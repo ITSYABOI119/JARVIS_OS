@@ -36,8 +36,9 @@ MAX_MESSAGE_SIZE = 256
 CACHE_LINE_SIZE = 64
 
 # Shared memory size (must fit ring buffer structure)
-# Ring buffer needs: head (8) + tail (8) + padding + messages array
-SHM_SIZE = 4096  # 4KB page
+# Ring buffer needs: head (8) + tail (8) + padding (48) + messages array (1024 * 276)
+# Total: 64 + 282624 = 282688 bytes
+SHM_SIZE = 283648  # ~277KB (rounded to 1KB boundary)
 
 # Message types (must match C enum message_type_t)
 MSG_COMMAND = 0
