@@ -1,0 +1,101 @@
+================================================================================
+                    JARVIS AI-OS WEEK 9 - START HERE
+================================================================================
+
+Hi! You're ready to run Week 9 QEMU integration tests.
+
+Since you're using Claude web version, you'll run the tests manually on your
+machine and report the results back to me.
+
+================================================================================
+STEP 1: Open the Testing Guide
+================================================================================
+
+Open this file:
+    phase1/weeks/week9/WEEK_9_MANUAL_TESTING_GUIDE.md
+
+It has EXACT COMMANDS you can copy/paste on your machine.
+
+================================================================================
+STEP 2: Run the Tests
+================================================================================
+
+Follow the guide step-by-step:
+    1. Install prerequisites (QEMU, build tools)
+    2. Test C components (decision cache, IPC)
+    3. Set up seL4 (if not already done)
+    4. Build and boot seL4 in QEMU
+    5. Run integration tests
+    6. Check shared memory
+
+Copy all the outputs as you go!
+
+================================================================================
+STEP 3: Fill Out Results Template
+================================================================================
+
+Open this file:
+    phase1/weeks/week9/WEEK_9_RESULTS_TEMPLATE.txt
+
+Fill it in with your test outputs and observations.
+
+================================================================================
+STEP 4: Report Back to Claude
+================================================================================
+
+Copy the entire filled-out results template and paste it in your next
+message to me (Claude web). I'll analyze the results and tell you:
+
+    ✅ What passed
+    ❌ What failed (if anything)
+    🔧 How to fix any issues
+    ➡️ Next steps (Week 10 or troubleshooting)
+
+================================================================================
+TIME REQUIRED
+================================================================================
+
+First time (with QEMU setup):  30-60 minutes
+Already set up:                15-20 minutes
+
+================================================================================
+QUICK CHECKLIST
+================================================================================
+
+Week 9 is successful if these all pass:
+
+    [ ] C decision cache compiles and runs
+    [ ] C IPC ring buffer compiles and runs
+    [ ] Python IPC tests pass (6/6)
+    [ ] Python query processor tests pass (4/4)
+    [ ] QEMU installed and working
+    [ ] seL4 builds successfully
+    [ ] seL4 boots in QEMU
+    [ ] Shared memory (/dev/shm) accessible
+
+================================================================================
+NEED HELP?
+================================================================================
+
+If you get stuck:
+    1. Copy the exact error message
+    2. Copy the command that failed
+    3. Include in your results template
+    4. I'll help troubleshoot!
+
+================================================================================
+FILES IN THIS FOLDER
+================================================================================
+
+START_HERE.txt (this file)            - Quick orientation
+README.md                             - Week 9 overview
+WEEK_9_MANUAL_TESTING_GUIDE.md       - Step-by-step commands ⭐
+WEEK_9_RESULTS_TEMPLATE.txt          - Results template
+WEEK_9_STATUS.md                     - Detailed specifications
+test_week9_integration.py            - Integration test script
+
+================================================================================
+
+Ready? Open WEEK_9_MANUAL_TESTING_GUIDE.md and let's go! 🚀
+
+================================================================================

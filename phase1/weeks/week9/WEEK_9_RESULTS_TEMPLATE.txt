@@ -1,0 +1,156 @@
+========================================
+JARVIS AI-OS Week 9 Manual Test Results
+========================================
+Date:
+System: (e.g., Ubuntu 22.04, WSL2, Windows 11)
+CPU:
+RAM:
+
+========================================
+QUICK CHECKLIST
+========================================
+Fill in [YES/NO] for each:
+
+[ ] 1. C decision cache compiles and runs
+[ ] 2. C IPC ring buffer compiles and runs
+[ ] 3. Python IPC client tests pass (6/6)
+[ ] 4. Python query processor tests pass (4/4)
+[ ] 5. QEMU installed and working
+[ ] 6. seL4 builds successfully
+[ ] 7. seL4 boots in QEMU
+[ ] 8. Shared memory (/dev/shm) accessible
+
+========================================
+DETAILED RESULTS
+========================================
+
+----------------------------------------
+1. Prerequisites Versions
+----------------------------------------
+QEMU version:
+
+
+CMake version:
+
+
+Python version:
+
+
+----------------------------------------
+2. C Components Test Results
+----------------------------------------
+Decision Cache Test (./test_cache):
+Number of tests:
+Passed:
+Failed:
+Output (paste last 10 lines):
+
+
+
+
+IPC Ring Buffer Test (./test_ipc):
+Number of tests:
+Passed:
+Failed:
+Performance (median latency):
+Output (paste last 10 lines):
+
+
+
+
+----------------------------------------
+3. Python Test Results
+----------------------------------------
+Python IPC Integration Test (test_ipc_integration.py):
+Tests passed: /6
+Output (paste summary):
+
+
+
+
+Python IPC Cache Lookup Test (test_ipc_cache_lookup.py):
+Tests passed: /4
+Output (paste summary):
+
+
+
+
+----------------------------------------
+4. seL4 Build Results
+----------------------------------------
+Build successful? [YES/NO]
+Build time (approximate):
+Warnings count:
+Errors count:
+
+Build output (paste last 20 lines):
+
+
+
+
+----------------------------------------
+5. seL4 QEMU Boot Test
+----------------------------------------
+Did seL4 boot? [YES/NO]
+Boot time (approximate):
+
+Boot output (paste first 20 lines):
+
+
+
+
+----------------------------------------
+6. Shared Memory Check
+----------------------------------------
+/dev/shm exists? [YES/NO]
+/dev/shm size:
+/dev/shm writable? [YES/NO]
+
+Output of 'df -h /dev/shm':
+
+
+
+
+========================================
+ISSUES & OBSERVATIONS
+========================================
+
+Any errors encountered:
+
+
+
+
+Any performance observations:
+
+
+
+
+Any unexpected behavior:
+
+
+
+
+Questions for Claude:
+
+
+
+
+========================================
+SUMMARY
+========================================
+Overall Week 9 status: [SUCCESS / PARTIAL / FAILED]
+
+Next steps needed:
+
+
+
+
+========================================
+END OF RESULTS
+========================================
+
+INSTRUCTIONS FOR SUBMITTING:
+1. Fill in all sections above
+2. Copy the entire contents of this file
+3. Paste it in your message to Claude (web version)
+4. Claude will analyze and provide next steps!

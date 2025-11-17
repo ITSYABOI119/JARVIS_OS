@@ -36,8 +36,9 @@ MAX_MESSAGE_SIZE = 256
 CACHE_LINE_SIZE = 64
 
 # Shared memory size (must fit ring buffer structure)
-# Ring buffer needs: head (8) + tail (8) + padding + messages array
-SHM_SIZE = 4096  # 4KB page
+# Ring buffer needs: head (8) + tail (8) + padding (48) + messages array (1024 * 276)
+# Total: 64 + 282624 = 282688 bytes
+SHM_SIZE = 283648  # ~277KB (rounded to 1KB boundary)
 
 # Message types (must match C enum message_type_t)
 MSG_COMMAND = 0
@@ -256,15 +257,17 @@ class IPCClient:
             msg.type = msg_type
             msg.id = self.message_id_counter
             msg.payload_size = len(payload_bytes)
-            msg.payload = payload_bytes
+            # Copy payload bytes into ctypes array using memmove
+            ctypes.memmove(msg.payload, payload_bytes, len(payload_bytes))
             msg.timestamp = time.time_ns()
 
             # Calculate message offset in ring buffer
             msg_offset = self.messages_offset + (head * MESSAGE_SIZE)
 
-            # Write message to shared memory
+            # Write message to shared memory (use ctypes.string_at to get raw bytes)
             self.shm.seek(msg_offset)
-            self.shm.write(bytes(msg))
+            msg_bytes = ctypes.string_at(ctypes.addressof(msg), ctypes.sizeof(msg))
+            self.shm.write(msg_bytes)
 
             # Update head pointer
             self._write_uint64(self.head_offset, next_head)
