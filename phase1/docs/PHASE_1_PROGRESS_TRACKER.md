@@ -605,33 +605,36 @@
 
 ---
 
-### Week 10: Multi-Agent Architecture (Month 8)
+### Week 10: seL4 + JARVIS Integration (QEMU) (Month 8)
 **Dates:** TBD
-**Status:** ⏳ Not Started
-**Effort:** 0/18 hours
+**Status:** ⏳ NOT STARTED
+**Effort:** 0/12 hours
 
-**Planned Tasks:**
-- [ ] Implement 10 system monitoring commands
-- [ ] Add kernel handlers for each command
-- [ ] Test all 10 commands
-- [ ] Expand decision cache to 100 patterns
+**Planned Tasks (from Week 9 Deferrals):**
+- [ ] Task 2: Build seL4 with JARVIS components (cache + IPC + handler)
+- [ ] Task 3: End-to-end IPC testing in QEMU (Python ↔ seL4)
+- [ ] Task 4: Performance benchmarking in QEMU
+- [ ] Task 5: Shell integration with seL4 (optional)
 
 **Actual Progress:**
 - (To be filled during execution)
 
 **Deliverables:**
-- [ ] 10 commands implemented
-- [ ] Kernel handlers working
-- [ ] Cache expanded to 100 patterns
-- [ ] All commands tested
+- [ ] seL4 builds with JARVIS components integrated
+- [ ] Python → seL4 → Python IPC working in QEMU
+- [ ] Performance benchmarks complete (<100μs IPC, <2s cached queries)
+- [ ] Shell integration functional (stretch goal)
 
 **Issues/Blockers:**
 - None yet
 
 **Notes:**
-- (To be filled during execution)
+- Week 10 completes the deferred Week 9 tasks (QEMU integration)
+- This is foundational for multi-agent work (original Week 10 plan deferred to Week 11)
+- Focus on end-to-end validation before adding complexity
+- See detailed task breakdown in phase1/weeks/week9/WEEK_9_STATUS.md (Tasks 2-5)
 
-**Week 8 Milestone:** ✅ AI agent functional, 10+ commands working
+**Week 9 Carryover:** seL4+JARVIS integration is prerequisite for multi-agent architecture
 
 ---
 

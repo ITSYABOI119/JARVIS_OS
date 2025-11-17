@@ -1,8 +1,8 @@
 # Phase 1 Technical Debt Tracker
 
-**Last Updated:** November 15, 2025
+**Last Updated:** November 17, 2025
 **Total Debt Items:** 2
-**Critical Items:** 1 (stdin for Week 5+ AI testing)
+**Critical Items:** 0 (IPC SHM_SIZE bug resolved in Week 9)
 
 ---
 
@@ -75,7 +75,36 @@
 
 ## Resolved Debt
 
-(None yet)
+### RESOLVED: IPC SHM_SIZE Bug ✅ Week 9
+**Source:** Week 9 - Python IPC Integration Testing
+**Issue:** IPC send operations failing with "data out of range" error
+**Root Cause:** Shared memory size (SHM_SIZE) was only 4KB but ring buffer needed 277KB
+  - Ring buffer: 1024 slots × 276 bytes/message = 282,624 bytes needed
+  - Allocated: Only 4096 bytes (4KB)
+  - Writing beyond 4KB caused buffer overflow
+
+**Impact:**
+- Python IPC client tests failing (2/6 → 6/6 after fix)
+- Could not send messages to seL4
+- Blocked Week 9 integration testing
+
+**Resolution (Week 9):**
+- **Fix:** Increased SHM_SIZE from 4096 to 283648 bytes (~277KB)
+- **Location:** phase1/src/ai/ipc_client.py line 41
+- **Additional fixes:**
+  - ctypes payload handling: `ctypes.memmove()` for byte copy
+  - Struct serialization: `ctypes.string_at()` for converting to bytes
+- **Result:** All 6/6 IPC integration tests passing
+
+**Commits:**
+- 16ceade: Fix SHM_SIZE to accommodate full ring buffer (4KB → 277KB)
+- d17b1ec: Fix IPC payload copy using ctypes.memmove()
+- 82caffe: Fix ctypes struct serialization using string_at()
+
+**Lessons Learned:**
+- Always validate buffer size calculations (1024 × 276 = 282,624, not 4096)
+- ctypes arrays require special handling (memmove, not direct assignment)
+- Debug logging critical for isolating issues across Python/C boundary
 
 ---
 
@@ -85,8 +114,10 @@
 |------|----------|----------|-------------------|
 | Week 1 | 0 | 0 | 0 |
 | Week 2 | 2 | 0 | 2 |
-| Week 3 | TBD | TBD | TBD |
-| Week 4 | TBD | 1 (stdin) | TBD |
+| Week 3 | 0 | 0 | 2 |
+| Week 4 | 0 | 0 | 2 |
+| Week 5-8 | 0 | 0 | 2 |
+| Week 9 | 1 (SHM_SIZE) | 1 (SHM_SIZE) | 2 |
 
 **Target:** Resolve all HIGH priority debt by Week 8 (before AI integration)
 
