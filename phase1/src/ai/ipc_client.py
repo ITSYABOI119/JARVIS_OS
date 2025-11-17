@@ -256,7 +256,8 @@ class IPCClient:
             msg.type = msg_type
             msg.id = self.message_id_counter
             msg.payload_size = len(payload_bytes)
-            msg.payload = payload_bytes
+            # Copy payload bytes into ctypes array (can't assign directly)
+            msg.payload[:len(payload_bytes)] = payload_bytes
             msg.timestamp = time.time_ns()
 
             # Calculate message offset in ring buffer
