@@ -278,16 +278,18 @@ class QueryProcessor:
     6. Return command structure
     """
 
-    def __init__(self, cache=None):
+    def __init__(self, cache=None, ipc_client=None):
         """
         Initialize query processor
 
         Args:
-            cache: Decision cache instance (optional for Week 6)
+            cache: Decision cache instance (optional, legacy Week 6)
+            ipc_client: IPC client for seL4 communication (Week 8+)
         """
         self.normalizer = QueryNormalizer()
         self.parser = CommandParser()
         self.cache = cache
+        self.ipc_client = ipc_client
         self.logger = logging.getLogger('QueryProcessor')
 
         # Statistics
@@ -322,9 +324,9 @@ class QueryProcessor:
         query_hash = fnv1a_hash_64(normalized)
         self.logger.info(f"Hash: 0x{query_hash:016x}")
 
-        # Step 3: Check cache (if available)
-        if self.cache:
-            cached_command = self._cache_lookup(query_hash)
+        # Step 3: Check cache (if available via IPC or legacy cache)
+        if self.cache or self.ipc_client:
+            cached_command = self._cache_lookup(query_hash, normalized)
             if cached_command:
                 self.stats['cache_hits'] += 1
                 self.logger.info(f"Cache HIT for '{normalized}'")
@@ -353,34 +355,94 @@ class QueryProcessor:
 
         return command, False
 
-    def _cache_lookup(self, query_hash: int) -> Optional[Dict]:
+    def _cache_lookup(self, query_hash: int, normalized_query: str = "") -> Optional[Dict]:
         """
-        Lookup command in cache
+        Lookup command in cache via IPC to seL4
 
-        For Week 6: Python-side cache (simple dict)
-        For Week 7: Connect to C decision cache via IPC
+        Week 8+: IPC call to C decision cache in seL4
 
         Args:
             query_hash (int): FNV-1a hash of normalized query
+            normalized_query (str): Normalized query text (for IPC)
 
         Returns:
             dict or None: Cached command if found, None otherwise
         """
-        # Week 6: Placeholder (Python-only cache)
-        # Week 7: IPC call to C decision cache
-        return None
+        # If no IPC client, cannot do cache lookup
+        if not self.ipc_client:
+            self.logger.debug("No IPC client - cache lookup disabled")
+            return None
+
+        try:
+            # Import message types (avoiding circular import)
+            from ipc_client import MSG_QUERY
+
+            # Send query to seL4 via IPC
+            if not self.ipc_client.send_message(MSG_QUERY, normalized_query):
+                self.logger.warning("Failed to send query to seL4")
+                return None
+
+            # Receive response from seL4 (with timeout)
+            response_msg = self.ipc_client.receive_message(timeout_ms=1000)
+            if not response_msg:
+                self.logger.warning("No response from seL4 (timeout)")
+                return None
+
+            # Parse response payload (format: "ACTION:xxx|TRUST:x|HIT:x")
+            payload = response_msg.payload[:response_msg.payload_size].decode('utf-8', errors='ignore')
+            self.logger.debug(f"Received from seL4: {payload}")
+
+            # Parse response format
+            parts = payload.split('|')
+            response_dict = {}
+            for part in parts:
+                if ':' in part:
+                    key, value = part.split(':', 1)
+                    response_dict[key.strip()] = value.strip()
+
+            # Check cache hit
+            cache_hit = response_dict.get('HIT', '0') == '1'
+
+            if not cache_hit:
+                self.logger.debug("Cache miss in seL4")
+                return None
+
+            # Cache hit - parse command
+            action = response_dict.get('ACTION', 'UNKNOWN')
+            trust_level = int(response_dict.get('TRUST', str(TRUST_LEVELS['REQUEST'])))
+
+            # Map action to command type
+            command_type = action if action in COMMAND_TYPES else 'UNKNOWN'
+
+            return {
+                'command': command_type,
+                'parameters': {},
+                'trust_level': trust_level,
+                'success': True,
+                'error': None
+            }
+
+        except Exception as e:
+            self.logger.error(f"Cache lookup error: {e}")
+            return None
 
     def _cache_update(self, normalized_query: str, query_hash: int, command: Dict):
         """
         Update cache with new query→command mapping
+
+        Week 8+: IPC call to C cache to insert entry (optional)
+        Note: seL4 decision cache is pre-loaded with 200 patterns,
+        dynamic updates are not critical for Phase 1.
 
         Args:
             normalized_query (str): Normalized query text
             query_hash (int): FNV-1a hash
             command (dict): Parsed command structure
         """
-        # Week 6: Placeholder
-        # Week 7: IPC call to C cache to insert entry
+        # Cache updates not implemented for Phase 1
+        # seL4 decision cache is pre-loaded and read-only
+        # Dynamic cache updates deferred to Phase 2
+        self.logger.debug(f"Cache update not implemented (query: '{normalized_query}')")
         pass
 
     def get_statistics(self) -> Dict:
