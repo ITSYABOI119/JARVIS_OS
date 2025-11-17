@@ -280,7 +280,9 @@ class IPCClient:
             return True
 
         except Exception as e:
+            import traceback
             logger.error(f"Send failed: {e}")
+            logger.error(f"Full traceback:\n{traceback.format_exc()}")
             self.stats['send_errors'] += 1
             return False
 
