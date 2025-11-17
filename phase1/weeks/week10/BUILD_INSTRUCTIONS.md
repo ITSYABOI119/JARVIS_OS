@@ -116,44 +116,27 @@ ls kernel/sel4Config.cmake 2>/dev/null && echo "✓ seL4Config.cmake found" || e
 find . -name "sel4Config.cmake" -o -name "seL4Config.cmake" 2>/dev/null | head -5
 ```
 
-**Copy the output from these commands** - this will help us determine the correct build approach.
+**Diagnostic Results from your output:**
+- ✗ init-build.sh not found
+- ✗ tutorials/ not found
+- ✗ seL4Config.cmake not found in kernel/ root
+- ✅ **Found:** `./kernel/configs/seL4Config.cmake`
 
-### Step 5a: If init-build.sh EXISTS (Tutorials Framework Available)
+This means we have a standard seL4 installation (not tutorials framework), and the config file is in `kernel/configs/`.
 
-```bash
-cd ~/jarvis-phase1
+---
 
-# Initialize build for hello-world first to verify it works
-./init-build.sh -DTUTORIAL=hello-world
+### Step 5: Build with Correct seL4_DIR
 
-# Build hello-world to confirm setup
-cd build
-ninja
-
-# Test hello-world in QEMU
-./simulate
-
-# Exit QEMU (Ctrl+A then X)
-
-# Now we need to integrate JARVIS into the tutorials build system
-# This requires modifying the tutorials CMakeLists.txt
-```
-
-### Step 5b: If init-build.sh DOES NOT EXIST (Manual Build Required)
-
-We'll need to find seL4Config.cmake and set up CMake correctly:
+Now that we know seL4Config.cmake is at `./kernel/configs/seL4Config.cmake`, we can configure CMake correctly:
 
 ```bash
 cd ~/jarvis-phase1/build-jarvis
 
-# Find where seL4 config files are
-SEL4_DIR=$(find ~/jarvis-phase1 -name "seL4Config.cmake" -o -name "sel4Config.cmake" 2>/dev/null | head -1 | xargs dirname)
-echo "Found seL4 at: $SEL4_DIR"
-
 # Configure with the correct seL4_DIR
 cmake -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE=../kernel/gcc.cmake \
-    -DseL4_DIR="$SEL4_DIR" \
+    -DseL4_DIR=../kernel/configs \
     -DPLATFORM=pc99 \
     -DKernelPlatform=x86_64 \
     ../apps/jarvis/sel4
@@ -161,23 +144,6 @@ cmake -G Ninja \
 # Build
 ninja
 ```
-
-### Step 5c: Last Resort - Use Week 2 Working Method
-
-If Steps 5a and 5b don't work, we'll use the method that worked in Week 2:
-
-```bash
-# Go back to the working hello-world tutorial build
-cd ~/jarvis-phase1
-
-# Find the hello-world build that worked in Week 1-2
-find . -name "hello-world" -type d
-
-# Copy the JARVIS files to replace hello-world
-# (we'll provide specific commands after diagnostic output)
-```
-
-**PAUSE HERE** - Run the Step 4 diagnostic commands and share the output. Based on what we find, I'll provide the exact next steps.
 
 **Expected CMake Output:**
 ```
@@ -226,11 +192,11 @@ Build result: SUCCESS
 
 ---
 
-## Step 5: Boot in QEMU and Validate
+## Step 6: Boot in QEMU and Validate
 
 ### Launch QEMU:
 ```bash
-# Should already be in build-jarvis directory from Step 4
+# Should already be in build-jarvis directory from Step 5
 # If not: cd ~/jarvis-phase1/build-jarvis
 
 ./simulate
