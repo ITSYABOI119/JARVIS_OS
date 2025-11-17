@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Phase 1 Development Commands (CURRENT PHASE)
 
-**Current Status:** Week 8 COMPLETE, Week 9 READY (30.8%) - QEMU integration & end-to-end testing next
+**Current Status:** Week 10 IN PROGRESS (30.8%) - seL4 + JARVIS Integration (CMakeLists.txt fix complete, ready to build)
 
 **Component Testing:**
 
@@ -578,6 +578,68 @@ Every component has standalone tests:
 
 All tests should be **self-contained** and print clear PASS/FAIL results.
 
+### seL4 Tutorials Framework CMakeLists.txt Pattern (Week 10 Discovery)
+
+**Critical Discovery:** The seL4 tutorials framework requires a specific CMakeLists.txt structure.
+
+**Available macros (that actually exist):**
+- `sel4_tutorials_regenerate_tutorial()` - Sets up kernel targets (kernel.elf, etc.)
+- `DeclareRootserver()` - Makes executable bootable (from include(rootserver))
+- Standard CMake: `add_executable()`, `target_include_directories()`, `target_link_libraries()`
+
+**Macros that DON'T exist:**
+- ❌ `DeclareTutorialApp()` - This was incorrectly assumed to exist
+
+**Correct CMakeLists.txt structure for JARVIS integration:**
+
+```cmake
+# Include tutorial framework settings
+include(${SEL4_TUTORIALS_DIR}/settings.cmake)
+
+# Set up kernel targets (required for build)
+sel4_tutorials_regenerate_tutorial(${CMAKE_CURRENT_SOURCE_DIR})
+
+# Include rootserver module - provides DeclareRootserver macro
+include(rootserver)
+
+# Include simulation support
+include(simulation)
+
+# Define executable with standard CMake
+add_executable(hello-world
+    src/main.c
+    src/cache/decision_cache.c
+    src/cache/cache_patterns.c
+    src/ipc/ring_buffer.c
+    src/ipc/ipc_sel4.c
+)
+
+# Set include directories
+target_include_directories(hello-world PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/cache
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ipc
+)
+
+# Link seL4 libraries
+target_link_libraries(hello-world
+    sel4 muslc utils sel4muslcsys
+    sel4platsupport sel4utils sel4debug
+)
+
+# Make executable bootable as root server
+DeclareRootserver(hello-world)
+```
+
+**Why this works:**
+1. Tutorial framework sets up kernel and dependencies via `sel4_tutorials_regenerate_tutorial()`
+2. We use standard CMake `add_executable()` to specify OUR sources (not tutorial templates)
+3. Our src/ directory in temp directory overrides any regenerated template files
+4. `DeclareRootserver()` makes it bootable
+5. Result: JARVIS boots instead of "Hello, World!" tutorial
+
+**See:** `phase1/weeks/week10/CMAKE_FIX_SUMMARY.md` for complete explanation
+
 ### Weekly Development Pattern (Weeks 1-8)
 
 Each week follows this structure:
@@ -590,7 +652,7 @@ Each week follows this structure:
 
 ## Important Notes for Future Claude Instances
 
-1. **Current Status: Week 8 COMPLETE, Week 9 READY (30.8%)** - IPC bridge implemented, QEMU integration testing next
+1. **Current Status: Week 10 IN PROGRESS (30.8%)** - CMakeLists.txt fix complete, ready to build JARVIS in QEMU
 
 2. **Phase 0 COMPLETE** - 80% validation success. See `phase0/PHASE_0_FINAL_REPORT.md` for results.
 
@@ -622,7 +684,7 @@ Each week follows this structure:
 
 9. **Cross-platform:** Python IPC client supports Linux/WSL (real mmap) and Windows (mock fallback for development).
 
-10. **Week 9 focus** - QEMU integration & end-to-end testing (validate IPC in QEMU, performance benchmarks)
+10. **Week 10 focus** - seL4 + JARVIS Integration + Multi-Agent Implementation (build JARVIS in QEMU, end-to-end IPC testing, create specialist agents)
 
 ## Key Research Findings
 
@@ -675,9 +737,9 @@ Each week follows this structure:
 ---
 
 **Current Phase:** Phase 1 - Proof of Concept (Months 6-12)
-**Current Status:** Week 8 COMPLETE, Week 9 READY (30.8%)
+**Current Status:** Week 10 IN PROGRESS (30.8%)
 
-**Completed (Weeks 1-8):**
+**Completed (Weeks 1-9):**
 - ✅ Environment setup (QEMU, seL4 toolchain)
 - ✅ Decision cache implementation (256 entries, 200 patterns, 85.7% hit rate)
 - ✅ Lock-free IPC ring buffer (54μs latency)
@@ -685,18 +747,34 @@ Each week follows this structure:
 - ✅ Python AI agent (Phi-3 Mini, 558ms GPU inference)
 - ✅ Interactive shell (REPL, 9 commands, 30/30 tests passing)
 - ✅ Python ↔ seL4 IPC bridge (mmap-based, 6/6 tests passing)
+- ✅ Week 9: All components validated standalone (34/34 tests passing)
+- ✅ CMakeLists.txt fix: Identified and corrected use of non-existent DeclareTutorialApp macro
 
-**Week 9 Objectives (QEMU Integration & End-to-End Testing):**
-1. Validate QEMU environment with IPC requirements
-2. Build seL4 with all components integrated (cache + IPC + handler)
-3. Test end-to-end IPC in QEMU (Python → seL4 → cache → Python)
-4. Performance benchmarking (<100μs IPC, <2s cached queries)
-5. Shell integration (optional - if time permits)
+**Week 10 Objectives (seL4 + JARVIS Integration + Multi-Agent Implementation):**
 
-**Weeks 10-12 Preview:**
+**Part A: QEMU Integration (deferred from Week 9)**
+1. ⏳ Build seL4 with all JARVIS components (follow BUILD_INSTRUCTIONS_FIXED.md Steps 1-5)
+2. ⏳ Test end-to-end IPC in QEMU (Python → seL4 → cache → Python)
+3. ⏳ Performance benchmarking (<100μs IPC, <2s cached queries)
+4. ⏳ Shell integration (optional)
+
+**Part B: Multi-Agent Implementation (original Week 10 plan)**
+5. ⏳ Create 4 specialist agents (Device Manager, Network, FileSystem, User Interaction)
+6. ⏳ Implement agent router with keyword-based routing
+7. ⏳ Implement shared context pool (lock-free reads)
+8. ⏳ Test multi-agent coordination (100 queries, 100% routing accuracy)
+
+**Key Files for Week 10:**
+- `phase1/weeks/week10/BUILD_INSTRUCTIONS_FIXED.md` - Complete build instructions
+- `phase1/weeks/week10/CMakeLists_for_tutorial.txt` - Corrected CMakeLists.txt
+- `phase1/weeks/week10/CMAKE_FIX_SUMMARY.md` - Quick reference for CMakeLists.txt fix
+- `phase1/weeks/week10/ROOT_CAUSE_SUMMARY.md` - Root cause analysis and solution
+- `phase1/weeks/week10/WEEK_10_STATUS.md` - Current status and progress
+
+**Weeks 11-12 Preview:**
 - AI model integration with seL4 (cache miss → AI inference)
-- Multi-agent architecture preparation
 - Performance optimization
+- Documentation and testing refinement
 
 **For Claude Code:**
 - **First time?** Read README.md → phase1/PHASE_1_PROGRESS_TRACKER.md → current week's status

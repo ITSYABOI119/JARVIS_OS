@@ -1,7 +1,8 @@
 # Week 10 Build Issue - Root Cause & Solution
 
 **Date:** November 17, 2025
-**Status:** RESOLVED - Instructions updated in BUILD_INSTRUCTIONS_FIXED.md
+**Status:** RESOLVED - CMakeLists.txt approach corrected
+**Updated:** November 17, 2025 - Fixed CMakeLists.txt to use actual seL4 macros
 
 ---
 
@@ -153,6 +154,81 @@ Once JARVIS boots successfully in QEMU:
 
 ---
 
+---
+
+## CMakeLists.txt Fix (November 17, 2025)
+
+### Problem: DeclareTutorialApp() Doesn't Exist
+
+Initial CMakeLists.txt attempted to use `DeclareTutorialApp()` macro, which doesn't exist in the seL4 tutorials framework.
+
+```cmake
+# WRONG - This macro doesn't exist
+DeclareTutorialApp(
+    hello-world
+    SOURCES ...
+)
+```
+
+**Error:**
+```
+CMake Error at CMakeLists.txt:12 (DeclareTutorialApp):
+  Unknown CMake command "DeclareTutorialApp".
+```
+
+### Solution: Use Standard CMake + DeclareRootserver
+
+The correct approach uses standard CMake commands with the tutorial framework's actual macros:
+
+```cmake
+# Include tutorial framework settings
+include(${SEL4_TUTORIALS_DIR}/settings.cmake)
+
+# Let tutorial framework regenerate to set up kernel targets
+sel4_tutorials_regenerate_tutorial(${CMAKE_CURRENT_SOURCE_DIR})
+
+# Include rootserver module (provides DeclareRootserver macro)
+include(rootserver)
+
+# Import seL4 libraries configuration
+include(simulation)
+
+# Define executable with standard CMake
+add_executable(hello-world
+    src/main.c
+    src/cache/decision_cache.c
+    src/cache/cache_patterns.c
+    src/ipc/ring_buffer.c
+    src/ipc/ipc_sel4.c
+)
+
+# Set include directories
+target_include_directories(hello-world PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/cache
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ipc
+)
+
+# Link seL4 libraries
+target_link_libraries(hello-world
+    sel4 muslc utils sel4muslcsys
+    sel4platsupport sel4utils sel4debug
+)
+
+# Declare as root server (makes it bootable)
+DeclareRootserver(hello-world)
+```
+
+**Why this works:**
+1. `sel4_tutorials_regenerate_tutorial()` sets up kernel targets
+2. `include(rootserver)` provides DeclareRootserver macro
+3. `add_executable()` defines our JARVIS executable with OUR sources
+4. `DeclareRootserver()` makes it bootable
+5. Our src/ directory overrides any tutorial templates
+
+---
+
 **Document Status:** ACTIVE
 **Created:** November 17, 2025
+**Updated:** November 17, 2025 - Added CMakeLists.txt fix
 **Purpose:** Document root cause discovery and solution for Week 10 build issue

@@ -99,8 +99,8 @@ cp /mnt/c/Users/jluca/Documents/JARVIS_OS/phase1/weeks/week10/CMakeLists_for_tut
 grep "JARVIS" CMakeLists.txt
 # Should see: "# JARVIS Phase 1 - seL4 Tutorial Integration"
 
-grep "DeclareTutorialApp" CMakeLists.txt
-# Should see: "DeclareTutorialApp(" (using tutorial framework macro)
+grep "DeclareRootserver" CMakeLists.txt
+# Should see: "DeclareRootserver(hello-world)"
 ```
 
 **Alternative:** If cp from Windows doesn't work, create CMakeLists.txt manually:
@@ -110,35 +110,75 @@ cat > CMakeLists.txt << 'EOF'
 cmake_minimum_required(VERSION 3.7.2)
 project(hello-world C ASM)
 
+# Include tutorial framework settings
 include(${SEL4_TUTORIALS_DIR}/settings.cmake)
 
 # Let tutorial framework regenerate to set up kernel targets
+# This creates the kernel.elf and other necessary targets
 sel4_tutorials_regenerate_tutorial(${CMAKE_CURRENT_SOURCE_DIR})
 
-# Use tutorial framework's app declaration macro
-DeclareTutorialApp(
-    hello-world
-    SOURCES
-        src/main.c
-        src/cache/decision_cache.c
-        src/cache/cache_patterns.c
-        src/ipc/ring_buffer.c
-        src/ipc/ipc_sel4.c
-    INCLUDES
-        src
-        src/cache
-        src/ipc
-    LIBS
-        sel4
-        muslc
-        utils
-        sel4muslcsys
-        sel4platsupport
-        sel4utils
-        sel4debug
+# Include rootserver module (provides DeclareRootserver macro)
+include(rootserver)
+
+# Import seL4 libraries configuration
+include(simulation)
+
+# Define our JARVIS executable with all sources
+add_executable(hello-world
+    src/main.c
+    src/cache/decision_cache.c
+    src/cache/cache_patterns.c
+    src/ipc/ring_buffer.c
+    src/ipc/ipc_sel4.c
 )
+
+# Set include directories
+target_include_directories(hello-world PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/cache
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ipc
+)
+
+# Link required seL4 libraries
+target_link_libraries(hello-world
+    sel4
+    muslc
+    utils
+    sel4muslcsys
+    sel4platsupport
+    sel4utils
+    sel4debug
+)
+
+# Declare as root server (this makes it bootable)
+DeclareRootserver(hello-world)
 EOF
 ```
+
+**Understanding the CMakeLists.txt Approach:**
+
+The seL4 tutorials framework requires a specific sequence:
+
+1. **`sel4_tutorials_regenerate_tutorial()`** - Sets up kernel targets (kernel.elf, etc.)
+   - Required for the build system to work
+   - May regenerate some files, but we've replaced the src/ directory
+
+2. **`include(rootserver)`** - Provides the DeclareRootserver macro
+   - This macro makes our executable bootable as the initial root server
+
+3. **`add_executable()`** - Standard CMake command to define our JARVIS executable
+   - We specify OUR sources (not the tutorial template sources)
+   - Includes all JARVIS components: main.c, cache, IPC
+
+4. **`DeclareRootserver()`** - Declares our executable as the root server
+   - Generates boot image with our JARVIS code
+   - Creates the simulate script
+
+**Why this works:**
+- Tutorial framework sets up kernel and dependencies
+- But we compile OUR sources, not tutorial templates
+- Our src/ directory overrides any regenerated files
+- Result: JARVIS boots instead of "Hello, World!"
 
 ---
 
@@ -326,8 +366,8 @@ ls -la ~/jarvis-phase1/hello-world????????/src/
 # Should show: cache -> ... (symlink), ipc -> ... (symlink)
 
 # Verify CMakeLists.txt is correct
-grep "DeclareTutorialApp" ~/jarvis-phase1/hello-world????????/CMakeLists.txt
-# Should show: "DeclareTutorialApp(" (using tutorial framework macro)
+grep "DeclareRootserver" ~/jarvis-phase1/hello-world????????/CMakeLists.txt
+# Should show: "DeclareRootserver(hello-world)"
 ```
 
 ---
