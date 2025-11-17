@@ -52,9 +52,9 @@ Week 9 successfully validated all core components in standalone mode (34/34 test
 ## 📊 WEEK 10 PROGRESS TRACKER
 
 ### Task 2: Build seL4 with JARVIS Components Integrated
-**Status:** ⏳ IN PROGRESS (30.8% complete)
+**Status:** ⏳ IN PROGRESS (80% complete - debugging boot issue)
 **Estimated Time:** 3 hours
-**Actual Time:** TBD
+**Actual Time:** ~2 hours (so far)
 
 **Objective:**
 Build a single seL4 executable that includes decision cache, IPC ring buffer, and IPC message handler, and boots successfully in QEMU.
@@ -62,8 +62,11 @@ Build a single seL4 executable that includes decision cache, IPC ring buffer, an
 **Current State:**
 - ✅ main.c already includes cache and IPC initialization code
 - ✅ All component source files exist and are tested
-- ⏳ CMakeLists.txt needs updating to include cache/*.c and ipc/*.c
-- ⏳ Build and test in QEMU
+- ✅ CMakeLists.txt updated to include cache/*.c and ipc/*.c
+- ✅ Build succeeds (183/183 targets) using seL4 tutorials framework
+- ⚠️ Boot crash discovered - tutorial code running instead of JARVIS
+- 🔧 Fix created - CMakeLists_for_tutorial.txt updated
+- ⏳ User needs to apply fix and rebuild
 
 **Steps:**
 
@@ -184,7 +187,28 @@ IPC Message Handler - Listening for Python queries
    - Expected: ipc_sel4.c uses sel4_atomics.h (custom wrapper)
    - Verify sel4_atomics.h is included correctly
 
-4. **QEMU doesn't boot / kernel panic**
+4. **QEMU boots with "Hello, World!" then crashes** ⚠️ CRITICAL ISSUE DISCOVERED
+   - **Symptoms:**
+     ```
+     Hello, World!
+     Caught cap fault in send phase at address 0
+     vm fault on data at address 0 with status 0x4
+     ```
+   - **Root Cause:** Tutorial framework regenerating original code, overwriting JARVIS main.c
+   - **Fix:** See BUILD_INSTRUCTIONS_FIXED.md "Troubleshooting" section
+   - **Quick Fix:**
+     ```bash
+     cp /mnt/c/Users/jluca/Documents/JARVIS_OS/phase1/weeks/week10/CMakeLists_for_tutorial.txt \
+        ~/jarvis-phase1/projects/sel4-tutorials/tutorials/hello-world/CMakeLists.txt
+     cd ~/jarvis-phase1
+     rm -rf hello-world_*_build build/
+     ./init --plat pc99 --tut hello-world
+     cd hello-world_*_build
+     ninja
+     ./simulate
+     ```
+
+5. **QEMU doesn't boot / kernel panic**
    - Check QEMU command in ./simulate script
    - Verify memory size (-m 8G) and serial output (-serial stdio)
    - Check seL4 logs for initialization errors

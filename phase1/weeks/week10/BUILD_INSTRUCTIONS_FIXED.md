@@ -173,6 +173,69 @@ Initializing IPC system...
 
 ---
 
+## Troubleshooting
+
+### Problem: QEMU boots with "Hello, World!" then crashes
+
+**Symptoms:**
+```
+Hello, World!
+Caught cap fault in send phase at address 0
+vm fault on data at address 0 with status 0x4
+```
+
+**This means:** The tutorial's original code is running, not JARVIS code.
+
+**Root Cause:** Either:
+1. CMakeLists.txt still has `sel4_tutorials_regenerate_tutorial()` uncommented
+2. Cached generated files from previous build
+
+**Solution:**
+
+```bash
+cd ~/jarvis-phase1/projects/sel4-tutorials/tutorials/hello-world
+
+# 1. Verify CMakeLists.txt is correct
+cat CMakeLists.txt | grep -A1 "regenerate"
+# Should see: # sel4_tutorials_regenerate_tutorial(...) (commented out)
+
+# 2. If incorrect, copy the fixed version:
+cp /mnt/c/Users/jluca/Documents/JARVIS_OS/phase1/weeks/week10/CMakeLists_for_tutorial.txt CMakeLists.txt
+
+# 3. Verify JARVIS main.c exists
+ls -la main.c cache/ ipc/
+# Should see: main.c, cache/ (symlink), ipc/ (symlink)
+
+# 4. Check first few lines of main.c to ensure it's JARVIS code
+head -20 main.c | grep "JARVIS"
+# Should see JARVIS banner text
+
+# 5. Complete clean rebuild
+cd ~/jarvis-phase1
+rm -rf hello-world_*_build  # Remove ALL build directories
+rm -rf build/  # Remove old build if exists
+
+# 6. Rebuild from scratch
+./init --plat pc99 --tut hello-world
+cd hello-world_*_build
+ninja
+./simulate
+```
+
+**Expected output after fix:**
+```
+========================================
+  JARVIS AI-OS v0.1 - Phase 1
+  Week 8: IPC Integration Complete
+========================================
+
+Initializing decision cache...
+✓ Cache initialized (256 entries)
+✓ Loaded 103 patterns into cache
+```
+
+---
+
 ## Alternative: Use build-jarvis with Toolchain
 
 If the above doesn't work, try this approach using the existing build infrastructure:

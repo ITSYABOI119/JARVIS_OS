@@ -1,0 +1,39 @@
+# JARVIS Phase 1 - seL4 Tutorial Integration
+cmake_minimum_required(VERSION 3.7.2)
+project(hello-world C ASM)
+
+# Include tutorial helpers (provided by init script)
+include(${SEL4_TUTORIALS_DIR}/settings.cmake)
+
+# DO NOT regenerate tutorial - we're using custom JARVIS sources
+# sel4_tutorials_regenerate_tutorial(${CMAKE_CURRENT_SOURCE_DIR})
+
+# Define executable with JARVIS sources
+add_executable(hello-world
+    main.c
+    cache/decision_cache.c
+    cache/cache_patterns.c
+    ipc/ring_buffer.c
+    ipc/ipc_sel4.c
+)
+
+# Add include directories
+target_include_directories(hello-world PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/cache
+    ${CMAKE_CURRENT_SOURCE_DIR}/ipc
+)
+
+# Link libraries (provided by tutorials framework)
+target_link_libraries(hello-world
+    sel4
+    muslc
+    utils
+    sel4muslcsys
+    sel4platsupport
+    sel4utils
+    sel4debug
+)
+
+# Declare as root server
+DeclareRootserver(hello-world)
