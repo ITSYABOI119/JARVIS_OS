@@ -28,8 +28,20 @@ util_libs_import_libraries()
 sel4_libs_import_libraries()
 
 # Define the executable and source files
+# Week 10: Added decision cache and IPC components
 add_executable(jarvis-sel4
     main.c
+    ../cache/decision_cache.c
+    ../cache/cache_patterns.c
+    ../ipc/ring_buffer.c
+    ../ipc/ipc_sel4.c
+)
+
+# Add include directories for headers
+target_include_directories(jarvis-sel4 PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../cache
+    ${CMAKE_CURRENT_SOURCE_DIR}/../ipc
 )
 
 # Link required libraries
