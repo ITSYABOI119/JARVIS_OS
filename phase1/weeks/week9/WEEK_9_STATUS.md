@@ -2,9 +2,37 @@
 
 **Date Started:** November 17, 2025
 **Date Completed:** TBD
-**Status:** NOT STARTED
+**Status:** PREPARATION COMPLETE - Manual Testing
 **Focus:** QEMU environment setup, seL4 integration testing, full IPC validation
-**Time Invested:** 0/12 hours
+**Time Invested:** 2/12 hours (preparation phase)
+
+---
+
+## 📋 MANUAL TESTING APPROACH (Web Version)
+
+Week 9 QEMU integration testing requires full system access:
+
+- ✅ sudo permissions (install QEMU, dependencies)
+- ✅ QEMU virtualization (run seL4 in VM)
+- ✅ Shared memory access (/dev/shm for IPC)
+- ✅ Real hardware (performance benchmarking)
+
+**Since using web version:** User will run tests manually on their machine and report results back.
+
+**Testing Guide:** See `phase1/weeks/week9/WEEK_9_MANUAL_TESTING_GUIDE.md`
+**Results Template:** See `phase1/weeks/week9/WEEK_9_RESULTS_TEMPLATE.txt`
+
+**Workflow:**
+1. ✅ User runs commands from testing guide on their machine
+2. ✅ User fills out results template with outputs
+3. ✅ User pastes completed results back to Claude (web)
+4. ✅ Claude analyzes results and provides next steps
+
+**Preparation Status:**
+- ✅ Manual testing guide created (step-by-step commands)
+- ✅ Results template created (easy to fill in)
+- ✅ All test scripts ready in repo
+- ✅ Common issues & fixes documented
 
 ---
 
