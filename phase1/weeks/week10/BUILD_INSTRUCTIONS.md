@@ -1,8 +1,21 @@
 # Week 10 Build Instructions - Quick Reference
 
+## Week 10 Overview
+**Week 10 combines two major workstreams:**
+- **Part A:** QEMU Integration (deferred Week 9 tasks 2-5) - 12 hours
+- **Part B:** Multi-Agent Implementation (original Week 10 plan) - 16-20 hours
+
+**Total:** 28-32 hours planned (14-20 hours estimated actual based on Week 5-9 efficiency)
+
+---
+
 ## Current Status
 ✅ **Task 2.1 COMPLETE:** CMakeLists.txt updated with cache and IPC components
 ⏳ **Task 2.2 IN PROGRESS:** Build seL4 with integrated components
+
+**This Guide Covers:** Part A Tasks 2-5 (QEMU Integration)
+
+**After Part A:** Proceed to multi-agent implementation (Tasks 6-9) - see WEEK_10_STATUS.md
 
 ---
 
@@ -214,14 +227,30 @@ Issues encountered: [describe any problems]
 ## Next Steps After Successful Build
 
 Once build and boot are successful:
+
+### Part A Continuation (QEMU Integration):
 1. ✅ Mark Task 2 as COMPLETE
-2. ⏭️ Move to Task 3: End-to-End IPC Testing
+2. ⏭️ Task 3: End-to-End IPC Testing (Python ↔ seL4)
    - Create Python test script
    - Test Python → seL4 communication
    - Validate message delivery
+3. ⏭️ Task 4: Performance Benchmarking
+   - IPC latency measurements
+   - Boot time validation
+4. ⏭️ Task 5: Shell Integration (optional)
+
+### After Part A Complete:
+Move to **Part B: Multi-Agent Implementation** (Tasks 6-9)
+- Task 6: Create 4 specialist agents
+- Task 7: Implement agent router
+- Task 8: Implement shared context pool
+- Task 9: Test multi-agent coordination
+
+See `WEEK_10_STATUS.md` for detailed Part B instructions.
 
 ---
 
 **Document Status:** ACTIVE
 **Created:** November 17, 2025
-**For:** Week 10 Task 2 (Build & Boot)
+**Updated:** November 17, 2025 (added Part B overview)
+**For:** Week 10 Part A - Tasks 2-5 (QEMU Integration)
