@@ -99,8 +99,8 @@ cp /mnt/c/Users/jluca/Documents/JARVIS_OS/phase1/weeks/week10/CMakeLists_for_tut
 grep "JARVIS" CMakeLists.txt
 # Should see: "# JARVIS Phase 1 - seL4 Tutorial Integration"
 
-grep "regenerate" CMakeLists.txt
-# Should see: "# sel4_tutorials_regenerate_tutorial" (COMMENTED OUT)
+grep "DeclareTutorialApp" CMakeLists.txt
+# Should see: "DeclareTutorialApp(" (using tutorial framework macro)
 ```
 
 **Alternative:** If cp from Windows doesn't work, create CMakeLists.txt manually:
@@ -112,36 +112,31 @@ project(hello-world C ASM)
 
 include(${SEL4_TUTORIALS_DIR}/settings.cmake)
 
-# DO NOT regenerate tutorial - using custom JARVIS sources
-# sel4_tutorials_regenerate_tutorial(${CMAKE_CURRENT_SOURCE_DIR})
+# Let tutorial framework regenerate to set up kernel targets
+sel4_tutorials_regenerate_tutorial(${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(hello-world
-    src/main.c
-    src/cache/decision_cache.c
-    src/cache/cache_patterns.c
-    src/ipc/ring_buffer.c
-    src/ipc/ipc_sel4.c
+# Use tutorial framework's app declaration macro
+DeclareTutorialApp(
+    hello-world
+    SOURCES
+        src/main.c
+        src/cache/decision_cache.c
+        src/cache/cache_patterns.c
+        src/ipc/ring_buffer.c
+        src/ipc/ipc_sel4.c
+    INCLUDES
+        src
+        src/cache
+        src/ipc
+    LIBS
+        sel4
+        muslc
+        utils
+        sel4muslcsys
+        sel4platsupport
+        sel4utils
+        sel4debug
 )
-
-target_include_directories(hello-world PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/cache
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/ipc
-)
-
-target_link_libraries(hello-world
-    sel4
-    muslc
-    utils
-    sel4muslcsys
-    sel4platsupport
-    sel4utils
-    sel4debug
-)
-
-# Include rootserver helper (provides DeclareRootserver macro)
-include(rootserver)
-DeclareRootserver(hello-world)
 EOF
 ```
 
@@ -331,8 +326,8 @@ ls -la ~/jarvis-phase1/hello-world????????/src/
 # Should show: cache -> ... (symlink), ipc -> ... (symlink)
 
 # Verify CMakeLists.txt is correct
-grep "regenerate" ~/jarvis-phase1/hello-world????????/CMakeLists.txt
-# Should show: "# sel4_tutorials_regenerate_tutorial" (COMMENTED OUT)
+grep "DeclareTutorialApp" ~/jarvis-phase1/hello-world????????/CMakeLists.txt
+# Should show: "DeclareTutorialApp(" (using tutorial framework macro)
 ```
 
 ---
