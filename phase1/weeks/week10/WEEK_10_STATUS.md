@@ -201,9 +201,9 @@ IPC Message Handler - Listening for Python queries
      cp /mnt/c/Users/jluca/Documents/JARVIS_OS/phase1/weeks/week10/CMakeLists_for_tutorial.txt \
         ~/jarvis-phase1/projects/sel4-tutorials/tutorials/hello-world/CMakeLists.txt
      cd ~/jarvis-phase1
-     rm -rf hello-world_*_build build/
+     rm -rf hello-world*_build build/
      ./init --plat pc99 --tut hello-world
-     cd hello-world_*_build
+     cd $(ls -dt hello-world*_build | head -1)
      ninja
      ./simulate
      ```

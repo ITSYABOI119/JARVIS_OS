@@ -212,12 +212,22 @@ head -20 main.c | grep "JARVIS"
 
 # 5. Complete clean rebuild
 cd ~/jarvis-phase1
-rm -rf hello-world_*_build  # Remove ALL build directories
+rm -rf hello-world*_build  # Remove ALL build directories
 rm -rf build/  # Remove old build if exists
 
 # 6. Rebuild from scratch
 ./init --plat pc99 --tut hello-world
-cd hello-world_*_build
+
+# 7. Navigate to the newly created build directory
+# The init script creates a directory with random suffix like hello-worldXXXXXX_build
+# Use ls to find it, then cd into it:
+ls -d hello-world*_build
+cd hello-world*_build  # Note: This only works if there's exactly one match
+
+# Alternative: Use this one-liner to cd into the latest build dir
+cd $(ls -dt hello-world*_build | head -1)
+
+# 8. Build and run
 ninja
 ./simulate
 ```
