@@ -21,72 +21,157 @@
 
 ## Step-by-Step Build Instructions
 
-### Step 1: Navigate to Project Root (in WSL)
-```bash
-cd /mnt/c/Users/jluca/Documents/JARVIS_OS
-```
+### Step 1: Copy JARVIS Components to seL4 Tutorials Tree
 
-### Step 2: Clean Previous Build
+The issue in the error was that we need to build within the seL4 tutorials framework, not standalone.
+
+**In WSL, run these commands:**
+
 ```bash
-./phase1/scripts/build-jarvis.sh clean
+# Navigate to seL4 tutorials directory
+cd ~/jarvis-phase1
+
+# Create a new app directory for JARVIS if it doesn't exist
+mkdir -p apps/jarvis
+
+# Copy all JARVIS source files to the seL4 app directory
+cp -r /mnt/c/Users/jluca/Documents/JARVIS_OS/phase1/src/* apps/jarvis/
+
+# Verify files were copied
+ls -la apps/jarvis/
 ```
 
 **Expected Output:**
 ```
-Cleaning build directory...
-Done.
+drwxr-xr-x  6 itsme itsme 4096 Nov 17 [time] .
+drwxr-xr-x  5 itsme itsme 4096 Nov 17 [time] ..
+drwxr-xr-x  2 itsme itsme 4096 Nov 17 [time] ai
+drwxr-xr-x  2 itsme itsme 4096 Nov 17 [time] cache
+drwxr-xr-x  2 itsme itsme 4096 Nov 17 [time] ipc
+drwxr-xr-x  2 itsme itsme 4096 Nov 17 [time] sel4
+drwxr-xr-x  2 itsme itsme 4096 Nov 17 [time] shell
 ```
 
-### Step 3: Build with Updated CMakeLists.txt
+### Step 2: Update CMakeLists.txt Paths
+
+The CMakeLists.txt paths need to be adjusted since we're now in the apps/jarvis/sel4 directory.
+
+**Run:**
 ```bash
-./phase1/scripts/build-jarvis.sh
+cd ~/jarvis-phase1/apps/jarvis/sel4
+
+# Create a backup of the original
+cp CMakeLists.txt CMakeLists.txt.backup
+
+# Update the paths (they need to go up one more level)
+sed -i 's|\.\./cache/|../../cache/|g' CMakeLists.txt
+sed -i 's|\.\./ipc/|../../ipc/|g' CMakeLists.txt
+sed -i 's|${CMAKE_CURRENT_SOURCE_DIR}/\.\./cache|${CMAKE_CURRENT_SOURCE_DIR}/../../cache|g' CMakeLists.txt
+sed -i 's|${CMAKE_CURRENT_SOURCE_DIR}/\.\./ipc|${CMAKE_CURRENT_SOURCE_DIR}/../../ipc|g' CMakeLists.txt
+
+# Verify changes
+cat CMakeLists.txt | grep -A 10 "add_executable"
 ```
 
-**Expected Output:**
+**Expected to see:**
+```cmake
+add_executable(jarvis-sel4
+    main.c
+    ../../cache/decision_cache.c
+    ../../cache/cache_patterns.c
+    ../../ipc/ring_buffer.c
+    ../../ipc/ipc_sel4.c
+)
+
+# Add include directories for headers
+target_include_directories(jarvis-sel4 PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../cache
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../ipc
+)
 ```
-JARVIS AI-OS Phase 1 - Build Script
-=====================================
 
-Build directory: /home/jluca/jarvis-phase1/build-jarvis
-Source directory: /mnt/c/Users/jluca/Documents/JARVIS_OS/phase1/src/sel4
+### Step 3: Clean Previous Build
+```bash
+cd ~/jarvis-phase1
+rm -rf build-jarvis
+```
 
-Configuring CMake...
-[CMake configuration output...]
+### Step 4: Configure and Build with CMake
+```bash
+cd ~/jarvis-phase1
 
-Building JARVIS...
-[Ninja build output...]
-[1/183] Building C object...
-[2/183] Building C object...
+# Create build directory
+mkdir -p build-jarvis
+cd build-jarvis
+
+# Configure CMake (pointing to our app)
+cmake -G Ninja \
+    -DCMAKE_TOOLCHAIN_FILE=../kernel/gcc.cmake \
+    -DPLATFORM=pc99 \
+    -DKernelPlatform=x86_64 \
+    -DTUT_BOARD=pc \
+    -DTUT_ARCH=x86_64 \
+    ../apps/jarvis/sel4
+
+# Build
+ninja
+```
+
+**Expected CMake Output:**
+```
+-- The C compiler identification is GNU 13.3.0
+-- The ASM compiler identification is GNU
+-- Found assembler: /usr/bin/gcc
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/gcc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Found seL4: /home/itsme/jarvis-phase1/kernel
+-- seL4 found at: /home/itsme/jarvis-phase1/kernel
+-- Configuring done
+-- Generating done
+-- Build files have been written to: /home/itsme/jarvis-phase1/build-jarvis
+```
+
+**Expected Ninja Build Output:**
+```
+[1/92] Building C object CMakeFiles/jarvis-sel4.dir/main.c.o
+[2/92] Building C object CMakeFiles/jarvis-sel4.dir/../../cache/decision_cache.c.o
+[3/92] Building C object CMakeFiles/jarvis-sel4.dir/../../cache/cache_patterns.c.o
+[4/92] Building C object CMakeFiles/jarvis-sel4.dir/../../ipc/ring_buffer.c.o
+[5/92] Building C object CMakeFiles/jarvis-sel4.dir/../../ipc/ipc_sel4.c.o
 ...
-[183/183] Linking...
+[89/92] Linking C executable jarvis-sel4
+[90/92] Generating binary image
+[91/92] Generating simulation script
+[92/92] Build complete
 
-Build complete!
-
-Executable: /home/jluca/jarvis-phase1/build-jarvis/jarvis-sel4
-
-To run in QEMU:
-  cd /home/jluca/jarvis-phase1/build-jarvis
-  ./simulate
+Build result: SUCCESS
 ```
 
 **What to Look For:**
-- ✅ CMake configures successfully (no errors)
-- ✅ All source files compile:
+- ✅ CMake finds seL4 successfully (no "FindseL4.cmake" error)
+- ✅ All 5 JARVIS source files compile:
   - main.c
   - decision_cache.c
   - cache_patterns.c
   - ring_buffer.c
   - ipc_sel4.c
 - ✅ Linking completes with no undefined references
-- ✅ Total: ~183 build targets (matches previous builds)
+- ✅ jarvis-sel4 executable created
+- ✅ Simulation script generated
 
 ---
 
-## Step 4: Boot in QEMU and Validate
+## Step 5: Boot in QEMU and Validate
 
 ### Launch QEMU:
 ```bash
-cd ~/jarvis-phase1/build-jarvis
+# Should already be in build-jarvis directory from Step 4
+# If not: cd ~/jarvis-phase1/build-jarvis
+
 ./simulate
 ```
 
