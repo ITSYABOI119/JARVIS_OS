@@ -5,7 +5,7 @@ project(hello-world C ASM)
 # Include tutorial helpers (provided by init script)
 include(${SEL4_TUTORIALS_DIR}/settings.cmake)
 
-# DO NOT regenerate tutorial - we're using custom JARVIS sources
+# DO NOT regenerate tutorial - using custom JARVIS sources
 # sel4_tutorials_regenerate_tutorial(${CMAKE_CURRENT_SOURCE_DIR})
 
 # Define executable with JARVIS sources
@@ -35,5 +35,6 @@ target_link_libraries(hello-world
     sel4debug
 )
 
-# Declare as root server
+# Include rootserver helper (provides DeclareRootserver macro)
+include(rootserver)
 DeclareRootserver(hello-world)
