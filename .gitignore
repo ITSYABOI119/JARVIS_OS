@@ -1,0 +1,64 @@
+# JARVIS AI-OS .gitignore
+
+# C/C++ compiled files
+*.o
+*.a
+*.so
+*.exe
+*.out
+test_cache
+test_ipc
+ipc_benchmark
+
+# Build directories
+build/
+*.build/
+cmake-build-*/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+*.egg-info/
+dist/
+*.egg
+
+# AI Model files (too large for git - use Git LFS or download separately)
+*.gguf
+*.bin
+*.safetensors
+models/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+temp/
+tmp/
+
+# QEMU
+*.qcow2
+*.img
+
+# seL4 build artifacts
+*.elf
+*.dump
+
+# System files
+Thumbs.db
+.directory

@@ -1,0 +1,78 @@
+JARVIS AI-OS: Document Reading Guide
+====================================
+
+NEW HERE? Start with this:
+
+1. README.md
+   - Project overview
+   - Quick start summary
+   - Repository structure
+
+2. PHASE_0_GETTING_STARTED.md ⭐ HANDS-ON
+   - Practical setup instructions
+   - Solo developer path (start experimenting NOW)
+   - Official Phase 0 path (requires team)
+   - Python + C prototype experiments
+   - Works with your hardware (RTX 2070, 32GB, 8-core)
+
+COMPREHENSIVE UNDERSTANDING? Read these in order:
+
+3. JARVIS_UNIFIED_PLAN.md
+   - 36-month execution plan
+   - Phase 0-4 breakdown
+   - Budget, timeline, team
+   - Architectural innovations
+
+4. PHASE_0_VALIDATION_SPEC.md
+   - 6-month validation details
+   - Dual-track: Simulation + Hardware prototypes
+   - Go/No-Go decision criteria
+   - $270K budget breakdown
+
+5. ARCHITECTURE_ENHANCEMENTS.md
+   - Decision Cache (135x speedup)
+   - Dynamic Model Scaling (1B→7B→13B)
+   - SHIELD Safety Framework
+   - Shared Context Memory Pool
+
+6. CRITICAL_SPECIFICATIONS.md
+   - Power Management (suspend/resume)
+   - Driver Framework (20 Tier 1 drivers)
+   - Multi-Agent Protocol (conflict resolution)
+
+FOR CLAUDE CODE CONTEXT:
+
+7. CLAUDE.md
+   - Architectural context
+   - Technical constraints
+   - Development approach
+   - What AI can/cannot do
+
+HISTORICAL REFERENCE (Optional):
+
+8. archive/research/ - Original evidence-based research
+9. archive/plans/ - Original 24-30 month plan (superseded)
+10. archive/analysis/ - Opus + Sonnet ultrathink analyses
+
+==============================================================
+
+QUICK START (You Can Do This NOW):
+
+Step 1: Read README.md (5 min)
+Step 2: Read PHASE_0_GETTING_STARTED.md (15 min)
+Step 3: Install WSL2 + Python (15 min)
+Step 4: Run first experiment (30 min)
+Step 5: Test AI inference on your GPU (30 min)
+
+Total: ~2 hours to hands-on experimentation
+
+Your Hardware (RTX 2070, 32GB DDR4, Ryzen 2700X 8-core):
+✅ Perfect for Phase 0 validation!
+✅ GPU can run Mistral 7B INT8
+✅ RAM matches recommended spec
+✅ 8-core perfect for multi-core testing
+
+==============================================================
+
+Questions? See README.md or PHASE_0_GETTING_STARTED.md
+Ready to start? → PHASE_0_GETTING_STARTED.md

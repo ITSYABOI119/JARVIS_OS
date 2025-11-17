@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wsl:*)",
+      "Bash(nvidia-smi:*)",
+      "Bash(python -m pip install:*)",
+      "Read(//c/Users/jluca/Pictures/Screenshots/**)",
+      "Bash(pip show:*)",
+      "Bash(python:*)",
+      "Bash(pip uninstall:*)",
+      "Bash(pip install:*)",
+      "Bash(make:*)",
+      "Bash(gcc:*)",
+      "Read(//c/Users/jluca/**)",
+      "Bash(tree:*)",
+      "Bash(grep:*)",
+      "Bash(./ipc_benchmark)",
+      "Bash(set PYTHONIOENCODING=utf-8)",
+      "Bash(gh:*)",
+      "Bash(git init:*)",
+      "Bash(git add:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
