@@ -139,6 +139,8 @@ target_link_libraries(hello-world
     sel4debug
 )
 
+# Include rootserver helper (provides DeclareRootserver macro)
+include(rootserver)
 DeclareRootserver(hello-world)
 EOF
 ```
