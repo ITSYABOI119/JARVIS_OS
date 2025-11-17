@@ -257,23 +257,17 @@ class IPCClient:
             msg.type = msg_type
             msg.id = self.message_id_counter
             msg.payload_size = len(payload_bytes)
-            logger.info(f"DEBUG: About to memmove, payload_bytes={payload_bytes}, len={len(payload_bytes)}")
             # Copy payload bytes into ctypes array using memmove
             ctypes.memmove(msg.payload, payload_bytes, len(payload_bytes))
-            logger.info(f"DEBUG: memmove succeeded")
             msg.timestamp = time.time_ns()
 
             # Calculate message offset in ring buffer
             msg_offset = self.messages_offset + (head * MESSAGE_SIZE)
-            logger.info(f"DEBUG: msg_offset={msg_offset}, MESSAGE_SIZE={MESSAGE_SIZE}")
 
             # Write message to shared memory (use ctypes.string_at to get raw bytes)
             self.shm.seek(msg_offset)
-            logger.info(f"DEBUG: About to string_at, sizeof(msg)={ctypes.sizeof(msg)}")
             msg_bytes = ctypes.string_at(ctypes.addressof(msg), ctypes.sizeof(msg))
-            logger.info(f"DEBUG: string_at succeeded, len(msg_bytes)={len(msg_bytes)}")
             self.shm.write(msg_bytes)
-            logger.info(f"DEBUG: write succeeded")
 
             # Update head pointer
             self._write_uint64(self.head_offset, next_head)
@@ -287,9 +281,7 @@ class IPCClient:
             return True
 
         except Exception as e:
-            import traceback
             logger.error(f"Send failed: {e}")
-            logger.error(f"Full traceback:\n{traceback.format_exc()}")
             self.stats['send_errors'] += 1
             return False
 
