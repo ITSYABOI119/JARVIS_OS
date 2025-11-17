@@ -2,9 +2,25 @@
 
 **Date Started:** November 17, 2025
 **Date Completed:** TBD
-**Status:** NOT STARTED
+**Status:** PREPARATION COMPLETE - Ready for CLI Execution
 **Focus:** QEMU environment setup, seL4 integration testing, full IPC validation
-**Time Invested:** 0/12 hours
+**Time Invested:** 2/12 hours (preparation phase)
+
+---
+
+## ⚠️ IMPORTANT: Week 9 Requires Claude CLI on Local Machine
+
+Week 9 QEMU integration testing **must be run via Claude CLI** on your development workstation because it requires:
+
+- ✅ sudo permissions (install QEMU, dependencies)
+- ✅ QEMU virtualization (run seL4 in VM)
+- ✅ Shared memory access (/dev/shm for IPC)
+- ✅ Real hardware (performance benchmarking)
+
+**Preparation Complete:** ✅ All scripts, tests, and documentation ready
+**Next Step:** Open this project in Claude CLI on your local machine
+
+**Quick-Start Guide:** See `WEEK_9_QUICKSTART_CLI.md` in project root
 
 ---
 
