@@ -263,9 +263,10 @@ class IPCClient:
             # Calculate message offset in ring buffer
             msg_offset = self.messages_offset + (head * MESSAGE_SIZE)
 
-            # Write message to shared memory
+            # Write message to shared memory (use ctypes.string_at to get raw bytes)
             self.shm.seek(msg_offset)
-            self.shm.write(bytes(msg))
+            msg_bytes = ctypes.string_at(ctypes.addressof(msg), ctypes.sizeof(msg))
+            self.shm.write(msg_bytes)
 
             # Update head pointer
             self._write_uint64(self.head_offset, next_head)
