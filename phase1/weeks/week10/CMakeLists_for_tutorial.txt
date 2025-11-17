@@ -10,18 +10,18 @@ include(${SEL4_TUTORIALS_DIR}/settings.cmake)
 
 # Define executable with JARVIS sources
 add_executable(hello-world
-    main.c
-    cache/decision_cache.c
-    cache/cache_patterns.c
-    ipc/ring_buffer.c
-    ipc/ipc_sel4.c
+    src/main.c
+    src/cache/decision_cache.c
+    src/cache/cache_patterns.c
+    src/ipc/ring_buffer.c
+    src/ipc/ipc_sel4.c
 )
 
 # Add include directories
 target_include_directories(hello-world PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/cache
-    ${CMAKE_CURRENT_SOURCE_DIR}/ipc
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/cache
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ipc
 )
 
 # Link libraries (provided by tutorials framework)
