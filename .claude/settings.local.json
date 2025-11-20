@@ -18,7 +18,9 @@
       "Bash(set PYTHONIOENCODING=utf-8)",
       "Bash(gh:*)",
       "Bash(git init:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git -C \"C:\\Users\\jluca\\Documents\\JARVIS_OS\" log --oneline --all)",
+      "Bash(git -C \"C:\\Users\\jluca\\Documents\\JARVIS_OS\" diff --stat master..HEAD)"
     ],
     "deny": [],
     "ask": []
