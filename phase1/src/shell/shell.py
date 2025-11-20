@@ -36,6 +36,12 @@ except ImportError:
     QueryProcessor = None
     print("WARNING: Query processor not available")
 
+try:
+    from agent_router import AgentRouter
+except ImportError:
+    AgentRouter = None
+    print("WARNING: Multi-agent router not available")
+
 # Try to import readline for command history (may not be available on Windows)
 try:
     import readline
@@ -102,6 +108,7 @@ class JARVISShell:
         self.running = False
         self.command_count = 0
         self.ai_agent = None
+        self.agent_router = None  # Multi-agent router (Week 11)
         self.history = []
 
         # Statistics
@@ -112,6 +119,15 @@ class JARVISShell:
             'cache_misses': 0,
             'errors': 0,
         }
+
+        # Initialize multi-agent router if available (Week 11)
+        if AgentRouter:
+            try:
+                self.agent_router = AgentRouter()
+                print("[Multi-Agent] Router initialized (4 agents: device/network/filesystem/user)")
+            except Exception as e:
+                print(f"[Multi-Agent] Router initialization failed: {e}")
+                self.agent_router = None
 
     def start(self):
         """
@@ -466,39 +482,73 @@ class JARVISShell:
         print("[PROCESSING] ", end='', flush=True)
 
         try:
-            # Process query through AI agent
-            start_time = time.time()
-            result = self.ai_agent.process_query(query)
-            total_time = (time.time() - start_time) * 1000
+            # Use multi-agent router if available (Week 11+)
+            if self.agent_router:
+                # Route through multi-agent system
+                start_time = time.time()
+                response = self.agent_router.route_query(query)
+                total_time = (time.time() - start_time) * 1000
 
-            # Clear processing indicator
-            print(f"({total_time:.0f}ms)")
-            print()
+                # Clear processing indicator
+                print(f"({total_time:.0f}ms)")
+                print()
 
-            # Display result
-            if result['success']:
-                # Show cache hit/miss
-                if result.get('cache_hit'):
-                    print(f"[CACHE HIT] {result['command']['command']}")
-                    self.stats['cache_hits'] += 1
+                # Display result
+                agent = response['routing']['selected_agent']
+                action = response['action']
+                result = response['result']
+                routing_time = response['routing']['routing_time_ms']
+
+                # Show agent and action
+                print(f"[{agent.upper()} AGENT] Action: {action}")
+                print(f"  Routing: {routing_time:.3f}ms | Response: {response['inference_time_ms']:.2f}ms")
+                print()
+
+                # Show result
+                if 'error' in response:
+                    print(f"[ERROR] {response['error']}")
+                    self.stats['errors'] += 1
+                elif 'summary' in result:
+                    print(f"Result: {result['summary']}")
                 else:
-                    print(f"[AI INFERENCE] {result['command']['command']}")
-                    self.stats['cache_misses'] += 1
-
-                # Show response
-                print()
-                print(f"Response: {result['response']}")
-
-                # Show timing details
-                if not result.get('cache_hit'):
-                    print()
-                    print(f"  Inference time: {result['inference_time_ms']:.0f}ms")
-                    print(f"  Tokens: {result['tokens_generated']}")
+                    print(f"Result: {result}")
 
                 print()
+
             else:
-                print(f"[ERROR] Query processing failed: {result.get('response', 'Unknown error')}")
-                self.stats['errors'] += 1
+                # Fallback to single AI agent (Week 5-10)
+                start_time = time.time()
+                result = self.ai_agent.process_query(query)
+                total_time = (time.time() - start_time) * 1000
+
+                # Clear processing indicator
+                print(f"({total_time:.0f}ms)")
+                print()
+
+                # Display result
+                if result['success']:
+                    # Show cache hit/miss
+                    if result.get('cache_hit'):
+                        print(f"[CACHE HIT] {result['command']['command']}")
+                        self.stats['cache_hits'] += 1
+                    else:
+                        print(f"[AI INFERENCE] {result['command']['command']}")
+                        self.stats['cache_misses'] += 1
+
+                    # Show response
+                    print()
+                    print(f"Response: {result['response']}")
+
+                    # Show timing details
+                    if not result.get('cache_hit'):
+                        print()
+                        print(f"  Inference time: {result['inference_time_ms']:.0f}ms")
+                        print(f"  Tokens: {result['tokens_generated']}")
+
+                    print()
+                else:
+                    print(f"[ERROR] Query processing failed: {result.get('response', 'Unknown error')}")
+                    self.stats['errors'] += 1
 
         except Exception as e:
             print()
