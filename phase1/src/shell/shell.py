@@ -43,9 +43,15 @@ except ImportError:
     print("WARNING: Multi-agent router not available")
 
 # Try to import readline for command history (may not be available on Windows)
+# DISABLED on Windows due to pyreadline3 bugs
 try:
-    import readline
-    READLINE_AVAILABLE = True
+    import platform
+    if platform.system().lower() == "windows":
+        # Disable readline on Windows - it's buggy
+        READLINE_AVAILABLE = False
+    else:
+        import readline
+        READLINE_AVAILABLE = True
 except ImportError:
     READLINE_AVAILABLE = False
 
