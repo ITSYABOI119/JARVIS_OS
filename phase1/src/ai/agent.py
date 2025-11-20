@@ -71,10 +71,36 @@ def _get_model_path():
 # Model path (auto-detects Windows vs WSL)
 MODEL_PATH = _get_model_path()
 
+def _get_gpu_layers():
+    """
+    Auto-detect GPU availability and return appropriate n_gpu_layers
+
+    WSL typically doesn't have GPU access for llama-cpp-python unless
+    CUDA passthrough is specifically configured.
+
+    Returns:
+        int: Number of layers to offload to GPU (0 = CPU-only, 35 = full GPU)
+    """
+    # Check if running in WSL
+    is_wsl = False
+    if sys.platform == 'linux':
+        try:
+            with open('/proc/version', 'r') as f:
+                is_wsl = 'microsoft' in f.read().lower() or 'wsl' in f.read().lower()
+        except:
+            pass
+
+    # WSL: Default to CPU-only (GPU passthrough is rare)
+    if is_wsl:
+        return 0
+
+    # Windows/native Linux: Use GPU
+    return 35
+
 # Phi-3 configuration (from Phase 0 benchmarks)
 PHI3_CONFIG = {
     'n_ctx': 2048,          # Context window (4096 max, but 2048 sufficient for commands)
-    'n_gpu_layers': 35,     # Offload all layers to GPU (RTX 2070)
+    'n_gpu_layers': _get_gpu_layers(),  # Auto-detect: 35 (Windows/Linux) or 0 (WSL)
     'n_threads': 4,         # CPU threads for host operations
     'verbose': False        # Quiet loading
 }
