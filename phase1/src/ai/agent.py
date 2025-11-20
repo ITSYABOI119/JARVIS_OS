@@ -42,8 +42,34 @@ except ImportError:
 # Configuration
 # ============================================================================
 
-# Model path (adjust based on actual location)
-MODEL_PATH = "C:/Users/jluca/Documents/JARVIS_OS/models/Phi-3-mini-4k-instruct-q4.gguf"
+def _get_model_path():
+    """
+    Get the correct model path based on environment (Windows vs WSL)
+
+    Returns:
+        str: Absolute path to model file
+    """
+    # Check if running in WSL
+    is_wsl = False
+    if sys.platform == 'linux':
+        try:
+            with open('/proc/version', 'r') as f:
+                is_wsl = 'microsoft' in f.read().lower() or 'wsl' in f.read().lower()
+        except:
+            pass
+
+    # Base Windows path
+    windows_path = "C:/Users/jluca/Documents/JARVIS_OS/models/Phi-3-mini-4k-instruct-q4.gguf"
+
+    if is_wsl:
+        # Convert Windows path to WSL path: C:/ -> /mnt/c/
+        wsl_path = windows_path.replace('C:/', '/mnt/c/')
+        return wsl_path
+    else:
+        return windows_path
+
+# Model path (auto-detects Windows vs WSL)
+MODEL_PATH = _get_model_path()
 
 # Phi-3 configuration (from Phase 0 benchmarks)
 PHI3_CONFIG = {
