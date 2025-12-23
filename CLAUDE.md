@@ -665,7 +665,12 @@ Each week follows this structure:
 3. Implement deliverables
 4. Run tests (aim for 100% pass rate)
 5. Update `PHASE_1_PROGRESS_TRACKER.md` with results
-6. **Actual time is consistently 2-8 hours vs 12-16 planned** (76% efficiency gain)
+6. **COMMIT WEEKLY: Create git commit after completing each week's work**
+   - Include week number and major achievements in commit message
+   - Follow git commit format (see "Committing changes with git" section)
+   - Push to remote repository to preserve progress
+   - **This is MANDATORY** - prevents loss of work and maintains weekly checkpoints
+7. **Actual time is consistently 2-8 hours vs 12-16 planned** (76% efficiency gain)
 
 ## Important Notes for Future Claude Instances
 
@@ -685,23 +690,29 @@ Each week follows this structure:
    - See `QUICK_START_TESTING.md` for quick start guide
    - See `phase1/COMPREHENSIVE_TEST_PLAN.md` for detailed test plan
 
-4. **Progress Tracking:** Always update `phase1/docs/PHASE_1_PROGRESS_TRACKER.md` after completing work
+5. **Progress Tracking:** Always update `phase1/docs/PHASE_1_PROGRESS_TRACKER.md` after completing work
 
-5. **Read documents in order:**
+6. **WEEKLY GIT COMMITS (MANDATORY):** After completing each week's work, create a git commit
+   - Include week number and major achievements in commit message
+   - Push to remote repository
+   - This is **REQUIRED** to maintain weekly checkpoints and prevent work loss
+   - See "Committing changes with git" section in this file for format
+
+7. **Read documents in order:**
    - README.md → Overview + current status
    - phase1/PHASE_1_PROGRESS_TRACKER.md → See what's done/in-progress
    - phase1/weeks/weekN/WEEK_N_STATUS.md → Current week objectives
    - phase1/PHASE_1_KICKOFF.md → Phase 1 context
    - JARVIS_UNIFIED_PLAN.md → Full 36-month plan
 
-6. **Code organization:**
+8. **Code organization:**
    - `phase1/src/cache/` - Decision cache (C)
    - `phase1/src/ipc/` - Ring buffer IPC (C)
    - `phase1/src/sel4/` - seL4 kernel integration (C)
    - `phase1/src/ai/` - AI agent + multi-agent + SHIELD + dynamic scaling (Python)
    - `phase1/src/shell/` - Interactive shell (Python)
 
-7. **Key validated metrics (all gate criteria met):**
+9. **Key validated metrics (all gate criteria met):**
    - ✅ IPC latency: 54μs median (target: <100μs)
    - ✅ Cache hit rate: 85.7% (target: >80%)
    - ✅ AI inference: 558ms GPU Phi-3, <100ms TinyLlama (GPU mandatory)
@@ -710,20 +721,20 @@ Each week follows this structure:
    - ✅ SHIELD: 100% harmful block, 0% false positive (targets: >90%, <5%)
    - ✅ Dynamic scaling: All state transitions work (IDLE→ACTIVE→CRITICAL)
 
-8. **Testing philosophy:** Every component has standalone tests. Use comprehensive test suite for full validation. Aim for 100% pass rate.
+10. **Testing philosophy:** Every component has standalone tests. Use comprehensive test suite for full validation. Aim for 100% pass rate.
 
-9. **Timeline efficiency:** Weeks 5-16 averaged 2-8 hours vs 12-16 planned (50-75% efficiency gain). Don't over-estimate complexity.
+11. **Timeline efficiency:** Weeks 5-16 averaged 2-8 hours vs 12-16 planned (50-75% efficiency gain). Don't over-estimate complexity.
 
-10. **Cross-platform:** Python IPC client supports Linux/WSL (real mmap) and Windows (mock fallback for development).
+12. **Cross-platform:** Python IPC client supports Linux/WSL (real mmap) and Windows (mock fallback for development).
 
-11. **Week 16 COMPLETE** - SHIELD Safety Framework Expansion:
+13. **Week 16 COMPLETE** - SHIELD Safety Framework Expansion:
     - 100 action types across 10 categories (vs 7 in Phase 0)
     - Pattern matching with wildcard support
     - Context-aware risk scoring (6 factors)
     - Integration with SystemStateManager (CRITICAL state trigger at risk ≥0.6)
     - Gate criteria exceeded: 100% harmful block (target: >90%), 0% false positive (target: <5%)
 
-12. **Week 18 COMPLETE** - SHIELD Adversarial Testing:
+14. **Week 18 COMPLETE** - SHIELD Adversarial Testing:
     - 14 adversarial attack scenarios across 5 categories
     - 0% bypass rate (0/14 attacks succeeded, target: <10%)
     - Fixed Week 17 regression (16% FP → 0% FP for read-only operations)
