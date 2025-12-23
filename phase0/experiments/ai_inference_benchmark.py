@@ -94,18 +94,24 @@ except ImportError:
     print()
     sys.exit(1)
 
-# Model path - Should be on Windows for GPU inference
-# If model is in WSL, copy it first: see RUN_EXPERIMENTS.md
-model_path = Path(r"C:\Users\jluca\Documents\JARVIS_OS\jarvis-phase0\models\mistral-7b-instruct-v0.2.Q8_0.gguf")
+# Model path - Use Phi-3 Mini (current model)
+# Try Windows path first, then WSL path
+windows_model_path = Path(r"C:\Users\jluca\Documents\JARVIS_OS\models\Phi-3-mini-4k-instruct-q4.gguf")
+wsl_model_path = Path("/mnt/c/Users/jluca/Documents/JARVIS_OS/models/Phi-3-mini-4k-instruct-q4.gguf")
 
-if not model_path.exists():
-    print(f"❌ Model not found at: {model_path}")
+if windows_model_path.exists():
+    model_path = windows_model_path
+    print(f"✅ Found Phi-3 model (Windows path)")
+elif wsl_model_path.exists():
+    model_path = wsl_model_path
+    print(f"✅ Found Phi-3 model (WSL path)")
+else:
+    print(f"❌ Model not found!")
+    print(f"  Tried Windows: {windows_model_path}")
+    print(f"  Tried WSL: {wsl_model_path}")
     print()
-    print("The model needs to be on Windows filesystem for optimal GPU performance.")
-    print()
-    print("Copy from WSL with:")
-    print("  mkdir C:\\Users\\jluca\\Documents\\JARVIS_OS\\jarvis-phase0\\models")
-    print("  copy \"\\\\wsl.localhost\\Ubuntu\\home\\itsme\\jarvis-phase0\\models\\mistral-7b-instruct-v0.2.Q8_0.gguf\" \"C:\\Users\\jluca\\Documents\\JARVIS_OS\\jarvis-phase0\\models\\\"")
+    print("Expected model: Phi-3-mini-4k-instruct-q4.gguf")
+    print("Download with: cd phase0/experiments && python3 download_phi3.py")
     print()
     sys.exit(1)
 
@@ -135,8 +141,8 @@ print()
 # Load model
 print("[LOADING MODEL]")
 print("-" * 70)
-print("Loading Mistral 7B INT8 onto GPU...")
-print("This may take 10-30 seconds...")
+print("Loading Phi-3 Mini 3.8B Q4 onto GPU...")
+print("This may take 5-10 seconds...")
 
 load_start = time.time()
 

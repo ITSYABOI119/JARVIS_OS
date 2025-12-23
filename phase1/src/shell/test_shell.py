@@ -301,8 +301,14 @@ def test_ai_query_routing():
 
     shell.ai_agent = mock_agent
 
-    # Test 4.1: AI query with cache miss
-    mock_agent.process_query.return_value = MOCK_AI_RESPONSES['show cpu']
+    # Disable agent_router to test the single-agent fallback path (lines 556-605 in shell.py)
+    # This is where cache_hit/cache_miss stats are tracked
+    shell.agent_router = None
+
+    # Test 4.1: AI query with cache miss (NOTE: cache_hit is checked by _execute_ai_query)
+    cache_miss_response = MOCK_AI_RESPONSES['show cpu'].copy()
+    cache_miss_response['cache_hit'] = False  # Explicitly set cache_hit
+    mock_agent.process_query.return_value = cache_miss_response
 
     # Manually increment ai_queries since we're calling _execute_ai_query directly
     shell.stats['ai_queries'] += 1
@@ -323,8 +329,10 @@ def test_ai_query_routing():
         print(f"[FAIL] AI query execution error: {e}")
         failed += 1
 
-    # Test 4.2: AI query with cache hit
-    mock_agent.process_query.return_value = MOCK_AI_RESPONSES['check memory']
+    # Test 4.2: AI query with cache hit (cache_hit = True in MOCK_AI_RESPONSES)
+    cache_hit_response = MOCK_AI_RESPONSES['check memory'].copy()
+    cache_hit_response['cache_hit'] = True  # Explicitly set cache_hit
+    mock_agent.process_query.return_value = cache_hit_response
 
     # Manually increment ai_queries since we're calling _execute_ai_query directly
     shell.stats['ai_queries'] += 1
@@ -352,6 +360,7 @@ def test_ai_query_routing():
         print(f"[FAIL] AI query count incorrect: {shell.stats['ai_queries']}")
         failed += 1
 
+    # Cache stats should now be tracked by _execute_ai_query
     if shell.stats['cache_hits'] >= 1:
         print(f"[PASS] Cache hits tracked ({shell.stats['cache_hits']} hits)")
         passed += 1

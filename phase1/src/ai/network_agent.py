@@ -329,6 +329,45 @@ class NetworkAgent(AgentBase):
         except Exception as e:
             return {"error": f"DNS check failed: {str(e)}"}
 
+    def serialize(self) -> Dict[str, Any]:
+        """
+        Serialize agent state for suspend/resume (Week 22).
+
+        Returns:
+            dict: Agent state including statistics and status
+        """
+        return {
+            'type': 'network_agent',
+            'name': self.name,
+            'status': getattr(self, 'status', 'ready'),
+            'statistics': {
+                'total_queries': getattr(self, 'total_queries', 0),
+                'successful_queries': getattr(self, 'successful_queries', 0),
+                'failed_queries': getattr(self, 'failed_queries', 0),
+                'total_response_time_ms': getattr(self, 'total_response_time_ms', 0.0),
+                'cache_hits': getattr(self, 'cache_hits', 0)
+            },
+            'timestamp': time.time()
+        }
+
+    def deserialize(self, state: Dict[str, Any]):
+        """
+        Restore agent state from suspend/resume (Week 22).
+
+        Args:
+            state: Serialized agent state
+        """
+        # Restore status
+        self.status = state.get('status', 'ready')
+
+        # Restore statistics
+        stats = state.get('statistics', {})
+        self.total_queries = stats.get('total_queries', 0)
+        self.successful_queries = stats.get('successful_queries', 0)
+        self.failed_queries = stats.get('failed_queries', 0)
+        self.total_response_time_ms = stats.get('total_response_time_ms', 0.0)
+        self.cache_hits = stats.get('cache_hits', 0)
+
 
 if __name__ == "__main__":
     # Test Network Agent

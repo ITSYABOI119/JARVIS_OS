@@ -38,9 +38,53 @@ except ImportError:
     QueryProcessor = None
     print("WARNING: query_processor not available (Week 5 compatibility mode)")
 
+# Import IPC client for cache communication
+try:
+    from ipc_client import IPCClient
+except ImportError:
+    IPCClient = None
+    print("WARNING: ipc_client not available")
+
+# Week 11-17 component imports (optional)
+try:
+    from agent_router import AgentRouter
+except ImportError:
+    AgentRouter = None
+
+try:
+    from agent_health import AgentHealthMonitor
+except ImportError:
+    AgentHealthMonitor = None
+
+try:
+    from system_state_manager import SystemStateManager
+except ImportError:
+    SystemStateManager = None
+
+try:
+    from shield_framework import SHIELDFramework
+except ImportError:
+    SHIELDFramework = None
+
+try:
+    from snapshot_manager import EnhancedRollbackManager
+except ImportError:
+    EnhancedRollbackManager = None
+
 # ============================================================================
 # Configuration
 # ============================================================================
+
+# JARVIS System Prompt (Fix #2: Add AI context)
+JARVIS_SYSTEM_PROMPT = """You are JARVIS, an AI-controlled operating system agent.
+
+Your role:
+- Interpret OS commands (file, process, network, device operations)
+- Provide structured command responses for system control
+- Focus on system operations only (not general conversation)
+- Use deterministic, precise responses for reliable system control
+
+Respond with concise OS commands or system information only."""
 
 def _get_model_path():
     """
@@ -58,15 +102,20 @@ def _get_model_path():
         except:
             pass
 
-    # Base Windows path
-    windows_path = "C:/Users/jluca/Documents/JARVIS_OS/models/Phi-3-mini-4k-instruct-q4.gguf"
-
     if is_wsl:
-        # Convert Windows path to WSL path: C:/ -> /mnt/c/
-        wsl_path = windows_path.replace('C:/', '/mnt/c/')
-        return wsl_path
+        # Try WSL native filesystem first (MUCH faster - ~5s load time)
+        import os
+        home = os.path.expanduser('~')
+        wsl_native_path = os.path.join(home, 'models', 'Phi-3-mini-4k-instruct-q4.gguf')
+        if os.path.exists(wsl_native_path):
+            return wsl_native_path
+
+        # Fallback to Windows mount (slower - ~120s load time)
+        wsl_mount_path = "/mnt/c/Users/jluca/Documents/JARVIS_OS/models/Phi-3-mini-4k-instruct-q4.gguf"
+        return wsl_mount_path
     else:
-        return windows_path
+        # Windows
+        return "C:/Users/jluca/Documents/JARVIS_OS/models/Phi-3-mini-4k-instruct-q4.gguf"
 
 # Model path (auto-detects Windows vs WSL)
 MODEL_PATH = _get_model_path()
@@ -76,13 +125,13 @@ PHI3_CONFIG = {
     'n_ctx': 2048,          # Context window (4096 max, but 2048 sufficient for commands)
     'n_gpu_layers': 35,     # Offload all layers to GPU (RTX 2070)
     'n_threads': 4,         # CPU threads for host operations
-    'verbose': False        # Quiet loading
+    'verbose': True         # Enable verbose loading to debug WSL hang
 }
 
 # Inference parameters
 INFERENCE_CONFIG = {
     'max_tokens': 50,       # Short responses for commands
-    'temperature': 0.7,     # Moderate creativity
+    'temperature': 0.2,     # Low temperature for deterministic command execution (Fix #2)
     'top_p': 0.9,           # Nucleus sampling
     'stop': ["\n"],         # Stop at newline for command responses
     'echo': False           # Don't echo prompt back
@@ -112,13 +161,26 @@ class JARVISAgent:
     - Communicate via IPC (future)
     """
 
-    def __init__(self, model_path=MODEL_PATH, use_query_processor=True):
+    def __init__(self,
+                 model_path=MODEL_PATH,
+                 use_query_processor=True,
+                 # Week 11-17: Component injection
+                 agent_router=None,
+                 health_monitor=None,
+                 state_manager=None,
+                 shield=None,
+                 snapshot_manager=None):
         """
         Initialize JARVIS AI agent
 
         Args:
             model_path (str): Path to Phi-3 Mini model
             use_query_processor (bool): Enable query processor (Week 6+)
+            agent_router (AgentRouter): Multi-agent router (Week 11)
+            health_monitor (AgentHealthMonitor): Health monitor (Week 12)
+            state_manager (SystemStateManager): State manager (Week 13-15)
+            shield (SHIELDFramework): Safety framework (Week 16)
+            snapshot_manager (EnhancedRollbackManager): Snapshot manager (Week 17)
         """
         self.model_path = model_path
         self.model = None
@@ -128,7 +190,26 @@ class JARVISAgent:
 
         # Week 6: Query processor integration
         self.use_query_processor = use_query_processor and (QueryProcessor is not None)
-        self.query_processor = QueryProcessor() if self.use_query_processor else None
+
+        # Fix #1: Initialize IPC client for cache communication
+        self.ipc_client = None
+        if self.use_query_processor and IPCClient is not None:
+            try:
+                self.ipc_client = IPCClient()
+                self.ipc_client.connect()
+                logger.info("[IPC CLIENT] Connected to cache")
+            except Exception as e:
+                logger.warning(f"[IPC CLIENT] Failed to connect: {e}")
+                logger.warning("[IPC CLIENT] Cache lookups will be disabled")
+
+        self.query_processor = QueryProcessor(ipc_client=self.ipc_client) if self.use_query_processor else None
+
+        # Week 11-17: Component injection
+        self.agent_router = agent_router
+        self.health_monitor = health_monitor
+        self.state_manager = state_manager
+        self.shield = shield
+        self.snapshot_manager = snapshot_manager
 
         week = "Week 6" if self.use_query_processor else "Week 5"
         logger.info("="*70)
@@ -236,9 +317,12 @@ class JARVISAgent:
         start_time = time.time()
 
         try:
+            # Fix #2: Wrap query with JARVIS system prompt
+            full_prompt = f"{JARVIS_SYSTEM_PROMPT}\n\nUser: {user_query}\nJARVIS:"
+
             # Generate response
             output = self.model(
-                user_query,
+                full_prompt,
                 **INFERENCE_CONFIG
             )
 
@@ -321,8 +405,11 @@ class JARVISAgent:
         logger.info(f"[CACHE MISS] - Running AI inference")
 
         try:
+            # Fix #2: Wrap query with JARVIS system prompt
+            full_prompt = f"{JARVIS_SYSTEM_PROMPT}\n\nUser: {user_query}\nJARVIS:"
+
             ai_response = self.model(
-                user_query,
+                full_prompt,
                 **INFERENCE_CONFIG
             )
 

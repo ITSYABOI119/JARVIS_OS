@@ -12,6 +12,7 @@ import shutil
 from typing import Dict, Any, Optional
 from pathlib import Path
 from agent_base import AgentBase
+from driver_proxy import get_driver_proxy, read_file_via_driver, write_file_via_driver
 
 
 class FileSystemAgent(AgentBase):
@@ -32,7 +33,8 @@ class FileSystemAgent(AgentBase):
         "ls", "list", "cp", "copy", "mv", "move", "rm", "remove", "delete",
         "chmod", "chown", "permission", "owner",
         "find", "search", "locate",
-        "mkdir", "rmdir", "touch", "cat", "read"
+        "mkdir", "rmdir", "touch", "cat", "read",
+        "driver", "block", "disk", "storage"
     ]
 
     # Action mapping (keyword → action)
@@ -60,6 +62,10 @@ class FileSystemAgent(AgentBase):
         "touch": "create_file",
         "cat": "read_file",
         "read": "read_file",
+        "driver": "show_driver_status",
+        "block": "show_driver_status",
+        "disk": "show_driver_status",
+        "storage": "show_driver_status",
     }
 
     def __init__(self, model=None, shared_context=None):
@@ -71,6 +77,7 @@ class FileSystemAgent(AgentBase):
             shared_context=shared_context
         )
         self.status = "ready"  # No model needed for file operations
+        self.driver_proxy = get_driver_proxy()  # Initialize driver proxy
 
     def process_query(self, query: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
@@ -113,6 +120,8 @@ class FileSystemAgent(AgentBase):
             result = {"error": "Create file disabled for safety (trust level 2 required)"}
         elif action == "read_file":
             result = self._read_file(path if path else "")
+        elif action == "show_driver_status":
+            result = self._show_driver_status()
         else:
             result = {"error": f"Unknown action: {action}"}
 
@@ -356,6 +365,76 @@ class FileSystemAgent(AgentBase):
         except Exception as e:
             return {"error": f"Failed to read file: {str(e)}"}
 
+    def _show_driver_status(self) -> Dict[str, Any]:
+        """Show block driver status (Week 23: Driver Framework Integration)"""
+        try:
+            # Get list of all drivers
+            drivers = self.driver_proxy.list_drivers()
+
+            if not drivers:
+                return {
+                    "drivers": [],
+                    "count": 0,
+                    "mode": "mock" if self.driver_proxy.mock_mode else "real",
+                    "summary": "No block drivers registered"
+                }
+
+            # Get info for each driver
+            driver_info = []
+            for driver_name in drivers:
+                info = self.driver_proxy.get_driver_info(driver_name)
+                if info:
+                    driver_info.append(info)
+
+            return {
+                "drivers": driver_info,
+                "count": len(driver_info),
+                "mode": "mock" if self.driver_proxy.mock_mode else "real",
+                "summary": f"Found {len(driver_info)} block driver(s) ({self.driver_proxy.mock_mode and 'mock mode' or 'real drivers'})"
+            }
+
+        except Exception as e:
+            return {"error": f"Failed to get driver status: {str(e)}"}
+
+    def serialize(self) -> Dict[str, Any]:
+        """
+        Serialize agent state for suspend/resume (Week 22).
+
+        Returns:
+            dict: Agent state including statistics and status
+        """
+        return {
+            'type': 'filesystem_agent',
+            'name': self.name,
+            'status': getattr(self, 'status', 'ready'),
+            'statistics': {
+                'total_queries': getattr(self, 'total_queries', 0),
+                'successful_queries': getattr(self, 'successful_queries', 0),
+                'failed_queries': getattr(self, 'failed_queries', 0),
+                'total_response_time_ms': getattr(self, 'total_response_time_ms', 0.0),
+                'cache_hits': getattr(self, 'cache_hits', 0)
+            },
+            'timestamp': time.time()
+        }
+
+    def deserialize(self, state: Dict[str, Any]):
+        """
+        Restore agent state from suspend/resume (Week 22).
+
+        Args:
+            state: Serialized agent state
+        """
+        # Restore status
+        self.status = state.get('status', 'ready')
+
+        # Restore statistics
+        stats = state.get('statistics', {})
+        self.total_queries = stats.get('total_queries', 0)
+        self.successful_queries = stats.get('successful_queries', 0)
+        self.failed_queries = stats.get('failed_queries', 0)
+        self.total_response_time_ms = stats.get('total_response_time_ms', 0.0)
+        self.cache_hits = stats.get('cache_hits', 0)
+
 
 if __name__ == "__main__":
     # Test FileSystem Agent
@@ -374,6 +453,7 @@ if __name__ == "__main__":
         "find *.py in .",
         "show permissions for .",
         "read file agent_base.py",
+        "show driver status",  # Week 23: Driver integration test
     ]
 
     for query in test_queries:

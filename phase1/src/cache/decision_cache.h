@@ -15,7 +15,7 @@
 #include <stdbool.h>
 
 /* Configuration */
-#define CACHE_SIZE 256          /* Power of 2 for fast modulo */
+#define CACHE_SIZE 512          /* Increased from 256 to accommodate Week 24 storage patterns (258 total) */
 #define MAX_QUERY_LEN 128       /* Max normalized query string */
 #define MAX_ACTION_LEN 256      /* Max action/bytecode length */
 #define CACHE_VERSION 1         /* For future compatibility */

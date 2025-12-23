@@ -4,15 +4,295 @@ JARVIS AI-OS Phase 1 - Agent Router
 
 Routes queries to appropriate specialist agents based on keywords.
 Manages agent coordination and shared context.
+Implements conflict resolution for multi-agent coordination (Week 11).
 """
 
 import time
-from typing import Dict, Any, Optional
+import threading
+from typing import Dict, Any, Optional, List, Set
 from shared_context import SharedContext
 from device_agent import DeviceAgent
 from network_agent import NetworkAgent
 from filesystem_agent import FileSystemAgent
 from user_agent import UserAgent
+
+
+class ConflictResolutionError(Exception):
+    """Raised when conflict resolution fails"""
+    pass
+
+
+class DeadlockDetectedError(ConflictResolutionError):
+    """Raised when deadlock is detected"""
+    pass
+
+
+class ResourceTimeoutError(ConflictResolutionError):
+    """Raised when resource request times out"""
+    pass
+
+
+class ConflictResolver:
+    """
+    Conflict Resolution System (Week 11)
+
+    Handles resource allocation, priority-based arbitration, and deadlock detection.
+
+    Features:
+    - Resource allocation tracking (which agent holds which resources)
+    - Priority-based conflict resolution (device > network > filesystem > user)
+    - Deadlock detection via wait-for graph
+    - Timeout mechanism (5 second default)
+    """
+
+    def __init__(self, agent_priority: List[str]):
+        """
+        Initialize Conflict Resolver
+
+        Args:
+            agent_priority: List of agent names in priority order (highest first)
+        """
+        self.agent_priority = agent_priority
+
+        # Resource allocation tracking
+        # resource_name -> (agent_name, timestamp)
+        self.resource_locks: Dict[str, tuple] = {}
+
+        # Wait-for graph for deadlock detection
+        # agent_name -> set of agents it's waiting for
+        self.wait_for_graph: Dict[str, Set[str]] = {
+            agent: set() for agent in agent_priority
+        }
+
+        # Pending resource requests
+        # (agent_name, resource_name) -> timestamp
+        self.pending_requests: Dict[tuple, float] = {}
+
+        # Thread lock for safe concurrent access
+        self.lock = threading.RLock()
+
+        # Statistics
+        self.stats = {
+            "conflicts_resolved": 0,
+            "deadlocks_detected": 0,
+            "timeouts": 0,
+            "priority_resolutions": 0
+        }
+
+    def request_resource(self, agent_name: str, resource_name: str, timeout: float = 5.0) -> bool:
+        """
+        Request exclusive access to a resource
+
+        Args:
+            agent_name: Name of requesting agent
+            resource_name: Name of resource to acquire
+            timeout: Maximum wait time in seconds (default: 5.0)
+
+        Returns:
+            bool: True if resource acquired, False on timeout
+
+        Raises:
+            DeadlockDetectedError: If deadlock is detected
+        """
+        with self.lock:
+            start_time = time.time()
+            request_time = start_time
+
+            # Record pending request
+            self.pending_requests[(agent_name, resource_name)] = request_time
+
+            # Wait for resource to become available
+            while (time.time() - start_time) < timeout:
+                # Check if resource is available
+                if resource_name not in self.resource_locks:
+                    # Resource available - acquire it
+                    self.resource_locks[resource_name] = (agent_name, time.time())
+
+                    # Remove from pending requests
+                    if (agent_name, resource_name) in self.pending_requests:
+                        del self.pending_requests[(agent_name, resource_name)]
+
+                    # Clear wait-for relationship
+                    self.wait_for_graph[agent_name].clear()
+
+                    return True
+
+                # Resource is locked - check who holds it
+                holder_agent, lock_time = self.resource_locks[resource_name]
+
+                # Resolve conflict based on priority
+                if self._should_preempt(agent_name, holder_agent):
+                    # Higher priority agent can preempt lower priority
+                    print(f"[CONFLICT] {agent_name} preempts {holder_agent} for resource '{resource_name}'")
+                    self.stats["priority_resolutions"] += 1
+                    self.stats["conflicts_resolved"] += 1
+
+                    # Release resource from holder
+                    self._force_release(resource_name, holder_agent)
+
+                    # Acquire for requester
+                    self.resource_locks[resource_name] = (agent_name, time.time())
+
+                    # Remove from pending
+                    if (agent_name, resource_name) in self.pending_requests:
+                        del self.pending_requests[(agent_name, resource_name)]
+
+                    # Clear wait-for relationship
+                    self.wait_for_graph[agent_name].clear()
+
+                    return True
+
+                # Lower or equal priority - must wait
+                # Update wait-for graph
+                self.wait_for_graph[agent_name].add(holder_agent)
+
+                # Check for deadlock
+                if self._detect_deadlock():
+                    self.stats["deadlocks_detected"] += 1
+                    # Clear wait-for
+                    self.wait_for_graph[agent_name].clear()
+                    if (agent_name, resource_name) in self.pending_requests:
+                        del self.pending_requests[(agent_name, resource_name)]
+                    raise DeadlockDetectedError(
+                        f"Deadlock detected: {agent_name} waiting for {holder_agent} on resource '{resource_name}'"
+                    )
+
+                # Wait a bit before retrying
+                time.sleep(0.01)
+
+            # Timeout reached
+            self.stats["timeouts"] += 1
+
+            # Clean up
+            self.wait_for_graph[agent_name].clear()
+            if (agent_name, resource_name) in self.pending_requests:
+                del self.pending_requests[(agent_name, resource_name)]
+
+            raise ResourceTimeoutError(
+                f"Timeout: {agent_name} could not acquire resource '{resource_name}' within {timeout}s"
+            )
+
+    def release_resource(self, resource_name: str, agent_name: Optional[str] = None) -> bool:
+        """
+        Release a resource
+
+        Args:
+            resource_name: Name of resource to release
+            agent_name: Name of agent releasing (optional, for validation)
+
+        Returns:
+            bool: True if released, False if not held
+        """
+        with self.lock:
+            if resource_name not in self.resource_locks:
+                return False
+
+            holder_agent, _ = self.resource_locks[resource_name]
+
+            # Validate holder if agent_name provided
+            if agent_name and holder_agent != agent_name:
+                print(f"[WARNING] {agent_name} trying to release resource held by {holder_agent}")
+                return False
+
+            # Release resource
+            del self.resource_locks[resource_name]
+
+            # Clear any wait-for relationships involving this resource
+            # (agents waiting for the holder can now proceed)
+            for agent in self.wait_for_graph:
+                if holder_agent in self.wait_for_graph[agent]:
+                    self.wait_for_graph[agent].remove(holder_agent)
+
+            return True
+
+    def _force_release(self, resource_name: str, agent_name: str):
+        """Force release of a resource (for preemption)"""
+        if resource_name in self.resource_locks:
+            holder, _ = self.resource_locks[resource_name]
+            if holder == agent_name:
+                del self.resource_locks[resource_name]
+
+    def _should_preempt(self, requester: str, holder: str) -> bool:
+        """
+        Determine if requester should preempt holder based on priority
+
+        Priority order: device > network > filesystem > user
+
+        Args:
+            requester: Agent requesting resource
+            holder: Agent currently holding resource
+
+        Returns:
+            bool: True if requester has higher priority
+        """
+        try:
+            requester_priority = self.agent_priority.index(requester)
+            holder_priority = self.agent_priority.index(holder)
+            return requester_priority < holder_priority
+        except ValueError:
+            # Unknown agent - don't preempt
+            return False
+
+    def _detect_deadlock(self) -> bool:
+        """
+        Detect deadlock using cycle detection in wait-for graph
+
+        Uses depth-first search to find cycles.
+
+        Returns:
+            bool: True if deadlock detected
+        """
+        # DFS-based cycle detection
+        visited = set()
+        rec_stack = set()
+
+        def has_cycle(node):
+            visited.add(node)
+            rec_stack.add(node)
+
+            # Check all neighbors
+            for neighbor in self.wait_for_graph[node]:
+                if neighbor not in visited:
+                    if has_cycle(neighbor):
+                        return True
+                elif neighbor in rec_stack:
+                    # Back edge found - cycle exists
+                    return True
+
+            rec_stack.remove(node)
+            return False
+
+        # Check all nodes
+        for node in self.wait_for_graph:
+            if node not in visited:
+                if has_cycle(node):
+                    return True
+
+        return False
+
+    def get_resource_status(self) -> Dict[str, Any]:
+        """Get current resource allocation status"""
+        with self.lock:
+            return {
+                "locked_resources": {
+                    resource: {"holder": agent, "lock_time": timestamp}
+                    for resource, (agent, timestamp) in self.resource_locks.items()
+                },
+                "pending_requests": {
+                    f"{agent}->{resource}": timestamp
+                    for (agent, resource), timestamp in self.pending_requests.items()
+                },
+                "wait_for_graph": {
+                    agent: list(waiting_for)
+                    for agent, waiting_for in self.wait_for_graph.items()
+                    if waiting_for  # Only show non-empty
+                },
+                "statistics": dict(self.stats)
+            }
+
+    def get_statistics(self) -> Dict[str, int]:
+        """Get conflict resolution statistics"""
+        return dict(self.stats)
 
 
 class AgentRouter:
@@ -46,6 +326,9 @@ class AgentRouter:
 
         # Routing priority (checked in this order)
         self.routing_priority = ["device", "network", "filesystem", "user"]
+
+        # Initialize conflict resolver (Week 11)
+        self.conflict_resolver = ConflictResolver(self.routing_priority)
 
         # Routing statistics
         self.routing_stats = {
@@ -196,8 +479,49 @@ class AgentRouter:
         return {
             "shared_context": self.shared_context.to_dict(),
             "agents": self.get_agent_status(),
-            "routing_stats": self.get_routing_stats()
+            "routing_stats": self.get_routing_stats(),
+            "conflict_resolution": self.conflict_resolver.get_resource_status()
         }
+
+    def request_resource(self, agent_name: str, resource_name: str, timeout: float = 5.0) -> bool:
+        """
+        Request resource for an agent (Week 11)
+
+        Args:
+            agent_name: Agent requesting resource
+            resource_name: Resource to acquire
+            timeout: Maximum wait time in seconds
+
+        Returns:
+            bool: True if acquired
+
+        Raises:
+            DeadlockDetectedError: If deadlock detected
+            ResourceTimeoutError: If timeout reached
+        """
+        return self.conflict_resolver.request_resource(agent_name, resource_name, timeout)
+
+    def release_resource(self, resource_name: str, agent_name: Optional[str] = None) -> bool:
+        """
+        Release resource (Week 11)
+
+        Args:
+            resource_name: Resource to release
+            agent_name: Agent releasing (optional)
+
+        Returns:
+            bool: True if released
+        """
+        return self.conflict_resolver.release_resource(resource_name, agent_name)
+
+    def get_conflict_stats(self) -> Dict[str, int]:
+        """
+        Get conflict resolution statistics (Week 11)
+
+        Returns:
+            dict: Conflict resolution stats
+        """
+        return self.conflict_resolver.get_statistics()
 
 
 if __name__ == "__main__":
