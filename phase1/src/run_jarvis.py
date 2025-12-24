@@ -202,6 +202,22 @@ def launch_interactive_shell(enable_ai=True, enable_shield=True, enable_snapshot
         print(f"   Registered components: state_manager + 4 agents")
         print()
 
+    # Phase 2 Week 28: Initialize IPC client for seL4 cache
+    print("Initializing IPC client...")
+    from ai.ipc_client import IPCClient
+    ipc_client = None
+    try:
+        ipc_client = IPCClient()
+        if ipc_client.connect():
+            print("✅ IPC client connected (/dev/shm/jarvis_ipc)")
+        else:
+            print("⚠️  IPC client: seL4 not available, using AI fallback")
+            ipc_client = None
+    except Exception as e:
+        print(f"⚠️  IPC client: Connection failed ({e}), using AI fallback")
+        ipc_client = None
+    print()
+
     # Launch shell with ALL components
     print("Starting JARVIS shell...")
     print("Type 'help' for available commands")
@@ -216,7 +232,8 @@ def launch_interactive_shell(enable_ai=True, enable_shield=True, enable_snapshot
         state_manager=state_manager if enable_ai else None,
         shield=shield if enable_shield else None,
         snapshot_manager=snapshot_manager if enable_snapshots else None,
-        suspend_manager=suspend_manager if enable_ai else None
+        suspend_manager=suspend_manager if enable_ai else None,
+        ipc_client=ipc_client  # Week 28: seL4 cache integration
     )
 
     shell.start()

@@ -32,7 +32,10 @@ typedef enum {
     MSG_RESPONSE = 1,       /* Response from AI to kernel */
     MSG_QUERY = 2,          /* Cache query */
     MSG_EVENT = 3,          /* System event notification */
-    MSG_CONTROL = 4         /* Control message (shutdown, etc) */
+    MSG_CONTROL = 4,        /* Control message (shutdown, etc) */
+    MSG_CACHE_LOOKUP = 5,   /* Python → seL4 cache lookup (Phase 2 Week 28) */
+    MSG_CACHE_RESPONSE = 6, /* seL4 → Python cache result (Phase 2 Week 28) */
+    MSG_CACHE_STATS = 7     /* Python → seL4 cache stats request (Phase 2 Week 28) */
 } message_type_t;
 
 /* Message structure */

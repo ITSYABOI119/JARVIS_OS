@@ -48,6 +48,12 @@ except ImportError:
     SuspendManager = None
     print("WARNING: Suspend manager not available (Week 22)")
 
+try:
+    from ipc_client import IPCClient
+except ImportError:
+    IPCClient = None
+    print("WARNING: IPC client not available (Phase 2 Week 28)")
+
 # Try to import readline for command history (may not be available on Windows)
 # DISABLED on Windows due to pyreadline3 bugs
 try:
@@ -142,7 +148,9 @@ class JARVISShell:
                  shield=None,
                  snapshot_manager=None,
                  # Week 22: Suspend/resume
-                 suspend_manager=None):
+                 suspend_manager=None,
+                 # Phase 2 Week 28: IPC client
+                 ipc_client=None):
         """
         Initialize JARVIS shell
 
@@ -155,6 +163,7 @@ class JARVISShell:
             shield (SHIELDFramework): Safety framework (Week 16)
             snapshot_manager (EnhancedRollbackManager): Snapshot manager (Week 17)
             suspend_manager (SuspendManager): Suspend/resume manager (Week 22)
+            ipc_client (IPCClient): IPC client for seL4 cache communication (Phase 2 Week 28)
         """
         self.enable_ai = enable_ai
         self.auto_load_model = auto_load_model
@@ -169,6 +178,9 @@ class JARVISShell:
         self._injected_shield = shield
         self._injected_snapshot_manager = snapshot_manager
         self._injected_suspend_manager = suspend_manager
+
+        # Phase 2 Week 28: IPC client for seL4 cache
+        self.ipc_client = ipc_client
 
         # Multi-agent router (Week 11)
         # Use injected router if provided, otherwise create new one
@@ -587,13 +599,68 @@ class JARVISShell:
         print()
 
     def _execute_cache(self):
-        """Show cache statistics"""
-        if not self.ai_agent or not self.ai_agent.query_processor:
-            print("[ERROR] Query processor not available")
-            return
+        """
+        Show cache statistics
 
+        Phase 2 Week 28: Display both Python cache and seL4 cache statistics
+        """
         print()
-        self.ai_agent.query_processor.print_statistics()
+        print("=" * 70)
+        print("Cache Statistics")
+        print("=" * 70)
+        print()
+
+        # Phase 2 Week 28: Show seL4 cache statistics (source of truth)
+        if self.ipc_client and hasattr(self.ipc_client, 'connected') and self.ipc_client.connected:
+            try:
+                # Request full statistics from seL4
+                msg_id = self.ipc_client.send_cache_stats_request()
+
+                if msg_id > 0:
+                    # Wait for response (10ms timeout)
+                    stats = self.ipc_client.recv_cache_stats(msg_id, timeout_ms=10)
+
+                    if stats:
+                        print("🔷 seL4 Decision Cache (Source of Truth)")
+                        print("-" * 70)
+                        print(f"  Capacity:      {stats['used']}/{stats['capacity']} entries ({stats['used']/stats['capacity']*100:.1f}% full)")
+                        print(f"  Total Lookups: {stats['lookups']}")
+                        print(f"  Cache Hits:    {stats['hits']} ({stats['hit_rate']:.1f}%)")
+                        print(f"  Cache Misses:  {stats['misses']}")
+                        print(f"  Evictions:     {stats['evictions']}")
+                        print()
+
+                        # Show real-time Python tracking
+                        sel4_hits = self.stats['cache_hits']
+                        sel4_total = sel4_hits + self.stats['cache_misses']
+                        sel4_hit_rate = (sel4_hits / sel4_total * 100) if sel4_total > 0 else 0
+
+                        print("📊 Real-Time Tracking (This Session)")
+                        print("-" * 70)
+                        print(f"  seL4 Cache Queries: {sel4_total}")
+                        print(f"  Hits:   {sel4_hits} ({sel4_hit_rate:.1f}%)")
+                        print(f"  Misses: {self.stats['cache_misses']}")
+                        print()
+
+            except Exception as e:
+                print(f"⚠️  Failed to retrieve seL4 cache statistics: {e}")
+                print()
+
+        else:
+            print("⚠️  seL4 IPC not connected - showing Python cache only")
+            print()
+
+        # Show Python-side cache (QueryProcessor)
+        if self.ai_agent and self.ai_agent.query_processor:
+            print("🐍 Python Query Processor Cache")
+            print("-" * 70)
+            self.ai_agent.query_processor.print_statistics()
+        else:
+            print("Python query processor not available")
+            print()
+
+        print("=" * 70)
+        print()
 
     def _execute_agent(self):
         """Show AI agent statistics"""
@@ -1429,6 +1496,8 @@ class JARVISShell:
         """
         Execute AI query
 
+        Phase 2 Week 28: Query seL4 cache first via IPC before routing to AI
+
         Args:
             query (str): User's natural language query
         """
@@ -1436,6 +1505,38 @@ class JARVISShell:
             print("[ERROR] AI agent not initialized")
             self.stats['errors'] += 1
             return
+
+        # Phase 2 Week 28: Try seL4 cache first (if IPC connected)
+        if self.ipc_client and hasattr(self.ipc_client, 'connected') and self.ipc_client.connected:
+            # Normalize query (lowercase, collapse spaces, trim)
+            normalized = ' '.join(query.lower().split())
+
+            try:
+                # Send cache lookup to seL4
+                msg_id = self.ipc_client.send_cache_lookup(normalized)
+
+                if msg_id > 0:
+                    # Wait for response (10ms timeout = 100× safety margin over <100μs IPC target)
+                    response = self.ipc_client.recv_cache_response(msg_id, timeout_ms=10)
+
+                    if response and response['hit']:
+                        # seL4 cache HIT!
+                        self.stats['cache_hits'] += 1
+
+                        print(f"[seL4 CACHE HIT] {response['action']} (trust={response['trust']})")
+                        print()
+                        print(f"  Cached action from seL4 decision cache")
+                        print(f"  IPC latency: <10ms (target: <100μs)")
+                        print()
+                        return
+
+            except Exception as e:
+                # IPC error - fall back to AI
+                logger.warning(f"seL4 IPC cache lookup failed: {e}")
+
+        # seL4 cache miss or IPC unavailable - route to AI
+        if self.ipc_client and hasattr(self.ipc_client, 'connected') and self.ipc_client.connected:
+            self.stats['cache_misses'] += 1
 
         # Show processing indicator
         print("[PROCESSING] ", end='', flush=True)
@@ -1601,10 +1702,27 @@ def main():
 
     args = parser.parse_args()
 
+    # Phase 2 Week 28: Create IPC client for seL4 cache
+    ipc_client = None
+    if IPCClient:
+        try:
+            ipc_client = IPCClient()
+            if ipc_client.connect():
+                print("[IPC] Connected to seL4 cache (/dev/shm/jarvis_ipc)")
+            else:
+                print("[IPC] seL4 not available, using AI fallback")
+                ipc_client = None
+        except Exception as e:
+            print(f"[IPC] Connection failed: {e}, using AI fallback")
+            ipc_client = None
+    else:
+        print("[IPC] IPC client not available (Phase 2 Week 28 feature)")
+
     # Create and start shell
     shell = JARVISShell(
         enable_ai=not args.no_ai,
-        auto_load_model=args.load_model
+        auto_load_model=args.load_model,
+        ipc_client=ipc_client
     )
 
     try:
