@@ -109,114 +109,39 @@ def check_dependencies():
 
 
 def launch_interactive_shell(enable_ai=True, enable_shield=True, enable_snapshots=True):
-    """Launch JARVIS interactive shell with all features"""
-    print("=" * 70)
-    print("JARVIS AI-OS - Interactive Shell")
-    print("=" * 70)
-    print()
-    print("Features enabled:")
-    print(f"  AI Agent (Phi-3 Mini): {'✅' if enable_ai else '❌'}")
-    print(f"  SHIELD Safety: {'✅' if enable_shield else '❌'}")
-    print(f"  Shadow Execution: {'✅' if enable_shield else '❌'}")
-    print(f"  Snapshots & Rollback: {'✅' if enable_snapshots else '❌'}")
-    print(f"  Suspend/Resume: {'✅' if enable_ai else '❌'}")
-    print()
+    """
+    Launch JARVIS interactive shell with all features
 
-    # Import components
+    Phase 2 Week 29: Refactored to use SystemBootstrap for clean initialization
+    """
+    # Import required components
     from shell.shell import JARVISShell
-    from ai.agent import JARVISAgent
-    from ai.agent_router import AgentRouter
-    from ai.agent_health import AgentHealthMonitor
-    from ai.model_loader import ModelLoader
-    from ai.system_state_manager import SystemStateManager
-    from ai.shield_framework import SHIELDFramework
-    from ai.snapshot_manager import EnhancedRollbackManager
-    from ai.suspend_manager import SuspendManager
+    # Add phase2 to path for SystemBootstrap
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent / "phase2" / "src" / "ai"))
+    from system_bootstrap import SystemBootstrap, BootstrapError
 
-    # Initialize components to None
-    model_loader = None
-    state_manager = None
-    shield = None
-    snapshot_manager = None
-    agent_router = None
-    health_monitor = None
-    suspend_manager = None
+    # Use SystemBootstrap to initialize all components
+    bootstrap = SystemBootstrap(config={
+        'enable_ai': enable_ai,
+        'enable_shield': enable_shield,
+        'enable_snapshots': enable_snapshots
+    })
 
-    if enable_ai:
-        print("Initializing AI components...")
-        model_loader = ModelLoader()
-
-        if enable_snapshots:
-            snapshot_manager = EnhancedRollbackManager(
-                max_memory_snapshots=5,
-                max_disk_snapshots=20
-            )
-
-        state_manager = SystemStateManager(
-            model_loader=model_loader,
-            snapshot_manager=snapshot_manager
-        )
-
-        # Start in IDLE state (TinyLlama)
-        print("Loading TinyLlama 1.1B (IDLE state)...")
-        from ai.system_state_manager import SystemState
-        state_manager.transition_to(SystemState.IDLE, trigger="startup")
-        print("✅ TinyLlama loaded")
-        print()
-
-    if enable_shield:
-        print("Initializing SHIELD safety framework...")
-        shield = SHIELDFramework()
-        print("✅ SHIELD initialized (100 action types)")
-        print()
-
-    # Initialize agent router (Week 11)
-    if enable_ai:
-        print("Initializing multi-agent router...")
-        agent_router = AgentRouter()
-        print("✅ Agent router initialized (4 specialist agents)")
-        print()
-
-        # Initialize health monitor (Week 12)
-        print("Initializing health monitor...")
-        # Health monitor needs agent list - use router's agents
-        agent_list = list(agent_router.agents.values())
-        health_monitor = AgentHealthMonitor(agent_list)
-        print("✅ Health monitor initialized")
-        print()
-
-        # Initialize suspend manager (Week 22)
-        print("Initializing suspend manager...")
-        suspend_manager = SuspendManager()
-
-        # Register components that support suspend/resume
-        if state_manager:
-            suspend_manager.register_component("state_manager", state_manager)
-
-        # Register agents from router
-        if agent_router:
-            for agent_name, agent in agent_router.agents.items():
-                suspend_manager.register_component(agent_name, agent)
-
-        print("✅ Suspend manager initialized")
-        print(f"   Registered components: state_manager + 4 agents")
-        print()
-
-    # Phase 2 Week 28: Initialize IPC client for seL4 cache
-    print("Initializing IPC client...")
-    from ai.ipc_client import IPCClient
-    ipc_client = None
     try:
-        ipc_client = IPCClient()
-        if ipc_client.connect():
-            print("✅ IPC client connected (/dev/shm/jarvis_ipc)")
-        else:
-            print("⚠️  IPC client: seL4 not available, using AI fallback")
-            ipc_client = None
-    except Exception as e:
-        print(f"⚠️  IPC client: Connection failed ({e}), using AI fallback")
-        ipc_client = None
-    print()
+        components = bootstrap.initialize_all()
+    except BootstrapError as e:
+        print(f"\n❌ Fatal error during initialization: {e}")
+        print("Cannot start JARVIS without critical components.")
+        sys.exit(1)
+
+    # Get initialized components
+    ipc_client = components.get('ipc_client')
+    agent_router = components.get('agent_router')
+    health_monitor = components.get('health_monitor')
+    state_manager = components.get('state_manager')
+    shield = components.get('shield')
+    snapshot_manager = components.get('snapshot_manager')
+    suspend_manager = components.get('suspend_manager')
 
     # Launch shell with ALL components
     print("Starting JARVIS shell...")
@@ -227,12 +152,12 @@ def launch_interactive_shell(enable_ai=True, enable_shield=True, enable_snapshot
     shell = JARVISShell(
         enable_ai=enable_ai,
         auto_load_model=False,  # Model already loaded in state_manager
-        agent_router=agent_router if enable_ai else None,
-        health_monitor=health_monitor if enable_ai else None,
-        state_manager=state_manager if enable_ai else None,
-        shield=shield if enable_shield else None,
-        snapshot_manager=snapshot_manager if enable_snapshots else None,
-        suspend_manager=suspend_manager if enable_ai else None,
+        agent_router=agent_router,
+        health_monitor=health_monitor,
+        state_manager=state_manager,
+        shield=shield,
+        snapshot_manager=snapshot_manager,
+        suspend_manager=suspend_manager,
         ipc_client=ipc_client  # Week 28: seL4 cache integration
     )
 
