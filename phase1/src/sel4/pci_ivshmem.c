@@ -249,16 +249,20 @@ bool ivshmem_map_bar2(ivshmem_device_t *dev)
 
 #else
     /*
-     * Default: Direct mapping as fallback
-     * This may or may not work depending on seL4 configuration.
+     * seL4 tutorials framework doesn't provide device memory mapping.
+     * Return false to trigger local fallback buffer in main.c.
+     *
+     * Direct physical address access causes VM fault in seL4 user space
+     * because memory must be mapped via seL4's capability system.
      */
-    dev->bar2_vaddr = (void *)(uintptr_t)dev->bar2_phys;
-    dev->mapped = true;
-    printf("[ivshmem] WARNING: Using direct mapping (may not work)\n");
+    printf("[ivshmem] Device memory mapping not available in seL4 user space\n");
+    printf("[ivshmem] Physical address 0x%08x cannot be accessed directly\n",
+           dev->bar2_phys);
+    printf("[ivshmem] Falling back to local buffer\n");
+    dev->bar2_vaddr = NULL;
+    dev->mapped = false;
+    return false;
 #endif
-
-    printf("[ivshmem] BAR2 mapped: vaddr=%p\n", dev->bar2_vaddr);
-    return true;
 }
 
 /**
