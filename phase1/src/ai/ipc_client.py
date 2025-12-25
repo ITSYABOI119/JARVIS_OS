@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
 """
-JARVIS AI-OS Phase 1 - IPC Client
+JARVIS AI-OS Phase 1/2 - IPC Client
 Week 5: AI Agent Bootstrap
 Week 8: Real Shared Memory Integration
+Week 28: Bidirectional IPC (Dual Ring Buffer)
+Week 30: ivshmem Shared Memory Support
 
 Python client for connecting to seL4 IPC ring buffer.
 Mirrors the C implementation in phase1/src/ipc/ring_buffer.{h,c}
+and phase1/src/sel4/dual_ring_buffer.{h,c}
 
 Architecture:
-- Shared memory for ring buffer (mmap)
-- Lock-free SPSC ring buffer
+- Shared memory for ring buffer (mmap or ivshmem)
+- Lock-free SPSC dual ring buffer (query + response)
 - Matches C structure layout for interoperability
 
-Week 8 Updates:
-- Real shared memory via mmap
-- Ring buffer read/write operations
-- Connection health checking
+Week 30 Updates:
+- Support for dual_ring_buffer_t (567KB, two rings)
+- Magic number validation (JARV = 0x4A415256)
+- Wait for seL4 initialization before use
 """
 
 import os
@@ -28,17 +31,32 @@ import logging
 from pathlib import Path
 
 # ============================================================================
-# Constants (must match C implementation in ring_buffer.h)
+# Constants (must match C implementation in ring_buffer.h and dual_ring_buffer.h)
 # ============================================================================
 
 RING_BUFFER_SIZE = 1024
 MAX_MESSAGE_SIZE = 256
 CACHE_LINE_SIZE = 64
 
-# Shared memory size (must fit ring buffer structure)
-# Ring buffer needs: head (8) + tail (8) + padding (48) + messages array (1024 * 276)
-# Total: 64 + 282624 = 282688 bytes
-SHM_SIZE = 283648  # ~277KB (rounded to 1KB boundary)
+# Single ring buffer size (~283KB)
+SINGLE_RING_SHM_SIZE = 283648
+
+# Dual ring buffer size (~567KB) - Week 28/30
+# dual_ring_buffer_t: magic (4) + version (4) + query_ring (~283KB) + response_ring (~283KB)
+DUAL_RING_SHM_SIZE = 567296
+
+# Default shared memory size (use dual ring for Week 30+)
+SHM_SIZE = DUAL_RING_SHM_SIZE
+
+# Dual ring buffer magic number and version
+DUAL_RING_MAGIC = 0x4A415256  # "JARV" in hex
+DUAL_RING_VERSION = 1
+
+# Dual ring buffer offsets (from dual_ring_buffer.h)
+DUAL_RING_MAGIC_OFFSET = 0
+DUAL_RING_VERSION_OFFSET = 4
+DUAL_RING_QUERY_OFFSET = 8  # Start of query_ring (Python writes, seL4 reads)
+DUAL_RING_RESPONSE_OFFSET = 8 + SINGLE_RING_SHM_SIZE  # Start of response_ring
 
 # Message types (must match C enum message_type_t)
 MSG_COMMAND = 0
@@ -46,6 +64,9 @@ MSG_RESPONSE = 1
 MSG_QUERY = 2
 MSG_EVENT = 3
 MSG_CONTROL = 4
+MSG_CACHE_LOOKUP = 5    # Phase 2 Week 28: Python → seL4 cache lookup
+MSG_CACHE_RESPONSE = 6  # Phase 2 Week 28: seL4 → Python cache result
+MSG_CACHE_STATS = 7     # Phase 2 Week 28: Python → seL4 stats request
 
 # Logging
 logging.basicConfig(level=logging.INFO, format='[%(name)s] %(message)s')
@@ -188,6 +209,20 @@ class IPCClient:
             logger.error(f"Failed to connect: {e}")
             return False
 
+    def _read_uint32(self, offset):
+        """Read 32-bit unsigned integer from shared memory"""
+        if self.use_mock:
+            return 0
+        self.shm.seek(offset)
+        return struct.unpack('<I', self.shm.read(4))[0]
+
+    def _write_uint32(self, offset, value):
+        """Write 32-bit unsigned integer to shared memory"""
+        if self.use_mock:
+            return
+        self.shm.seek(offset)
+        self.shm.write(struct.pack('<I', value))
+
     def _read_uint64(self, offset):
         """Read 64-bit unsigned integer from shared memory"""
         if self.use_mock:
@@ -201,6 +236,61 @@ class IPCClient:
             return
         self.shm.seek(offset)
         self.shm.write(struct.pack('<Q', value))
+
+    def wait_for_initialization(self, timeout_s=10):
+        """
+        Wait for seL4 to initialize the dual ring buffer (Week 30)
+
+        Checks for the JARV magic number at offset 0 which indicates
+        seL4 has initialized the shared memory region.
+
+        Args:
+            timeout_s (float): Timeout in seconds (default 10)
+
+        Returns:
+            bool: True if initialized, False on timeout
+        """
+        if self.use_mock:
+            logger.info("Mock mode - skipping initialization check")
+            return True
+
+        if not self.connected:
+            logger.error("Not connected")
+            return False
+
+        logger.info(f"Waiting for seL4 to initialize shared memory (timeout: {timeout_s}s)...")
+
+        start = time.time()
+        while (time.time() - start) < timeout_s:
+            magic = self._read_uint32(DUAL_RING_MAGIC_OFFSET)
+
+            if magic == DUAL_RING_MAGIC:
+                version = self._read_uint32(DUAL_RING_VERSION_OFFSET)
+                logger.info(f"Dual ring buffer initialized by seL4")
+                logger.info(f"  Magic: 0x{magic:08X} (JARV)")
+                logger.info(f"  Version: {version}")
+                return True
+
+            # Not yet initialized, wait a bit
+            time.sleep(0.1)
+
+        logger.warning(f"Timeout waiting for seL4 initialization (magic=0x{magic:08X})")
+        return False
+
+    def is_dual_ring_initialized(self):
+        """
+        Check if dual ring buffer is initialized (has valid magic number)
+
+        Returns:
+            bool: True if magic number matches, False otherwise
+        """
+        if self.use_mock:
+            return True
+        if not self.connected:
+            return False
+
+        magic = self._read_uint32(DUAL_RING_MAGIC_OFFSET)
+        return magic == DUAL_RING_MAGIC
 
     def _get_next_slot(self, head):
         """Calculate next ring buffer slot"""
@@ -370,6 +460,197 @@ class IPCClient:
 
         except Exception as e:
             logger.error(f"Error during disconnect: {e}")
+
+    # ========================================================================
+    # Phase 2 Week 28: Cache Lookup Methods
+    # ========================================================================
+
+    def send_cache_lookup(self, query):
+        """
+        Send cache lookup query to seL4 decision cache
+
+        Args:
+            query (str): Normalized query string
+
+        Returns:
+            int: Message ID (for matching response), or 0 on failure
+        """
+        if not self.connected:
+            logger.error("Not connected")
+            return 0
+
+        # Convert query to bytes
+        if isinstance(query, str):
+            query_bytes = query.encode('utf-8')
+        else:
+            query_bytes = query
+
+        # Check query size
+        if len(query_bytes) > MAX_MESSAGE_SIZE:
+            logger.error(f"Query too large ({len(query_bytes)} > {MAX_MESSAGE_SIZE})")
+            return 0
+
+        # Use send_message with MSG_CACHE_LOOKUP type
+        msg_id = self.message_id_counter
+        if self.send_message(MSG_CACHE_LOOKUP, query):
+            return msg_id
+        else:
+            return 0
+
+    def recv_cache_response(self, msg_id, timeout_ms=10):
+        """
+        Receive cache response from seL4
+
+        Args:
+            msg_id (int): Expected message ID
+            timeout_ms (int): Timeout in milliseconds (default 10ms)
+
+        Returns:
+            dict: {'hit': bool, 'action': str, 'trust': int} or None on timeout/error
+        """
+        if not self.connected:
+            logger.error("Not connected")
+            return None
+
+        # Mock mode - no responses
+        if self.use_mock:
+            return None
+
+        try:
+            start_time = time.time()
+            timeout_s = timeout_ms / 1000.0
+
+            while (time.time() - start_time) < timeout_s:
+                # Try to receive response
+                msg = self.receive_message(timeout_ms=timeout_ms)
+
+                if msg and msg.type == MSG_CACHE_RESPONSE:
+                    # Check message ID match
+                    if msg.id != msg_id:
+                        logger.warning(f"Message ID mismatch (expected {msg_id}, got {msg.id})")
+                        # Continue waiting - might be old response
+                        continue
+
+                    # Parse response payload
+                    payload = msg.payload[:msg.payload_size].decode('utf-8', errors='ignore')
+
+                    if payload == "MISS":
+                        # Cache miss
+                        return {'hit': False, 'action': '', 'trust': 0}
+
+                    elif payload.startswith("HIT|"):
+                        # Cache hit: "HIT|action|trust"
+                        parts = payload.split('|')
+                        if len(parts) >= 3:
+                            action = parts[1]
+                            trust = int(parts[2])
+                            return {'hit': True, 'action': action, 'trust': trust}
+                        else:
+                            logger.error(f"Invalid HIT response format: {payload}")
+                            return None
+
+                    else:
+                        logger.error(f"Invalid response payload: {payload}")
+                        return None
+
+            # Timeout
+            return None
+
+        except Exception as e:
+            logger.error(f"recv_cache_response failed: {e}")
+            return None
+
+    def send_cache_stats_request(self):
+        """
+        Request full cache statistics from seL4
+
+        Returns:
+            int: Message ID (for matching response), or 0 on failure
+        """
+        if not self.connected:
+            logger.error("Not connected")
+            return 0
+
+        # Send empty MSG_CACHE_STATS message
+        msg_id = self.message_id_counter
+        if self.send_message(MSG_CACHE_STATS, ""):
+            return msg_id
+        else:
+            return 0
+
+    def recv_cache_stats(self, msg_id, timeout_ms=10):
+        """
+        Receive cache statistics from seL4
+
+        Args:
+            msg_id (int): Expected message ID
+            timeout_ms (int): Timeout in milliseconds (default 10ms)
+
+        Returns:
+            dict: {'capacity': int, 'used': int, 'lookups': int, 'hits': int,
+                   'misses': int, 'evictions': int, 'hit_rate': float}
+            or None on timeout/error
+        """
+        if not self.connected:
+            logger.error("Not connected")
+            return None
+
+        # Mock mode - no responses
+        if self.use_mock:
+            return None
+
+        try:
+            start_time = time.time()
+            timeout_s = timeout_ms / 1000.0
+
+            while (time.time() - start_time) < timeout_s:
+                # Try to receive response
+                msg = self.receive_message(timeout_ms=timeout_ms)
+
+                if msg and msg.type == MSG_RESPONSE:  # Stats response uses MSG_RESPONSE
+                    # Check message ID match
+                    if msg.id != msg_id:
+                        logger.warning(f"Message ID mismatch (expected {msg_id}, got {msg.id})")
+                        continue
+
+                    # Parse stats payload: "capacity|used|lookups|hits|misses|evictions"
+                    payload = msg.payload[:msg.payload_size].decode('utf-8', errors='ignore')
+                    parts = payload.split('|')
+
+                    if len(parts) >= 6:
+                        capacity = int(parts[0])
+                        used = int(parts[1])
+                        lookups = int(parts[2])
+                        hits = int(parts[3])
+                        misses = int(parts[4])
+                        evictions = int(parts[5])
+
+                        # Calculate hit rate
+                        hit_rate = (hits / lookups * 100.0) if lookups > 0 else 0.0
+
+                        return {
+                            'capacity': capacity,
+                            'used': used,
+                            'lookups': lookups,
+                            'hits': hits,
+                            'misses': misses,
+                            'evictions': evictions,
+                            'hit_rate': hit_rate
+                        }
+                    else:
+                        logger.error(f"Invalid stats response format: {payload}")
+                        return None
+
+            # Timeout
+            return None
+
+        except Exception as e:
+            logger.error(f"recv_cache_stats failed: {e}")
+            return None
+
+    # ========================================================================
+    # End of Phase 2 Week 28 additions
+    # ========================================================================
 
     def get_statistics(self):
         """

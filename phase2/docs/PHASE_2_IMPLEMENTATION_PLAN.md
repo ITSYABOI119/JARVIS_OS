@@ -140,39 +140,58 @@ This document provides a detailed week-by-week implementation plan for Phase 2. 
 
 ---
 
-### Week 30: Suspend/Resume Integration
+### Week 30: QEMU ivshmem Shared Memory Integration
+
+**Problem Statement:**
+Week 28 discovered Python and seL4 use separate memory spaces:
+- Python uses `/dev/shm/jarvis_ipc` (host memory)
+- seL4 uses static `dual_ring_buffer_t` (QEMU guest memory)
+- These are NOT connected - Python↔seL4 IPC doesn't actually work!
+
+**Solution:** QEMU ivshmem device maps host file into guest physical memory.
 
 **Tasks:**
-1. Initialize suspend manager
-   - Import `phase1/src/ai/suspend_manager.py`
-   - Register all 4 specialist agents
-   - Integrate with SystemBootstrap
+1. Create shared memory setup infrastructure
+   - `phase2/src/scripts/create_shm.sh` - Create 567KB shared memory file
+   - `phase2/src/scripts/run_jarvis_qemu.sh` - QEMU wrapper with ivshmem device
+   - QEMU args: `-device ivshmem-plain,memdev=shm0 -object memory-backend-file,...`
 
-2. Test suspend command in live shell
-   - Command: `suspend` → SuspendManager → save agent states
-   - Validate: State saved to JSON (1.5KB)
-   - Validate: System state transitions to SUSPENDING
+2. Implement ivshmem PCI driver (seL4)
+   - `phase1/src/sel4/pci_ivshmem.{c,h}` - PCI device detection + BAR2 mapping
+   - Vendor: 0x1AF4, Device: 0x1110
+   - Fallback to fixed physical address if PCI not available
 
-3. Test resume command in live shell
-   - Command: `resume` → SuspendManager → restore agent states
-   - Validate: 100% state preservation (all fields restored)
-   - Validate: System state transitions back to ACTIVE
+3. Integrate ivshmem with main_week28.c
+   - Detect ivshmem at startup
+   - Map BAR2 as dual_ring_buffer_t pointer
+   - Fallback to local buffer if ivshmem unavailable
 
-4. Integration validation
-   - Test full cycle: startup → health → scaling → suspend → resume
-   - Validate: 3/3 manager commands functional (`health`, `scaling state`, `suspend`)
-   - Measure: Suspend time <0.001s, resume time <0.001s (match Week 22 tests)
+4. Update Python IPC client
+   - Add magic number validation (0x4A415256 = "JARV")
+   - Add `wait_for_initialization()` for seL4 sync
+   - Add dual ring buffer constants
+
+5. Validate end-to-end IPC
+   - Python sends MSG_CACHE_LOOKUP via query ring
+   - seL4 performs cache lookup, sends response
+   - Python receives response via response ring
+   - Target: Cache hit rate >80%
 
 **Deliverables:**
-- ✅ Suspend manager initialized
-- ✅ `suspend` and `resume` commands working
-- ✅ All managers integrated
-- ✅ Week 30 gate criteria met
+- ✅ Shared memory scripts created
+- ✅ ivshmem PCI driver implemented (~400 lines)
+- ✅ main_week28.c uses ivshmem
+- ✅ Python IPC client validates magic number
+- ⏳ End-to-end IPC validated
 
-**Estimated Effort:** 10-12 hours
-**Blockers:** None (22/22 suspend tests already passing)
+**Estimated Effort:** 10-14 hours
+**Blockers:** seL4 PCI access (mitigate: fallback to fixed address)
 
-**Week 30 Checkpoint: IPC integration working, Python shell cache >80%, all managers initialized** ✅
+**Week 30 Checkpoint: ivshmem working, Python↔seL4 IPC connected via shared memory** ✅
+
+**Note:** Original Week 30 "Suspend/Resume Integration" moved to Week 31. Suspend/Resume
+was already completed in Phase 1 Week 22 (22/22 tests passing); integration can follow
+once ivshmem IPC is validated.
 
 ---
 

@@ -1,0 +1,38 @@
+include(${SEL4_TUTORIALS_DIR}/settings.cmake)
+
+cmake_minimum_required(VERSION 3.7.2)
+project(hello-world C ASM)
+
+find_package(seL4 REQUIRED)
+find_package(elfloader-tool REQUIRED)
+find_package(musllibc REQUIRED)
+find_package(util_libs REQUIRED)
+find_package(seL4_libs REQUIRED)
+
+sel4_import_kernel()
+elfloader_import_project()
+
+musllibc_setup_build_environment_with_sel4runtime()
+sel4_import_libsel4()
+util_libs_import_libraries()
+sel4_libs_import_libraries()
+
+add_executable(hello-world
+    main_week28.c
+    decision_cache.c
+    cache_patterns.c
+    ring_buffer.c
+    ipc_sel4.c
+    dual_ring_buffer.c
+    ipc_handler.c
+    pci_ivshmem.c
+)
+
+target_include_directories(hello-world PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(hello-world sel4runtime sel4 muslc utils sel4muslcsys sel4platsupport sel4utils sel4debug)
+
+include(rootserver)
+DeclareRootserver(hello-world)
+
+include(simulation)
+GenerateSimulateScript()

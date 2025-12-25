@@ -26,7 +26,11 @@
       "Bash(timeout 5 python:*)",
       "Bash(dir:*)",
       "Bash(findstr:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git push:*)",
+      "Bash(wsl find:*)",
+      "WebSearch",
+      "WebFetch(domain:www.qemu.org)"
     ],
     "deny": [],
     "ask": []

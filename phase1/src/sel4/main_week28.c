@@ -1,16 +1,16 @@
 /*
- * JARVIS AI-OS - Phase 2 Week 28 Main Entry Point
+ * JARVIS AI-OS - Phase 2 Week 30 Main Entry Point
  *
- * Bidirectional Python↔seL4 IPC Integration with Dual Ring Buffer
+ * Bidirectional Python↔seL4 IPC via QEMU ivshmem Shared Memory
  *
- * This is a modified version of phase1/src/sel4/main.c that integrates
- * the Week 28 dual ring buffer and IPC handler in polling mode.
+ * Week 28: Dual ring buffer + IPC handler (polling mode)
+ * Week 30: QEMU ivshmem integration for real Python↔seL4 IPC
  *
- * Key Changes from Phase 1:
+ * Key Features:
  * - Uses dual ring buffer (separate query and response channels)
- * - Integrates IPC handler in polling mode (no threading yet)
+ * - QEMU ivshmem device for shared memory with host
  * - Supports MSG_CACHE_LOOKUP and MSG_CACHE_STATS messages
- * - Returns responses via response ring
+ * - Returns responses via response ring to Python
  */
 
 #include <stdio.h>
@@ -20,14 +20,15 @@
 #include "stdin_impl.h"
 #include "dual_ring_buffer.h"
 #include "ipc_handler.h"
+#include "pci_ivshmem.h"
 
 #define BANNER \
     "\n" \
     "========================================\n" \
-    "  JARVIS AI-OS v0.2 - Phase 2 Week 28\n" \
-    "  Bidirectional IPC Integration\n" \
+    "  JARVIS AI-OS v0.3 - Phase 2 Week 30\n" \
+    "  ivshmem Shared Memory IPC\n" \
     "========================================\n" \
-    "  seL4 + Dual Ring Buffer + IPC Handler\n" \
+    "  seL4 + ivshmem + Python Host IPC\n" \
     "  Build: " __DATE__ " " __TIME__ "\n" \
     "========================================\n\n"
 
@@ -37,8 +38,13 @@
 /* Global decision cache */
 static decision_cache_t g_cache;
 
-/* Global dual ring buffer */
-static dual_ring_buffer_t g_dual_ring;
+/* Global dual ring buffer (pointer to ivshmem or fallback) */
+static dual_ring_buffer_t *g_dual_ring = NULL;
+static dual_ring_buffer_t g_dual_ring_fallback;  /* Fallback if ivshmem unavailable */
+
+/* Global ivshmem device state */
+static ivshmem_device_t g_ivshmem;
+static bool g_using_ivshmem = false;
 
 /* Global IPC handler state */
 static ipc_handler_state_t g_ipc_handler;
@@ -133,7 +139,7 @@ void ipc_message_handler_polling(void)
         ring_message_t msg;
 
         /* Try to read from query ring */
-        if (ring_buffer_read(&g_dual_ring.query_ring, &msg)) {
+        if (ring_buffer_read(&g_dual_ring->query_ring, &msg)) {
             /* Message received! */
             timeout_count = 0;  /* Reset timeout */
             processed++;
@@ -171,7 +177,7 @@ void ipc_message_handler_polling(void)
                 }
 
                 /* Send response via response ring */
-                if (dual_ring_send_response(&g_dual_ring, msg_id, hit, action, trust)) {
+                if (dual_ring_send_response(g_dual_ring, msg_id, hit, action, trust)) {
                     printf("  [SENT] Response to Python via response ring\n");
                 } else {
                     printf("  [ERROR] Failed to send response\n");
@@ -186,7 +192,7 @@ void ipc_message_handler_polling(void)
                 cache_get_stats(&g_cache, &stats);
 
                 /* Send stats response */
-                if (dual_ring_send_cache_stats(&g_dual_ring, msg_id, &stats)) {
+                if (dual_ring_send_cache_stats(g_dual_ring, msg_id, &stats)) {
                     printf("  [SENT] Cache stats to Python\n");
                 } else {
                     printf("  [ERROR] Failed to send stats\n");
@@ -216,7 +222,7 @@ void ipc_message_handler_polling(void)
     ipc_handler_print_stats(&g_ipc_handler);
 
     /* Print dual ring buffer statistics */
-    dual_ring_print_stats(&g_dual_ring);
+    dual_ring_print_stats(g_dual_ring);
 }
 
 /*
@@ -248,21 +254,45 @@ int main(int argc, char *argv[])
     printf("✓ Loaded %d patterns into cache\n", loaded);
     printf("\n");
 
-    /* Week 28: Initialize dual ring buffer */
+    /* Week 30: Initialize ivshmem for shared memory IPC */
+    printf("Initializing ivshmem shared memory...\n");
+    ivshmem_init(&g_ivshmem);
+
+    if (ivshmem_detect(&g_ivshmem)) {
+        printf("  ivshmem device detected\n");
+
+        if (ivshmem_map_bar2(&g_ivshmem)) {
+            g_dual_ring = (dual_ring_buffer_t *)ivshmem_get_shared_memory(&g_ivshmem);
+            g_using_ivshmem = true;
+            printf("OK Using ivshmem shared memory at %p\n", (void *)g_dual_ring);
+            ivshmem_print_info(&g_ivshmem);
+        } else {
+            printf("WARNING: Failed to map ivshmem, using fallback\n");
+            g_dual_ring = &g_dual_ring_fallback;
+            g_using_ivshmem = false;
+        }
+    } else {
+        printf("WARNING: ivshmem not detected, using fallback buffer\n");
+        printf("  (Python IPC will NOT work without ivshmem)\n");
+        g_dual_ring = &g_dual_ring_fallback;
+        g_using_ivshmem = false;
+    }
+
+    /* Initialize dual ring buffer (at ivshmem or fallback location) */
     printf("Initializing dual ring buffer...\n");
-    if (!dual_ring_init(&g_dual_ring)) {
+    if (!dual_ring_init(g_dual_ring)) {
         printf("ERROR: Failed to initialize dual ring buffer!\n");
         return 1;
     }
-    printf("✓ Dual ring buffer initialized\n");
-    printf("  Query Ring:    Python → seL4\n");
-    printf("  Response Ring: seL4 → Python\n");
-    printf("  Memory: ~567KB shared memory\n");
+    printf("OK Dual ring buffer initialized\n");
+    printf("  Query Ring:    Python -> seL4\n");
+    printf("  Response Ring: seL4 -> Python\n");
+    printf("  Memory: ~567KB %s\n", g_using_ivshmem ? "(ivshmem shared)" : "(local fallback)");
     printf("\n");
 
     /* Week 28: Initialize IPC handler */
     printf("Initializing IPC handler...\n");
-    if (!ipc_handler_init(&g_ipc_handler, &g_cache, &g_dual_ring)) {
+    if (!ipc_handler_init(&g_ipc_handler, &g_cache, g_dual_ring)) {
         printf("ERROR: Failed to initialize IPC handler!\n");
         return 1;
     }
@@ -274,13 +304,21 @@ int main(int argc, char *argv[])
 
     printf("\n");
     printf("========================================\n");
-    printf("  Week 28 Deliverables Complete:\n");
-    printf("  [✓] Dual ring buffer implemented\n");
-    printf("  [✓] IPC handler integrated (polling)\n");
-    printf("  [✓] MSG_CACHE_LOOKUP supported\n");
-    printf("  [✓] MSG_CACHE_STATS supported\n");
-    printf("  [✓] Python <-> seL4 bidirectional IPC\n");
+    printf("  Week 30 Deliverables Complete:\n");
+    printf("  [%c] ivshmem shared memory detected\n", g_using_ivshmem ? 'Y' : 'N');
+    printf("  [%c] Python <-> seL4 IPC via ivshmem\n", g_using_ivshmem ? 'Y' : 'N');
+    printf("  [Y] Dual ring buffer initialized\n");
+    printf("  [Y] IPC handler (polling mode)\n");
+    printf("  [Y] MSG_CACHE_LOOKUP supported\n");
+    printf("  [Y] MSG_CACHE_STATS supported\n");
     printf("========================================\n");
+    if (!g_using_ivshmem) {
+        printf("\nWARNING: Running without ivshmem!\n");
+        printf("Python IPC will not work.\n");
+        printf("Start QEMU with ivshmem device:\n");
+        printf("  -device ivshmem-plain,memdev=shm0\n");
+        printf("  -object memory-backend-file,...\n");
+    }
     printf("\nPress Ctrl+A X to exit QEMU\n\n");
 
     /* Infinite loop to keep system running */

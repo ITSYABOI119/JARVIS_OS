@@ -5,6 +5,7 @@
 # Based on seL4 tutorials hello-world template
 # Modified for JARVIS AI-OS Phase 1 Week 2
 # Updated for Phase 2 Week 28: Bidirectional IPC Integration
+# Updated for Phase 2 Week 30: QEMU ivshmem Shared Memory
 
 cmake_minimum_required(VERSION 3.7.2)
 
@@ -29,15 +30,17 @@ util_libs_import_libraries()
 sel4_libs_import_libraries()
 
 # Define the executable and source files
-# Week 28: Updated to use bidirectional IPC with dual ring buffer
+# Week 28: Bidirectional IPC with dual ring buffer
+# Week 30: QEMU ivshmem shared memory integration
 add_executable(jarvis-sel4
-    main_week28.c              # Week 28: New entry point with dual ring buffer
+    main_week28.c              # Week 28/30: Entry point with ivshmem support
     ../cache/decision_cache.c
     ../cache/cache_patterns.c
     ../ipc/ring_buffer.c
     ../ipc/ipc_sel4.c
     dual_ring_buffer.c         # Week 28: Bidirectional ring buffer
     ipc_handler.c              # Week 28: IPC message handler
+    pci_ivshmem.c              # Week 30: QEMU ivshmem PCI driver
 )
 
 # Add include directories for headers
