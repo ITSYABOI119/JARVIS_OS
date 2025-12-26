@@ -1,12 +1,23 @@
 /*
- * JARVIS AI-OS - IPC Handler Thread (Phase 2 Week 28)
+ * JARVIS AI-OS - IPC Handler (Phase 2 Week 28)
  *
- * Dedicated thread for handling Python↔seL4 IPC communication
- * Runs continuously in background, processing cache lookups and statistics requests
+ * Handles Python↔seL4 IPC communication for cache lookups and statistics.
  *
- * Threading: Uses seL4 threading primitives (TCB, endpoints)
- * Priority: Normal (same as main thread)
- * Stack: 8KB (sufficient for cache operations)
+ * OPERATION MODE: POLLING (Phase 2)
+ * =================================
+ * Phase 2 uses polling mode, not threading, because:
+ * - seL4 tutorials framework doesn't expose threading infrastructure
+ * - Polling is simpler and sufficient for proof-of-concept
+ * - For Pi 4 UART IPC, polling is natural (matches serial port model)
+ *
+ * Usage:
+ *   1. Call ipc_handler_init() to initialize state
+ *   2. Call ipc_handler_init_polling() to set up polling mode
+ *   3. Call ipc_handler_poll_once() in your main loop, OR
+ *      Call ipc_handler_thread_entry() to run continuous polling
+ *
+ * Phase 3 threading (future):
+ *   Would use seL4 TCB allocation, stack setup, seL4_TCB_Configure()
  */
 
 #ifndef IPC_HANDLER_H
@@ -56,19 +67,36 @@ bool ipc_handler_init(ipc_handler_state_t *state,
 void ipc_handler_thread_entry(void *arg);
 
 /**
- * Spawn IPC handler thread (seL4-specific)
+ * Initialize polling mode (PREFERRED for Phase 2)
  *
- * Creates and configures a new seL4 thread for IPC handling:
- * 1. Allocate Thread Control Block (TCB)
- * 2. Allocate stack (8KB)
- * 3. Configure thread (priority, stack pointer, entry point)
- * 4. Resume thread
+ * Prepares the handler for polling mode operation.
+ * After this, call ipc_handler_poll_once() in your main loop.
  *
- * @param state Pointer to handler state (passed to thread)
+ * @param state Pointer to handler state
  * @return true on success, false on failure
+ */
+bool ipc_handler_init_polling(ipc_handler_state_t *state);
+
+/**
+ * Poll for one message (non-blocking)
  *
- * NOTE: This function requires seL4 VKA (Virtual Kernel Allocator) context
- *       and should be called from the root task after VKA initialization.
+ * Checks query ring for one incoming message and processes it.
+ * Returns immediately if no message available.
+ *
+ * @param state Pointer to handler state
+ * @return true if message processed, false if queue empty
+ */
+bool ipc_handler_poll_once(ipc_handler_state_t *state);
+
+/**
+ * Legacy: Spawn IPC handler thread
+ *
+ * DEPRECATED: Use ipc_handler_init_polling() instead.
+ * This function now just calls ipc_handler_init_polling().
+ * Kept for backward compatibility with existing code.
+ *
+ * @param state Pointer to handler state
+ * @return true (always succeeds, enables polling mode)
  */
 bool ipc_handler_spawn_thread(ipc_handler_state_t *state);
 

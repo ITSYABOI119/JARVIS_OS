@@ -1,8 +1,38 @@
 /*
- * JARVIS AI-OS - IPC Handler Thread Implementation
+ * JARVIS AI-OS - IPC Handler Implementation (POLLING MODE)
  * Phase 2 Week 28
  *
- * Dedicated thread for processing Python↔seL4 IPC communication
+ * Processes Python↔seL4 IPC communication in polling mode.
+ *
+ * ============================================================================
+ * ARCHITECTURE NOTE: Polling vs Threading (Phase 2 Decision)
+ * ============================================================================
+ *
+ * This implementation uses POLLING mode, not true threading.
+ *
+ * Current behavior:
+ * - ipc_handler_init_polling() sets up the handler state
+ * - ipc_handler_poll_once() processes one message (non-blocking)
+ * - Caller is responsible for calling poll in a loop
+ * - usleep(100) is used for POSIX testing only
+ *
+ * Why not threading?
+ * - seL4 threading requires VKA context, TCB allocation, capability setup
+ * - seL4 tutorials framework doesn't expose threading infrastructure
+ * - Polling is simpler and sufficient for Phase 2 proof-of-concept
+ *
+ * Phase 3 threading approach (when needed):
+ * 1. Allocate TCB via vka_alloc_tcb()
+ * 2. Allocate stack memory
+ * 3. Configure TCB with seL4_TCB_Configure()
+ * 4. Set entry point and registers
+ * 5. Resume with seL4_TCB_Resume()
+ *
+ * For Pi 4 (UART IPC):
+ * - Polling is actually preferred (interrupt-driven UART has its own timing)
+ * - The Python AI agent polls the serial port; seL4 polls the buffer
+ *
+ * ============================================================================
  */
 
 #include "ipc_handler.h"
@@ -134,54 +164,83 @@ void ipc_handler_thread_entry(void *arg)
 }
 
 /**
- * Spawn IPC handler thread
+ * Initialize polling mode (PREFERRED for Phase 2)
  *
- * NOTE: This is a PLACEHOLDER implementation.
- * Proper seL4 threading requires:
- * - VKA (Virtual Kernel Allocator) context
- * - TCB (Thread Control Block) allocation
- * - Stack allocation and configuration
- * - seL4_TCB_Configure() and seL4_TCB_Resume()
+ * This function prepares the handler for polling mode operation.
+ * Caller should then use ipc_handler_poll_once() or ipc_handler_thread_entry()
+ * to process messages.
  *
- * For Week 28, we'll use a simpler approach:
- * - Call ipc_handler_thread_entry() directly from main loop (polling mode)
- * - OR: Use pthread for development/testing (if available)
- * - Full seL4 threading implementation in Week 29
+ * Polling mode is used because:
+ * - seL4 tutorials framework doesn't provide threading infrastructure
+ * - Simpler and more debuggable for Phase 2 proof-of-concept
+ * - For Pi 4 with UART, polling is natural (no shared memory threading needed)
+ *
+ * Returns true to indicate handler is ready for polling.
  */
-bool ipc_handler_spawn_thread(ipc_handler_state_t *state)
+bool ipc_handler_init_polling(ipc_handler_state_t *state)
 {
     if (!state) {
         return false;
     }
 
-    printf("[IPC Handler] Spawning IPC handler thread...\n");
+    printf("[IPC Handler] Initializing polling mode...\n");
+    printf("[IPC Handler] Ready for polling (call ipc_handler_poll_once or ipc_handler_thread_entry)\n");
 
-    /*
-     * TODO: Implement proper seL4 threading here
-     *
-     * Example seL4 threading code (requires VKA context):
-     *
-     * // Allocate TCB
-     * seL4_CPtr tcb = vka_alloc_tcb(&vka);
-     *
-     * // Allocate stack
-     * void *stack = malloc(IPC_HANDLER_STACK_SIZE);
-     *
-     * // Configure TCB
-     * seL4_UserContext regs = {0};
-     * regs.pc = (seL4_Word)ipc_handler_thread_entry;
-     * regs.sp = (seL4_Word)(stack + IPC_HANDLER_STACK_SIZE);
-     * // ... other register setup
-     *
-     * seL4_TCB_Configure(tcb, ...);
-     * seL4_TCB_WriteRegisters(tcb, 0, 0, 2, &regs);
-     * seL4_TCB_Resume(tcb);
-     */
+    return true;
+}
 
-    printf("[IPC Handler] WARNING: Full seL4 threading not yet implemented\n");
-    printf("[IPC Handler] Using polling mode instead (call ipc_handler_thread_entry manually)\n");
+/**
+ * Legacy alias for ipc_handler_init_polling
+ *
+ * DEPRECATED: Use ipc_handler_init_polling() instead.
+ * Kept for backward compatibility with existing code.
+ */
+bool ipc_handler_spawn_thread(ipc_handler_state_t *state)
+{
+    printf("[IPC Handler] NOTE: spawn_thread() is deprecated, using polling mode\n");
+    return ipc_handler_init_polling(state);
+}
 
-    return true;  /* Return true to continue (caller will use polling mode) */
+/**
+ * Poll for one message (non-blocking)
+ *
+ * Checks the query ring for one incoming message and processes it.
+ * Returns immediately if no message is available.
+ *
+ * This is the preferred way to integrate IPC handling with main loop.
+ *
+ * @param state IPC handler state
+ * @return true if a message was processed, false if queue empty
+ */
+bool ipc_handler_poll_once(ipc_handler_state_t *state)
+{
+    if (!state || !state->running) {
+        return false;
+    }
+
+    char query[MAX_QUERY_LEN];
+    uint32_t msg_id;
+    ring_message_t msg;
+
+    /* Poll query ring for incoming message (non-blocking) */
+    if (ring_buffer_read(&state->drb->query_ring, &msg)) {
+        msg_id = msg.id;
+
+        if (msg.type == MSG_CACHE_LOOKUP) {
+            size_t copy_len = (msg.payload_size < MAX_QUERY_LEN) ? msg.payload_size : (MAX_QUERY_LEN - 1);
+            memcpy(query, msg.payload, copy_len);
+            query[copy_len] = '\0';
+            handle_cache_lookup(state, query, msg_id);
+        } else if (msg.type == MSG_CACHE_STATS) {
+            handle_cache_stats(state, msg_id);
+        } else {
+            printf("[IPC Handler] WARNING: Unsupported message type %d\n", msg.type);
+            state->errors++;
+        }
+        return true;  /* Message processed */
+    }
+
+    return false;  /* No message available */
 }
 
 /* Stop IPC handler thread */

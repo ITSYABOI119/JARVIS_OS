@@ -66,7 +66,8 @@ All messages use a fixed-length header with variable-length payload:
 | PAYLOAD | 0-240 bytes | Variable-length data |
 | CRC16 | 2 bytes | CRC-16-CCITT over TYPE through PAYLOAD |
 
-**Maximum Frame Size:** 250 bytes (10 header + 240 payload)
+**Header Size (after SYNC):** 6 bytes (TYPE + SEQ + LENGTH + FLAGS)
+**Maximum Frame Size:** 248 bytes (2 SYNC + 6 header + 240 payload + 2 CRC)
 
 ### Message Types
 

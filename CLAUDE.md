@@ -792,8 +792,10 @@ Each week follows this structure:
 
 ---
 
-**Current Phase:** Phase 1 - Proof of Concept (Months 6-12)
-**Current Status:** Week 26 COMPLETE (100%) - **PHASE 1 COMPLETE** ✅
+**Current Phase:** Phase 2 - Alpha System (Months 12-24)
+**Current Status:** Week 31 COMPLETE - Pre-Hardware Preparation Done
+
+**Phase 1:** COMPLETE (26/26 weeks, 100%) - December 23, 2025 ✅
 
 **Completed (Weeks 1-26):**
 - ✅ Weeks 1-4: Decision cache + seL4 integration (85.7% hit rate, 54μs IPC latency)
@@ -967,3 +969,290 @@ See `QUICK_START_TESTING.md` for quick start or `phase1/COMPREHENSIVE_TEST_PLAN.
 - **Making changes?** Always update PHASE_1_PROGRESS_TRACKER.md when completing work
 - **Testing everything?** See QUICK_START_TESTING.md for comprehensive Phase 0-1 validation
 - Always update CLAUDE.md
+
+---
+
+# Phase 2: Alpha System Development (Months 12-24)
+
+## Phase 2 Overview
+
+Phase 2 develops a real hardware alpha system running on Raspberry Pi 4 with UART-based Python↔seL4 IPC.
+
+**Timeline:** 52 weeks (December 2025 - December 2026)
+**Hardware:** Raspberry Pi 4 (BCM2711, 8GB RAM, ARM64)
+**Goal:** 15+ Tier 1 drivers operational, 20 alpha testers by Month 18
+
+## Hardware Pivot: Intel NUC → Raspberry Pi 4
+
+**Decision Date:** December 2025
+
+**Rationale:**
+- Cost reduction: $1,200 Intel NUC → $75 Raspberry Pi 4 (89% savings)
+- seL4 ARM64 heritage: Pi 4 (BCM2711, Cortex-A72) is officially supported
+- Bare metal access: No QEMU/tutorials framework limitations
+- Hardware already owned: No acquisition delay
+
+**Trade-offs Accepted:**
+- Slower IPC: 1-10ms UART (vs 54μs shared memory on x86)
+- Lower AI performance: TinyLlama 1.1B only, 5-15 tokens/sec
+- No NVMe (SD card instead), No PCIe expansion
+- Single hardware platform (vs 3 originally planned)
+
+**Documentation:** `phase2/docs/PHASE_2_HARDWARE_PIVOT.md`
+
+## Phase 2 Development Commands
+
+### ARM64 Cross-Compilation
+
+```bash
+# Install ARM64 toolchain (WSL Ubuntu)
+sudo apt install gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+# Verify installation
+aarch64-linux-gnu-gcc --version
+
+# Cross-compile C code for Pi 4
+aarch64-linux-gnu-gcc -O2 -march=armv8-a source.c -o output
+```
+
+### seL4 Pi 4 Build
+
+```bash
+# Navigate to seL4 build directory
+cd ~/sel4-tutorials-manifest/jarvis-pi4
+
+# Configure for Raspberry Pi 4
+../init --plat rpi4 --tut hello-world
+
+# Build kernel and rootserver
+ninja
+
+# Output files:
+# - images/kernel.elf (seL4 kernel, ~138KB)
+# - images/hello-world-image-arm-rpi4 (bootable image)
+```
+
+### Phase 2 Test Commands
+
+```bash
+# Phase 2 Python tests
+wsl python3 phase2/src/ai/test_uart_ipc_client.py      # 22 tests - UART protocol
+wsl python3 phase2/src/ai/test_system_bootstrap.py     # 25 tests - Bootstrap framework
+wsl python3 phase2/src/ai/test_integration.py          # 10 tests - Component integration
+
+# Phase 2 C tests
+wsl bash -c "cd /mnt/c/Users/jluca/Documents/JARVIS_OS/phase2/src/ipc && \
+  gcc -O2 -I../../../phase1/src/cache -I../../../phase1/src/ipc \
+  dual_ring_buffer.c test_dual_ring.c ../../../phase1/src/ipc/ring_buffer.c \
+  -o test_dual_ring && ./test_dual_ring"                # 12 tests - Dual ring buffer
+
+wsl bash -c "cd /mnt/c/Users/jluca/Documents/JARVIS_OS/phase2/src/ipc && \
+  gcc -O2 -I../../../phase1/src/cache -I../../../phase1/src/ipc \
+  ipc_handler.c dual_ring_buffer.c ../../../phase1/src/ipc/ring_buffer.c \
+  ../../../phase1/src/cache/decision_cache.c ../../../phase1/src/cache/cache_patterns.c \
+  test_ipc_handler.c -o test_ipc_handler && ./test_ipc_handler"  # 10 tests - IPC handler
+
+wsl bash -c "cd /mnt/c/Users/jluca/Documents/JARVIS_OS/phase2/src/drivers && \
+  gcc -O2 test_uart_logic.c -o test_uart_logic && ./test_uart_logic"  # 8 tests - UART logic
+```
+
+## UART IPC Protocol
+
+Phase 2 uses UART serial communication instead of shared memory for Python↔seL4 IPC.
+
+### Frame Structure
+```
+┌──────────┬──────────┬──────────┬──────────┬──────────┬──────────┬──────────┐
+│  SYNC    │  TYPE    │   SEQ    │  LENGTH  │  FLAGS   │ PAYLOAD  │  CRC16   │
+│ (2 bytes)│ (1 byte) │ (2 bytes)│ (2 bytes)│ (1 byte) │ (0-240)  │ (2 bytes)│
+│  0xAA55  │  0x01-0E │  0-65535 │  0-240   │  0x00    │  data    │ CRC-CCITT│
+└──────────┴──────────┴──────────┴──────────┴──────────┴──────────┴──────────┘
+```
+
+### Message Types (14 total)
+| Type | Value | Direction | Description |
+|------|-------|-----------|-------------|
+| QUERY | 0x01 | Python→seL4 | Cache lookup request |
+| RESPONSE | 0x02 | seL4→Python | Cache lookup result |
+| HEARTBEAT | 0x03 | Bidirectional | Keep-alive ping |
+| HEARTBEAT_ACK | 0x04 | Bidirectional | Keep-alive response |
+| STATS_REQUEST | 0x05 | Python→seL4 | Request cache statistics |
+| STATS_RESPONSE | 0x06 | seL4→Python | Cache statistics data |
+| SHIELD_CHECK | 0x07 | Python→seL4 | SHIELD risk assessment |
+| SHIELD_RESULT | 0x08 | seL4→Python | SHIELD decision |
+| COMMAND | 0x09 | Python→seL4 | Shell command |
+| COMMAND_RESULT | 0x0A | seL4→Python | Command output |
+| ERROR | 0x0B | Bidirectional | Error notification |
+| RESET | 0x0C | Bidirectional | Protocol reset |
+| STATE_CHANGE | 0x0D | Python→seL4 | System state notification |
+| STATE_ACK | 0x0E | seL4→Python | State change acknowledged |
+
+### Performance Characteristics
+- Baud rate: 115200 (default), configurable to 230400
+- Single byte: ~0.087ms at 115200 baud
+- Typical query (50 bytes): ~4.3ms
+- Round-trip (query + response): 10-20ms expected
+- Heartbeat interval: 5 seconds
+- Link timeout: 30 seconds
+
+**Documentation:** `phase2/docs/UART_IPC_PROTOCOL.md`
+
+## Raspberry Pi 4 Hardware Configuration
+
+### BCM2711 Memory Map
+```
+Peripheral Base: 0xFE000000 (Pi 4, different from Pi 3's 0x3F000000)
+UART0 (PL011):   0xFE201000
+GPIO:            0xFE200000
+```
+
+### USB-Serial Adapter Wiring
+```
+Pi 4 GPIO        USB-Serial Adapter
+─────────        ──────────────────
+GPIO14 (TXD) ──► RXD
+GPIO15 (RXD) ◄── TXD
+GND          ─── GND
+```
+
+### SD Card Boot Configuration
+```
+Boot Partition (FAT32):
+├── start4.elf      # GPU firmware (2.2MB)
+├── fixup4.dat      # Memory configuration (5.5KB)
+├── kernel8.img     # seL4 kernel (renamed from kernel.elf)
+└── config.txt      # Boot configuration
+
+config.txt:
+  arm_64bit=1
+  kernel=kernel8.img
+  enable_uart=1
+  uart_2ndstage=1
+```
+
+## Phase 2 File Structure
+
+```
+phase2/
+├── docs/
+│   ├── PHASE_2_KICKOFF.md           # Phase 2 goals and constraints (580 lines)
+│   ├── PHASE_2_HARDWARE_PIVOT.md    # Pi 4 decision rationale (516 lines)
+│   ├── PHASE_2_IMPLEMENTATION_PLAN.md
+│   └── UART_IPC_PROTOCOL.md         # Protocol specification (392 lines)
+├── weeks/
+│   ├── week27/                      # Bidirectional IPC design
+│   ├── week28/                      # IPC implementation (12/12 tests)
+│   ├── week29/                      # SystemBootstrap framework
+│   ├── week30/                      # QEMU ivshmem integration
+│   └── week31/                      # Pre-hardware preparation
+├── src/
+│   ├── ipc/
+│   │   ├── dual_ring_buffer.h       # Bidirectional ring buffer (200 lines)
+│   │   ├── dual_ring_buffer.c       # Implementation (490 lines)
+│   │   ├── ipc_handler.h            # IPC handler interface (100 lines)
+│   │   ├── ipc_handler.c            # Handler implementation (291 lines)
+│   │   ├── test_dual_ring.c         # 12 unit tests (465 lines)
+│   │   └── test_ipc_handler.c       # 10 unit tests
+│   ├── drivers/
+│   │   ├── uart_pl011.h             # PL011 UART driver (235 lines)
+│   │   ├── uart_pl011.c             # Implementation (472 lines)
+│   │   └── test_uart_logic.c        # 8 logic tests
+│   ├── ai/
+│   │   ├── uart_ipc_client.py       # Python UART client (550+ lines)
+│   │   ├── system_bootstrap.py      # Unified initialization
+│   │   ├── test_uart_ipc_client.py  # 22 protocol tests
+│   │   ├── test_system_bootstrap.py # 25 bootstrap tests
+│   │   └── test_integration.py      # 10 integration tests
+│   ├── sel4/
+│   │   └── main_week28.c            # Dual ring integration (301 lines)
+│   └── scripts/
+│       ├── setup_sel4_pi4.sh        # ARM64 toolchain setup
+│       ├── create_shm.sh            # Shared memory initialization
+│       └── run_jarvis_qemu.sh       # QEMU launch script
+└── scripts/
+    └── setup_sel4_pi4.sh            # Initial setup script
+```
+
+## Key Differences: Phase 1 vs Phase 2
+
+| Aspect | Phase 1 | Phase 2 |
+|--------|---------|---------|
+| **Architecture** | x86_64 QEMU | ARM64 Raspberry Pi 4 |
+| **IPC Protocol** | Shared memory (54μs) | UART serial (10-20ms) |
+| **Hardware** | Virtual only | Real bare metal |
+| **AI Model** | Phi-3 Mini 3.8B | TinyLlama 1.1B (lower power) |
+| **Cache Access** | Direct mmap | UART frames with CRC |
+| **Storage** | N/A (test only) | SD card (boot + root) |
+| **Initialization** | Inline in scripts | SystemBootstrap class |
+| **Cross-compile** | Native x86 | aarch64-linux-gnu-gcc |
+
+## Phase 2 Progress (Weeks 27-31)
+
+**Week 27: Bidirectional IPC Design** ✅
+- Designed dual ring buffer architecture (query + response channels)
+- Defined message types for cache lookup and stats
+- Documentation complete
+
+**Week 28: IPC Implementation** ✅
+- dual_ring_buffer.c/h complete (490 lines)
+- ipc_handler.c/h complete (291 lines)
+- 12/12 unit tests passing
+- main_week28.c seL4 integration
+
+**Week 29: SystemBootstrap Framework** ✅
+- system_bootstrap.py complete
+- Unified initialization sequence
+- Graceful degradation for optional components
+- 25/25 tests passing
+
+**Week 30: QEMU ivshmem Integration** ✅
+- 7/8 tasks complete
+- Shared memory setup scripts
+- QEMU launch configuration
+
+**Week 31: Pre-Hardware Preparation** ✅
+- ARM64 toolchain verified (aarch64-linux-gnu-gcc)
+- seL4 kernel.elf built (44/44 ninja targets)
+- Pi 4 GPU firmware ready (start4.elf, fixup4.dat)
+- PL011 UART driver complete (472 lines)
+- UART IPC protocol specification (392 lines)
+- Python UART client complete (550+ lines)
+- All 7/7 pre-hardware tasks complete
+
+## Phase 2 Test Coverage
+
+| Test File | Tests | Component | Status |
+|-----------|-------|-----------|--------|
+| test_system_bootstrap.py | 25 | SystemBootstrap | ✅ PASS |
+| test_dual_ring.c | 12 | Dual Ring Buffer | ✅ PASS |
+| test_uart_ipc_client.py | 22 | UART Protocol | ✅ PASS |
+| test_ipc_handler.c | 10 | IPC Handler | ✅ PASS |
+| test_integration.py | 10 | Integration | ✅ PASS |
+| test_uart_logic.c | 8 | UART Logic | ✅ PASS |
+| **Total** | **87** | | **100% PASS** |
+
+## Phase 2 Remaining Work (Weeks 32+)
+
+**Immediate (Weeks 32-34):**
+- Week 32: ARM64 port (remove x86-specific code, PL011 integration)
+- Week 33: UART IPC implementation (full bidirectional protocol)
+- Week 34: Integration & testing (cache hit rate validation on hardware)
+
+**Hardware Integration (Weeks 35-41):**
+- Weeks 35-36: SD/EMMC storage driver
+- Weeks 37-38: Broadcom GENET Ethernet driver
+- Weeks 39-41: Additional Tier 1 drivers (USB HID, etc.)
+
+**Alpha Release (Weeks 42-52):**
+- Weeks 42-46: Alpha release infrastructure
+- Weeks 47-50: Security audit preparation
+- Weeks 50-52: 30-day stability testing
+
+## For Claude Code (Phase 2)
+
+- **First time?** Read this section → `phase2/docs/PHASE_2_KICKOFF.md` → current week's status
+- **Continuing work?** Check `phase2/weeks/weekN/` for latest status
+- **Running Phase 2 tests?** Use test commands above
+- **Hardware setup?** See `phase2/docs/PHASE_2_HARDWARE_PIVOT.md`
+- **UART protocol?** See `phase2/docs/UART_IPC_PROTOCOL.md`
+- Always update CLAUDE.md and week status files

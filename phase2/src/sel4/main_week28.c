@@ -18,6 +18,7 @@
 #include <sel4/sel4.h>
 #include "../../phase1/src/cache/decision_cache.h"
 #include "../../phase1/src/sel4/stdin_impl.h"
+#include "../../phase1/src/sel4/pci_ivshmem.h"
 #include "../ipc/dual_ring_buffer.h"
 #include "../ipc/ipc_handler.h"
 
@@ -37,8 +38,13 @@
 /* Global decision cache */
 static decision_cache_t g_cache;
 
-/* Global dual ring buffer */
-static dual_ring_buffer_t g_dual_ring;
+/* Global dual ring buffer (pointer - may point to ivshmem or local fallback) */
+static dual_ring_buffer_t g_dual_ring_local;  /* Fallback local buffer */
+static dual_ring_buffer_t *g_dual_ring = NULL; /* Active buffer pointer */
+
+/* Global ivshmem device state */
+static ivshmem_device_t g_ivshmem;
+static bool g_using_shared_memory = false;
 
 /* Global IPC handler state */
 static ipc_handler_state_t g_ipc_handler;
@@ -133,7 +139,7 @@ void ipc_message_handler_polling(void)
         ring_message_t msg;
 
         /* Try to read from query ring */
-        if (ring_buffer_read(&g_dual_ring.query_ring, &msg)) {
+        if (ring_buffer_read(&g_dual_ring->query_ring, &msg)) {
             /* Message received! */
             timeout_count = 0;  /* Reset timeout */
             processed++;
@@ -171,7 +177,7 @@ void ipc_message_handler_polling(void)
                 }
 
                 /* Send response via response ring */
-                if (dual_ring_send_response(&g_dual_ring, msg_id, hit, action, trust)) {
+                if (dual_ring_send_response(g_dual_ring, msg_id, hit, action, trust)) {
                     printf("  [SENT] Response to Python via response ring\n");
                 } else {
                     printf("  [ERROR] Failed to send response\n");
@@ -186,7 +192,7 @@ void ipc_message_handler_polling(void)
                 cache_get_stats(&g_cache, &stats);
 
                 /* Send stats response */
-                if (dual_ring_send_cache_stats(&g_dual_ring, msg_id, &stats)) {
+                if (dual_ring_send_cache_stats(g_dual_ring, msg_id, &stats)) {
                     printf("  [SENT] Cache stats to Python\n");
                 } else {
                     printf("  [ERROR] Failed to send stats\n");
@@ -216,7 +222,7 @@ void ipc_message_handler_polling(void)
     ipc_handler_print_stats(&g_ipc_handler);
 
     /* Print dual ring buffer statistics */
-    dual_ring_print_stats(&g_dual_ring);
+    dual_ring_print_stats(g_dual_ring);
 }
 
 /*
@@ -248,21 +254,63 @@ int main(int argc, char *argv[])
     printf("✓ Loaded %d patterns into cache\n", loaded);
     printf("\n");
 
-    /* Week 28: Initialize dual ring buffer */
+    /* Week 28+30: Initialize dual ring buffer with ivshmem if available */
     printf("Initializing dual ring buffer...\n");
-    if (!dual_ring_init(&g_dual_ring)) {
+
+    /* Try to detect ivshmem device for shared memory IPC */
+    printf("Checking for ivshmem shared memory device...\n");
+    ivshmem_init(&g_ivshmem);
+
+    if (ivshmem_detect(&g_ivshmem)) {
+        printf("✓ ivshmem device detected\n");
+
+        if (ivshmem_map_bar2(&g_ivshmem)) {
+            /* Use ivshmem shared memory */
+            void *shm = ivshmem_get_shared_memory(&g_ivshmem);
+            if (shm != NULL) {
+                g_dual_ring = (dual_ring_buffer_t *)shm;
+                g_using_shared_memory = true;
+                printf("✓ Using ivshmem shared memory at %p\n", shm);
+                printf("  Size: %u bytes\n", ivshmem_get_size(&g_ivshmem));
+            } else {
+                printf("! ivshmem mapped but returned NULL pointer\n");
+            }
+        } else {
+            printf("! ivshmem BAR2 mapping failed (seL4 capability issue)\n");
+            printf("  This is expected in seL4 tutorials framework\n");
+        }
+    } else {
+        printf("! ivshmem device not detected\n");
+    }
+
+    /* Fallback to local buffer if ivshmem not available */
+    if (!g_using_shared_memory) {
+        g_dual_ring = &g_dual_ring_local;
+        printf("\n");
+        printf("============= WARNING =============\n");
+        printf("Using LOCAL buffer (fallback mode)\n");
+        printf("Python IPC will NOT work!\n");
+        printf("For Python↔seL4 IPC, enable ivshmem:\n");
+        printf("  QEMU: -device ivshmem-plain,...\n");
+        printf("  Pi 4: Use UART IPC instead\n");
+        printf("===================================\n");
+        printf("\n");
+    }
+
+    /* Initialize the dual ring buffer (either ivshmem or local) */
+    if (!dual_ring_init(g_dual_ring)) {
         printf("ERROR: Failed to initialize dual ring buffer!\n");
         return 1;
     }
     printf("✓ Dual ring buffer initialized\n");
     printf("  Query Ring:    Python → seL4\n");
     printf("  Response Ring: seL4 → Python\n");
-    printf("  Memory: ~567KB shared memory\n");
+    printf("  Memory: ~567KB %s\n", g_using_shared_memory ? "SHARED (ivshmem)" : "LOCAL (no Python IPC)");
     printf("\n");
 
     /* Week 28: Initialize IPC handler */
     printf("Initializing IPC handler...\n");
-    if (!ipc_handler_init(&g_ipc_handler, &g_cache, &g_dual_ring)) {
+    if (!ipc_handler_init(&g_ipc_handler, &g_cache, g_dual_ring)) {
         printf("ERROR: Failed to initialize IPC handler!\n");
         return 1;
     }

@@ -26,12 +26,16 @@ Date: December 2025
 
 import sys
 import os
+import platform
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Literal
 import logging
 
 # Add phase1/src/ai to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "phase1" / "src" / "ai"))
+
+# Platform detection result type
+PlatformType = Literal['pi4', 'qemu', 'linux', 'windows', 'unknown']
 
 # Logging setup
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
@@ -79,6 +83,148 @@ class SystemBootstrap:
         self.enable_ai = self.config.get('enable_ai', True)
         self.enable_shield = self.config.get('enable_shield', True)
         self.enable_snapshots = self.config.get('enable_snapshots', True)
+
+        # Detect platform for IPC selection
+        self.platform = self._detect_platform()
+
+    def _detect_platform(self) -> PlatformType:
+        """
+        Detect the running platform to select appropriate IPC method.
+
+        Returns:
+            'pi4' - Raspberry Pi 4 (use UART IPC)
+            'qemu' - QEMU/seL4 simulation (use mmap IPC)
+            'linux' - Generic Linux (use mmap IPC)
+            'windows' - Windows (mock mode)
+            'unknown' - Unknown platform (mock mode)
+        """
+        # Check Windows first
+        if platform.system() == 'Windows':
+            logger.info("Platform detected: Windows (mock IPC mode)")
+            return 'windows'
+
+        # Check for Raspberry Pi 4 via device tree
+        device_tree_model = Path('/proc/device-tree/model')
+        if device_tree_model.exists():
+            try:
+                model = device_tree_model.read_text().lower()
+                if 'raspberry pi 4' in model:
+                    logger.info("Platform detected: Raspberry Pi 4 (UART IPC)")
+                    return 'pi4'
+            except Exception:
+                pass
+
+        # Check for QEMU via /proc/cpuinfo or /sys/devices
+        cpuinfo = Path('/proc/cpuinfo')
+        if cpuinfo.exists():
+            try:
+                content = cpuinfo.read_text().lower()
+                if 'qemu' in content or 'kvm' in content:
+                    logger.info("Platform detected: QEMU/KVM (mmap IPC)")
+                    return 'qemu'
+            except Exception:
+                pass
+
+        # Check for seL4 shared memory file
+        jarvis_shm = Path('/dev/shm/jarvis_ipc')
+        if jarvis_shm.exists():
+            logger.info("Platform detected: Linux with seL4 shared memory (mmap IPC)")
+            return 'qemu'
+
+        # Generic Linux fallback
+        if platform.system() == 'Linux':
+            logger.info("Platform detected: Linux (mmap IPC)")
+            return 'linux'
+
+        logger.warning("Platform unknown, using mock IPC mode")
+        return 'unknown'
+
+    def _select_ipc_client(self) -> Optional[Any]:
+        """
+        Select and initialize appropriate IPC client based on platform.
+
+        Returns:
+            IPCClient (mmap), UARTIPCClient, or None
+        """
+        if self.platform == 'pi4':
+            # Use UART IPC for Raspberry Pi 4
+            return self._init_uart_ipc_client()
+        elif self.platform in ('qemu', 'linux'):
+            # Use mmap IPC for QEMU/Linux
+            return self._init_mmap_ipc_client()
+        else:
+            # Mock mode for Windows/unknown
+            logger.info("Using mock IPC client (no hardware)")
+            return None
+
+    def _init_uart_ipc_client(self) -> Optional[Any]:
+        """
+        Initialize UART IPC client for Pi 4 communication.
+
+        Returns:
+            UARTIPCClient instance or None
+        """
+        try:
+            # Import from phase2
+            from uart_ipc_client import UARTIPCClient
+
+            # Try common serial port paths
+            serial_ports = ['/dev/ttyUSB0', '/dev/ttyAMA0', '/dev/serial0']
+            for port in serial_ports:
+                if Path(port).exists():
+                    uart_client = UARTIPCClient(port=port)
+                    if uart_client.connect():
+                        print(f"✅ UART IPC client connected ({port})")
+                        return uart_client
+
+            warning = "UART IPC: No serial port found"
+            print(f"⚠️  {warning}")
+            self.warnings.append(warning)
+            return None
+
+        except ImportError:
+            warning = "UART IPC client not available"
+            print(f"⚠️  {warning}")
+            self.warnings.append(warning)
+            return None
+
+        except Exception as e:
+            warning = f"UART IPC client failed: {e}"
+            print(f"⚠️  {warning}")
+            self.warnings.append(warning)
+            return None
+
+    def _init_mmap_ipc_client(self) -> Optional[Any]:
+        """
+        Initialize mmap-based IPC client for QEMU/Linux.
+
+        Returns:
+            IPCClient instance or None
+        """
+        try:
+            from ipc_client import IPCClient
+
+            ipc_client = IPCClient()
+            if ipc_client.connect():
+                print("✅ IPC client connected (/dev/shm/jarvis_ipc)")
+                return ipc_client
+            else:
+                warning = "IPC client: seL4 shared memory not available"
+                print(f"⚠️  {warning}")
+                self.warnings.append(warning)
+                return None
+
+        except ImportError:
+            warning = "mmap IPC client not available"
+            print(f"⚠️  {warning}")
+            self.warnings.append(warning)
+            return None
+
+        except Exception as e:
+            warning = f"mmap IPC client failed: {e}"
+            print(f"⚠️  {warning}")
+            self.warnings.append(warning)
+            return None
 
     def initialize_all(self) -> Dict[str, Any]:
         """
@@ -174,41 +320,27 @@ class SystemBootstrap:
 
     def _init_ipc_client(self) -> Optional[Any]:
         """
-        Initialize IPC client for seL4 cache communication
+        Initialize IPC client for seL4 cache communication.
+
+        Automatically selects:
+        - UART IPC for Raspberry Pi 4 hardware
+        - mmap IPC for QEMU/Linux (seL4 shared memory)
+        - Mock mode for Windows/unknown platforms
 
         Returns:
-            IPCClient instance or None (graceful fallback)
+            IPCClient, UARTIPCClient, or None (graceful fallback)
         """
-        print("[BOOTSTRAP] Initializing IPC client...")
+        print(f"[BOOTSTRAP] Initializing IPC client (platform: {self.platform})...")
 
-        try:
-            from ipc_client import IPCClient
-
-            ipc_client = IPCClient()
-            if ipc_client.connect():
-                print("✅ IPC client connected (/dev/shm/jarvis_ipc)")
-                self.components['ipc_client'] = ipc_client
-                return ipc_client
+        ipc_client = self._select_ipc_client()
+        if ipc_client:
+            self.components['ipc_client'] = ipc_client
+            return ipc_client
+        else:
+            if self.platform in ('windows', 'unknown'):
+                print("   System will continue with AI-based cache queries (no hardware)")
             else:
-                warning = "IPC client: seL4 not available, using AI fallback"
-                print(f"⚠️  {warning}")
-                print("   System will continue with AI-based cache queries")
-                self.warnings.append(warning)
-                self.components['ipc_client'] = None
-                return None
-
-        except ImportError:
-            warning = "IPC client not available (Phase 2 Week 28 feature)"
-            print(f"⚠️  {warning}")
-            self.warnings.append(warning)
-            self.components['ipc_client'] = None
-            return None
-
-        except Exception as e:
-            warning = f"IPC client initialization failed: {e}"
-            print(f"⚠️  {warning}")
-            print("   System will continue using AI fallback")
-            self.warnings.append(warning)
+                print("   System will continue using AI fallback")
             self.components['ipc_client'] = None
             return None
 

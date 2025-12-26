@@ -179,7 +179,7 @@ class EnhancedRollbackManager:
         import psutil
 
         # Get AI state from SystemStateManager
-        ai_state = system_state.get_current_state()
+        ai_state = system_state.get_current_state_str() if hasattr(system_state, 'get_current_state_str') else system_state.get_current_state()
         ai_model = None
         ai_memory = 0.0
 
@@ -458,7 +458,7 @@ class EnhancedRollbackManager:
         logger.info(f"[SnapshotMgr] Restoring AI state: {target_state}")
 
         # Transition to target state using existing SystemStateManager methods
-        current_state = system_state.get_current_state()
+        current_state = system_state.get_current_state_str() if hasattr(system_state, 'get_current_state_str') else system_state.get_current_state()
 
         if current_state == target_state:
             logger.info(f"[SnapshotMgr] AI already in target state: {target_state}")

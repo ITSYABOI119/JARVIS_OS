@@ -421,9 +421,9 @@ class SystemStateManager:
                 "avg_transition_time": self.stats["avg_transition_time"]
             }
 
-    def get_current_state(self) -> str:
+    def get_current_state_str(self) -> str:
         """
-        Get current system state (for snapshot_manager compatibility).
+        Get current system state as string (for snapshot_manager compatibility).
 
         Returns:
             Current state as string ("idle", "active", "critical", "emergency")

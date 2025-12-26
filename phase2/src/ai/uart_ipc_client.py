@@ -40,9 +40,9 @@ except ImportError:
 # Protocol Constants
 SYNC_BYTES = bytes([0xAA, 0x55])
 MAX_PAYLOAD_SIZE = 240
-HEADER_SIZE = 8  # TYPE + SEQ + LENGTH + FLAGS
+HEADER_SIZE = 6  # TYPE(1) + SEQ(2) + LENGTH(2) + FLAGS(1) = 6 bytes
 CRC_SIZE = 2
-MAX_FRAME_SIZE = 2 + HEADER_SIZE + MAX_PAYLOAD_SIZE + CRC_SIZE  # 250 bytes
+MAX_FRAME_SIZE = 2 + HEADER_SIZE + MAX_PAYLOAD_SIZE + CRC_SIZE  # 248 bytes
 
 # Timing
 HEARTBEAT_INTERVAL = 5.0  # seconds
@@ -244,16 +244,13 @@ class UARTIPCClient:
 
         seq = self._next_seq()
 
-        # Build header + payload
-        header = struct.pack('<BHBB',
+        # Build header: TYPE(1) + SEQ(2) + LENGTH(2) + FLAGS(1) = 6 bytes
+        header = struct.pack('<BHHB',
             msg_type.value,     # TYPE (1 byte)
             seq,                # SEQ (2 bytes, little-endian)
-            len(payload),       # LENGTH low byte
+            len(payload),       # LENGTH (2 bytes, little-endian)
             flags               # FLAGS (1 byte)
         )
-        # Add high byte of length
-        header = struct.pack('<B', msg_type.value) + struct.pack('<H', seq) + \
-                 struct.pack('<H', len(payload)) + struct.pack('<B', flags)
 
         data = header + payload
         crc = crc16_ccitt(data)
