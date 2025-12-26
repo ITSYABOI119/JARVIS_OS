@@ -197,243 +197,331 @@ once ivshmem IPC is validated.
 
 ## Month 13-14: First Hardware Target (Weeks 31-34)
 
-### Focus: Intel NUC Acquisition + NVMe Driver
+### Focus: Raspberry Pi 4 Setup + UART IPC
 
-**Objective:** Boot JARVIS on bare metal (Intel NUC) and implement first Tier 1 driver (NVMe storage).
+**Objective:** Boot JARVIS on bare metal Raspberry Pi 4 and implement UART-based Python↔seL4 IPC.
 
----
-
-### Week 31: Hardware Acquisition & Setup
-
-**Tasks:**
-1. Order Intel NUC
-   - Model: Intel NUC 13 Pro (NUC13ANHi7)
-   - CPU: Intel Core i7-13700 (16 cores, 5.2GHz boost)
-   - RAM: Upgrade to 32GB DDR5-4800 (2× 16GB SODIMMs)
-   - GPU: Intel Arc A380 (6GB VRAM, optional external)
-   - Storage: 512GB NVMe SSD
-   - Network: Intel i225 (2.5 GbE, built-in)
-   - **Cost: ~$1,200 total**
-
-2. Set up bare metal development environment
-   - Install WSL2 on Intel NUC (for comparison with existing dev PC)
-   - Configure BIOS: Disable Secure Boot, enable UEFI, CSM off
-   - Install bootloader (GRUB or systemd-boot)
-   - Test QEMU on NUC (validate environment before bare metal)
-
-3. Create JARVIS installation image
-   - Build seL4 kernel for bare metal (not QEMU)
-   - Package Python environment (AI models, agents, SHIELD)
-   - Create bootable USB drive (ISO image)
-
-4. First bare metal boot attempt
-   - Boot from USB
-   - Debug boot issues (serial console logging)
-   - Document hardware-specific quirks
-
-**Deliverables:**
-- ✅ Intel NUC purchased and received
-- ✅ Bare metal environment configured
-- ✅ JARVIS installation image created
-- ✅ First boot attempt (may not succeed yet)
-
-**Estimated Effort:** 12-16 hours (includes hardware setup time)
-**Blockers:** Hardware delivery time (2-4 weeks lead time)
-
-**Mitigation:** Order in Week 27, expect delivery by Week 31-32.
+**Hardware Pivot:** See `PHASE_2_HARDWARE_PIVOT.md` for full rationale (Intel NUC → Pi 4, $1,065 savings).
 
 ---
 
-### Week 32: Intel NUC Boot Validation
+### Week 31: seL4 Pi 4 Environment Setup
 
 **Tasks:**
-1. Debug bare metal boot issues
-   - Serial console debugging (identify boot failures)
-   - UEFI boot sequence validation
-   - Kernel initialization logging
+1. Set up ARM64 cross-compilation toolchain
+   - Install `aarch64-linux-gnu-gcc` on WSL
+   - Configure CMake for cross-compilation
+   - Verify toolchain with hello-world test
 
-2. Validate Phase 1 gate criteria on Intel NUC
-   - Boot time: measure from power-on to shell prompt (target: <10s)
-   - Decision cache: validate 85.7% hit rate on real hardware
-   - AI inference: measure Phi-3 Mini latency on Arc A380 (target: <558ms)
-   - IPC latency: measure on real hardware (target: <100μs)
+2. Build seL4 for Raspberry Pi 4
+   - Clone TII seL4 build system
+   - Configure for BCM2711, 8GB RAM (`-DRPI4_MEMORY=8192`)
+   - Build kernel.elf + elfloader
+   - Target platform: `rpi4`
 
-3. Compare QEMU vs bare metal performance
-   - Boot time: ~2s (QEMU) vs ?s (bare metal)
-   - Cache lookup: 0.021μs (QEMU) vs ?μs (bare metal)
-   - AI inference: 558ms (RTX 2070) vs ?ms (Arc A380)
+3. Prepare Pi 4 boot media
+   - Format SD card (FAT32 boot partition)
+   - Copy GPU firmware (`start4.elf`, `fixup4.dat`)
+   - Configure U-Boot bootloader
+   - Copy seL4 kernel image
 
-4. Document Intel NUC-specific configuration
-   - BIOS settings required
-   - Kernel parameters needed
-   - Hardware compatibility notes
+4. First seL4 boot on Pi 4
+   - Connect USB-serial adapter to Pi 4 UART pins
+   - Boot hello-world via UART console (115200 baud)
+   - Validate serial output
+   - Document boot time, memory layout
 
 **Deliverables:**
-- ✅ JARVIS boots on Intel NUC
-- ✅ Phase 1 gate criteria validated on real hardware
-- ✅ Performance comparison documented
-- ✅ Intel NUC configuration guide created
+- ✅ Cross-compilation toolchain configured
+- ✅ seL4 boots on Pi 4 (hello-world)
+- ✅ UART serial console working
+- ✅ Boot process documented
+
+**Estimated Effort:** 10-14 hours
+**Blockers:** None (Pi 4 already owned, seL4 support verified)
+
+**Hardware Required:**
+- Raspberry Pi 4 8GB (owned)
+- 64GB MicroSD card ($30)
+- USB-serial adapter ($5)
+- USB-C power supply ($15)
+
+---
+
+### Week 32: JARVIS ARM64 Port
+
+**Tasks:**
+1. Remove x86-specific code
+   - `stdin_impl.c`: Replace x86 `inb`/`outb` with PL011 UART driver
+   - `pci_ivshmem.c`: Remove entirely (not applicable on Pi 4)
+   - `main.c`: Update "x86_64" to "aarch64"
+
+2. Implement ARM64 serial driver
+   - New file: `phase1/src/sel4/uart_pl011.{c,h}`
+   - BCM2711 PL011 UART at 0xFE201000
+   - 115200 baud, 8N1 configuration
+   - Blocking read/write functions
+
+3. Update build system
+   - CMakeLists.txt: ARM64 target, aarch64 toolchain
+   - Remove x86-specific compiler flags
+   - Add Device Tree support for hardware description
+
+4. Build and boot JARVIS on Pi 4
+   - Decision cache initialization
+   - Cache pattern loading (258 patterns)
+   - Validate cache hit rate on ARM64
+
+**Deliverables:**
+- ✅ x86 code removed/replaced
+- ✅ ARM64 PL011 UART driver operational (~200 LOC)
+- ✅ JARVIS boots on Pi 4
+- ✅ Cache validated on ARM64 (target: 85.7% hit rate)
 
 **Estimated Effort:** 12-16 hours
-**Blockers:** Hardware-specific boot issues (mitigate: serial debugging, community forums)
+**Blockers:** ARM64 porting complexity (mitigate: most code already platform-independent)
 
 ---
 
-### Week 33: NVMe Driver Design
+### Week 33: UART IPC Implementation
 
 **Tasks:**
-1. Study NVMe specification
-   - Read NVM Express Base Specification 2.0
-   - Focus on: PCIe interface, admin queue, I/O queues
-   - Understand: command structure, completion queue, doorbell registers
+1. Design UART IPC protocol
+   - Message format: `[LENGTH:2][TYPE:1][ID:4][PAYLOAD:N][CRC:2]`
+   - Message types: CACHE_LOOKUP, CACHE_RESPONSE, HEARTBEAT, CACHE_STATS
+   - Max message size: 256 bytes
+   - CRC-16 for error detection
 
-2. Design NVMe driver architecture
-   - Controller initialization (identify device, allocate queues)
-   - Admin commands: Identify, Create I/O Queue, Delete I/O Queue
-   - I/O commands: Read, Write, Flush
-   - Interrupt handling: MSI-X support
+2. Implement seL4 UART IPC handler
+   - New file: `phase1/src/ipc/uart_ipc.{c,h}`
+   - Receive query from Python host via UART
+   - Parse message, perform cache lookup
+   - Send response with cache hit/miss indicator
 
-3. Adapt VirtIO pattern for NVMe
-   - Review `phase1/src/drivers/virtio_blk.{c,h}` (Week 23-24 reference)
-   - Reuse: Ring buffer management, command queuing
-   - Adapt: PCIe discovery (not PCI), NVMe-specific registers
+3. Implement Python UART client
+   - New file: `phase2/src/ai/uart_ipc_client.py`
+   - Serial connection via `/dev/ttyUSB0` (host) or `/dev/ttyAMA0` (Pi)
+   - Query/response with timeout (10s max)
+   - Retry logic for dropped messages
 
-4. Create NVMe driver test plan
-   - Unit tests: Controller init, queue management, command submission
-   - Integration tests: Read/write 4KB blocks, flush, error handling
-   - Performance tests: Latency (<2ms), throughput (>100 MB/s)
+4. Test UART IPC
+   - Loopback test (host sends, seL4 echoes)
+   - Cache lookup test (10 queries)
+   - Measure latency (target: <10ms round-trip)
 
 **Deliverables:**
-- ✅ NVMe spec reviewed (relevant sections documented)
-- ✅ Driver architecture designed
-- ✅ VirtIO pattern adapted for NVMe
-- ✅ Test plan created (30+ test cases)
+- ✅ UART IPC protocol designed and documented
+- ✅ seL4 UART handler operational (~300 LOC)
+- ✅ Python UART client working (~200 LOC)
+- ✅ IPC latency <10ms validated
 
-**Estimated Effort:** 10-14 hours (complex spec, significant reading)
-**Blockers:** NVMe spec complexity (mitigate: focus on essential commands only)
+**Estimated Effort:** 10-14 hours
+**Blockers:** None (UART is well-documented, seL4 has serial support)
 
 ---
 
-### Week 34: NVMe Driver Implementation
+### Week 34: Integration & Testing
 
 **Tasks:**
-1. Implement NVMe controller initialization
-   - Files: `phase2/src/drivers/nvme_core.{c,h}`, `nvme_driver.{c,h}`
-   - Detect NVMe device via PCIe enumeration
-   - Allocate admin queue (256 entries)
-   - Send Identify Controller command
+1. Full Python↔seL4 IPC via UART
+   - Python sends CACHE_LOOKUP message
+   - seL4 performs cache lookup, sends CACHE_RESPONSE
+   - Python displays result with timing
 
-2. Implement I/O queue setup
-   - Allocate I/O submission queue (1024 entries)
-   - Allocate I/O completion queue (1024 entries)
-   - Configure doorbell registers
+2. Validate cache hit rate via IPC
+   - Run 100 test queries through UART IPC
+   - Measure hit rate (target: >80%)
+   - Compare to Phase 1 QEMU results (85.7%)
 
-3. Implement read/write operations
-   - Read command: LBA, transfer size, buffer pointer
-   - Write command: LBA, transfer size, data buffer
-   - Flush command: ensure data persistence
+3. Performance benchmarking
+   - UART IPC latency: 1-10ms expected
+   - Cache lookup time: <1ms
+   - Round-trip time: <15ms total
+   - Document any bottlenecks
 
-4. Test NVMe driver
-   - Write 4KB block to LBA 0, read back, verify
-   - Measure read latency: target <2ms
-   - Measure write latency: target <2ms
-   - Test error handling: invalid LBA, queue full
+4. TinyLlama integration (optional)
+   - Run TinyLlama 1.1B on Linux (Pi 5 or Pi 4 dual-boot)
+   - Connect to seL4 via UART for cache miss fallback
+   - AI query → cache check → fallback to LLM if miss
+   - Measure end-to-end response time (10-30s for AI)
 
 **Deliverables:**
-- ✅ NVMe driver operational (2,000+ LOC)
-- ✅ Read/write latency <2ms
-- ✅ 10/10 driver tests passing
-- ✅ NVMe driver stable, no data corruption
+- ✅ Full Python↔seL4 IPC working via UART
+- ✅ Cache hit rate >80% validated
+- ✅ Performance documented (latency, throughput)
+- ✅ TinyLlama integration tested (optional)
 
-**Estimated Effort:** 20-24 hours (complex driver, critical storage component)
-**Blockers:** PCIe enumeration complexity (mitigate: use seL4 PCI APIs)
+**Estimated Effort:** 10-14 hours
+**Blockers:** None
 
-**Week 34 Checkpoint: Intel NUC boots, NVMe driver stable** ✅
+**Week 34 Checkpoint: Pi 4 boots JARVIS, UART IPC working, cache >80%** ✅
 
 ---
 
 ## Month 15-16: Driver Framework Expansion (Weeks 35-38)
 
-### Focus: Network + Input Drivers
+### Focus: Storage + Network Drivers (Pi 4)
 
-**Objective:** Implement critical Tier 1 drivers for network connectivity (e1000e) and user input (USB HID).
+**Objective:** Implement SD/EMMC storage driver and Broadcom GENET network driver for Raspberry Pi 4.
 
 ---
 
-### Week 35: Network Driver (Intel e1000e) - Part 1
+### Week 35: SD/EMMC Storage Driver - Part 1
 
 **Tasks:**
-1. Study Intel e1000e specification
-   - Read Intel 82574L Gigabit Ethernet Controller datasheet
-   - Focus on: TX/RX ring buffers, interrupt handling, MAC configuration
-   - Understand: PHY initialization, link negotiation, packet descriptors
+1. Study BCM2711 EMMC2 controller
+   - Read BCM2711 ARM Peripherals datasheet (EMMC2 section)
+   - Focus on: SD card protocol, command structure, data transfer
+   - Understand: Controller registers at 0xFE340000
 
-2. Design e1000e driver architecture
-   - TX ring buffer: 256 descriptors
-   - RX ring buffer: 256 descriptors
-   - Interrupt handling: MSI-X or legacy INTx
-   - MAC address configuration
+2. Design SD/EMMC driver architecture
+   - Controller initialization sequence
+   - Command/response handling (CMD0, CMD8, ACMD41, etc.)
+   - Data transfer modes: PIO vs DMA
+   - Block read/write operations
 
 3. Implement controller initialization
-   - Files: `phase2/src/drivers/e1000e_core.{c,h}`, `e1000e_driver.{c,h}`
-   - Detect e1000e device via PCI enumeration
-   - Reset controller (software reset)
-   - Configure MAC address
+   - Files: `phase2/src/drivers/bcm_emmc.{c,h}`
+   - Initialize EMMC2 controller
+   - Set clock frequency (400kHz init, 50MHz data)
+   - Card detection and identification
+
+4. Implement card initialization
+   - Send CMD0 (GO_IDLE)
+   - Send CMD8 (SEND_IF_COND)
+   - Send ACMD41 (SD_SEND_OP_COND)
+   - Read CID/CSD registers
+
+**Deliverables:**
+- ✅ BCM2711 EMMC2 spec reviewed
+- ✅ Driver architecture designed
+- ✅ Controller initialization working
+- ✅ SD card detected and identified
+
+**Estimated Effort:** 12-16 hours
+**Blockers:** SD protocol complexity (mitigate: use proven initialization sequence)
+
+---
+
+### Week 36: SD/EMMC Storage Driver - Part 2
+
+**Tasks:**
+1. Implement block read operations
+   - CMD17: READ_SINGLE_BLOCK
+   - CMD18: READ_MULTIPLE_BLOCK
+   - Buffer management
+
+2. Implement block write operations
+   - CMD24: WRITE_BLOCK
+   - CMD25: WRITE_MULTIPLE_BLOCK
+   - Write verification
+
+3. Integrate with file system layer
+   - Block device interface
+   - Read/write 512-byte sectors
+   - Error handling and retry logic
+
+4. Test SD driver
+   - Read boot sector (LBA 0)
+   - Write test pattern, read back, verify
+   - Measure throughput: target >10 MB/s read
+   - Test with different SD cards
+
+**Deliverables:**
+- ✅ SD/EMMC driver operational (~800 LOC)
+- ✅ Read/write operations working
+- ✅ Throughput >10 MB/s validated
+- ✅ 10/10 driver tests passing
+
+**Estimated Effort:** 12-16 hours
+**Blockers:** None (straightforward block device interface)
+
+**Success Criteria:** SD card read/write working, >10 MB/s throughput ✅
+
+---
+
+### Week 37: Broadcom GENET Network Driver - Part 1
+
+**Tasks:**
+1. Study Broadcom GENET specification
+   - Read BCM2711 GENET documentation
+   - Focus on: TX/RX DMA rings, MAC configuration, PHY interface
+   - Understand: Controller registers at 0xFD580000
+
+2. Design GENET driver architecture
+   - TX ring buffer: 256 descriptors
+   - RX ring buffer: 256 descriptors
+   - DMA descriptor format
+   - Interrupt handling
+
+3. Implement controller initialization
+   - Files: `phase2/src/drivers/bcm_genet.{c,h}`
+   - Reset GENET controller
+   - Configure MAC address (from OTP or Device Tree)
+   - Initialize PHY (RGMII interface)
 
 4. Implement TX ring buffer
-   - Allocate TX descriptor ring (256 entries)
-   - Implement packet transmission: buffer → descriptor → doorbell
+   - Allocate TX descriptor ring
+   - Implement packet transmission: buffer → DMA descriptor → doorbell
    - Test: Send raw Ethernet frame
 
 **Deliverables:**
-- ✅ e1000e spec reviewed
+- ✅ GENET spec reviewed
 - ✅ Driver architecture designed
 - ✅ Controller initialization working
 - ✅ TX ring buffer operational
 
 **Estimated Effort:** 12-16 hours
-**Blockers:** PCI enumeration (mitigate: reuse NVMe PCIe code from Week 33-34)
+**Blockers:** DMA configuration (mitigate: reference Linux driver)
 
 ---
 
-### Week 36: Network Driver (Intel e1000e) - Part 2
+### Week 38: Broadcom GENET Network Driver - Part 2
 
 **Tasks:**
 1. Implement RX ring buffer
-   - Allocate RX descriptor ring (256 entries)
-   - Implement packet reception: interrupt → descriptor → buffer
+   - Allocate RX descriptor ring
+   - Implement packet reception: DMA → buffer → interrupt
    - Test: Receive raw Ethernet frame
 
 2. Implement basic networking stack
    - ARP: Address Resolution Protocol (map IP → MAC)
    - ICMP: Internet Control Message Protocol (ping)
-   - IP: Internet Protocol (packet routing)
+   - IP: Internet Protocol (basic routing)
 
 3. Integrate with shell commands
    - `ping <host>` → ICMP Echo Request → wait for Reply
    - `ifconfig` → display MAC address, IP address, link status
    - `netstat` → display network statistics
 
-4. Test e1000e driver
-   - Ping localhost (127.0.0.1): verify loopback
+4. Test GENET driver
    - Ping gateway (192.168.1.1): verify local network
    - Ping external host (8.8.8.8): verify internet connectivity
-   - Measure RTT: target <1ms on local network
+   - Measure RTT: target <5ms on local network
+   - Test link up/down handling
 
 **Deliverables:**
-- ✅ e1000e driver operational
+- ✅ GENET driver operational (~1,200 LOC)
 - ✅ Basic networking stack (ARP, ICMP, IP)
 - ✅ Network commands working (`ping`, `ifconfig`, `netstat`)
-- ✅ 8/8 driver tests passing
+- ✅ 10/10 driver tests passing
 
 **Estimated Effort:** 12-16 hours
-**Blockers:** Networking stack complexity (mitigate: implement minimal subset only)
+**Blockers:** PHY initialization (mitigate: use standard RGMII config)
 
-**Success Criteria:** Ping working, <1ms RTT on local network ✅
+**Week 38 Checkpoint: SD/EMMC + Network drivers operational, 4 Pi 4 drivers working** ✅
 
 ---
 
-### Week 37: USB HID Driver - Part 1
+## Month 17-18: USB HID + Alpha Prep (Weeks 39-42)
+
+### Focus: USB Input + Alpha Release Infrastructure
+
+**Objective:** Implement USB HID driver for keyboard/mouse input and prepare for alpha tester onboarding.
+
+---
+
+### Week 39: USB HID Driver - Part 1
 
 **Tasks:**
 1. Study USB HID specification
@@ -441,14 +529,13 @@ once ivshmem IPC is validated.
    - Focus on: Endpoint descriptors, interrupt transfers, HID reports
    - Understand: Boot protocol (keyboard/mouse), report descriptors
 
-2. Design USB HID driver architecture
-   - USB host controller interface (xHCI or EHCI)
-   - Endpoint 0: Control transfers (enumeration)
-   - Endpoint 1: Interrupt transfers (keyboard/mouse input)
-   - HID report parsing
+2. Study BCM2711 USB host controller
+   - Pi 4 uses DesignWare USB 2.0 (DWC2) controller
+   - xHCI for USB 3.0 ports
+   - Controller registers and DMA
 
 3. Implement USB enumeration
-   - Files: `phase2/src/drivers/usb_hid_core.{c,h}`, `usb_hid_driver.{c,h}`
+   - Files: `phase2/src/drivers/usb_hid.{c,h}`
    - Detect USB keyboard/mouse
    - Read device descriptor
    - Configure device (Set Configuration)
@@ -456,132 +543,50 @@ once ivshmem IPC is validated.
 4. Implement keyboard input
    - Read HID report (8 bytes: modifier keys + 6 scan codes)
    - Parse scan codes → ASCII characters
-   - Test: Keyboard input in shell prompt
+   - Test: Keyboard input via UART passthrough
 
 **Deliverables:**
 - ✅ USB HID spec reviewed
-- ✅ Driver architecture designed
 - ✅ USB enumeration working
 - ✅ Keyboard input partially working
+- ✅ Basic HID parsing operational
 
-**Estimated Effort:** 10-14 hours
-**Blockers:** USB host controller complexity (mitigate: focus on keyboard only, defer mouse)
+**Estimated Effort:** 12-16 hours
+**Blockers:** DWC2 complexity (mitigate: use simplified boot protocol)
 
 ---
 
-### Week 38: USB HID Driver - Part 2
+### Week 40: USB HID Driver - Part 2
 
 **Tasks:**
-1. Implement mouse input
-   - Read HID report (4 bytes: buttons + X/Y movement)
-   - Parse mouse movement → cursor position
-   - Test: Mouse movement tracking (not displayed yet, just logged)
+1. Complete keyboard driver
+   - All printable characters working
+   - Modifier keys (Shift, Ctrl, Alt)
+   - Special keys (Enter, Backspace, arrows)
 
-2. Integrate with shell interface
-   - Keyboard input → shell prompt (replace stdin simulation)
-   - Mouse input → future GUI (log for now)
+2. Implement mouse input (optional)
+   - Read HID report (4 bytes: buttons + X/Y movement)
+   - Parse mouse movement
+   - Log events (no GUI yet)
+
+3. Integrate with shell interface
+   - Keyboard input → shell prompt
+   - Replace UART input with USB keyboard
    - Test: Type commands using physical keyboard
 
-3. Test USB HID driver
-   - Keyboard: Type all printable characters, test modifier keys
-   - Mouse: Test movement, left/right click, scroll wheel
-   - Error handling: Device disconnection, invalid reports
-
-4. Validate integration
-   - Shell accepts keyboard input (no virtual keyboard needed)
-   - All 27 commands functional via physical keyboard
-   - USB HID driver stable (no crashes on invalid input)
+4. Test USB HID driver
+   - Keyboard: Type all printable characters
+   - Modifier keys: Shift+letter for uppercase
+   - Error handling: Device disconnection
 
 **Deliverables:**
-- ✅ USB HID driver operational
-- ✅ Keyboard/mouse working
+- ✅ USB HID driver operational (~600 LOC)
+- ✅ Keyboard fully working
 - ✅ Shell accepts physical keyboard input
 - ✅ 10/10 driver tests passing
 
 **Estimated Effort:** 10-14 hours
-**Blockers:** None (keyboard is primary focus, mouse is bonus)
-
-**Week 38 Checkpoint: Network + USB drivers operational, 5/20 Tier 1 drivers working (25%)** ✅
-
----
-
-## Month 17-18: Second Hardware + Alpha Prep (Weeks 39-42)
-
-### Focus: Framework Laptop + Alpha Release Infrastructure
-
-**Objective:** Validate JARVIS on second hardware platform (AMD-based) and prepare for alpha tester onboarding.
-
----
-
-### Week 39: Framework Laptop Acquisition
-
-**Tasks:**
-1. Order Framework Laptop
-   - Model: Framework Laptop 13 (AMD Ryzen 7040 Series)
-   - CPU: AMD Ryzen 7 7840U (8 cores, 5.1GHz boost)
-   - RAM: Upgrade to 32GB DDR5-5600 (2× 16GB SODIMMs)
-   - GPU: AMD Radeon 780M (integrated, 2.7 TFlops)
-   - Storage: 1TB NVMe SSD (Western Digital SN850X)
-   - Network: Intel AX210 (WiFi 6E, M.2 2230 module)
-   - **Cost: ~$1,800 total**
-
-2. Set up Framework Laptop
-   - Configure BIOS: Disable Secure Boot, enable UEFI
-   - Create JARVIS installation USB (same image as Intel NUC)
-   - Test QEMU on Framework (validate environment)
-
-3. First boot on Framework Laptop
-   - Boot from USB
-   - Debug AMD-specific boot issues
-   - Document differences from Intel NUC
-
-4. Compare Intel vs AMD platforms
-   - Boot time: Intel NUC vs Framework Laptop
-   - AI inference: Arc A380 vs Radeon 780M
-   - Driver compatibility: NVMe, e1000e (may need Realtek driver)
-
-**Deliverables:**
-- ✅ Framework Laptop purchased and received
-- ✅ JARVIS boots on Framework Laptop
-- ✅ Intel vs AMD comparison documented
-- ✅ AMD-specific configuration noted
-
-**Estimated Effort:** 12-16 hours
-**Blockers:** Hardware delivery time (order in Week 35, expect delivery Week 39-40)
-
----
-
-### Week 40: Realtek 8169 Network Driver (Tier 1 #5)
-
-**Tasks:**
-1. Study Realtek 8169 specification
-   - Framework Laptop may use Realtek 8125 (2.5 GbE)
-   - Read Realtek 8169/8125 datasheet
-   - Compare to e1000e (similar TX/RX ring architecture)
-
-2. Implement Realtek driver
-   - Files: `phase2/src/drivers/rtl8169_core.{c,h}`, `rtl8169_driver.{c,h}`
-   - Reuse e1000e pattern (TX/RX rings, interrupts)
-   - Adapt for Realtek-specific registers
-
-3. Test Realtek driver on Framework Laptop
-   - Ping gateway (verify local network)
-   - Measure RTT: target <1ms
-   - Compare performance: e1000e (Intel) vs rtl8169 (Realtek)
-
-4. Validate driver compatibility matrix
-   - Intel NUC: e1000e driver ✅
-   - Framework Laptop: rtl8169 driver ✅
-   - Document: Hardware → Driver mapping
-
-**Deliverables:**
-- ✅ Realtek 8169 driver operational
-- ✅ Network working on Framework Laptop
-- ✅ 2/3 network drivers working (e1000e, rtl8169)
-- ✅ Driver compatibility matrix documented
-
-**Estimated Effort:** 10-14 hours
-**Blockers:** Realtek spec differences (mitigate: e1000e pattern reuse)
+**Blockers:** None (keyboard focus, mouse optional)
 
 ---
 
@@ -604,9 +609,9 @@ once ivshmem IPC is validated.
      - Troubleshooting (common issues + solutions)
    - Length: 50-100 pages (comprehensive)
 
-3. Test installation on both platforms
-   - Intel NUC: Run install script, verify automated setup
-   - Framework Laptop: Run install script, verify compatibility
+3. Test installation on Pi 4
+   - Raspberry Pi 4: Run install script, verify automated setup
+   - Test with different SD cards (Samsung, SanDisk)
 
 4. Create USB installer image
    - Bootable USB with installation script
@@ -662,163 +667,156 @@ once ivshmem IPC is validated.
 **Estimated Effort:** 8-12 hours
 **Blockers:** Tester recruitment (mitigate: start outreach in Week 40)
 
-**Week 42 Checkpoint: Framework Laptop boots, alpha testers recruited** ✅
+**Week 42 Checkpoint: USB HID working, alpha testers recruited** ✅
 
 ---
 
-## Month 19-20: Third Hardware + Power Management (Weeks 43-46)
+## Month 19-20: System Integration + Power Management (Weeks 43-46)
 
-### Focus: Dell Precision + ACPI S3 Integration
+### Focus: GPIO + Device Tree + Boot Optimization
 
-**Objective:** Add optional third hardware configuration and integrate real ACPI S3 suspend/resume on actual hardware.
+**Objective:** Complete Pi 4 system integration with GPIO, power management, and boot optimization.
 
 ---
 
-### Week 43: Dell Precision Integration (Optional)
+### Week 43: GPIO Driver + System Integration
 
 **Tasks:**
-1. Order Dell Precision workstation (if budget allows)
-   - Model: Dell Precision 3660 Tower
-   - CPU: Intel Xeon W-1370P or AMD Ryzen 9 5950X
-   - RAM: 64GB DDR4-3200
-   - GPU: NVIDIA RTX 3060 12GB or AMD Radeon Pro W6600
-   - Storage: 2TB NVMe SSD
-   - Network: Realtek 8125 (2.5 GbE)
-   - **Cost: ~$2,000**
+1. Implement GPIO driver
+   - Files: `phase2/src/drivers/bcm_gpio.{c,h}`
+   - BCM2711 GPIO controller at 0xFE200000
+   - Pin mode configuration (input/output/alt)
+   - Read/write pin values
 
-2. Boot JARVIS on Dell Precision
-   - Use same USB installer
-   - Validate automated installation
-   - Test driver compatibility
+2. Implement I2C driver (optional)
+   - BCM2711 BSC controller
+   - Support for I2C peripherals (sensors, displays)
+   - Basic read/write operations
 
-3. Validate 3/3 hardware configs
-   - Intel NUC: Intel CPU + Arc GPU + Intel NIC ✅
-   - Framework Laptop: AMD CPU + Radeon GPU + WiFi ✅
-   - Dell Precision: Intel/AMD CPU + NVIDIA/AMD GPU + Realtek NIC ✅
+3. System integration testing
+   - All drivers working together
+   - UART IPC + SD storage + Network + USB HID
+   - Stress test: continuous operation for 24h
 
-4. Update compatibility matrix
-   - Document: All tested hardware combinations
-   - Note: Driver requirements per platform
+4. Document Pi 4 hardware platform
+   - Driver compatibility matrix (Pi 4 specific)
+   - Known limitations
+   - Performance benchmarks
 
 **Deliverables:**
-- ✅ Dell Precision boots (if purchased)
-- ✅ 3/3 hardware configs validated
-- ✅ Compatibility matrix complete
+- ✅ GPIO driver operational (~200 LOC)
+- ✅ I2C driver operational (optional, ~300 LOC)
+- ✅ 24-hour integration test passed
+- ✅ Pi 4 platform documentation complete
 
-**Estimated Effort:** 8-12 hours (if Dell purchased; 0h if deferred)
-**Blockers:** Budget constraint (mitigate: defer to Phase 3 if needed)
-
-**Alternative:** Skip Dell, focus on 2 configs (Intel NUC + Framework Laptop)
+**Estimated Effort:** 8-12 hours
+**Blockers:** None (GPIO is straightforward)
 
 ---
 
-### Week 44: PS/2 Keyboard Driver (Tier 1 #8)
+### Week 44: Watchdog + Power Management
 
 **Tasks:**
-1. Study PS/2 keyboard specification
-   - Read PS/2 Protocol documentation
-   - Focus on: Scan code sets, interrupt handling
-   - Understand: Keyboard controller (8042), ports 0x60/0x64
+1. Implement BCM2711 watchdog driver
+   - Files: `phase2/src/drivers/bcm_watchdog.{c,h}`
+   - Hardware watchdog at 0xFE100000
+   - Timeout configuration (1-15 seconds)
+   - Heartbeat/feed mechanism
 
-2. Implement PS/2 driver
-   - Files: `phase2/src/drivers/ps2_kbd.{c,h}`
-   - Initialize keyboard controller
-   - Handle keyboard interrupts (IRQ 1)
-   - Parse scan codes → ASCII
+2. Implement basic power management
+   - CPU frequency scaling (optional)
+   - Temperature monitoring (VideoCore mailbox)
+   - Thermal throttling awareness
 
-3. Test PS/2 driver
-   - Boot with USB keyboard disabled (force PS/2)
-   - Verify keyboard input works
-   - Test: All printable characters, modifier keys
+3. Integrate with SuspendManager
+   - Reuse Phase 1 `suspend_manager.py`
+   - State save to SD card (vs NVMe)
+   - Agent state persistence
 
-4. Validate input driver diversity
-   - USB HID: Modern keyboards/mice ✅
-   - PS/2: Legacy keyboards ✅
+4. Test power management
+   - Watchdog triggers on hang
+   - Temperature reported correctly
+   - State save/restore cycle works
 
 **Deliverables:**
-- ✅ PS/2 keyboard driver operational
-- ✅ Legacy keyboard support working
-- ✅ 8/20 Tier 1 drivers working (40%)
+- ✅ Watchdog driver operational (~150 LOC)
+- ✅ Temperature monitoring working
+- ✅ SuspendManager integration complete
+- ✅ 5/5 power tests passing
 
-**Estimated Effort:** 8-10 hours (simpler than USB HID)
-**Blockers:** None (PS/2 is well-documented legacy protocol)
+**Estimated Effort:** 8-10 hours
+**Blockers:** None (Pi 4 watchdog is simple)
 
 ---
 
-### Week 45: ACPI S3 Suspend/Resume - Part 1
+### Week 45: Device Tree + Boot Optimization - Part 1
 
 **Tasks:**
-1. Study ACPI specification
-   - Read ACPI Specification 6.5 (S3 Sleep State)
-   - Focus on: S3 entry, S3 resume, power states
-   - Understand: ACPI tables (DSDT, FADT), SCI interrupt
+1. Study Device Tree specification
+   - Read Devicetree Specification v0.4
+   - Focus on: Node structure, properties, overlays
+   - Understand: Pi 4 DTB structure
 
-2. Design ACPI S3 integration
-   - Integrate with `phase1/src/ai/suspend_manager.py`
-   - S3 entry sequence:
-     1. Suspend all agents (save state via SuspendManager)
-     2. Save AI model to NVMe (Phi-3 Mini ~2GB)
-     3. Enter ACPI S3 (system RAM powered, everything else off)
-   - S3 resume sequence:
-     1. Resume from ACPI S3 (hardware wakeup)
-     2. Restore AI model from NVMe (~5-10s)
-     3. Resume all agents (restore state via SuspendManager)
+2. Create JARVIS Device Tree overlay
+   - Files: `phase2/src/boot/jarvis.dts`
+   - Define JARVIS-specific device nodes
+   - Configure reserved memory regions
+   - Enable required peripherals
 
-3. Implement ACPI S3 entry
-   - Files: `phase2/src/power/acpi_s3.{c,h}`
-   - Write to ACPI registers (PM1a_CNT, PM1b_CNT)
-   - Handle S3 entry transition
+3. Implement DT parsing in seL4
+   - Parse DTB blob at boot
+   - Extract memory regions
+   - Configure drivers from DT properties
 
-4. Test S3 entry
-   - Command: `suspend` → agents suspended → model saved → S3 entry
-   - Validate: System enters low-power state
-   - Measure: Power consumption (should drop to ~5W)
+4. Test Device Tree integration
+   - Boot with custom overlay
+   - Verify peripherals configured correctly
+   - Compare boot time with/without DT
 
 **Deliverables:**
-- ✅ ACPI spec reviewed (S3-specific sections)
-- ✅ S3 integration designed
-- ✅ ACPI S3 entry working
-- ✅ Power consumption validated
+- ✅ Device Tree spec reviewed
+- ✅ JARVIS overlay created (~100 lines)
+- ✅ DT parsing operational
+- ✅ Boot configuration automated
 
 **Estimated Effort:** 10-14 hours
-**Blockers:** ACPI complexity (mitigate: focus on S3 only, defer S4/S5)
+**Blockers:** DT parsing complexity (mitigate: use libfdt)
 
 ---
 
-### Week 46: ACPI S3 Suspend/Resume - Part 2
+### Week 46: Device Tree + Boot Optimization - Part 2
 
 **Tasks:**
-1. Implement ACPI S3 resume
-   - Handle resume interrupt (SCI or RTC alarm)
-   - Restore hardware state (PCI, interrupts, timers)
-   - Resume bootloader → kernel → agents
+1. Optimize boot sequence
+   - Parallel driver initialization
+   - Lazy loading of optional components
+   - Reduce kernel initialization time
 
-2. Integrate model restoration
-   - Load Phi-3 Mini from NVMe (~2GB, 5-10s)
-   - Warm-start inference engine (dummy query)
-   - Resume agent monitoring
+2. Implement warm reboot
+   - Preserve state across reboots
+   - Fast resume without full re-initialization
+   - Target: <5s warm boot
 
-3. Test S3 resume
-   - Wake system (power button or RTC alarm)
-   - Measure resume time: target <15s (vs instant in Phase 1 tests)
-   - Validate: All agents operational after resume
-   - Validate: 100% state preservation
+3. Power state management
+   - Idle power reduction
+   - CPU core parking
+   - Dynamic frequency scaling
 
-4. Test battery optimization (on Framework Laptop)
-   - Low battery trigger (<15%): Switch to TinyLlama 1B
-   - Measure: Battery life extension (target: 2× longer)
-   - Test: Resume from S3 with low battery
+4. Validate boot performance
+   - Cold boot: target <10s
+   - Warm boot: target <5s
+   - Measure power consumption at idle
 
 **Deliverables:**
-- ✅ ACPI S3 suspend/resume working
-- ✅ Resume time <15s on real hardware
-- ✅ Battery optimization functional
-- ✅ Power management stable
+- ✅ Boot time <10s (cold), <5s (warm)
+- ✅ Power optimization working
+- ✅ Device Tree fully integrated
+- ✅ Boot process stable
 
 **Estimated Effort:** 12-16 hours
-**Blockers:** Resume complexity (mitigate: extensive debugging, serial logging)
+**Blockers:** None
 
-**Week 46 Checkpoint: Dell boots (3/3 configs), power management working** ✅
+**Week 46 Checkpoint: Pi 4 fully integrated, 6 drivers working, boot optimized** ✅
 
 ---
 
@@ -979,7 +977,7 @@ once ivshmem IPC is validated.
 
 **Tasks:**
 1. Set up 30-day stability test infrastructure
-   - Hardware: Intel NUC (primary) + Framework Laptop (secondary)
+   - Hardware: Raspberry Pi 4 8GB (primary)
    - Monitoring: Crash logs, error logs, memory leaks
    - Automation: Script to execute commands 24/7
 
@@ -1053,83 +1051,70 @@ once ivshmem IPC is validated.
 
 ---
 
-## Driver Implementation Schedule (20 Tier 1 Drivers)
+## Driver Implementation Schedule (Raspberry Pi 4)
 
-**From CRITICAL_SPECIFICATIONS.md:**
+**Platform:** Raspberry Pi 4 8GB (BCM2711, Cortex-A72)
 
-### Storage (3 drivers)
-
-| Driver | Week | Status | Priority | Notes |
-|--------|------|--------|----------|-------|
-| 1. NVMe | 33-34 | ✅ Phase 2 | Critical | PCIe storage, primary boot device |
-| 2. AHCI | 35 | ⏳ Deferred | High | SATA storage, secondary device |
-| 3. USB Mass Storage | 37 | ⏳ Deferred | Medium | USB drives, external storage |
-
-### Network (3 drivers)
+### Core Drivers (Required)
 
 | Driver | Week | Status | Priority | Notes |
 |--------|------|--------|----------|-------|
-| 4. Intel e1000e | 35-36 | ✅ Phase 2 | Critical | Gigabit Ethernet, Intel NUC |
-| 5. Realtek 8169 | 40 | ✅ Phase 2 | High | 2.5 GbE, Framework Laptop |
-| 6. Intel WiFi (ax210) | 42 | ⏳ Deferred | High | WiFi 6E, wireless connectivity |
+| 1. PL011 UART | 32 | ✅ Phase 2 | Critical | Serial console + IPC |
+| 2. SD/EMMC | 35-36 | ✅ Phase 2 | Critical | Boot + primary storage |
+| 3. Broadcom GENET | 37-38 | ✅ Phase 2 | Critical | Gigabit Ethernet |
+| 4. USB HID | 39-40 | ✅ Phase 2 | Critical | Keyboard/mouse input |
+| 5. GPIO | 43 | ✅ Phase 2 | High | General I/O, LED status |
+| 6. Watchdog | 44 | ✅ Phase 2 | High | System recovery |
 
-### Input (3 drivers)
-
-| Driver | Week | Status | Priority | Notes |
-|--------|------|--------|----------|-------|
-| 7. USB HID | 37-38 | ✅ Phase 2 | Critical | Keyboard/mouse, modern input |
-| 8. PS/2 | 44 | ✅ Phase 2 | Medium | Legacy keyboard support |
-| 9. Touchpad (I2C) | 46 | ⏳ Deferred | Medium | Laptop touchpad |
-
-### Graphics (3 drivers)
+### System Drivers
 
 | Driver | Week | Status | Priority | Notes |
 |--------|------|--------|----------|-------|
-| 10. VESA | 48 | ✅ Phase 2 | High | Basic framebuffer, universal |
-| 11. Intel i915 | 51 | ✅ Phase 2 | High | Integrated graphics, accelerated |
-| 12. Simple Framebuffer | 49 | ⏳ Deferred | Low | Minimal graphics mode |
+| 7. Device Tree | 45-46 | ✅ Phase 2 | High | Hardware description |
+| 8. Temperature | 44 | ✅ Phase 2 | Medium | Thermal monitoring |
+| 9. I2C (BSC) | 43 | ⏳ Optional | Medium | Peripheral support |
+| 10. SPI | Phase 3 | ⏳ Deferred | Low | Peripheral support |
 
-### Audio (2 drivers)
-
-| Driver | Week | Status | Priority | Notes |
-|--------|------|--------|----------|-------|
-| 13. Intel HDA | 52 | ⏳ Deferred | Medium | Audio codec, sound output |
-| 14. USB Audio | Phase 3 | ❌ Deferred | Low | USB speakers/headsets |
-
-### USB (2 drivers)
+### Graphics (Future)
 
 | Driver | Week | Status | Priority | Notes |
 |--------|------|--------|----------|-------|
-| 15. EHCI (USB 2.0) | Phase 3 | ❌ Deferred | Medium | Legacy USB support |
-| 16. xHCI (USB 3.0) | Phase 3 | ❌ Deferred | High | Modern USB support (needed for USB HID) |
+| 11. VideoCore VI | Phase 3 | ⏳ Deferred | Medium | GPU framebuffer |
+| 12. HDMI | Phase 3 | ⏳ Deferred | Medium | Display output |
 
-### System (4 drivers)
+### Audio (Future)
 
 | Driver | Week | Status | Priority | Notes |
 |--------|------|--------|----------|-------|
-| 17. ACPI | 45-46 | ✅ Phase 2 | Critical | Power management, S3 suspend |
-| 18. RTC | 47 | ⏳ Deferred | High | Real-time clock, timekeeping |
-| 19. PCI/PCIe | 31-32 | ✅ Phase 2 | Critical | Device enumeration (needed for NVMe) |
-| 20. GPIO | Phase 3 | ❌ Deferred | Low | General-purpose I/O |
+| 13. PWM Audio | Phase 3 | ⏳ Deferred | Low | Basic audio output |
+| 14. I2S | Phase 3 | ⏳ Deferred | Low | Digital audio |
 
-**Phase 2 Target: 15/20 drivers (75%)**
+### Comparison: x86 vs ARM64
 
-**Phase 2 Actual (optimistic estimate): 11-13/20 drivers (55-65%)**
+| x86 Driver (Removed) | ARM64 Replacement | Notes |
+|---------------------|-------------------|-------|
+| NVMe | SD/EMMC | No PCIe on Pi 4 |
+| Intel e1000e | Broadcom GENET | Pi 4 built-in NIC |
+| Intel i915 | VideoCore VI | Pi 4 GPU |
+| ACPI S3 | Device Tree + Watchdog | ARM power model |
+| PS/2 | USB HID only | No legacy ports |
+| PCI/PCIe | N/A | No PCI bus on Pi 4 |
+
+**Phase 2 Target: 8/10 core drivers (80%)**
 
 **Drivers Implemented in Phase 2:**
-1. ✅ NVMe (Weeks 33-34)
-2. ✅ Intel e1000e (Weeks 35-36)
-3. ✅ Realtek 8169 (Week 40)
-4. ✅ USB HID (Weeks 37-38)
-5. ✅ PS/2 (Week 44)
-6. ✅ VESA (Week 48)
-7. ✅ Intel i915 (Week 51)
-8. ✅ ACPI (Weeks 45-46)
-9. ✅ PCI/PCIe (Weeks 31-32)
-10-13. ⏳ AHCI, USB Mass Storage, Intel WiFi, RTC (stretch goals)
+1. ✅ PL011 UART (Week 32)
+2. ✅ SD/EMMC (Weeks 35-36)
+3. ✅ Broadcom GENET (Weeks 37-38)
+4. ✅ USB HID (Weeks 39-40)
+5. ✅ GPIO (Week 43)
+6. ✅ Watchdog (Week 44)
+7. ✅ Device Tree (Weeks 45-46)
+8. ✅ Temperature (Week 44)
+9. ⏳ I2C (Week 43, optional)
 
 **Drivers Deferred to Phase 3:**
-- USB Mass Storage, Intel WiFi, Touchpad, Simple Framebuffer, Intel HDA, USB Audio, EHCI, xHCI, RTC, GPIO
+- VideoCore VI, HDMI, PWM Audio, I2S, SPI
 
 ---
 
@@ -1144,28 +1129,28 @@ once ivshmem IPC is validated.
 - **Test Suite:** 30+ IPC integration tests, 10+ manager tests
 
 **Week 34 Checkpoint:**
-- ✅ Intel NUC boots to shell
-- ✅ NVMe driver stable (no data corruption)
-- ✅ Phase 1 gate criteria validated on real hardware
-- **Test Suite:** 20+ NVMe tests, 10+ bare metal boot tests
+- ✅ Raspberry Pi 4 boots JARVIS
+- ✅ UART IPC working (Python↔seL4)
+- ✅ Cache hit rate >80% validated
+- **Test Suite:** 20+ UART IPC tests, 10+ cache tests
 
 **Week 38 Checkpoint:**
-- ✅ Network + USB drivers operational
-- ✅ 5/20 Tier 1 drivers working (25%)
-- ✅ All 27 commands functional on real hardware
-- **Test Suite:** 15+ network tests, 15+ USB HID tests
+- ✅ SD/EMMC + GENET drivers operational
+- ✅ 4/8 core drivers working (50%)
+- ✅ Network ping working on Pi 4
+- **Test Suite:** 15+ storage tests, 15+ network tests
 
 **Week 42 Checkpoint:**
-- ✅ Framework Laptop boots to shell
-- ✅ 2/3 hardware configs validated
+- ✅ USB HID driver working
+- ✅ Physical keyboard input functional
 - ✅ Alpha testers recruited (20-30 people)
-- **Test Suite:** 20+ compatibility tests (Intel vs AMD)
+- **Test Suite:** 20+ USB HID tests, alpha tester onboarding
 
 **Week 46 Checkpoint:**
-- ✅ Dell Precision boots (3/3 configs) [optional]
-- ✅ Power management working (ACPI S3)
-- ✅ 10/20 Tier 1 drivers working (50%)
-- **Test Suite:** 25+ suspend/resume tests, 10+ power management tests
+- ✅ GPIO + Device Tree integrated
+- ✅ Boot optimized (<10s cold, <5s warm)
+- ✅ 8/8 core drivers working (100%)
+- **Test Suite:** 25+ integration tests, 10+ boot tests
 
 **Week 50 Checkpoint:**
 - ✅ Security audit passed (no critical issues)
@@ -1188,8 +1173,8 @@ once ivshmem IPC is validated.
 | Risk | Probability | Impact | Phase 1 Learning | Mitigation |
 |------|-------------|--------|------------------|------------|
 | **Real-time IPC integration fails** | Medium | Critical | Phase 1 split demo; IPC 54μs validated | Incremental integration (Weeks 27-30); fallback to mock mode if needed; extensive testing |
-| **Driver complexity underestimated** | High | High | VirtIO took 2 weeks; Tier 1 more complex | Allocate 2-3 weeks per driver; start with NVMe (highest priority); reuse VirtIO pattern |
-| **Hardware compatibility issues** | High | Medium | Phase 1 QEMU-only; real HW unknown | Test on 3 diverse configs (Intel, AMD, workstation); tier system prioritization |
+| **Driver complexity underestimated** | Medium | High | VirtIO took 2 weeks; Pi 4 drivers simpler | Allocate 2-3 weeks per driver; start with UART/SD (highest priority); reference Linux drivers |
+| **Hardware compatibility issues** | Low | Medium | Phase 1 QEMU-only; Pi 4 seL4 verified | Single Pi 4 platform; well-documented BCM2711; reference Linux drivers |
 | **Cache capacity overflow** | Low | Medium | Phase 1 overflow at 256→512 (Week 25) | Start with 1024 capacity; implement dynamic resizing; monitor pattern growth |
 | **Documentation lag** | Medium | Low | Week 17 scope change caused lag | Update PHASE_2_PROGRESS_TRACKER.md within 24h; bi-weekly status docs |
 | **Security vulnerabilities** | Medium | Critical | Phase 1 focused on functionality | External audit (Month 22); fix critical issues before alpha release; community bug bounty |
@@ -1202,8 +1187,8 @@ once ivshmem IPC is validated.
 
 | Risk | Probability | Impact | Mitigation |
 |------|-------------|--------|------------|
-| **Hardware acquisition delays** | Medium | Medium | Order early (Week 27 for NUC, Week 35 for Framework); use existing PC until delivery |
-| **No funding secured** | High | Medium | Self-fund Phase 2 (minimize costs); prioritize Intel NUC only if budget constrained |
+| **Hardware acquisition delays** | Low | Low | Pi 4 already owned; accessories ($65) ship in 1-2 days |
+| **No funding secured** | Low | Low | Pi 4 pivot eliminates hardware budget need | Self-fund Phase 2 ($65-175 total); Pi 4 already owned |
 | **Timeline slips (solo dev)** | High | Medium | Adjust scope (defer 20→15 drivers acceptable); focus on 7 gate criteria; 24% buffer from Phase 1 |
 | **Security audit cost** | Medium | Low | Budget $75K; consider open-source tools (KLEE, AFL, Valgrind); defer to Month 23 if needed |
 | **Alpha tester drop-off** | Medium | Medium | Recruit 30 (aim for 20 active); provide responsive support; release patches quickly (P0 within 48h) |
@@ -1215,25 +1200,30 @@ once ivshmem IPC is validated.
 
 **Based on Phase 1 Efficiency (24% under budget):**
 
-**Week-by-Week Breakdown:**
+**Week-by-Week Breakdown (Raspberry Pi 4):**
 - Weeks 27-30 (IPC integration): 38-48 hours (4 weeks × 9.5-12h/week)
-- Weeks 31-34 (Intel NUC + NVMe): 54-66 hours (4 weeks × 13.5-16.5h/week, hardware complexity)
-- Weeks 35-38 (Network + USB drivers): 44-56 hours (4 weeks × 11-14h/week)
-- Weeks 39-42 (Framework + alpha prep): 42-52 hours (4 weeks × 10.5-13h/week)
-- Weeks 43-46 (Dell + power mgmt): 48-58 hours (4 weeks × 12-14.5h/week)
+- Weeks 31-34 (Pi 4 setup + UART IPC): 42-58 hours (4 weeks × 10.5-14.5h/week)
+- Weeks 35-38 (SD/EMMC + GENET drivers): 48-64 hours (4 weeks × 12-16h/week)
+- Weeks 39-42 (USB HID + alpha prep): 42-56 hours (4 weeks × 10.5-14h/week)
+- Weeks 43-46 (GPIO + Device Tree): 38-52 hours (4 weeks × 9.5-13h/week)
 - Weeks 47-50 (Alpha + security): 56-74 hours (4 weeks × 14-18.5h/week, bug fixing)
 - Weeks 51-52 (Stability + report): 22-30 hours (2 weeks × 11-15h/week)
 
-**Total Estimated: 304-384 hours**
+**Total Estimated: 286-382 hours**
 
-**Conservative Estimate: ~500 hours** (accounts for unknown unknowns, hardware delays, bug fixing)
+**Conservative Estimate: ~400 hours** (reduced from 500h due to simpler Pi 4 vs x86)
 
 **Comparison to Phase 1:**
 - Phase 1 actual: 286 hours (26 weeks)
-- Phase 2 estimate: 500 hours (52 weeks)
-- Scaling factor: 1.75× (reasonable for 2× duration + higher complexity)
+- Phase 2 estimate: 400 hours (52 weeks)
+- Scaling factor: 1.4× (reduced complexity with single Pi 4 target)
 
-**Confidence Level: Medium-High** (based on Phase 1 efficiency data, driver complexity known from VirtIO)
+**Hardware Cost Savings:**
+- Original (x86): $5,000 (Intel NUC + Framework + Dell)
+- Revised (Pi 4): $65-175
+- Savings: $4,825-4,935 (97-99%)
+
+**Confidence Level: High** (based on Phase 1 efficiency, proven seL4 Pi 4 support)
 
 ---
 
@@ -1269,9 +1259,9 @@ once ivshmem IPC is validated.
 - Action: Initialize on startup via SystemBootstrap
 
 **Drivers:**
-- `phase1/src/drivers/virtio_core.{c,h}` (ring buffer, PCI discovery)
-- `phase1/src/drivers/virtio_blk.{c,h}` (block storage, operational)
-- Action: Reuse pattern for NVMe, e1000e, USB HID
+- `phase1/src/drivers/virtio_core.{c,h}` (ring buffer pattern)
+- `phase1/src/drivers/virtio_blk.{c,h}` (block storage pattern)
+- Action: Reuse ring buffer pattern for SD/EMMC, GENET, USB HID
 
 **Shell:**
 - `phase1/src/shell/shell.py` (27 commands, 43/43 tests)
@@ -1279,22 +1269,38 @@ once ivshmem IPC is validated.
 
 ---
 
-## Appendix B: Hardware Acquisition Timeline
+## Appendix B: Hardware Configuration (Raspberry Pi 4)
 
-**Week 27 (December 2025):**
-- Order Intel NUC ($1,200)
-- Expected delivery: Week 31-32 (allow 4 weeks)
+**Hardware Already Owned:**
+- Raspberry Pi 4 8GB ($0 - already owned)
 
-**Week 35 (January 2026):**
-- Order Framework Laptop ($1,800)
-- Expected delivery: Week 39-40 (allow 4 weeks)
+**Accessories to Purchase (Week 31):**
+- 64GB Samsung Endurance MicroSD card ($30)
+- USB-C power supply 5V/3A ($15)
+- Heatsink + fan kit ($10)
+- USB-serial adapter (FTDI or CP2102) ($5)
+- Jumper wires for UART ($5)
 
-**Week 43 (March 2026) [Optional]:**
-- Order Dell Precision ($2,000)
-- Expected delivery: Week 47-48 (allow 4 weeks)
+**Optional (Future):**
+- Raspberry Pi 5 for AI inference ($80)
+- UART-to-UART cable for Pi 4↔Pi 5 ($5)
+- Active cooling case ($25)
 
-**Total Hardware Cost: $5,000** (all 3 configs)
-**Minimum Viable: $1,200** (Intel NUC only)
+**Total Hardware Cost: $65-175** (vs $5,000 original x86 plan)
+**Savings: $4,825-4,935 (97-99%)**
+
+### Pi 4 Specifications (BCM2711)
+
+| Component | Specification |
+|-----------|---------------|
+| CPU | Cortex-A72 quad-core @ 1.8 GHz |
+| RAM | 8GB LPDDR4-3200 |
+| Storage | MicroSD (SDIO) |
+| Network | Broadcom GENET Gigabit |
+| USB | 2× USB 3.0, 2× USB 2.0 |
+| UART | PL011 @ 0xFE201000 |
+| GPIO | 40-pin header |
+| Power | 5V/3A USB-C |
 
 ---
 
@@ -1333,7 +1339,12 @@ once ivshmem IPC is validated.
 ---
 
 *Implementation Plan Date: December 2025*
+*Updated: December 2025 (Hardware Pivot: Intel NUC → Raspberry Pi 4)*
 *Author: JARVIS Development Team (Solo Developer)*
 *Phase 1 Complete: 26/26 weeks (100%), 286 hours*
-*Phase 2 Estimate: 52 weeks, ~500 hours*
-*Next Milestone: Week 30 - IPC Integration Complete*
+*Phase 2 Estimate: 52 weeks, ~400 hours*
+*Hardware: Raspberry Pi 4 8GB (BCM2711, Cortex-A72)*
+*Hardware Cost: $65-175 (savings: $4,825-4,935 vs original x86 plan)*
+*Next Milestone: Week 31 - seL4 Pi 4 Environment Setup*
+
+**See Also:** `PHASE_2_HARDWARE_PIVOT.md` for full pivot rationale
