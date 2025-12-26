@@ -488,24 +488,25 @@ If budget becomes available:
 
 ## Appendix B: Hardware Checklist
 
-**Required (Already Owned):**
-- [ ] Raspberry Pi 4 8GB
-- [ ] MicroSD card (32GB+ recommended)
-- [ ] USB-C power supply (5V/3A)
-- [ ] MicroHDMI cable (for initial setup)
-- [ ] USB keyboard (for initial setup)
+**Ordered (December 2025):**
+- [x] Raspberry Pi 4 Model B 8GB (CE06974) - $145.00
+- [x] Official USB-C Power Supply 5.1V 15.3W (CE06427) - $11.90
+- [x] MicroSD 16GB Class 10 (CE04628) - $17.25
+- [x] Large Heatsink (CE09095) - $2.40
+- [x] USB to TTL Serial Cable - Adafruit (ADA954) - $20.75
 
-**Required (To Purchase ~$60):**
-- [ ] 64GB Samsung/SanDisk Endurance SD card ($30)
-- [ ] USB-serial adapter (FTDI or CP2102) ($5)
-- [ ] Heatsink + fan kit ($10)
-- [ ] Jumper wires for UART ($5)
-- [ ] SD card reader (if not available) ($10)
+**Order Total:**
+- Subtotal: $197.30
+- Shipping: $18.52
+- GST: $19.62
+- **Grand Total: $215.82 AUD**
 
-**Optional:**
-- [ ] Raspberry Pi 5 (for AI inference) ($80)
-- [ ] UART-to-UART cable (for Pi 4 ↔ Pi 5) ($5)
-- [ ] Active cooling case ($25)
+**Note:** 16GB SD card is sufficient for initial development. Consider upgrading to 64GB+ if AI models need to be stored locally.
+
+**Optional (Future):**
+- [ ] Raspberry Pi 5 (for AI inference) (~$120 AUD)
+- [ ] Larger SD card 64GB+ (~$30 AUD)
+- [ ] Active cooling case (~$35 AUD)
 
 ---
 

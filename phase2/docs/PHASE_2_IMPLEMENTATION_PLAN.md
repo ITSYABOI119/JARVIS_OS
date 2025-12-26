@@ -1271,23 +1271,22 @@ once ivshmem IPC is validated.
 
 ## Appendix B: Hardware Configuration (Raspberry Pi 4)
 
-**Hardware Already Owned:**
-- Raspberry Pi 4 8GB ($0 - already owned)
+**Hardware Ordered (December 2025):**
+- Raspberry Pi 4 Model B 8GB - $145.00 AUD
+- Official USB-C Power Supply 5.1V 15.3W - $11.90 AUD
+- MicroSD 16GB Class 10 - $17.25 AUD
+- Large Heatsink - $2.40 AUD
+- USB to TTL Serial Cable (Adafruit) - $20.75 AUD
+- Shipping - $18.52 AUD
+- GST - $19.62 AUD
 
-**Accessories to Purchase (Week 31):**
-- 64GB Samsung Endurance MicroSD card ($30)
-- USB-C power supply 5V/3A ($15)
-- Heatsink + fan kit ($10)
-- USB-serial adapter (FTDI or CP2102) ($5)
-- Jumper wires for UART ($5)
+**Total Hardware Cost: $215.82 AUD** (vs $5,000+ USD original x86 plan)
+**Savings: ~$4,800+ (96%)**
 
 **Optional (Future):**
-- Raspberry Pi 5 for AI inference ($80)
-- UART-to-UART cable for Pi 4↔Pi 5 ($5)
-- Active cooling case ($25)
-
-**Total Hardware Cost: $65-175** (vs $5,000 original x86 plan)
-**Savings: $4,825-4,935 (97-99%)**
+- Raspberry Pi 5 for AI inference (~$120 AUD)
+- Larger SD card 64GB+ (~$30 AUD)
+- Active cooling case (~$35 AUD)
 
 ### Pi 4 Specifications (BCM2711)
 
