@@ -132,17 +132,25 @@ class UARTIPCClient:
     DEFAULT_PORT = '/dev/ttyUSB0'  # Linux/WSL
     DEFAULT_BAUD = 115200
 
-    def __init__(self, port: str = None, baudrate: int = DEFAULT_BAUD):
+    def __init__(self, port: str = None, baudrate: int = DEFAULT_BAUD,
+                 mock_latency_ms: float = 0.0, mock_mode: bool = False):
         """
         Initialize UART IPC client.
 
         Args:
             port: Serial port path (e.g., '/dev/ttyUSB0', 'COM3')
             baudrate: Baud rate (default: 115200)
+            mock_latency_ms: Simulated latency in mock mode (0=disabled, 10-20=realistic)
+            mock_mode: Force mock mode even if pyserial is available (for testing)
         """
         self.port = port or self.DEFAULT_PORT
         self.baudrate = baudrate
         self.serial: Optional['serial.Serial'] = None
+
+        # Mock mode settings
+        self._force_mock = mock_mode
+        self.mock_latency_ms = mock_latency_ms
+        self.mock_latency_jitter = 0.2  # +/- 20% jitter
 
         # Protocol state
         self.seq_tx = 0
@@ -163,8 +171,35 @@ class UARTIPCClient:
             'rx_bytes': 0,
             'crc_errors': 0,
             'timeouts': 0,
-            'retries': 0
+            'retries': 0,
+            'mock_latency_total_ms': 0.0
         }
+
+    def _simulate_latency(self):
+        """
+        Simulate UART latency in mock mode.
+
+        In real UART at 115200 baud, a typical 50-byte message takes ~4ms,
+        plus round-trip and processing time = 10-20ms total.
+        """
+        if self.mock_latency_ms > 0:
+            import random
+            # Add jitter for realism
+            jitter = 1.0 + (random.random() - 0.5) * 2 * self.mock_latency_jitter
+            latency = self.mock_latency_ms * jitter
+            time.sleep(latency / 1000.0)
+            self.stats['mock_latency_total_ms'] += latency
+
+    @property
+    def in_mock_mode(self) -> bool:
+        """
+        Check if running in mock mode.
+
+        Mock mode is active if:
+        - mock_mode=True was passed to __init__, OR
+        - pyserial is not available
+        """
+        return self._force_mock or not SERIAL_AVAILABLE
 
     def connect(self) -> bool:
         """
@@ -173,7 +208,7 @@ class UARTIPCClient:
         Returns:
             True if connection successful, False otherwise.
         """
-        if not SERIAL_AVAILABLE:
+        if self.in_mock_mode:
             print(f"[UART] Mock mode: Would connect to {self.port} @ {self.baudrate}")
             self.connected = True
             return True
@@ -389,7 +424,7 @@ class UARTIPCClient:
 
         frame = self._build_frame(msg_type, payload, flags)
 
-        if not SERIAL_AVAILABLE:
+        if self.in_mock_mode:
             print(f"[UART] Mock TX: {msg_type.name}, {len(payload)} bytes")
             self.stats['tx_messages'] += 1
             self.stats['tx_bytes'] += len(frame)
@@ -472,8 +507,9 @@ class UARTIPCClient:
         """
         payload = query.encode('utf-8') + b'\x00'
 
-        if not SERIAL_AVAILABLE:
-            # Mock response for testing
+        if self.in_mock_mode:
+            # Mock response for testing with optional latency simulation
+            self._simulate_latency()
             return {
                 'status': 0,
                 'hit': True,
@@ -534,7 +570,8 @@ class UARTIPCClient:
         Returns:
             Dict with 'hits', 'misses', 'entries', 'patterns', 'uptime' or None.
         """
-        if not SERIAL_AVAILABLE:
+        if self.in_mock_mode:
+            self._simulate_latency()
             return {'hits': 100, 'misses': 15, 'entries': 258, 'patterns': 258, 'uptime': 3600}
 
         msg = self._send_and_wait(MsgType.STATS_REQUEST, b'', MsgType.STATS_RESPONSE)
@@ -562,7 +599,8 @@ class UARTIPCClient:
         """
         payload = command.encode('utf-8') + b'\x00'
 
-        if not SERIAL_AVAILABLE:
+        if self.in_mock_mode:
+            self._simulate_latency()
             return f"[Mock] Would execute: {command}"
 
         msg = self._send_and_wait(MsgType.COMMAND, payload, MsgType.COMMAND_RESULT,
@@ -590,7 +628,8 @@ class UARTIPCClient:
             data['context'] = context
         payload = json.dumps(data).encode('utf-8') + b'\x00'
 
-        if not SERIAL_AVAILABLE:
+        if self.in_mock_mode:
+            self._simulate_latency()
             return {
                 'risk_score': 0.15,
                 'recommendation': 'allow',
