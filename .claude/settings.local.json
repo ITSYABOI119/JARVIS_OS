@@ -35,7 +35,10 @@
       "Bash(done)",
       "Bash(git -C \"C:/Users/jluca/Documents/JARVIS_OS\" status)",
       "Bash(git -C \"C:/Users/jluca/Documents/JARVIS_OS\" diff --stat)",
-      "Bash(git -C \"C:/Users/jluca/Documents/JARVIS_OS\" log -3 --oneline)"
+      "Bash(git -C \"C:/Users/jluca/Documents/JARVIS_OS\" log -3 --oneline)",
+      "WebFetch(domain:docs.sel4.systems)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:datasheets.raspberrypi.com)"
     ],
     "deny": [],
     "ask": []
