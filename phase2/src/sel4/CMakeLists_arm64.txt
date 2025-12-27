@@ -1,0 +1,80 @@
+#
+# JARVIS AI-OS - Phase 2 Week 32 ARM64 Build Configuration
+#
+# This CMakeLists.txt builds JARVIS for Raspberry Pi 4 (BCM2711)
+#
+# Usage:
+#   cd ~/sel4-pi4
+#   mkdir build && cd build
+#   cmake -DKernelPlatform=bcm2711 \
+#         -DKernelSel4Arch=aarch64 \
+#         -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- \
+#         -G Ninja ..
+#   ninja
+#
+# Prerequisites:
+#   - aarch64-linux-gnu-gcc toolchain
+#   - seL4 kernel sources (sel4-tutorials-manifest or seL4/seL4)
+#   - Python 3 with pyfdt, jinja2
+
+cmake_minimum_required(VERSION 3.16)
+
+project(jarvis-arm64 C ASM)
+
+# Platform settings for Raspberry Pi 4
+set(KernelPlatform "bcm2711" CACHE STRING "Target platform")
+set(KernelSel4Arch "aarch64" CACHE STRING "seL4 architecture")
+set(KernelArmPlatform "bcm2711" CACHE STRING "ARM platform")
+
+# Cross-compilation toolchain
+set(CROSS_COMPILER_PREFIX "aarch64-linux-gnu-" CACHE STRING "Toolchain prefix")
+set(CMAKE_C_COMPILER "${CROSS_COMPILER_PREFIX}gcc")
+set(CMAKE_ASM_COMPILER "${CROSS_COMPILER_PREFIX}gcc")
+
+# Compiler flags for ARM64
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=armv8-a -mcpu=cortex-a72")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O2 -Wall -Wextra")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-builtin -ffreestanding")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -nostdlib -nostdinc")
+
+# JARVIS source directory (relative to seL4 build directory)
+# Adjust this path based on your directory structure
+set(JARVIS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../JARVIS_OS")
+set(JARVIS_PHASE1 "${JARVIS_ROOT}/phase1/src")
+set(JARVIS_PHASE2 "${JARVIS_ROOT}/phase2/src")
+
+# Include directories
+include_directories(
+    ${JARVIS_PHASE1}/cache
+    ${JARVIS_PHASE1}/ipc
+    ${JARVIS_PHASE2}/drivers
+    ${JARVIS_PHASE2}/ipc
+    ${JARVIS_PHASE2}/sel4
+)
+
+# Source files
+set(JARVIS_SOURCES
+    # Main entry point
+    ${JARVIS_PHASE2}/sel4/main_arm64.c
+
+    # Decision cache (Phase 1)
+    ${JARVIS_PHASE1}/cache/decision_cache.c
+    ${JARVIS_PHASE1}/cache/cache_patterns.c
+
+    # PL011 UART driver (Phase 2)
+    ${JARVIS_PHASE2}/drivers/uart_pl011.c
+)
+
+# Note: The actual seL4 build system integration is more complex.
+# This file serves as a reference for the source structure.
+# In practice, we integrate into the seL4 tutorials framework.
+
+message(STATUS "JARVIS ARM64 Build Configuration")
+message(STATUS "  Platform: ${KernelPlatform}")
+message(STATUS "  Architecture: ${KernelSel4Arch}")
+message(STATUS "  JARVIS Root: ${JARVIS_ROOT}")
+message(STATUS "  Sources: ${JARVIS_SOURCES}")
+
+# For actual seL4 integration, copy sources to:
+#   ~/sel4-pi4/projects/jarvis/
+# And modify the top-level CMakeLists.txt to include this project.

@@ -30,7 +30,12 @@
       "Bash(git push:*)",
       "Bash(wsl find:*)",
       "WebSearch",
-      "WebFetch(domain:www.qemu.org)"
+      "WebFetch(domain:www.qemu.org)",
+      "Bash(ls:*)",
+      "Bash(done)",
+      "Bash(git -C \"C:/Users/jluca/Documents/JARVIS_OS\" status)",
+      "Bash(git -C \"C:/Users/jluca/Documents/JARVIS_OS\" diff --stat)",
+      "Bash(git -C \"C:/Users/jluca/Documents/JARVIS_OS\" log -3 --oneline)"
     ],
     "deny": [],
     "ask": []
