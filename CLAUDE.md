@@ -790,6 +790,26 @@ Each week follows this structure:
 **Critical analysis:** `archive/analysis/claude_sonnet_ultrathink_analysis.md`
 **Original plan:** `archive/plans/sonnet4.5-plan2.txt`
 
+## Codebase Metrics (Audit: December 27, 2025)
+
+### Phase 1 (Complete)
+- **Total:** 39,106 LOC across 95 source files
+- **Python:** ~28,500 LOC (45 AI + 6 shell + 6 integration test files)
+- **C:** ~9,600 LOC (cache, IPC, seL4, drivers)
+- **Tests:** 38 test suites (34 Python + 4 C), 338 test functions, 15,852 lines
+- **Test Coverage:** 46% test-to-code ratio
+
+### Phase 2 (Week 31)
+- **Total:** 6,452 LOC (3,585 production + 2,867 tests)
+- **Python:** 1,796 LOC (system_bootstrap.py, uart_ipc_client.py)
+- **C:** 1,789 LOC (dual_ring_buffer, ipc_handler, uart_pl011)
+- **Tests:** 87 tests across 6 files (100% pass rate)
+
+### Combined Project
+- **Total Lines:** ~45,500 LOC (Phase 1 + Phase 2)
+- **Documentation:** 127 markdown files
+- **Test Functions:** 425+ total
+
 ---
 
 **Current Phase:** Phase 2 - Alpha System (Months 12-24)
@@ -999,6 +1019,32 @@ Phase 2 develops a real hardware alpha system running on Raspberry Pi 4 with UAR
 - Single hardware platform (vs 3 originally planned)
 
 **Documentation:** `phase2/docs/PHASE_2_HARDWARE_PIVOT.md`
+
+## Phase 2 Architecture (CRITICAL)
+
+**Pi 4 runs bare-metal seL4 (C code only, no Python runtime)**
+
+```
+┌──────────────────┐       UART        ┌──────────────────┐
+│   PC (Host)      │◄─────────────────►│   Pi 4 (seL4)    │
+│                  │   115200 baud     │                  │
+│  Python AI       │                   │  Decision Cache  │
+│  - Phi-3 Mini    │   10-20ms RTT     │  - 258 patterns  │
+│  - TinyLlama     │                   │  - 85.7% hit     │
+│  - SHIELD        │                   │  - <1ms lookup   │
+└──────────────────┘                   └──────────────────┘
+```
+
+**Query Flow:**
+- **Cache hits (85%):** Answered by seL4 decision cache in <1ms
+- **Cache misses (15%):** Forwarded to PC via UART, AI responds in 10-20ms
+- **No Python on Pi 4:** seL4 userspace runs C code only
+
+**Why This Architecture:**
+- seL4 is a C-only microkernel with no Python runtime
+- llama-cpp-python requires Linux userspace (not bare-metal seL4)
+- UART provides reliable serial IPC (vs complex PCIe/shared memory)
+- Decision cache handles 85% of queries locally (sub-millisecond)
 
 ## Phase 2 Development Commands
 
@@ -1211,13 +1257,14 @@ phase2/
 - QEMU launch configuration
 
 **Week 31: Pre-Hardware Preparation** ✅
-- ARM64 toolchain verified (aarch64-linux-gnu-gcc)
-- seL4 kernel.elf built (44/44 ninja targets)
-- Pi 4 GPU firmware ready (start4.elf, fixup4.dat)
-- PL011 UART driver complete (472 lines)
-- UART IPC protocol specification (392 lines)
-- Python UART client complete (550+ lines)
-- All 7/7 pre-hardware tasks complete
+- ✅ ARM64 cross-compilation toolchain verified (aarch64-linux-gnu-gcc 13.3.0)
+- ✅ seL4 Pi 4 kernel build successful (44/44 ninja targets, 138KB kernel.elf)
+- ✅ Pi 4 GPU firmware ready (start4.elf 2.2MB, fixup4.dat 5.5KB)
+- ✅ PL011 UART driver complete (707 LOC: 235 header + 472 implementation)
+- ✅ UART IPC protocol specification (450+ lines, 14 message types, CRC-16 CCITT)
+- ✅ Python UART IPC client (722 LOC, async receiver, retransmission, mock mode)
+- ✅ All 7/7 pre-hardware tasks complete
+- ✅ **Ready for Week 32 ARM64 port upon Pi 4 arrival**
 
 ## Phase 2 Test Coverage
 

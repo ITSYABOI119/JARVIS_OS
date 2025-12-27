@@ -439,7 +439,7 @@ class SystemStateManager:
                 memory = psutil.virtual_memory()
                 disk = psutil.disk_usage('/')
                 net_connections = psutil.net_connections()
-            except:
+            except (OSError, IOError, psutil.Error):
                 cpu_percent = 0.0
                 memory = type('obj', (object,), {'percent': 0.0})()
                 disk = type('obj', (object,), {'percent': 0.0})()

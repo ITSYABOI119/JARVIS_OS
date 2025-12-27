@@ -45,6 +45,10 @@ def _get_models_directory():
     Returns:
         str: Absolute path to models directory
     """
+    # Compute project root from __file__ (model_loader.py -> ai -> src -> phase1 -> JARVIS_OS)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(script_dir)))
+
     # Check if running in WSL
     is_wsl = False
     if sys.platform == 'linux':
@@ -52,7 +56,7 @@ def _get_models_directory():
             with open('/proc/version', 'r') as f:
                 content = f.read().lower()
                 is_wsl = 'microsoft' in content or 'wsl' in content
-        except:
+        except (OSError, IOError):
             pass
 
     if is_wsl:
@@ -62,11 +66,11 @@ def _get_models_directory():
         if os.path.exists(wsl_native_path):
             return wsl_native_path
 
-        # Fallback to Windows mount (slower - ~120s load time)
-        return "/mnt/c/Users/jluca/Documents/JARVIS_OS/models"
+        # Fallback to project models directory via Windows mount
+        return os.path.join(project_root, 'models')
     else:
-        # Windows
-        return "C:/Users/jluca/Documents/JARVIS_OS/models"
+        # Windows - use project-relative path
+        return os.path.join(project_root, 'models')
 
 class ModelConfig:
     """Configuration for AI models"""

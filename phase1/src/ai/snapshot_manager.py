@@ -386,7 +386,7 @@ class EnhancedRollbackManager:
                         'ai_state': snapshot.ai_model_state,
                         'ai_model': snapshot.ai_model_loaded
                     })
-            except:
+            except (OSError, IOError, ValueError, KeyError):
                 pass  # Skip corrupted snapshots
 
         return sorted(snapshots, key=lambda x: x['timestamp'])

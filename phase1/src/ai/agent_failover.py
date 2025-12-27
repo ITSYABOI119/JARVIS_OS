@@ -352,7 +352,7 @@ def device_fallback_handler(query: str) -> str:
         try:
             result = subprocess.run(["df", "-h"], capture_output=True, text=True, timeout=2)
             return f"[FALLBACK] Disk space:\n{result.stdout}"
-        except:
+        except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError):
             return "[FALLBACK] Unable to check disk space"
 
     elif "memory" in query_lower or "ram" in query_lower:
@@ -360,7 +360,7 @@ def device_fallback_handler(query: str) -> str:
         try:
             result = subprocess.run(["free", "-h"], capture_output=True, text=True, timeout=2)
             return f"[FALLBACK] Memory:\n{result.stdout}"
-        except:
+        except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError):
             return "[FALLBACK] Unable to check memory"
 
     else:
@@ -378,7 +378,7 @@ def network_fallback_handler(query: str) -> str:
         try:
             socket.create_connection(("8.8.8.8", 53), timeout=2)
             return "[FALLBACK] Internet connection appears to be working"
-        except:
+        except (OSError, socket.timeout, socket.error):
             return "[FALLBACK] Internet connection may be down"
 
     else:

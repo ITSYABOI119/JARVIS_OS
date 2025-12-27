@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """
 JARVIS AI-OS Phase 1 - AI Agent
-Week 5: AI Agent Bootstrap
-Week 6: Query Processing Pipeline Integration
+Main AI decision engine for the JARVIS operating system.
 
-This is the main AI decision engine that:
-1. Loads Phi-3 Mini 3.8B model
+This module:
+1. Loads Phi-3 Mini 3.8B model (or TinyLlama 1.1B for IDLE state)
 2. Processes queries from seL4 kernel via IPC
 3. Generates command responses
-4. Integrates with decision cache (Week 6)
-5. Uses query processor for normalization and command parsing (Week 6)
+4. Integrates with decision cache for <1ms responses on common queries
+5. Uses query processor for normalization and command parsing
 
 Model: Phi-3 Mini 3.8B Q4 (2.23GB)
 Target: <600ms inference time (Phase 0 validated: 558ms GPU)
+
+Phase 1 Complete: December 2025
 """
 
 import os
@@ -93,29 +94,35 @@ def _get_model_path():
     Returns:
         str: Absolute path to model file
     """
+    import os
+    MODEL_FILENAME = 'Phi-3-mini-4k-instruct-q4.gguf'
+
+    # Compute project root from __file__ (agent.py -> ai -> src -> phase1 -> JARVIS_OS)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(script_dir)))
+
     # Check if running in WSL
     is_wsl = False
     if sys.platform == 'linux':
         try:
             with open('/proc/version', 'r') as f:
                 is_wsl = 'microsoft' in f.read().lower() or 'wsl' in f.read().lower()
-        except:
+        except (OSError, IOError):
             pass
 
     if is_wsl:
         # Try WSL native filesystem first (MUCH faster - ~5s load time)
-        import os
         home = os.path.expanduser('~')
-        wsl_native_path = os.path.join(home, 'models', 'Phi-3-mini-4k-instruct-q4.gguf')
+        wsl_native_path = os.path.join(home, 'models', MODEL_FILENAME)
         if os.path.exists(wsl_native_path):
             return wsl_native_path
 
-        # Fallback to Windows mount (slower - ~120s load time)
-        wsl_mount_path = "/mnt/c/Users/jluca/Documents/JARVIS_OS/models/Phi-3-mini-4k-instruct-q4.gguf"
-        return wsl_mount_path
+        # Fallback to project models directory via Windows mount
+        wsl_project_path = os.path.join(project_root, 'models', MODEL_FILENAME)
+        return wsl_project_path
     else:
-        # Windows
-        return "C:/Users/jluca/Documents/JARVIS_OS/models/Phi-3-mini-4k-instruct-q4.gguf"
+        # Windows - use project-relative path
+        return os.path.join(project_root, 'models', MODEL_FILENAME)
 
 # Model path (auto-detects Windows vs WSL)
 MODEL_PATH = _get_model_path()

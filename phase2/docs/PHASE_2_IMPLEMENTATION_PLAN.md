@@ -14,7 +14,7 @@ This document provides a detailed week-by-week implementation plan for Phase 2. 
 
 **Goal:** Build an alpha JARVIS AI-OS running on real hardware with 15+ operational Tier 1 drivers and 20 active alpha testers.
 
-**Success Criteria:** 7/7 Phase 2 gate criteria met (real hardware boot on 3+ configs, Python↔seL4 IPC, 15+ drivers, 30-day stability, alpha release, security audit, performance on real hardware).
+**Success Criteria:** 7/7 Phase 2 gate criteria met (Pi 4 bare-metal boot, Python↔seL4 UART IPC, 15+ drivers, 30-day stability, alpha release, security audit, performance on real hardware).
 
 **Efficiency Calibration (from Phase 1):**
 - Phase 1 Planned: 12-16 hours/week
@@ -25,6 +25,32 @@ This document provides a detailed week-by-week implementation plan for Phase 2. 
 - Weekly baseline: 8-12 hours/week (accounting for driver complexity)
 - Total Phase 2: ~500 hours estimated (52 weeks × 9.6h/week avg)
 - Scaling factor: 1.75× Phase 1 (real hardware, driver framework complexity)
+
+---
+
+## Phase 2 Architecture: Split Deployment (CRITICAL)
+
+**IMPORTANT:** Phase 2 uses a split architecture due to Pi 4 hardware constraints.
+
+```
+┌─────────────────────┐         UART          ┌─────────────────────┐
+│   Host PC           │◄───────────────────►│   Raspberry Pi 4     │
+│                     │   115200 baud         │                      │
+│  Python AI Runtime  │   1-10ms RTT          │  seL4 Microkernel   │
+│  ├── Phi-3 Mini 3.8B│                       │  ├── Decision Cache  │
+│  ├── TinyLlama 1.1B │                       │  ├── IPC Handler     │
+│  ├── SHIELD         │                       │  └── PL011 UART      │
+│  └── Multi-Agent    │                       │                      │
+└─────────────────────┘                       └─────────────────────┘
+```
+
+**Why Split?**
+- Pi 4 CPU too slow for Phi-3 Mini (5-30s/inference vs 558ms on PC GPU)
+- seL4 is C-only microkernel (no Python runtime)
+- Decision cache handles 85% of queries locally (<1ms)
+- Remaining 15% forwarded to Host PC via UART (10-20ms RTT)
+
+**This is TEMPORARY** - see "Path to Standalone" section at the end of this document.
 
 ---
 
@@ -1224,6 +1250,46 @@ once ivshmem IPC is validated.
 - Savings: $4,825-4,935 (97-99%)
 
 **Confidence Level: High** (based on Phase 1 efficiency, proven seL4 Pi 4 support)
+
+---
+
+## Path Back to Standalone Operation (Phase 3+)
+
+The Phase 2 split architecture is **temporary**. The original vision and end goal remains a fully self-contained system where AI runs on the same hardware as the microkernel.
+
+### Phase 3 Options (2027+)
+
+**Option A: Multi-Pi Cluster**
+- Pi 4: seL4 microkernel (bare metal)
+- Pi 5: Linux + TinyLlama (AI inference)
+- UART connection between boards
+- Cost: ~$200 additional
+- Benefit: Keeps ARM64 architecture, incremental upgrade
+
+**Option B: x86 Return (Original Vision)**
+- Intel NUC or equivalent x86-64 hardware
+- All AI runs on-device (Phi-3 Mini + TinyLlama)
+- ivshmem shared memory IPC (<100μs, not UART)
+- Cost: ~$1,200+
+- Benefit: Full performance, original architecture restored
+
+### Hardware Requirements for Standalone
+- **CPU:** 8-core minimum (2 kernel, 6 AI)
+- **RAM:** 16-32GB (dynamic scaling support)
+- **GPU:** Discrete GPU (RTX 3060+ / Arc A380) for <500ms inference
+- **Storage:** NVMe SSD (fast model loading)
+
+### Why This Matters
+The split architecture adds latency (1-10ms UART vs 54μs shared memory) and requires a host PC. Phase 3+ should eliminate this dependency for:
+- **Portable deployment** (laptop, embedded systems)
+- **Air-gapped operation** (no network/host required)
+- **Production reliability** (single device = single point of failure eliminated)
+
+### Migration Path
+1. **Phase 2 (Now):** Validate architecture on Pi 4 + Host PC
+2. **Phase 3 Option A:** Add Pi 5 for local AI (if budget limited)
+3. **Phase 3 Option B:** Return to x86 (if budget available)
+4. **Phase 4:** Production standalone deployment
 
 ---
 

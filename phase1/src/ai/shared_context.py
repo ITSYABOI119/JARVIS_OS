@@ -215,7 +215,7 @@ class SharedContext:
 
         return f"""
 Shared Context Summary:
-  Memory: {self.memory_used}/{self.memory_total} MB ({self.memory_used*100//self.memory_total}%)
+  Memory: {self.memory_used}/{self.memory_total} MB ({self.memory_used*100//self.memory_total if self.memory_total > 0 else 0}%)
   CPU: {self.cpu_percent:.1f}%
   Disk: {self.disk_used}/{self.disk_total} GB ({self.disk_used*100//self.disk_total if self.disk_total > 0 else 0}%)
   Cache: {self.cache_hit_rate*100:.1f}% hit rate ({self.cache_entries}/{self.cache_capacity} entries)
