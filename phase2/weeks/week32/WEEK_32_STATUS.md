@@ -45,6 +45,16 @@ Week 32 focuses on porting JARVIS to ARM64 for Raspberry Pi 4. All core componen
 - Tests ARM64 cross-compilation without full seL4 build
 - Validates toolchain and generates object files
 
+### 5. SD Card Preparation ✅ (December 29, 2025)
+- **Status:** 3/4 boot files ready
+- **SD Card:** D:\ formatted FAT32
+- **Files Copied:**
+  - `start4.elf` (2.3 MB) - GPU firmware
+  - `fixup4.dat` (5.5 KB) - Memory configuration
+  - `config.txt` (476 bytes) - Boot configuration
+- **Missing:** `kernel8.img` (seL4 + JARVIS kernel - requires TII build)
+- **Ready for:** Hardware arrival - can boot immediately once kernel is built
+
 ---
 
 ## Key Differences: x86 vs ARM64
@@ -203,13 +213,41 @@ This allows testing the full split architecture when Pi 4 arrives.
 
 ## Next Steps (When Hardware Arrives)
 
-### Immediate (Pi 4 Arrival)
-1. ⏳ Format SD card with FAT32 boot partition
-2. ⏳ Copy firmware (`start4.elf`, `fixup4.dat`)
-3. ⏳ Build full seL4 kernel with JARVIS integrated
-4. ⏳ Create `config.txt` for Pi 4 boot
+### SD Card Status (December 29, 2025)
+1. ✅ Format SD card with FAT32 boot partition (D:\)
+2. ✅ Copy firmware (`start4.elf`, `fixup4.dat`, `config.txt`)
+3. ⏳ Build full seL4 kernel with JARVIS integrated (see options below)
+4. ⏳ Copy `kernel8.img` to D:\
 5. ⏳ Connect USB-UART cable (GPIO14/15)
 6. ⏳ First boot test via serial console
+
+### Kernel Build Options
+
+**Option A: TII Build System (Proper Way)**
+```bash
+# 1. Enable Docker Desktop WSL2 integration
+# 2. Install make in WSL
+sudo apt install make
+
+# 3. Clone TII manifest
+cd ~/sel4-jarvis
+repo init -u https://github.com/tiiuae/tii_sel4_manifest.git -b tii/development
+repo sync
+
+# 4. Build for Pi 4
+make raspberrypi4-64_defconfig
+make
+
+# 5. Copy kernel
+cp images/kernel.elf kernel8.img
+cp kernel8.img /mnt/d/
+```
+
+**Option B: Test Boot First**
+1. Download pre-built ARM64 seL4 demo kernel
+2. Rename to kernel8.img → D:\
+3. Verify Pi 4 boots (proves hardware + SD setup works)
+4. Then build JARVIS integration properly
 
 ### Week 33: UART IPC Implementation
 1. Full bidirectional UART IPC
