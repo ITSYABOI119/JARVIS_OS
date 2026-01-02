@@ -38,7 +38,16 @@
       "Bash(git -C \"C:/Users/jluca/Documents/JARVIS_OS\" log -3 --oneline)",
       "WebFetch(domain:docs.sel4.systems)",
       "WebFetch(domain:github.com)",
-      "WebFetch(domain:datasheets.raspberrypi.com)"
+      "WebFetch(domain:datasheets.raspberrypi.com)",
+      "Bash(wsl grep:*)",
+      "Bash(rm:*)",
+      "Bash(wsl sed:*)",
+      "Bash(git -C \"C:/Users/jluca/Documents/JARVIS_OS\" log --oneline -5)",
+      "Bash(wmic logicaldisk:*)",
+      "Bash(powershell -Command \"\\(Get-Item D:\\\\kernel8.img\\).Length\")",
+      "Bash(powershell -Command \"Get-FileHash D:\\\\kernel8.img -Algorithm MD5 | Select-Object -ExpandProperty Hash\")",
+      "Bash(powershell -Command \"Get-ChildItem D:\\\\ | Select-Object Name, @{Name=''Size'';Expression={''{0:N0} bytes'' -f $_Length}}, LastWriteTime | Format-Table -AutoSize\")",
+      "Bash(git -C \"C:/Users/jluca/Documents/JARVIS_OS\" diff CLAUDE.md)"
     ],
     "deny": [],
     "ask": []

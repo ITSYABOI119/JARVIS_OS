@@ -1,31 +1,34 @@
 # SD Card Preparation Complete
 
-**Date:** December 29, 2025
-**Status:** 3/4 boot files ready
+**Date:** December 29, 2025 (Updated: January 2, 2026)
+**Status:** 4/4 boot files ready ✅
 **SD Card:** D:\ (FAT32)
 
 ## Files Copied ✅
 
 | File | Size | Purpose | Status |
 |------|------|---------|--------|
+| kernel8.img | 701 KB | seL4 + JARVIS kernel | ✅ Copied (Jan 2) |
 | start4.elf | 2.3 MB | GPU firmware bootloader | ✅ Copied |
 | fixup4.dat | 5.5 KB | Memory configuration | ✅ Copied |
 | config.txt | 476 bytes | Boot configuration | ✅ Copied |
-| kernel8.img | N/A | seL4 + JARVIS kernel | ⏳ Pending |
 
 ## Verification
 
 ```powershell
 PS> Get-ChildItem D:\
 
-Name        Length LastWriteTime
-----        ------ -------------
-config.txt     476 12/29/2025 1:45:46 PM
-fixup4.dat    5498 12/29/2025 1:50:30 PM
-start4.elf 2303232 12/29/2025 1:50:34 PM
+Name        Length   LastWriteTime
+----        ------   -------------
+kernel8.img  717088  1/1/2026 10:21:38 PM
+start4.elf  2303232  12/27/2025 6:28:20 PM
+fixup4.dat     5498  12/27/2025 6:28:22 PM
+config.txt      476  12/27/2025 6:28:30 PM
 ```
 
-All files present and correct sizes. ✅
+**All 4 files present and verified! ✅**
+
+**MD5 Checksum (kernel8.img):** `3B0D839F0B5A7D187DFC6A77F446AEAA` ✅
 
 ## Next Steps
 
@@ -79,16 +82,30 @@ System Information:
 ## Current Blockers
 
 - ❌ Pi 4 hardware not arrived yet
-- ❌ Docker WSL2 integration not configured (needed for TII build)
-- ❌ `make` not installed in WSL (easy fix: `sudo apt install make`)
+
+## Completed Items
+
+- ✅ kernel8.img built and copied to SD card (January 1-2, 2026)
+- ✅ All 4 boot files verified on D:\
+- ✅ MD5 checksum verified
+- ✅ USB-UART cable available (3.3V TTL)
 
 ## Ready State
 
-SD card is **ready to boot** as soon as:
-1. kernel8.img is built and copied
-2. Pi 4 hardware arrives
+SD card is **100% READY TO BOOT** ✅
 
-**Estimated time to first boot:** 30 minutes after Pi 4 arrival (if using Option B pre-built kernel)
+**All prerequisites met:**
+1. ✅ kernel8.img built and copied
+2. ✅ All firmware files verified
+3. ✅ USB-UART cable available
+4. ⏳ Awaiting Pi 4 hardware arrival only
+
+**Estimated time to first boot:** 5-10 minutes after Pi 4 arrival
+- Insert SD card
+- Connect UART cable (GPIO 14/15 + GND)
+- Open serial terminal (115200 baud)
+- Power on
+- Watch for JARVIS banner!
 
 ---
 

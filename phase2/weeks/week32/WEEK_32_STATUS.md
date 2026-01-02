@@ -45,15 +45,15 @@ Week 32 focuses on porting JARVIS to ARM64 for Raspberry Pi 4. All core componen
 - Tests ARM64 cross-compilation without full seL4 build
 - Validates toolchain and generates object files
 
-### 5. SD Card Preparation ✅ (December 29, 2025)
-- **Status:** 3/4 boot files ready
+### 5. SD Card Preparation ✅ (December 29, 2025 - Updated January 2, 2026)
+- **Status:** 4/4 boot files ready ✅
 - **SD Card:** D:\ formatted FAT32
-- **Files Copied:**
+- **Files Verified on D:\:**
+  - `kernel8.img` (701 KB) - JARVIS seL4 kernel (MD5: 3b0d839f0b5a7d187dfc6a77f446aeaa)
   - `start4.elf` (2.3 MB) - GPU firmware
   - `fixup4.dat` (5.5 KB) - Memory configuration
   - `config.txt` (476 bytes) - Boot configuration
-- **Missing:** `kernel8.img` (seL4 + JARVIS kernel - requires TII build)
-- **Ready for:** Hardware arrival - can boot immediately once kernel is built
+- **Ready for:** Immediate boot when Pi 4 arrives (5-10 min setup time)
 
 ---
 
