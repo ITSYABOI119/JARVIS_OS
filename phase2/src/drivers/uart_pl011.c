@@ -1,87 +1,23 @@
 /*
  * JARVIS AI-OS - PL011 UART Driver Implementation
- * Phase 2 Week 31-32
+ * Phase 2 Week 32 (REVISED)
  *
  * BCM2711 PL011 UART driver for seL4 on Raspberry Pi 4.
  *
- * NOTE: This implementation assumes the UART base address has been
- * mapped into the process's virtual address space. In seL4, this
- * requires proper capability setup via CAmkES or manual mapping.
+ * IMPLEMENTATION: Uses seL4 capability-based MMIO via ps_io_map()
+ * - Requires platsupport library linked in CMakeLists.txt
+ * - Requires ps_io_ops_t initialized by root task
  *
- * ============================================================================
- * TODO: seL4 CAPABILITY REQUIREMENTS (Critical for Pi 4 Hardware)
- * ============================================================================
- *
- * The current implementation uses a DIRECT PHYSICAL ADDRESS CAST (line ~111):
- *     uart_state.base = (volatile uint32_t *)(uintptr_t)UART0_BASE;
- *
- * THIS WILL CAUSE A VM FAULT ON seL4!
- *
- * seL4 requires proper capability-based memory mapping. Fix options:
- *
- * OPTION 1: CAmkES Dataport (Recommended for Pi 4)
- * ------------------------------------------------
- * In your CAmkES ADL file:
- *     component UARTDriver {
- *         dataport Buf(256) uart_regs;
- *     }
- *     assembly {
- *         composition {
- *             component UARTDriver uart;
- *         }
- *         configuration {
- *             uart.uart_regs_paddr = 0xFE201000;  // BCM2711 UART0
- *             uart.uart_regs_size = 0x200;
- *         }
- *     }
- *
- * Then in this driver:
- *     extern void *uart_regs;  // CAmkES dataport
- *     uart_state.base = (volatile uint32_t *)uart_regs;
- *
- * OPTION 2: ps_io_map() from sel4platsupport
- * ------------------------------------------
- *     #include <platsupport/io.h>
- *     extern ps_io_ops_t io_ops;  // Must be initialized by bootstrap
- *
- *     void *vaddr = ps_io_map(&io_ops.io_mapper,
- *                             UART0_BASE,   // 0xFE201000
- *                             0x200,        // 512 bytes
- *                             false,        // not cached
- *                             PS_MEM_NORMAL);
- *     if (vaddr == NULL) {
- *         // Handle error
- *     }
- *     uart_state.base = (volatile uint32_t *)vaddr;
- *
- * OPTION 3: Manual VKA Frame Allocation (Low-level)
- * --------------------------------------------------
- *     #include <vka/vka.h>
- *     #include <sel4utils/mapping.h>
- *
- *     extern vka_t vka;
- *     extern vspace_t vspace;
- *
- *     // Allocate capability for device frame
- *     vka_object_t frame;
- *     vka_alloc_frame_at(&vka, seL4_PageBits, UART0_BASE, &frame);
- *
- *     // Map into virtual address space
- *     void *vaddr = vspace_map_pages(&vspace, &frame.cptr, NULL, seL4_ARM_Default_VMAttributes,
- *                                    1, seL4_PageBits, true);
- *     uart_state.base = (volatile uint32_t *)vaddr;
- *
- * IMPLEMENTATION PRIORITY (Week 32):
- * 1. First boot test: May work if seL4 tutorials creates identity mapping
- * 2. If VM fault: Implement Option 2 (ps_io_map)
- * 3. For production: Implement Option 1 (CAmkES dataport)
- *
- * ============================================================================
+ * NOTE: This implementation uses proper seL4 capability-based memory mapping.
  */
 
 #include "uart_pl011.h"
 #include <stdio.h>
 #include <string.h>
+#include <platsupport/io.h>
+
+/* seL4 I/O operations - must be initialized by root task before calling uart_init() */
+extern ps_io_ops_t io_ops;
 
 /* Global UART state */
 static uart_state_t uart_state = {0};
@@ -173,12 +109,24 @@ bool uart_init_baud(uint32_t baud_rate)
     }
 
     /*
-     * Map UART registers
+     * Map UART registers using seL4 capability-based MMIO
      *
-     * TODO: Replace with proper seL4 mapping when integrating.
-     * This direct cast only works with identity mapping or similar.
+     * Uses ps_io_map() from platsupport library to create proper
+     * capability-safe mapping of UART peripheral registers.
      */
-    uart_state.base = (volatile uint32_t *)(uintptr_t)UART0_BASE;
+    void *vaddr = ps_io_map(&io_ops.io_mapper,
+                            UART0_BASE,        /* Physical address: 0xFE201000 for Pi 4 */
+                            0x200,             /* Size: 512 bytes (PL011 register space) */
+                            false,             /* Not cached (device memory) */
+                            PS_MEM_NORMAL);    /* Normal device memory */
+
+    if (vaddr == NULL) {
+        printf("[UART] ERROR: Failed to map UART registers at 0x%08x\n", UART0_BASE);
+        printf("[UART] Capability mapping failed - check ps_io_ops initialization\n");
+        return false;
+    }
+
+    uart_state.base = (volatile uint32_t *)vaddr;
 
     printf("[UART] Initializing PL011 at 0x%08x, baud=%u\n",
            UART0_BASE, baud_rate);

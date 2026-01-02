@@ -1166,7 +1166,7 @@ GND          ─── GND
 Boot Partition (FAT32):
 ├── start4.elf      # GPU firmware (2.2MB)
 ├── fixup4.dat      # Memory configuration (5.5KB)
-├── kernel8.img     # seL4 kernel (renamed from kernel.elf)
+├── kernel8.img     # JARVIS seL4 boot image (701KB)
 └── config.txt      # Boot configuration
 
 config.txt:
@@ -1190,7 +1190,8 @@ phase2/
 │   ├── week28/                      # IPC implementation (12/12 tests)
 │   ├── week29/                      # SystemBootstrap framework
 │   ├── week30/                      # QEMU ivshmem integration
-│   └── week31/                      # Pre-hardware preparation
+│   ├── week31/                      # Pre-hardware preparation
+│   └── week32/                      # JARVIS ARM64 build complete
 ├── src/
 │   ├── ipc/
 │   │   ├── dual_ring_buffer.h       # Bidirectional ring buffer (200 lines)
@@ -1232,7 +1233,7 @@ phase2/
 | **Initialization** | Inline in scripts | SystemBootstrap class |
 | **Cross-compile** | Native x86 | aarch64-linux-gnu-gcc |
 
-## Phase 2 Progress (Weeks 27-31)
+## Phase 2 Progress (Weeks 27-32)
 
 **Week 27: Bidirectional IPC Design** ✅
 - Designed dual ring buffer architecture (query + response channels)
@@ -1266,6 +1267,20 @@ phase2/
 - ✅ All 7/7 pre-hardware tasks complete
 - ✅ **Ready for Week 32 ARM64 port upon Pi 4 arrival**
 
+**Week 32: JARVIS ARM64 Build Complete** ✅
+- ✅ TII seL4 build system integration (sel4test pattern)
+- ✅ CMakeLists.txt for JARVIS rootserver (93 lines)
+- ✅ settings.cmake + easy-settings.cmake created
+- ✅ GCC 13 compatibility fixes applied:
+  - musllibc weak_alias visibility fix (`src/internal/libc.h`)
+  - elfloader array bounds fix (`src/arch-arm/sys_boot.c`)
+- ✅ JARVIS ARM64 rootserver built (275KB)
+- ✅ Boot image created (701KB kernel8.img)
+- ✅ All 4 SD card files ready in phase2/firmware/
+- ✅ MD5 verified: `3b0d839f0b5a7d187dfc6a77f446aeaa`
+- ✅ copy_to_sd.bat script updated
+- ⏳ **Ready for Pi 4 hardware test**
+
 **Documentation Audit (December 27, 2025)** ✅
 - ✅ Compared original plans (archive/) vs current implementation
 - ✅ Updated PHASE_2_IMPLEMENTATION_PLAN.md with split architecture documentation
@@ -1287,12 +1302,12 @@ phase2/
 | test_uart_logic.c | 8 | UART Logic | ✅ PASS |
 | **Total** | **87** | | **100% PASS** |
 
-## Phase 2 Remaining Work (Weeks 32+)
+## Phase 2 Remaining Work (Weeks 33+)
 
-**Immediate (Weeks 32-34):**
-- Week 32: ARM64 port (remove x86-specific code, PL011 integration)
+**Immediate (Weeks 33-34):**
 - Week 33: UART IPC implementation (full bidirectional protocol)
 - Week 34: Integration & testing (cache hit rate validation on hardware)
+- **Note:** Week 32 COMPLETE - JARVIS ARM64 built (275KB rootserver, 701KB boot image)
 
 **Hardware Integration (Weeks 35-41):**
 - Weeks 35-36: SD/EMMC storage driver

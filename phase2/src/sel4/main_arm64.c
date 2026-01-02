@@ -23,6 +23,12 @@
 #include <sel4/sel4.h>
 #endif
 
+/* Platform support for I/O operations */
+#include <platsupport/io.h>
+
+/* Global I/O operations structure - required by uart_pl011.c */
+ps_io_ops_t io_ops;
+
 /* JARVIS components */
 #include "../../../phase1/src/cache/decision_cache.h"
 #include "../drivers/uart_pl011.h"

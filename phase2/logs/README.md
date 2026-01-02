@@ -1,58 +1,54 @@
-# Phase 2 Serial Logs
+# Phase 2 Serial Console Logs
 
-This directory stores serial console logs from Raspberry Pi 4 via PuTTY.
+This directory contains PuTTY serial console logs from Pi 4 boot tests.
 
-## PuTTY Configuration
+## Files
 
-**Session Settings:**
-- Connection type: Serial
-- Serial line: COM# (check Device Manager when USB-serial adapter connected)
-- Speed: 115200
+- `putty.log` - Complete serial output from all boot sessions (appended)
 
-**Serial Settings:**
-- Data bits: 8
-- Stop bits: 1
-- Parity: None
-- Flow control: None
+## What Gets Logged
 
-**Logging Settings:**
-- Session logging: All session output
-- Log file: `C:\Users\jluca\Documents\JARVIS_OS\phase2\logs\putty.log`
-- Options: Always append to end of file
+Every time you boot the Pi 4 with PuTTY connected, it captures:
+- ELF-loader startup messages
+- seL4 kernel boot
+- JARVIS banner and system info
+- Decision cache initialization
+- UART IPC handler startup
+- Any errors or warnings
 
-## Expected Boot Output (seL4 on Pi 4)
+## Log Format
 
+PuTTY adds a header for each session:
 ```
-ELF-loader started on CPU: ARM Ltd. Cortex-A72 r0p3
-  paddr=[80000,...]
-  vaddr=[...]
-Bringing up 3 other cpus
-Switching to EL1
-seL4 Kernel booting...
-[JARVIS] Decision cache initialized: 258 patterns
-[JARVIS] IPC handler ready (polling mode)
-[JARVIS] Waiting for Python AI agent...
+=~=~=~=~=~=~=~=~=~=~=~= PuTTY log 2026.01.02 09:50:33 =~=~=~=~=~=~=~=~=~=~=~=
 ```
 
-## Log Files
+Followed by all serial output until you close the session.
 
-| File | Description |
-|------|-------------|
-| `putty.log` | Main serial log (append mode) |
-| `boot_YYYYMMDD_HHMMSS.log` | Individual boot sessions (optional) |
+## Usage
 
-## Troubleshooting
+**View recent boot:**
+```cmd
+# Last 50 lines
+type putty.log | more
 
-**No output:**
-- Check GPIO wiring (TX→RXD, RX→TXD, GND→GND)
-- Verify baud rate matches (115200)
-- Ensure `enable_uart=1` in config.txt
+# Search for errors
+findstr /I "error fail panic" putty.log
+```
 
-**Garbage characters:**
-- Baud rate mismatch - both ends must be 115200
-- Check USB-serial adapter driver
+**Clear old logs:**
+```cmd
+# Backup first
+copy putty.log putty.log.backup
 
-**seL4 doesn't start:**
-- Verify kernel8.img is correct file
-- Check start4.elf and fixup4.dat are present
-- Review config.txt settings
+# Clear
+del putty.log
+```
+
+## Configured in PuTTY
+
+See `docs/PUTTY_SETUP.md` for PuTTY logging configuration:
+- Session → Logging
+- All session output
+- Always append
+- Flush frequently
