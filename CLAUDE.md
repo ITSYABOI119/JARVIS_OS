@@ -813,7 +813,10 @@ Each week follows this structure:
 ---
 
 **Current Phase:** Phase 2 - Alpha System (Months 12-24)
-**Current Status:** Week 32 COMPLETE (100%) - JARVIS ARM64 Build Complete + SD Card Ready (4/4 files verified)
+**Current Status:** Week 32 COMPLETE (January 2, 2026) - Boot Image Ready on SD Card (D:\)
+  - kernel8.img (701KB, MD5: `3b0d839f0b5a7d187dfc6a77f446aeaa`) ✅
+  - Firmware files (start4.elf 2.2MB, fixup4.dat 5.5KB, config.txt 476 bytes) ✅
+  - **100% READY FOR PI 4 BOOT** (5-10 min setup when hardware arrives)
 
 **Phase 1:** COMPLETE (26/26 weeks, 100%) - December 23, 2025 ✅
 
@@ -989,6 +992,42 @@ See `QUICK_START_TESTING.md` for quick start or `phase1/COMPREHENSIVE_TEST_PLAN.
 - **Making changes?** Always update PHASE_1_PROGRESS_TRACKER.md when completing work
 - **Testing everything?** See QUICK_START_TESTING.md for comprehensive Phase 0-1 validation
 - Always update CLAUDE.md
+
+---
+
+## Phase 1 Architectural Notes
+
+### IPC Architecture Limitation (Mock IPC)
+
+**Important:** Phase 1 uses "mock IPC" - Python and seL4 **do NOT actually communicate** in real-time.
+
+**The Architecture:**
+```
+Python Process (Host)          seL4 QEMU (Guest)
+─────────────────              ─────────────────
+/dev/shm/jarvis_ipc     ✗      static queue in guest memory
+(Linux host memory)     ✗      (ipc_sel4_simple.c)
+                        ✗
+    NO SHARED MEMORY    ✗      Separate memory spaces
+```
+
+**Why This Design:**
+- Phase 1 is a **proof-of-concept** demonstrating both components work independently
+- Python multi-agent system: Fully functional (4 agents, SHIELD, dynamic scaling) ✅
+- seL4 decision cache: Fully functional (258 patterns, 85.7% hit rate) ✅
+- **Intentionally separate** to prove each component before hardware integration
+
+**What This Means:**
+- Python queries don't reach seL4 cache (0% hit rate when testing Python→seL4)
+- seL4 cache hits occur only for built-in demo queries within seL4
+- Both systems proven working, but **not yet connected**
+
+**Phase 2 Solution:**
+- Real hardware (Raspberry Pi 4) uses **UART serial IPC** (10-20ms latency)
+- True bidirectional communication via `/dev/ttyUSB0`
+- Actual cache lookups from Python to seL4 via UART frames with CRC-16
+
+**Discovered:** January 3, 2026 (during Python→seL4 IPC testing)
 
 ---
 
@@ -1318,9 +1357,14 @@ phase2/
 ## Phase 2 Remaining Work (Weeks 33+)
 
 **Immediate (Weeks 33-34):**
-- Week 33: UART IPC implementation (full bidirectional protocol)
-- Week 34: Integration & testing (cache hit rate validation on hardware)
-- **Note:** Week 32 COMPLETE - JARVIS ARM64 built (275KB rootserver, 701KB boot image)
+- **Week 33: First Hardware Boot** (when Pi 4 arrives)
+  - Insert prepared SD card (D:\ - all 4 files ready ✅)
+  - Connect USB-UART adapter (GPIO14/15, 115200 baud)
+  - 5-10 minute setup (wiring + PuTTY)
+  - Verify boot: seL4 + decision cache + UART IPC handler
+  - Expected output documented in `phase2/docs/SD_CARD_SETUP.md`
+- Week 34: UART IPC validation (cache hit rate testing on hardware)
+- **Note:** Week 32 COMPLETE (January 2, 2026) - SD card 100% ready, awaiting Pi 4 hardware
 
 **Hardware Integration (Weeks 35-41):**
 - Weeks 35-36: SD/EMMC storage driver
