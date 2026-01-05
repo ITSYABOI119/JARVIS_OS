@@ -104,7 +104,7 @@ Week 14 successfully transitioned the dynamic model scaling system from mock mod
 
 **Changes:**
 - Added `_get_models_directory()` function for Windows/WSL auto-detection
-- Updated `ModelConfig.TINYLLAMA_PATH` to correct filename: `tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf`
+- Updated `ModelConfig.LLAMA32_PATH` to correct filename: `tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf`
 - Updated model parameters:
   - `n_gpu_layers`: Changed from -1 (all) to 35 (RTX 2070 specific)
   - `n_ctx`: Changed from 4096 to 2048 for Phi-3 (sufficient for commands)

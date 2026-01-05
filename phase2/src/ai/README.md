@@ -43,7 +43,7 @@ config = BootstrapConfig(
     uart_port="/dev/ttyUSB0",
     enable_shield=True,
     enable_snapshots=True,
-    ai_model="tinyllama"
+    ai_model="llama32"
 )
 
 # Initialize system

@@ -141,7 +141,7 @@ def test_3_memory_snapshot_rotation():
 
     system_state = type('obj', (object,), {
         'current_state': 'active',
-        'current_model': 'tinyllama',
+        'current_model': 'llama32',
         'get_current_state': lambda self: 'active',
         'get_statistics': lambda self: {
             'cpu_usage': 25.0,
@@ -195,7 +195,7 @@ def test_4_disk_snapshot_rotation():
 
     system_state = type('obj', (object,), {
         'current_state': 'idle',
-        'current_model': 'tinyllama',
+        'current_model': 'llama32',
         'get_current_state': lambda self: 'idle',
         'get_statistics': lambda self: {
             'cpu_usage': 10.0,
@@ -330,7 +330,7 @@ def test_6_rollback_disk_snapshot():
     class MockSystemStateManager:
         def __init__(self):
             self.current_state = 'idle'
-            self.current_model = 'tinyllama'
+            self.current_model = 'llama32'
 
         def get_current_state(self):
             return self.current_state

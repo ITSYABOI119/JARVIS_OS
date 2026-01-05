@@ -168,7 +168,7 @@ echo "========================================="
 echo ""
 
 run_test "Dynamic Model Scaling (25 tests)" "cd $BASE_DIR/phase1/src && python3 ai/test_dynamic_scaling.py"
-run_test "Inference Benchmark (TinyLlama vs Phi-3)" "cd $BASE_DIR/phase1/src && python3 ai/test_inference_benchmark.py"
+run_test "Inference Benchmark (Llama 3.2 1B vs Phi-3) [Updated Jan 2026]" "cd $BASE_DIR/phase1/src && python3 ai/test_inference_benchmark.py"
 run_test "SHIELD Accuracy (100 scenarios)" "cd $BASE_DIR/phase1/src && python3 ai/test_shield_accuracy.py"
 run_test "SHIELD Integration (with SystemStateManager)" "cd $BASE_DIR/phase1/src && python3 ai/test_shield_integration.py"
 

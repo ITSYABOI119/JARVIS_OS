@@ -4,7 +4,7 @@ JARVIS AI-OS Phase 1 - AI Agent
 Main AI decision engine for the JARVIS operating system.
 
 This module:
-1. Loads Phi-3 Mini 3.8B model (or TinyLlama 1.1B for IDLE state)
+1. Loads Phi-3 Mini 3.8B model (or Llama 3.2 1B for IDLE state [Updated Jan 2026])
 2. Processes queries from seL4 kernel via IPC
 3. Generates command responses
 4. Integrates with decision cache for <1ms responses on common queries

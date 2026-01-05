@@ -6,7 +6,7 @@ Week 13: Dynamic Model Scaling
 This module implements dynamic loading/unloading of AI models for different system states.
 
 Models:
-- IDLE: TinyLlama 1.1B Q4 (~2GB RAM)
+- IDLE: Llama 3.2 1B Q4 [Updated Jan 2026] (~2GB RAM)
 - ACTIVE: Phi-3 Mini 3.8B Q4 (~8GB RAM)
 - CRITICAL: Phi-3 Mini + Validator (~10GB RAM)
 - EMERGENCY: None (rule-based fallback)
@@ -76,11 +76,11 @@ class ModelConfig:
     """Configuration for AI models"""
 
     # Model filenames (relative to models directory)
-    TINYLLAMA_PATH = "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
+    LLAMA32_PATH = "Llama-3.2-1B-Instruct-Q4_K_M.gguf"  # Updated Jan 2026: Llama 3.2 1B (was TinyLlama 1.1B)
     PHI3_PATH = "Phi-3-mini-4k-instruct-q4.gguf"
 
     # Model parameters (matching agent.py configuration)
-    TINYLLAMA_PARAMS = {
+    LLAMA32_PARAMS = {
         "n_ctx": 2048,          # Context window
         "n_gpu_layers": 35,     # Offload to GPU (RTX 2070)
         "n_threads": 4,         # CPU threads
@@ -99,13 +99,13 @@ class ModelLoader:
     Manages dynamic loading and unloading of AI models.
 
     Supports:
-    - TinyLlama 1.1B (IDLE state)
+    - Llama 3.2 1B (IDLE state) [Updated Jan 2026]
     - Phi-3 Mini 3.8B (ACTIVE state)
     - Dual Phi-3 Mini (CRITICAL state - primary + validator)
     - None (EMERGENCY state - rule-based fallback)
 
     Performance Targets:
-    - Load TinyLlama: <0.5s
+    - Load Llama 3.2 1B: <0.5s
     - Load Phi-3 Mini: <1.5s
     - Unload model: <0.5s
     - Memory management: Immediate garbage collection
@@ -187,7 +187,7 @@ class ModelLoader:
 
             # Load appropriate model
             if state == SystemState.IDLE:
-                success = self._load_tinyllama()
+                success = self._load_llama32()
             elif state == SystemState.ACTIVE:
                 success = self._load_phi3()
             elif state == SystemState.CRITICAL:
@@ -223,32 +223,32 @@ class ModelLoader:
             print(f"[ModelLoader] Error loading model: {e}")
             return False
 
-    def _load_tinyllama(self) -> bool:
-        """Load TinyLlama 1.1B model"""
+    def _load_llama32(self) -> bool:
+        """Load Llama 3.2 1B model (legacy: _load_llama32)"""
         if not LLAMA_CPP_AVAILABLE:
-            print(f"[ModelLoader] Mock: Loading TinyLlama 1.1B...")
+            print(f"[ModelLoader] Mock: Loading Llama 3.2 1B...")
             time.sleep(0.1)  # Simulate load time
-            self.current_model = "mock_tinyllama"
+            self.current_model = "mock_llama32"
             return True
 
-        model_path = os.path.join(self.models_dir, ModelConfig.TINYLLAMA_PATH)
+        model_path = os.path.join(self.models_dir, ModelConfig.LLAMA32_PATH)
 
         if not os.path.exists(model_path):
             print(f"[ModelLoader] Model file not found: {model_path}")
             # Use mock for testing
             print(f"[ModelLoader] Using mock model for testing")
-            self.current_model = "mock_tinyllama"
+            self.current_model = "mock_llama32"
             return True
 
         try:
             self.current_model = Llama(
                 model_path=model_path,
-                **ModelConfig.TINYLLAMA_PARAMS
+                **ModelConfig.LLAMA32_PARAMS
             )
-            print(f"[ModelLoader] TinyLlama 1.1B loaded")
+            print(f"[ModelLoader] Llama 3.2 1B loaded")
             return True
         except Exception as e:
-            print(f"[ModelLoader] Error loading TinyLlama: {e}")
+            print(f"[ModelLoader] Error loading Llama 3.2 1B: {e}")
             return False
 
     def _load_phi3(self) -> bool:
@@ -418,16 +418,16 @@ if __name__ == "__main__":
     loader = ModelLoader()
 
     print("\n" + "="*70)
-    print("Test 1: Load TinyLlama (IDLE state)")
+    print("Test 1: Load Llama 3.2 1B (IDLE state)")
     print("="*70)
 
     success = loader.load_model(SystemState.IDLE)
     if success:
-        print(f"[PASS] TinyLlama loaded")
+        print(f"[PASS] Llama 3.2 1B loaded")
         mem = loader.get_memory_usage()
         print(f"  Memory: {mem['rss_mb']:.1f} MB RSS, {mem['percent']:.1f}%")
     else:
-        print("[FAIL] Failed to load TinyLlama")
+        print("[FAIL] Failed to load Llama 3.2 1B")
 
     print("\n" + "="*70)
     print("Test 2: Unload model")

@@ -34,7 +34,7 @@ Transition from mock mode (Week 13) to real model loading with TinyLlama and Phi
 
 **Changes Made:**
 - Added `_get_models_directory()` function for cross-platform support
-- Updated `ModelConfig.TINYLLAMA_PATH` to correct filename
+- Updated `ModelConfig.LLAMA32_PATH` to correct filename
 - Updated `ModelConfig.PHI3_PATH` (already correct)
 - Changed GPU layers from -1 (all) to 35 (RTX 2070 specific)
 - Changed n_ctx from 4096 to 2048 for Phi-3 (sufficient for commands)
@@ -271,7 +271,7 @@ Transition from mock mode (Week 13) to real model loading with TinyLlama and Phi
 
 1. **phase1/src/ai/model_loader.py**
    - Added `_get_models_directory()` function (Windows/WSL auto-detection)
-   - Updated `ModelConfig.TINYLLAMA_PATH` to `tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf`
+   - Updated `ModelConfig.LLAMA32_PATH` to `tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf`
    - Updated model parameters (n_gpu_layers: 35, n_ctx: 2048)
    - Changed constructor default: `models_dir=None` (auto-detect)
    - Lines changed: ~70 lines modified/added

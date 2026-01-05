@@ -47,7 +47,10 @@
       "Bash(powershell -Command \"\\(Get-Item D:\\\\kernel8.img\\).Length\")",
       "Bash(powershell -Command \"Get-FileHash D:\\\\kernel8.img -Algorithm MD5 | Select-Object -ExpandProperty Hash\")",
       "Bash(powershell -Command \"Get-ChildItem D:\\\\ | Select-Object Name, @{Name=''Size'';Expression={''{0:N0} bytes'' -f $_Length}}, LastWriteTime | Format-Table -AutoSize\")",
-      "Bash(git -C \"C:/Users/jluca/Documents/JARVIS_OS\" diff CLAUDE.md)"
+      "Bash(git -C \"C:/Users/jluca/Documents/JARVIS_OS\" diff CLAUDE.md)",
+      "Bash(git -C \"C:/Users/jluca/Documents/JARVIS_OS\" status --short)",
+      "Bash(git -C \"C:/Users/jluca/Documents/JARVIS_OS\" push)",
+      "Bash(git -C \"C:/Users/jluca/Documents/JARVIS_OS\" diff phase1/src/ai/model_loader.py)"
     ],
     "deny": [],
     "ask": []

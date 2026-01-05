@@ -4,7 +4,7 @@ JARVIS AI-OS - AI Inference Benchmark
 Week 15: Dynamic Scaling Optimization
 
 This script benchmarks AI inference latency with real queries for both:
-- TinyLlama 1.1B (IDLE state) - Target: <100ms
+- Llama 3.2 1B (IDLE state) [Updated Jan 2026] - Target: <100ms
 - Phi-3 Mini 3.8B (ACTIVE state) - Target: <600ms
 
 Author: JARVIS AI-OS Team
@@ -255,18 +255,18 @@ def main():
     print("="*70)
     print()
     print("Testing inference latency with 100 queries per model:")
-    print("  - TinyLlama 1.1B (IDLE state): Target <100ms avg")
+    print("  - Llama 3.2 1B (IDLE state) [Updated Jan 2026]: Target <100ms avg")
     print("  - Phi-3 Mini 3.8B (ACTIVE state): Target <600ms avg")
     print()
 
     # Create model loader
     loader = ModelLoader()
 
-    # Benchmark TinyLlama
-    tinyllama_results = benchmark_model(
+    # Benchmark Llama 3.2 1B (IDLE model)
+    llama32_results = benchmark_model(
         loader,
         SystemState.IDLE,
-        "TinyLlama 1.1B Q4",
+        "Llama 3.2 1B Q4",
         100.0
     )
 
@@ -284,13 +284,13 @@ def main():
     print("="*70)
     print()
 
-    if tinyllama_results and phi3_results:
+    if llama32_results and phi3_results:
         print(f"{'Model':<25} {'Mean':<10} {'Target':<10} {'Status':<10}")
         print("-"*70)
-        print(f"{tinyllama_results['model']:<25} "
-              f"{tinyllama_results['mean_ms']:>7.1f}ms "
-              f"<{tinyllama_results['target_ms']:>6.0f}ms "
-              f"{'PASS' if tinyllama_results['meets_target'] else 'FAIL':<10}")
+        print(f"{llama32_results['model']:<25} "
+              f"{llama32_results['mean_ms']:>7.1f}ms "
+              f"<{llama32_results['target_ms']:>6.0f}ms "
+              f"{'PASS' if llama32_results['meets_target'] else 'FAIL':<10}")
         print(f"{phi3_results['model']:<25} "
               f"{phi3_results['mean_ms']:>7.1f}ms "
               f"<{phi3_results['target_ms']:>6.0f}ms "
@@ -298,9 +298,9 @@ def main():
 
         print()
         print("Speed Comparison:")
-        speedup = phi3_results['mean_ms'] / tinyllama_results['mean_ms']
+        speedup = phi3_results['mean_ms'] / llama32_results['mean_ms']
         print(f"  Phi-3 is {speedup:.1f}x slower than TinyLlama")
-        print(f"  TinyLlama: {1000/tinyllama_results['mean_ms']:.1f} queries/second")
+        print(f"  TinyLlama: {1000/llama32_results['mean_ms']:.1f} queries/second")
         print(f"  Phi-3: {1000/phi3_results['mean_ms']:.1f} queries/second")
 
     print()

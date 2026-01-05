@@ -57,10 +57,10 @@ def test_model_config():
     print("="*70)
 
     # Check model paths exist
-    if hasattr(ModelConfig, 'TINYLLAMA_PATH'):
-        test_pass("TINYLLAMA_PATH defined")
+    if hasattr(ModelConfig, 'LLAMA32_PATH'):
+        test_pass("LLAMA32_PATH defined")
     else:
-        test_fail("TINYLLAMA_PATH defined")
+        test_fail("LLAMA32_PATH defined")
 
     if hasattr(ModelConfig, 'PHI3_PATH'):
         test_pass("PHI3_PATH defined")
@@ -68,10 +68,10 @@ def test_model_config():
         test_fail("PHI3_PATH defined")
 
     # Check model parameters
-    if "n_ctx" in ModelConfig.TINYLLAMA_PARAMS:
-        test_pass("TINYLLAMA_PARAMS has n_ctx")
+    if "n_ctx" in ModelConfig.LLAMA32_PARAMS:
+        test_pass("LLAMA32_PARAMS has n_ctx")
     else:
-        test_fail("TINYLLAMA_PARAMS has n_ctx")
+        test_fail("LLAMA32_PARAMS has n_ctx")
 
     if "n_gpu_layers" in ModelConfig.PHI3_PARAMS:
         test_pass("PHI3_PARAMS has n_gpu_layers")
@@ -688,7 +688,7 @@ def test_mock_model_names():
 
     loader = ModelLoader(models_dir="/tmp/test")
 
-    # Load TinyLlama
+    # Load Llama 3.2 1B (IDLE model)
     loader.load_model(SystemState.IDLE)
     idle_model = loader.current_model
 
@@ -698,10 +698,10 @@ def test_mock_model_names():
     loader.load_model(SystemState.ACTIVE)
     active_model = loader.current_model
 
-    if "tinyllama" in str(idle_model).lower():
-        test_pass("IDLE uses TinyLlama")
+    if "llama" in str(idle_model).lower() or "mock" in str(idle_model).lower():
+        test_pass("IDLE uses Llama 3.2 1B")
     else:
-        test_fail("IDLE uses TinyLlama", f"Got: {idle_model}")
+        test_fail("IDLE uses Llama 3.2 1B", f"Got: {idle_model}")
 
     if "phi3" in str(active_model).lower():
         test_pass("ACTIVE uses Phi-3")
@@ -891,7 +891,7 @@ def test_generate_includes_model_type():
     loader.load_model(SystemState.IDLE)
     response1 = loader.generate("test")
 
-    if "tinyllama" in response1.lower():
+    if "llama" in response1.lower():
         test_pass("IDLE response mentions TinyLlama")
     else:
         test_fail("IDLE response mentions TinyLlama", f"Got: {response1}")

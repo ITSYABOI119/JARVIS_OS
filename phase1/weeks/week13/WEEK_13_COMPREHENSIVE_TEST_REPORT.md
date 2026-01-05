@@ -224,7 +224,7 @@ All tests executed in **mock mode** where actual model files are simulated.
 ```
 
 **Mock objects created:**
-- `self.current_model = "mock_tinyllama"` (IDLE state)
+- `self.current_model = "mock_llama32"` (IDLE state)
 - `self.current_model = "mock_phi3"` (ACTIVE state)
 - `self.validator_model = "mock_phi3_validator"` (CRITICAL state)
 

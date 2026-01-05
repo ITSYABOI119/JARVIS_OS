@@ -50,7 +50,7 @@ class EnhancedSystemSnapshot:
 
     # NEW: AI state
     ai_model_state: str  # "idle", "active", "critical", "emergency"
-    ai_model_loaded: Optional[str]  # "tinyllama", "phi3", None
+    ai_model_loaded: Optional[str]  # "llama32", "phi3", None
     ai_model_memory_mb: float
 
     # NEW: IPC state

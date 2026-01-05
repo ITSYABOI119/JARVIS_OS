@@ -55,7 +55,7 @@ python test_fault_tolerance_integration.py  # End-to-end fault tolerance
 
 # Dynamic Model Scaling (Week 13-15)
 python test_dynamic_scaling.py      # 25 tests, all state transitions
-python test_inference_benchmark.py  # TinyLlama vs Phi-3 performance
+python test_inference_benchmark.py  # Llama 3.2 1B vs Phi-3 performance [Updated Jan 2026]
 
 # SHIELD Safety Framework (Week 16)
 python test_shield_accuracy.py      # 100 test scenarios (100% harmful block, 0% FP)
@@ -422,7 +422,7 @@ Analysis shows 24-month timeline was too aggressive. 30-36 months more realistic
 - **Microkernel:** seL4 (formally verified, ~12K LOC) - https://sel4.systems/
 - **AI Inference:** ONNX Runtime (cross-platform, optimized)
 - **Main Model:** Mistral 7B INT8 (~8GB)
-- **Specialist Models:** Phi-3 Mini (3.8B) or TinyLlama (1.1B)
+- **Specialist Models:** Phi-3 Mini (3.8B) or Llama 3.2 1B [Updated Jan 2026]
 - **Monitoring Model:** Custom 1B INT8 (~2GB)
 - **Bootloader:** UEFI + custom loader
 - **Build:** CMake/Meson (when implementation begins)
@@ -715,7 +715,7 @@ Each week follows this structure:
 9. **Key validated metrics (all gate criteria met):**
    - ✅ IPC latency: 54μs median (target: <100μs)
    - ✅ Cache hit rate: 85.7% (target: >80%)
-   - ✅ AI inference: 558ms GPU Phi-3, <100ms TinyLlama (GPU mandatory)
+   - ✅ AI inference: 558ms GPU Phi-3, <100ms Llama 3.2 1B [Updated Jan 2026] (GPU mandatory)
    - ✅ Boot time: ~2s (target: <60s)
    - ✅ Multi-agent routing: 100% accuracy
    - ✅ SHIELD: 100% harmful block, 0% false positive (targets: >90%, <5%)
@@ -827,7 +827,7 @@ Each week follows this structure:
 - ✅ Week 11: Multi-agent architecture (4 specialist agents, 100% routing accuracy)
 - ✅ Week 12: Agent health monitoring & failover (comprehensive fault tolerance)
 - ✅ Week 13: Dynamic model scaling design (4 system states, 25/25 tests passing)
-- ✅ Week 14: Real model integration (TinyLlama + Phi-3, Q4 quantization 60-70% memory savings)
+- ✅ Week 14: Real model integration (Llama 3.2 1B + Phi-3, Q4 quantization 60-70% memory savings) [Updated Jan 2026]
 - ✅ Week 15: Scaling optimization & inference testing (transition times optimized, real inference validated)
 - ✅ Week 16: SHIELD Safety Framework Expansion (100 action types, 100% accuracy)
 - ✅ Week 17: Shadow Execution & Snapshot Rollback (35/35 tests PASS, 2000-4000× better than targets)
@@ -1053,7 +1053,7 @@ Phase 2 develops a real hardware alpha system running on Raspberry Pi 4 with UAR
 
 **Trade-offs Accepted:**
 - Slower IPC: 1-10ms UART (vs 54μs shared memory on x86)
-- Lower AI performance: TinyLlama 1.1B only, 5-15 tokens/sec
+- Lower AI performance: Llama 3.2 1B only [Updated Jan 2026], 5-15 tokens/sec
 - No NVMe (SD card instead), No PCIe expansion
 - Single hardware platform (vs 3 originally planned)
 
@@ -1069,7 +1069,7 @@ Phase 2 develops a real hardware alpha system running on Raspberry Pi 4 with UAR
 │                  │   115200 baud     │                  │
 │  Python AI       │                   │  Decision Cache  │
 │  - Phi-3 Mini    │   10-20ms RTT     │  - 258 patterns  │
-│  - TinyLlama     │                   │  - 85.7% hit     │
+│  - Llama 3.2 1B  │                   │  - 85.7% hit     │
 │  - SHIELD        │                   │  - <1ms lookup   │
 └──────────────────┘                   └──────────────────┘
 ```
@@ -1273,7 +1273,7 @@ phase2/
 | **Architecture** | x86_64 QEMU | ARM64 Raspberry Pi 4 |
 | **IPC Protocol** | Shared memory (54μs) | UART serial (10-20ms) |
 | **Hardware** | Virtual only | Real bare metal |
-| **AI Model** | Phi-3 Mini 3.8B | TinyLlama 1.1B (lower power) |
+| **AI Model** | Phi-3 Mini 3.8B | Llama 3.2 1B (lower power) [Updated Jan 2026] |
 | **Cache Access** | Direct mmap | UART frames with CRC |
 | **Storage** | N/A (test only) | SD card (boot + root) |
 | **Initialization** | Inline in scripts | SystemBootstrap class |
@@ -1394,3 +1394,15 @@ Host PC (Python AI) ◄──UART──► Pi 4 (seL4 + Cache)
 - Pi 4 handles 85% of queries via decision cache (<1ms)
 - Host PC handles 15% cache misses via UART (10-20ms)
 - Phase 3+ returns to standalone (x86 or Multi-Pi cluster)
+
+---
+
+## Private Research Context
+
+**Instinct-Based AI Research** (C:\Users\jluca\Documents\ai_research)
+- Parallel research track exploring memory-centric AI (semantic caching via Hopfield Networks)
+- PoC COMPLETE (Dec 2025): <100MB memory, <100ms latency, 100% accuracy on cached queries
+- Potential Phase 4+ integration (post-Month 36) for continuous learning capabilities
+- **Status**: Private research, not shared externally
+- **Connection**: Could enhance JARVIS decision cache from 85.7% → 95%+ hit rate with semantic matching
+- See ai_research/CLAUDE.md and ai_research/RESEARCH_FINDINGS.md for details

@@ -5,7 +5,7 @@ Week 13: Dynamic Model Scaling
 Week 17: Shadow Execution - Snapshot Triggers
 
 This module implements the dynamic model scaling state machine with 4 states:
-- IDLE: TinyLlama 1.1B (2GB RAM) - Monitoring mode
+- IDLE: Llama 3.2 1B (2GB RAM) - Monitoring mode [Updated Jan 2026]
 - ACTIVE: Phi-3 Mini 3.8B (8GB RAM) - General operations
 - CRITICAL: Phi-3 Mini + Validator (10GB RAM) - Safety-critical ops
 - EMERGENCY: Rule-based fallback (<100MB RAM) - AI failure recovery
@@ -32,7 +32,7 @@ from datetime import datetime
 
 class SystemState(Enum):
     """System states for dynamic model scaling"""
-    IDLE = "idle"               # TinyLlama 1.1B - monitoring
+    IDLE = "idle"               # Llama 3.2 1B - monitoring [Updated Jan 2026]
     ACTIVE = "active"           # Phi-3 Mini 3.8B - general ops
     CRITICAL = "critical"       # Phi-3 + Validator - safety-critical
     EMERGENCY = "emergency"     # Rule-based fallback - AI failure
@@ -56,7 +56,7 @@ class SystemStateManager:
     Manages system state transitions for dynamic model scaling.
 
     State Machine:
-    - IDLE: Minimal resources (TinyLlama 1.1B, 2GB RAM)
+    - IDLE: Minimal resources (Llama 3.2 1B, 2GB RAM) [Updated Jan 2026]
     - ACTIVE: Normal operations (Phi-3 Mini 3.8B, 8GB RAM)
     - CRITICAL: Safety-critical (Phi-3 + Validator, 10GB RAM)
     - EMERGENCY: AI failure fallback (rule-based, <100MB RAM)
