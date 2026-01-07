@@ -42,17 +42,20 @@ if not exist "%SD_DRIVE%\" (
 echo Copying files...
 echo.
 
-copy /Y "%FIRMWARE_DIR%\kernel8.img" "%SD_DRIVE%\"
-if errorlevel 1 goto error
+REM Copy all files in firmware (skip DTS sources and backups)
+for %%F in ("%FIRMWARE_DIR%\*") do (
+    if not exist "%%F\" (
+        if /I not "%%~xF"==".dts" if /I not "%%~xF"==".orig" (
+            copy /Y "%%F" "%SD_DRIVE%\"
+            if errorlevel 1 goto error
+        )
+    )
+)
 
-copy /Y "%FIRMWARE_DIR%\start4.elf" "%SD_DRIVE%\"
-if errorlevel 1 goto error
-
-copy /Y "%FIRMWARE_DIR%\fixup4.dat" "%SD_DRIVE%\"
-if errorlevel 1 goto error
-
-copy /Y "%FIRMWARE_DIR%\config.txt" "%SD_DRIVE%\"
-if errorlevel 1 goto error
+if exist "%FIRMWARE_DIR%\overlays\" (
+    xcopy /E /I /Y "%FIRMWARE_DIR%\overlays" "%SD_DRIVE%\overlays"
+    if errorlevel 1 goto error
+)
 
 echo.
 echo ============================================

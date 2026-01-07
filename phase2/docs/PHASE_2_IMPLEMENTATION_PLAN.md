@@ -4,7 +4,7 @@
 **Date:** December 2025
 **Phase:** Phase 2 - Alpha System (Months 12-24)
 **Duration:** 12 months (52 weeks)
-**Status:** READY TO EXECUTE
+**Status:** IN PROGRESS
 
 ---
 
@@ -28,31 +28,41 @@ This document provides a detailed week-by-week implementation plan for Phase 2. 
 
 ---
 
-## CURRENT STATUS (January 1, 2026)
+## CURRENT STATUS (January 7, 2026)
 
-**Phase 2 Progress:** Week 32 COMPLETE - JARVIS ARM64 Build Ready
+**Phase 2 Progress:** Week 32 COMPLETE - Pi 4 boot + UART banner + IPC loop running (TX only)
+
+**Update (January 7, 2026):**
+- Pi 4 boot reaches seL4 user space; elfloader loads DTB from CPIO and jumps to kernel.
+- JARVIS rootserver runs; banner and system info visible on UART.
+- Cache loads confirmed:
+  - "Loaded 50 initial patterns into cache"
+  - "Loaded 258 total patterns into cache"
+- Fixed UART MMIO fault by switching to libsel4platsupport serial mapping (no direct UART MMIO).
+- Built raw driver image (ElfloaderImage=binary); `kernel8.img` now raw (~1.6 MB) and `jarvis-sel4-image-arm-bcm2711` available.
+- UART IPC loop running; RX disabled for now to avoid cap faults (Week 33 work item).
 
 ### What's Ready to Test
 
-**SD Card Status: ✅ JARVIS BOOTABLE** (when Pi 4 arrives)
+**SD Card Status: OK - JARVIS BOOTABLE + VERIFIED**
 
-Your SD card has all 4 required boot files in `phase2/firmware/`:
+Your SD card has the required boot files in `phase2/firmware/`:
 - `start4.elf` (2.2 MB) - GPU firmware ✅
 - `fixup4.dat` (5.5 KB) - Memory configuration ✅
 - `config.txt` (476 bytes) - Boot settings ✅
-- `kernel8.img` (701 KB) - **JARVIS seL4 rootserver** ✅
+- `kernel8.img` (~1.6 MB) - **JARVIS seL4 rootserver** OK
 
-**MD5 Checksum:** `3b0d839f0b5a7d187dfc6a77f446aeaa`
+**MD5 Checksum:** build-dependent; check `phase2/firmware/kernel8.img`
 
-**What Will Happen When You Boot:**
+**Observed on Pi 4 (January 7, 2026):**
 1. GPU loads start4.elf → Works ✓
 2. GPU reads config.txt → Works ✓
 3. GPU loads kernel8.img (JARVIS) → Works ✓
 4. GPU starts ARM CPU at kernel entry → Works ✓
 5. ELF-loader starts, prints banner → Works ✓
 6. seL4 kernel initializes → Works ✓
-7. JARVIS rootserver runs `main()` → **Expected to work** ✓
-8. UART serial output visible → **JARVIS banner should appear** ✓
+7. JARVIS rootserver runs `main()` -> Works (OK)
+8. UART serial output visible -> Works (banner + IPC handler)
 
 **This IS JARVIS** - the complete JARVIS AI-OS rootserver with:
 - Decision cache (258 patterns, 85.7% hit rate)
@@ -62,12 +72,12 @@ Your SD card has all 4 required boot files in `phase2/firmware/`:
 
 ### What's NOT Ready
 
-**Hardware Test: ⏳ PENDING** (Pi 4 not yet arrived)
+**Hardware Test: COMPLETE** (Pi 4 boot verified)
 
 - ✅ JARVIS ARM64 build complete (275KB rootserver)
-- ✅ Boot image ready (701KB kernel8.img)
+- ✅ Boot image ready (~1.6 MB kernel8.img)
 - ✅ SD card files prepared in `phase2/firmware/`
-- ⏳ Hardware test pending Pi 4 arrival
+- Hardware test complete (UART banner + IPC loop)
 
 ### Build Completed (January 1, 2026)
 
@@ -76,7 +86,7 @@ Your SD card has all 4 required boot files in `phase2/firmware/`:
 - CMakeLists.txt for JARVIS rootserver (93 lines)
 - GCC 13 compatibility fixes applied
 - JARVIS ARM64 rootserver: 275KB
-- Boot image: 701KB (includes elfloader + kernel + rootserver)
+- Boot image: ~1.6 MB (includes elfloader + kernel + rootserver)
 
 **GCC 13 Fixes Applied:**
 1. musllibc weak_alias visibility fix (`src/internal/libc.h`)
@@ -84,22 +94,22 @@ Your SD card has all 4 required boot files in `phase2/firmware/`:
 
 ### Next Steps
 
-**Immediate (when Pi 4 arrives):**
-1. Run `copy_to_sd.bat E:` (replace E: with SD card drive)
-2. Insert SD card into Pi 4
-3. Connect UART serial adapter (GPIO14→RXD, GPIO15→TXD, GND→GND)
-4. Open serial terminal at 115200 baud, 8N1
-5. Power on Pi 4
-6. **Expected:** JARVIS banner appears on serial console
+**Next Steps (Week 33):**
+1. Keep UART RX disabled until a safe receive path is mapped (Week 33 task).
+2. Implement safe UART RX mapping or ring buffer for host->Pi.
+3. Re-enable UART RX and verify host->Pi queries.
+4. Validate UART IPC with Python host (query/response).
+5. Remove duplicate IPC header output (optional cleanup).
+6. Confirm stable idle with periodic status (no faults).
 
-**Expected Serial Output:**
+**Observed Serial Output (January 7, 2026):**
 ```
 ========================================
   JARVIS AI-OS v0.2 - Phase 2 Week 32
   ARM64 Raspberry Pi 4 Port
 ========================================
   seL4 + PL011 UART + Decision Cache
-  Build: Jan  1 2026 XX:XX:XX
+  Build: Jan  7 2026 15:36:25
 ========================================
 ```
 
@@ -370,7 +380,7 @@ TII `vm_minimal` builds a CAmkES VM hypervisor (runs Linux VMs on seL4), NOT a b
 
 ### Week 32: JARVIS ARM64 Port + seL4 Build Framework
 
-**STATUS: COMPLETE ✅** (January 1, 2026)
+**STATUS: COMPLETE** (January 7, 2026)
 
 **What Was Actually Done:**
 
@@ -402,23 +412,30 @@ TII `vm_minimal` builds a CAmkES VM hypervisor (runs Linux VMs on seL4), NOT a b
 
 4. ✅ **Build completed successfully**
    - JARVIS rootserver: 275KB ARM64 ELF
-   - Boot image: 701KB (includes elfloader + kernel + rootserver)
+   - Boot image: ~1.6 MB (includes elfloader + kernel + rootserver)
    - All ninja targets passed
-   - MD5: `3b0d839f0b5a7d187dfc6a77f446aeaa`
+   - MD5: build-dependent; check `phase2/firmware/kernel8.img`
 
 5. ✅ **SD card files prepared**
    - All 4 boot files in `phase2/firmware/`
    - `copy_to_sd.bat` script updated
    - Ready for hardware test
 
+**Update (January 7, 2026):**
+- Pi 4 hardware boot reaches seL4 user space (elfloader + kernel + rootserver all running).
+- Rootserver cache initialization confirmed in UART output (50 initial + 258 total patterns).
+- UART MMIO fault fixed by switching to libsel4platsupport serial mapping.
+- Raw driver image build enabled (ElfloaderImage=binary); `kernel8.img` now raw (~1.6 MB).
+- UART banner visible on GPIO14/15; IPC loop running; RX disabled to avoid cap faults.
+
 **Deliverables:**
 - ✅ ARM64 JARVIS code integrated (main_arm64.c, uart_pl011.c, decision_cache)
 - ✅ seL4 build framework working (TII build system, sel4test pattern)
 - ✅ JARVIS built successfully (275KB rootserver)
-- ✅ Boot image created (701KB kernel8.img)
+- ✅ Boot image created (~1.6 MB kernel8.img)
 - ✅ SD card files ready in `phase2/firmware/`
 - ✅ copy_to_sd.bat script updated
-- ⏳ Hardware test (pending Pi 4 arrival)
+- Hardware test complete (UART banner + IPC loop)
 
 **Actual Effort:** ~8 hours (build + GCC fixes + verification)
 
@@ -426,7 +443,7 @@ TII `vm_minimal` builds a CAmkES VM hypervisor (runs Linux VMs on seL4), NOT a b
 - `~/sel4-workspace/projects/jarvis-sel4/CMakeLists.txt` (93 lines)
 - `~/sel4-workspace/projects/jarvis-sel4/settings.cmake`
 - `~/sel4-workspace/projects/jarvis-sel4/easy-settings.cmake`
-- `phase2/firmware/kernel8.img` (701KB JARVIS boot image)
+- `phase2/firmware/kernel8.img` (~1.6 MB JARVIS boot image)
 - `phase2/copy_to_sd.bat` (updated for JARVIS)
 
 **JARVIS Symbols Verified:**
@@ -445,7 +462,7 @@ ARM64 Raspberry Pi 4 Port
 | Component | Size | Status |
 |-----------|------|--------|
 | jarvis-sel4 (rootserver) | 275 KB | ✅ Built |
-| kernel8.img (boot image) | 701 KB | ✅ Created |
+| kernel8.img (boot image) | ~1.6 MB | ✅ Created |
 | kernel.elf (seL4 kernel) | 172 KB | ✅ Built |
 | kernel.dtb (device tree) | 26 KB | ✅ Generated |
 
@@ -458,7 +475,7 @@ ninja
 **Copy to SD Card:**
 ```cmd
 cd C:\Users\jluca\Documents\JARVIS_OS\phase2
-copy_to_sd.bat E:
+copy_to_sd.bat D:
 ```
 
 ---
@@ -1564,7 +1581,7 @@ The split architecture adds latency (1-10ms UART vs 54μs shared memory) and req
 *Phase 2 Estimate: 52 weeks, ~400 hours*
 *Hardware: Raspberry Pi 4 8GB (BCM2711, Cortex-A72)*
 *Hardware Cost: $65-175 (savings: $4,825-4,935 vs original x86 plan)*
-*Current Status: Week 32 COMPLETE - JARVIS ARM64 rootserver built (275KB)*
+*Current Status: Week 32 COMPLETE - Pi 4 boot + UART banner + IPC loop running (TX only)*
 *Next Milestone: Hardware test on Pi 4 → Week 33 UART IPC Implementation*
 
 **See Also:** `PHASE_2_HARDWARE_PIVOT.md` for full pivot rationale

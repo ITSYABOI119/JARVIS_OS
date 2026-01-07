@@ -19,19 +19,30 @@
 #include <stdbool.h>
 
 /* seL4 headers */
-#ifdef __sel4__
 #include <sel4/sel4.h>
-#endif
+#include <sel4platsupport/platsupport.h>
 
-/* Platform support for I/O operations */
-#include <platsupport/io.h>
+/* seL4 debug output - works from user space */
+static void sel4_putchar(char c)
+{
+    seL4_DebugPutChar(c);
+}
 
-/* Global I/O operations structure - required by uart_pl011.c */
-ps_io_ops_t io_ops;
+static void sel4_puts(const char *s)
+{
+    while (*s)
+    {
+        if (*s == '\n')
+        {
+            sel4_putchar('\r');
+        }
+        sel4_putchar(*s++);
+    }
+}
 
 /* JARVIS components */
-#include "../../../phase1/src/cache/decision_cache.h"
-#include "../drivers/uart_pl011.h"
+#include "decision_cache.h"
+#include "uart_pl011.h"
 
 #define BANNER \
     "\n" \
@@ -382,21 +393,7 @@ static void ipc_main_loop(void)
     }
 }
 
-/*
- * Print system information
- */
-static void print_system_info(void)
-{
-    uart_puts("System Information:\n");
-    uart_puts("  Architecture: aarch64 (ARM64)\n");
-    uart_puts("  Platform: Raspberry Pi 4 (BCM2711)\n");
-    uart_puts("  CPU: Cortex-A72 @ 1.8 GHz\n");
-    uart_puts("  Kernel: seL4 microkernel\n");
-    uart_puts("  UART: PL011 @ 0xFE201000\n");
-    uart_puts("  Baud: 115200 8N1\n");
-    uart_puts("  Phase: 2 Week 32\n");
-    uart_puts("\n");
-}
+/* print_system_info() removed - now inline in main() */
 
 /*
  * Main entry point - seL4 root task
@@ -406,46 +403,94 @@ int main(int argc, char *argv[])
     (void)argc;
     (void)argv;
 
-    /* Initialize UART first (for all output) */
+    /* Bring up serial before any printf/logging to avoid libsel4platsupport warnings */
+    if (platsupport_serial_setup_bootinfo_failsafe() != 0) {
+        while (1);
+    }
+
+    /* Initialize UART driver (for IPC and UART output) */
     if (!uart_init()) {
-        /* Can't print error - UART failed! */
         while (1);  /* Hang */
     }
 
-    /* Print banner */
-    uart_puts(BANNER);
+    /* CRITICAL TEST: Output immediately to verify rootserver starts */
+    /* Try seL4 DebugPutChar first (kernel syscall) */
+    sel4_putchar('!');
+    sel4_putchar('!');
+    sel4_putchar('!');
+    sel4_putchar(' ');
+    sel4_putchar('J');
+    sel4_putchar('A');
+    sel4_putchar('R');
+    sel4_putchar('V');
+    sel4_putchar('I');
+    sel4_putchar('S');
+    sel4_putchar(' ');
+    sel4_putchar('S');
+    sel4_putchar('T');
+    sel4_putchar('A');
+    sel4_putchar('R');
+    sel4_putchar('T');
+    sel4_putchar('E');
+    sel4_putchar('D');
+    sel4_putchar('!');
+    sel4_putchar('!');
+    sel4_putchar('!');
+    sel4_putchar('\r');
+    sel4_putchar('\n');
+
+    /* Flush output */
+    for (volatile int i = 0; i < 1000000; i++)
+        ; /* Small delay */
+
+    sel4_puts("\n*** JARVIS ROOTSERVER STARTING ***\n");
+
+    /* Print banner using seL4 debug output */
+    sel4_puts(BANNER);
 
     /* Print system info */
-    print_system_info();
+    sel4_puts("System Information:\n");
+    sel4_puts("  Architecture: aarch64 (ARM64)\n");
+    sel4_puts("  Platform: Raspberry Pi 4 (BCM2711)\n");
+    sel4_puts("  CPU: Cortex-A72 @ 1.8 GHz\n");
+    sel4_puts("  Kernel: seL4 microkernel\n");
+    sel4_puts("  UART: PL011 @ 0xFE201000\n");
+    sel4_puts("  Baud: 115200 8N1\n");
+    sel4_puts("  Phase: 2 Week 32\n");
+    sel4_puts("\n");
 
     /* Initialize decision cache */
-    uart_puts("Initializing decision cache...\n");
+    sel4_puts("Initializing decision cache...\n");
     if (!cache_init(&g_cache)) {
-        uart_puts("ERROR: Failed to initialize cache!\n");
+        sel4_puts("ERROR: Failed to initialize cache!\n");
         while (1);
     }
-    uart_puts("  Cache initialized (512 entries)\n");
+    sel4_puts("  Cache initialized (512 entries)\n");
 
     /* Load patterns */
     int loaded = cache_load_extended_patterns(&g_cache);
-    char msg[64];
+    char msg[128];
     snprintf(msg, sizeof(msg), "  Loaded %d patterns into cache\n", loaded);
-    uart_puts(msg);
-    uart_puts("\n");
+    sel4_puts(msg);
+    sel4_puts("\n");
 
     /* Print cache stats */
     cache_stats_t stats;
     cache_get_stats(&g_cache, &stats);
-    snprintf(msg, sizeof(msg), "Cache Stats: %u entries loaded\n",
-             stats.entries_used);
-    uart_puts(msg);
-    uart_puts("\n");
+    snprintf(msg, sizeof(msg), "Cache Stats: %u entries loaded\n", stats.entries_used);
+    sel4_puts(msg);
+    sel4_puts("\n");
 
     /* Enter IPC main loop */
-    uart_puts("Starting UART IPC handler...\n");
+    sel4_puts("Starting UART IPC handler...\n");
+    sel4_puts("\n========================================\n");
+    sel4_puts("UART IPC Handler Running (ARM64)\n");
+    sel4_puts("Waiting for Python queries...\n");
+    sel4_puts("========================================\n\n");
+
     ipc_main_loop();
 
     /* Should never reach here */
-    uart_puts("ERROR: IPC loop exited unexpectedly!\n");
+    sel4_puts("ERROR: IPC loop exited unexpectedly!\n");
     return 1;
 }

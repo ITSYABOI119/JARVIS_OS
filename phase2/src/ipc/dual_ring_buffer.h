@@ -20,8 +20,8 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "../../../phase1/src/ipc/ring_buffer.h"
-#include "../../../phase1/src/cache/decision_cache.h"
+#include "ring_buffer.h"
+#include "decision_cache.h"
 
 /* Dual ring buffer magic number for validation */
 #define DUAL_RING_MAGIC 0x4A415256  /* "JARV" in hex */

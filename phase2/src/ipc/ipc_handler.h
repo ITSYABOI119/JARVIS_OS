@@ -26,7 +26,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "dual_ring_buffer.h"
-#include "../../../phase1/src/cache/decision_cache.h"
+#include "decision_cache.h"
 
 /* IPC handler configuration */
 #define IPC_HANDLER_STACK_SIZE (8 * 1024)   /* 8KB stack */

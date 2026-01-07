@@ -198,11 +198,11 @@ SD Card (FAT32, label: JARVIS)
 ### Windows Copy Commands
 
 ```cmd
-REM Assuming SD card is E:
-copy start4.elf E:\
-copy fixup4.dat E:\
-copy kernel8.img E:\
-copy config.txt E:\
+REM Assuming SD card is D:
+copy start4.elf D:\
+copy fixup4.dat D:\
+copy kernel8.img D:\
+copy config.txt D:\
 ```
 
 ### Linux Copy Commands
