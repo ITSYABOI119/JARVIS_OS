@@ -28,19 +28,23 @@ This document provides a detailed week-by-week implementation plan for Phase 2. 
 
 ---
 
-## CURRENT STATUS (January 7, 2026)
+## CURRENT STATUS (January 8, 2026)
 
-**Phase 2 Progress:** Week 32 COMPLETE - Pi 4 boot + UART banner + IPC loop running (TX only)
+**Phase 2 Progress:** Week 32 COMPLETE - JARVIS FULLY BOOTING ON Pi 4! 🎉
 
-**Update (January 7, 2026):**
+**Update (January 8, 2026):**
+- **UART OUTPUT FIX:** Added PL011 UART initialization to elfloader `platform_init.c` for bcm2711.
+  - Initializes GPIO14/15 to ALT0 (PL011 mode)
+  - Sets PL011 baud rate to 115200 @ 48MHz
+  - Enables TX/RX with 8N1 format
 - Pi 4 boot reaches seL4 user space; elfloader loads DTB from CPIO and jumps to kernel.
 - JARVIS rootserver runs; banner and system info visible on UART.
 - Cache loads confirmed:
   - "Loaded 50 initial patterns into cache"
   - "Loaded 258 total patterns into cache"
 - Fixed UART MMIO fault by switching to libsel4platsupport serial mapping (no direct UART MMIO).
-- Built raw driver image (ElfloaderImage=binary); `kernel8.img` now raw (~1.6 MB) and `jarvis-sel4-image-arm-bcm2711` available.
-- UART IPC loop running; RX disabled for now to avoid cap faults (Week 33 work item).
+- Built raw driver image (ElfloaderImage=binary); `kernel8.img` now raw (~1.6 MB).
+- UART IPC loop running with status updates; RX disabled for now (Week 33 work item).
 
 ### What's Ready to Test
 
