@@ -813,10 +813,12 @@ Each week follows this structure:
 ---
 
 **Current Phase:** Phase 2 - Alpha System (Months 12-24)
-**Current Status:** Week 32 COMPLETE (January 2, 2026) - Boot Image Ready on SD Card (D:\)
-  - kernel8.img (701KB, MD5: `3b0d839f0b5a7d187dfc6a77f446aeaa`) ✅
-  - Firmware files (start4.elf 2.2MB, fixup4.dat 5.5KB, config.txt 476 bytes) ✅
-  - **100% READY FOR PI 4 BOOT** (5-10 min setup when hardware arrives)
+**Current Status:** Week 32+ U-Boot Setup COMPLETE (January 8, 2026)
+  - ✅ U-Boot 2026.01 working with interactive shell
+  - ✅ Auto-boot loads kernel8.img (1.5MB in 80ms)
+  - ✅ Boot flow: GPU → U-Boot → boot.scr → kernel8.img → seL4
+  - ✅ Backup in `temp_sd_backup/uboot_working/` (all 7 boot files)
+  - ⚠️ seL4 UART output silent (known issue - rootserver memory mapping)
 
 **Phase 1:** COMPLETE (26/26 weeks, 100%) - December 23, 2025 ✅
 
@@ -1200,12 +1202,46 @@ GPIO15 (RXD) ◄── TXD
 GND          ─── GND
 ```
 
-### SD Card Boot Configuration
+### SD Card Boot Configuration (U-Boot)
+
+**Working U-Boot Setup** (January 8, 2026):
+```
+Boot Partition (FAT32):
+├── start4.elf          # GPU firmware (2.2MB)
+├── fixup4.dat          # Memory configuration (5.5KB)
+├── u-boot.bin          # U-Boot 2026.01 bootloader (717KB)
+├── boot.scr            # U-Boot boot script (356B)
+├── kernel8.img         # JARVIS seL4 boot image (1.5MB)
+├── bcm2711-rpi-4-b.dtb # Device tree (56KB)
+└── config.txt          # Boot configuration
+
+config.txt:
+  arm_64bit=1
+  kernel=u-boot.bin
+  enable_uart=1
+  dtoverlay=disable-bt
+  uart_2ndstage=1
+  boot_delay=1
+```
+
+**Boot Flow:**
+```
+GPU firmware → U-Boot → boot.scr → kernel8.img → seL4
+```
+
+**U-Boot Features:**
+- Interactive shell: Press any key during 3-second countdown → `U-Boot>` prompt
+- Auto-boot: Loads kernel8.img (1.5MB in 80ms) and jumps to 0x00080000
+- Manual commands: `fatls mmc 0:1`, `mmc info`, `fatload`, `go`
+
+**Backup Location:** `temp_sd_backup/uboot_working/` (all 7 boot files)
+
+### SD Card Boot Configuration (Direct Kernel - Alternative)
 ```
 Boot Partition (FAT32):
 ├── start4.elf      # GPU firmware (2.2MB)
 ├── fixup4.dat      # Memory configuration (5.5KB)
-├── kernel8.img     # JARVIS seL4 boot image (701KB)
+├── kernel8.img     # JARVIS seL4 boot image (1.5MB)
 └── config.txt      # Boot configuration
 
 config.txt:
@@ -1214,6 +1250,8 @@ config.txt:
   enable_uart=1
   uart_2ndstage=1
 ```
+
+**Note:** Direct kernel boot is simpler but lacks U-Boot's interactive debugging features.
 
 ## Phase 2 File Structure
 
@@ -1232,10 +1270,14 @@ phase2/
 │   ├── week31/                      # Pre-hardware preparation
 │   └── week32/                      # JARVIS ARM64 build complete + SD card ready
 ├── firmware/                        # Boot files (ready on D:)
-│   ├── kernel8.img                  # JARVIS seL4 boot image (701KB, MD5 verified)
+│   ├── kernel8.img                  # JARVIS seL4 boot image (1.5MB)
+│   ├── u-boot.bin                   # U-Boot 2026.01 bootloader (717KB)
+│   ├── boot.cmd                     # Boot script source
+│   ├── boot.scr                     # Compiled U-Boot script (356B)
 │   ├── start4.elf                   # GPU firmware (2.2MB)
 │   ├── fixup4.dat                   # Memory configuration (5.5KB)
-│   └── config.txt                   # Boot configuration (476 bytes)
+│   ├── bcm2711-rpi-4-b.dtb          # Device tree (56KB)
+│   └── config.txt                   # Boot configuration (kernel=u-boot.bin)
 ├── src/
 │   ├── ipc/
 │   │   ├── dual_ring_buffer.h       # Bidirectional ring buffer (200 lines)
@@ -1329,7 +1371,17 @@ phase2/
 - ✅ USB-UART cable (3.3V TTL) confirmed available
 - ✅ 8 test files complete (57+ tests, 100% pass rate)
 - ✅ 8 documentation guides complete (SD setup, UART protocol, troubleshooting, PuTTY setup)
-- ⏳ **100% ready for Pi 4 hardware test (5-10 min to first boot)**
+
+**U-Boot Setup COMPLETE** ✅ (January 8, 2026)
+- ✅ U-Boot 2026.01 verified working on Pi 4 hardware
+- ✅ boot.cmd script created (Unix line endings, no bootmenu)
+- ✅ boot.scr compiled with mkimage (356 bytes)
+- ✅ config.txt updated (kernel=u-boot.bin)
+- ✅ Interactive shell: Press key during countdown → `U-Boot>` prompt
+- ✅ Auto-boot: kernel8.img loads in 80ms (18.8 MiB/s)
+- ✅ Boot flow verified: GPU → U-Boot → boot.scr → kernel8.img → seL4
+- ✅ Working SD card backup: `temp_sd_backup/uboot_working/` (7 files)
+- ⚠️ seL4 output silent after jump (known rootserver UART mapping issue)
 
 **Documentation Audit (December 27, 2025)** ✅
 - ✅ Compared original plans (archive/) vs current implementation
@@ -1356,15 +1408,17 @@ phase2/
 
 ## Phase 2 Remaining Work (Weeks 33+)
 
+**Current Status (January 8, 2026):**
+- ✅ U-Boot working with interactive shell
+- ✅ kernel8.img loads and jumps to seL4 (verified)
+- ⚠️ **Next task:** Debug seL4 rootserver UART output (silent after jump)
+
 **Immediate (Weeks 33-34):**
-- **Week 33: First Hardware Boot** (when Pi 4 arrives)
-  - Insert prepared SD card (D:\ - all 4 files ready ✅)
-  - Connect USB-UART adapter (GPIO14/15, 115200 baud)
-  - 5-10 minute setup (wiring + PuTTY)
-  - Verify boot: seL4 + decision cache + UART IPC handler
-  - Expected output documented in `phase2/docs/SD_CARD_SETUP.md`
+- **Week 33: seL4 UART Debug**
+  - Root cause: seL4 rootserver runs unprivileged, cannot access UART at 0xFE201000
+  - Options: seL4_DebugPutChar(), proper memory mapping, or identity mapping
+  - See `phase2/docs/BOOT_DEBUG_NOTES.md` for analysis
 - Week 34: UART IPC validation (cache hit rate testing on hardware)
-- **Note:** Week 32 COMPLETE (January 2, 2026) - SD card 100% ready, awaiting Pi 4 hardware
 
 **Hardware Integration (Weeks 35-41):**
 - Weeks 35-36: SD/EMMC storage driver
