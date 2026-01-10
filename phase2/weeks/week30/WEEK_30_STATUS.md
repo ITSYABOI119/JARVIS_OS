@@ -268,5 +268,33 @@ The ivshmem driver files are placed in `phase1/src/sel4/` because:
 
 ---
 
-**Week 30 Status:** 7/8 tasks complete
-**Remaining:** Update PHASE_2_IMPLEMENTATION_PLAN.md, then testing
+**Week 30 Status:** 7/8 tasks complete (CODE COMPLETE)
+
+---
+
+## ⚠️ SUPERSEDED BY HARDWARE PIVOT (January 2026)
+
+**The ivshmem E2E testing was NEVER COMPLETED and is now SUPERSEDED:**
+
+| Item | Original Target | New Status |
+|------|-----------------|------------|
+| ivshmem device detection | QEMU x86 | ❌ SUPERSEDED by Pi 4 UART |
+| BAR2 mapping validation | QEMU guest | ❌ SUPERSEDED - no PCI on Pi 4 |
+| Python↔seL4 via ivshmem | End-to-end test | ❌ SUPERSEDED - will use UART |
+| Cache hit rate via ivshmem | >80% target | ❌ Will validate on Pi 4 instead |
+
+**Reason:** Phase 2 pivoted from x86 QEMU (ivshmem shared memory) to Raspberry Pi 4 (UART serial IPC). See `phase2/docs/PHASE_2_HARDWARE_PIVOT.md`.
+
+**Week 30 Code Status:**
+- ✅ ivshmem driver code EXISTS (pci_ivshmem.c/h)
+- ✅ QEMU wrapper scripts created
+- ✅ Python magic validation implemented
+- ⚠️ **NEVER END-TO-END TESTED** - project pivoted before validation
+- ✅ Pi 4 uses UART IPC instead (no PCI, no shared memory)
+
+**Validation moved to Week 34:** Python↔seL4 IPC will be validated via UART on real Pi 4 hardware.
+
+---
+
+*Week 30 Code Complete: December 2025*
+*E2E Testing: SUPERSEDED by UART (January 2026)*

@@ -375,6 +375,28 @@ JARVIS> cache
 
 ---
 
+## ⚠️ SUPERSEDED BY HARDWARE PIVOT (January 2026)
+
+**The following Week 28 E2E testing items are SUPERSEDED:**
+
+| Item | Original Target | New Status |
+|------|-----------------|------------|
+| QEMU E2E testing | x86 shared memory | ❌ SUPERSEDED by Pi 4 UART |
+| IPC latency <100μs | Shared memory | ❌ SUPERSEDED (UART is 10-20ms) |
+| Cache hit rate via QEMU | x86 validation | ❌ Will validate on Pi 4 instead |
+
+**Reason:** Phase 2 pivoted from x86 QEMU (shared memory IPC) to Raspberry Pi 4 (UART serial IPC). See `phase2/docs/PHASE_2_HARDWARE_PIVOT.md`.
+
+**Week 28 Code Status:**
+- ✅ Dual ring buffer code EXISTS and TESTED (12/12 pass)
+- ✅ IPC handler code EXISTS and TESTED (10/10 pass)
+- ⚠️ This code validates the **protocol design** but is NOT deployed on Pi 4
+- ✅ Pi 4 uses UART IPC instead (different message types, different transport)
+
+**Validation moved to Week 34:** Python↔seL4 IPC will be validated via UART on real Pi 4 hardware.
+
+---
+
 *Week 28 Start Date: December 2025*
 *Target Completion: December 2025*
-*Next Milestone: Week 30 - IPC Integration Complete + Managers Initialized*
+*Architecture Note: Shared memory IPC superseded by UART (January 2026)*

@@ -123,14 +123,15 @@ wsl -e bash -c "cd /mnt/c/Users/jluca/Documents/JARVIS_OS/phase2/src/ai && pytho
 
 ---
 
-## Next Steps (Week 31 Proper)
+## Next Steps (Week 31 Proper) - NOW COMPLETE
 
-When hardware arrives:
-1. ⏳ Create bootable SD card
-2. ⏳ First seL4 boot test
-3. ⏳ UART console verification
-4. ⏳ Integrate JARVIS code into seL4 build
-5. ⏳ Test UART IPC end-to-end
+**Hardware arrived December 27, 2025. All tasks completed in Weeks 32-33:**
+
+1. ✅ Create bootable SD card - **DONE Week 32** (7 boot files on FAT32)
+2. ✅ First seL4 boot test - **DONE Week 32** (GPU → U-Boot → seL4 → rootserver)
+3. ✅ UART console verification - **DONE Week 32-33** (TX via seL4_DebugPutChar)
+4. ✅ Integrate JARVIS code into seL4 build - **DONE Week 32** (kernel8.img 1.5MB)
+5. ⏳ Test UART IPC end-to-end - **Week 34** (RX enabled, awaiting Python client test)
 
 ---
 

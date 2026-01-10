@@ -211,15 +211,17 @@ This allows testing the full split architecture when Pi 4 arrives.
 
 ---
 
-## Next Steps (When Hardware Arrives)
+## Hardware Steps - ALL COMPLETE (January 2026)
 
-### SD Card Status (December 29, 2025)
+### SD Card Status (Final)
 1. ✅ Format SD card with FAT32 boot partition (D:\)
 2. ✅ Copy firmware (`start4.elf`, `fixup4.dat`, `config.txt`)
-3. ⏳ Build full seL4 kernel with JARVIS integrated (see options below)
-4. ⏳ Copy `kernel8.img` to D:\
-5. ⏳ Connect USB-UART cable (GPIO14/15)
-6. ⏳ First boot test via serial console
+3. ✅ Build full seL4 kernel with JARVIS integrated - **DONE** (kernel8.img 1.5MB)
+4. ✅ Copy `kernel8.img` to D:\ - **DONE**
+5. ✅ Connect USB-UART cable (GPIO14/15) - **DONE**
+6. ✅ First boot test via serial console - **DONE** (January 7-8, 2026)
+
+**Boot Verified:** GPU → U-Boot (80ms) → seL4 elfloader → kernel → JARVIS rootserver
 
 ### Kernel Build Options
 
@@ -300,6 +302,6 @@ wsl -e bash -c "cd phase2/src/ai && python3 -c 'from uart_ipc_client import UART
 
 ---
 
-*Week 32 Status: Core ARM64 port + PC-only prep complete, awaiting Pi 4 hardware*
-*Next: Week 33 (UART IPC Implementation) when hardware arrives*
-*Ready to boot within 30 minutes of Pi 4 arrival*
+*Week 32 Status: ✅ COMPLETE - Pi 4 boots JARVIS with UART output*
+*Hardware verified: January 7-8, 2026*
+*Next: Week 33 (UART RX Enable) → Week 34 (Python↔seL4 IPC Testing)*
