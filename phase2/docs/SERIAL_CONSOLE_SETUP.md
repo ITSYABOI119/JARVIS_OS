@@ -1,4 +1,4 @@
-# PuTTY Configuration for JARVIS Pi 4 Serial Console
+# Serial Console Configuration for JARVIS Pi 4
 
 **Last Updated:** January 2, 2026
 
@@ -12,7 +12,7 @@
 
 ### Logging Settings
 - **Session logging:** All session output
-- **Log file name:** `C:\Users\jluca\Documents\JARVIS_OS\phase2\logs\putty.log`
+- **Log file name:** `C:\Users\jluca\Documents\JARVIS_OS\phase2\logs\serial_console.log`
 - **If log exists:** Always append to end of it
 - **Flush log frequently:** ✓ Enabled
 - **Include header:** ✓ Enabled
@@ -41,12 +41,12 @@
    - Look for "USB Serial Port (COM3)" or similar
    - Note the COM number
 
-2. **PuTTY Session Tab:**
+2. **serial console Session Tab:**
    - Connection type: ☑ Serial
    - Serial line: `COM3` (or your adapter's port)
    - Speed: `115200`
 
-3. **PuTTY Connection → Serial Settings:**
+3. **serial console Connection → Serial Settings:**
    - Serial line: `COM3` (same as session)
    - Speed (baud): `115200`
    - Data bits: `8`
@@ -114,9 +114,9 @@ Waiting for Python queries...
 3. Try shorter USB cable (reduces electrical noise)
 
 ### Wrong COM Port
-If PuTTY can't open COM3:
+If serial console can't open COM3:
 1. Check Device Manager for actual COM#
-2. Update PuTTY "Serial line" to match
+2. Update serial console "Serial line" to match
 3. Close any other programs using the serial port
 
 ## Hardware Connections
@@ -151,7 +151,7 @@ Power: USB-C to Pi 4 (separate from serial adapter)
 
 ## Alternative: Windows Terminal
 
-If you prefer Windows Terminal instead of PuTTY:
+If you prefer Windows Terminal instead of serial console:
 
 ```powershell
 # Install if not present
@@ -178,12 +178,12 @@ while($true) {
 - Allows sharing boot output for troubleshooting
 - Creates permanent record of JARVIS boot process
 
-**PuTTY Logging Setup (Session → Logging):**
+**serial console Logging Setup (Session → Logging):**
 
 1. **Session logging:** Select "All session output"
 2. **Log file name:** Click Browse and set to:
    ```
-   C:\Users\jluca\Documents\JARVIS_OS\phase2\logs\putty.log
+   C:\Users\jluca\Documents\JARVIS_OS\phase2\logs\serial_console.log
    ```
 3. **If log exists:** Select "Always append to end of it"
 4. **Options:**
@@ -192,7 +192,7 @@ while($true) {
 
 **Log File Location:**
 ```
-C:\Users\jluca\Documents\JARVIS_OS\phase2\logs\putty.log
+C:\Users\jluca\Documents\JARVIS_OS\phase2\logs\serial_console.log
 ```
 
 This will capture:
@@ -205,37 +205,37 @@ This will capture:
 **Viewing the log:**
 ```cmd
 # View last 50 lines
-type C:\Users\jluca\Documents\JARVIS_OS\phase2\logs\putty.log | more
+type C:\Users\jluca\Documents\JARVIS_OS\phase2\logs\serial_console.log | more
 
 # Or open in notepad
-notepad C:\Users\jluca\Documents\JARVIS_OS\phase2\logs\putty.log
+notepad C:\Users\jluca\Documents\JARVIS_OS\phase2\logs\serial_console.log
 ```
 
 ## Screenshot Reference
 
 **Session Configuration:**
-![PuTTY Session Configuration](../../Pictures/Screenshots/Screenshot%202026-01-02%20095024.png)
+![serial console Session Configuration](../../Pictures/Screenshots/Screenshot%202026-01-02%20095024.png)
 - Serial line: COM3
 - Speed: 115200
 - Connection type: Serial
 - Saved as: Pi4-UART
 
 **Logging Configuration:**
-![PuTTY Logging Configuration](../../Pictures/Screenshots/Screenshot%202026-01-02%20095033.png)
+![serial console Logging Configuration](../../Pictures/Screenshots/Screenshot%202026-01-02%20095033.png)
 - Session logging: All session output
-- Log file: phase2/logs/putty.log
+- Log file: phase2/logs/serial_console.log
 - Always append to end
 - Flush frequently enabled
 
 **Serial Port Settings (Connection → Serial):**
-![PuTTY Serial Configuration](../../Pictures/Screenshots/Screenshot%202026-01-02%20095712.png)
+![serial console Serial Configuration](../../Pictures/Screenshots/Screenshot%202026-01-02%20095712.png)
 - Serial line: COM3
 - Speed: 115200
 - Data bits: 8, Stop bits: 1, Parity: None (8N1 config)
 - Flow control: **None** (⚠️ Screenshot shows XON/XOFF - this was corrected to None)
 
 **Terminal Settings (Connection → Data):**
-![PuTTY Data Configuration](../../Pictures/Screenshots/Screenshot%202026-01-02%20095212.png)
+![serial console Data Configuration](../../Pictures/Screenshots/Screenshot%202026-01-02%20095212.png)
 - Terminal-type: xterm
 - Terminal speeds: 38400,38400 (not used for serial, only SSH/Telnet)
 - Auto-login: empty (serial doesn't use login)

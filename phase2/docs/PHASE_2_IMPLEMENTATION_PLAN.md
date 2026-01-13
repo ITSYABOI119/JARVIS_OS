@@ -28,9 +28,16 @@ This document provides a detailed week-by-week implementation plan for Phase 2. 
 
 ---
 
-## CURRENT STATUS (January 10, 2026)
+## CURRENT STATUS (January 13, 2026)
 
-**Phase 2 Progress:** Week 33 COMPLETE - UART RX ENABLED! 🎉
+**Phase 2 Progress:** Week 34 COMPLETE - UART IPC validated + benchmarked
+
+**Update (January 13, 2026):**
+- **UART IPC BENCH COMPLETE:** 200-query run via UART
+  - Success: 100% (timeouts: 0)
+  - Hit rate: 100%
+  - RTT median 7.06 ms, p95 8.12 ms
+  - CRC errors observed: 3 (handled; no cascading failures)
 
 **Update (January 10, 2026):**
 - **UART RX WORKING:** Device frame mapped at vaddr 0x5c0000 via seL4 capabilities
@@ -40,7 +47,7 @@ This document provides a detailed week-by-week implementation plan for Phase 2. 
 - JARVIS fully booting on Pi 4 with bidirectional UART capability
 - Decision cache loaded (258 patterns, 252 entries)
 - IPC handler running, waiting for Python queries
-- **Next:** Week 34 - Test Python↔seL4 communication via UART
+- **Next:** Week 35 - SD/EMMC storage driver (start Week 35)
 
 **Update (January 8, 2026):**
 - **UART OUTPUT FIX:** Added PL011 UART initialization to elfloader `platform_init.c` for bcm2711.
@@ -373,7 +380,7 @@ Actual Python↔seL4 communication testing begins Week 34 with UART RX now enabl
 **Deliverables:**
 - ✅ Cross-compilation toolchain configured (aarch64-linux-gnu-gcc 13.3.0)
 - ✅ seL4 boots on Pi 4 (verified January 7-8, 2026)
-- ✅ UART serial console working (PuTTY logs captured)
+- ✅ UART serial console working (serial logs captured)
 - ✅ Boot process documented (SD_CARD_SETUP.md)
 
 **Actual Effort:** ~8 hours (Week 31 PC-only prep)
@@ -527,6 +534,8 @@ copy_to_sd.bat D:
 
 **Actual Effort:** ~4 hours (3 kernel iterations)
 
+**Week 33 Evidence:** `phase2/weeks/week33/WEEK_33_STATUS.md`, `phase2/weeks/week33/WEEK_33_RESULTS.md`
+
 **Key Learning:**
 seL4 ARM64 VSpace only has page tables for the address range where code is loaded.
 Mapping at arbitrary addresses requires creating intermediate page tables (PUD/PMD).
@@ -536,13 +545,19 @@ Solution: Map device frames within the existing VSpace range.
 
 ### Week 34: Python↔seL4 IPC Testing
 
-**STATUS: PENDING (Next up)**
+**STATUS: COMPLETE (January 13, 2026)**
 
 **Prerequisites:** Week 33 UART RX enabled ✅
 
+**Update (January 13, 2026):**
+- 200-query UART IPC bench: success 100%, hit rate 100%
+- RTT median 7.06 ms, p95 8.12 ms (target <25 ms)
+- CRC errors observed (3) and one invalid-length frame; no cascading failures
+
+
 **Tasks:**
-1. Test UART RX with PuTTY character input
-   - Type characters in PuTTY, verify seL4 receives them
+1. Test UART RX with serial console character input
+   - Type characters, verify seL4 receives them
    - Confirm uart_rx_ready() and uart_getc() work
 
 2. Full Python↔seL4 IPC via UART

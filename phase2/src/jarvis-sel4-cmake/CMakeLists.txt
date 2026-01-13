@@ -1,5 +1,5 @@
 #
-# JARVIS AI-OS - Phase 2 Week 32
+# JARVIS AI-OS - Phase 2 Week 33
 # seL4 ARM64 (Raspberry Pi 4) Build Configuration
 #
 # Top-level CMakeLists.txt following sel4test pattern
@@ -21,6 +21,11 @@ set(KernelRootCNodeSizeBits 13 CACHE INTERNAL "")
 
 # Import kernel and elfloader
 sel4_import_kernel()
+
+# Match sel4test elfloader settings (sets IMAGE_START_ADDR=0x10000000 for RPi4)
+if(KernelArchARM OR KernelArchRiscV)
+    ApplyData61ElfLoaderSettings(${KernelPlatform} ${KernelSel4Arch})
+endif()
 elfloader_import_project()
 
 # Find required libraries

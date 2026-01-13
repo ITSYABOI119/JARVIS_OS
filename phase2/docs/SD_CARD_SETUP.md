@@ -249,7 +249,7 @@ Connect USB-serial adapter to Pi 4 GPIO header:
 
 ### Windows
 
-1. Install PuTTY or similar terminal emulator
+1. Install serial console or similar terminal emulator
 2. Find COM port in Device Manager → Ports (COM & LPT)
 3. Configure:
    - Connection type: Serial

@@ -184,7 +184,7 @@ UART RX: ENABLED (device frame mapped)
 **Estimated Effort:** 8-12 hours
 
 **Objectives:**
-1. Test UART RX with PuTTY character input
+1. Test UART RX with serial console character input
 2. Connect Python uart_ipc_client.py via USB-UART
 3. Send UART IPC frame (0xAA55 sync + query)
 4. Verify cache lookup response

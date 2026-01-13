@@ -7,6 +7,6 @@ echo
 mmc dev 0
 mmc rescan
 echo Loading kernel8.img...
-fatload mmc 0:1 0x00080000 kernel8.img
+fatload mmc 0:1 0x10000000 kernel8.img
 echo Booting JARVIS seL4...
-go 0x00080000
+go 0x10000000

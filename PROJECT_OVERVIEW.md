@@ -641,7 +641,7 @@ Query Flow:
 1. Insert SD card into Pi 4
 2. Connect USB-UART adapter (GPIO14/15, 115200 baud)
 3. Power on Pi 4
-4. Verify boot via PuTTY serial console
+4. Verify boot via serial console
 5. Test decision cache (expect 85.7% hit rate)
 6. Validate UART IPC (expect 10-20ms latency)
 

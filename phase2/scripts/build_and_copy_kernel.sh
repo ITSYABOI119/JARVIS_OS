@@ -22,6 +22,7 @@ SEL4_WORKSPACE="$HOME/sel4-workspace"
 JARVIS_PROJECT="$SEL4_WORKSPACE/projects/jarvis-sel4"
 BUILD_DIR="$SEL4_WORKSPACE/rpi4_jarvis"
 RPI4_MEMORY="8192"
+IMAGE_START_ADDR="0x80000"
 
 # Check if TII workspace exists
 if [ ! -d "$SEL4_WORKSPACE" ]; then
@@ -70,6 +71,11 @@ cp -r "$JARVIS_ROOT/phase1/src/ipc" "$JARVIS_PROJECT/src/"
 cp -r "$JARVIS_ROOT/phase2/src/drivers" "$JARVIS_PROJECT/src/"
 cp -r "$JARVIS_ROOT/phase2/src/ipc" "$JARVIS_PROJECT/src/ipc_phase2"
 cp "$JARVIS_ROOT/phase2/src/sel4/main_arm64.c" "$JARVIS_PROJECT/src/main.c"
+if [ -f "$JARVIS_ROOT/phase2/src/jarvis-sel4-cmake/CMakeLists.txt" ]; then
+    cp "$JARVIS_ROOT/phase2/src/jarvis-sel4-cmake/CMakeLists.txt" "$JARVIS_PROJECT/"
+else
+    echo -e "${YELLOW}Warning: CMakeLists.txt not found in repo, using existing project copy${NC}"
+fi
 
 # Create build directory
 echo -e "${GREEN}[1/3] Configuring build...${NC}"
@@ -83,7 +89,10 @@ cmake -G Ninja \
     -DKernelSel4Arch=aarch64 \
     -DKernelArmPlatform=bcm2711 \
     -DRPI4_MEMORY="$RPI4_MEMORY" \
+    -DIMAGE_START_ADDR="$IMAGE_START_ADDR" \
     -DElfloaderImage=binary \
+    -DKernelDebugBuild=ON \
+    -DKernelPrinting=ON \
     "$JARVIS_PROJECT" 2>&1 | head -20
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
@@ -140,6 +149,10 @@ if [ -f "$BUILD_DIR/images/jarvis-sel4-image-arm-bcm2711" ]; then
     cp "$BUILD_DIR/images/jarvis-sel4-image-arm-bcm2711" \
        "$FIRMWARE_DIR/jarvis-sel4-image-arm-bcm2711"
 fi
+if [ -f "$FIRMWARE_DIR/jarvis-sel4-image-arm-bcm2711" ] && [ ! -f "$FIRMWARE_DIR/jarvis-sel4-driver-image-arm-bcm2711" ]; then
+    cp "$FIRMWARE_DIR/jarvis-sel4-image-arm-bcm2711" \
+       "$FIRMWARE_DIR/jarvis-sel4-driver-image-arm-bcm2711"
+fi
 
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -155,6 +168,6 @@ echo "     cd $JARVIS_ROOT/phase2"
 echo "     ./copy_to_sd.bat D:"
 echo ""
 echo "  2. Connect UART serial adapter (GPIO14/15)"
-echo "  3. Open PuTTY (115200 baud, 8N1)"
+echo "  3. Open serial console (115200 baud, 8N1)"
 echo "  4. Power on Pi 4"
 echo ""

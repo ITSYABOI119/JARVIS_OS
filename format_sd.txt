@@ -1,0 +1,2 @@
+select volume D
+format fs=fat32 label=BOOT quick

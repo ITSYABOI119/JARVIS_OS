@@ -1,0 +1,13 @@
+#
+# JARVIS AI-OS Build Targets for TII seL4 Build System
+#
+
+build_jarvis: .config
+	@scripts/build_jarvis.sh
+
+jarvis:
+	make build_jarvis
+
+TARGETS += jarvis
+
+.PHONY: build_jarvis jarvis

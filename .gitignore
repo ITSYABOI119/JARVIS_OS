@@ -59,6 +59,9 @@ tmp/
 *.elf
 *.dump
 
+# Firmware overlays
+*.dtbo
+
 # System files
 Thumbs.db
 .directory

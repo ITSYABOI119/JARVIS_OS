@@ -50,7 +50,15 @@
       "Bash(git -C \"C:/Users/jluca/Documents/JARVIS_OS\" diff CLAUDE.md)",
       "Bash(git -C \"C:/Users/jluca/Documents/JARVIS_OS\" status --short)",
       "Bash(git -C \"C:/Users/jluca/Documents/JARVIS_OS\" push)",
-      "Bash(git -C \"C:/Users/jluca/Documents/JARVIS_OS\" diff phase1/src/ai/model_loader.py)"
+      "Bash(git -C \"C:/Users/jluca/Documents/JARVIS_OS\" diff phase1/src/ai/model_loader.py)",
+      "Bash(powershell:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:packages.debian.org)",
+      "Bash(powershell.exe -Command 'Copy-Item \"\"C:\\\\Users\\\\jluca\\\\Documents\\\\JARVIS_OS\\\\phase2\\\\firmware\\\\kernel8.img\"\" \"\"D:\\\\\"\" -Force')",
+      "Bash(powershell.exe -Command 'Copy-Item \"\"C:\\\\Users\\\\jluca\\\\Documents\\\\JARVIS_OS\\\\phase2\\\\firmware\\\\bcm2711-rpi-4-b.dtb\"\" \"\"D:\\\\\"\" -Force')",
+      "Bash(find:*)",
+      "Bash(wsl cat:*)",
+      "Bash(wsl ls:*)"
     ],
     "deny": [],
     "ask": []

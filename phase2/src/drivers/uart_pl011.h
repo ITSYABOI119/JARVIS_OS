@@ -24,9 +24,32 @@
  * - Pi 4 (BCM2711): 0xFE000000
  *
  * UART0 (PL011) is at offset 0x201000 from peripheral base.
+ * GPIO is at offset 0x200000 from peripheral base.
  */
 #define BCM2711_PERI_BASE       0xFE000000
 #define UART0_BASE              (BCM2711_PERI_BASE + 0x201000)
+#define GPIO_BASE               (BCM2711_PERI_BASE + 0x200000)
+
+/*
+ * BCM2711 GPIO Pull-Up/Down Registers
+ *
+ * Unlike BCM2835/BCM2837, BCM2711 uses a simpler pull-up/down mechanism:
+ * - GPIO_PUP_PDN_CNTRL_REG0-3 at offsets 0xE4, 0xE8, 0xEC, 0xF0
+ * - Each register controls 16 GPIOs (2 bits per GPIO)
+ * - Values: 00=none, 01=pull-up, 10=pull-down, 11=reserved
+ */
+#define GPIO_PUP_PDN_CNTRL_REG0 0xE4    /* GPIO 0-15 */
+#define GPIO_PUP_PDN_CNTRL_REG1 0xE8    /* GPIO 16-31 */
+#define GPIO_PUP_PDN_CNTRL_REG2 0xEC    /* GPIO 32-47 */
+#define GPIO_PUP_PDN_CNTRL_REG3 0xF0    /* GPIO 48-57 */
+#define GPIO_GPFSEL1            0x04    /* GPIO 10-19 function select */
+#define GPIO_GPLEV0             0x34    /* GPIO 0-31 level */
+
+/* Pull-up/down values (2 bits per GPIO) */
+#define GPIO_PUD_NONE           0x0
+#define GPIO_PUD_UP             0x1
+#define GPIO_PUD_DOWN           0x2
+#define GPIO_FSEL_ALT0          0x4
 
 /*
  * PL011 Register Offsets
@@ -141,6 +164,14 @@ typedef struct {
 bool uart_init(void);
 
 /**
+ * Map UART device frame for direct MMIO access (Week 33)
+ * This enables RX by mapping the PL011 registers into virtual memory.
+ * Called automatically by uart_init_baud().
+ * @return true on success, false on failure
+ */
+bool uart_map_device_frame(void);
+
+/**
  * Initialize UART with custom baud rate
  * @param baud_rate Desired baud rate (e.g., 115200, 9600)
  * @return true on success, false on failure
@@ -191,6 +222,34 @@ void uart_puts(const char *s);
 size_t uart_write(const uint8_t *data, size_t len);
 
 /**
+ * Read GPIO15 level (1=high, 0=low, -1=unavailable)
+ */
+int uart_gpio15_level(void);
+
+/**
+ * Dump UART register state for diagnostics
+ * @param tag Label printed before the register dump (may be NULL)
+ */
+void uart_dump_regs(const char *tag);
+
+/**
+ * Get UART receive error status (RSRECR)
+ * @return RSRECR value (0 if no errors or MMIO unmapped)
+ */
+uint32_t uart_rx_error_status(void);
+
+/**
+ * Clear UART receive error status (RSRECR)
+ */
+void uart_clear_rx_errors(void);
+
+/**
+ * Drain up to max_bytes from RX FIFO (non-blocking)
+ * @param max_bytes Maximum bytes to discard
+ */
+void uart_rx_drain(int max_bytes);
+
+/**
  * Read bytes with timeout
  * @param buf Buffer to store received data
  * @param max_len Maximum bytes to read
@@ -230,5 +289,11 @@ void uart_get_stats(uint64_t *tx_bytes, uint64_t *rx_bytes, uint32_t *rx_errors)
  * Print UART status for debugging
  */
 void uart_print_status(void);
+
+/**
+ * Check if UART RX is enabled (Week 33)
+ * @return true if RX is enabled (device frame mapped), false otherwise
+ */
+bool uart_is_rx_enabled(void);
 
 #endif /* UART_PL011_H */

@@ -3,5 +3,7 @@ enable_uart=1
 dtoverlay=disable-bt
 uart_2ndstage=1
 boot_delay=1
+init_uart_clock=48000000
+gpio=15=pu
 
 kernel=u-boot.bin

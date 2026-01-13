@@ -1,17 +1,25 @@
 # Week 33: UART RX Enable via Device Frame Mapping
 
-**Status:** COMPLETE ✅
+**Status:** COMPLETE
 **Dates:** January 9-10, 2026
-**Goal:** Enable bidirectional UART communication (Python <-> seL4)
+**Goal:** Enable UART RX via seL4 device frame mapping (TX via seL4_DebugPutChar)
+
+---
+
+## Definition of Done
+
+- Boot log shows device frame mapping succeeded and `UART RX: ENABLED (device frame mapped)`
+- IPC handler prints "Waiting for Python queries..."
+- Week 33 banner and system info render
 
 ---
 
 ## Objectives
 
-1. ✅ Fix UART TX using `seL4_DebugPutChar()` kernel syscall
-2. ✅ Implement device frame mapping for UART RX
-3. ✅ Test on Pi 4 hardware - UART RX ENABLED
-4. ⏳ Verify Python <-> seL4 bidirectional communication (Week 34)
+1. [x] Fix UART TX using `seL4_DebugPutChar()` kernel syscall
+2. [x] Implement device frame mapping for UART RX
+3. [x] Test on Pi 4 hardware - UART RX enabled
+4. [ ] Verify Python <-> seL4 bidirectional communication (Week 34)
 
 ---
 
@@ -94,6 +102,14 @@ static int uart_mmio_getchar(void)
 
 ---
 
+## What We Built/Changed (Summary)
+
+- Rootserver UART TX via `seL4_DebugPutChar()` with `sel4_putchar()`/`sel4_puts()` helpers.
+- Device frame mapping for PL011 UART MMIO and RX polling helpers in `uart_pl011.c`.
+- Boot-time UART RX status print and IPC handler start message in `main_arm64.c`.
+
+---
+
 ## Debug Output (from successful boot)
 
 ```
@@ -116,7 +132,7 @@ static int uart_mmio_getchar(void)
 
 ---
 
-## Files Modified
+## What We Built/Changed (Files)
 
 | File | Changes |
 |------|---------|
@@ -127,15 +143,28 @@ static int uart_mmio_getchar(void)
 
 ---
 
-## Build & Deploy
+## Commands We Run (Reproducible)
 
-### Final Kernel
-- **File:** `kernel8.img`
-- **Size:** 1,573,152 bytes (1.5MB)
-- **Built:** January 10, 2026 @ 11:58:13
-- **Location:** D:\ (SD card)
+```bash
+# Build + copy into phase2/firmware/kernel8.img (WSL)
+cd /mnt/c/Users/jluca/Documents/JARVIS_OS/phase2/scripts
+./build_and_copy_kernel.sh
+```
 
-### Build Commands
+```cmd
+# Copy to SD card (Windows)
+cd C:\Users\jluca\Documents\JARVIS_OS\phase2
+copy_to_sd.bat D:
+```
+
+```cmd
+# Host test mode (Week 34 handoff)
+cd C:\Users\jluca\Documents\JARVIS_OS\phase2\src\ai
+python uart_ipc_client.py --port COM5 --raw-log C:\Users\jluca\Documents\JARVIS_OS\phase2\logs\python_uart.log --raw-bin C:\Users\jluca\Documents\JARVIS_OS\phase2\logs\python_uart.bin
+```
+
+### Legacy manual commands (January 10, 2026 snapshot)
+
 ```bash
 # Sync sources
 wsl.exe -e bash -c 'JARVIS_ROOT=/mnt/c/Users/jluca/Documents/JARVIS_OS; \
@@ -155,8 +184,20 @@ wsl.exe -e bash -c 'cp /home/itsme/sel4-workspace/rpi4_jarvis/images/jarvis-sel4
   /mnt/c/Users/jluca/Documents/JARVIS_OS/phase2/firmware/kernel8.img'
 
 # Copy to SD card
-powershell.exe -Command "Copy-Item 'phase2\firmware\kernel8.img' 'D:\kernel8.img' -Force"
+powershell.exe -Command "Copy-Item 'phase2\\firmware\\kernel8.img' 'D:\\kernel8.img' -Force"
 ```
+
+---
+
+## Artifacts Produced
+
+- `phase2/firmware/kernel8.img` (boot image copied from build output)
+- `D:\kernel8.img` (SD card copy for boot)
+- Serial console logs when captured: `phase2/logs/serial_console.log` (see `phase2/logs/README.md`)
+
+**Example build metadata (Week 33 boot banner):**
+- Size: 1,573,152 bytes (1.5MB)
+- Build timestamp: Jan 10 2026 11:58:13
 
 ---
 
@@ -212,19 +253,26 @@ Waiting for Python queries...
 
 ---
 
-## Success Criteria
+## Success Criteria + Latest Results
 
 | Criterion | Target | Actual | Status |
 |-----------|--------|--------|--------|
-| UART TX working | seL4_DebugPutChar output visible | Full banner + logs visible | ✅ |
-| UART RX enabled | Device frame mapped successfully | Mapped at 0x5c0000 | ✅ |
-| Banner displayed | Full JARVIS banner prints | Week 33 banner shows | ✅ |
-| Cache loaded | 258 patterns loaded | 258 patterns loaded | ✅ |
-| IPC handler running | "Waiting for Python queries..." | Handler running | ✅ |
+| UART TX working | seL4_DebugPutChar output visible | Full banner + logs visible | PASS |
+| UART RX enabled | Device frame mapped successfully | Mapped at 0x5c0000 | PASS |
+| Banner displayed | Full JARVIS banner prints | Week 33 banner shows | PASS |
+| Cache loaded | 258 patterns loaded | 258 patterns loaded | PASS |
+| IPC handler running | "Waiting for Python queries..." | Handler running | PASS |
+
+**Note:** IPC hit rate/RTT metrics are Week 34 deliverables and are not measured in Week 33.
 
 ---
 
-## Lessons Learned
+## Known Issues + Mitigations
+
+- Mapping outside rootserver VSpace fails with seL4_FailedLookup. Mitigation: map at 0x5c0000 within existing VSpace.
+- Direct MMIO access from rootserver faults. Mitigation: map device frame via bootinfo device untyped.
+- Debug output relies on seL4_DebugPutChar; requires debug builds.
+- End-to-end Python <-> seL4 IPC validation is a Week 34 task.
 
 ### 1. VSpace Page Table Coverage
 seL4 ARM64 requires intermediate page tables (PGD/PUD/PMD) before mapping pages. The rootserver's VSpace only covers addresses where it's loaded (`0x400000-0x5b9fff`). Mapping outside this range requires creating additional paging structures.
@@ -240,12 +288,12 @@ Using `seL4_DebugPutChar()` for early debug output is essential for diagnosing b
 
 ---
 
-## Next Steps (Week 34)
+## Next Week Handoff (Week 34)
 
-1. **Test UART RX** - Send characters from PuTTY, verify reception
-2. **Python IPC Client** - Connect `uart_ipc_client.py` via USB-UART
-3. **Send test query** - Verify cache lookup returns response
-4. **Measure latency** - Confirm 10-20ms round-trip time
+1. Validate UART RX with host-side byte input
+2. Connect `uart_ipc_client.py` over USB-UART and send a test query
+3. Verify cache lookup response and record latency
+4. Update `phase2/weeks/week34/WEEK_34_STATUS.md` with IPC bench results
 
 ---
 

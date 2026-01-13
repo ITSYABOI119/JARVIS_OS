@@ -1,14 +1,14 @@
-# Phase 2 Serial Console Logs
+﻿# Phase 2 Serial Console Logs
 
-This directory contains PuTTY serial console logs from Pi 4 boot tests.
+This directory contains serial console logs from Pi 4 boot tests.
 
 ## Files
 
-- `putty.log` - Complete serial output from all boot sessions (appended)
+- `serial_console.log` - Complete serial output from all boot sessions (appended)
 
 ## What Gets Logged
 
-Every time you boot the Pi 4 with PuTTY connected, it captures:
+Every time you boot the Pi 4 with the serial console connected, it captures:
 - ELF-loader startup messages
 - seL4 kernel boot
 - JARVIS banner and system info
@@ -18,9 +18,9 @@ Every time you boot the Pi 4 with PuTTY connected, it captures:
 
 ## Log Format
 
-PuTTY adds a header for each session:
+The logger adds a header for each session:
 ```
-=~=~=~=~=~=~=~=~=~=~=~= PuTTY log 2026.01.02 09:50:33 =~=~=~=~=~=~=~=~=~=~=~=
+=~=~=~=~=~=~=~=~=~=~=~= serial console log 2026.01.02 09:50:33 =~=~=~=~=~=~=~=~=~=~=~=
 ```
 
 Followed by all serial output until you close the session.
@@ -30,25 +30,25 @@ Followed by all serial output until you close the session.
 **View recent boot:**
 ```cmd
 # Last 50 lines
-type putty.log | more
+type serial_console.log | more
 
 # Search for errors
-findstr /I "error fail panic" putty.log
+findstr /I "error fail panic" serial_console.log
 ```
 
 **Clear old logs:**
 ```cmd
 # Backup first
-copy putty.log putty.log.backup
+copy serial_console.log serial_console.log.backup
 
 # Clear
-del putty.log
+del serial_console.log
 ```
 
-## Configured in PuTTY
+## Configured in Serial Console App
 
-See `docs/PUTTY_SETUP.md` for PuTTY logging configuration:
-- Session → Logging
+See `docs/SERIAL_CONSOLE_SETUP.md` for logging configuration:
+- Session -> Logging
 - All session output
 - Always append
 - Flush frequently

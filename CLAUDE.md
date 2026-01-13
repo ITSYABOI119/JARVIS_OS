@@ -813,15 +813,16 @@ Each week follows this structure:
 ---
 
 **Current Phase:** Phase 2 - Alpha System (Months 12-24)
-**Current Status:** Week 32+ JARVIS FULLY BOOTING ON Pi 4! 🎉 (January 8, 2026)
+**Current Status:** Week 33 COMPLETE - UART RX ENABLED! 🎉 (January 10, 2026)
   - ✅ U-Boot 2026.01 working with interactive shell
   - ✅ Auto-boot loads kernel8.img (1.5MB in 80ms)
   - ✅ Boot flow: GPU → U-Boot → boot.scr → kernel8.img → seL4 → JARVIS
-  - ✅ **UART OUTPUT WORKING** - Fixed with PL011 init in elfloader platform_init.c
+  - ✅ **UART TX WORKING** - seL4_DebugPutChar() kernel syscall
+  - ✅ **UART RX ENABLED** - Device frame mapped at 0x5c0000 via seL4 capabilities
   - ✅ ELF-loader, kernel, and rootserver all print to serial
   - ✅ Decision cache loaded (258 patterns)
   - ✅ UART IPC handler running with status updates
-  - ⏳ Week 33: Enable UART RX for Python↔seL4 communication
+  - ⏳ Week 34: Test Python↔seL4 bidirectional communication
 
 **Phase 1:** COMPLETE (26/26 weeks, 100%) - December 23, 2025 ✅
 
@@ -1324,7 +1325,7 @@ phase2/
 | **Initialization** | Inline in scripts | SystemBootstrap class |
 | **Cross-compile** | Native x86 | aarch64-linux-gnu-gcc |
 
-## Phase 2 Progress (Weeks 27-32)
+## Phase 2 Progress (Weeks 27-33)
 
 **Week 27: Bidirectional IPC Design** ✅
 - Designed dual ring buffer architecture (query + response channels)
@@ -1373,7 +1374,7 @@ phase2/
 - ✅ copy_to_sd.bat script ready
 - ✅ USB-UART cable (3.3V TTL) confirmed available
 - ✅ 8 test files complete (57+ tests, 100% pass rate)
-- ✅ 8 documentation guides complete (SD setup, UART protocol, troubleshooting, PuTTY setup)
+- ✅ 8 documentation guides complete (SD setup, UART protocol, troubleshooting, serial console setup)
 
 **U-Boot Setup COMPLETE** ✅ (January 8, 2026)
 - ✅ U-Boot 2026.01 verified working on Pi 4 hardware
@@ -1384,7 +1385,7 @@ phase2/
 - ✅ Auto-boot: kernel8.img loads in 80ms (18.8 MiB/s)
 - ✅ Boot flow verified: GPU → U-Boot → boot.scr → kernel8.img → seL4
 - ✅ Working SD card backup: `temp_sd_backup/uboot_working/` (7 files)
-- ⚠️ seL4 output silent after jump (known rootserver UART mapping issue)
+- ✅ seL4 rootserver UART output working (fixed in Week 33)
 
 **Documentation Audit (December 27, 2025)** ✅
 - ✅ Compared original plans (archive/) vs current implementation
@@ -1394,6 +1395,17 @@ phase2/
 - ✅ Fixed success criteria: "3+ configs" → "Pi 4 bare-metal boot"
 - ✅ Alignment score: 85% (core architecture preserved, strategic pivots justified)
 - ✅ Analysis saved to: `.claude/plans/swift-petting-island.md`
+
+**Week 33: UART RX Enable via Device Frame Mapping** ✅ (January 10, 2026)
+- ✅ UART TX working via seL4_DebugPutChar() kernel syscall
+- ✅ Device frame mapping implemented for UART RX
+- ✅ Found device untyped covering 0xFE201000 (BCM2711 peripherals)
+- ✅ Retyped to ARM SmallPage, mapped at vaddr 0x5c0000
+- ✅ Key fix: vaddr must be within existing VSpace range (error 6 = seL4_FailedLookup)
+- ✅ **UART RX: ENABLED (device frame mapped)**
+- ✅ IPC handler running, waiting for Python queries
+- ✅ 258 cache patterns loaded, ready for queries
+- ⏳ Week 34: Test Python↔seL4 bidirectional communication
 
 ## Phase 2 Test Coverage
 
@@ -1409,19 +1421,22 @@ phase2/
 | test_uart_logic.c | 8 | UART Logic | ✅ PASS |
 | **Total** | **122+** | **8 test files** | **100% PASS** |
 
-## Phase 2 Remaining Work (Weeks 33+)
+## Phase 2 Remaining Work (Weeks 34+)
 
-**Current Status (January 8, 2026):**
+**Current Status (January 10, 2026):**
 - ✅ U-Boot working with interactive shell
 - ✅ kernel8.img loads and jumps to seL4 (verified)
-- ⚠️ **Next task:** Debug seL4 rootserver UART output (silent after jump)
+- ✅ **UART TX + RX WORKING** - Device frame mapped at 0x5c0000
+- ✅ Week 33 COMPLETE - UART RX enabled via seL4 device frame mapping
+- ⏳ **Next task:** Test Python↔seL4 bidirectional communication
 
-**Immediate (Weeks 33-34):**
-- **Week 33: seL4 UART Debug**
-  - Root cause: seL4 rootserver runs unprivileged, cannot access UART at 0xFE201000
-  - Options: seL4_DebugPutChar(), proper memory mapping, or identity mapping
-  - See `phase2/docs/BOOT_DEBUG_NOTES.md` for analysis
-- Week 34: UART IPC validation (cache hit rate testing on hardware)
+**Immediate (Week 34):**
+- **Week 34: Python↔seL4 IPC Testing**
+  - Test UART RX with serial console character input
+  - Connect uart_ipc_client.py via USB-UART
+  - Send UART IPC frames (0xAA55 sync + query)
+  - Verify cache lookup returns response
+  - Measure round-trip latency (target: 10-20ms)
 
 **Hardware Integration (Weeks 35-41):**
 - Weeks 35-36: SD/EMMC storage driver

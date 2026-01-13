@@ -1,5 +1,5 @@
 /*
- * JARVIS AI-OS - Phase 2 Week 32 ARM64 Entry Point
+ * JARVIS AI-OS - Phase 2 Week 33 ARM64 Entry Point
  *
  * Raspberry Pi 4 (BCM2711) seL4 Root Task with UART IPC
  *
@@ -21,6 +21,8 @@
 /* seL4 headers */
 #include <sel4/sel4.h>
 #include <sel4platsupport/platsupport.h>
+
+/* Week 33: RX disabled - __plat_getchar causes cap fault, needs direct MMIO */
 
 /* seL4 debug output - works from user space */
 static void sel4_putchar(char c)
@@ -47,7 +49,7 @@ static void sel4_puts(const char *s)
 #define BANNER \
     "\n" \
     "========================================\n" \
-    "  JARVIS AI-OS v0.2 - Phase 2 Week 32\n" \
+    "  JARVIS AI-OS v0.2 - Phase 2 Week 33\n" \
     "  ARM64 Raspberry Pi 4 Port\n" \
     "========================================\n" \
     "  seL4 + PL011 UART + Decision Cache\n" \
@@ -59,8 +61,36 @@ static void sel4_puts(const char *s)
  * Must match phase2/docs/UART_IPC_PROTOCOL.md
  */
 #define UART_SYNC_WORD          0xAA55
+#define UART_SYNC_BYTE0         0xAA
+#define UART_SYNC_BYTE1         0x55
+#define UART_SYNC_WORD_LE       ((UART_SYNC_BYTE1 << 8) | UART_SYNC_BYTE0)
 #define UART_MAX_PAYLOAD        240
 #define UART_FRAME_OVERHEAD     10      /* SYNC(2) + TYPE(1) + SEQ(2) + LEN(2) + FLAGS(1) + CRC(2) */
+
+/* Disable echo test by default to avoid UART noise flooding logs */
+#ifndef UART_ECHO_TEST
+#define UART_ECHO_TEST 0
+#endif
+
+/* Disable per-byte UART RX debug logging by default */
+#ifndef UART_RX_DEBUG
+#define UART_RX_DEBUG 0
+#endif
+
+/* Minimal RX diagnostics (prints once per timeout, no per-byte spam) */
+#ifndef UART_RX_DIAG
+#define UART_RX_DIAG 0
+#endif
+#ifndef UART_RX_NOISE_LIMIT
+#define UART_RX_NOISE_LIMIT 4096
+#endif
+#ifndef UART_RX_DIAG_RATE
+#define UART_RX_DIAG_RATE 60
+#endif
+/* Disable protocol UART ASCII logs by default (binary-only stream) */
+#ifndef UART_PROTO_LOG
+#define UART_PROTO_LOG 0
+#endif
 
 /* Message Types (from UART_IPC_PROTOCOL.md) */
 #define MSG_TYPE_QUERY          0x01
@@ -122,36 +152,48 @@ static uint16_t crc16_ccitt(const uint8_t *data, size_t len)
 /*
  * Send UART frame with CRC
  */
-static bool uart_send_frame(uint8_t type, const uint8_t *payload, size_t payload_len)
+static bool uart_send_frame_with_seq(uint8_t type, uint16_t seq,
+                                     const uint8_t *payload, size_t payload_len)
 {
     if (payload_len > UART_MAX_PAYLOAD) {
         return false;
     }
 
-    uart_frame_t frame;
-    memset(&frame, 0, sizeof(frame));
+    uint8_t tx_buf[UART_FRAME_OVERHEAD + UART_MAX_PAYLOAD];
+    uint16_t length = (uint16_t)payload_len;
 
-    /* Build frame */
-    frame.sync = UART_SYNC_WORD;
-    frame.type = type;
-    frame.seq = g_seq_tx++;
-    frame.length = (uint16_t)payload_len;
-    frame.flags = 0;
+    /* Build header */
+    tx_buf[0] = UART_SYNC_BYTE0;
+    tx_buf[1] = UART_SYNC_BYTE1;
+    tx_buf[2] = type;
+    tx_buf[3] = (uint8_t)(seq & 0xFF);
+    tx_buf[4] = (uint8_t)((seq >> 8) & 0xFF);
+    tx_buf[5] = (uint8_t)(length & 0xFF);
+    tx_buf[6] = (uint8_t)((length >> 8) & 0xFF);
+    tx_buf[7] = 0;  /* flags */
 
     if (payload_len > 0 && payload != NULL) {
-        memcpy(frame.payload, payload, payload_len);
+        memcpy(&tx_buf[8], payload, payload_len);
     }
 
-    /* Calculate CRC over header + payload (excluding CRC field) */
-    size_t crc_len = UART_FRAME_OVERHEAD - 2 + payload_len;
-    frame.crc = crc16_ccitt((uint8_t *)&frame, crc_len);
+    /* Calculate CRC over TYPE through PAYLOAD (exclude SYNC and CRC) */
+    size_t crc_len = 6 + payload_len;
+    uint16_t crc = crc16_ccitt(&tx_buf[2], crc_len);
+    tx_buf[8 + payload_len] = (uint8_t)(crc & 0xFF);
+    tx_buf[9 + payload_len] = (uint8_t)((crc >> 8) & 0xFF);
 
     /* Send frame via UART */
     size_t frame_len = UART_FRAME_OVERHEAD + payload_len;
-    uart_write((uint8_t *)&frame, frame_len);
+    uart_write(tx_buf, frame_len);
 
     g_frames_tx++;
     return true;
+}
+
+static bool uart_send_frame(uint8_t type, const uint8_t *payload, size_t payload_len)
+{
+    uint16_t seq = g_seq_tx++;
+    return uart_send_frame_with_seq(type, seq, payload, payload_len);
 }
 
 /*
@@ -162,21 +204,67 @@ static bool uart_recv_frame(uart_frame_t *frame, uint32_t timeout_ms)
 {
     uint8_t *buf = (uint8_t *)frame;
     int bytes_read = 0;
+    const uint32_t byte_timeout_default = 100;
+    uint32_t byte_timeout_ms = byte_timeout_default;
+#if UART_RX_DEBUG
+    static int total_rx_bytes = 0;  /* Debug counter */
+#endif
+#if UART_RX_DIAG
+    static uint32_t diag_bytes = 0;
+    static uint32_t diag_timeouts = 0;
+    static uint8_t diag_last = 0;
+#endif
+
+wait_for_sync:
+    bytes_read = 0;
 
     /* Wait for sync word */
     while (timeout_ms > 0) {
         if (uart_rx_ready()) {
-            buf[bytes_read++] = uart_getc();
+            buf[bytes_read] = uart_getc();
+#if UART_RX_DIAG
+            diag_bytes++;
+            diag_last = buf[bytes_read];
+#endif
+#if UART_RX_DEBUG
+            total_rx_bytes++;
 
-            /* Check for sync word */
+            /* DEBUG: Only print non-noise bytes (0x00/0x01 are common idle noise) */
+            uint8_t b = buf[bytes_read];
+            if (b != 0x00 && b != 0x01) {
+                sel4_putchar('[');
+                char hex[] = "0123456789ABCDEF";
+                sel4_putchar(hex[(b >> 4) & 0xF]);
+                sel4_putchar(hex[b & 0xF]);
+                sel4_putchar(']');
+            }
+#endif
+
+            bytes_read++;
+
+            /* Check for sync bytes */
             if (bytes_read >= 2) {
-                if (frame->sync == UART_SYNC_WORD) {
+                if (buf[0] == UART_SYNC_BYTE0 && buf[1] == UART_SYNC_BYTE1) {
                     break;  /* Found sync */
                 }
                 /* Shift and continue looking */
                 buf[0] = buf[1];
                 bytes_read = 1;
             }
+
+#if UART_RX_DIAG
+            if (diag_bytes >= UART_RX_NOISE_LIMIT) {
+                int gpio15 = uart_gpio15_level();
+                char diag[96];
+                snprintf(diag, sizeof(diag),
+                         "[RX DIAG] noise limit: bytes=%u last=0x%02x gpio15=%d\n",
+                         diag_bytes, diag_last, gpio15);
+                sel4_puts(diag);
+                diag_bytes = 0;
+                diag_timeouts = 0;
+                return false;
+            }
+#endif
         } else {
             /* Simple delay ~1ms */
             for (volatile int i = 0; i < 1000; i++);
@@ -185,18 +273,45 @@ static bool uart_recv_frame(uart_frame_t *frame, uint32_t timeout_ms)
     }
 
     if (timeout_ms == 0) {
+#if UART_RX_DIAG
+        diag_timeouts++;
+        bool has_data = uart_rx_ready();
+        bool has_err = uart_rx_error_status() != 0;
+        bool rate = (diag_timeouts % UART_RX_DIAG_RATE) == 0;
+        if (diag_bytes > 0 || has_data || has_err || rate) {
+            int gpio15 = uart_gpio15_level();
+            char diag[96];
+            snprintf(diag, sizeof(diag),
+                     "[RX DIAG] timeout: bytes=%u last=0x%02x gpio15=%d\n",
+                     diag_bytes, diag_last, gpio15);
+            sel4_puts(diag);
+        }
+        diag_bytes = 0;
+#endif
         return false;  /* Timeout waiting for sync */
     }
 
     /* Read header (6 more bytes after sync) */
     int header_remaining = 6;
+    byte_timeout_ms = byte_timeout_default;
     while (header_remaining > 0 && timeout_ms > 0) {
         if (uart_rx_ready()) {
             buf[bytes_read++] = uart_getc();
             header_remaining--;
+            byte_timeout_ms = byte_timeout_default;
         } else {
             for (volatile int i = 0; i < 1000; i++);
             timeout_ms--;
+            if (byte_timeout_ms > 0) {
+                byte_timeout_ms--;
+                if (byte_timeout_ms == 0) {
+                    if (uart_rx_error_status() != 0) {
+                        uart_clear_rx_errors();
+                    }
+                    uart_rx_drain(16);
+                    goto wait_for_sync;
+                }
+            }
         }
     }
 
@@ -210,13 +325,25 @@ static bool uart_recv_frame(uart_frame_t *frame, uint32_t timeout_ms)
     }
 
     int payload_remaining = frame->length;
+    byte_timeout_ms = byte_timeout_default;
     while (payload_remaining > 0 && timeout_ms > 0) {
         if (uart_rx_ready()) {
             buf[bytes_read++] = uart_getc();
             payload_remaining--;
+            byte_timeout_ms = byte_timeout_default;
         } else {
             for (volatile int i = 0; i < 1000; i++);
             timeout_ms--;
+            if (byte_timeout_ms > 0) {
+                byte_timeout_ms--;
+                if (byte_timeout_ms == 0) {
+                    if (uart_rx_error_status() != 0) {
+                        uart_clear_rx_errors();
+                    }
+                    uart_rx_drain(16);
+                    goto wait_for_sync;
+                }
+            }
         }
     }
 
@@ -228,13 +355,25 @@ static bool uart_recv_frame(uart_frame_t *frame, uint32_t timeout_ms)
     int crc_remaining = 2;
     uint8_t crc_buf[2];
     int crc_idx = 0;
+    byte_timeout_ms = byte_timeout_default;
     while (crc_remaining > 0 && timeout_ms > 0) {
         if (uart_rx_ready()) {
             crc_buf[crc_idx++] = uart_getc();
             crc_remaining--;
+            byte_timeout_ms = byte_timeout_default;
         } else {
             for (volatile int i = 0; i < 1000; i++);
             timeout_ms--;
+            if (byte_timeout_ms > 0) {
+                byte_timeout_ms--;
+                if (byte_timeout_ms == 0) {
+                    if (uart_rx_error_status() != 0) {
+                        uart_clear_rx_errors();
+                    }
+                    uart_rx_drain(16);
+                    goto wait_for_sync;
+                }
+            }
         }
     }
 
@@ -244,13 +383,17 @@ static bool uart_recv_frame(uart_frame_t *frame, uint32_t timeout_ms)
 
     uint16_t recv_crc = (crc_buf[1] << 8) | crc_buf[0];
 
-    /* Validate CRC */
-    size_t crc_len = UART_FRAME_OVERHEAD - 2 + frame->length;
-    uint16_t calc_crc = crc16_ccitt(buf, crc_len);
+    /* Validate CRC (TYPE through PAYLOAD) */
+    size_t crc_len = 6 + frame->length;
+    uint16_t calc_crc = crc16_ccitt(buf + 2, crc_len);
 
     if (recv_crc != calc_crc) {
         g_crc_errors++;
-        return false;
+        if (uart_rx_error_status() != 0) {
+            uart_clear_rx_errors();
+        }
+        uart_rx_drain(16);
+        goto wait_for_sync;
     }
 
     frame->crc = recv_crc;
@@ -270,9 +413,11 @@ static void handle_query(uart_frame_t *request)
     memcpy(query, request->payload, query_len);
     query[query_len] = '\0';
 
+#if UART_PROTO_LOG
     uart_puts("[QUERY] ");
     uart_puts(query);
     uart_puts("\n");
+#endif
 
     /* Perform cache lookup */
     char action[MAX_ACTION_LEN];
@@ -287,18 +432,23 @@ static void handle_query(uart_frame_t *request)
         g_cache_hits++;
         resp_len = snprintf(response, sizeof(response),
                            "ACTION:%s|TRUST:%d|HIT:1", action, trust);
+#if UART_PROTO_LOG
         uart_puts("  [CACHE HIT] ");
         uart_puts(action);
         uart_puts("\n");
+#endif
     } else {
         g_cache_misses++;
         resp_len = snprintf(response, sizeof(response),
                            "ACTION:unknown|TRUST:0|HIT:0");
+#if UART_PROTO_LOG
         uart_puts("  [CACHE MISS]\n");
+#endif
     }
 
     /* Send response */
-    uart_send_frame(MSG_TYPE_RESPONSE, (uint8_t *)response, resp_len);
+    uart_send_frame_with_seq(MSG_TYPE_RESPONSE, request->seq,
+                             (uint8_t *)response, resp_len);
 }
 
 /*
@@ -306,9 +456,11 @@ static void handle_query(uart_frame_t *request)
  */
 static void handle_heartbeat(uart_frame_t *request)
 {
-    (void)request;
+    uint16_t seq = request->seq;
+#if UART_PROTO_LOG
     uart_puts("[HEARTBEAT] Received, sending ACK\n");
-    uart_send_frame(MSG_TYPE_HEARTBEAT_ACK, NULL, 0);
+#endif
+    uart_send_frame_with_seq(MSG_TYPE_HEARTBEAT_ACK, seq, NULL, 0);
 }
 
 /*
@@ -316,8 +468,11 @@ static void handle_heartbeat(uart_frame_t *request)
  */
 static void handle_stats_request(uart_frame_t *request)
 {
+    uint16_t seq = request->seq;
     (void)request;
+#if UART_PROTO_LOG
     uart_puts("[STATS] Sending cache statistics\n");
+#endif
 
     cache_stats_t stats;
     cache_get_stats(&g_cache, &stats);
@@ -331,7 +486,8 @@ static void handle_stats_request(uart_frame_t *request)
         (unsigned long long)stats.cache_misses,
         stats.hit_rate * 100.0);
 
-    uart_send_frame(MSG_TYPE_STATS_RESPONSE, (uint8_t *)response, resp_len);
+    uart_send_frame_with_seq(MSG_TYPE_STATS_RESPONSE, seq,
+                             (uint8_t *)response, resp_len);
 }
 
 /*
@@ -339,11 +495,13 @@ static void handle_stats_request(uart_frame_t *request)
  */
 static void ipc_main_loop(void)
 {
+#if UART_PROTO_LOG
     uart_puts("\n");
     uart_puts("========================================\n");
     uart_puts("UART IPC Handler Running (ARM64)\n");
     uart_puts("Waiting for Python queries...\n");
     uart_puts("========================================\n\n");
+#endif
 
     uart_frame_t frame;
 
@@ -365,11 +523,13 @@ static void ipc_main_loop(void)
                     break;
 
                 default:
+#if UART_PROTO_LOG
                     uart_puts("[WARN] Unknown message type: ");
                     char num[8];
                     snprintf(num, sizeof(num), "0x%02X", frame.type);
                     uart_puts(num);
                     uart_puts("\n");
+#endif
                     break;
             }
         }
@@ -379,11 +539,13 @@ static void ipc_main_loop(void)
         idle_count++;
         if (idle_count >= 100) {
             idle_count = 0;
+#if UART_PROTO_LOG
             char status[128];
             snprintf(status, sizeof(status),
                 "[STATUS] RX:%u TX:%u Hits:%u Misses:%u CRC_Err:%u\n",
                 g_frames_rx, g_frames_tx, g_cache_hits, g_cache_misses, g_crc_errors);
             uart_puts(status);
+#endif
         }
 
 #ifdef __sel4__
@@ -412,6 +574,8 @@ int main(int argc, char *argv[])
     if (!uart_init()) {
         while (1);  /* Hang */
     }
+
+    /* Week 33: UART RX status will be printed after banner */
 
     /* CRITICAL TEST: Output immediately to verify rootserver starts */
     /* Try seL4 DebugPutChar first (kernel syscall) */
@@ -456,7 +620,15 @@ int main(int argc, char *argv[])
     sel4_puts("  Kernel: seL4 microkernel\n");
     sel4_puts("  UART: PL011 @ 0xFE201000\n");
     sel4_puts("  Baud: 115200 8N1\n");
-    sel4_puts("  Phase: 2 Week 32\n");
+    sel4_puts("  Phase: 2 Week 33\n");
+
+    /* Week 33: Print UART RX status */
+    sel4_puts("  UART RX: ");
+    if (uart_is_rx_enabled()) {
+        sel4_puts("ENABLED (device frame mapped)\n");
+    } else {
+        sel4_puts("DISABLED (device frame mapping failed)\n");
+    }
     sel4_puts("\n");
 
     /* Initialize decision cache */
@@ -480,6 +652,53 @@ int main(int argc, char *argv[])
     snprintf(msg, sizeof(msg), "Cache Stats: %u entries loaded\n", stats.entries_used);
     sel4_puts(msg);
     sel4_puts("\n");
+
+    /* Optional UART echo test - keep disabled for IPC runs */
+#if UART_ECHO_TEST
+    sel4_puts("\n========================================\n");
+    sel4_puts("UART ECHO TEST MODE\n");
+    sel4_puts("Send any byte, will echo back with [XX] format\n");
+    sel4_puts("Waiting 30 seconds for test bytes...\n");
+    sel4_puts("========================================\n");
+
+    /* Echo test for 30 seconds */
+    uint32_t echo_timeout = 30000;  /* 30 seconds */
+    int echo_count = 0;
+    while (echo_timeout > 0) {
+        if (uart_rx_ready()) {
+            uint8_t b = uart_getc();
+            /* Echo the byte as hex */
+            sel4_putchar('[');
+            char hex[] = "0123456789ABCDEF";
+            sel4_putchar(hex[(b >> 4) & 0xF]);
+            sel4_putchar(hex[b & 0xF]);
+            sel4_putchar(']');
+            echo_count++;
+
+            /* Also check for sync pattern */
+            static uint8_t last_byte = 0;
+            if (last_byte == 0xAA && b == 0x55) {
+                sel4_puts(" <-- SYNC DETECTED!\n");
+            }
+            last_byte = b;
+        }
+
+        /* ~1ms delay */
+        for (volatile int i = 0; i < 1000; i++);
+        echo_timeout--;
+
+        /* Print heartbeat every 5 seconds */
+        if (echo_timeout % 5000 == 0) {
+            char status[64];
+            snprintf(status, sizeof(status), "\n[ECHO] Still waiting... %d bytes received so far\n", echo_count);
+            sel4_puts(status);
+        }
+    }
+
+    sel4_puts("\n[ECHO] Test complete. Entering IPC handler...\n");
+#else
+    sel4_puts("UART echo test disabled\n");
+#endif
 
     /* Enter IPC main loop */
     sel4_puts("Starting UART IPC handler...\n");

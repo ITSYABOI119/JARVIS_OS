@@ -103,7 +103,7 @@ This document covers common issues when running JARVIS on Raspberry Pi 4 with se
 
 2. **Increase serial buffer**
    - Some terminals drop characters
-   - Try different terminal (minicom vs screen vs PuTTY)
+   - Try different terminal (minicom vs screen vs serial console)
 
 ---
 

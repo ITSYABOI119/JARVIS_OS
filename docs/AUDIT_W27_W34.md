@@ -92,7 +92,7 @@
 |-------------|-------------|-----------------|----------|-------|
 | Cross-compilation toolchain configured | ✅ | **VERIFIED_HW** | `aarch64-linux-gnu-gcc 13.3.0` documented, used to build kernel8.img | Actually used |
 | seL4 boots on Pi 4 | ⏳→✅ | **VERIFIED_HW** | Boot logs show seL4 elfloader + kernel running | Should be ✅ now |
-| UART serial console working | ⏳→✅ | **VERIFIED_HW** | PuTTY logs (4,452 lines) capture full boot | Should be ✅ now |
+| UART serial console working | ⏳→✅ | **VERIFIED_HW** | serial console logs (4,452 lines) capture full boot | Should be ✅ now |
 | Boot process documented | ✅ | **DOC_ONLY** | SD_CARD_SETUP.md exists | Documentation |
 
 **Week 31 Verdict:** ⚠️ **OUTDATED** - Plan still shows ⏳ for items now verified on hardware
@@ -252,7 +252,7 @@ Or change only UART to show completion:
 **Deliverables:**
 - ✅ Cross-compilation toolchain configured (aarch64-linux-gnu-gcc 13.3.0)
 - ✅ seL4 boots on Pi 4 (verified January 7-8, 2026)
-- ✅ UART serial console working (PuTTY logs captured)
+- ✅ UART serial console working (serial console logs captured)
 - ✅ Boot process documented (SD_CARD_SETUP.md)
 ```
 
@@ -407,4 +407,4 @@ After applying the recommended patches, the plan will accurately reflect:
 ---
 
 *Audit completed: January 10, 2026*
-*Files examined: 45+ source files, 8 test files, 20+ commits, 4,452 lines of PuTTY logs*
+*Files examined: 45+ source files, 8 test files, 20+ commits, 4,452 lines of serial console logs*
