@@ -38,10 +38,11 @@ python uart_ipc_client.py --port COM5 --bench 500 --pace-ms 15 --bench-log C:\Us
 
 ## Results Summary
 
-### 200-Query Bench (documented in plan update)
+### 200-Query Bench (recorded in plan update)
 - Success: 100% (timeouts: 0)
 - Hit rate: 100%
 - RTT median 7.06 ms, p95 8.12 ms
+- Note: CSV/log artifacts are not present in `phase2/logs`
 
 ### 500-Query Bench (from `phase2/logs/uart_bench_500.csv`)
 - Total: 500, Success: 500 (timeouts: 0)
@@ -56,8 +57,8 @@ python uart_ipc_client.py --port COM5 --bench 500 --pace-ms 15 --bench-log C:\Us
 - `phase2/logs/uart_bench_500.csv`
 - `phase2/logs/python_uart_bench_500.log`
 - `phase2/logs/python_uart_bench_500.bin`
-- `phase2/logs/python_uart.log` (test mode)
 - `phase2/docs/PHASE_2_IMPLEMENTATION_PLAN.md` (Jan 13, 2026 update for 200-query bench)
+- `phase2/weeks/week34/WEEK_34_RESULTS.md`
 
 ---
 

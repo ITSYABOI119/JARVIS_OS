@@ -5,6 +5,8 @@
 **Scope:** Phase 2 Weeks 27-34 deliverables vs actual evidence
 **Source Document:** `phase2/docs/PHASE_2_IMPLEMENTATION_PLAN.md`
 
+**Update (January 13, 2026):** Week 34 UART IPC bench completed; see `phase2/weeks/week34/WEEK_34_STATUS.md` and `phase2/logs/uart_bench_500.csv`.
+
 ---
 
 ## Executive Summary

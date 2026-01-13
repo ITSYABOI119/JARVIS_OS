@@ -5,6 +5,9 @@ This directory contains serial console logs from Pi 4 boot tests.
 ## Files
 
 - `serial_console.log` - Complete serial output from all boot sessions (appended)
+- `uart_bench_500.csv` - 500-query UART IPC bench results (CSV)
+- `python_uart_bench_500.log` - UART IPC RX/TX hexdump log (text)
+- `python_uart_bench_500.bin` - Raw UART RX byte stream (binary)
 
 ## What Gets Logged
 
@@ -15,6 +18,11 @@ Every time you boot the Pi 4 with the serial console connected, it captures:
 - Decision cache initialization
 - UART IPC handler startup
 - Any errors or warnings
+
+UART IPC bench runs add:
+- Per-query RTT and status (CSV)
+- Raw RX/TX hexdumps (text)
+- Raw RX bytes (binary)
 
 ## Log Format
 

@@ -33,11 +33,11 @@ This document provides a detailed week-by-week implementation plan for Phase 2. 
 **Phase 2 Progress:** Week 34 COMPLETE - UART IPC validated + benchmarked
 
 **Update (January 13, 2026):**
-- **UART IPC BENCH COMPLETE:** 200-query run via UART
+- **UART IPC BENCH COMPLETE:** 500-query run via UART
   - Success: 100% (timeouts: 0)
   - Hit rate: 100%
-  - RTT median 7.06 ms, p95 8.12 ms
-  - CRC errors observed: 3 (handled; no cascading failures)
+  - RTT median 7.09 ms, p95 8.19 ms, p99 513.82 ms (9 retries)
+  - CRC mismatches: 7; invalid-length frames: 2 (handled; no cascading failures)
 
 **Update (January 10, 2026):**
 - **UART RX WORKING:** Device frame mapped at vaddr 0x5c0000 via seL4 capabilities
@@ -550,9 +550,9 @@ Solution: Map device frames within the existing VSpace range.
 **Prerequisites:** Week 33 UART RX enabled ✅
 
 **Update (January 13, 2026):**
-- 200-query UART IPC bench: success 100%, hit rate 100%
+- 500-query UART IPC bench: success 100%, hit rate 100%
 - RTT median 7.06 ms, p95 8.12 ms (target <25 ms)
-- CRC errors observed (3) and one invalid-length frame; no cascading failures
+- CRC mismatches observed (7) and two invalid-length frames; no cascading failures
 
 
 **Tasks:**
