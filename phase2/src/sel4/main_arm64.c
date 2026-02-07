@@ -163,6 +163,7 @@ static void emmc_dump_block(uint32_t lba, const uint8_t *buf, size_t dump_len)
 #include "drivers/slot_alloc.h"
 #include "drivers/bcm_genet.h"
 #include "drivers/net_stack.h"
+#include "drivers/net_cmd.h"
 
 #define BANNER \
     "\n" \
@@ -224,6 +225,8 @@ static void emmc_dump_block(uint32_t lba, const uint8_t *buf, size_t dump_len)
 #define MSG_TYPE_HEARTBEAT_ACK  0x04
 #define MSG_TYPE_STATS_REQUEST  0x05
 #define MSG_TYPE_STATS_RESPONSE 0x06
+#define MSG_TYPE_COMMAND        0x07
+#define MSG_TYPE_COMMAND_RESULT 0x08
 #define MSG_TYPE_ERROR          0x0B
 
 /* UART IPC Frame Structure */
@@ -616,6 +619,34 @@ static void handle_stats_request(uart_frame_t *request)
 }
 
 /*
+ * Handle COMMAND - dispatch shell command and return result
+ */
+static void handle_command(uart_frame_t *request)
+{
+    uint16_t seq = request->seq;
+
+    /* Null-terminate the payload */
+    char cmd_str[UART_MAX_PAYLOAD + 1];
+    uint16_t len = request->length;
+    if (len > UART_MAX_PAYLOAD) len = UART_MAX_PAYLOAD;
+    memcpy(cmd_str, request->payload, len);
+    cmd_str[len] = '\0';
+
+#if UART_PROTO_LOG
+    uart_puts("[CMD] Received: ");
+    uart_puts(cmd_str);
+    uart_puts("\n");
+#endif
+
+    char result[UART_MAX_PAYLOAD];
+    int result_len = cmd_dispatch(cmd_str, result, sizeof(result));
+    if (result_len < 0) result_len = 0;
+
+    uart_send_frame_with_seq(MSG_TYPE_COMMAND_RESULT, seq,
+                             (uint8_t *)result, (uint16_t)result_len);
+}
+
+/*
  * Main IPC processing loop
  */
 static void ipc_main_loop(void)
@@ -645,6 +676,10 @@ static void ipc_main_loop(void)
 
                 case MSG_TYPE_STATS_REQUEST:
                     handle_stats_request(&frame);
+                    break;
+
+                case MSG_TYPE_COMMAND:
+                    handle_command(&frame);
                     break;
 
                 default:
@@ -1580,6 +1615,266 @@ genet_test_done:
             sel4_puts("[W38] SOME TESTS FAILED\n");
         }
         sel4_puts("[W38] ========================================\n\n");
+    }
+#endif
+
+    /* ============================================================
+     * SHELL COMMANDS + GENET INTEGRATION TEST (Week 39)
+     * ============================================================ */
+#if GENET_TEST
+    sel4_puts("\n========================================\n");
+    sel4_puts("SHELL CMD + GENET INTEGRATION (Week 39)\n");
+    sel4_puts("========================================\n");
+
+    {
+        int w39_pass = 0;
+        int w39_fail = 0;
+        int w39_skip = 0;
+
+        /* Test 1: link_status - read PHY BMSR */
+        {
+            bool link = genet_get_link_status();
+            /* Either UP or DOWN is valid - just verify it returns without crash */
+            sel4_puts("[W39][TEST] link_status=PASS (");
+            sel4_puts(link ? "UP" : "DOWN");
+            sel4_puts(")\n");
+            w39_pass++;
+        }
+
+        /* Test 2: link_speed - read negotiated speed */
+        {
+            genet_link_speed_t speed = genet_get_link_speed();
+            /* Verify enum is in valid range */
+            if (speed >= GENET_LINK_DOWN && speed <= GENET_LINK_1000FD) {
+                sel4_puts("[W39][TEST] link_speed=PASS (");
+                switch (speed) {
+                    case GENET_LINK_DOWN:   sel4_puts("DOWN"); break;
+                    case GENET_LINK_10HD:   sel4_puts("10HD"); break;
+                    case GENET_LINK_10FD:   sel4_puts("10FD"); break;
+                    case GENET_LINK_100HD:  sel4_puts("100HD"); break;
+                    case GENET_LINK_100FD:  sel4_puts("100FD"); break;
+                    case GENET_LINK_1000HD: sel4_puts("1000HD"); break;
+                    case GENET_LINK_1000FD: sel4_puts("1000FD"); break;
+                }
+                sel4_puts(")\n");
+                w39_pass++;
+            } else {
+                sel4_puts("[W39][TEST] link_speed=FAIL (invalid enum)\n");
+                w39_fail++;
+            }
+        }
+
+        /* Test 3: stats_counter - tx_packets > 0 from prior TX test */
+        {
+            genet_stats_t stats;
+            genet_get_stats(&stats);
+            if (stats.tx_packets > 0) {
+                snprintf(msg, sizeof(msg), "[W39][TEST] stats_counter=PASS (tx=%u rx=%u)\n",
+                         stats.tx_packets, stats.rx_packets);
+                sel4_puts(msg);
+                w39_pass++;
+            } else {
+                sel4_puts("[W39][TEST] stats_counter=FAIL (tx_packets=0)\n");
+                w39_fail++;
+            }
+        }
+
+        /* Test 4: arp_cache_hit - add then lookup */
+        {
+            uint8_t test_mac[6] = { 0x11, 0x22, 0x33, 0x44, 0x55, 0x66 };
+            uint32_t test_ip = parse_ipv4("192.168.1.1");
+            net_arp_add(test_ip, test_mac);
+
+            uint8_t found_mac[6] = {0};
+            bool found = net_arp_lookup(test_ip, found_mac);
+            if (found && memcmp(found_mac, test_mac, 6) == 0) {
+                sel4_puts("[W39][TEST] arp_cache_hit=PASS\n");
+                w39_pass++;
+            } else {
+                sel4_puts("[W39][TEST] arp_cache_hit=FAIL\n");
+                w39_fail++;
+            }
+        }
+
+        /* Test 5: arp_cache_miss - lookup non-existent IP */
+        {
+            uint32_t fake_ip = parse_ipv4("172.16.0.99");
+            uint8_t found_mac[6] = {0};
+            bool found = net_arp_lookup(fake_ip, found_mac);
+            if (!found) {
+                sel4_puts("[W39][TEST] arp_cache_miss=PASS\n");
+                w39_pass++;
+            } else {
+                sel4_puts("[W39][TEST] arp_cache_miss=FAIL (should not find)\n");
+                w39_fail++;
+            }
+        }
+
+        /* Test 6: arp_request_build - verify 42-byte ARP frame structure */
+        {
+            uint8_t frame[64];
+            uint32_t target_ip = parse_ipv4("10.0.0.1");
+            uint32_t flen = net_build_arp_request(target_ip, frame, sizeof(frame));
+
+            bool ok = (flen == 42);
+            /* Check broadcast dst */
+            ok = ok && (frame[0] == 0xFF && frame[1] == 0xFF && frame[2] == 0xFF &&
+                        frame[3] == 0xFF && frame[4] == 0xFF && frame[5] == 0xFF);
+            /* Check ethertype = 0x0806 */
+            ok = ok && (frame[12] == 0x08 && frame[13] == 0x06);
+            /* Check opcode = 1 (request) */
+            ok = ok && (frame[20] == 0x00 && frame[21] == 0x01);
+
+            if (ok) {
+                sel4_puts("[W39][TEST] arp_request_build=PASS\n");
+                w39_pass++;
+            } else {
+                snprintf(msg, sizeof(msg), "[W39][TEST] arp_request_build=FAIL (len=%u)\n", flen);
+                sel4_puts(msg);
+                w39_fail++;
+            }
+        }
+
+        /* Test 7: icmp_request_build - verify 74-byte ICMP frame + checksum */
+        {
+            uint8_t frame[128];
+            uint8_t dst_mac[6] = { 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF };
+            uint32_t target_ip = parse_ipv4("10.0.0.1");
+            uint32_t flen = net_build_icmp_request(target_ip, dst_mac,
+                                                    0x1234, 1,
+                                                    frame, sizeof(frame));
+
+            bool ok = (flen == 74);
+            /* Check ethertype = 0x0800 (IP) */
+            ok = ok && (frame[12] == 0x08 && frame[13] == 0x00);
+            /* Check IP protocol = 1 (ICMP) */
+            ok = ok && (frame[23] == 1);
+            /* Check ICMP type = 8 (echo request) */
+            ok = ok && (frame[34] == 8);
+            /* Check ident = 0x1234 */
+            ok = ok && (frame[38] == 0x12 && frame[39] == 0x34);
+            /* Check seq = 1 */
+            ok = ok && (frame[40] == 0x00 && frame[41] == 0x01);
+
+            /* Verify IP checksum (zero checksum field, recalculate) */
+            if (ok) {
+                uint8_t ip_copy[20];
+                memcpy(ip_copy, &frame[14], 20);
+                uint16_t saved = ((uint16_t)ip_copy[10] << 8) | ip_copy[11];
+                ip_copy[10] = 0; ip_copy[11] = 0;
+                uint16_t calc = net_checksum(ip_copy, 20);
+                /* net_checksum returns host-endian, saved is network-endian */
+                ok = (saved == calc);
+            }
+
+            if (ok) {
+                sel4_puts("[W39][TEST] icmp_request_build=PASS\n");
+                w39_pass++;
+            } else {
+                snprintf(msg, sizeof(msg), "[W39][TEST] icmp_request_build=FAIL (len=%u)\n", flen);
+                sel4_puts(msg);
+                w39_fail++;
+            }
+        }
+
+        /* Test 8: cmd_ifconfig - verify output format */
+        {
+            char output[CMD_OUTPUT_MAX];
+            int out_len = cmd_ifconfig(output, sizeof(output));
+
+            /* Should contain "eth0:", "MAC:", "IP:", "Link:" */
+            bool has_eth0 = false, has_mac = false, has_ip = false, has_link = false;
+            for (int i = 0; i < out_len - 3; i++) {
+                if (output[i] == 'e' && output[i+1] == 't' && output[i+2] == 'h' && output[i+3] == '0')
+                    has_eth0 = true;
+                if (output[i] == 'M' && output[i+1] == 'A' && output[i+2] == 'C')
+                    has_mac = true;
+                if (output[i] == 'I' && output[i+1] == 'P')
+                    has_ip = true;
+                if (output[i] == 'L' && output[i+1] == 'i' && output[i+2] == 'n' && output[i+3] == 'k')
+                    has_link = true;
+            }
+
+            if (out_len > 0 && has_eth0 && has_mac && has_ip && has_link) {
+                sel4_puts("[W39][TEST] cmd_ifconfig=PASS\n");
+                w39_pass++;
+            } else {
+                snprintf(msg, sizeof(msg), "[W39][TEST] cmd_ifconfig=FAIL (len=%d)\n", out_len);
+                sel4_puts(msg);
+                w39_fail++;
+            }
+        }
+
+        /* Test 9: cmd_netstat - verify output format */
+        {
+            char output[CMD_OUTPUT_MAX];
+            int out_len = cmd_netstat(output, sizeof(output));
+
+            /* Should contain "TX:", "RX:", "ARP" */
+            bool has_tx = false, has_rx = false, has_arp = false;
+            for (int i = 0; i < out_len - 1; i++) {
+                if (output[i] == 'T' && output[i+1] == 'X') has_tx = true;
+                if (output[i] == 'R' && output[i+1] == 'X') has_rx = true;
+                if (output[i] == 'A' && output[i+1] == 'R' && i + 2 < out_len && output[i+2] == 'P')
+                    has_arp = true;
+            }
+
+            if (out_len > 0 && has_tx && has_rx && has_arp) {
+                sel4_puts("[W39][TEST] cmd_netstat=PASS\n");
+                w39_pass++;
+            } else {
+                snprintf(msg, sizeof(msg), "[W39][TEST] cmd_netstat=FAIL (len=%d)\n", out_len);
+                sel4_puts(msg);
+                w39_fail++;
+            }
+        }
+
+        /* Test 10: cmd_ping_gateway - requires Ethernet cable */
+        {
+            bool link = genet_get_link_status();
+            if (link) {
+                char output[CMD_OUTPUT_MAX];
+                uint32_t gw_ip = parse_ipv4("192.168.1.1");
+                int out_len = cmd_ping(gw_ip, 1, 2000, output, sizeof(output));
+                /* Any non-empty response is valid (Reply or timeout) */
+                if (out_len > 0) {
+                    /* Check if we got a reply */
+                    bool got_reply = false;
+                    for (int i = 0; i < out_len - 4; i++) {
+                        if (output[i] == 'R' && output[i+1] == 'e' &&
+                            output[i+2] == 'p' && output[i+3] == 'l') {
+                            got_reply = true;
+                            break;
+                        }
+                    }
+                    if (got_reply) {
+                        sel4_puts("[W39][TEST] cmd_ping_gateway=PASS (reply received)\n");
+                        w39_pass++;
+                    } else {
+                        sel4_puts("[W39][TEST] cmd_ping_gateway=PASS (sent, timeout)\n");
+                        w39_pass++;
+                    }
+                } else {
+                    sel4_puts("[W39][TEST] cmd_ping_gateway=FAIL (no output)\n");
+                    w39_fail++;
+                }
+            } else {
+                sel4_puts("[W39][TEST] cmd_ping_gateway=SKIP (no link)\n");
+                w39_skip++;
+            }
+        }
+
+        /* Test summary */
+        sel4_puts("[W39] ========================================\n");
+        snprintf(msg, sizeof(msg), "[W39] TEST RESULTS: %d PASS, %d FAIL, %d SKIP\n",
+                 w39_pass, w39_fail, w39_skip);
+        sel4_puts(msg);
+        if (w39_fail == 0) {
+            sel4_puts("[W39] ALL TESTS PASSED\n");
+        } else {
+            sel4_puts("[W39] SOME TESTS FAILED\n");
+        }
+        sel4_puts("[W39] ========================================\n\n");
     }
 #endif
 

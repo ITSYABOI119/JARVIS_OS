@@ -56,6 +56,9 @@ static uint8_t *rx_dma_buf = NULL;
 static uintptr_t rx_dma_paddr = 0;
 static uint32_t rx_dma_buf_size = 0;
 
+/* Software statistics counters */
+static genet_stats_t genet_stats;
+
 /* ================================================================
  * Debug Output (via seL4 kernel debug port)
  * ================================================================ */
@@ -841,6 +844,10 @@ bool genet_tx_send(const uint8_t *frame, uint32_t len)
     tx_ring.prod_index++;
     genet_reg_write(ring_base + RING_PROD_INDEX, tx_ring.prod_index & DMA_INDEX_MASK);
 
+    /* Update stats */
+    genet_stats.tx_packets++;
+    genet_stats.tx_bytes += len;
+
     debug_puts("[GENET] TX: sent ");
     debug_hex(len);
     debug_puts(" bytes, desc=");
@@ -1011,6 +1018,7 @@ bool genet_rx_recv(uint8_t *buf, uint32_t buf_size, uint32_t *len_out)
         debug_puts("[GENET] RX: runt frame, dma_len=");
         debug_hex(dma_len);
         debug_puts("\n");
+        genet_stats.rx_dropped++;
         rx_ring.cons_index++;
         genet_reg_write(ring_base + RING_CONS_INDEX, rx_ring.cons_index & DMA_INDEX_MASK);
         return false;
@@ -1022,6 +1030,7 @@ bool genet_rx_recv(uint8_t *buf, uint32_t buf_size, uint32_t *len_out)
         debug_puts("[GENET] RX: error status=");
         debug_hex(length_status);
         debug_puts("\n");
+        genet_stats.rx_errors++;
         /* Still advance consumer to free the descriptor */
         rx_ring.cons_index++;
         genet_reg_write(ring_base + RING_CONS_INDEX, rx_ring.cons_index & DMA_INDEX_MASK);
@@ -1043,9 +1052,82 @@ bool genet_rx_recv(uint8_t *buf, uint32_t buf_size, uint32_t *len_out)
     memcpy(buf, src, copy_len);
     *len_out = frame_len;
 
+    /* Update stats */
+    genet_stats.rx_packets++;
+    genet_stats.rx_bytes += frame_len;
+
     /* Advance consumer index (doorbell) */
     rx_ring.cons_index++;
     genet_reg_write(ring_base + RING_CONS_INDEX, rx_ring.cons_index & DMA_INDEX_MASK);
 
     return true;
+}
+
+/* ================================================================
+ * genet_get_link_status() - Read PHY BMSR for link status
+ *
+ * BMSR bit 2 (Link Status) is latching-low: first read clears
+ * any latched-down event, second read shows current state.
+ * ================================================================ */
+
+bool genet_get_link_status(void)
+{
+    if (!genet_initialized) {
+        return false;
+    }
+
+    /* First read clears latched-low status */
+    (void)genet_mdio_read(GENET_PHY_ADDR, MII_BMSR);
+    /* Second read is current */
+    uint16_t bmsr = genet_mdio_read(GENET_PHY_ADDR, MII_BMSR);
+
+    return (bmsr & BMSR_LSTATUS) != 0;
+}
+
+/* ================================================================
+ * genet_get_link_speed() - Read negotiated speed/duplex
+ * ================================================================ */
+
+genet_link_speed_t genet_get_link_speed(void)
+{
+    if (!genet_initialized) {
+        return GENET_LINK_DOWN;
+    }
+
+    /* Check link first */
+    (void)genet_mdio_read(GENET_PHY_ADDR, MII_BMSR);
+    uint16_t bmsr = genet_mdio_read(GENET_PHY_ADDR, MII_BMSR);
+    if (!(bmsr & BMSR_LSTATUS)) {
+        return GENET_LINK_DOWN;
+    }
+
+    /* Check 1000BASE-T status */
+    uint16_t stat1000 = genet_mdio_read(GENET_PHY_ADDR, MII_STAT1000);
+    if (stat1000 & STAT1000_FULL) return GENET_LINK_1000FD;
+    if (stat1000 & STAT1000_HALF) return GENET_LINK_1000HD;
+
+    /* Check 10/100 via ANLPAR */
+    uint16_t anlpar = genet_mdio_read(GENET_PHY_ADDR, MII_ANLPAR);
+    if (anlpar & ANLPAR_100FULL)  return GENET_LINK_100FD;
+    if (anlpar & ANLPAR_100HALF)  return GENET_LINK_100HD;
+    if (anlpar & ANLPAR_10FULL)   return GENET_LINK_10FD;
+    if (anlpar & ANLPAR_10HALF)   return GENET_LINK_10HD;
+
+    return GENET_LINK_DOWN;
+}
+
+/* ================================================================
+ * Statistics
+ * ================================================================ */
+
+void genet_get_stats(genet_stats_t *stats)
+{
+    if (stats) {
+        *stats = genet_stats;
+    }
+}
+
+void genet_reset_stats(void)
+{
+    memset(&genet_stats, 0, sizeof(genet_stats));
 }

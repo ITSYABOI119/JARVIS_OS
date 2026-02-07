@@ -93,4 +93,74 @@ bool net_process_frame(const uint8_t *frame, uint32_t len,
 /* Compute IP/ICMP checksum (ones-complement sum) */
 uint16_t net_checksum(const void *data, uint32_t len);
 
+/* ================================================================
+ * Getters
+ * ================================================================ */
+
+/* Get current IP address (network byte order) */
+uint32_t net_get_ip(void);
+
+/* Get current MAC address */
+void net_get_mac(uint8_t mac_out[ETH_ALEN]);
+
+/* ================================================================
+ * ARP Cache
+ * ================================================================ */
+
+#define NET_ARP_CACHE_SIZE  8
+
+typedef struct {
+    uint32_t ip;                /* Network byte order, 0 = empty */
+    uint8_t  mac[ETH_ALEN];
+} net_arp_entry_t;
+
+/* Lookup MAC for an IP in cache. Returns true if found. */
+bool net_arp_lookup(uint32_t ip_be, uint8_t mac_out[ETH_ALEN]);
+
+/* Add/update an entry in the ARP cache */
+void net_arp_add(uint32_t ip_be, const uint8_t mac[ETH_ALEN]);
+
+/* Return number of valid entries in cache */
+uint32_t net_arp_cache_count(void);
+
+/* ================================================================
+ * Outbound Frame Builders
+ * ================================================================ */
+
+/* Build an ARP WHO-HAS request frame (42 bytes).
+ * Returns frame length or 0 on error. */
+uint32_t net_build_arp_request(uint32_t target_ip_be,
+                               uint8_t *frame_buf, uint32_t buf_size);
+
+/* Build an ICMP echo request frame (74 bytes: ETH+IP+ICMP+32B data).
+ * Returns frame length or 0 on error. */
+uint32_t net_build_icmp_request(uint32_t target_ip_be,
+                                const uint8_t dst_mac[ETH_ALEN],
+                                uint16_t ident, uint16_t seq,
+                                uint8_t *frame_buf, uint32_t buf_size);
+
+/* ================================================================
+ * ARP Resolution (send ARP + poll for reply)
+ * ================================================================ */
+
+/* Resolve IP to MAC. Checks cache first, then sends ARP request
+ * and polls for reply. timeout_ms is in milliseconds.
+ * Returns true if resolved. */
+bool net_arp_resolve(uint32_t target_ip_be, uint8_t mac_out[ETH_ALEN],
+                     uint32_t timeout_ms);
+
+/* ================================================================
+ * ICMP Echo Reply Matching
+ * ================================================================ */
+
+/* Check if a received frame is an ICMP echo reply matching ident/seq.
+ * If matched, sets *ttl_out to the IP TTL field. Returns true on match. */
+bool net_is_icmp_echo_reply(const uint8_t *frame, uint32_t len,
+                            uint16_t ident, uint16_t seq,
+                            uint8_t *ttl_out);
+
+/* Process an incoming ARP reply and update the cache.
+ * Called by the RX polling loop. */
+void net_process_arp_reply(const uint8_t *frame, uint32_t len);
+
 #endif /* NET_STACK_H */

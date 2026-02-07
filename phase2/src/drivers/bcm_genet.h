@@ -247,6 +247,18 @@
 #define BMSR_LSTATUS            (1u << 2)
 #define BMSR_ANEGCOMPLETE       (1u << 5)
 
+/* MII Auto-Negotiation Link Partner Ability Register */
+#define MII_ANLPAR              0x05
+#define ANLPAR_10HALF           (1u << 5)
+#define ANLPAR_10FULL           (1u << 6)
+#define ANLPAR_100HALF          (1u << 7)
+#define ANLPAR_100FULL          (1u << 8)
+
+/* MII 1000BASE-T Status Register */
+#define MII_STAT1000            0x0A
+#define STAT1000_HALF           (1u << 10)
+#define STAT1000_FULL           (1u << 11)
+
 /* ================================================================
  * TX Ring State
  * ================================================================ */
@@ -319,5 +331,45 @@ bool genet_rx_recv(uint8_t *buf, uint32_t buf_size, uint32_t *len_out);
 
 /* Check if any RX frames are pending (non-destructive). */
 bool genet_rx_poll(void);
+
+/* ================================================================
+ * Link Status & Speed
+ * ================================================================ */
+
+typedef enum {
+    GENET_LINK_DOWN = 0,
+    GENET_LINK_10HD,
+    GENET_LINK_10FD,
+    GENET_LINK_100HD,
+    GENET_LINK_100FD,
+    GENET_LINK_1000HD,
+    GENET_LINK_1000FD,
+} genet_link_speed_t;
+
+/* Check PHY link status (reads BMSR twice: first latches, second is current) */
+bool genet_get_link_status(void);
+
+/* Get negotiated link speed/duplex */
+genet_link_speed_t genet_get_link_speed(void);
+
+/* ================================================================
+ * Statistics Counters
+ * ================================================================ */
+
+typedef struct {
+    uint32_t tx_packets;
+    uint32_t tx_bytes;
+    uint32_t tx_errors;
+    uint32_t rx_packets;
+    uint32_t rx_bytes;
+    uint32_t rx_errors;
+    uint32_t rx_dropped;
+} genet_stats_t;
+
+/* Get current statistics */
+void genet_get_stats(genet_stats_t *stats);
+
+/* Reset statistics to zero */
+void genet_reset_stats(void);
 
 #endif /* BCM_GENET_H */

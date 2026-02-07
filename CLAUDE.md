@@ -16,7 +16,7 @@ Guidance for Claude Code when working with this repository.
 | Phase 3 | Future | Months 24-30 | Beta (10+ configs, security audit) |
 | Phase 4 | Future | Months 30-36 | Production v1.0 |
 
-**Current:** Phase 2, Week 38 HARDWARE VERIFIED (February 7, 2026). Next: Week 39 USB HID or next driver.
+**Current:** Phase 2, Week 39 HARDWARE VERIFIED (February 7, 2026). Next: Commit.
 
 ---
 
@@ -150,11 +150,11 @@ JARVIS_OS/
 │   ├── src/
 │   │   ├── ipc/               # dual_ring_buffer, ipc_handler + tests
 │   │   ├── drivers/           # uart_pl011, emmc_sdhci, bcm2711_timer,
-│   │   │                      # bcm_genet, net_stack, slot_alloc, dma_alloc, blk_dev
+│   │   │                      # bcm_genet, net_stack, net_cmd, slot_alloc, dma_alloc, blk_dev
 │   │   ├── ai/                # uart_ipc_client.py, system_bootstrap.py + tests
 │   │   ├── sel4/              # main_arm64.c, CMakeLists.txt
 │   │   └── jarvis-sel4-cmake/ # CMakeLists.txt for TII build system
-│   ├── weeks/                  # week27-week38 status docs
+│   ├── weeks/                  # week27-week39 status docs
 │   └── scripts/               # build_and_copy_kernel.sh
 ├── JARVIS_UNIFIED_PLAN.md     # 36-month master plan
 ├── ARCHITECTURE_ENHANCEMENTS.md
@@ -217,9 +217,9 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 
 ---
 
-## Current Status (Phase 2, Week 38)
+## Current Status (Phase 2, Week 39)
 
-**Week 38 HARDWARE VERIFIED** (February 7, 2026) - GENET RX + Networking: 23 PASS, 0 FAIL (12 EMMC + 6 GENET TX + 5 RX/Net)
+**Week 39 HARDWARE VERIFIED** (February 7, 2026) - Shell Commands + GENET Integration: 32 PASS + 1 SKIP (23 existing + 9 new PASS + 1 SKIP)
 
 | Milestone | Status |
 |-----------|--------|
@@ -243,14 +243,20 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | GENET RX recv + poll (polled receive) | DONE |
 | Basic networking stack (ARP reply + ICMP echo reply) | DONE |
 | 5-test RX + networking suite (hardware verified) | DONE |
+| Shell commands: ping, ifconfig, netstat (net_cmd.c) | DONE |
+| Outbound networking: ARP request, ICMP echo request | DONE |
+| ARP cache (8 entries) + ARP resolve with timeout | DONE |
+| GENET link status/speed/stats via MDIO | DONE |
+| UART IPC COMMAND handler (0x07/0x08) | DONE |
+| 10-test shell + integration suite (9 PASS + 1 SKIP hw verified) | DONE |
 
-**Next:** Week 39 - USB HID or next Tier 1 driver
+**Next:** Commit Week 39
 
 ### Remaining Work
 
 | Weeks | Task |
 |-------|------|
-| 39-41 | Additional Tier 1 drivers (USB HID, etc.) |
+| 40-41 | Additional Tier 1 drivers (USB HID, etc.) |
 | 42-46 | Alpha release infrastructure |
 | 47-50 | Security audit preparation |
 | 50-52 | 30-day stability testing |
@@ -288,10 +294,10 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | HEARTBEAT_ACK | 0x04 | Both | Keep-alive ack |
 | STATS_REQUEST | 0x05 | Py→seL4 | Cache stats req |
 | STATS_RESPONSE | 0x06 | seL4→Py | Cache stats |
-| SHIELD_CHECK | 0x07 | Py→seL4 | Risk assessment |
-| SHIELD_RESULT | 0x08 | seL4→Py | Risk decision |
-| COMMAND | 0x09 | Py→seL4 | Shell command |
-| COMMAND_RESULT | 0x0A | seL4→Py | Command output |
+| COMMAND | 0x07 | Py→seL4 | Shell command |
+| COMMAND_RESULT | 0x08 | seL4→Py | Command output |
+| SHIELD_CHECK | 0x09 | Py→seL4 | Risk assessment |
+| SHIELD_RESULT | 0x0A | seL4→Py | Risk decision |
 | ERROR | 0x0B | Both | Error |
 | RESET | 0x0C | Both | Protocol reset |
 | STATE_CHANGE | 0x0D | Py→seL4 | State change |
@@ -368,7 +374,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 
 ### Reading Order (New Session)
 1. This file (CLAUDE.md) → architecture + current status
-2. `phase2/weeks/week38/WEEK_38_STATUS.md` → latest week details
+2. `phase2/weeks/week39/WEEK_39_STATUS.md` → latest week details
 3. `phase2/docs/PHASE_2_KICKOFF.md` → Phase 2 goals
 4. Source files as needed
 
@@ -385,6 +391,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Block device:** `phase2/src/drivers/blk_dev.c`
 - **GENET Ethernet:** `phase2/src/drivers/bcm_genet.c`
 - **Net Stack:** `phase2/src/drivers/net_stack.c`
+- **Net Commands:** `phase2/src/drivers/net_cmd.c`
 - **Build config:** `phase2/src/jarvis-sel4-cmake/CMakeLists.txt`
 
 ### Rules

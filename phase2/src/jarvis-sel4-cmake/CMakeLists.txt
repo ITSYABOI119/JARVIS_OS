@@ -80,6 +80,9 @@ add_executable(jarvis-sel4
 
     # Basic networking stack (Week 38 - ARP/ICMP)
     src/drivers/net_stack.c
+
+    # Network shell commands (Week 39 - ping/ifconfig/netstat)
+    src/drivers/net_cmd.c
 )
 
 # Include directories
