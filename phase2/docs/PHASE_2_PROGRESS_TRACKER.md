@@ -315,7 +315,7 @@ UART RX: ENABLED (device frame mapped)
 
 ## Metrics Summary
 
-### Code Written (Weeks 27-37)
+### Code Written (Weeks 27-38)
 
 | Week | C Lines | Python Lines | Total |
 |------|---------|--------------|-------|

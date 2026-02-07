@@ -184,11 +184,11 @@ static bool handle_icmp(const uint8_t *frame, uint32_t len,
 
     debug_puts("[NET] ICMP echo request, sending reply\n");
 
-    /* Copy entire frame as basis for reply */
+    /* Copy entire frame as basis for reply.
+     * Clamp to actual received length to prevent read past buffer. */
     uint32_t total_len = ETH_HLEN + ip_total;
-    if (total_len > NET_MAX_FRAME) {
-        total_len = NET_MAX_FRAME;
-    }
+    if (total_len > len) total_len = len;
+    if (total_len > NET_MAX_FRAME) total_len = NET_MAX_FRAME;
     memcpy(reply, frame, total_len);
 
     /* Fix Ethernet header: swap src/dst */

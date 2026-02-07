@@ -161,6 +161,13 @@
 #define RBUF_ALIGN_2B           (1u << 0)
 #define RBUF_64B_EN             (1u << 1)
 
+/* RBUF prepend: 2-byte status + 64-byte readahead when RBUF_64B_EN is set.
+ * The hardware DMA length includes this prepend + 4-byte FCS at the end. */
+#define RBUF_STATUS_PREPEND     2
+#define RBUF_64B_PREPEND        64
+#define RBUF_RX_OFFSET          (RBUF_STATUS_PREPEND + RBUF_64B_PREPEND)  /* 66 bytes */
+#define RBUF_FCS_LEN            4
+
 /* ================================================================
  * UMAC Registers (offset from GENET_UMAC_OFF)
  * ================================================================ */

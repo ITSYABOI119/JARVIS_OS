@@ -154,7 +154,7 @@ JARVIS_OS/
 │   │   ├── ai/                # uart_ipc_client.py, system_bootstrap.py + tests
 │   │   ├── sel4/              # main_arm64.c, CMakeLists.txt
 │   │   └── jarvis-sel4-cmake/ # CMakeLists.txt for TII build system
-│   ├── weeks/                  # week27-week36 status docs
+│   ├── weeks/                  # week27-week38 status docs
 │   └── scripts/               # build_and_copy_kernel.sh
 ├── JARVIS_UNIFIED_PLAN.md     # 36-month master plan
 ├── ARCHITECTURE_ENHANCEMENTS.md
@@ -368,7 +368,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 
 ### Reading Order (New Session)
 1. This file (CLAUDE.md) → architecture + current status
-2. `phase2/weeks/week36/WEEK_36_STATUS.md` → latest week details
+2. `phase2/weeks/week38/WEEK_38_STATUS.md` → latest week details
 3. `phase2/docs/PHASE_2_KICKOFF.md` → Phase 2 goals
 4. Source files as needed
 

@@ -977,7 +977,7 @@ bool genet_rx_poll(void)
     uint32_t ring_base = GENET_RDMA_REG_OFF + (GENET_DESC_INDEX * DMA_RING_STRIDE);
     uint32_t hw_prod = genet_reg_read(ring_base + RING_PROD_INDEX) & DMA_INDEX_MASK;
 
-    return (hw_prod != rx_ring.cons_index);
+    return (hw_prod != (rx_ring.cons_index & DMA_INDEX_MASK));
 }
 
 /* ================================================================
@@ -994,7 +994,7 @@ bool genet_rx_recv(uint8_t *buf, uint32_t buf_size, uint32_t *len_out)
     uint32_t ring_base = GENET_RDMA_REG_OFF + (GENET_DESC_INDEX * DMA_RING_STRIDE);
     uint32_t hw_prod = genet_reg_read(ring_base + RING_PROD_INDEX) & DMA_INDEX_MASK;
 
-    if (hw_prod == rx_ring.cons_index) {
+    if (hw_prod == (rx_ring.cons_index & DMA_INDEX_MASK)) {
         return false;  /* No frames pending */
     }
 
@@ -1003,8 +1003,19 @@ bool genet_rx_recv(uint8_t *buf, uint32_t buf_size, uint32_t *len_out)
     uint32_t desc_off = GENET_RDMA_OFF + (desc_idx * DMA_DESC_SIZE);
     uint32_t length_status = genet_reg_read(desc_off + DMA_DESC_LENGTH_STATUS);
 
-    /* Extract frame length from bits [31:16] */
-    uint32_t frame_len = (length_status >> DMA_BUFLENGTH_SHIFT) & 0xFFF;
+    /* Extract DMA length from bits [31:16].
+     * Hardware includes RBUF prepend (66 bytes with 64B_EN) + FCS (4 bytes).
+     * Actual Ethernet frame = dma_len - RBUF_RX_OFFSET - RBUF_FCS_LEN */
+    uint32_t dma_len = (length_status >> DMA_BUFLENGTH_SHIFT) & 0xFFF;
+    if (dma_len <= RBUF_RX_OFFSET + RBUF_FCS_LEN) {
+        debug_puts("[GENET] RX: runt frame, dma_len=");
+        debug_hex(dma_len);
+        debug_puts("\n");
+        rx_ring.cons_index++;
+        genet_reg_write(ring_base + RING_CONS_INDEX, rx_ring.cons_index & DMA_INDEX_MASK);
+        return false;
+    }
+    uint32_t frame_len = dma_len - RBUF_RX_OFFSET - RBUF_FCS_LEN;
 
     /* Check for errors */
     if (length_status & (DMA_RX_CRC_ERROR | DMA_RX_OV | DMA_RX_RXER)) {
@@ -1025,9 +1036,10 @@ bool genet_rx_recv(uint8_t *buf, uint32_t buf_size, uint32_t *len_out)
         return false;
     }
 
-    /* Copy frame data from DMA buffer to caller's buffer */
+    /* Copy frame data from DMA buffer to caller's buffer.
+     * Skip RBUF_RX_OFFSET bytes of prepended status data. */
     uint32_t copy_len = (frame_len < buf_size) ? frame_len : buf_size;
-    uint8_t *src = rx_dma_buf + (desc_idx * GENET_RX_BUF_SIZE);
+    uint8_t *src = rx_dma_buf + (desc_idx * GENET_RX_BUF_SIZE) + RBUF_RX_OFFSET;
     memcpy(buf, src, copy_len);
     *len_out = frame_len;
 
