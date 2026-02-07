@@ -15,6 +15,7 @@
  */
 
 #include "uart_pl011.h"
+#include "slot_alloc.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -55,6 +56,17 @@ static volatile uint32_t *uart_mmio_base = NULL;  /* Direct MMIO pointer */
 static volatile uint32_t *gpio_mmio_base = NULL;  /* GPIO MMIO pointer */
 static seL4_CPtr uart_frame_cap = seL4_CapNull;   /* Frame capability */
 static seL4_CPtr gpio_frame_cap = seL4_CapNull;   /* GPIO frame capability */
+
+/* Shared device mapper state (used for other MMIO like EMMC) */
+static bool device_mapper_ready = false;
+static seL4_BootInfo *device_bootinfo = NULL;
+static seL4_CPtr device_untyped = seL4_CapNull;
+static seL4_Word device_untyped_base = 0;
+static seL4_Word device_untyped_size = 0;
+static seL4_Word device_cursor = 0;
+static seL4_CPtr device_next_slot = seL4_CapNull;
+static seL4_Word device_slots_left = 0;
+static seL4_Word device_vaddr_next = 0;
 
 static inline uint32_t uart_reg_read(uint32_t offset);
 static inline void uart_reg_write(uint32_t offset, uint32_t value);
@@ -123,6 +135,160 @@ static void debug_hex(seL4_Word val)
     }
     debug_puts("0x");
     debug_puts(buf);
+}
+
+bool uart_device_map_ready(void)
+{
+    return sel4runtime_bootinfo() != NULL;
+}
+
+bool uart_device_map_page(uintptr_t paddr, uintptr_t requested_vaddr,
+                          volatile uint32_t **out_vaddr)
+{
+    seL4_Word req_paddr = (seL4_Word)paddr;
+    seL4_Word req_vaddr = (seL4_Word)requested_vaddr;
+    seL4_Error err;
+
+    if (!out_vaddr) {
+        return false;
+    }
+
+    if ((req_paddr & (PAGE_SIZE_4K - 1)) != 0) {
+        debug_puts("[DEV] ERROR: paddr not 4K aligned\n");
+        return false;
+    }
+
+    seL4_BootInfo *bi = device_bootinfo ? device_bootinfo : sel4runtime_bootinfo();
+    if (!bi) {
+        debug_puts("[DEV] ERROR: bootinfo is NULL\n");
+        return false;
+    }
+
+    if (!device_mapper_ready) {
+        seL4_Word ut_base = 0;
+        int size_bits = 0;
+        seL4_CPtr ut = find_device_untyped(bi, req_paddr, &ut_base, &size_bits);
+        if (ut == seL4_CapNull) {
+            debug_puts("[DEV] ERROR: no device untyped for paddr\n");
+            return false;
+        }
+        device_bootinfo = bi;
+        device_untyped = ut;
+        device_untyped_base = ut_base;
+        device_untyped_size = BIT(size_bits);
+        device_cursor = ut_base;
+        /* Week 36 fix: Use shared slot allocator instead of local cursor */
+        device_slots_left = slot_alloc_remaining();
+        if (device_vaddr_next == 0) {
+            device_vaddr_next = 0x5c2000;
+        }
+        device_mapper_ready = true;
+    }
+
+    if (req_paddr < device_untyped_base ||
+        req_paddr >= device_untyped_base + device_untyped_size) {
+        debug_puts("[DEV] ERROR: paddr outside device untyped range\n");
+        return false;
+    }
+
+    if (req_paddr < device_cursor) {
+        debug_puts("[DEV] ERROR: paddr before device cursor\n");
+        return false;
+    }
+
+    seL4_Word gap = req_paddr - device_cursor;
+    if ((gap & (PAGE_SIZE_4K - 1)) != 0) {
+        debug_puts("[DEV] ERROR: gap not 4K aligned\n");
+        return false;
+    }
+
+    seL4_Word skip_pages = gap >> PAGE_BITS_4K;
+    seL4_Word required_slots = skip_pages + 1;
+    if (required_slots > device_slots_left) {
+        debug_puts("[DEV] ERROR: not enough empty slots\n");
+        return false;
+    }
+
+    debug_puts("[DEV] Skip pages: ");
+    debug_hex(skip_pages);
+    debug_puts("\n");
+
+    for (seL4_Word i = 0; i < skip_pages; i++) {
+        /* Week 36 fix: Use shared slot allocator */
+        seL4_CPtr skip_cap = slot_alloc_next("DEV skip");
+        if (skip_cap == seL4_CapNull) {
+            debug_puts("[DEV] ERROR: slot allocation failed for skip\n");
+            return false;
+        }
+        err = seL4_Untyped_Retype(
+            device_untyped,
+            seL4_ARM_SmallPageObject,
+            PAGE_BITS_4K,
+            seL4_CapInitThreadCNode,
+            0,
+            0,
+            skip_cap,
+            1
+        );
+
+        if (err != seL4_NoError) {
+            debug_puts("[DEV] ERROR: skip retype failed, err=");
+            debug_hex(err);
+            debug_puts("\n");
+            return false;
+        }
+    }
+
+    device_cursor += skip_pages * PAGE_SIZE_4K;
+
+    /* Week 36 fix: Use shared slot allocator */
+    seL4_CPtr frame_cap = slot_alloc_next("DEV frame");
+    if (frame_cap == seL4_CapNull) {
+        debug_puts("[DEV] ERROR: slot allocation failed for frame\n");
+        return false;
+    }
+    err = seL4_Untyped_Retype(
+        device_untyped,
+        seL4_ARM_SmallPageObject,
+        PAGE_BITS_4K,
+        seL4_CapInitThreadCNode,
+        0,
+        0,
+        frame_cap,
+        1
+    );
+
+    if (err != seL4_NoError) {
+        debug_puts("[DEV] ERROR: retype failed, err=");
+        debug_hex(err);
+        debug_puts("\n");
+        return false;
+    }
+
+    if (req_vaddr == 0) {
+        req_vaddr = device_vaddr_next;
+        device_vaddr_next += PAGE_SIZE_4K;
+    }
+
+    err = seL4_ARM_Page_Map(
+        frame_cap,
+        seL4_CapInitThreadVSpace,
+        req_vaddr,
+        seL4_AllRights,
+        seL4_ARM_Device_VMAttributes
+    );
+
+    if (err != seL4_NoError) {
+        debug_puts("[DEV] ERROR: Page_Map failed, err=");
+        debug_hex(err);
+        debug_puts("\n");
+        return false;
+    }
+
+    *out_vaddr = (volatile uint32_t *)req_vaddr;
+    device_cursor = req_paddr + PAGE_SIZE_4K;
+
+    return true;
 }
 
 /*
@@ -315,6 +481,10 @@ bool uart_map_device_frame(void)
 {
     debug_puts("[UART] uart_map_device_frame() starting\n");
 
+    /* Track if prior mapping (e.g., timer) already consumed from device untyped.
+     * This affects device_cursor calculation due to 2MB alignment. */
+    bool prior_mapping_existed = device_mapper_ready;
+
     /* Use sel4runtime to get bootinfo (avoids deprecated seL4_GetBootInfo) */
     seL4_BootInfo *bi = sel4runtime_bootinfo();
     if (!bi) {
@@ -402,48 +572,121 @@ bool uart_map_device_frame(void)
     seL4_Word skip_large_pages = gpio_offset >> PAGE_BITS_2M;
     seL4_Word required_slots = skip_large_pages + 2;
 
-    if (bi->empty.start >= bi->empty.end) {
-        debug_puts("[UART] ERROR: No empty slots\n");
+    /* Use shared slot allocator instead of direct bootinfo access */
+    if (!slot_alloc_ready()) {
+        debug_puts("[UART] ERROR: Slot allocator not initialized\n");
         return false;
     }
 
-    seL4_Word empty_slots = bi->empty.end - bi->empty.start;
-    if (required_slots > empty_slots) {
-        debug_puts("[UART] ERROR: Not enough empty slots for device frames\n");
+    seL4_Word avail_slots = slot_alloc_remaining();
+    if (required_slots > avail_slots) {
+        debug_puts("[UART] ERROR: Not enough slots for device frames\n");
         debug_puts("[UART] Needed slots: ");
         debug_hex(required_slots);
         debug_puts(" Available: ");
-        debug_hex(empty_slots);
+        debug_hex(avail_slots);
         debug_puts("\n");
         return false;
     }
 
-    seL4_CPtr next_slot = bi->empty.start;
     seL4_Error err;
 
-    for (seL4_Word i = 0; i < skip_large_pages; i++) {
-        seL4_CPtr skip_cap = next_slot++;
-        debug_puts("[UART] Retyping 2MB page to skip base region...\n");
-        err = seL4_Untyped_Retype(
-            ut,                       /* Untyped capability */
-            seL4_ARM_LargePageObject, /* Object type (2MB page) */
-            PAGE_BITS_2M,             /* Size bits (21 for 2MB) */
-            seL4_CapInitThreadCNode,  /* Root CNode */
-            0,                        /* Node index (root) */
-            0,                        /* Node depth (root) */
-            skip_cap,                 /* Destination slot */
-            1                         /* Number of objects */
-        );
+    if (prior_mapping_existed) {
+        /*
+         * Binary buddy skip: advance the untyped watermark from device_cursor
+         * to GPIO_BASE using power-of-2 Untyped objects.
+         *
+         * We can't use a single 2MB LargePage skip here because seL4 aligns
+         * the 2MB page to the next 2MB boundary (0xFE200000), which CONSUMES
+         * the GPIO page frame. Instead, we retype smaller Untyped objects that
+         * precisely fill the gap without overlapping GPIO's address range.
+         *
+         * Example: cursor=0xFE004000, target=0xFE200000
+         *   16KB → 32KB → 64KB → 128KB → 256KB → 512KB → 1MB  (7 retypes)
+         */
+        seL4_Word cursor = device_cursor;
+        seL4_Word target = GPIO_BASE;
 
-        if (err != seL4_NoError) {
-            debug_puts("[UART] ERROR: Large page retype failed, err=");
-            debug_hex(err);
+        debug_puts("[UART] Buddy skip from ");
+        debug_hex(cursor);
+        debug_puts(" to ");
+        debug_hex(target);
+        debug_puts("\n");
+
+        while (cursor < target) {
+            seL4_Word gap = target - cursor;
+            /* Find largest power-of-2 aligned at cursor that fits in gap */
+            int size_bits = PAGE_BITS_4K;  /* minimum 4KB */
+            while (size_bits < PAGE_BITS_2M &&
+                   ((1UL << (size_bits + 1)) <= gap) &&
+                   ((cursor & ((1UL << (size_bits + 1)) - 1)) == 0)) {
+                size_bits++;
+            }
+
+            seL4_CPtr skip_cap = slot_alloc_next("buddy skip");
+            if (skip_cap == seL4_CapNull) {
+                debug_puts("[UART] ERROR: slot alloc failed for buddy skip\n");
+                return false;
+            }
+
+            debug_puts("[UART] Buddy retype size_bits=");
+            debug_hex(size_bits);
+            debug_puts(" at ");
+            debug_hex(cursor);
             debug_puts("\n");
-            return false;
+
+            err = seL4_Untyped_Retype(
+                ut,
+                seL4_UntypedObject,
+                size_bits,
+                seL4_CapInitThreadCNode,
+                0,
+                0,
+                skip_cap,
+                1
+            );
+
+            if (err != seL4_NoError) {
+                debug_puts("[UART] ERROR: Buddy skip retype failed, err=");
+                debug_hex(err);
+                debug_puts(" size_bits=");
+                debug_hex(size_bits);
+                debug_puts("\n");
+                return false;
+            }
+
+            cursor += (1UL << size_bits);
+        }
+
+        debug_puts("[UART] Buddy skip complete, cursor at ");
+        debug_hex(cursor);
+        debug_puts("\n");
+    } else {
+        /* No prior mapping - use single 2MB skip (fast path) */
+        for (seL4_Word i = 0; i < skip_large_pages; i++) {
+            seL4_CPtr skip_cap = slot_alloc_next("UART skip 2MB");
+            debug_puts("[UART] Retyping 2MB page to skip base region...\n");
+            err = seL4_Untyped_Retype(
+                ut,                       /* Untyped capability */
+                seL4_ARM_LargePageObject, /* Object type (2MB page) */
+                PAGE_BITS_2M,             /* Size bits (21 for 2MB) */
+                seL4_CapInitThreadCNode,  /* Root CNode */
+                0,                        /* Node index (root) */
+                0,                        /* Node depth (root) */
+                skip_cap,                 /* Destination slot */
+                1                         /* Number of objects */
+            );
+
+            if (err != seL4_NoError) {
+                debug_puts("[UART] ERROR: Large page retype failed, err=");
+                debug_hex(err);
+                debug_puts("\n");
+                return false;
+            }
         }
     }
 
-    gpio_frame_cap = next_slot++;
+    gpio_frame_cap = slot_alloc_next("GPIO frame");
     debug_puts("[GPIO] Retyping small page for GPIO...\n");
     err = seL4_Untyped_Retype(
         ut,                           /* Untyped capability */
@@ -463,7 +706,7 @@ bool uart_map_device_frame(void)
         return false;
     }
 
-    uart_frame_cap = next_slot++;
+    uart_frame_cap = slot_alloc_next("UART frame");
     debug_puts("[UART] Retyping small page for UART...\n");
     err = seL4_Untyped_Retype(
         ut,                           /* Untyped capability */
@@ -552,6 +795,29 @@ bool uart_map_device_frame(void)
         debug_puts("[GPIO] GPLEV0 initial: ");
         debug_hex(*gplev0);
         debug_puts("\n");
+
+        device_bootinfo = bi;
+        device_untyped = ut;
+        device_untyped_base = ut_base;
+        device_untyped_size = ut_size;
+
+        /*
+         * After GPIO + UART mapping, the untyped watermark is at:
+         *   GPIO_BASE + 2 * PAGE_SIZE_4K = 0xFE202000
+         *
+         * This is the same regardless of whether buddy skip or 2MB skip was used,
+         * because the buddy skip precisely consumed up to GPIO_BASE (0xFE200000)
+         * and then GPIO + UART consumed 2 x 4KB pages.
+         */
+        device_cursor = GPIO_BASE + (2 * PAGE_SIZE_4K);
+
+        /* Slots now managed by shared slot_alloc module */
+        device_next_slot = seL4_CapNull;  /* Not used - shared allocator manages slots */
+        device_slots_left = slot_alloc_remaining();
+        if (device_vaddr_next == 0) {
+            device_vaddr_next = 0x5c2000;
+        }
+        device_mapper_ready = true;
     }
 
     if (uart_mmio_base) {

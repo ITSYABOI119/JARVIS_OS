@@ -3,7 +3,7 @@
 **Phase:** Phase 2 - Alpha System (Months 12-24)
 **Timeline:** 52 weeks (December 2025 - December 2026)
 **Hardware:** Raspberry Pi 4 8GB (BCM2711, Cortex-A72)
-**Status:** Week 34 COMPLETE
+**Status:** Week 36 COMPLETE
 
 ---
 
@@ -31,7 +31,8 @@ UART IPC (10-20ms RTT)
 |--------|-------|--------|-------|
 | Month 12-13 | 27-30 | COMPLETE (4/4) | IPC Integration + Manager Init |
 | Month 13-14 | 31-34 | COMPLETE (4/4) | Pi 4 Setup + UART IPC |
-| Month 15-16 | 35-38 | PENDING | Driver Framework (SD, GENET) |
+| Month 15-16 | 35-36 | COMPLETE (2/2) | SD/EMMC Driver (read + write) |
+| Month 16 | 37-38 | PENDING | GENET Ethernet + Additional Drivers |
 | Month 17-18 | 39-42 | PENDING | USB HID + Alpha Prep |
 | Month 19-20 | 43-46 | PENDING | GPIO + Device Tree |
 | Month 21-22 | 47-50 | PENDING | Alpha Testing + Security |
@@ -205,11 +206,65 @@ UART RX: ENABLED (device frame mapped)
 - CRC mismatches: 7; invalid-length headers: 2 (handled without cascading failures)
 
 **Files:** `phase2/weeks/week34/WEEK_34_STATUS.md`, `phase2/logs/uart_bench_500.csv`
+
+---
+
+### Week 35: SD/EMMC Storage Driver - Part 1
+
+**Status:** COMPLETE (January 16, 2026)
+**Effort:** ~6 hours
+
+**Achievements:**
+- EMMC2 MMIO mapped at vaddr 0x5c2000 via seL4 device frame capabilities
+- Controller reset + clock init (400kHz initial, 50MHz high-speed)
+- Card detection: CMD0/CMD8/ACMD41, SDHC/SDXC support
+- Single-block read (CMD17) with PIO
+- Multi-block read (CMD18 + AUTO_CMD12) with PIO
+- FAT32 BPB parsing (OEM, sector size, cluster size, FAT layout)
+- ADMA2 DMA initialization for high-throughput reads (128KB buffer)
+- MBR partition table parsing
+
+**Files:** `phase2/weeks/week35/WEEK_35_STATUS.md`
+
+---
+
+### Week 36: SD/EMMC Storage Driver - Part 2
+
+**Status:** COMPLETE (February 6, 2026)
+**Effort:** ~12 hours (including extensive debug iterations)
+
+**Achievements:**
+- Single-block write (CMD24) with PIO - **PASS**
+- Multi-block write (CMD25 + AUTO_CMD12) - CODE COMPLETE
+- Write verification (write + read-back compare) - **PASS**
+- CMD9 CSD register parsing for actual card capacity (was hardcoded 32GB estimate)
+- Dynamic write test LBA computed from card capacity (works on any card size)
+- Write-specific interrupt wait (`emmc_wait_interrupt_write()`) to handle BCM2711 DATA_TIMEOUT quirk
+- 12-test driver suite: **12 PASS, 0 FAIL**
+- Diagnostic cleanup (removed verbose debug prints, EMMC_DEBUG=0)
+
+**Debug Journey (10 rounds):**
+- Rounds 1-5: BCM2711 DATA_TIMEOUT fires continuously during write data phase
+  - Solution: `emmc_wait_interrupt_write()` checks desired bit first, ignores DATA_TIMEOUT
+- Rounds 6-10: OUT_OF_RANGE error (test LBA exceeded card capacity)
+  - Root cause: capacity was 32GB estimate, card was 16GB
+  - Solution: CMD9 CSD parsing + dynamic test LBA (`total_sectors - 1024`)
+
+**New Driver Files (Week 35-36):**
+- `emmc_sdhci.c` (~1300 LOC) - Full EMMC2 SDHCI driver
+- `emmc_sdhci.h` (67 LOC) - Driver API
+- `bcm2711_timer.c/h` (98 LOC) - System Timer driver
+- `blk_dev.c/h` (145 LOC) - Block device abstraction
+- `dma_alloc.c/h` (310 LOC) - DMA memory allocator
+- `slot_alloc.c/h` (99 LOC) - seL4 slot allocator
+
+**Files:** `phase2/weeks/week35/WEEK_35_STATUS.md`, `phase2/weeks/week36/WEEK_36_STATUS.md`
+
 ---
 
 ## Metrics Summary
 
-### Code Written (Weeks 27-33)
+### Code Written (Weeks 27-36)
 
 | Week | C Lines | Python Lines | Total |
 |------|---------|--------------|-------|
@@ -220,7 +275,9 @@ UART RX: ENABLED (device frame mapped)
 | 31 | ~500 | ~550 | ~1,050 |
 | 32 | ~450 | ~1,500 | ~1,950 |
 | 33 | ~150 | 0 | ~150 |
-| **Total** | **~2,760** | **~2,953** | **~5,713** |
+| 34 | ~50 | ~100 | ~150 |
+| 35-36 | ~2,020 | 0 | ~2,020 |
+| **Total** | **~4,830** | **~3,053** | **~7,883** |
 
 ### Test Coverage
 
@@ -255,7 +312,10 @@ UART RX: ENABLED (device frame mapped)
 | 31 | 8-10h | 2h | 78% gain |
 | 32 | 10-14h | 12h | 14% gain |
 | 33 | 8-12h | 4h | 60% gain |
-| **Total** | **62-82h** | **49h** | **35% gain** |
+| 34 | 8-12h | 6h | 40% gain |
+| 35 | 8-10h | 6h | 33% gain |
+| 36 | 10-14h | 12h | 0% (complex debug) |
+| **Total** | **96-130h** | **73h** | **33% gain** |
 
 ---
 
@@ -357,6 +417,6 @@ UART RX: ENABLED (device frame mapped)
 
 ---
 
-*Last Updated: January 13, 2026*
-*Current Week: 34 COMPLETE*
-*Next: Week 35 - SD/EMMC Driver*
+*Last Updated: February 7, 2026*
+*Current Week: 36 COMPLETE*
+*Next: Week 37 - Broadcom GENET Ethernet*

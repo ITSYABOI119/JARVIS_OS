@@ -13,7 +13,8 @@ This document covers common issues when running JARVIS on Raspberry Pi 4 with se
 3. [Memory Mapping Issues](#3-memory-mapping-issues)
 4. [Cache Hit Rate Problems](#4-cache-hit-rate-problems)
 5. [Python IPC Client Issues](#5-python-ipc-client-issues)
-6. [Build and Compilation Issues](#6-build-and-compilation-issues)
+6. [U-Boot and Boot Warnings](#6-u-boot-and-boot-warnings)
+7. [Build and Compilation Issues](#7-build-and-compilation-issues)
 
 ---
 
@@ -391,7 +392,51 @@ Fault type: Data abort
 
 ---
 
-## 6. Build and Compilation Issues
+## 6. U-Boot and Boot Warnings
+
+### Problem: "Card did not respond to voltage select! : -110"
+
+**Symptoms:**
+- U-Boot shows warning during boot:
+  ```
+  Card did not respond to voltage select! : -110
+  ```
+- Boot continues normally after the warning
+
+**Explanation:**
+
+This warning is **harmless** and occurs during early SD card initialization. The `-110` is a Linux-style timeout error code (ETIMEDOUT). U-Boot's MMC driver attempts voltage negotiation (CMD5 for SDIO or SD UHS mode) and some cards don't respond to this particular command.
+
+**Why it happens:**
+1. U-Boot probes for SDIO cards first (CMD5)
+2. Your SD card is not an SDIO card, so it ignores CMD5
+3. U-Boot interprets the silence as a timeout (-110)
+4. U-Boot then tries standard SD initialization (CMD0, CMD8, ACMD41)
+5. Standard initialization succeeds
+
+**Do I need to fix it?**
+
+**No.** If the boot continues and kernel8.img loads successfully, this warning can be safely ignored. It's a cosmetic message from U-Boot's verbose error reporting.
+
+**When to worry:**
+
+Only investigate further if:
+- Boot actually fails (kernel doesn't load)
+- Multiple timeout warnings appear in sequence
+- SD card is known to be faulty
+
+**Optional suppression:**
+
+If the warning is distracting, you can reduce U-Boot verbosity by adding to config.txt:
+```ini
+boot_delay=0
+```
+
+Or rebuild U-Boot with `#define CONFIG_MMC_VERBOSE 0` (not recommended for debugging).
+
+---
+
+## 7. Build and Compilation Issues
 
 ### Problem: aarch64-linux-gnu-gcc not found
 

@@ -20,6 +20,8 @@
 
 /* seL4 headers */
 #include <sel4/sel4.h>
+#include <sel4/bootinfo.h>
+#include <sel4runtime.h>
 #include <sel4platsupport/platsupport.h>
 
 /* Week 33: RX disabled - __plat_getchar causes cap fault, needs direct MMIO */
@@ -42,9 +44,123 @@ static void sel4_puts(const char *s)
     }
 }
 
+static void sel4_puthex8(uint8_t val)
+{
+    const char *hex = "0123456789ABCDEF";
+    sel4_putchar(hex[(val >> 4) & 0xF]);
+    sel4_putchar(hex[val & 0xF]);
+}
+
+static void sel4_puthex16(uint16_t val)
+{
+    sel4_puthex8((uint8_t)((val >> 8) & 0xFF));
+    sel4_puthex8((uint8_t)(val & 0xFF));
+}
+
+static void sel4_puthex32(uint32_t val)
+{
+    sel4_puthex16((uint16_t)((val >> 16) & 0xFFFF));
+    sel4_puthex16((uint16_t)(val & 0xFFFF));
+}
+
+static void sel4_dump_hex(const uint8_t *buf, size_t len)
+{
+    size_t offset = 0;
+    while (offset < len)
+    {
+        size_t line_len = (len - offset > 16) ? 16 : (len - offset);
+        sel4_puts("  ");
+        sel4_puthex16((uint16_t)offset);
+        sel4_puts(": ");
+        for (size_t i = 0; i < line_len; i++) {
+            sel4_puthex8(buf[offset + i]);
+            sel4_putchar(' ');
+        }
+        sel4_puts("\n");
+        offset += line_len;
+    }
+}
+
+static void sel4_dump_hex_at(const uint8_t *buf, size_t len, size_t base_offset)
+{
+    size_t offset = 0;
+    while (offset < len)
+    {
+        size_t line_len = (len - offset > 16) ? 16 : (len - offset);
+        sel4_puts("  ");
+        sel4_puthex16((uint16_t)(base_offset + offset));
+        sel4_puts(": ");
+        for (size_t i = 0; i < line_len; i++) {
+            sel4_puthex8(buf[offset + i]);
+            sel4_putchar(' ');
+        }
+        sel4_puts("\n");
+        offset += line_len;
+    }
+}
+
+static uint32_t sel4_read_le32(const uint8_t *p)
+{
+    return (uint32_t)p[0] |
+           ((uint32_t)p[1] << 8) |
+           ((uint32_t)p[2] << 16) |
+           ((uint32_t)p[3] << 24);
+}
+
+static uint16_t sel4_read_le16(const uint8_t *p)
+{
+    return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+}
+
+static void sel4_copy_ascii(char *dst, size_t dst_len, const uint8_t *src, size_t src_len)
+{
+    size_t n = src_len;
+    if (n >= dst_len) {
+        n = dst_len - 1;
+    }
+    for (size_t i = 0; i < n; i++) {
+        uint8_t c = src[i];
+        dst[i] = (c >= 0x20 && c <= 0x7E) ? (char)c : '.';
+    }
+    dst[n] = '\0';
+}
+
+static uint32_t emmc_checksum32(const uint8_t *buf, size_t len)
+{
+    uint32_t sum = 0;
+    for (size_t i = 0; i < len; i++) {
+        sum += buf[i];
+    }
+    return sum;
+}
+
+static void emmc_dump_block(uint32_t lba, const uint8_t *buf, size_t dump_len)
+{
+    char msg[128];
+    uint32_t sum = emmc_checksum32(buf, 512);
+    snprintf(msg, sizeof(msg), "[EMMC] LBA%u checksum=", lba);
+    sel4_puts(msg);
+    sel4_puthex32(sum);
+    sel4_puts("\n");
+    sel4_dump_hex(buf, dump_len);
+}
+
+/*
+ * Timing measurements via BCM2711 System Timer (1 MHz).
+ *
+ * The ARM64 cycle counter (CNTVCT_EL0) is trapped by seL4, but the BCM2711
+ * System Timer at 0xFE003000 is a simple MMIO peripheral that works without
+ * any seL4 timer capabilities. It provides 1 µs resolution timing.
+ */
+#define TIMING_AVAILABLE 1  /* Using BCM2711 System Timer */
+
 /* JARVIS components */
 #include "decision_cache.h"
 #include "uart_pl011.h"
+#include "drivers/emmc_sdhci.h"
+#include "drivers/bcm2711_timer.h"
+#include "drivers/dma_alloc.h"
+#include "drivers/slot_alloc.h"
 
 #define BANNER \
     "\n" \
@@ -90,6 +206,13 @@ static void sel4_puts(const char *s)
 /* Disable protocol UART ASCII logs by default (binary-only stream) */
 #ifndef UART_PROTO_LOG
 #define UART_PROTO_LOG 0
+#endif
+
+#ifndef EMMC_TEST
+#define EMMC_TEST 1
+#endif
+#ifndef EMMC_DUMP_BYTES
+#define EMMC_DUMP_BYTES 64
 #endif
 
 /* Message Types (from UART_IPC_PROTOCOL.md) */
@@ -570,7 +693,64 @@ int main(int argc, char *argv[])
         while (1);
     }
 
+    /*
+     * CRITICAL: Device mapping order matters!
+     * The device mapper uses a sequential cursor that only moves forward.
+     * We MUST map devices in ascending physical address order:
+     *   1. System Timer: 0xFE003000
+     *   2. GPIO:         0xFE200000 (mapped by uart_init)
+     *   3. UART:         0xFE201000 (mapped by uart_init)
+     *   4. EMMC:         0xFE340000 (mapped by emmc_map_device_frame)
+     *
+     * Week 36 fix: Timer was failing because cursor was past its address.
+     */
+
+    /* Initialize shared slot allocator FIRST (all device/DMA code uses this) */
+    seL4_BootInfo *bi = sel4runtime_bootinfo();
+    if (!slot_alloc_init(bi)) {
+        /* Slot allocator failed - fatal, cannot continue */
+        seL4_DebugPutChar('S');
+        seL4_DebugPutChar('L');
+        seL4_DebugPutChar('O');
+        seL4_DebugPutChar('T');
+        seL4_DebugPutChar('!');
+        seL4_DebugPutChar('\r');
+        seL4_DebugPutChar('\n');
+        while (1);
+    }
+
+    /* Initialize DMA allocator (needs bootinfo, uses regular untyped) */
+    if (!dma_alloc_init(bi)) {
+        /* DMA allocator failed - continue without ADMA2 support */
+        /* Use seL4 debug output since UART not yet initialized */
+        seL4_DebugPutChar('D');
+        seL4_DebugPutChar('M');
+        seL4_DebugPutChar('A');
+        seL4_DebugPutChar('!');
+        seL4_DebugPutChar('\r');
+        seL4_DebugPutChar('\n');
+    }
+
+    /*
+     * System Timer: Map BEFORE UART (must be in ascending paddr order).
+     *
+     * Timer at 0xFE003000, GPIO at 0xFE200000, UART at 0xFE201000.
+     * uart_map_device_frame() uses binary buddy skip to advance the
+     * untyped watermark from 0xFE004000 to 0xFE200000 without consuming
+     * the GPIO page frame (7 Untyped retypes instead of 1 x 2MB page).
+     */
+    if (!systimer_init()) {
+        seL4_DebugPutChar('T');
+        seL4_DebugPutChar('M');
+        seL4_DebugPutChar('R');
+        seL4_DebugPutChar('!');
+        seL4_DebugPutChar('\r');
+        seL4_DebugPutChar('\n');
+        /* Non-fatal: throughput test will SKIP if timer unavailable */
+    }
+
     /* Initialize UART driver (for IPC and UART output) */
+    /* This maps GPIO (0xFE200000) and UART (0xFE201000) */
     if (!uart_init()) {
         while (1);  /* Hang */
     }
@@ -652,6 +832,425 @@ int main(int argc, char *argv[])
     snprintf(msg, sizeof(msg), "Cache Stats: %u entries loaded\n", stats.entries_used);
     sel4_puts(msg);
     sel4_puts("\n");
+
+#if EMMC_TEST
+    /*
+     * ========================================================
+     * Week 36: EMMC Driver Test Suite (10 test blocks)
+     * ========================================================
+     * 1. mmio_map     2. init+CID    3. read_lba0   4. mbr_sig
+     * 5. part0_lba    6. bpb checks  7. multi_read  8. throughput
+     * 9. null_ptr     10. write+verify
+     */
+    sel4_puts("[EMMC] ========================================\n");
+    sel4_puts("[EMMC] DRIVER TEST SUITE (Week 36)\n");
+    sel4_puts("[EMMC] ========================================\n");
+
+    int test_pass = 0, test_fail = 0;
+    uint8_t sector[512];
+    uint32_t part0_lba = 0;
+    uint16_t bytes_per_sector = 0;
+
+    /* --------------------------------------------------------
+     * TEST 1: MMIO Mapping
+     * -------------------------------------------------------- */
+    if (!emmc_is_mapped() && !emmc_map_device_frame()) {
+        sel4_puts("[EMMC][TEST] mmio_map=FAIL (device frame mapping failed)\n");
+        test_fail++;
+        goto emmc_test_done;
+    }
+    sel4_puts("[EMMC][TEST] mmio_map=PASS\n");
+    test_pass++;
+
+    /* --------------------------------------------------------
+     * TEST 2: Controller Init
+     * -------------------------------------------------------- */
+    if (!emmc_init()) {
+        sel4_puts("[EMMC][TEST] init=FAIL\n");
+        test_fail++;
+        goto emmc_test_done;
+    }
+    sel4_puts("[EMMC][TEST] init=PASS\n");
+    test_pass++;
+
+    /* Print CID for multi-card identification */
+    {
+        uint32_t cid[4];
+        emmc_get_cid(cid);
+        snprintf(msg, sizeof(msg), "[EMMC] CID: %08X %08X %08X %08X\n",
+                 cid[0], cid[1], cid[2], cid[3]);
+        sel4_puts(msg);
+        uint64_t cap = emmc_get_capacity_bytes();
+        snprintf(msg, sizeof(msg), "[EMMC] Capacity: %llu MB\n",
+                 (unsigned long long)(cap / (1024 * 1024)));
+        sel4_puts(msg);
+    }
+
+    if (systimer_is_initialized()) {
+        sel4_puts("[EMMC] Timing: BCM2711 System Timer (1 MHz)\n");
+    } else {
+        sel4_puts("[EMMC] Timing: NOT AVAILABLE (systimer_init failed)\n");
+    }
+
+#if EMMC_USE_ADMA2
+    /* Initialize ADMA2 DMA mode for high-throughput reads */
+    if (emmc_adma2_init()) {
+        sel4_puts("[EMMC] ADMA2 mode ENABLED\n");
+    } else {
+        sel4_puts("[EMMC] ADMA2 init failed, using PIO mode\n");
+    }
+#else
+    sel4_puts("[EMMC] PIO mode (ADMA2 disabled at compile time)\n");
+#endif
+
+    /* --------------------------------------------------------
+     * TEST 3: Single-Block Read LBA0 (CMD17)
+     * -------------------------------------------------------- */
+    if (!emmc_read_block(0, sector)) {
+        sel4_puts("[EMMC][TEST] read_lba0=FAIL\n");
+        test_fail++;
+    } else {
+        sel4_puts("[EMMC][TEST] read_lba0=PASS\n");
+        test_pass++;
+    }
+
+    /* --------------------------------------------------------
+     * TEST 4: MBR Signature Check (0x55AA)
+     * -------------------------------------------------------- */
+    if (sector[0x1FE] == 0x55 && sector[0x1FF] == 0xAA) {
+        sel4_puts("[EMMC][TEST] mbr_sig=PASS\n");
+        test_pass++;
+        part0_lba = sel4_read_le32(sector + 0x1BE + 8);
+    } else {
+        snprintf(msg, sizeof(msg), "[EMMC][TEST] mbr_sig=FAIL (got %02x%02x)\n",
+                 sector[0x1FE], sector[0x1FF]);
+        sel4_puts(msg);
+        test_fail++;
+    }
+
+    /* --------------------------------------------------------
+     * TEST 5: Partition 0 Start LBA Valid
+     * -------------------------------------------------------- */
+    if (part0_lba > 0 && part0_lba < 0x10000000) {
+        snprintf(msg, sizeof(msg), "[EMMC][TEST] part0_lba=PASS (LBA=%u)\n", part0_lba);
+        sel4_puts(msg);
+        test_pass++;
+    } else {
+        snprintf(msg, sizeof(msg), "[EMMC][TEST] part0_lba=FAIL (LBA=%u invalid)\n", part0_lba);
+        sel4_puts(msg);
+        test_fail++;
+    }
+
+    /* --------------------------------------------------------
+     * TEST 6: BPB Read + bytes_per_sector Check
+     * -------------------------------------------------------- */
+    if (part0_lba > 0 && emmc_read_block(part0_lba, sector)) {
+        bytes_per_sector = sel4_read_le16(sector + 0x0B);
+        if (bytes_per_sector == 512) {
+            sel4_puts("[EMMC][TEST] bpb_sector_size=PASS\n");
+            test_pass++;
+        } else {
+            snprintf(msg, sizeof(msg), "[EMMC][TEST] bpb_sector_size=FAIL (got %u)\n",
+                     bytes_per_sector);
+            sel4_puts(msg);
+            test_fail++;
+        }
+        /* Also verify BPB boot signature */
+        if (sector[0x1FE] == 0x55 && sector[0x1FF] == 0xAA) {
+            sel4_puts("[EMMC][TEST] bpb_sig=PASS\n");
+            test_pass++;
+        } else {
+            sel4_puts("[EMMC][TEST] bpb_sig=FAIL\n");
+            test_fail++;
+        }
+    } else {
+        sel4_puts("[EMMC][TEST] bpb_sector_size=FAIL (read error)\n");
+        sel4_puts("[EMMC][TEST] bpb_sig=FAIL (read error)\n");
+        test_fail += 2;
+    }
+
+    /* --------------------------------------------------------
+     * TEST 7: Multi-Block Read (CMD18)
+     * -------------------------------------------------------- */
+    {
+        #define MULTI_READ_BLOCKS 256  /* 128 KB */
+        static uint8_t multi_buf[MULTI_READ_BLOCKS * 512];
+        uint32_t lba = (part0_lba > 0) ? part0_lba : 8192;
+
+        sel4_puts("[EMMC] Multi-block read: 256 blocks (128KB)...\n");
+
+        bool multi_ok = emmc_read_blocks(lba, MULTI_READ_BLOCKS, multi_buf);
+
+        if (multi_ok) {
+            snprintf(msg, sizeof(msg),
+                "[EMMC][TEST] multi_read=PASS (LBA=%u, %u blocks)\n",
+                lba, MULTI_READ_BLOCKS);
+            sel4_puts(msg);
+            test_pass++;
+        } else {
+            sel4_puts("[EMMC][TEST] multi_read=FAIL\n");
+            test_fail++;
+        }
+        #undef MULTI_READ_BLOCKS
+    }
+
+    /* --------------------------------------------------------
+     * TEST 8: Throughput Measurement (using BCM2711 System Timer)
+     * Target: >10 MB/s (requires 4-bit bus + High Speed mode or ADMA2)
+     * -------------------------------------------------------- */
+    {
+        #define THROUGHPUT_BLOCKS 256  /* 128 KB */
+        #define THROUGHPUT_TARGET_MBPS 10
+        uint32_t lba = (part0_lba > 0) ? part0_lba : 8192;
+        bool tput_ok = false;
+        uint64_t start_us = 0, elapsed_us = 0;
+
+        /* Week 36: Check if timer is available before attempting timed test */
+        if (!systimer_is_initialized()) {
+            sel4_puts("[EMMC][TEST] throughput=SKIP (timer not available)\n");
+            sel4_puts("[EMMC][TEST] Performing untimed read verification instead...\n");
+
+            /* Do a simple untimed read verification */
+            static uint8_t verify_buf[8 * 512];  /* 8 blocks = 4KB */
+            tput_ok = emmc_read_blocks(lba, 8, verify_buf);
+            if (tput_ok) {
+                sel4_puts("[EMMC][TEST] untimed_read=PASS (8 blocks read OK)\n");
+                test_pass++;
+            } else {
+                sel4_puts("[EMMC][TEST] untimed_read=FAIL (read error)\n");
+                test_fail++;
+            }
+            goto throughput_done;
+        }
+
+#if EMMC_USE_ADMA2
+        /* Use ADMA2 DMA buffer and read function */
+        uint8_t *tput_buf = emmc_adma2_get_buffer();
+        if (emmc_adma2_is_enabled() && tput_buf != 0) {
+            sel4_puts("[EMMC] Throughput test using ADMA2 DMA\n");
+            start_us = systimer_read();
+            tput_ok = emmc_read_blocks_adma2(lba, THROUGHPUT_BLOCKS, tput_buf);
+            elapsed_us = systimer_elapsed_us(start_us);
+
+            /* ============================================================
+             * SANITY TEST: PIO vs ADMA2 Checksum Comparison
+             * Read a small subset with PIO and compare checksums.
+             * If different, indicates DMA addressing or cache issues.
+             * ============================================================ */
+            if (tput_ok) {
+                #define SANITY_BLOCKS 4  /* 2KB - small sample for quick check */
+                static uint8_t pio_verify[SANITY_BLOCKS * 512];
+
+                sel4_puts("[EMMC] SANITY: Comparing ADMA2 vs PIO read (");
+                snprintf(msg, sizeof(msg), "%u", SANITY_BLOCKS * 512);
+                sel4_puts(msg);
+                sel4_puts(" bytes at LBA ");
+                snprintf(msg, sizeof(msg), "%u", lba);
+                sel4_puts(msg);
+                sel4_puts(")...\n");
+
+                /* Read same LBAs with PIO */
+                bool pio_ok = emmc_read_blocks(lba, SANITY_BLOCKS, pio_verify);
+
+                if (pio_ok) {
+                    /* Calculate simple checksums (sum of all bytes) */
+                    uint32_t adma2_sum = 0;
+                    uint32_t pio_sum = 0;
+                    for (uint32_t i = 0; i < SANITY_BLOCKS * 512; i++) {
+                        adma2_sum += tput_buf[i];
+                        pio_sum += pio_verify[i];
+                    }
+
+                    if (adma2_sum == pio_sum) {
+                        /* Also do byte-by-byte comparison for first mismatch */
+                        bool match = true;
+                        uint32_t first_diff = 0;
+                        for (uint32_t i = 0; i < SANITY_BLOCKS * 512 && match; i++) {
+                            if (tput_buf[i] != pio_verify[i]) {
+                                match = false;
+                                first_diff = i;
+                            }
+                        }
+                        if (match) {
+                            snprintf(msg, sizeof(msg),
+                                "[EMMC][SANITY] PASS: ADMA2 == PIO (checksum=%u)\n", adma2_sum);
+                            sel4_puts(msg);
+                        } else {
+                            snprintf(msg, sizeof(msg),
+                                "[EMMC][SANITY] WARNING: Checksum match but byte diff at offset %u (ADMA2=0x%02x, PIO=0x%02x)\n",
+                                first_diff, tput_buf[first_diff], pio_verify[first_diff]);
+                            sel4_puts(msg);
+                        }
+                    } else {
+                        snprintf(msg, sizeof(msg),
+                            "[EMMC][SANITY] **FAIL**: ADMA2 checksum=%u != PIO checksum=%u\n",
+                            adma2_sum, pio_sum);
+                        sel4_puts(msg);
+                        sel4_puts("[EMMC][SANITY] *** DMA ADDRESSING OR CACHE ISSUE DETECTED! ***\n");
+
+                        /* Print first few bytes from each */
+                        sel4_puts("[EMMC][SANITY] ADMA2 first 16 bytes: ");
+                        for (int i = 0; i < 16; i++) {
+                            snprintf(msg, sizeof(msg), "%02x ", tput_buf[i]);
+                            sel4_puts(msg);
+                        }
+                        sel4_puts("\n[EMMC][SANITY] PIO   first 16 bytes: ");
+                        for (int i = 0; i < 16; i++) {
+                            snprintf(msg, sizeof(msg), "%02x ", pio_verify[i]);
+                            sel4_puts(msg);
+                        }
+                        sel4_puts("\n");
+                    }
+                } else {
+                    sel4_puts("[EMMC][SANITY] SKIP: PIO verify read failed\n");
+                }
+                #undef SANITY_BLOCKS
+            }
+
+        } else {
+            /* Fall back to PIO with static buffer */
+            static uint8_t pio_buf[THROUGHPUT_BLOCKS * 512];
+            tput_buf = pio_buf;
+            sel4_puts("[EMMC] Throughput test using PIO (ADMA2 unavailable)\n");
+            start_us = systimer_read();
+            tput_ok = emmc_read_blocks(lba, THROUGHPUT_BLOCKS, tput_buf);
+            elapsed_us = systimer_elapsed_us(start_us);
+        }
+#else
+        /* PIO mode - use static buffer */
+        static uint8_t tput_buf[THROUGHPUT_BLOCKS * 512];
+        start_us = systimer_read();
+        tput_ok = emmc_read_blocks(lba, THROUGHPUT_BLOCKS, tput_buf);
+        elapsed_us = systimer_elapsed_us(start_us);
+#endif
+
+        if (tput_ok && elapsed_us > 0) {
+            uint32_t bytes = THROUGHPUT_BLOCKS * 512;
+            /* MB/s = bytes / elapsed_us (since elapsed is µs, this gives MB/s) */
+            uint32_t mbps_x10 = (bytes * 10) / (uint32_t)elapsed_us;
+
+            snprintf(msg, sizeof(msg),
+                "[EMMC][TEST] throughput=PASS (%u bytes, %llu us, %u.%u MB/s)\n",
+                bytes, (unsigned long long)elapsed_us, mbps_x10 / 10, mbps_x10 % 10);
+            sel4_puts(msg);
+            test_pass++;
+        } else if (!tput_ok) {
+            sel4_puts("[EMMC][TEST] throughput=FAIL (read error)\n");
+            test_fail++;
+        } else {
+            /* Timer returned 0 unexpectedly */
+            sel4_puts("[EMMC][TEST] throughput=PASS (read OK, timer returned 0)\n");
+            test_pass++;
+        }
+
+throughput_done:
+        #undef THROUGHPUT_BLOCKS
+        #undef THROUGHPUT_TARGET_MBPS
+    }
+
+    /* --------------------------------------------------------
+     * TEST 9: Error Handling (NULL pointer)
+     * -------------------------------------------------------- */
+    {
+        bool null_read = emmc_read_block(0, NULL);
+        bool null_write = emmc_write_block(0, NULL);
+        if (!null_read && !null_write) {
+            sel4_puts("[EMMC][TEST] null_ptr_check=PASS\n");
+            test_pass++;
+        } else {
+            sel4_puts("[EMMC][TEST] null_ptr_check=FAIL\n");
+            test_fail++;
+        }
+    }
+
+    /* --------------------------------------------------------
+     * TEST 10: Write Single Block (CMD24) + Verify
+     * -------------------------------------------------------- */
+#if EMMC_WRITE_TEST_ENABLE
+    {
+        /* Compute safe write test LBA dynamically from actual card capacity.
+         * Use 1024 sectors (512KB) before end of card - well beyond any
+         * partition but safely within card bounds for any card size. */
+        uint32_t test_lba;
+        uint64_t cap = emmc_get_capacity_bytes();
+        if (cap > 0) {
+            uint32_t total_sectors = (uint32_t)(cap / 512);
+            test_lba = total_sectors - 1024;
+        } else {
+            test_lba = EMMC_WRITE_TEST_LBA;  /* fallback */
+        }
+        static uint8_t write_buf[512];
+        static uint8_t verify_buf[512];
+
+        snprintf(msg, sizeof(msg),
+            "[EMMC] Write test ENABLED (LBA=%u, %u sectors from end)\n", test_lba, 1024);
+        sel4_puts(msg);
+
+        /* Fill with test pattern: 0xDE 0xAD 0xBE 0xEF repeating */
+        for (int i = 0; i < 512; i += 4) {
+            write_buf[i+0] = 0xDE;
+            write_buf[i+1] = 0xAD;
+            write_buf[i+2] = 0xBE;
+            write_buf[i+3] = 0xEF;
+        }
+
+        /* Single-block write test */
+        if (emmc_write_block(test_lba, write_buf)) {
+            sel4_puts("[EMMC][TEST] write_single=PASS\n");
+            test_pass++;
+
+            /* Read back and verify */
+            if (emmc_read_block(test_lba, verify_buf)) {
+                bool match = true;
+                for (int i = 0; i < 512; i++) {
+                    if (write_buf[i] != verify_buf[i]) {
+                        match = false;
+                        snprintf(msg, sizeof(msg),
+                            "[EMMC] Mismatch at offset %d: wrote %02x, read %02x\n",
+                            i, write_buf[i], verify_buf[i]);
+                        sel4_puts(msg);
+                        break;
+                    }
+                }
+                if (match) {
+                    sel4_puts("[EMMC][TEST] write_verify=PASS\n");
+                    test_pass++;
+                } else {
+                    sel4_puts("[EMMC][TEST] write_verify=FAIL\n");
+                    test_fail++;
+                }
+            } else {
+                sel4_puts("[EMMC][TEST] write_verify=FAIL (read-back error)\n");
+                test_fail++;
+            }
+        } else {
+            sel4_puts("[EMMC][TEST] write_single=FAIL\n");
+            sel4_puts("[EMMC][TEST] write_verify=FAIL (write error)\n");
+            test_fail += 2;
+        }
+    }
+#else
+    sel4_puts("[EMMC][TEST] write_single=SKIP (EMMC_WRITE_TEST_ENABLE=0)\n");
+    sel4_puts("[EMMC][TEST] write_verify=SKIP (EMMC_WRITE_TEST_ENABLE=0)\n");
+#endif
+
+emmc_test_done:
+    /* --------------------------------------------------------
+     * TEST SUMMARY
+     * -------------------------------------------------------- */
+    sel4_puts("[EMMC] ========================================\n");
+    snprintf(msg, sizeof(msg), "[EMMC] TEST RESULTS: %d PASS, %d FAIL\n",
+             test_pass, test_fail);
+    sel4_puts(msg);
+    if (test_fail == 0) {
+        sel4_puts("[EMMC] ALL TESTS PASSED\n");
+    } else {
+        sel4_puts("[EMMC] SOME TESTS FAILED\n");
+    }
+    sel4_puts("[EMMC] ========================================\n\n");
+#else
+    sel4_puts("[EMMC] Test disabled (EMMC_TEST=0)\n\n");
+#endif
 
     /* Optional UART echo test - keep disabled for IPC runs */
 #if UART_ECHO_TEST

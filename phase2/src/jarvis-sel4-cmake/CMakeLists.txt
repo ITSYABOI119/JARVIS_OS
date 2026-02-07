@@ -63,6 +63,17 @@ add_executable(jarvis-sel4
 
     # ARM64 PL011 UART driver
     src/drivers/uart_pl011.c
+
+    # SD/EMMC + Timer (Week 35-36)
+    src/drivers/emmc_sdhci.c
+    src/drivers/bcm2711_timer.c
+    src/drivers/blk_dev.c
+
+    # DMA allocator (Week 36 - proper physical address handling)
+    src/drivers/dma_alloc.c
+
+    # Shared slot allocator (Week 36 - prevents slot collisions)
+    src/drivers/slot_alloc.c
 )
 
 # Include directories

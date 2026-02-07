@@ -172,6 +172,18 @@ bool uart_init(void);
 bool uart_map_device_frame(void);
 
 /**
+ * Device mapper readiness (bootinfo available).
+ */
+bool uart_device_map_ready(void);
+
+/**
+ * Map a 4KB device page into VSpace.
+ * requested_vaddr=0 means auto-allocate from device vaddr region.
+ */
+bool uart_device_map_page(uintptr_t paddr, uintptr_t requested_vaddr,
+                          volatile uint32_t **out_vaddr);
+
+/**
  * Initialize UART with custom baud rate
  * @param baud_rate Desired baud rate (e.g., 115200, 9600)
  * @return true on success, false on failure
