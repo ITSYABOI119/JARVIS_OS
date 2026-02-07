@@ -24,6 +24,7 @@
 #include <sel4/sel4.h>
 #include <sel4runtime.h>
 #include <string.h>
+#include <stdio.h>
 
 /* ================================================================
  * Internal State
@@ -45,6 +46,9 @@ static volatile uint8_t *usb_mmio_base = NULL;
 
 /* Driver state */
 static usb_hid_state_t hid_state;
+
+/* Caps Lock persistent state */
+static bool caps_lock_active = false;
 
 /* Transfer buffer (static, 256 bytes - enough for descriptors) */
 static uint8_t usb_xfer_buf[256] __attribute__((aligned(4)));
@@ -1176,8 +1180,126 @@ static const char scancode_to_ascii_shifted[128] = {
 char usb_hid_scancode_to_ascii(uint8_t scancode, uint8_t modifier)
 {
     if (scancode >= 128) return 0;
+
+    /* Ctrl modifier: Ctrl+A=0x01 through Ctrl+Z=0x1A */
+    bool ctrl = (modifier & (MOD_LCTRL | MOD_RCTRL)) != 0;
+    if (ctrl && scancode >= 0x04 && scancode <= 0x1D) {
+        return (char)(scancode - 0x04 + 1);
+    }
+
     bool shift = (modifier & (MOD_LSHIFT | MOD_RSHIFT)) != 0;
+
+    /* Caps Lock: toggle shift for letters only (0x04-0x1D) */
+    if (caps_lock_active && scancode >= 0x04 && scancode <= 0x1D) {
+        shift = !shift;
+    }
+
     return shift ? scancode_to_ascii_shifted[scancode] : scancode_to_ascii[scancode];
+}
+
+/* ================================================================
+ * Extended Key Conversion with Debounce
+ * ================================================================ */
+
+/* Check if scancode is present in a report's key array */
+static bool scancode_in_report(const hid_keyboard_report_t *report, uint8_t sc)
+{
+    for (int i = 0; i < 6; i++) {
+        if (report->keys[i] == sc) return true;
+    }
+    return false;
+}
+
+int usb_hid_get_key(const hid_keyboard_report_t *report,
+                    const hid_keyboard_report_t *prev_report)
+{
+    if (!report || !prev_report) return 0;
+
+    /* Find first NEW key press (in current but not in previous) */
+    for (int i = 0; i < 6; i++) {
+        uint8_t sc = report->keys[i];
+        if (sc == 0) continue;
+        if (scancode_in_report(prev_report, sc)) continue;  /* Held key, skip */
+
+        /* New key press detected */
+
+        /* Caps Lock toggle (scancode 0x39) */
+        if (sc == 0x39) {
+            caps_lock_active = !caps_lock_active;
+            return 0;  /* Consumed internally */
+        }
+
+        /* Arrow keys (0x4F-0x52) */
+        if (sc == 0x4F) return USB_KEY_RIGHT;
+        if (sc == 0x50) return USB_KEY_LEFT;
+        if (sc == 0x51) return USB_KEY_DOWN;
+        if (sc == 0x52) return USB_KEY_UP;
+
+        /* Navigation keys */
+        if (sc == 0x49) return USB_KEY_INSERT;
+        if (sc == 0x4A) return USB_KEY_HOME;
+        if (sc == 0x4B) return USB_KEY_PAGEUP;
+        if (sc == 0x4C) return USB_KEY_DELETE;
+        if (sc == 0x4D) return USB_KEY_END;
+        if (sc == 0x4E) return USB_KEY_PAGEDOWN;
+
+        /* F-keys (0x3A-0x45 = F1-F12) */
+        if (sc >= 0x3A && sc <= 0x45) {
+            return USB_KEY_F1 + (sc - 0x3A);
+        }
+
+        /* Normal key: use scancode_to_ascii with current modifier */
+        char ch = usb_hid_scancode_to_ascii(sc, report->modifier);
+        if (ch != 0) return (int)(unsigned char)ch;
+
+        /* Unknown/unmapped scancode */
+        return 0;
+    }
+
+    return 0;  /* No new keys */
+}
+
+void usb_hid_reset_caps_lock(void)
+{
+    caps_lock_active = false;
+}
+
+/* ================================================================
+ * USB Status for Shell Command
+ * ================================================================ */
+
+int usb_hid_get_status(char *output, uint32_t output_size)
+{
+    if (!output || output_size == 0) return 0;
+
+    const char *init_str = hid_state.initialized ? "initialized" : "not initialized";
+    const char *dev_str = hid_state.device_connected ? "connected" : "not connected";
+    const char *speed_str = "unknown";
+    if (hid_state.initialized) {
+        switch (hid_state.port_speed) {
+            case 0: speed_str = "high-speed"; break;
+            case 1: speed_str = "full-speed"; break;
+            case 2: speed_str = "low-speed"; break;
+        }
+    }
+
+    int n = 0;
+    n += snprintf(output + n, output_size - n,
+                  "USB DWC2: %s\n", init_str);
+    n += snprintf(output + n, output_size - n,
+                  "Device: %s (%s)\n", dev_str, speed_str);
+    if (hid_state.device_connected) {
+        n += snprintf(output + n, output_size - n,
+                      "Address: %d, EP%d interval %dms, max_pkt %d\n",
+                      hid_state.device_address,
+                      hid_state.hid_ep_addr & 0x0F,
+                      hid_state.hid_ep_interval,
+                      hid_state.hid_ep_max_pkt);
+    }
+    n += snprintf(output + n, output_size - n,
+                  "Caps Lock: %s\n", caps_lock_active ? "ON" : "OFF");
+
+    return n;
 }
 
 /* ================================================================

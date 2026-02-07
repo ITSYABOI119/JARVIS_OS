@@ -400,4 +400,47 @@ char usb_hid_scancode_to_ascii(uint8_t scancode, uint8_t modifier);
 /* Check if a USB device is connected and enumerated. */
 bool usb_hid_device_connected(void);
 
+/* ================================================================
+ * Special Key Codes (non-ASCII, returned by usb_hid_get_key())
+ * ================================================================ */
+
+#define USB_KEY_NONE        0
+#define USB_KEY_UP          0x80
+#define USB_KEY_DOWN        0x81
+#define USB_KEY_LEFT        0x82
+#define USB_KEY_RIGHT       0x83
+#define USB_KEY_HOME        0x84
+#define USB_KEY_END         0x85
+#define USB_KEY_PAGEUP      0x86
+#define USB_KEY_PAGEDOWN    0x87
+#define USB_KEY_INSERT      0x88
+#define USB_KEY_DELETE      0x89
+#define USB_KEY_F1          0x90  /* F1-F12 = 0x90-0x9B */
+#define USB_KEY_F2          0x91
+#define USB_KEY_F3          0x92
+#define USB_KEY_F4          0x93
+#define USB_KEY_F5          0x94
+#define USB_KEY_F6          0x95
+#define USB_KEY_F7          0x96
+#define USB_KEY_F8          0x97
+#define USB_KEY_F9          0x98
+#define USB_KEY_F10         0x99
+#define USB_KEY_F11         0x9A
+#define USB_KEY_F12         0x9B
+
+/* Extended key conversion with debounce.
+ * Compares current report to previous report to detect NEW key presses only.
+ * Returns: ASCII char for printable keys, control char for Ctrl+letter,
+ *          USB_KEY_* for special keys, or 0 if no new key. */
+int usb_hid_get_key(const hid_keyboard_report_t *report,
+                    const hid_keyboard_report_t *prev_report);
+
+/* Get USB device status string for "usb status" command.
+ * Writes formatted status into output buffer.
+ * Returns bytes written (excluding NUL). */
+int usb_hid_get_status(char *output, uint32_t output_size);
+
+/* Reset Caps Lock state (for testing) */
+void usb_hid_reset_caps_lock(void);
+
 #endif /* USB_HID_H */

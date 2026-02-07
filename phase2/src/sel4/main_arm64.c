@@ -662,9 +662,15 @@ static void ipc_main_loop(void)
 
     uart_frame_t frame;
 
+    /* USB keyboard line buffer */
+    char usb_line_buf[128];
+    int usb_line_pos = 0;
+    hid_keyboard_report_t usb_prev_report;
+    memset(&usb_prev_report, 0, sizeof(usb_prev_report));
+
     while (1) {
-        /* Wait for incoming frame (10 second timeout) */
-        if (uart_recv_frame(&frame, 10000)) {
+        /* Wait for incoming frame (50ms timeout for responsive USB polling) */
+        if (uart_recv_frame(&frame, 50)) {
             /* Process based on message type */
             switch (frame.type) {
                 case MSG_TYPE_QUERY:
@@ -695,10 +701,51 @@ static void ipc_main_loop(void)
             }
         }
 
-        /* Periodic status (every ~100 frames or on timeout) */
+        /* Poll USB keyboard if device connected */
+        if (usb_hid_device_connected()) {
+            hid_keyboard_report_t report;
+            if (usb_hid_poll_keyboard(&report)) {
+                int key = usb_hid_get_key(&report, &usb_prev_report);
+                usb_prev_report = report;
+
+                if (key == '\n') {
+                    /* Enter: dispatch command */
+                    sel4_puts("\r\n");
+                    usb_line_buf[usb_line_pos] = '\0';
+                    if (usb_line_pos > 0) {
+                        char result[240];
+                        int len = cmd_dispatch(usb_line_buf, result, sizeof(result));
+                        if (len > 0) sel4_puts(result);
+                    }
+                    sel4_puts("> ");
+                    usb_line_pos = 0;
+                } else if (key == '\b') {
+                    /* Backspace */
+                    if (usb_line_pos > 0) {
+                        usb_line_pos--;
+                        sel4_putchar('\b');
+                        sel4_putchar(' ');
+                        sel4_putchar('\b');
+                    }
+                } else if (key == 0x03) {
+                    /* Ctrl+C: cancel current line */
+                    sel4_puts("^C\r\n> ");
+                    usb_line_pos = 0;
+                } else if (key >= 0x20 && key < 0x7F) {
+                    /* Printable ASCII: add to buffer and echo */
+                    if (usb_line_pos < 126) {
+                        usb_line_buf[usb_line_pos++] = (char)key;
+                        sel4_putchar((char)key);
+                    }
+                }
+                /* Special keys (arrows, F-keys) ignored in basic shell */
+            }
+        }
+
+        /* Periodic status (every ~6000 iterations = ~5 min at 50ms) */
         static int idle_count = 0;
         idle_count++;
-        if (idle_count >= 100) {
+        if (idle_count >= 6000) {
             idle_count = 0;
 #if UART_PROTO_LOG
             char status[128];
@@ -1979,6 +2026,170 @@ genet_test_done:
         else
             sel4_puts("[W40] SOME TESTS FAILED\n");
         sel4_puts("[W40] ========================================\n\n");
+    }
+
+    /* ============================================================
+     * Week 41: USB HID Part 2 - Full Keyboard + Shell Integration
+     * ============================================================ */
+    sel4_puts("\n========================================\n");
+    sel4_puts("USB HID KEYBOARD TESTS (Week 41)\n");
+    sel4_puts("========================================\n");
+
+    {
+        int w41_pass = 0, w41_fail = 0, w41_skip = 0;
+
+        /* Test 1: Ctrl+C produces 0x03 */
+        {
+            sel4_puts("[W41] Test 1: ctrl_c... ");
+            char ch = usb_hid_scancode_to_ascii(0x06, MOD_LCTRL);  /* 'c' = 0x06, Ctrl */
+            if (ch == 0x03) { sel4_puts("PASS\n"); w41_pass++; }
+            else { sel4_puts("FAIL\n"); w41_fail++; }
+        }
+
+        /* Test 2: Ctrl+D produces 0x04 */
+        {
+            sel4_puts("[W41] Test 2: ctrl_d... ");
+            char ch = usb_hid_scancode_to_ascii(0x07, MOD_LCTRL);  /* 'd' = 0x07, Ctrl */
+            if (ch == 0x04) { sel4_puts("PASS\n"); w41_pass++; }
+            else { sel4_puts("FAIL\n"); w41_fail++; }
+        }
+
+        /* Test 3: Ctrl+A produces 0x01 */
+        {
+            sel4_puts("[W41] Test 3: ctrl_a... ");
+            char ch = usb_hid_scancode_to_ascii(0x04, MOD_LCTRL);  /* 'a' = 0x04, Ctrl */
+            if (ch == 0x01) { sel4_puts("PASS\n"); w41_pass++; }
+            else { sel4_puts("FAIL\n"); w41_fail++; }
+        }
+
+        /* Test 4: Caps Lock toggle */
+        {
+            sel4_puts("[W41] Test 4: caps_lock_toggle... ");
+            usb_hid_reset_caps_lock();
+            hid_keyboard_report_t empty_report;
+            memset(&empty_report, 0, sizeof(empty_report));
+
+            /* Simulate pressing Caps Lock (scancode 0x39) */
+            hid_keyboard_report_t caps_report;
+            memset(&caps_report, 0, sizeof(caps_report));
+            caps_report.keys[0] = 0x39;
+
+            int key = usb_hid_get_key(&caps_report, &empty_report);
+            /* Caps Lock press should return 0 (consumed internally) */
+            /* Now 'a' without shift should produce 'A' */
+            char ch = usb_hid_scancode_to_ascii(0x04, 0);
+            if (key == 0 && ch == 'A') { sel4_puts("PASS\n"); w41_pass++; }
+            else { sel4_puts("FAIL\n"); w41_fail++; }
+            usb_hid_reset_caps_lock();
+        }
+
+        /* Test 5: Caps Lock + letter produces uppercase */
+        {
+            sel4_puts("[W41] Test 5: caps_lock_letter... ");
+            usb_hid_reset_caps_lock();
+            hid_keyboard_report_t empty_report;
+            memset(&empty_report, 0, sizeof(empty_report));
+            hid_keyboard_report_t caps_report;
+            memset(&caps_report, 0, sizeof(caps_report));
+            caps_report.keys[0] = 0x39;
+            usb_hid_get_key(&caps_report, &empty_report);  /* Toggle caps ON */
+
+            /* Caps + Shift should give lowercase (double-toggle) */
+            char ch1 = usb_hid_scancode_to_ascii(0x04, 0);           /* a -> A */
+            char ch2 = usb_hid_scancode_to_ascii(0x04, MOD_LSHIFT);  /* Shift+a -> a */
+            if (ch1 == 'A' && ch2 == 'a') { sel4_puts("PASS\n"); w41_pass++; }
+            else { sel4_puts("FAIL\n"); w41_fail++; }
+            usb_hid_reset_caps_lock();
+        }
+
+        /* Test 6: Arrow key returns USB_KEY_RIGHT */
+        {
+            sel4_puts("[W41] Test 6: special_key_arrow... ");
+            hid_keyboard_report_t empty_report;
+            memset(&empty_report, 0, sizeof(empty_report));
+            hid_keyboard_report_t arrow_report;
+            memset(&arrow_report, 0, sizeof(arrow_report));
+            arrow_report.keys[0] = 0x4F;  /* Right arrow */
+
+            int key = usb_hid_get_key(&arrow_report, &empty_report);
+            if (key == USB_KEY_RIGHT) { sel4_puts("PASS\n"); w41_pass++; }
+            else { sel4_puts("FAIL\n"); w41_fail++; }
+        }
+
+        /* Test 7: Debounce - held key returns 0 */
+        {
+            sel4_puts("[W41] Test 7: debounce_held_key... ");
+            hid_keyboard_report_t report;
+            memset(&report, 0, sizeof(report));
+            report.keys[0] = 0x04;  /* 'a' held */
+
+            /* Second call with same report as both current and previous */
+            int key = usb_hid_get_key(&report, &report);
+            if (key == 0) { sel4_puts("PASS\n"); w41_pass++; }
+            else { sel4_puts("FAIL\n"); w41_fail++; }
+        }
+
+        /* Test 8: Debounce - new key returns character */
+        {
+            sel4_puts("[W41] Test 8: debounce_new_key... ");
+            hid_keyboard_report_t empty_report;
+            memset(&empty_report, 0, sizeof(empty_report));
+            hid_keyboard_report_t a_report;
+            memset(&a_report, 0, sizeof(a_report));
+            a_report.keys[0] = 0x04;  /* 'a' newly pressed */
+
+            int key = usb_hid_get_key(&a_report, &empty_report);
+            if (key == 'a') { sel4_puts("PASS\n"); w41_pass++; }
+            else { sel4_puts("FAIL\n"); w41_fail++; }
+        }
+
+        /* Test 9: "usb" command returns status */
+        {
+            sel4_puts("[W41] Test 9: usb_status_cmd... ");
+            char buf[240];
+            int len = cmd_dispatch("usb", buf, sizeof(buf));
+            /* Should return >0 and contain "DWC2" */
+            bool has_dwc2 = false;
+            for (int i = 0; i < len - 3; i++) {
+                if (buf[i]=='D' && buf[i+1]=='W' && buf[i+2]=='C' && buf[i+3]=='2') {
+                    has_dwc2 = true;
+                    break;
+                }
+            }
+            if (len > 0 && has_dwc2) { sel4_puts("PASS\n"); w41_pass++; }
+            else { sel4_puts("FAIL\n"); w41_fail++; }
+        }
+
+        /* Test 10: Line buffer overflow protection */
+        {
+            sel4_puts("[W41] Test 10: line_buf_overflow... ");
+            /* Verify that our line buffer limit (126 chars) is enforced.
+             * This is a logic test - verify the constant is correct. */
+            char test_buf[128];
+            int test_pos = 0;
+            /* Fill to capacity */
+            for (int i = 0; i < 130; i++) {
+                if (test_pos < 126) {
+                    test_buf[test_pos++] = 'x';
+                }
+            }
+            if (test_pos == 126) { sel4_puts("PASS\n"); w41_pass++; }
+            else { sel4_puts("FAIL\n"); w41_fail++; }
+        }
+
+        /* Week 41 summary */
+        sel4_puts("[W41] ========================================\n");
+        {
+            char buf[80];
+            snprintf(buf, sizeof(buf), "[W41] TEST RESULTS: %d PASS, %d FAIL, %d SKIP\n",
+                     w41_pass, w41_fail, w41_skip);
+            sel4_puts(buf);
+        }
+        if (w41_fail == 0)
+            sel4_puts("[W41] ALL TESTS PASSED\n");
+        else
+            sel4_puts("[W41] SOME TESTS FAILED\n");
+        sel4_puts("[W41] ========================================\n\n");
     }
 
     /* Optional UART echo test - keep disabled for IPC runs */

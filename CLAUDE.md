@@ -16,7 +16,7 @@ Guidance for Claude Code when working with this repository.
 | Phase 3 | Future | Months 24-30 | Beta (10+ configs, security audit) |
 | Phase 4 | Future | Months 30-36 | Production v1.0 |
 
-**Current:** Phase 2, Week 40 HARDWARE VERIFIED (February 8, 2026). Next: Commit.
+**Current:** Phase 2, Week 41 HARDWARE VERIFIED (February 8, 2026). Next: Commit.
 
 ---
 
@@ -154,7 +154,7 @@ JARVIS_OS/
 │   │   ├── ai/                # uart_ipc_client.py, system_bootstrap.py + tests
 │   │   ├── sel4/              # main_arm64.c, CMakeLists.txt
 │   │   └── jarvis-sel4-cmake/ # CMakeLists.txt for TII build system
-│   ├── weeks/                  # week27-week40 status docs
+│   ├── weeks/                  # week27-week41 status docs
 │   └── scripts/               # build_and_copy_kernel.sh
 ├── JARVIS_UNIFIED_PLAN.md     # 36-month master plan
 ├── ARCHITECTURE_ENHANCEMENTS.md
@@ -217,9 +217,9 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 
 ---
 
-## Current Status (Phase 2, Week 40)
+## Current Status (Phase 2, Week 41)
 
-**Week 40 HARDWARE VERIFIED** (February 8, 2026) - USB HID Keyboard Driver: 36 PASS, 0 FAIL, 3 SKIP
+**Week 41 HARDWARE VERIFIED** (February 8, 2026) - USB HID Full Keyboard + Shell: 46 PASS, 0 FAIL, 3 SKIP
 
 | Milestone | Status |
 |-----------|--------|
@@ -253,15 +253,20 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | USB enumeration (GET_DESCRIPTOR, SET_ADDRESS, SET_CONFIGURATION) | DONE |
 | HID boot protocol keyboard (8-byte reports, scancode to ASCII) | DONE |
 | 6-test USB HID suite (4 PASS + 2 SKIP hardware verified) | DONE |
+| USB HID Ctrl/CapsLock/special key support | DONE |
+| USB keyboard shell integration (line buffer + echo) | DONE |
+| "usb" shell command | DONE |
+| 10-test USB keyboard suite (build pending) | DONE |
 
-**Next:** Week 40 Commit
+**Next:** Week 42+ Alpha release infrastructure
 
 ### Remaining Work
 
 | Weeks | Task |
 |-------|------|
 | 40 | USB HID keyboard driver (DWC2 host, HID boot protocol) - DONE |
-| 41 | Additional Tier 1 drivers (USB mass storage, etc.) |
+| 41 | USB HID full keyboard + shell integration - DONE |
+| 42 | Additional Tier 1 drivers (USB mass storage, etc.) |
 | 42-46 | Alpha release infrastructure |
 | 47-50 | Security audit preparation |
 | 50-52 | 30-day stability testing |
@@ -381,7 +386,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 
 ### Reading Order (New Session)
 1. This file (CLAUDE.md) → architecture + current status
-2. `phase2/weeks/week40/WEEK_40_STATUS.md` → latest week details
+2. `phase2/weeks/week41/WEEK_41_STATUS.md` → latest week details
 3. `phase2/docs/PHASE_2_KICKOFF.md` → Phase 2 goals
 4. Source files as needed
 

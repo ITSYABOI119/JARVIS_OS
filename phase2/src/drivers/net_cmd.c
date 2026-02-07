@@ -10,6 +10,7 @@
 #include "net_stack.h"
 #include "bcm_genet.h"
 #include "bcm2711_timer.h"
+#include "usb_hid.h"
 
 #include <sel4/sel4.h>
 #include <string.h>
@@ -303,8 +304,11 @@ int cmd_dispatch(const char *cmd_str, char *output, uint32_t output_size)
     } else if (starts_with(cmd, "netstat")) {
         return cmd_netstat(output, output_size);
 
+    } else if (starts_with(cmd, "usb")) {
+        return usb_hid_get_status(output, output_size);
+
     } else {
         return snprintf(output, output_size,
-                        "Unknown command. Try: ping, ifconfig, netstat\n");
+                        "Unknown command. Try: ping, ifconfig, netstat, usb\n");
     }
 }
