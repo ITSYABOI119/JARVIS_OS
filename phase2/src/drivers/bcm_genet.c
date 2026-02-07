@@ -48,6 +48,14 @@ static genet_tx_ring_t tx_ring;
 static uint8_t *tx_dma_buf = NULL;
 static uintptr_t tx_dma_paddr = 0;
 
+/* RX ring state */
+static genet_rx_ring_t rx_ring;
+
+/* RX DMA buffer pool */
+static uint8_t *rx_dma_buf = NULL;
+static uintptr_t rx_dma_paddr = 0;
+static uint32_t rx_dma_buf_size = 0;
+
 /* ================================================================
  * Debug Output (via seL4 kernel debug port)
  * ================================================================ */
@@ -418,6 +426,22 @@ bool genet_init(void)
     debug_hex((uintptr_t)tx_dma_buf);
     debug_puts(" paddr=");
     debug_hex(tx_dma_paddr);
+    debug_puts("\n");
+
+    /* Pre-allocate RX DMA buffers (MUST be before MMIO mapping) */
+    rx_dma_buf_size = GENET_RX_DESC_COUNT * GENET_RX_BUF_SIZE;  /* 32 * 2048 = 64KB = 16 pages */
+    debug_puts("[GENET] Allocating RX DMA buffers (pre-register-write)...\n");
+    rx_dma_buf = (uint8_t *)dma_alloc(rx_dma_buf_size, &rx_dma_paddr);
+    if (!rx_dma_buf) {
+        debug_puts("[GENET] ERROR: Failed to allocate RX DMA buffers\n");
+        return false;
+    }
+    debug_puts("[GENET] RX DMA buf: vaddr=");
+    debug_hex((uintptr_t)rx_dma_buf);
+    debug_puts(" paddr=");
+    debug_hex(rx_dma_paddr);
+    debug_puts(" size=");
+    debug_hex(rx_dma_buf_size);
     debug_puts("\n");
 
     /* Map GENET MMIO registers */
@@ -839,4 +863,177 @@ bool genet_tx_send(const uint8_t *frame, uint32_t len)
 
     debug_puts("[GENET] TX: DMA completion timeout (frame may still send)\n");
     return true;  /* Frame submitted; timeout doesn't mean failure */
+}
+
+/* ================================================================
+ * genet_rx_ring_init()
+ *
+ * Configure RX DMA ring 16 with GENET_RX_DESC_COUNT descriptors.
+ * Each descriptor points to a pre-allocated DMA buffer.
+ * ================================================================ */
+
+bool genet_rx_ring_init(void)
+{
+    if (!genet_initialized || !rx_dma_buf) {
+        debug_puts("[GENET] RX ring: not initialized or no DMA buf\n");
+        return false;
+    }
+
+    debug_puts("[GENET] RX ring init (ring 16, ");
+    debug_hex(GENET_RX_DESC_COUNT);
+    debug_puts(" descs)\n");
+
+    /* Ring 16 register base (RDMA side) */
+    uint32_t ring_base = GENET_RDMA_REG_OFF + (GENET_DESC_INDEX * DMA_RING_STRIDE);
+
+    /* Global RDMA control register base */
+    uint32_t rdma_global = GENET_RDMA_REG_OFF + DMA_RINGS_SIZE;
+
+    /* Disable RDMA first */
+    genet_reg_write(rdma_global + DMA_CTRL_OFF, 0);
+
+    /* Zero all RX descriptors first */
+    for (uint32_t i = 0; i < GENET_RX_DESC_COUNT; i++) {
+        uint32_t desc_off = GENET_RDMA_OFF + (i * DMA_DESC_SIZE);
+        genet_reg_write(desc_off + DMA_DESC_LENGTH_STATUS, 0);
+        genet_reg_write(desc_off + DMA_DESC_ADDRESS_LO, 0);
+        genet_reg_write(desc_off + DMA_DESC_ADDRESS_HI, 0);
+    }
+
+    /* Assign a DMA buffer to each descriptor */
+    for (uint32_t i = 0; i < GENET_RX_DESC_COUNT; i++) {
+        uint32_t desc_off = GENET_RDMA_OFF + (i * DMA_DESC_SIZE);
+        uintptr_t buf_paddr = rx_dma_paddr + (i * GENET_RX_BUF_SIZE);
+
+        /* Write buffer physical address */
+        genet_reg_write(desc_off + DMA_DESC_ADDRESS_LO, (uint32_t)(buf_paddr & 0xFFFFFFFF));
+        genet_reg_write(desc_off + DMA_DESC_ADDRESS_HI, 0);
+    }
+
+    /* Configure ring 16 registers */
+    genet_reg_write(ring_base + RING_READ_PTR, 0);
+    genet_reg_write(ring_base + RING_READ_PTR_HI, 0);
+    genet_reg_write(ring_base + RING_WRITE_PTR, 0);
+    genet_reg_write(ring_base + RING_WRITE_PTR_HI, 0);
+    genet_reg_write(ring_base + RING_PROD_INDEX, 0);
+    genet_reg_write(ring_base + RING_CONS_INDEX, 0);
+
+    /* Ring buffer size: (desc_count << 16) | buf_length */
+    genet_reg_write(ring_base + RING_BUF_SIZE,
+                    (GENET_RX_DESC_COUNT << DMA_RING_SIZE_SHIFT) | GENET_RX_BUF_SIZE);
+
+    /* Start/end address in 3-word (descriptor) units */
+    genet_reg_write(ring_base + RING_START_ADDR, 0);
+    genet_reg_write(ring_base + RING_START_ADDR_HI, 0);
+    genet_reg_write(ring_base + RING_END_ADDR,
+                    GENET_RX_DESC_COUNT * GENET_WORDS_PER_BD - 1);
+    genet_reg_write(ring_base + RING_END_ADDR_HI, 0);
+
+    /* Completion threshold */
+    genet_reg_write(ring_base + RING_MBUF_DONE_THRESH, 1);
+    genet_reg_write(ring_base + RING_FLOW_PERIOD, 0);
+
+    /* Set SCB burst size for RDMA */
+    genet_reg_write(rdma_global + DMA_SCB_BURST_SIZE_OFF, DMA_MAX_BURST_LENGTH);
+
+    /* Enable ring 16 in RDMA ring config */
+    uint32_t ring_mask = (1u << GENET_DESC_INDEX);
+    genet_reg_write(rdma_global + DMA_RING_CFG_OFF, ring_mask);
+
+    /* Enable RDMA: DMA_EN | ring 16 buffer enable */
+    uint32_t dma_ctrl = DMA_EN | (ring_mask << DMA_RING_BUF_EN_SHIFT);
+    genet_reg_write(rdma_global + DMA_CTRL_OFF, dma_ctrl);
+
+    debug_puts("[GENET] RDMA enabled, ring_cfg=");
+    debug_hex(ring_mask);
+    debug_puts(" ctrl=");
+    debug_hex(dma_ctrl);
+    debug_puts("\n");
+
+    /* Enable UMAC RX */
+    uint32_t cmd = genet_reg_read(GENET_UMAC_OFF + UMAC_CMD);
+    cmd |= CMD_RX_EN;
+    genet_reg_write(GENET_UMAC_OFF + UMAC_CMD, cmd);
+
+    /* Initialize software ring state */
+    rx_ring.cons_index = 0;
+    rx_ring.prod_index = 0;
+    rx_ring.size = GENET_RX_DESC_COUNT;
+
+    debug_puts("[GENET] RX ring init done\n");
+    return true;
+}
+
+/* ================================================================
+ * genet_rx_poll() - Check if frames are pending
+ * ================================================================ */
+
+bool genet_rx_poll(void)
+{
+    if (!genet_initialized) {
+        return false;
+    }
+
+    uint32_t ring_base = GENET_RDMA_REG_OFF + (GENET_DESC_INDEX * DMA_RING_STRIDE);
+    uint32_t hw_prod = genet_reg_read(ring_base + RING_PROD_INDEX) & DMA_INDEX_MASK;
+
+    return (hw_prod != rx_ring.cons_index);
+}
+
+/* ================================================================
+ * genet_rx_recv() - Receive a frame from RX ring
+ * ================================================================ */
+
+bool genet_rx_recv(uint8_t *buf, uint32_t buf_size, uint32_t *len_out)
+{
+    if (!genet_initialized || !rx_dma_buf || !buf || !len_out) {
+        return false;
+    }
+
+    /* Check if any frames are available */
+    uint32_t ring_base = GENET_RDMA_REG_OFF + (GENET_DESC_INDEX * DMA_RING_STRIDE);
+    uint32_t hw_prod = genet_reg_read(ring_base + RING_PROD_INDEX) & DMA_INDEX_MASK;
+
+    if (hw_prod == rx_ring.cons_index) {
+        return false;  /* No frames pending */
+    }
+
+    /* Read descriptor at consumer index */
+    uint32_t desc_idx = rx_ring.cons_index % rx_ring.size;
+    uint32_t desc_off = GENET_RDMA_OFF + (desc_idx * DMA_DESC_SIZE);
+    uint32_t length_status = genet_reg_read(desc_off + DMA_DESC_LENGTH_STATUS);
+
+    /* Extract frame length from bits [31:16] */
+    uint32_t frame_len = (length_status >> DMA_BUFLENGTH_SHIFT) & 0xFFF;
+
+    /* Check for errors */
+    if (length_status & (DMA_RX_CRC_ERROR | DMA_RX_OV | DMA_RX_RXER)) {
+        debug_puts("[GENET] RX: error status=");
+        debug_hex(length_status);
+        debug_puts("\n");
+        /* Still advance consumer to free the descriptor */
+        rx_ring.cons_index++;
+        genet_reg_write(ring_base + RING_CONS_INDEX, rx_ring.cons_index & DMA_INDEX_MASK);
+        return false;
+    }
+
+    /* Validate SOP+EOP (single-buffer frame) */
+    if (!(length_status & DMA_SOP) || !(length_status & DMA_EOP)) {
+        debug_puts("[GENET] RX: multi-buffer frame not supported\n");
+        rx_ring.cons_index++;
+        genet_reg_write(ring_base + RING_CONS_INDEX, rx_ring.cons_index & DMA_INDEX_MASK);
+        return false;
+    }
+
+    /* Copy frame data from DMA buffer to caller's buffer */
+    uint32_t copy_len = (frame_len < buf_size) ? frame_len : buf_size;
+    uint8_t *src = rx_dma_buf + (desc_idx * GENET_RX_BUF_SIZE);
+    memcpy(buf, src, copy_len);
+    *len_out = frame_len;
+
+    /* Advance consumer index (doorbell) */
+    rx_ring.cons_index++;
+    genet_reg_write(ring_base + RING_CONS_INDEX, rx_ring.cons_index & DMA_INDEX_MASK);
+
+    return true;
 }

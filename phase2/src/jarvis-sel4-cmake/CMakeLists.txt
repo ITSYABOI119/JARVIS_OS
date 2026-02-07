@@ -77,6 +77,9 @@ add_executable(jarvis-sel4
 
     # BCM2711 GENET Ethernet (Week 37 - TX only)
     src/drivers/bcm_genet.c
+
+    # Basic networking stack (Week 38 - ARP/ICMP)
+    src/drivers/net_stack.c
 )
 
 # Include directories

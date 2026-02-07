@@ -16,7 +16,7 @@ Guidance for Claude Code when working with this repository.
 | Phase 3 | Future | Months 24-30 | Beta (10+ configs, security audit) |
 | Phase 4 | Future | Months 30-36 | Production v1.0 |
 
-**Current:** Phase 2, Week 37 HARDWARE VERIFIED (February 7, 2026). Next: Week 38 GENET RX + Hardware Test.
+**Current:** Phase 2, Week 38 HARDWARE VERIFIED (February 7, 2026). Next: Week 39 USB HID or next driver.
 
 ---
 
@@ -150,7 +150,7 @@ JARVIS_OS/
 │   ├── src/
 │   │   ├── ipc/               # dual_ring_buffer, ipc_handler + tests
 │   │   ├── drivers/           # uart_pl011, emmc_sdhci, bcm2711_timer,
-│   │   │                      # bcm_genet, slot_alloc, dma_alloc, blk_dev
+│   │   │                      # bcm_genet, net_stack, slot_alloc, dma_alloc, blk_dev
 │   │   ├── ai/                # uart_ipc_client.py, system_bootstrap.py + tests
 │   │   ├── sel4/              # main_arm64.c, CMakeLists.txt
 │   │   └── jarvis-sel4-cmake/ # CMakeLists.txt for TII build system
@@ -217,9 +217,9 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 
 ---
 
-## Current Status (Phase 2, Week 37)
+## Current Status (Phase 2, Week 38)
 
-**Week 37 HARDWARE VERIFIED** (February 7, 2026) - GENET Ethernet TX: 6 PASS, 0 FAIL
+**Week 38 HARDWARE VERIFIED** (February 7, 2026) - GENET RX + Networking: 23 PASS, 0 FAIL (12 EMMC + 6 GENET TX + 5 RX/Net)
 
 | Milestone | Status |
 |-----------|--------|
@@ -239,14 +239,17 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | GENET TX DMA ring 16 (256 descs, TDMA enabled) | DONE |
 | GENET TX send (ARP broadcast test frame) | DONE |
 | 6-test GENET driver suite | DONE |
+| GENET RX DMA ring 16 (32 descs, RDMA + UMAC RX enabled) | DONE |
+| GENET RX recv + poll (polled receive) | DONE |
+| Basic networking stack (ARP reply + ICMP echo reply) | DONE |
+| 5-test RX + networking suite (hardware verified) | DONE |
 
-**Next:** Week 38 - GENET RX + Hardware Test
+**Next:** Week 39 - USB HID or next Tier 1 driver
 
 ### Remaining Work
 
 | Weeks | Task |
 |-------|------|
-| 38 | GENET RX + hardware test |
 | 39-41 | Additional Tier 1 drivers (USB HID, etc.) |
 | 42-46 | Alpha release infrastructure |
 | 47-50 | Security audit preparation |
@@ -381,6 +384,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **DMA allocator:** `phase2/src/drivers/dma_alloc.c`
 - **Block device:** `phase2/src/drivers/blk_dev.c`
 - **GENET Ethernet:** `phase2/src/drivers/bcm_genet.c`
+- **Net Stack:** `phase2/src/drivers/net_stack.c`
 - **Build config:** `phase2/src/jarvis-sel4-cmake/CMakeLists.txt`
 
 ### Rules

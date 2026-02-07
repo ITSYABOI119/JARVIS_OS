@@ -3,7 +3,7 @@
 **Phase:** Phase 2 - Alpha System (Months 12-24)
 **Timeline:** 52 weeks (December 2025 - December 2026)
 **Hardware:** Raspberry Pi 4 8GB (BCM2711, Cortex-A72)
-**Status:** Week 37 HARDWARE VERIFIED
+**Status:** Week 38 HARDWARE VERIFIED
 
 ---
 
@@ -32,7 +32,7 @@ UART IPC (10-20ms RTT)
 | Month 12-13 | 27-30 | COMPLETE (4/4) | IPC Integration + Manager Init |
 | Month 13-14 | 31-34 | COMPLETE (4/4) | Pi 4 Setup + UART IPC |
 | Month 15-16 | 35-36 | COMPLETE (2/2) | SD/EMMC Driver (read + write) |
-| Month 16 | 37-38 | IN PROGRESS (1/2) | GENET Ethernet (TX done, RX pending) |
+| Month 16 | 37-38 | COMPLETE (2/2) | GENET Ethernet (TX+RX) + Networking |
 | Month 17-18 | 39-42 | PENDING | USB HID + Alpha Prep |
 | Month 19-20 | 43-46 | PENDING | GPIO + Device Tree |
 | Month 21-22 | 47-50 | PENDING | Alpha Testing + Security |
@@ -287,6 +287,32 @@ UART RX: ENABLED (device frame mapped)
 
 ---
 
+### Week 38: Broadcom GENET Ethernet - Part 2 (RX + Networking)
+
+**Status:** BUILD VERIFIED (February 7, 2026) - 5 new tests, build clean
+**Effort:** ~4 hours (agent-assisted)
+
+**Achievements:**
+- GENET RX DMA ring 16: 32 descriptors with pre-allocated 64KB DMA buffer pool
+- RX receive path: polled `genet_rx_recv()` + `genet_rx_poll()` + RDMA enable + UMAC RX enable
+- Basic networking stack (`net_stack.c/h`): ARP reply, ICMP echo reply, IPv4 parsing
+- IP/ICMP checksum calculation (ones-complement sum)
+- 5-test suite: rx_ring_init, rx_poll_empty, net_config, arp_reply, icmp_echo_reply
+
+**New Files:**
+- `net_stack.h` (96 LOC) - Protocol structs (ETH, ARP, IP, ICMP) and API
+- `net_stack.c` (299 LOC) - Frame dispatcher, ARP handler, IP handler, ICMP handler
+
+**Modified Files:**
+- `bcm_genet.h` - Added RX ring struct, buffer defines, RX API prototypes
+- `bcm_genet.c` - Added RX DMA pre-alloc, rx_ring_init, rx_recv, rx_poll (~170 LOC)
+- `CMakeLists.txt` - Added net_stack.c
+- `main_arm64.c` - Added Week 38 test section
+
+**Files:** `phase2/weeks/week38/WEEK_38_STATUS.md`
+
+---
+
 ## Metrics Summary
 
 ### Code Written (Weeks 27-37)
@@ -303,7 +329,8 @@ UART RX: ENABLED (device frame mapped)
 | 34 | ~50 | ~100 | ~150 |
 | 35-36 | ~2,020 | 0 | ~2,020 |
 | 37 | ~773 | 0 | ~773 |
-| **Total** | **~5,603** | **~3,053** | **~8,656** |
+| 38 | ~565 | 0 | ~565 |
+| **Total** | **~6,168** | **~3,053** | **~9,221** |
 
 ### Test Coverage
 
@@ -372,7 +399,7 @@ UART RX: ENABLED (device frame mapped)
 |--------|------|--------|
 | PL011 UART | 32-33 | DONE (TX+RX) |
 | SD/EMMC | 35-36 | DONE (read+write) |
-| Broadcom GENET | 37-38 | TX done (Week 37), RX pending |
+| Broadcom GENET | 37-38 | DONE (TX+RX) |
 | USB HID | 39-40 | Planned |
 | GPIO | 43 | Planned |
 | Watchdog | 44 | Planned |
@@ -403,6 +430,7 @@ UART RX: ENABLED (device frame mapped)
 | Python<->seL4 UART IPC | Working | Bench 500 OK | PASS |
 | SD/EMMC Driver | Week 36 | Week 36 | DONE |
 | GENET Ethernet TX | Week 37 | Week 37 | DONE |
+| GENET Ethernet RX + Networking | Week 38 | Week 38 | DONE |
 | Alpha Release | Week 42 | - | â³ |
 | Security Audit | Week 50 | - | â³ |
 | 30-Day Stability | Week 52 | - | â³ |
@@ -416,7 +444,7 @@ UART RX: ENABLED (device frame mapped)
 | Pi 4 bare-metal boot | seL4 + JARVIS | Booting | â
  |
 | Python<->seL4 IPC | Week 34 | Week 34 | COMPLETE |
-| 15+ Tier 1 drivers | 15 drivers | 3/15 (UART, EMMC, GENET-TX) | â³ |
+| 15+ Tier 1 drivers | 15 drivers | 3/15 (UART, EMMC, GENET) | â³ |
 | 30-day stability | 0 crashes | - | â³ |
 | Alpha release | 20 testers | - | â³ |
 | Security audit | Pass | - | â³ |
@@ -445,5 +473,5 @@ UART RX: ENABLED (device frame mapped)
 ---
 
 *Last Updated: February 7, 2026*
-*Current Week: 37 CODE COMPLETE*
-*Next: Week 38 - GENET RX + Hardware Test*
+*Current Week: 38 HARDWARE VERIFIED*
+*Next: Hardware test on Pi 4 (RX + networking tests)*

@@ -276,4 +276,41 @@ bool genet_tx_send(const uint8_t *frame, uint32_t len);
 /* Read GENET revision register (for mapping verification) */
 uint32_t genet_read_rev(void);
 
+/* ================================================================
+ * RX Ring State
+ * ================================================================ */
+
+/* RX buffer pool: 32 buffers of 2048 bytes each (16 x 4KB pages) */
+#define GENET_RX_DESC_COUNT     32
+#define GENET_RX_BUF_SIZE       2048
+
+typedef struct {
+    uint32_t cons_index;    /* Software consumer index */
+    uint32_t prod_index;    /* Hardware producer index (read from register) */
+    uint32_t size;          /* Number of descriptors */
+} genet_rx_ring_t;
+
+/* RX DMA descriptor status bits */
+#define DMA_RX_OWN              0x8000u     /* Hardware owns this descriptor */
+#define DMA_RX_CHK_V3PLUS       0x0040u     /* RX checksum valid (v3+) */
+#define DMA_RX_CRC_ERROR        0x0001u
+#define DMA_RX_RXER             0x0004u
+#define DMA_RX_OV               0x0010u     /* Overflow */
+#define DMA_RX_LG               0x0020u     /* Frame too long */
+
+/* ================================================================
+ * RX Public API
+ * ================================================================ */
+
+/* Initialize RX DMA ring 16 and enable RDMA + UMAC RX.
+ * Requires: genet_init() already called. */
+bool genet_rx_ring_init(void);
+
+/* Receive a frame. Copies frame data to buf (up to buf_size bytes).
+ * Sets *len_out to actual frame length. Returns true if frame received. */
+bool genet_rx_recv(uint8_t *buf, uint32_t buf_size, uint32_t *len_out);
+
+/* Check if any RX frames are pending (non-destructive). */
+bool genet_rx_poll(void);
+
 #endif /* BCM_GENET_H */

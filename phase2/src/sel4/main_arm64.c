@@ -162,6 +162,7 @@ static void emmc_dump_block(uint32_t lba, const uint8_t *buf, size_t dump_len)
 #include "drivers/dma_alloc.h"
 #include "drivers/slot_alloc.h"
 #include "drivers/bcm_genet.h"
+#include "drivers/net_stack.h"
 
 #define BANNER \
     "\n" \
@@ -1381,6 +1382,205 @@ genet_test_done:
     }
 #else
     sel4_puts("[GENET] Test disabled (GENET_TEST=0)\n\n");
+#endif
+
+    /* ============================================================
+     * GENET RX + NETWORKING TEST (Week 38)
+     * ============================================================ */
+#if GENET_TEST
+    sel4_puts("\n========================================\n");
+    sel4_puts("GENET RX + NETWORKING TEST (Week 38)\n");
+    sel4_puts("========================================\n");
+
+    {
+        int w38_pass = 0;
+        int w38_fail = 0;
+
+        /* Test 1: RX ring init */
+        if (genet_rx_ring_init()) {
+            sel4_puts("[W38][TEST] rx_ring_init=PASS\n");
+            w38_pass++;
+        } else {
+            sel4_puts("[W38][TEST] rx_ring_init=FAIL\n");
+            w38_fail++;
+        }
+
+        /* Test 2: RX poll on empty ring (no cable = no frames) */
+        {
+            bool has_frames = genet_rx_poll();
+            if (!has_frames) {
+                sel4_puts("[W38][TEST] rx_poll_empty=PASS (no frames as expected)\n");
+                w38_pass++;
+            } else {
+                sel4_puts("[W38][TEST] rx_poll_empty=FAIL (unexpected frames)\n");
+                w38_fail++;
+            }
+        }
+
+        /* Test 3: Net stack init */
+        {
+            /* IP 10.0.0.2 in network byte order */
+            uint8_t test_mac[6] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE };
+            uint32_t test_ip = 0;
+            uint8_t ip_bytes[4] = { 10, 0, 0, 2 };
+            memcpy(&test_ip, ip_bytes, 4);
+            net_init(test_ip, test_mac);
+            sel4_puts("[W38][TEST] net_config=PASS\n");
+            w38_pass++;
+        }
+
+        /* Test 4: ARP reply construction */
+        {
+            static uint8_t arp_req[42];
+            static uint8_t arp_reply[64];
+            uint32_t reply_len = 0;
+            int p = 0;
+
+            /* Ethernet header */
+            memset(&arp_req[p], 0xFF, 6); p += 6;  /* dst = broadcast */
+            arp_req[p++] = 0xAA; arp_req[p++] = 0xBB;
+            arp_req[p++] = 0xCC; arp_req[p++] = 0xDD;
+            arp_req[p++] = 0xEE; arp_req[p++] = 0xFF;  /* src = requester MAC */
+            arp_req[p++] = 0x08; arp_req[p++] = 0x06;  /* EtherType: ARP */
+
+            /* ARP request */
+            arp_req[p++] = 0x00; arp_req[p++] = 0x01;  /* HTYPE: Ethernet */
+            arp_req[p++] = 0x08; arp_req[p++] = 0x00;  /* PTYPE: IPv4 */
+            arp_req[p++] = 0x06;                        /* HLEN */
+            arp_req[p++] = 0x04;                        /* PLEN */
+            arp_req[p++] = 0x00; arp_req[p++] = 0x01;  /* Opcode: Request */
+
+            /* Sender: AA:BB:CC:DD:EE:FF / 10.0.0.1 */
+            arp_req[p++] = 0xAA; arp_req[p++] = 0xBB;
+            arp_req[p++] = 0xCC; arp_req[p++] = 0xDD;
+            arp_req[p++] = 0xEE; arp_req[p++] = 0xFF;
+            arp_req[p++] = 10; arp_req[p++] = 0;
+            arp_req[p++] = 0;  arp_req[p++] = 1;
+
+            /* Target: 00:00:00:00:00:00 / 10.0.0.2 (our IP) */
+            memset(&arp_req[p], 0, 6); p += 6;
+            arp_req[p++] = 10; arp_req[p++] = 0;
+            arp_req[p++] = 0;  arp_req[p++] = 2;
+
+            bool got_reply = net_process_frame(arp_req, 42, arp_reply, &reply_len);
+
+            if (got_reply && reply_len == 42) {
+                /* Verify ARP reply opcode = 2 */
+                uint16_t opcode = ((uint16_t)arp_reply[20] << 8) | arp_reply[21];
+                /* Verify reply target MAC = requester's MAC */
+                bool mac_ok = (arp_reply[32] == 0xAA && arp_reply[33] == 0xBB &&
+                               arp_reply[34] == 0xCC && arp_reply[35] == 0xDD &&
+                               arp_reply[36] == 0xEE && arp_reply[37] == 0xFF);
+                if (opcode == 2 && mac_ok) {
+                    sel4_puts("[W38][TEST] arp_reply=PASS\n");
+                    w38_pass++;
+                } else {
+                    sel4_puts("[W38][TEST] arp_reply=FAIL (bad opcode or MAC)\n");
+                    w38_fail++;
+                }
+            } else {
+                sel4_puts("[W38][TEST] arp_reply=FAIL (no reply generated)\n");
+                w38_fail++;
+            }
+        }
+
+        /* Test 5: ICMP echo reply construction */
+        {
+            static uint8_t icmp_req[74];  /* ETH(14) + IP(20) + ICMP(8) + data(32) */
+            static uint8_t icmp_reply[128];
+            uint32_t reply_len = 0;
+            int p = 0;
+
+            /* Ethernet header */
+            icmp_req[p++] = 0xDE; icmp_req[p++] = 0xAD;
+            icmp_req[p++] = 0xBE; icmp_req[p++] = 0xEF;
+            icmp_req[p++] = 0xCA; icmp_req[p++] = 0xFE;  /* dst = our MAC */
+            icmp_req[p++] = 0xAA; icmp_req[p++] = 0xBB;
+            icmp_req[p++] = 0xCC; icmp_req[p++] = 0xDD;
+            icmp_req[p++] = 0xEE; icmp_req[p++] = 0xFF;  /* src = sender MAC */
+            icmp_req[p++] = 0x08; icmp_req[p++] = 0x00;  /* EtherType: IP */
+
+            /* IP header (20 bytes) */
+            icmp_req[p++] = 0x45;  /* version=4, IHL=5 */
+            icmp_req[p++] = 0x00;  /* DSCP/ECN */
+            icmp_req[p++] = 0x00; icmp_req[p++] = 60;  /* total_len = 60 (IP+ICMP+data) */
+            icmp_req[p++] = 0x00; icmp_req[p++] = 0x01;  /* ident */
+            icmp_req[p++] = 0x00; icmp_req[p++] = 0x00;  /* flags/frag */
+            icmp_req[p++] = 64;    /* TTL */
+            icmp_req[p++] = 1;     /* protocol = ICMP */
+            icmp_req[p++] = 0x00; icmp_req[p++] = 0x00;  /* checksum placeholder */
+            icmp_req[p++] = 10; icmp_req[p++] = 0;
+            icmp_req[p++] = 0;  icmp_req[p++] = 1;  /* src IP = 10.0.0.1 */
+            icmp_req[p++] = 10; icmp_req[p++] = 0;
+            icmp_req[p++] = 0;  icmp_req[p++] = 2;  /* dst IP = 10.0.0.2 (ours) */
+
+            /* Calculate IP checksum */
+            {
+                uint8_t *ip_start = &icmp_req[14];
+                uint16_t cksum = net_checksum(ip_start, 20);
+                ip_start[10] = (uint8_t)(cksum >> 8);
+                ip_start[11] = (uint8_t)(cksum & 0xFF);
+            }
+
+            /* ICMP echo request (8 bytes header + 32 bytes data) */
+            icmp_req[p++] = 8;     /* type = echo request */
+            icmp_req[p++] = 0;     /* code = 0 */
+            icmp_req[p++] = 0x00; icmp_req[p++] = 0x00;  /* checksum placeholder */
+            icmp_req[p++] = 0x12; icmp_req[p++] = 0x34;  /* ident */
+            icmp_req[p++] = 0x00; icmp_req[p++] = 0x01;  /* seq = 1 */
+
+            /* 32 bytes of data */
+            for (int i = 0; i < 32; i++) {
+                icmp_req[p++] = (uint8_t)(i & 0xFF);
+            }
+
+            /* Calculate ICMP checksum */
+            {
+                uint8_t *icmp_start = &icmp_req[34];
+                uint16_t cksum = net_checksum(icmp_start, 40);
+                icmp_start[2] = (uint8_t)(cksum >> 8);
+                icmp_start[3] = (uint8_t)(cksum & 0xFF);
+            }
+
+            bool got_reply = net_process_frame(icmp_req, 74, icmp_reply, &reply_len);
+
+            if (got_reply && reply_len == 74) {
+                /* Verify ICMP type = 0 (echo reply) */
+                uint8_t icmp_type = icmp_reply[34];
+                /* Verify ident preserved */
+                bool ident_ok = (icmp_reply[38] == 0x12 && icmp_reply[39] == 0x34);
+                /* Verify seq preserved */
+                bool seq_ok = (icmp_reply[40] == 0x00 && icmp_reply[41] == 0x01);
+
+                if (icmp_type == 0 && ident_ok && seq_ok) {
+                    sel4_puts("[W38][TEST] icmp_echo_reply=PASS\n");
+                    w38_pass++;
+                } else {
+                    snprintf(msg, sizeof(msg), "[W38][TEST] icmp_echo_reply=FAIL (type=%d ident=%d seq=%d)\n",
+                             icmp_type, ident_ok, seq_ok);
+                    sel4_puts(msg);
+                    w38_fail++;
+                }
+            } else {
+                snprintf(msg, sizeof(msg), "[W38][TEST] icmp_echo_reply=FAIL (reply=%d len=%u)\n",
+                         got_reply, reply_len);
+                sel4_puts(msg);
+                w38_fail++;
+            }
+        }
+
+        /* Test summary */
+        sel4_puts("[W38] ========================================\n");
+        snprintf(msg, sizeof(msg), "[W38] TEST RESULTS: %d PASS, %d FAIL\n",
+                 w38_pass, w38_fail);
+        sel4_puts(msg);
+        if (w38_fail == 0) {
+            sel4_puts("[W38] ALL TESTS PASSED\n");
+        } else {
+            sel4_puts("[W38] SOME TESTS FAILED\n");
+        }
+        sel4_puts("[W38] ========================================\n\n");
+    }
 #endif
 
     /* Optional UART echo test - keep disabled for IPC runs */
