@@ -1,8 +1,9 @@
 # Phase 1 Technical Debt Tracker
 
-**Last Updated:** November 17, 2025
-**Total Debt Items:** 2
-**Critical Items:** 0 (IPC SHM_SIZE bug resolved in Week 9)
+**Last Updated:** February 7, 2026
+**Total Debt Items:** 1 (stdin deferred to Phase 2)
+**Critical Items:** 0
+**Resolved:** DEBT #2 (build system) in Phase 2 Week 31-32, IPC SHM_SIZE in Week 9
 
 ---
 
@@ -43,33 +44,16 @@
 
 ---
 
-### DEBT #2: Custom Build System Integration 📊 PRIORITY: MEDIUM
+### RESOLVED: Custom Build System Integration ✅ Phase 2 (Week 31-32)
 **Source:** Week 2 - seL4 Serial Console
 **Issue:** Created custom CMakeLists.txt but currently using hello-world tutorial framework
-**Impact:**
-- Build works but not via our custom build system
-- Executable named "hello-world" not "jarvis-sel4"
-- Cannot easily add new source files to build
 
-**Mitigation:**
-- ✅ Current build process works and is repeatable
-- ✅ Custom CMakeLists.txt exists for reference
-- ✅ Can manually add files to tutorial CMakeLists.txt
-
-**Resolution Plan:**
-- **When:** Week 7-8 (when adding multiple source files for AI agent)
-- **How:** Integrate custom CMakeLists.txt with seL4 SDK properly
-- **Effort:** 4-6 hours estimated
-- **Alternatives:**
-  - Keep using tutorial framework (works fine)
-  - Gradually migrate to standalone build
-
-**Acceptance Criteria:**
-- Can build with custom CMakeLists.txt
-- Executable named "jarvis-sel4"
-- Easy to add new .c/.h files
-
-**Deferred Rationale:** Not blocking any current work, tutorial framework sufficient for now
+**Resolution (Phase 2):**
+- ✅ Custom `phase2/src/jarvis-sel4-cmake/CMakeLists.txt` using TII seL4 build system
+- ✅ Executable named "jarvis-sel4" (via `DeclareRootserver()`)
+- ✅ Easy to add new .c/.h files (just add to `add_executable()` list)
+- ✅ Phase 1 tutorial framework retained for Phase 1 PoC (still works)
+- Resolved when ARM64 Pi 4 build system was set up in Week 31-32
 
 ---
 

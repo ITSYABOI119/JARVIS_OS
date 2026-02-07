@@ -16,7 +16,7 @@ Guidance for Claude Code when working with this repository.
 | Phase 3 | Future | Months 24-30 | Beta (10+ configs, security audit) |
 | Phase 4 | Future | Months 30-36 | Production v1.0 |
 
-**Current:** Phase 2, Week 36 COMPLETE (February 6, 2026). Next: Week 37 Broadcom GENET Ethernet.
+**Current:** Phase 2, Week 37 HARDWARE VERIFIED (February 7, 2026). Next: Week 38 GENET RX + Hardware Test.
 
 ---
 
@@ -150,7 +150,7 @@ JARVIS_OS/
 │   ├── src/
 │   │   ├── ipc/               # dual_ring_buffer, ipc_handler + tests
 │   │   ├── drivers/           # uart_pl011, emmc_sdhci, bcm2711_timer,
-│   │   │                      # slot_alloc, dma_alloc, blk_dev + tests
+│   │   │                      # bcm_genet, slot_alloc, dma_alloc, blk_dev
 │   │   ├── ai/                # uart_ipc_client.py, system_bootstrap.py + tests
 │   │   ├── sel4/              # main_arm64.c, CMakeLists.txt
 │   │   └── jarvis-sel4-cmake/ # CMakeLists.txt for TII build system
@@ -217,9 +217,9 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 
 ---
 
-## Current Status (Phase 2, Week 36)
+## Current Status (Phase 2, Week 37)
 
-**Week 36 COMPLETE** (February 6, 2026) - SD/EMMC Driver Done
+**Week 37 HARDWARE VERIFIED** (February 7, 2026) - GENET Ethernet TX: 6 PASS, 0 FAIL
 
 | Milestone | Status |
 |-----------|--------|
@@ -233,14 +233,20 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | 12-test EMMC driver suite: 12 PASS, 0 FAIL | DONE |
 | Decision cache loaded (258 patterns) | DONE |
 | BCM2711 System Timer + throughput (11.9 MB/s ADMA2) | DONE |
+| GENET MMIO mapping (6 pages at 0x604000, own device untyped) | DONE |
+| GENET UMAC init + RGMII config | DONE |
+| GENET PHY init via MDIO (BCM54213PE at addr 1) | DONE |
+| GENET TX DMA ring 16 (256 descs, TDMA enabled) | DONE |
+| GENET TX send (ARP broadcast test frame) | DONE |
+| 6-test GENET driver suite | DONE |
 
-**Next:** Week 37 - Broadcom GENET Ethernet driver
+**Next:** Week 38 - GENET RX + Hardware Test
 
 ### Remaining Work
 
 | Weeks | Task |
 |-------|------|
-| 37-38 | Broadcom GENET Ethernet driver |
+| 38 | GENET RX + hardware test |
 | 39-41 | Additional Tier 1 drivers (USB HID, etc.) |
 | 42-46 | Alpha release infrastructure |
 | 47-50 | Security audit preparation |
@@ -294,6 +300,7 @@ Full spec: `phase2/docs/UART_IPC_PROTOCOL.md`
 ### BCM2711 Hardware
 
 ```
+GENET Ethernet:  0xFD580000  (separate device untyped!)
 Peripheral Base: 0xFE000000
 System Timer:    0xFE003000  (1 MHz free-running counter)
 GPIO:            0xFE200000
@@ -337,6 +344,8 @@ Backup: `temp_sd_backup/uboot_working/`
 0x5c1000 - GPIO (hardcoded)
 0x5c2000 - System Timer (auto-assigned)
 0x5c3000 - EMMC (auto-assigned)
+0x5c4000-0x603FFF - DMA pool (256KB)
+0x604000-0x609FFF - GENET MMIO (6 pages, own device untyped)
 ```
 
 ### Phase 1 IPC Limitation
@@ -371,6 +380,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Slot allocator:** `phase2/src/drivers/slot_alloc.c`
 - **DMA allocator:** `phase2/src/drivers/dma_alloc.c`
 - **Block device:** `phase2/src/drivers/blk_dev.c`
+- **GENET Ethernet:** `phase2/src/drivers/bcm_genet.c`
 - **Build config:** `phase2/src/jarvis-sel4-cmake/CMakeLists.txt`
 
 ### Rules

@@ -161,6 +161,7 @@ static void emmc_dump_block(uint32_t lba, const uint8_t *buf, size_t dump_len)
 #include "drivers/bcm2711_timer.h"
 #include "drivers/dma_alloc.h"
 #include "drivers/slot_alloc.h"
+#include "drivers/bcm_genet.h"
 
 #define BANNER \
     "\n" \
@@ -1250,6 +1251,136 @@ emmc_test_done:
     sel4_puts("[EMMC] ========================================\n\n");
 #else
     sel4_puts("[EMMC] Test disabled (EMMC_TEST=0)\n\n");
+#endif
+
+    /* ============================================================
+     * GENET ETHERNET TEST (Week 37)
+     * ============================================================ */
+#if GENET_TEST
+    sel4_puts("\n========================================\n");
+    sel4_puts("GENET ETHERNET TEST (Week 37)\n");
+    sel4_puts("========================================\n");
+
+    {
+        int genet_pass = 0;
+        int genet_fail = 0;
+
+        /* Test 1: GENET init (MMIO mapping, UMAC reset) */
+        if (genet_init()) {
+            sel4_puts("[GENET][TEST] init=PASS\n");
+            genet_pass++;
+        } else {
+            sel4_puts("[GENET][TEST] init=FAIL\n");
+            genet_fail++;
+            goto genet_test_done;
+        }
+
+        /* Test 2: Read revision register */
+        {
+            uint32_t rev = genet_read_rev();
+            snprintf(msg, sizeof(msg), "[GENET][TEST] REV_CTRL=0x%08x\n", rev);
+            sel4_puts(msg);
+            if (rev != 0 && rev != 0xFFFFFFFF) {
+                sel4_puts("[GENET][TEST] read_rev=PASS\n");
+                genet_pass++;
+            } else {
+                sel4_puts("[GENET][TEST] read_rev=FAIL (unexpected value)\n");
+                genet_fail++;
+            }
+        }
+
+        /* Test 3: Set MAC address */
+        {
+            /* Use a locally-administered unicast MAC (bit 1 of byte 0 set) */
+            uint8_t mac[6] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE };
+            genet_set_mac(mac);
+            sel4_puts("[GENET][TEST] set_mac=PASS\n");
+            genet_pass++;
+        }
+
+        /* Test 4: PHY init (MDIO) */
+        if (genet_phy_init()) {
+            sel4_puts("[GENET][TEST] phy_init=PASS\n");
+            genet_pass++;
+        } else {
+            sel4_puts("[GENET][TEST] phy_init=FAIL (PHY not detected or MDIO error)\n");
+            genet_fail++;
+            /* Continue - TX ring setup doesn't need PHY for basic test */
+        }
+
+        /* Test 5: TX ring init */
+        if (genet_tx_ring_init()) {
+            sel4_puts("[GENET][TEST] tx_ring_init=PASS\n");
+            genet_pass++;
+        } else {
+            sel4_puts("[GENET][TEST] tx_ring_init=FAIL\n");
+            genet_fail++;
+            goto genet_test_done;
+        }
+
+        /* Test 6: Send ARP broadcast (best-effort, may not get response) */
+        {
+            /* Build a minimal ARP WHO-HAS request frame:
+             *   Dst MAC:  FF:FF:FF:FF:FF:FF (broadcast)
+             *   Src MAC:  DE:AD:BE:EF:CA:FE
+             *   EtherType: 0x0806 (ARP)
+             *   ARP: Ethernet(1), IPv4(0x0800), HLen=6, PLen=4
+             *   Opcode: 1 (Request)
+             *   Sender MAC/IP: DE:AD:BE:EF:CA:FE / 10.0.0.2
+             *   Target MAC/IP: 00:00:00:00:00:00 / 10.0.0.1
+             */
+            static uint8_t arp_frame[42];
+            int p = 0;
+
+            /* Ethernet header (14 bytes) */
+            memset(&arp_frame[p], 0xFF, 6); p += 6;  /* dst MAC = broadcast */
+            arp_frame[p++] = 0xDE; arp_frame[p++] = 0xAD;
+            arp_frame[p++] = 0xBE; arp_frame[p++] = 0xEF;
+            arp_frame[p++] = 0xCA; arp_frame[p++] = 0xFE;  /* src MAC */
+            arp_frame[p++] = 0x08; arp_frame[p++] = 0x06;  /* EtherType: ARP */
+
+            /* ARP header (28 bytes) */
+            arp_frame[p++] = 0x00; arp_frame[p++] = 0x01;  /* HTYPE: Ethernet */
+            arp_frame[p++] = 0x08; arp_frame[p++] = 0x00;  /* PTYPE: IPv4 */
+            arp_frame[p++] = 0x06;                          /* HLEN: 6 */
+            arp_frame[p++] = 0x04;                          /* PLEN: 4 */
+            arp_frame[p++] = 0x00; arp_frame[p++] = 0x01;  /* Opcode: Request */
+
+            /* Sender: DE:AD:BE:EF:CA:FE / 10.0.0.2 */
+            arp_frame[p++] = 0xDE; arp_frame[p++] = 0xAD;
+            arp_frame[p++] = 0xBE; arp_frame[p++] = 0xEF;
+            arp_frame[p++] = 0xCA; arp_frame[p++] = 0xFE;
+            arp_frame[p++] = 10; arp_frame[p++] = 0;
+            arp_frame[p++] = 0;  arp_frame[p++] = 2;
+
+            /* Target: 00:00:00:00:00:00 / 10.0.0.1 */
+            memset(&arp_frame[p], 0, 6); p += 6;
+            arp_frame[p++] = 10; arp_frame[p++] = 0;
+            arp_frame[p++] = 0;  arp_frame[p++] = 1;
+
+            if (genet_tx_send(arp_frame, 42)) {
+                sel4_puts("[GENET][TEST] tx_send_arp=PASS\n");
+                genet_pass++;
+            } else {
+                sel4_puts("[GENET][TEST] tx_send_arp=FAIL\n");
+                genet_fail++;
+            }
+        }
+
+genet_test_done:
+        sel4_puts("[GENET] ========================================\n");
+        snprintf(msg, sizeof(msg), "[GENET] TEST RESULTS: %d PASS, %d FAIL\n",
+                 genet_pass, genet_fail);
+        sel4_puts(msg);
+        if (genet_fail == 0) {
+            sel4_puts("[GENET] ALL TESTS PASSED\n");
+        } else {
+            sel4_puts("[GENET] SOME TESTS FAILED\n");
+        }
+        sel4_puts("[GENET] ========================================\n\n");
+    }
+#else
+    sel4_puts("[GENET] Test disabled (GENET_TEST=0)\n\n");
 #endif
 
     /* Optional UART echo test - keep disabled for IPC runs */

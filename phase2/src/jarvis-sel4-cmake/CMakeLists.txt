@@ -74,6 +74,9 @@ add_executable(jarvis-sel4
 
     # Shared slot allocator (Week 36 - prevents slot collisions)
     src/drivers/slot_alloc.c
+
+    # BCM2711 GENET Ethernet (Week 37 - TX only)
+    src/drivers/bcm_genet.c
 )
 
 # Include directories

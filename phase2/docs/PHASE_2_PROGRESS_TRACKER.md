@@ -3,7 +3,7 @@
 **Phase:** Phase 2 - Alpha System (Months 12-24)
 **Timeline:** 52 weeks (December 2025 - December 2026)
 **Hardware:** Raspberry Pi 4 8GB (BCM2711, Cortex-A72)
-**Status:** Week 36 COMPLETE
+**Status:** Week 37 HARDWARE VERIFIED
 
 ---
 
@@ -32,7 +32,7 @@ UART IPC (10-20ms RTT)
 | Month 12-13 | 27-30 | COMPLETE (4/4) | IPC Integration + Manager Init |
 | Month 13-14 | 31-34 | COMPLETE (4/4) | Pi 4 Setup + UART IPC |
 | Month 15-16 | 35-36 | COMPLETE (2/2) | SD/EMMC Driver (read + write) |
-| Month 16 | 37-38 | PENDING | GENET Ethernet + Additional Drivers |
+| Month 16 | 37-38 | IN PROGRESS (1/2) | GENET Ethernet (TX done, RX pending) |
 | Month 17-18 | 39-42 | PENDING | USB HID + Alpha Prep |
 | Month 19-20 | 43-46 | PENDING | GPIO + Device Tree |
 | Month 21-22 | 47-50 | PENDING | Alpha Testing + Security |
@@ -262,9 +262,34 @@ UART RX: ENABLED (device frame mapped)
 
 ---
 
+### Week 37: Broadcom GENET Ethernet - Part 1
+
+**Status:** HARDWARE VERIFIED (February 7, 2026) - 6 PASS, 0 FAIL
+**Effort:** ~8 hours
+
+**Achievements:**
+- GENET MMIO mapping: 6 pages at vaddr 0x604000 (dedicated device untyped, buddy skip)
+- UMAC init: reset, MIB clear, max frame length, port mode, RGMII config
+- PHY management via MDIO: BCM54213PE at addr 1, ID read, reset, auto-negotiation
+- TX DMA ring 16: 256 descriptors, TDMA enable, SCB burst config
+- TX send: frame copy to DMA buffer, descriptor write, producer index doorbell
+- 6-test suite: init, read_rev, set_mac, phy_init, tx_ring_init, tx_send_arp
+- **Hardware test:** All 6 tests PASS on Pi 4 bare metal
+
+**Critical Fix:** DMA buffer must be pre-allocated BEFORE any GENET register writes
+(GENET PHY/UMAC writes cause subsequent `seL4_Untyped_Retype()` to halt)
+
+**New Driver Files:**
+- `bcm_genet.h` (253 LOC) - Register definitions, DMA descriptor format, API
+- `bcm_genet.c` (520 LOC) - Full TX-only driver implementation
+
+**Files:** `phase2/weeks/week37/WEEK_37_STATUS.md`
+
+---
+
 ## Metrics Summary
 
-### Code Written (Weeks 27-36)
+### Code Written (Weeks 27-37)
 
 | Week | C Lines | Python Lines | Total |
 |------|---------|--------------|-------|
@@ -277,7 +302,8 @@ UART RX: ENABLED (device frame mapped)
 | 33 | ~150 | 0 | ~150 |
 | 34 | ~50 | ~100 | ~150 |
 | 35-36 | ~2,020 | 0 | ~2,020 |
-| **Total** | **~4,830** | **~3,053** | **~7,883** |
+| 37 | ~773 | 0 | ~773 |
+| **Total** | **~5,603** | **~3,053** | **~8,656** |
 
 ### Test Coverage
 
@@ -340,21 +366,21 @@ UART RX: ENABLED (device frame mapped)
 | bcm2711-rpi-4-b.dtb | 56 KB | Device tree | â
  |
 
-### Driver Status
+### Driver Status (3/15 Tier 1)
 
 | Driver | Week | Status |
 |--------|------|--------|
-| PL011 UART | 32-33 | â
- DONE (TX+RX) |
-| SD/EMMC | 35-36 | â³ Planned |
-| Broadcom GENET | 37-38 | â³ Planned |
-| USB HID | 39-40 | â³ Planned |
-| GPIO | 43 | â³ Planned |
-| Watchdog | 44 | â³ Planned |
-| Device Tree | 45-46 | â³ Planned |
-| Temperature | 44 | â³ Planned |
+| PL011 UART | 32-33 | DONE (TX+RX) |
+| SD/EMMC | 35-36 | DONE (read+write) |
+| Broadcom GENET | 37-38 | TX done (Week 37), RX pending |
+| USB HID | 39-40 | Planned |
+| GPIO | 43 | Planned |
+| Watchdog | 44 | Planned |
+| Device Tree | 45-46 | Planned |
+| Temperature | 44 | Planned |
 
 ---
+
 
 ## Key Milestones
 
@@ -375,7 +401,8 @@ UART RX: ENABLED (device frame mapped)
 | UART RX Working | Week 33 | Week 33 | â
  |
 | Python<->seL4 UART IPC | Working | Bench 500 OK | PASS |
-| SD/EMMC Driver | Week 36 | - | â³ |
+| SD/EMMC Driver | Week 36 | Week 36 | DONE |
+| GENET Ethernet TX | Week 37 | Week 37 | DONE |
 | Alpha Release | Week 42 | - | â³ |
 | Security Audit | Week 50 | - | â³ |
 | 30-Day Stability | Week 52 | - | â³ |
@@ -389,7 +416,7 @@ UART RX: ENABLED (device frame mapped)
 | Pi 4 bare-metal boot | seL4 + JARVIS | Booting | â
  |
 | Python<->seL4 IPC | Week 34 | Week 34 | COMPLETE |
-| 15+ Tier 1 drivers | 15 drivers | 1/15 (UART) | â³ |
+| 15+ Tier 1 drivers | 15 drivers | 3/15 (UART, EMMC, GENET-TX) | â³ |
 | 30-day stability | 0 crashes | - | â³ |
 | Alpha release | 20 testers | - | â³ |
 | Security audit | Pass | - | â³ |
@@ -418,5 +445,5 @@ UART RX: ENABLED (device frame mapped)
 ---
 
 *Last Updated: February 7, 2026*
-*Current Week: 36 COMPLETE*
-*Next: Week 37 - Broadcom GENET Ethernet*
+*Current Week: 37 CODE COMPLETE*
+*Next: Week 38 - GENET RX + Hardware Test*
