@@ -3,7 +3,7 @@
 **Phase:** Phase 2 - Alpha System (Months 12-24)
 **Timeline:** 52 weeks (December 2025 - December 2026)
 **Hardware:** Raspberry Pi 4 8GB (BCM2711, Cortex-A72)
-**Status:** Week 38 HARDWARE VERIFIED
+**Status:** Week 42 BUILD VERIFIED
 
 ---
 
@@ -33,7 +33,7 @@ UART IPC (10-20ms RTT)
 | Month 13-14 | 31-34 | COMPLETE (4/4) | Pi 4 Setup + UART IPC |
 | Month 15-16 | 35-36 | COMPLETE (2/2) | SD/EMMC Driver (read + write) |
 | Month 16 | 37-38 | COMPLETE (2/2) | GENET Ethernet (TX+RX) + Networking |
-| Month 17-18 | 39-42 | PENDING | USB HID + Alpha Prep |
+| Month 17-18 | 39-42 | COMPLETE (4/4) | USB HID + Alpha Prep |
 | Month 19-20 | 43-46 | PENDING | GPIO + Device Tree |
 | Month 21-22 | 47-50 | PENDING | Alpha Testing + Security |
 | Month 23-24 | 51-52 | PENDING | Stability + Final Report |
@@ -313,6 +313,70 @@ UART RX: ENABLED (device frame mapped)
 
 ---
 
+### Week 39: Shell Commands + GENET Integration
+
+**Status:** HARDWARE VERIFIED (February 7, 2026) - 10 new tests
+**Effort:** ~6 hours
+
+**Achievements:**
+- Shell commands: ping, ifconfig, netstat (net_cmd.c)
+- Outbound networking: ARP request, ICMP echo request
+- ARP cache (8 entries) + ARP resolve with timeout
+- GENET link status/speed/stats via MDIO
+- UART IPC COMMAND handler (0x07/0x08)
+- 10-test shell + integration suite
+
+**Files:** `phase2/weeks/week39/WEEK_39_STATUS.md`
+
+---
+
+### Week 40: USB HID Keyboard Driver Part 1
+
+**Status:** HARDWARE VERIFIED (February 8, 2026) - 6 new tests (4 PASS + 2 SKIP)
+**Effort:** ~8 hours
+
+**Achievements:**
+- DWC2 USB host controller init (slave mode, 3 MMIO pages at 0x60A000)
+- USB enumeration (GET_DESCRIPTOR, SET_ADDRESS, SET_CONFIGURATION)
+- HID boot protocol keyboard (8-byte reports, scancode to ASCII)
+- 6-test USB HID suite
+
+**Files:** `phase2/weeks/week40/WEEK_40_STATUS.md`
+
+---
+
+### Week 41: USB HID Full Keyboard + Shell Integration
+
+**Status:** HARDWARE VERIFIED (February 8, 2026) - 10 new tests
+**Effort:** ~6 hours
+
+**Achievements:**
+- Ctrl/CapsLock/special key support
+- USB keyboard shell integration (line buffer + echo)
+- "usb" shell command
+- 10-test USB keyboard suite
+
+**Files:** `phase2/weeks/week41/WEEK_41_STATUS.md`
+
+---
+
+### Week 42: Alpha Release Infrastructure
+
+**Status:** BUILD VERIFIED (February 8, 2026) - scripts/docs only
+**Effort:** ~4 hours (agent-assisted)
+
+**Achievements:**
+- install_jarvis.sh Linux/WSL installer
+- install_jarvis.bat Windows installer
+- USER_GUIDE.md setup documentation
+- ALPHA_TESTER_GUIDE.md tester onboarding guide
+- build_installer_image.sh SD card image builder
+- flash_sd.sh SD card flash utility
+
+**Files:** `phase2/weeks/week42/WEEK_42_STATUS.md`
+
+---
+
 ## Metrics Summary
 
 ### Code Written (Weeks 27-38)
@@ -400,7 +464,7 @@ UART RX: ENABLED (device frame mapped)
 | PL011 UART | 32-33 | DONE (TX+RX) |
 | SD/EMMC | 35-36 | DONE (read+write) |
 | Broadcom GENET | 37-38 | DONE (TX+RX) |
-| USB HID | 39-40 | Planned |
+| USB HID Keyboard | 40-41 | DONE (full keyboard + shell) |
 | GPIO | 43 | Planned |
 | Watchdog | 44 | Planned |
 | Device Tree | 45-46 | Planned |
@@ -431,6 +495,10 @@ UART RX: ENABLED (device frame mapped)
 | SD/EMMC Driver | Week 36 | Week 36 | DONE |
 | GENET Ethernet TX | Week 37 | Week 37 | DONE |
 | GENET Ethernet RX + Networking | Week 38 | Week 38 | DONE |
+| Shell Commands + GENET Integration | Week 39 | Week 39 | DONE |
+| USB HID Keyboard Driver | Week 40 | Week 40 | DONE |
+| USB HID Full Keyboard + Shell | Week 41 | Week 41 | DONE |
+| Alpha Release Infrastructure | Week 42 | Week 42 | DONE |
 | Alpha Release | Week 42 | - | â³ |
 | Security Audit | Week 50 | - | â³ |
 | 30-Day Stability | Week 52 | - | â³ |
@@ -444,7 +512,7 @@ UART RX: ENABLED (device frame mapped)
 | Pi 4 bare-metal boot | seL4 + JARVIS | Booting | â
  |
 | Python<->seL4 IPC | Week 34 | Week 34 | COMPLETE |
-| 15+ Tier 1 drivers | 15 drivers | 3/15 (UART, EMMC, GENET) | â³ |
+| 15+ Tier 1 drivers | 15 drivers | 4/15 (UART, EMMC, GENET, USB HID) | â³ |
 | 30-day stability | 0 crashes | - | â³ |
 | Alpha release | 20 testers | - | â³ |
 | Security audit | Pass | - | â³ |
@@ -472,6 +540,6 @@ UART RX: ENABLED (device frame mapped)
 
 ---
 
-*Last Updated: February 7, 2026*
-*Current Week: 38 HARDWARE VERIFIED*
-*Next: Hardware test on Pi 4 (RX + networking tests)*
+*Last Updated: February 8, 2026*
+*Current Week: 42 BUILD VERIFIED*
+*Next: Additional drivers + alpha testing*
