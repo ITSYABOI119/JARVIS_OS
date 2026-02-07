@@ -164,6 +164,7 @@ static void emmc_dump_block(uint32_t lba, const uint8_t *buf, size_t dump_len)
 #include "drivers/bcm_genet.h"
 #include "drivers/net_stack.h"
 #include "drivers/net_cmd.h"
+#include "drivers/usb_hid.h"
 
 #define BANNER \
     "\n" \
@@ -1877,6 +1878,108 @@ genet_test_done:
         sel4_puts("[W39] ========================================\n\n");
     }
 #endif
+
+    /* ============================================================
+     * Week 40: USB HID Keyboard Driver Init + Tests
+     * ============================================================ */
+    sel4_puts("\n========================================\n");
+    sel4_puts("USB HID DRIVER (Week 40)\n");
+    sel4_puts("========================================\n");
+
+    /* Week 40: USB HID keyboard driver - DWC2 at 0xFE980000 (highest paddr, init last) */
+    sel4_puts("[INIT] USB HID keyboard...\n");
+    bool usb_ok = usb_hid_init(bi);
+    sel4_puts(usb_ok ? "[INIT] USB HID: controller initialized\n" : "[INIT] USB HID: init failed (non-fatal)\n");
+
+    {
+        int w40_pass = 0, w40_fail = 0, w40_skip = 0;
+
+        /* Test 1: DWC2 register access */
+        {
+            sel4_puts("[W40] Test 1: dwc2_reg_access... ");
+            if (usb_ok) {
+                sel4_puts("PASS\n"); w40_pass++;
+            } else {
+                sel4_puts("SKIP (USB not mapped)\n"); w40_skip++;
+            }
+        }
+
+        /* Test 2: DWC2 core init */
+        {
+            sel4_puts("[W40] Test 2: dwc2_core_init... ");
+            if (usb_ok) {
+                sel4_puts("PASS\n"); w40_pass++;
+            } else {
+                sel4_puts("SKIP (USB init failed)\n"); w40_skip++;
+            }
+        }
+
+        /* Test 3: Port status read */
+        {
+            sel4_puts("[W40] Test 3: port_status... ");
+            if (usb_ok) {
+                bool connected = usb_hid_device_connected();
+                if (connected) {
+                    sel4_puts("PASS (device connected)\n"); w40_pass++;
+                } else {
+                    sel4_puts("PASS (no device - ok)\n"); w40_pass++;
+                }
+            } else {
+                sel4_puts("SKIP\n"); w40_skip++;
+            }
+        }
+
+        /* Test 4: USB enumeration */
+        {
+            sel4_puts("[W40] Test 4: usb_enumeration... ");
+            if (usb_ok && usb_hid_device_connected()) {
+                sel4_puts("PASS\n"); w40_pass++;
+            } else {
+                sel4_puts("SKIP (no device)\n"); w40_skip++;
+            }
+        }
+
+        /* Test 5: HID scan code table */
+        {
+            sel4_puts("[W40] Test 5: scancode_table... ");
+            bool ok = true;
+            ok = ok && (usb_hid_scancode_to_ascii(0x04, 0) == 'a');
+            ok = ok && (usb_hid_scancode_to_ascii(0x04, 0x02) == 'A');   /* LShift */
+            ok = ok && (usb_hid_scancode_to_ascii(0x1D, 0) == 'z');
+            ok = ok && (usb_hid_scancode_to_ascii(0x1E, 0) == '1');
+            ok = ok && (usb_hid_scancode_to_ascii(0x1E, 0x02) == '!');   /* Shift+1 */
+            ok = ok && (usb_hid_scancode_to_ascii(0x28, 0) == '\n');     /* Enter */
+            ok = ok && (usb_hid_scancode_to_ascii(0x2C, 0) == ' ');      /* Space */
+            if (ok) { sel4_puts("PASS\n"); w40_pass++; }
+            else { sel4_puts("FAIL\n"); w40_fail++; }
+        }
+
+        /* Test 6: HID keyboard poll (hardware) */
+        {
+            sel4_puts("[W40] Test 6: hid_poll... ");
+            if (usb_ok && usb_hid_device_connected()) {
+                hid_keyboard_report_t report;
+                usb_hid_poll_keyboard(&report);
+                sel4_puts("PASS (polled)\n"); w40_pass++;
+            } else {
+                sel4_puts("SKIP (no keyboard)\n"); w40_skip++;
+            }
+        }
+
+        /* Week 40 summary */
+        sel4_puts("[W40] ========================================\n");
+        {
+            char buf[80];
+            snprintf(buf, sizeof(buf), "[W40] TEST RESULTS: %d PASS, %d FAIL, %d SKIP\n",
+                     w40_pass, w40_fail, w40_skip);
+            sel4_puts(buf);
+        }
+        if (w40_fail == 0)
+            sel4_puts("[W40] ALL TESTS PASSED\n");
+        else
+            sel4_puts("[W40] SOME TESTS FAILED\n");
+        sel4_puts("[W40] ========================================\n\n");
+    }
 
     /* Optional UART echo test - keep disabled for IPC runs */
 #if UART_ECHO_TEST

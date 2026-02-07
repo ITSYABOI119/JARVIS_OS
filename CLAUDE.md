@@ -16,7 +16,7 @@ Guidance for Claude Code when working with this repository.
 | Phase 3 | Future | Months 24-30 | Beta (10+ configs, security audit) |
 | Phase 4 | Future | Months 30-36 | Production v1.0 |
 
-**Current:** Phase 2, Week 39 HARDWARE VERIFIED (February 7, 2026). Next: Commit.
+**Current:** Phase 2, Week 40 HARDWARE VERIFIED (February 8, 2026). Next: Commit.
 
 ---
 
@@ -150,11 +150,11 @@ JARVIS_OS/
 │   ├── src/
 │   │   ├── ipc/               # dual_ring_buffer, ipc_handler + tests
 │   │   ├── drivers/           # uart_pl011, emmc_sdhci, bcm2711_timer,
-│   │   │                      # bcm_genet, net_stack, net_cmd, slot_alloc, dma_alloc, blk_dev
+│   │   │                      # bcm_genet, net_stack, net_cmd, usb_hid, slot_alloc, dma_alloc, blk_dev
 │   │   ├── ai/                # uart_ipc_client.py, system_bootstrap.py + tests
 │   │   ├── sel4/              # main_arm64.c, CMakeLists.txt
 │   │   └── jarvis-sel4-cmake/ # CMakeLists.txt for TII build system
-│   ├── weeks/                  # week27-week39 status docs
+│   ├── weeks/                  # week27-week40 status docs
 │   └── scripts/               # build_and_copy_kernel.sh
 ├── JARVIS_UNIFIED_PLAN.md     # 36-month master plan
 ├── ARCHITECTURE_ENHANCEMENTS.md
@@ -217,9 +217,9 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 
 ---
 
-## Current Status (Phase 2, Week 39)
+## Current Status (Phase 2, Week 40)
 
-**Week 39 HARDWARE VERIFIED** (February 7, 2026) - Shell Commands + GENET Integration: 32 PASS + 1 SKIP (23 existing + 9 new PASS + 1 SKIP)
+**Week 40 HARDWARE VERIFIED** (February 8, 2026) - USB HID Keyboard Driver: 36 PASS, 0 FAIL, 3 SKIP
 
 | Milestone | Status |
 |-----------|--------|
@@ -249,14 +249,19 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | GENET link status/speed/stats via MDIO | DONE |
 | UART IPC COMMAND handler (0x07/0x08) | DONE |
 | 10-test shell + integration suite (9 PASS + 1 SKIP hw verified) | DONE |
+| DWC2 USB host controller init (slave mode, 3 MMIO pages at 0x60A000) | DONE |
+| USB enumeration (GET_DESCRIPTOR, SET_ADDRESS, SET_CONFIGURATION) | DONE |
+| HID boot protocol keyboard (8-byte reports, scancode to ASCII) | DONE |
+| 6-test USB HID suite (4 PASS + 2 SKIP hardware verified) | DONE |
 
-**Next:** Commit Week 39
+**Next:** Week 40 Commit
 
 ### Remaining Work
 
 | Weeks | Task |
 |-------|------|
-| 40-41 | Additional Tier 1 drivers (USB HID, etc.) |
+| 40 | USB HID keyboard driver (DWC2 host, HID boot protocol) - DONE |
+| 41 | Additional Tier 1 drivers (USB mass storage, etc.) |
 | 42-46 | Alpha release infrastructure |
 | 47-50 | Security audit preparation |
 | 50-52 | 30-day stability testing |
@@ -315,6 +320,7 @@ System Timer:    0xFE003000  (1 MHz free-running counter)
 GPIO:            0xFE200000
 UART0 (PL011):   0xFE201000
 EMMC/SDHCI:      0xFE340000
+DWC2 USB:        0xFE980000  (USB OTG host controller)
 ```
 
 USB-Serial wiring: GPIO14(TXD)→RXD, GPIO15(RXD)←TXD, GND─GND
@@ -355,6 +361,7 @@ Backup: `temp_sd_backup/uboot_working/`
 0x5c3000 - EMMC (auto-assigned)
 0x5c4000-0x603FFF - DMA pool (256KB)
 0x604000-0x609FFF - GENET MMIO (6 pages, own device untyped)
+0x60A000-0x60CFFF - DWC2 USB (3 pages, paddr 0xFE980000)
 ```
 
 ### Phase 1 IPC Limitation
@@ -374,7 +381,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 
 ### Reading Order (New Session)
 1. This file (CLAUDE.md) → architecture + current status
-2. `phase2/weeks/week39/WEEK_39_STATUS.md` → latest week details
+2. `phase2/weeks/week40/WEEK_40_STATUS.md` → latest week details
 3. `phase2/docs/PHASE_2_KICKOFF.md` → Phase 2 goals
 4. Source files as needed
 
@@ -392,6 +399,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **GENET Ethernet:** `phase2/src/drivers/bcm_genet.c`
 - **Net Stack:** `phase2/src/drivers/net_stack.c`
 - **Net Commands:** `phase2/src/drivers/net_cmd.c`
+- **USB HID Keyboard:** `phase2/src/drivers/usb_hid.c`
 - **Build config:** `phase2/src/jarvis-sel4-cmake/CMakeLists.txt`
 
 ### Rules

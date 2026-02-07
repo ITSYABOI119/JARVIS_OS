@@ -83,6 +83,9 @@ add_executable(jarvis-sel4
 
     # Network shell commands (Week 39 - ping/ifconfig/netstat)
     src/drivers/net_cmd.c
+
+    # USB HID keyboard driver (Week 40 - DWC2 host + HID boot protocol)
+    src/drivers/usb_hid.c
 )
 
 # Include directories
