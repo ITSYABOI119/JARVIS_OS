@@ -86,6 +86,10 @@ add_executable(jarvis-sel4
 
     # USB HID keyboard driver (Week 40 - DWC2 host + HID boot protocol)
     src/drivers/usb_hid.c
+
+    # GPIO + I2C drivers (Week 43)
+    src/drivers/bcm_gpio.c
+    src/drivers/bcm_i2c.c
 )
 
 # Include directories

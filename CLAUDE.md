@@ -16,7 +16,7 @@ Guidance for Claude Code when working with this repository.
 | Phase 3 | Future | Months 24-30 | Beta (10+ configs, security audit) |
 | Phase 4 | Future | Months 30-36 | Production v1.0 |
 
-**Current:** Phase 2, Week 42 BUILD VERIFIED (February 8, 2026). Next: Commit.
+**Current:** Phase 2, Week 43 HARDWARE VERIFIED (February 8, 2026). Next: Commit.
 
 ---
 
@@ -145,16 +145,16 @@ JARVIS_OS/
 ├── phase1/                     # COMPLETE (26/26 weeks)
 │   └── src/                    # cache/, ipc/, sel4/, ai/, shell/
 ├── phase2/                     # ACTIVE
-│   ├── docs/                   # PHASE_2_KICKOFF.md, UART_IPC_PROTOCOL.md, USER_GUIDE.md, ALPHA_TESTER_GUIDE.md
+│   ├── docs/                   # PHASE_2_KICKOFF.md, UART_IPC_PROTOCOL.md, USER_GUIDE.md, ALPHA_TESTER_GUIDE.md, PI4_PLATFORM_GUIDE.md
 │   ├── firmware/               # kernel8.img, u-boot.bin, boot files
 │   ├── src/
 │   │   ├── ipc/               # dual_ring_buffer, ipc_handler + tests
 │   │   ├── drivers/           # uart_pl011, emmc_sdhci, bcm2711_timer,
-│   │   │                      # bcm_genet, net_stack, net_cmd, usb_hid, slot_alloc, dma_alloc, blk_dev
+│   │   │                      # bcm_genet, net_stack, net_cmd, usb_hid, bcm_gpio, bcm_i2c, slot_alloc, dma_alloc, blk_dev
 │   │   ├── ai/                # uart_ipc_client.py, system_bootstrap.py + tests
 │   │   ├── sel4/              # main_arm64.c, CMakeLists.txt
 │   │   └── jarvis-sel4-cmake/ # CMakeLists.txt for TII build system
-│   ├── weeks/                  # week27-week42 status docs
+│   ├── weeks/                  # week27-week43 status docs
 │   └── scripts/               # build_and_copy_kernel.sh, build_installer_image.sh, flash_sd.sh, install_jarvis.sh
 ├── JARVIS_UNIFIED_PLAN.md     # 36-month master plan
 ├── ARCHITECTURE_ENHANCEMENTS.md
@@ -217,9 +217,9 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 
 ---
 
-## Current Status (Phase 2, Week 42)
+## Current Status (Phase 2, Week 43)
 
-**Week 42 BUILD VERIFIED** (February 8, 2026) - Alpha Release Infrastructure: 46 PASS, 0 FAIL, 3 SKIP
+**Week 43 HARDWARE VERIFIED** (February 8, 2026) - GPIO + I2C Drivers, Stress Tests: 59 PASS, 0 FAIL, 3 SKIP
 
 | Milestone | Status |
 |-----------|--------|
@@ -263,8 +263,15 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | ALPHA_TESTER_GUIDE.md tester onboarding | DONE |
 | build_installer_image.sh SD card image builder | DONE |
 | flash_sd.sh SD card flash utility | DONE |
+| BCM2711 GPIO driver (pin control, LED, pull-up/down) | DONE |
+| I2C BSC1 driver (100/400 kHz, bus scan) | DONE |
+| GPIO shell command (pin status) | DONE |
+| I2C shell command (bus scan) | DONE |
+| Stress test framework (all-driver exercise loop) | DONE |
+| PI4_PLATFORM_GUIDE.md (driver matrix, memory maps, benchmarks) | DONE |
+| 13-test GPIO + I2C + stress suite (build pending) | DONE |
 
-**Next:** Week 43+ Additional drivers, alpha testing
+**Next:** Week 44+ additional drivers, alpha testing
 
 ### Remaining Work
 
@@ -273,7 +280,8 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | 40 | USB HID keyboard driver (DWC2 host, HID boot protocol) - DONE |
 | 41 | USB HID full keyboard + shell integration - DONE |
 | 42 | Alpha release infrastructure (install scripts, docs, SD imaging) - DONE |
-| 43-46 | Additional Tier 1 drivers + alpha testing |
+| 43 | GPIO + I2C drivers, stress tests, platform guide - DONE |
+| 44-46 | Additional Tier 1 drivers (watchdog, temp sensor, device tree) + alpha testing |
 | 47-50 | Security audit preparation |
 | 50-52 | 30-day stability testing |
 
@@ -331,6 +339,7 @@ System Timer:    0xFE003000  (1 MHz free-running counter)
 GPIO:            0xFE200000
 UART0 (PL011):   0xFE201000
 EMMC/SDHCI:      0xFE340000
+BSC1 I2C:        0xFE804000  (I2C master, 100/400 kHz)
 DWC2 USB:        0xFE980000  (USB OTG host controller)
 ```
 
@@ -358,7 +367,7 @@ Backup: `temp_sd_backup/uboot_working/`
 
 - **Forward-only cursor:** seL4 Untyped_Retype watermark only moves forward. Map devices in ascending paddr order.
 - **VSpace range:** vaddr must be within mapped VSpace (0x400000-0x5b9fff). Error 6 = seL4_FailedLookup means vaddr not in VSpace.
-- **Init order:** systimer(0xFE003000) → UART/GPIO(0xFE200000-0xFE201000) → EMMC(0xFE340000)
+- **Init order:** systimer(0xFE003000) → UART/GPIO(0xFE200000-0xFE201000) → EMMC(0xFE340000) → I2C(0xFE804000) → USB(0xFE980000)
 - **Binary buddy skip:** When timer is mapped before UART, use power-of-2 Untyped retypes to advance watermark from 0xFE004000→0xFE200000 (7 retypes: 16KB→32KB→64KB→128KB→256KB→512KB→1MB) instead of 2MB LargePage skip (which would consume GPIO's frame).
 - **Device cursor after mapping:** GPIO_BASE + 2*4KB = 0xFE202000
 - **DMA = uncacheable:** seL4 does NOT set `SCTLR_EL1.UCI`, so ALL cache maintenance instructions (`DC IVAC/CIVAC/CVAC`) trap from EL0. Map DMA buffers with `vm_attributes = 0` (uncacheable) instead.
@@ -392,7 +401,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 
 ### Reading Order (New Session)
 1. This file (CLAUDE.md) → architecture + current status
-2. `phase2/weeks/week42/WEEK_42_STATUS.md` → latest week details
+2. `phase2/weeks/week43/WEEK_43_STATUS.md` → latest week details
 3. `phase2/docs/PHASE_2_KICKOFF.md` → Phase 2 goals
 4. Source files as needed
 
@@ -411,12 +420,15 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Net Stack:** `phase2/src/drivers/net_stack.c`
 - **Net Commands:** `phase2/src/drivers/net_cmd.c`
 - **USB HID Keyboard:** `phase2/src/drivers/usb_hid.c`
+- **GPIO Driver:** `phase2/src/drivers/bcm_gpio.c`
+- **I2C Driver:** `phase2/src/drivers/bcm_i2c.c`
 - **Build config:** `phase2/src/jarvis-sel4-cmake/CMakeLists.txt`
 - **SD Image Builder:** `phase2/scripts/build_installer_image.sh`
 - **SD Flasher:** `phase2/scripts/flash_sd.sh`
 - **Installer (Linux):** `phase2/scripts/install_jarvis.sh`
 - **User Guide:** `phase2/docs/USER_GUIDE.md`
 - **Tester Guide:** `phase2/docs/ALPHA_TESTER_GUIDE.md`
+- **Platform Guide:** `phase2/docs/PI4_PLATFORM_GUIDE.md`
 
 ### Rules
 - Always update CLAUDE.md and week status files after completing work

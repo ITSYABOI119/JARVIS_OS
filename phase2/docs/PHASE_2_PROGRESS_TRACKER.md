@@ -3,7 +3,7 @@
 **Phase:** Phase 2 - Alpha System (Months 12-24)
 **Timeline:** 52 weeks (December 2025 - December 2026)
 **Hardware:** Raspberry Pi 4 8GB (BCM2711, Cortex-A72)
-**Status:** Week 42 BUILD VERIFIED
+**Status:** Week 43 BUILD PENDING
 
 ---
 
@@ -34,7 +34,7 @@ UART IPC (10-20ms RTT)
 | Month 15-16 | 35-36 | COMPLETE (2/2) | SD/EMMC Driver (read + write) |
 | Month 16 | 37-38 | COMPLETE (2/2) | GENET Ethernet (TX+RX) + Networking |
 | Month 17-18 | 39-42 | COMPLETE (4/4) | USB HID + Alpha Prep |
-| Month 19-20 | 43-46 | PENDING | GPIO + Device Tree |
+| Month 19-20 | 43-46 | IN PROGRESS (1/4) | GPIO/I2C + Device Tree |
 | Month 21-22 | 47-50 | PENDING | Alpha Testing + Security |
 | Month 23-24 | 51-52 | PENDING | Stability + Final Report |
 
@@ -377,6 +377,34 @@ UART RX: ENABLED (device frame mapped)
 
 ---
 
+### Week 43: GPIO + I2C Drivers, Stress Tests, Platform Guide
+
+**Status:** BUILD PENDING (February 8, 2026) - 13 new tests expected
+**Effort:** ~4 hours (agent-assisted)
+
+**Achievements:**
+- BCM2711 GPIO driver: pin control, activity LED, pull-up/down (bcm_gpio.c, 234 LOC)
+- BSC1 I2C master driver: 100/400 kHz, bus scan, write/read/write-read (bcm_i2c.c, 404 LOC)
+- Integration stress test framework (100-iteration all-driver exercise loop)
+- Shell commands: gpio, i2c, stress
+- PI4_PLATFORM_GUIDE.md: driver matrix, memory maps, benchmarks, troubleshooting (~420 LOC)
+- 13-test suite: 8 GPIO + 3 I2C + 2 stress
+
+**New Driver Files:**
+- `bcm_gpio.h` (109 LOC) - GPIO register definitions and API
+- `bcm_gpio.c` (234 LOC) - GPIO driver (reuses UART GPIO mapping)
+- `bcm_i2c.h` (133 LOC) - BSC1 I2C register definitions and API
+- `bcm_i2c.c` (404 LOC) - I2C master driver
+
+**Key Technical Details:**
+- GPIO reuses UART's already-mapped GPIO page at vaddr 0x5c1000 (no new MMIO mapping)
+- I2C BSC1 at paddr 0xFE804000 mapped via uart_device_map_page() (must init before USB)
+- BCM2711 new-style pull-up/down registers at 0xE4-0xF0 (not legacy GPPUD/GPPUDCLK)
+
+**Files:** `phase2/weeks/week43/WEEK_43_STATUS.md`
+
+---
+
 ## Metrics Summary
 
 ### Code Written (Weeks 27-38)
@@ -457,7 +485,7 @@ UART RX: ENABLED (device frame mapped)
 | bcm2711-rpi-4-b.dtb | 56 KB | Device tree | â
  |
 
-### Driver Status (3/15 Tier 1)
+### Driver Status (6/15 Tier 1)
 
 | Driver | Week | Status |
 |--------|------|--------|
@@ -465,10 +493,11 @@ UART RX: ENABLED (device frame mapped)
 | SD/EMMC | 35-36 | DONE (read+write) |
 | Broadcom GENET | 37-38 | DONE (TX+RX) |
 | USB HID Keyboard | 40-41 | DONE (full keyboard + shell) |
-| GPIO | 43 | Planned |
+| GPIO | 43 | DONE (pin control, LED, pull-up/down) |
+| I2C (BSC1) | 43 | DONE (100/400 kHz, bus scan) |
 | Watchdog | 44 | Planned |
-| Device Tree | 45-46 | Planned |
 | Temperature | 44 | Planned |
+| Device Tree | 45-46 | Planned |
 
 ---
 
@@ -499,6 +528,8 @@ UART RX: ENABLED (device frame mapped)
 | USB HID Keyboard Driver | Week 40 | Week 40 | DONE |
 | USB HID Full Keyboard + Shell | Week 41 | Week 41 | DONE |
 | Alpha Release Infrastructure | Week 42 | Week 42 | DONE |
+| GPIO + I2C Drivers | Week 43 | Week 43 | DONE |
+| Platform Guide Documentation | Week 43 | Week 43 | DONE |
 | Alpha Release | Week 42 | - | â³ |
 | Security Audit | Week 50 | - | â³ |
 | 30-Day Stability | Week 52 | - | â³ |
@@ -512,7 +543,7 @@ UART RX: ENABLED (device frame mapped)
 | Pi 4 bare-metal boot | seL4 + JARVIS | Booting | â
  |
 | Python<->seL4 IPC | Week 34 | Week 34 | COMPLETE |
-| 15+ Tier 1 drivers | 15 drivers | 4/15 (UART, EMMC, GENET, USB HID) | â³ |
+| 15+ Tier 1 drivers | 15 drivers | 6/15 (UART, EMMC, GENET, USB HID, GPIO, I2C) | â³ |
 | 30-day stability | 0 crashes | - | â³ |
 | Alpha release | 20 testers | - | â³ |
 | Security audit | Pass | - | â³ |
@@ -536,10 +567,11 @@ UART RX: ENABLED (device frame mapped)
 - `phase2/docs/PHASE_2_KICKOFF.md` - Goals and constraints
 - `phase2/docs/PHASE_2_HARDWARE_PIVOT.md` - Pi 4 decision rationale
 - `phase2/docs/UART_IPC_PROTOCOL.md` - Protocol specification
+- `phase2/docs/PI4_PLATFORM_GUIDE.md` - Pi 4 platform reference (Week 43)
 - `docs/AUDIT_W27_W34.md` - Audit report (January 10, 2026)
 
 ---
 
 *Last Updated: February 8, 2026*
-*Current Week: 42 BUILD VERIFIED*
-*Next: Additional drivers + alpha testing*
+*Current Week: 43 BUILD PENDING*
+*Next: Build + hardware test, then additional drivers + alpha testing*

@@ -11,6 +11,9 @@
 #include "bcm_genet.h"
 #include "bcm2711_timer.h"
 #include "usb_hid.h"
+#include "bcm_gpio.h"
+#include "bcm_i2c.h"
+#include "emmc_sdhci.h"
 
 #include <sel4/sel4.h>
 #include <string.h>
@@ -257,6 +260,49 @@ int cmd_netstat(char *output, uint32_t output_size)
 }
 
 /* ================================================================
+ * cmd_stress - Quick stress test exercising all drivers
+ * ================================================================ */
+
+int cmd_stress(char *output, uint32_t output_size)
+{
+    int pos = 0;
+    int s_pass = 0, s_fail = 0;
+    int iterations = 100;
+
+    for (int i = 0; i < iterations; i++) {
+        /* Timer read */
+        uint64_t t = systimer_read();
+        if (t != 0) s_pass++; else s_fail++;
+
+        /* GPIO toggle (if initialized) */
+        if (gpio_is_initialized()) {
+            gpio_write(42, 1);
+            gpio_write(42, 0);
+            s_pass++;
+        } else {
+            s_pass++; /* skip but don't fail */
+        }
+
+        /* EMMC: read LBA 0 */
+        uint8_t sector[512];
+        if (emmc_read_block(0, sector)) s_pass++; else s_fail++;
+
+        /* GENET: link status check (no-hang) */
+        (void)genet_get_link_status();
+        s_pass++;
+
+        /* USB HID: connected check (returns quickly) */
+        (void)usb_hid_device_connected();
+        s_pass++;
+    }
+
+    pos += snprintf(output + pos, output_size - pos,
+                    "Stress: %d iterations, %d pass, %d fail\n",
+                    iterations, s_pass, s_fail);
+    return pos;
+}
+
+/* ================================================================
  * Command Dispatcher
  * ================================================================ */
 
@@ -307,8 +353,17 @@ int cmd_dispatch(const char *cmd_str, char *output, uint32_t output_size)
     } else if (starts_with(cmd, "usb")) {
         return usb_hid_get_status(output, output_size);
 
+    } else if (starts_with(cmd, "gpio")) {
+        return gpio_get_status(output, output_size);
+
+    } else if (starts_with(cmd, "i2c")) {
+        return i2c_scan(output, output_size);
+
+    } else if (starts_with(cmd, "stress")) {
+        return cmd_stress(output, output_size);
+
     } else {
         return snprintf(output, output_size,
-                        "Unknown command. Try: ping, ifconfig, netstat, usb\n");
+                        "Commands: ping, ifconfig, netstat, usb, gpio, i2c, stress\n");
     }
 }

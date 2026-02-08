@@ -15,7 +15,7 @@
 #define CMD_OUTPUT_MAX  240
 
 /* Dispatch a command string to the appropriate handler.
- * Supported: "ping <ip>", "ifconfig", "netstat"
+ * Supported: "ping <ip>", "ifconfig", "netstat", "usb", "gpio", "i2c", "stress"
  * Output is written to output buffer (null-terminated).
  * Returns number of bytes written (excluding NUL). */
 int cmd_dispatch(const char *cmd_str, char *output, uint32_t output_size);
@@ -29,6 +29,9 @@ int cmd_ifconfig(char *output, uint32_t output_size);
 
 /* netstat: display TX/RX statistics */
 int cmd_netstat(char *output, uint32_t output_size);
+
+/* stress: exercise all drivers in a loop, report pass/fail counts */
+int cmd_stress(char *output, uint32_t output_size);
 
 /* Parse "a.b.c.d" to network-byte-order uint32.
  * Returns 0 on parse error. */

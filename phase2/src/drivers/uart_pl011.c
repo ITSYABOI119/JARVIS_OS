@@ -1241,3 +1241,8 @@ bool uart_is_rx_enabled(void)
 {
     return uart_rx_enabled && uart_mmio_base != NULL;
 }
+
+uintptr_t uart_get_gpio_vaddr(void)
+{
+    return (uintptr_t)gpio_mmio_base;
+}

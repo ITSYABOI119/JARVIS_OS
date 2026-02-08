@@ -42,14 +42,26 @@
 #define GPIO_PUP_PDN_CNTRL_REG1 0xE8    /* GPIO 16-31 */
 #define GPIO_PUP_PDN_CNTRL_REG2 0xEC    /* GPIO 32-47 */
 #define GPIO_PUP_PDN_CNTRL_REG3 0xF0    /* GPIO 48-57 */
+#ifndef GPIO_GPFSEL1
 #define GPIO_GPFSEL1            0x04    /* GPIO 10-19 function select */
+#endif
+#ifndef GPIO_GPLEV0
 #define GPIO_GPLEV0             0x34    /* GPIO 0-31 level */
+#endif
 
 /* Pull-up/down values (2 bits per GPIO) */
+#ifndef GPIO_PUD_NONE
 #define GPIO_PUD_NONE           0x0
+#endif
+#ifndef GPIO_PUD_UP
 #define GPIO_PUD_UP             0x1
+#endif
+#ifndef GPIO_PUD_DOWN
 #define GPIO_PUD_DOWN           0x2
+#endif
+#ifndef GPIO_FSEL_ALT0
 #define GPIO_FSEL_ALT0          0x4
+#endif
 
 /*
  * PL011 Register Offsets
@@ -307,5 +319,12 @@ void uart_print_status(void);
  * @return true if RX is enabled (device frame mapped), false otherwise
  */
 bool uart_is_rx_enabled(void);
+
+/**
+ * Get GPIO MMIO base virtual address (Week 43)
+ * Returns the vaddr of the already-mapped GPIO page (0x5c1000),
+ * or 0 if not yet mapped. Used by bcm_gpio driver to avoid double-mapping.
+ */
+uintptr_t uart_get_gpio_vaddr(void);
 
 #endif /* UART_PL011_H */
