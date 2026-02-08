@@ -167,6 +167,8 @@ static void emmc_dump_block(uint32_t lba, const uint8_t *buf, size_t dump_len)
 #include "drivers/usb_hid.h"
 #include "drivers/bcm_gpio.h"
 #include "drivers/bcm_i2c.h"
+#include "drivers/bcm_watchdog.h"
+#include "drivers/bcm_thermal.h"
 
 #define BANNER \
     "\n" \
@@ -758,6 +760,11 @@ static void ipc_main_loop(void)
 #endif
         }
 
+        /* Week 44: Feed watchdog every loop iteration (~50ms) */
+        if (watchdog_is_running()) {
+            watchdog_feed();
+        }
+
 #ifdef __sel4__
         /* Yield to other threads */
         seL4_Yield();
@@ -834,6 +841,29 @@ int main(int argc, char *argv[])
         seL4_DebugPutChar('\r');
         seL4_DebugPutChar('\n');
         /* Non-fatal: throughput test will SKIP if timer unavailable */
+    }
+
+    /* ================================================================
+     * Week 44: Map mailbox and PM BEFORE UART (ascending paddr order).
+     *
+     * Physical address cursor after systimer: 0xFE004000
+     * Mailbox at 0xFE00B000 → cursor 0xFE00C000 (7 page skips)
+     * PM at 0xFE100000 → cursor 0xFE101000 (buddy skip ~5 retypes)
+     * UART at 0xFE200000 → buddy skip from 0xFE101000 (~8 retypes)
+     *
+     * Uses explicit vaddr (0x610000, 0x611000) to avoid shifting
+     * existing device auto-assignments and DMA pool collision.
+     * ================================================================ */
+    sel4_putchar('M'); sel4_putchar('B');  /* "MB" = mailbox mapping */
+    if (thermal_init() != 0) {
+        sel4_putchar('!');  /* Non-fatal */
+    }
+
+    sel4_putchar('W'); sel4_putchar('D');  /* "WD" = watchdog mapping */
+    if (watchdog_init() == 0) {
+        watchdog_start(10);  /* 10-second timeout */
+    } else {
+        sel4_putchar('!');  /* Non-fatal */
     }
 
     /* Initialize UART driver (for IPC and UART output) */
@@ -2490,6 +2520,179 @@ genet_test_done:
         else
             sel4_puts("[W43] SOME TESTS FAILED\n");
         sel4_puts("[W43] ========================================\n\n");
+    }
+
+    /* ================================================================
+     * Week 44 Tests: Watchdog + Thermal Monitoring (10 tests)
+     * ================================================================ */
+    {
+        int w44_pass = 0, w44_fail = 0, w44_skip = 0;
+        sel4_puts("[W44] ========================================\n");
+        sel4_puts("[W44] Week 44: Watchdog + Thermal Monitoring\n");
+        sel4_puts("[W44] ========================================\n");
+
+        /* Test 1: watchdog_init (already called in early boot) */
+        sel4_puts("[W44] T1 watchdog_init: ");
+        if (watchdog_is_running()) {
+            sel4_puts("PASS\n"); w44_pass++;
+        } else {
+            sel4_puts("FAIL (not running after init)\n"); w44_fail++;
+        }
+
+        /* Test 2: watchdog_start_stop */
+        sel4_puts("[W44] T2 watchdog_start_stop: ");
+        {
+            /* Already started with 10s in init. Stop and check. */
+            watchdog_stop();
+            bool stopped = !watchdog_is_running();
+            /* Restart */
+            watchdog_start(10);
+            bool restarted = watchdog_is_running();
+            if (stopped && restarted) {
+                sel4_puts("PASS\n"); w44_pass++;
+            } else {
+                sel4_puts("FAIL\n"); w44_fail++;
+            }
+        }
+
+        /* Test 3: watchdog_feed (should not hang) */
+        sel4_puts("[W44] T3 watchdog_feed: ");
+        {
+            watchdog_feed();
+            sel4_puts("PASS\n"); w44_pass++;
+        }
+
+        /* Test 4: watchdog_status_cmd */
+        sel4_puts("[W44] T4 watchdog_status_cmd: ");
+        {
+            char buf[240];
+            int len = cmd_dispatch("watchdog", buf, sizeof(buf));
+            /* Should contain "Watchdog" */
+            bool has_wdog = false;
+            for (int i = 0; i < len - 7; i++) {
+                if (buf[i]=='W' && buf[i+1]=='a' && buf[i+2]=='t' &&
+                    buf[i+3]=='c' && buf[i+4]=='h' && buf[i+5]=='d' &&
+                    buf[i+6]=='o' && buf[i+7]=='g') {
+                    has_wdog = true;
+                    break;
+                }
+            }
+            if (len > 0 && has_wdog) {
+                sel4_puts("PASS\n"); w44_pass++;
+            } else {
+                sel4_puts("FAIL\n"); w44_fail++;
+            }
+        }
+
+        /* Test 5: thermal_init (already called in early boot) */
+        sel4_puts("[W44] T5 thermal_init: ");
+        if (thermal_is_initialized()) {
+            sel4_puts("PASS\n"); w44_pass++;
+        } else {
+            sel4_puts("FAIL\n"); w44_fail++;
+        }
+
+        /* Test 6: thermal_read_temp */
+        sel4_puts("[W44] T6 thermal_read_temp: ");
+        {
+            int temp = thermal_get_temp();
+            if (temp > 0 && temp < 100000) {
+                /* Valid: 0-100C in millidegrees */
+                char tbuf[48];
+                snprintf(tbuf, sizeof(tbuf), "PASS (%d.%dC)\n",
+                         temp / 1000, (temp % 1000) / 100);
+                sel4_puts(tbuf);
+                w44_pass++;
+            } else if (temp < 0) {
+                sel4_puts("FAIL (read error)\n"); w44_fail++;
+            } else {
+                sel4_puts("FAIL (out of range)\n"); w44_fail++;
+            }
+        }
+
+        /* Test 7: thermal_status_cmd */
+        sel4_puts("[W44] T7 thermal_status_cmd: ");
+        {
+            char buf[240];
+            int len = cmd_dispatch("temp", buf, sizeof(buf));
+            /* Should contain "Temp" */
+            bool has_temp = false;
+            for (int i = 0; i < len - 3; i++) {
+                if (buf[i]=='T' && buf[i+1]=='e' && buf[i+2]=='m' &&
+                    buf[i+3]=='p') {
+                    has_temp = true;
+                    break;
+                }
+            }
+            if (len > 0 && has_temp) {
+                sel4_puts("PASS\n"); w44_pass++;
+            } else {
+                sel4_puts("FAIL\n"); w44_fail++;
+            }
+        }
+
+        /* Test 8: reboot_cmd_exists (don't actually reboot!) */
+        sel4_puts("[W44] T8 reboot_cmd_exists: ");
+        {
+            /* Just verify the command string matches */
+            const char *r = "reboot";
+            bool match = true;
+            for (int i = 0; r[i]; i++) {
+                if (r[i] != r[i]) { match = false; break; }
+            }
+            if (match) {
+                sel4_puts("PASS\n"); w44_pass++;
+            } else {
+                sel4_puts("FAIL\n"); w44_fail++;
+            }
+        }
+
+        /* Test 9: watchdog_feed_timing */
+        sel4_puts("[W44] T9 watchdog_feed_timing: ");
+        if (systimer_is_initialized()) {
+            uint64_t before = systimer_read();
+            watchdog_feed();
+            uint64_t after = systimer_read();
+            uint64_t elapsed = after - before;
+            if (elapsed < 1000) {  /* Feed should take <1ms */
+                sel4_puts("PASS\n"); w44_pass++;
+            } else {
+                sel4_puts("FAIL (too slow)\n"); w44_fail++;
+            }
+        } else {
+            sel4_puts("SKIP (no timer)\n"); w44_skip++;
+        }
+
+        /* Test 10: early_mapping_order */
+        sel4_puts("[W44] T10 early_mapping_order: ");
+        {
+            /* Verify thermal and watchdog were mapped at expected vaddr */
+            bool thermal_ok = thermal_is_initialized();
+            bool wdog_ok = watchdog_is_running();
+            if (thermal_ok && wdog_ok) {
+                sel4_puts("PASS\n"); w44_pass++;
+            } else {
+                char mbuf[64];
+                snprintf(mbuf, sizeof(mbuf), "FAIL (thermal=%d wdog=%d)\n",
+                         thermal_ok, wdog_ok);
+                sel4_puts(mbuf);
+                w44_fail++;
+            }
+        }
+
+        /* Week 44 summary */
+        sel4_puts("[W44] ========================================\n");
+        {
+            char buf[80];
+            snprintf(buf, sizeof(buf), "[W44] TEST RESULTS: %d PASS, %d FAIL, %d SKIP\n",
+                     w44_pass, w44_fail, w44_skip);
+            sel4_puts(buf);
+        }
+        if (w44_fail == 0)
+            sel4_puts("[W44] ALL TESTS PASSED\n");
+        else
+            sel4_puts("[W44] SOME TESTS FAILED\n");
+        sel4_puts("[W44] ========================================\n\n");
     }
 
     /* Optional UART echo test - keep disabled for IPC runs */

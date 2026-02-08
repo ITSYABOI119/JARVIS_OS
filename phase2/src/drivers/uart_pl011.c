@@ -203,43 +203,98 @@ bool uart_device_map_page(uintptr_t paddr, uintptr_t requested_vaddr,
     }
 
     seL4_Word skip_pages = gap >> PAGE_BITS_4K;
-    seL4_Word required_slots = skip_pages + 1;
-    if (required_slots > device_slots_left) {
-        debug_puts("[DEV] ERROR: not enough empty slots\n");
-        return false;
-    }
 
     debug_puts("[DEV] Skip pages: ");
     debug_hex(skip_pages);
     debug_puts("\n");
 
-    for (seL4_Word i = 0; i < skip_pages; i++) {
-        /* Week 36 fix: Use shared slot allocator */
-        seL4_CPtr skip_cap = slot_alloc_next("DEV skip");
-        if (skip_cap == seL4_CapNull) {
-            debug_puts("[DEV] ERROR: slot allocation failed for skip\n");
-            return false;
-        }
-        err = seL4_Untyped_Retype(
-            device_untyped,
-            seL4_ARM_SmallPageObject,
-            PAGE_BITS_4K,
-            seL4_CapInitThreadCNode,
-            0,
-            0,
-            skip_cap,
-            1
-        );
+    if (skip_pages > 16) {
+        /* Week 44: Binary buddy skip for large gaps (same algorithm as
+         * uart_map_device_frame). Uses power-of-2 Untyped retypes instead
+         * of page-by-page skipping. ~5 retypes instead of 244 for a
+         * 0xFE00C000->0xFE100000 gap. */
+        seL4_Word cursor = device_cursor;
+        seL4_Word target = req_paddr;
 
-        if (err != seL4_NoError) {
-            debug_puts("[DEV] ERROR: skip retype failed, err=");
-            debug_hex(err);
-            debug_puts("\n");
+        debug_puts("[DEV] Buddy skip from ");
+        debug_hex(cursor);
+        debug_puts(" to ");
+        debug_hex(target);
+        debug_puts("\n");
+
+        while (cursor < target) {
+            seL4_Word bgap = target - cursor;
+            /* Find largest power-of-2 aligned at cursor that fits in gap */
+            int size_bits = PAGE_BITS_4K;  /* minimum 4KB */
+            while (size_bits < 21 /* 2MB */ &&
+                   ((1UL << (size_bits + 1)) <= bgap) &&
+                   ((cursor & ((1UL << (size_bits + 1)) - 1)) == 0)) {
+                size_bits++;
+            }
+
+            seL4_CPtr skip_cap = slot_alloc_next("DEV buddy skip");
+            if (skip_cap == seL4_CapNull) {
+                debug_puts("[DEV] ERROR: slot alloc failed for buddy skip\n");
+                return false;
+            }
+
+            err = seL4_Untyped_Retype(
+                device_untyped,
+                seL4_UntypedObject,
+                size_bits,
+                seL4_CapInitThreadCNode,
+                0,
+                0,
+                skip_cap,
+                1
+            );
+
+            if (err != seL4_NoError) {
+                debug_puts("[DEV] ERROR: buddy skip retype failed, err=");
+                debug_hex(err);
+                debug_puts("\n");
+                return false;
+            }
+
+            cursor += (1UL << size_bits);
+        }
+
+        device_cursor = cursor;
+    } else {
+        /* Original page-by-page skip for small gaps (<=16 pages) */
+        seL4_Word required_slots = skip_pages + 1;
+        if (required_slots > device_slots_left) {
+            debug_puts("[DEV] ERROR: not enough empty slots\n");
             return false;
         }
+
+        for (seL4_Word i = 0; i < skip_pages; i++) {
+            seL4_CPtr skip_cap = slot_alloc_next("DEV skip");
+            if (skip_cap == seL4_CapNull) {
+                debug_puts("[DEV] ERROR: slot allocation failed for skip\n");
+                return false;
+            }
+            err = seL4_Untyped_Retype(
+                device_untyped,
+                seL4_ARM_SmallPageObject,
+                PAGE_BITS_4K,
+                seL4_CapInitThreadCNode,
+                0,
+                0,
+                skip_cap,
+                1
+            );
+
+            if (err != seL4_NoError) {
+                debug_puts("[DEV] ERROR: skip retype failed, err=");
+                debug_hex(err);
+                debug_puts("\n");
+                return false;
+            }
+        }
+
+        device_cursor += skip_pages * PAGE_SIZE_4K;
     }
-
-    device_cursor += skip_pages * PAGE_SIZE_4K;
 
     /* Week 36 fix: Use shared slot allocator */
     seL4_CPtr frame_cap = slot_alloc_next("DEV frame");
@@ -267,7 +322,13 @@ bool uart_device_map_page(uintptr_t paddr, uintptr_t requested_vaddr,
 
     if (req_vaddr == 0) {
         req_vaddr = device_vaddr_next;
-        device_vaddr_next += PAGE_SIZE_4K;
+        /* Week 44: Skip DMA pool (0x5c4000-0x603FFF) and GENET MMIO
+         * (0x604000-0x609FFF) to prevent vaddr collisions. These ranges
+         * are used by dma_alloc and bcm_genet respectively. */
+        if (req_vaddr >= 0x5c4000 && req_vaddr < 0x60a000) {
+            req_vaddr = 0x60a000;
+        }
+        device_vaddr_next = req_vaddr + PAGE_SIZE_4K;
     }
 
     err = seL4_ARM_Page_Map(

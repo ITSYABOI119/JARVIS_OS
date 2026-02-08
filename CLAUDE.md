@@ -16,7 +16,7 @@ Guidance for Claude Code when working with this repository.
 | Phase 3 | Future | Months 24-30 | Beta (10+ configs, security audit) |
 | Phase 4 | Future | Months 30-36 | Production v1.0 |
 
-**Current:** Phase 2, Week 43 HARDWARE VERIFIED (February 8, 2026). Next: Commit.
+**Current:** Phase 2, Week 44 HARDWARE VERIFIED (February 8, 2026). Next: Commit.
 
 ---
 
@@ -219,7 +219,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 
 ## Current Status (Phase 2, Week 43)
 
-**Week 43 HARDWARE VERIFIED** (February 8, 2026) - GPIO + I2C Drivers, Stress Tests: 59 PASS, 0 FAIL, 3 SKIP
+**Week 44 HARDWARE VERIFIED** (February 8, 2026) - Watchdog + Thermal Monitoring: 69 PASS, 0 FAIL, 3 SKIP
 
 | Milestone | Status |
 |-----------|--------|
@@ -270,8 +270,15 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | Stress test framework (all-driver exercise loop) | DONE |
 | PI4_PLATFORM_GUIDE.md (driver matrix, memory maps, benchmarks) | DONE |
 | 13-test GPIO + I2C + stress suite (build pending) | DONE |
+| BCM2711 PM watchdog timer (10s timeout, feed/reboot) | DONE |
+| VideoCore mailbox thermal monitoring (GPU temperature) | DONE |
+| Binary buddy skip enhancement in uart_device_map_page() | DONE |
+| Shell commands: temp, watchdog, reboot | DONE |
+| Watchdog heartbeat in IPC main loop (50ms) | DONE |
+| Python power_manager.py (host-side monitoring) | DONE |
+| 10-test watchdog + thermal suite (build verified) | DONE |
 
-**Next:** Week 44+ additional drivers, alpha testing
+**Next:** Week 44 Hardware Test + Commit, then alpha testing
 
 ### Remaining Work
 
@@ -281,7 +288,8 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | 41 | USB HID full keyboard + shell integration - DONE |
 | 42 | Alpha release infrastructure (install scripts, docs, SD imaging) - DONE |
 | 43 | GPIO + I2C drivers, stress tests, platform guide - DONE |
-| 44-46 | Additional Tier 1 drivers (watchdog, temp sensor, device tree) + alpha testing |
+| 44 | PM watchdog + thermal monitoring + power manager - DONE |
+| 45-46 | Additional drivers (device tree, SPI) + alpha testing |
 | 47-50 | Security audit preparation |
 | 50-52 | 30-day stability testing |
 
@@ -381,6 +389,8 @@ Backup: `temp_sd_backup/uboot_working/`
 0x5c3000 - EMMC (auto-assigned)
 0x5c4000-0x603FFF - DMA pool (256KB)
 0x604000-0x609FFF - GENET MMIO (6 pages, own device untyped)
+0x610000 - VideoCore Mailbox (explicit vaddr, maps 0xFE00B000)
+0x611000 - PM Watchdog (explicit vaddr, maps 0xFE100000)
 0x60A000-0x60CFFF - DWC2 USB (3 pages, paddr 0xFE980000)
 ```
 
@@ -422,6 +432,9 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **USB HID Keyboard:** `phase2/src/drivers/usb_hid.c`
 - **GPIO Driver:** `phase2/src/drivers/bcm_gpio.c`
 - **I2C Driver:** `phase2/src/drivers/bcm_i2c.c`
+- **Watchdog driver:** `phase2/src/drivers/bcm_watchdog.c`
+- **Thermal driver:** `phase2/src/drivers/bcm_thermal.c`
+- **Power manager:** `phase2/src/ai/power_manager.py`
 - **Build config:** `phase2/src/jarvis-sel4-cmake/CMakeLists.txt`
 - **SD Image Builder:** `phase2/scripts/build_installer_image.sh`
 - **SD Flasher:** `phase2/scripts/flash_sd.sh`

@@ -3,7 +3,7 @@
 **Phase:** Phase 2 - Alpha System (Months 12-24)
 **Timeline:** 52 weeks (December 2025 - December 2026)
 **Hardware:** Raspberry Pi 4 8GB (BCM2711, Cortex-A72)
-**Status:** Week 43 BUILD PENDING
+**Status:** Week 44 BUILD VERIFIED
 
 ---
 
@@ -405,6 +405,37 @@ UART RX: ENABLED (device frame mapped)
 
 ---
 
+### Week 44: Watchdog + Thermal Monitoring
+
+**Status:** BUILD VERIFIED (February 8, 2026) - 10 new tests expected
+**Effort:** ~3 hours
+
+**Achievements:**
+- BCM2711 PM watchdog timer: start/stop/feed/reboot, 10s timeout (bcm_watchdog.c, 200 LOC)
+- VideoCore mailbox thermal monitoring: GPU temperature (bcm_thermal.c, 200 LOC)
+- Enhanced uart_device_map_page() with binary buddy skip for large gaps
+- Python power_manager.py: host-side thermal monitoring + reboot (200 LOC)
+- Shell commands: temp, watchdog, reboot
+- Watchdog heartbeat in IPC main loop (~50ms)
+- 10-test suite: 4 watchdog + 3 thermal + 3 integration
+
+**New Driver Files:**
+- `bcm_watchdog.h` (90 LOC) - PM watchdog register definitions and API
+- `bcm_watchdog.c` (200 LOC) - PM watchdog driver implementation
+- `bcm_thermal.h` (85 LOC) - Mailbox thermal register definitions and API
+- `bcm_thermal.c` (200 LOC) - Thermal monitoring implementation
+- `power_manager.py` (200 LOC) - Python host-side power manager
+
+**Key Technical Details:**
+- PM at 0xFE100000 and mailbox at 0xFE00B000 mapped BEFORE uart_init() (ascending paddr order)
+- Explicit vaddr (0x610000, 0x611000) avoids DMA pool and existing device collisions
+- Buddy skip for 244-page gap from mailbox to PM (~5 retypes vs 244 page-by-page)
+- GPU bus address = paddr | 0xC0000000 for mailbox property tag buffer
+
+**Files:** `phase2/weeks/week44/WEEK_44_STATUS.md`
+
+---
+
 ## Metrics Summary
 
 ### Code Written (Weeks 27-38)
@@ -495,8 +526,8 @@ UART RX: ENABLED (device frame mapped)
 | USB HID Keyboard | 40-41 | DONE (full keyboard + shell) |
 | GPIO | 43 | DONE (pin control, LED, pull-up/down) |
 | I2C (BSC1) | 43 | DONE (100/400 kHz, bus scan) |
-| Watchdog | 44 | Planned |
-| Temperature | 44 | Planned |
+| Watchdog | 44 | DONE (PM watchdog, 10s timeout, feed/reboot) |
+| Temperature | 44 | DONE (VideoCore mailbox, GPU temp) |
 | Device Tree | 45-46 | Planned |
 
 ---
@@ -530,6 +561,7 @@ UART RX: ENABLED (device frame mapped)
 | Alpha Release Infrastructure | Week 42 | Week 42 | DONE |
 | GPIO + I2C Drivers | Week 43 | Week 43 | DONE |
 | Platform Guide Documentation | Week 43 | Week 43 | DONE |
+| Watchdog + Thermal Monitoring | Week 44 | Week 44 | DONE |
 | Alpha Release | Week 42 | - | â³ |
 | Security Audit | Week 50 | - | â³ |
 | 30-Day Stability | Week 52 | - | â³ |
@@ -543,7 +575,7 @@ UART RX: ENABLED (device frame mapped)
 | Pi 4 bare-metal boot | seL4 + JARVIS | Booting | â
  |
 | Python<->seL4 IPC | Week 34 | Week 34 | COMPLETE |
-| 15+ Tier 1 drivers | 15 drivers | 6/15 (UART, EMMC, GENET, USB HID, GPIO, I2C) | â³ |
+| 15+ Tier 1 drivers | 15 drivers | 8/15 (UART, EMMC, GENET, USB HID, GPIO, I2C, Watchdog, Thermal) | â³ |
 | 30-day stability | 0 crashes | - | â³ |
 | Alpha release | 20 testers | - | â³ |
 | Security audit | Pass | - | â³ |

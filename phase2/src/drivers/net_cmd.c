@@ -13,6 +13,8 @@
 #include "usb_hid.h"
 #include "bcm_gpio.h"
 #include "bcm_i2c.h"
+#include "bcm_watchdog.h"
+#include "bcm_thermal.h"
 #include "emmc_sdhci.h"
 
 #include <sel4/sel4.h>
@@ -362,8 +364,19 @@ int cmd_dispatch(const char *cmd_str, char *output, uint32_t output_size)
     } else if (starts_with(cmd, "stress")) {
         return cmd_stress(output, output_size);
 
+    } else if (starts_with(cmd, "temp")) {
+        return thermal_get_status(output, output_size);
+
+    } else if (starts_with(cmd, "watchdog")) {
+        return watchdog_get_status(output, output_size);
+
+    } else if (starts_with(cmd, "reboot")) {
+        int n = snprintf(output, output_size, "Reboot in 1s...\n");
+        watchdog_reboot();
+        return n;  /* Likely won't reach here */
+
     } else {
         return snprintf(output, output_size,
-                        "Commands: ping, ifconfig, netstat, usb, gpio, i2c, stress\n");
+                        "Commands: ping, ifconfig, netstat, usb, gpio, i2c, stress, temp, watchdog, reboot\n");
     }
 }

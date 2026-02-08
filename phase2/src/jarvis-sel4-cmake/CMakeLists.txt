@@ -90,6 +90,10 @@ add_executable(jarvis-sel4
     # GPIO + I2C drivers (Week 43)
     src/drivers/bcm_gpio.c
     src/drivers/bcm_i2c.c
+
+    # Watchdog + Thermal monitoring (Week 44)
+    src/drivers/bcm_watchdog.c
+    src/drivers/bcm_thermal.c
 )
 
 # Include directories
