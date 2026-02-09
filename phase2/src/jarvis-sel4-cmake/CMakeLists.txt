@@ -94,6 +94,9 @@ add_executable(jarvis-sel4
     # Watchdog + Thermal monitoring (Week 44)
     src/drivers/bcm_watchdog.c
     src/drivers/bcm_thermal.c
+
+    # FDT parser + embedded DTB (Week 45)
+    src/boot/fdt_parser.c
 )
 
 # Include directories
@@ -103,6 +106,7 @@ target_include_directories(jarvis-sel4 PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ipc
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ipc_phase2
     ${CMAKE_CURRENT_SOURCE_DIR}/src/drivers
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/boot
 )
 
 # Link seL4 libraries

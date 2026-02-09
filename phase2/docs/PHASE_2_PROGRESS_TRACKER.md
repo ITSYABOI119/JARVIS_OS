@@ -3,7 +3,7 @@
 **Phase:** Phase 2 - Alpha System (Months 12-24)
 **Timeline:** 52 weeks (December 2025 - December 2026)
 **Hardware:** Raspberry Pi 4 8GB (BCM2711, Cortex-A72)
-**Status:** Week 44 BUILD VERIFIED
+**Status:** Week 45 BUILD VERIFIED
 
 ---
 
@@ -434,6 +434,35 @@ UART RX: ENABLED (device frame mapped)
 
 **Files:** `phase2/weeks/week44/WEEK_44_STATUS.md`
 
+### Week 45: Device Tree + Boot Timing
+
+**Status:** BUILD VERIFIED (February 9, 2026) - 10 new tests expected
+**Effort:** ~3 hours
+
+**Achievements:**
+- Embedded JARVIS device tree: jarvis.dts (125 LOC) compiled to 2,280-byte DTB
+- DTB embedded as C array (jarvis_dtb_data.h) - no MMIO needed for parsing
+- FDT parser (fdt_parser.c, ~400 LOC): path-based node lookup, property extraction
+- All symbols prefixed jarvis_fdt_* to avoid libfdt collision
+- Boot timing instrumentation: systimer-based init phase profiling
+- "dt" shell command: shows device tree model, size, SOC device count
+- 10-test suite: 8 FDT parser + 1 boot timing + 1 shell command
+
+**New Files:**
+- `fdt_parser.h` (117 LOC) - FDT parser API with jarvis_ prefix
+- `fdt_parser.c` (400 LOC) - FDT parser implementation
+- `jarvis.dts` (125 LOC) - JARVIS device tree source
+- `jarvis.dtb` (2,280 bytes) - Compiled DTB binary
+- `jarvis_dtb_data.h` (206 LOC) - Embedded DTB C array
+
+**Key Technical Details:**
+- seL4 rootserver cannot access platform DTB (kernel VA space only)
+- FDT parser uses no dynamic allocation, pure pointer arithmetic
+- TII build system links libfdt.a automatically → name collision → jarvis_ prefix
+- Boot timing captures microsecond timestamps at systimer/mailbox/FDT/UART init
+
+**Files:** `phase2/weeks/week45/WEEK_45_STATUS.md`
+
 ---
 
 ## Metrics Summary
@@ -528,7 +557,7 @@ UART RX: ENABLED (device frame mapped)
 | I2C (BSC1) | 43 | DONE (100/400 kHz, bus scan) |
 | Watchdog | 44 | DONE (PM watchdog, 10s timeout, feed/reboot) |
 | Temperature | 44 | DONE (VideoCore mailbox, GPU temp) |
-| Device Tree | 45-46 | Planned |
+| Device Tree + Boot Timing | Week 45 | Week 45 | DONE |
 
 ---
 

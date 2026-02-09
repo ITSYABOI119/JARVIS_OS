@@ -65,10 +65,12 @@ mkdir -p "$JARVIS_PROJECT/src"
 rm -rf "$JARVIS_PROJECT/src/cache" \
        "$JARVIS_PROJECT/src/ipc" \
        "$JARVIS_PROJECT/src/ipc_phase2" \
-       "$JARVIS_PROJECT/src/drivers"
+       "$JARVIS_PROJECT/src/drivers" \
+       "$JARVIS_PROJECT/src/boot"
 cp -r "$JARVIS_ROOT/phase1/src/cache" "$JARVIS_PROJECT/src/"
 cp -r "$JARVIS_ROOT/phase1/src/ipc" "$JARVIS_PROJECT/src/"
 cp -r "$JARVIS_ROOT/phase2/src/drivers" "$JARVIS_PROJECT/src/"
+cp -r "$JARVIS_ROOT/phase2/src/boot" "$JARVIS_PROJECT/src/"
 cp -r "$JARVIS_ROOT/phase2/src/ipc" "$JARVIS_PROJECT/src/ipc_phase2"
 cp "$JARVIS_ROOT/phase2/src/sel4/main_arm64.c" "$JARVIS_PROJECT/src/main.c"
 if [ -f "$JARVIS_ROOT/phase2/src/jarvis-sel4-cmake/CMakeLists.txt" ]; then

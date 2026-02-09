@@ -16,7 +16,7 @@ Guidance for Claude Code when working with this repository.
 | Phase 3 | Future | Months 24-30 | Beta (10+ configs, security audit) |
 | Phase 4 | Future | Months 30-36 | Production v1.0 |
 
-**Current:** Phase 2, Week 44 HARDWARE VERIFIED (February 8, 2026). Next: Commit.
+**Current:** Phase 2, Week 45 HARDWARE VERIFIED (February 9, 2026). Next: Commit.
 
 ---
 
@@ -152,9 +152,10 @@ JARVIS_OS/
 │   │   ├── drivers/           # uart_pl011, emmc_sdhci, bcm2711_timer,
 │   │   │                      # bcm_genet, net_stack, net_cmd, usb_hid, bcm_gpio, bcm_i2c, slot_alloc, dma_alloc, blk_dev
 │   │   ├── ai/                # uart_ipc_client.py, system_bootstrap.py + tests
+│   │   ├── boot/              # jarvis.dts, jarvis.dtb, jarvis_dtb_data.h, fdt_parser.h/c
 │   │   ├── sel4/              # main_arm64.c, CMakeLists.txt
 │   │   └── jarvis-sel4-cmake/ # CMakeLists.txt for TII build system
-│   ├── weeks/                  # week27-week43 status docs
+│   ├── weeks/                  # week27-week45 status docs
 │   └── scripts/               # build_and_copy_kernel.sh, build_installer_image.sh, flash_sd.sh, install_jarvis.sh
 ├── JARVIS_UNIFIED_PLAN.md     # 36-month master plan
 ├── ARCHITECTURE_ENHANCEMENTS.md
@@ -217,9 +218,9 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 
 ---
 
-## Current Status (Phase 2, Week 43)
+## Current Status (Phase 2, Week 45)
 
-**Week 44 HARDWARE VERIFIED** (February 8, 2026) - Watchdog + Thermal Monitoring: 69 PASS, 0 FAIL, 3 SKIP
+**Week 45 HARDWARE VERIFIED** (February 9, 2026) - Device Tree + Boot Timing: 79 PASS, 0 FAIL, 3 SKIP
 
 | Milestone | Status |
 |-----------|--------|
@@ -277,8 +278,13 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | Watchdog heartbeat in IPC main loop (50ms) | DONE |
 | Python power_manager.py (host-side monitoring) | DONE |
 | 10-test watchdog + thermal suite (build verified) | DONE |
+| Embedded JARVIS device tree (jarvis.dts/dtb/dtb_data.h) | DONE |
+| FDT parser (jarvis_fdt_*, ~500 LOC, no alloc) | DONE |
+| Boot timing instrumentation (systimer-based) | DONE |
+| "dt" shell command (device tree info) | DONE |
+| 10-test FDT parser + boot timing suite (build verified) | DONE |
 
-**Next:** Week 44 Hardware Test + Commit, then alpha testing
+**Next:** Week 46 (SPI / additional drivers) + alpha testing
 
 ### Remaining Work
 
@@ -289,7 +295,8 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | 42 | Alpha release infrastructure (install scripts, docs, SD imaging) - DONE |
 | 43 | GPIO + I2C drivers, stress tests, platform guide - DONE |
 | 44 | PM watchdog + thermal monitoring + power manager - DONE |
-| 45-46 | Additional drivers (device tree, SPI) + alpha testing |
+| 45 | Device tree + boot timing (FDT parser, embedded DTB) - DONE |
+| 46 | Additional drivers (SPI, PWM) + alpha testing |
 | 47-50 | Security audit preparation |
 | 50-52 | 30-day stability testing |
 
@@ -435,6 +442,9 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Watchdog driver:** `phase2/src/drivers/bcm_watchdog.c`
 - **Thermal driver:** `phase2/src/drivers/bcm_thermal.c`
 - **Power manager:** `phase2/src/ai/power_manager.py`
+- **FDT parser:** `phase2/src/boot/fdt_parser.c`
+- **Device tree source:** `phase2/src/boot/jarvis.dts`
+- **Embedded DTB:** `phase2/src/boot/jarvis_dtb_data.h`
 - **Build config:** `phase2/src/jarvis-sel4-cmake/CMakeLists.txt`
 - **SD Image Builder:** `phase2/scripts/build_installer_image.sh`
 - **SD Flasher:** `phase2/scripts/flash_sd.sh`

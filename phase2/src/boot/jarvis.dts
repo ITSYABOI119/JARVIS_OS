@@ -1,0 +1,125 @@
+/dts-v1/;
+
+/ {
+    compatible = "jarvis,ai-os", "raspberrypi,4-model-b", "brcm,bcm2711";
+    model = "JARVIS AI-OS on Raspberry Pi 4";
+    #address-cells = <2>;
+    #size-cells = <1>;
+
+    chosen {
+        bootargs = "";
+        stdout-path = "uart0:115200n8";
+        jarvis,phase = <2>;
+        jarvis,week = <45>;
+    };
+
+    memory@0 {
+        device_type = "memory";
+        /* Pi 4 8GB: 0x00000000-0x1FFFFF000, 0x100000000-0x200000000 */
+        reg = <0x00 0x00000000 0x3b400000>,
+              <0x01 0x00000000 0x00000000>;
+    };
+
+    reserved-memory {
+        #address-cells = <2>;
+        #size-cells = <1>;
+        ranges;
+
+        /* DMA buffer pool - 256KB at paddr assigned by dma_alloc */
+        dma_pool: dma-pool@0 {
+            compatible = "jarvis,dma-pool";
+            size = <0x40000>;
+            alignment = <0x1000>;
+            no-map;
+        };
+    };
+
+    soc {
+        compatible = "simple-bus";
+        #address-cells = <2>;
+        #size-cells = <1>;
+        /* ARM physical address space - no translation needed */
+        ranges = <0x00 0xfe000000 0x00 0xfe000000 0x01000000>,
+                 <0x00 0xfc000000 0x00 0xfc000000 0x02000000>;
+
+        /* BCM2711 System Timer (1 MHz free-running) */
+        timer@fe003000 {
+            compatible = "brcm,bcm2835-system-timer", "jarvis,systimer";
+            reg = <0x00 0xfe003000 0x1000>;
+            status = "okay";
+            jarvis,vaddr = <0x5c2000>;
+        };
+
+        /* VideoCore Mailbox (property tag interface) */
+        mailbox@fe00b000 {
+            compatible = "brcm,bcm2835-mbox", "jarvis,mailbox";
+            reg = <0x00 0xfe00b000 0x1000>;
+            status = "okay";
+            jarvis,vaddr = <0x610000>;
+        };
+
+        /* PM Watchdog Timer */
+        watchdog@fe100000 {
+            compatible = "brcm,bcm2835-pm-wdt", "jarvis,watchdog";
+            reg = <0x00 0xfe100000 0x1000>;
+            status = "okay";
+            jarvis,vaddr = <0x611000>;
+            jarvis,timeout-sec = <10>;
+        };
+
+        /* GPIO Controller */
+        gpio@fe200000 {
+            compatible = "brcm,bcm2711-gpio", "jarvis,gpio";
+            reg = <0x00 0xfe200000 0x1000>;
+            status = "okay";
+            jarvis,vaddr = <0x5c1000>;
+        };
+
+        /* PL011 UART */
+        uart0: serial@fe201000 {
+            compatible = "arm,pl011", "arm,primecell", "jarvis,uart";
+            reg = <0x00 0xfe201000 0x1000>;
+            status = "okay";
+            jarvis,vaddr = <0x5c0000>;
+            jarvis,baud = <115200>;
+        };
+
+        /* EMMC2 (SD Card) */
+        mmc@fe340000 {
+            compatible = "brcm,bcm2711-emmc2", "jarvis,emmc";
+            reg = <0x00 0xfe340000 0x1000>;
+            status = "okay";
+            jarvis,vaddr = <0x5c3000>;
+            jarvis,bus-width = <4>;
+            jarvis,max-frequency = <50000000>;
+        };
+
+        /* I2C BSC1 */
+        i2c@fe804000 {
+            compatible = "brcm,bcm2711-i2c", "brcm,bcm2835-i2c", "jarvis,i2c";
+            reg = <0x00 0xfe804000 0x1000>;
+            status = "okay";
+            jarvis,vaddr = <0x60a000>;
+            clock-frequency = <100000>;
+        };
+
+        /* DWC2 USB Host Controller */
+        usb@fe980000 {
+            compatible = "brcm,bcm2835-usb", "snps,dwc2", "jarvis,usb";
+            reg = <0x00 0xfe980000 0x3000>;
+            status = "okay";
+            jarvis,vaddr = <0x60a000>;
+            jarvis,mmio-pages = <3>;
+        };
+
+        /* GENET v5 Ethernet (on SCB bus) */
+        ethernet@fd580000 {
+            compatible = "brcm,bcm2711-genet-v5", "jarvis,genet";
+            reg = <0x00 0xfd580000 0x6000>;
+            status = "okay";
+            jarvis,vaddr = <0x604000>;
+            jarvis,mmio-pages = <6>;
+            local-mac-address = [de ad be ef ca fe];
+        };
+    };
+};

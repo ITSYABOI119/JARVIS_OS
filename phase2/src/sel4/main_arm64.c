@@ -169,6 +169,8 @@ static void emmc_dump_block(uint32_t lba, const uint8_t *buf, size_t dump_len)
 #include "drivers/bcm_i2c.h"
 #include "drivers/bcm_watchdog.h"
 #include "drivers/bcm_thermal.h"
+#include "boot/fdt_parser.h"
+#include "boot/jarvis_dtb_data.h"
 
 #define BANNER \
     "\n" \
@@ -843,6 +845,9 @@ int main(int argc, char *argv[])
         /* Non-fatal: throughput test will SKIP if timer unavailable */
     }
 
+    /* Week 45: Boot timing - capture timestamps at key init phases */
+    uint64_t boot_t0 = systimer_read();  /* After systimer init */
+
     /* ================================================================
      * Week 44: Map mailbox and PM BEFORE UART (ascending paddr order).
      *
@@ -866,11 +871,19 @@ int main(int argc, char *argv[])
         sel4_putchar('!');  /* Non-fatal */
     }
 
+    /* Week 45: Initialize embedded FDT (no MMIO needed, pure parsing) */
+    sel4_putchar('D'); sel4_putchar('T');  /* "DT" = device tree init */
+    if (jarvis_fdt_init(jarvis_dtb) == 0) {
+        sel4_putchar('!');  /* Success marker */
+    }
+    uint64_t boot_t1 = systimer_read();  /* After mailbox+watchdog+FDT */
+
     /* Initialize UART driver (for IPC and UART output) */
     /* This maps GPIO (0xFE200000) and UART (0xFE201000) */
     if (!uart_init()) {
         while (1);  /* Hang */
     }
+    uint64_t boot_t2 = systimer_read();  /* After UART init */
 
     /* Week 33: UART RX status will be printed after banner */
 
@@ -925,6 +938,39 @@ int main(int argc, char *argv[])
         sel4_puts("ENABLED (device frame mapped)\n");
     } else {
         sel4_puts("DISABLED (device frame mapping failed)\n");
+    }
+    sel4_puts("\n");
+
+    /* Week 45: Print boot timing report */
+    if (systimer_is_initialized()) {
+        uint64_t boot_t3 = systimer_read();  /* After banner + sysinfo */
+        char btmsg[128];
+        sel4_puts("Boot Timing (us from systimer init):\n");
+        snprintf(btmsg, sizeof(btmsg), "  Early init (mailbox+watchdog+FDT): %llu us\n",
+                 (unsigned long long)(boot_t1 - boot_t0));
+        sel4_puts(btmsg);
+        snprintf(btmsg, sizeof(btmsg), "  UART init: %llu us\n",
+                 (unsigned long long)(boot_t2 - boot_t1));
+        sel4_puts(btmsg);
+        snprintf(btmsg, sizeof(btmsg), "  Banner + sysinfo: %llu us\n",
+                 (unsigned long long)(boot_t3 - boot_t2));
+        sel4_puts(btmsg);
+        snprintf(btmsg, sizeof(btmsg), "  Total init: %llu us (%llu ms)\n",
+                 (unsigned long long)(boot_t3 - boot_t0),
+                 (unsigned long long)((boot_t3 - boot_t0) / 1000));
+        sel4_puts(btmsg);
+    }
+
+    /* Week 45: Print FDT summary */
+    if (jarvis_fdt_is_valid()) {
+        const char *model = jarvis_fdt_get_string("/", "model");
+        char dtmsg[128];
+        snprintf(dtmsg, sizeof(dtmsg), "  Device Tree: %s (%u bytes)\n",
+                 model ? model : "unknown", jarvis_fdt_totalsize());
+        sel4_puts(dtmsg);
+        snprintf(dtmsg, sizeof(dtmsg), "  SOC devices: %d\n",
+                 jarvis_fdt_count_children("/soc"));
+        sel4_puts(dtmsg);
     }
     sel4_puts("\n");
 
@@ -2693,6 +2739,192 @@ genet_test_done:
         else
             sel4_puts("[W44] SOME TESTS FAILED\n");
         sel4_puts("[W44] ========================================\n\n");
+    }
+
+    /*
+     * ========================================================
+     * Week 45 Tests: FDT Parser + Boot Timing (10 tests)
+     * ========================================================
+     */
+    {
+        int w45_pass = 0, w45_fail = 0, w45_skip = 0;
+
+        sel4_puts("[W45] ========================================\n");
+        sel4_puts("[W45] FDT PARSER + BOOT TIMING TESTS\n");
+        sel4_puts("[W45] ========================================\n");
+
+        /* Test 1: jarvis_fdt_init (already called in early boot) */
+        sel4_puts("[W45] T1 fdt_init: ");
+        if (jarvis_fdt_is_valid()) {
+            sel4_puts("PASS\n"); w45_pass++;
+        } else {
+            sel4_puts("FAIL (not valid after init)\n"); w45_fail++;
+        }
+
+        /* Test 2: jarvis_fdt_totalsize */
+        sel4_puts("[W45] T2 fdt_totalsize: ");
+        {
+            uint32_t tsz = jarvis_fdt_totalsize();
+            if (tsz > 0 && tsz == sizeof(jarvis_dtb)) {
+                char tbuf[80];
+                snprintf(tbuf, sizeof(tbuf), "PASS (%u bytes)\n", tsz);
+                sel4_puts(tbuf);
+                w45_pass++;
+            } else {
+                char tbuf[80];
+                snprintf(tbuf, sizeof(tbuf), "FAIL (got %u, expected %u)\n",
+                         tsz, (uint32_t)sizeof(jarvis_dtb));
+                sel4_puts(tbuf);
+                w45_fail++;
+            }
+        }
+
+        /* Test 3: jarvis_fdt_get_string - root model */
+        sel4_puts("[W45] T3 fdt_get_string(model): ");
+        {
+            const char *model = jarvis_fdt_get_string("/", "model");
+            if (model != NULL) {
+                /* Check it contains "JARVIS" */
+                bool found = false;
+                for (const char *p = model; *p; p++) {
+                    if (p[0]=='J' && p[1]=='A' && p[2]=='R' && p[3]=='V' && p[4]=='I' && p[5]=='S') {
+                        found = true;
+                        break;
+                    }
+                }
+                if (found) {
+                    sel4_puts("PASS ("); sel4_puts(model); sel4_puts(")\n");
+                    w45_pass++;
+                } else {
+                    sel4_puts("FAIL (no JARVIS in model)\n"); w45_fail++;
+                }
+            } else {
+                sel4_puts("FAIL (NULL)\n"); w45_fail++;
+            }
+        }
+
+        /* Test 4: jarvis_fdt_get_u32 - chosen/jarvis,phase */
+        sel4_puts("[W45] T4 fdt_get_u32(phase): ");
+        {
+            uint32_t phase = jarvis_fdt_get_u32("/chosen", "jarvis,phase", 0);
+            if (phase == 2) {
+                sel4_puts("PASS (2)\n"); w45_pass++;
+            } else {
+                char tbuf[60];
+                snprintf(tbuf, sizeof(tbuf), "FAIL (got %u, expected 2)\n", phase);
+                sel4_puts(tbuf); w45_fail++;
+            }
+        }
+
+        /* Test 5: jarvis_fdt_get_u32 - chosen/jarvis,week */
+        sel4_puts("[W45] T5 fdt_get_u32(week): ");
+        {
+            uint32_t week = jarvis_fdt_get_u32("/chosen", "jarvis,week", 0);
+            if (week == 45) {
+                sel4_puts("PASS (45)\n"); w45_pass++;
+            } else {
+                char tbuf[60];
+                snprintf(tbuf, sizeof(tbuf), "FAIL (got %u, expected 45)\n", week);
+                sel4_puts(tbuf); w45_fail++;
+            }
+        }
+
+        /* Test 6: jarvis_fdt_get_reg - UART base address */
+        sel4_puts("[W45] T6 fdt_get_reg(uart): ");
+        {
+            struct jarvis_fdt_reg_result reg = jarvis_fdt_get_reg("/soc/serial@fe201000");
+            if (reg.found && reg.base == 0xfe201000 && reg.size == 0x1000) {
+                sel4_puts("PASS (0xfe201000, 0x1000)\n"); w45_pass++;
+            } else if (!reg.found) {
+                sel4_puts("FAIL (not found)\n"); w45_fail++;
+            } else {
+                char tbuf[80];
+                snprintf(tbuf, sizeof(tbuf), "FAIL (base=0x%llx size=0x%llx)\n",
+                         (unsigned long long)reg.base, (unsigned long long)reg.size);
+                sel4_puts(tbuf); w45_fail++;
+            }
+        }
+
+        /* Test 7: jarvis_fdt_get_reg - GENET (different address range) */
+        sel4_puts("[W45] T7 fdt_get_reg(genet): ");
+        {
+            struct jarvis_fdt_reg_result reg = jarvis_fdt_get_reg("/soc/ethernet@fd580000");
+            if (reg.found && reg.base == 0xfd580000 && reg.size == 0x6000) {
+                sel4_puts("PASS (0xfd580000, 0x6000)\n"); w45_pass++;
+            } else if (!reg.found) {
+                sel4_puts("FAIL (not found)\n"); w45_fail++;
+            } else {
+                char tbuf[80];
+                snprintf(tbuf, sizeof(tbuf), "FAIL (base=0x%llx size=0x%llx)\n",
+                         (unsigned long long)reg.base, (unsigned long long)reg.size);
+                sel4_puts(tbuf); w45_fail++;
+            }
+        }
+
+        /* Test 8: jarvis_fdt_count_children - /soc should have 9 devices */
+        sel4_puts("[W45] T8 fdt_count_children(soc): ");
+        {
+            int children = jarvis_fdt_count_children("/soc");
+            if (children == 9) {
+                sel4_puts("PASS (9)\n"); w45_pass++;
+            } else {
+                char tbuf[60];
+                snprintf(tbuf, sizeof(tbuf), "FAIL (got %d, expected 9)\n", children);
+                sel4_puts(tbuf); w45_fail++;
+            }
+        }
+
+        /* Test 9: jarvis_fdt_get_u32 - watchdog timeout */
+        sel4_puts("[W45] T9 fdt_get_u32(wdt timeout): ");
+        {
+            uint32_t timeout = jarvis_fdt_get_u32("/soc/watchdog@fe100000",
+                                           "jarvis,timeout-sec", 0);
+            if (timeout == 10) {
+                sel4_puts("PASS (10)\n"); w45_pass++;
+            } else {
+                char tbuf[60];
+                snprintf(tbuf, sizeof(tbuf), "FAIL (got %u, expected 10)\n", timeout);
+                sel4_puts(tbuf); w45_fail++;
+            }
+        }
+
+        /* Test 10: dt shell command */
+        sel4_puts("[W45] T10 dt_cmd: ");
+        {
+            char cmd_out[256];
+            int ret = cmd_dispatch("dt", cmd_out, sizeof(cmd_out));
+            if (ret > 0) {
+                /* Check output contains "Device Tree" */
+                bool found = false;
+                for (int i = 0; cmd_out[i] && cmd_out[i+1]; i++) {
+                    if (cmd_out[i] == 'D' && cmd_out[i+1] == 'e') {
+                        found = true;
+                        break;
+                    }
+                }
+                if (found) {
+                    sel4_puts("PASS\n"); w45_pass++;
+                } else {
+                    sel4_puts("FAIL (no 'Device' in output)\n"); w45_fail++;
+                }
+            } else {
+                sel4_puts("FAIL (no output)\n"); w45_fail++;
+            }
+        }
+
+        /* Week 45 summary */
+        sel4_puts("[W45] ========================================\n");
+        {
+            char buf[80];
+            snprintf(buf, sizeof(buf), "[W45] TEST RESULTS: %d PASS, %d FAIL, %d SKIP\n",
+                     w45_pass, w45_fail, w45_skip);
+            sel4_puts(buf);
+        }
+        if (w45_fail == 0)
+            sel4_puts("[W45] ALL TESTS PASSED\n");
+        else
+            sel4_puts("[W45] SOME TESTS FAILED\n");
+        sel4_puts("[W45] ========================================\n\n");
     }
 
     /* Optional UART echo test - keep disabled for IPC runs */

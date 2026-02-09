@@ -16,6 +16,7 @@
 #include "bcm_watchdog.h"
 #include "bcm_thermal.h"
 #include "emmc_sdhci.h"
+#include "fdt_parser.h"
 
 #include <sel4/sel4.h>
 #include <string.h>
@@ -370,6 +371,24 @@ int cmd_dispatch(const char *cmd_str, char *output, uint32_t output_size)
     } else if (starts_with(cmd, "watchdog")) {
         return watchdog_get_status(output, output_size);
 
+    } else if (starts_with(cmd, "dt")) {
+        if (!jarvis_fdt_is_valid()) {
+            return snprintf(output, output_size, "Device tree: not loaded\n");
+        }
+        int n = 0;
+        const char *model = jarvis_fdt_get_string("/", "model");
+        n += snprintf(output + n, output_size - (uint32_t)n,
+                      "Device Tree: %s\n", model ? model : "unknown");
+        n += snprintf(output + n, output_size - (uint32_t)n,
+                      "  Size: %u bytes\n", jarvis_fdt_totalsize());
+        n += snprintf(output + n, output_size - (uint32_t)n,
+                      "  SOC children: %d\n", jarvis_fdt_count_children("/soc"));
+        uint32_t phase = jarvis_fdt_get_u32("/chosen", "jarvis,phase", 0);
+        uint32_t week  = jarvis_fdt_get_u32("/chosen", "jarvis,week", 0);
+        n += snprintf(output + n, output_size - (uint32_t)n,
+                      "  Phase: %u  Week: %u\n", phase, week);
+        return n;
+
     } else if (starts_with(cmd, "reboot")) {
         int n = snprintf(output, output_size, "Reboot in 1s...\n");
         watchdog_reboot();
@@ -377,6 +396,6 @@ int cmd_dispatch(const char *cmd_str, char *output, uint32_t output_size)
 
     } else {
         return snprintf(output, output_size,
-                        "Commands: ping, ifconfig, netstat, usb, gpio, i2c, stress, temp, watchdog, reboot\n");
+                        "Commands: ping, ifconfig, netstat, usb, gpio, i2c, stress, temp, watchdog, dt, reboot\n");
     }
 }
