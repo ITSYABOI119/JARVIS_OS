@@ -3,7 +3,7 @@
 **Phase:** Phase 2 - Alpha System (Months 12-24)
 **Timeline:** 52 weeks (December 2025 - December 2026)
 **Hardware:** Raspberry Pi 4 8GB (BCM2711, Cortex-A72)
-**Status:** Week 45 BUILD VERIFIED
+**Status:** Week 46 BUILD VERIFIED
 
 ---
 
@@ -34,7 +34,7 @@ UART IPC (10-20ms RTT)
 | Month 15-16 | 35-36 | COMPLETE (2/2) | SD/EMMC Driver (read + write) |
 | Month 16 | 37-38 | COMPLETE (2/2) | GENET Ethernet (TX+RX) + Networking |
 | Month 17-18 | 39-42 | COMPLETE (4/4) | USB HID + Alpha Prep |
-| Month 19-20 | 43-46 | IN PROGRESS (1/4) | GPIO/I2C + Device Tree |
+| Month 19-20 | 43-46 | COMPLETE (4/4) | GPIO/I2C + DT + Boot + Power |
 | Month 21-22 | 47-50 | PENDING | Alpha Testing + Security |
 | Month 23-24 | 51-52 | PENDING | Stability + Final Report |
 
@@ -465,6 +465,35 @@ UART RX: ENABLED (device frame mapped)
 
 ---
 
+### Week 46: Boot Optimization + Power State Management
+
+**Status:** BUILD VERIFIED (February 9, 2026) - 10 new tests expected
+**Effort:** ~3 hours
+
+**Achievements:**
+- Boot manager: per-stage timing for all 12 init stages, lazy init tracking
+- Warm reboot: SD card state persistence (sector 30374000), warm/cold detection
+- Power management: WFI idle in main loop, ARM clock scaling via VideoCore mailbox
+- Generic mailbox property API (thermal_mailbox_tag) for cross-module use
+- 4 power profiles: LOW (600MHz), MED (1GHz), HIGH (1.5GHz), MAX (1.8GHz)
+- Shell commands: boot, power [idle/med/normal/perf], reboot [warm/cold]
+- 10-test suite: boot manager, warm reboot, power management
+
+**New Files:**
+- `boot_manager.h/c` (~300 LOC) - Boot stage timing tracker
+- `warm_reboot.h/c` (~350 LOC) - Warm/cold reboot with SD persistence
+- `bcm_power.h/c` (~280 LOC) - WFI + ARM frequency scaling
+
+**Key Technical Details:**
+- BCM2711 RAM reinitialized on reboot — must use SD for state persistence
+- GCC 13 -Werror: packed struct pointer cast → memcpy workaround
+- WFI from EL0: seL4 may or may not trap — safe either way (no-op worst case)
+- thermal_mailbox_tag() enables any module to send mailbox property tags
+
+**Files:** `phase2/weeks/week46/WEEK_46_STATUS.md`
+
+---
+
 ## Metrics Summary
 
 ### Code Written (Weeks 27-38)
@@ -558,6 +587,9 @@ UART RX: ENABLED (device frame mapped)
 | Watchdog | 44 | DONE (PM watchdog, 10s timeout, feed/reboot) |
 | Temperature | 44 | DONE (VideoCore mailbox, GPU temp) |
 | Device Tree + Boot Timing | Week 45 | Week 45 | DONE |
+| Boot Manager | 46 | DONE (per-stage timing, lazy init) |
+| Warm Reboot | 46 | DONE (SD persistence, warm/cold detect) |
+| Power Management | 46 | DONE (WFI idle, ARM frequency scaling) |
 
 ---
 
@@ -591,6 +623,8 @@ UART RX: ENABLED (device frame mapped)
 | GPIO + I2C Drivers | Week 43 | Week 43 | DONE |
 | Platform Guide Documentation | Week 43 | Week 43 | DONE |
 | Watchdog + Thermal Monitoring | Week 44 | Week 44 | DONE |
+| Device Tree + Boot Timing | Week 45 | Week 45 | DONE |
+| Boot Opt + Power Management | Week 46 | Week 46 | DONE |
 | Alpha Release | Week 42 | - | â³ |
 | Security Audit | Week 50 | - | â³ |
 | 30-Day Stability | Week 52 | - | â³ |

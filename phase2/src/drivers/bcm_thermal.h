@@ -42,10 +42,16 @@
 /* Mailbox channels */
 #define MBOX_CHANNEL_PROP   8       /* Property tags (ARM -> VC) */
 
-/* Property tag IDs */
+/* Property tag IDs - temperature */
 #define TAG_GET_TEMPERATURE 0x00030006
 #define TAG_GET_MAX_TEMP    0x0003000A
 #define TAG_END             0x00000000
+
+/* Property tag IDs - clock management (used by bcm_power.c) */
+#define TAG_GET_CLOCK_RATE  0x00030002
+#define TAG_SET_CLOCK_RATE  0x00038002
+#define TAG_GET_MIN_CLOCK   0x00030007
+#define TAG_GET_MAX_CLOCK   0x00030004
 
 /* Property request/response codes */
 #define MBOX_REQUEST        0x00000000
@@ -85,5 +91,15 @@ int thermal_get_status(char *output, uint32_t output_size);
  * Check if thermal monitoring is initialized.
  */
 bool thermal_is_initialized(void);
+
+/*
+ * Generic mailbox property tag call.
+ * Sends a single property tag with the given request data.
+ * buf[] = input data words, buf_words = number of input words,
+ * resp_words = number of expected response words.
+ * Response is written back into buf[].
+ * Returns 0 on success, -1 on failure.
+ */
+int thermal_mailbox_tag(uint32_t tag, uint32_t *buf, uint32_t buf_words, uint32_t resp_words);
 
 #endif /* BCM_THERMAL_H */

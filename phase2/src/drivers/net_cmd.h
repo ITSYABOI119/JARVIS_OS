@@ -15,7 +15,9 @@
 #define CMD_OUTPUT_MAX  240
 
 /* Dispatch a command string to the appropriate handler.
- * Supported: "ping <ip>", "ifconfig", "netstat", "usb", "gpio", "i2c", "stress"
+ * Supported: "ping <ip>", "ifconfig", "netstat", "usb", "gpio", "i2c",
+ *            "stress", "temp", "watchdog", "dt", "reboot",
+ *            "boot", "warmreboot", "power"
  * Output is written to output buffer (null-terminated).
  * Returns number of bytes written (excluding NUL). */
 int cmd_dispatch(const char *cmd_str, char *output, uint32_t output_size);

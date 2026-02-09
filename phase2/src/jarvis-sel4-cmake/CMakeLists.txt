@@ -97,6 +97,11 @@ add_executable(jarvis-sel4
 
     # FDT parser + embedded DTB (Week 45)
     src/boot/fdt_parser.c
+
+    # Boot manager + Warm reboot + Power management (Week 46)
+    src/boot/boot_manager.c
+    src/boot/warm_reboot.c
+    src/drivers/bcm_power.c
 )
 
 # Include directories

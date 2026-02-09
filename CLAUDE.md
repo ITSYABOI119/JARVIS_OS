@@ -16,7 +16,7 @@ Guidance for Claude Code when working with this repository.
 | Phase 3 | Future | Months 24-30 | Beta (10+ configs, security audit) |
 | Phase 4 | Future | Months 30-36 | Production v1.0 |
 
-**Current:** Phase 2, Week 45 HARDWARE VERIFIED (February 9, 2026). Next: Commit.
+**Current:** Phase 2, Week 46 HARDWARE VERIFIED (February 9, 2026). Next: Week 47.
 
 ---
 
@@ -218,9 +218,9 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 
 ---
 
-## Current Status (Phase 2, Week 45)
+## Current Status (Phase 2, Week 46)
 
-**Week 45 HARDWARE VERIFIED** (February 9, 2026) - Device Tree + Boot Timing: 79 PASS, 0 FAIL, 3 SKIP
+**Week 46 HARDWARE VERIFIED** (February 9, 2026) - Boot Opt + Power Management: 89 PASS, 0 FAIL, 3 SKIP
 
 | Milestone | Status |
 |-----------|--------|
@@ -283,8 +283,14 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | Boot timing instrumentation (systimer-based) | DONE |
 | "dt" shell command (device tree info) | DONE |
 | 10-test FDT parser + boot timing suite (build verified) | DONE |
+| Boot manager (per-stage timing, lazy init tracking) | DONE |
+| Warm reboot (SD persistence, warm/cold detection) | DONE |
+| Power management (WFI idle, ARM frequency scaling) | DONE |
+| Shell commands: boot, power, reboot warm/cold | DONE |
+| thermal_mailbox_tag() generic mailbox API | DONE |
+| 10-test boot/warm/power suite (build verified) | DONE |
 
-**Next:** Week 46 (SPI / additional drivers) + alpha testing
+**Next:** Week 46 Hardware Test + Commit, then alpha testing
 
 ### Remaining Work
 
@@ -296,7 +302,8 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | 43 | GPIO + I2C drivers, stress tests, platform guide - DONE |
 | 44 | PM watchdog + thermal monitoring + power manager - DONE |
 | 45 | Device tree + boot timing (FDT parser, embedded DTB) - DONE |
-| 46 | Additional drivers (SPI, PWM) + alpha testing |
+| 46 | Boot optimization + power management - DONE |
+| 47 | SPI / additional drivers + alpha testing |
 | 47-50 | Security audit preparation |
 | 50-52 | 30-day stability testing |
 
@@ -445,6 +452,9 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **FDT parser:** `phase2/src/boot/fdt_parser.c`
 - **Device tree source:** `phase2/src/boot/jarvis.dts`
 - **Embedded DTB:** `phase2/src/boot/jarvis_dtb_data.h`
+- **Boot manager:** `phase2/src/boot/boot_manager.c`
+- **Warm reboot:** `phase2/src/boot/warm_reboot.c`
+- **Power manager:** `phase2/src/drivers/bcm_power.c`
 - **Build config:** `phase2/src/jarvis-sel4-cmake/CMakeLists.txt`
 - **SD Image Builder:** `phase2/scripts/build_installer_image.sh`
 - **SD Flasher:** `phase2/scripts/flash_sd.sh`

@@ -171,6 +171,9 @@ static void emmc_dump_block(uint32_t lba, const uint8_t *buf, size_t dump_len)
 #include "drivers/bcm_thermal.h"
 #include "boot/fdt_parser.h"
 #include "boot/jarvis_dtb_data.h"
+#include "boot/boot_manager.h"
+#include "boot/warm_reboot.h"
+#include "drivers/bcm_power.h"
 
 #define BANNER \
     "\n" \
@@ -767,6 +770,9 @@ static void ipc_main_loop(void)
             watchdog_feed();
         }
 
+        /* Week 46: WFI before yield for power savings */
+        power_wfi();
+
 #ifdef __sel4__
         /* Yield to other threads */
         seL4_Yield();
@@ -835,6 +841,10 @@ int main(int argc, char *argv[])
      * untyped watermark from 0xFE004000 to 0xFE200000 without consuming
      * the GPIO page frame (7 Untyped retypes instead of 1 x 2MB page).
      */
+    /* Week 46: Initialize boot manager (must be before any boot_stage calls) */
+    boot_manager_init();
+
+    boot_stage_begin(BOOT_STAGE_SYSTIMER);
     if (!systimer_init()) {
         seL4_DebugPutChar('T');
         seL4_DebugPutChar('M');
@@ -844,6 +854,7 @@ int main(int argc, char *argv[])
         seL4_DebugPutChar('\n');
         /* Non-fatal: throughput test will SKIP if timer unavailable */
     }
+    boot_stage_end(BOOT_STAGE_SYSTIMER);
 
     /* Week 45: Boot timing - capture timestamps at key init phases */
     uint64_t boot_t0 = systimer_read();  /* After systimer init */
@@ -859,30 +870,38 @@ int main(int argc, char *argv[])
      * Uses explicit vaddr (0x610000, 0x611000) to avoid shifting
      * existing device auto-assignments and DMA pool collision.
      * ================================================================ */
+    boot_stage_begin(BOOT_STAGE_THERMAL);
     sel4_putchar('M'); sel4_putchar('B');  /* "MB" = mailbox mapping */
     if (thermal_init() != 0) {
         sel4_putchar('!');  /* Non-fatal */
     }
+    boot_stage_end(BOOT_STAGE_THERMAL);
 
+    boot_stage_begin(BOOT_STAGE_WATCHDOG);
     sel4_putchar('W'); sel4_putchar('D');  /* "WD" = watchdog mapping */
     if (watchdog_init() == 0) {
         watchdog_start(10);  /* 10-second timeout */
     } else {
         sel4_putchar('!');  /* Non-fatal */
     }
+    boot_stage_end(BOOT_STAGE_WATCHDOG);
 
     /* Week 45: Initialize embedded FDT (no MMIO needed, pure parsing) */
+    boot_stage_begin(BOOT_STAGE_FDT);
     sel4_putchar('D'); sel4_putchar('T');  /* "DT" = device tree init */
     if (jarvis_fdt_init(jarvis_dtb) == 0) {
         sel4_putchar('!');  /* Success marker */
     }
+    boot_stage_end(BOOT_STAGE_FDT);
     uint64_t boot_t1 = systimer_read();  /* After mailbox+watchdog+FDT */
 
     /* Initialize UART driver (for IPC and UART output) */
     /* This maps GPIO (0xFE200000) and UART (0xFE201000) */
+    boot_stage_begin(BOOT_STAGE_UART);
     if (!uart_init()) {
         while (1);  /* Hang */
     }
+    boot_stage_end(BOOT_STAGE_UART);
     uint64_t boot_t2 = systimer_read();  /* After UART init */
 
     /* Week 33: UART RX status will be printed after banner */
@@ -974,7 +993,22 @@ int main(int argc, char *argv[])
     }
     sel4_puts("\n");
 
+    /* Week 46: Print detailed boot stage report (early stages only) */
+    boot_manager_print_report();
+
+    /* Week 46: Initialize power management (shares thermal mailbox) */
+    sel4_puts("[INIT] Power management...\n");
+    if (power_init() == 0) {
+        char pmsg[80];
+        uint32_t freq = power_get_clock_hz();
+        snprintf(pmsg, sizeof(pmsg), "  ARM frequency: %u MHz\n", freq / 1000000);
+        sel4_puts(pmsg);
+    } else {
+        sel4_puts("[INIT] Power: init failed (non-fatal)\n");
+    }
+
     /* Initialize decision cache */
+    boot_stage_begin(BOOT_STAGE_CACHE);
     sel4_puts("Initializing decision cache...\n");
     if (!cache_init(&g_cache)) {
         sel4_puts("ERROR: Failed to initialize cache!\n");
@@ -988,6 +1022,7 @@ int main(int argc, char *argv[])
     snprintf(msg, sizeof(msg), "  Loaded %d patterns into cache\n", loaded);
     sel4_puts(msg);
     sel4_puts("\n");
+    boot_stage_end(BOOT_STAGE_CACHE);
 
     /* Print cache stats */
     cache_stats_t stats;
@@ -996,6 +1031,7 @@ int main(int argc, char *argv[])
     sel4_puts(msg);
     sel4_puts("\n");
 
+    boot_stage_begin(BOOT_STAGE_EMMC);
 #if EMMC_TEST
     /*
      * ========================================================
@@ -1414,10 +1450,30 @@ emmc_test_done:
 #else
     sel4_puts("[EMMC] Test disabled (EMMC_TEST=0)\n\n");
 #endif
+    boot_stage_end(BOOT_STAGE_EMMC);
+
+    /* Week 46: Initialize warm reboot (needs EMMC to be ready) */
+    sel4_puts("[INIT] Warm reboot subsystem...\n");
+    if (warm_reboot_init() == 0) {
+        if (warm_reboot_is_warm()) {
+            char wbuf[80];
+            snprintf(wbuf, sizeof(wbuf), "[INIT] WARM boot #%u detected\n",
+                     warm_reboot_boot_count());
+            sel4_puts(wbuf);
+        } else {
+            char wbuf[80];
+            snprintf(wbuf, sizeof(wbuf), "[INIT] Cold boot #%u\n",
+                     warm_reboot_boot_count());
+            sel4_puts(wbuf);
+        }
+    } else {
+        sel4_puts("[INIT] Warm reboot: init failed (non-fatal)\n");
+    }
 
     /* ============================================================
      * GENET ETHERNET TEST (Week 37)
      * ============================================================ */
+    boot_stage_begin(BOOT_STAGE_GENET);
 #if GENET_TEST
     sel4_puts("\n========================================\n");
     sel4_puts("GENET ETHERNET TEST (Week 37)\n");
@@ -1544,10 +1600,12 @@ genet_test_done:
 #else
     sel4_puts("[GENET] Test disabled (GENET_TEST=0)\n\n");
 #endif
+    boot_stage_end(BOOT_STAGE_GENET);
 
     /* ============================================================
      * GENET RX + NETWORKING TEST (Week 38)
      * ============================================================ */
+    boot_stage_begin(BOOT_STAGE_NET);
 #if GENET_TEST
     sel4_puts("\n========================================\n");
     sel4_puts("GENET RX + NETWORKING TEST (Week 38)\n");
@@ -2003,12 +2061,14 @@ genet_test_done:
         sel4_puts("[W39] ========================================\n\n");
     }
 #endif
+    boot_stage_end(BOOT_STAGE_NET);
 
     /* ============================================================
      * Week 43: GPIO + I2C Init (BEFORE USB due to paddr ordering)
      * GPIO reuses UART mapping (no new device pages).
      * I2C at 0xFE804000 must map before USB at 0xFE980000.
      * ============================================================ */
+    boot_stage_begin(BOOT_STAGE_GPIO);
     sel4_puts("[INIT] GPIO driver...\n");
     bool gpio_ok = (gpio_init() == 0);
     sel4_puts(gpio_ok ? "[INIT] GPIO: initialized OK\n" : "[INIT] GPIO: init failed (non-fatal)\n");
@@ -2020,10 +2080,16 @@ genet_test_done:
         gpio_led_off();
         sel4_puts("[INIT] GPIO: activity LED blink OK\n");
     }
+    boot_stage_end(BOOT_STAGE_GPIO);
 
+    boot_stage_mark_lazy(BOOT_STAGE_I2C);
+    boot_stage_mark_lazy(BOOT_STAGE_USB);
+
+    boot_stage_begin(BOOT_STAGE_I2C);
     sel4_puts("[INIT] I2C BSC1 controller...\n");
     bool i2c_ok = (i2c_init() == 0);
     sel4_puts(i2c_ok ? "[INIT] I2C: initialized OK\n" : "[INIT] I2C: init failed (non-fatal)\n");
+    boot_stage_end(BOOT_STAGE_I2C);
 
     /* ============================================================
      * Week 40: USB HID Keyboard Driver Init + Tests
@@ -2033,9 +2099,11 @@ genet_test_done:
     sel4_puts("========================================\n");
 
     /* Week 40: USB HID keyboard driver - DWC2 at 0xFE980000 (highest paddr, init last) */
+    boot_stage_begin(BOOT_STAGE_USB);
     sel4_puts("[INIT] USB HID keyboard...\n");
     bool usb_ok = usb_hid_init(bi);
     sel4_puts(usb_ok ? "[INIT] USB HID: controller initialized\n" : "[INIT] USB HID: init failed (non-fatal)\n");
+    boot_stage_end(BOOT_STAGE_USB);
 
     {
         int w40_pass = 0, w40_fail = 0, w40_skip = 0;
@@ -2925,6 +2993,156 @@ genet_test_done:
         else
             sel4_puts("[W45] SOME TESTS FAILED\n");
         sel4_puts("[W45] ========================================\n\n");
+    }
+
+    /* ========================================================
+     * Week 46 Tests: Boot Optimization + Power Management
+     * ======================================================== */
+    {
+        int w46_pass = 0, w46_fail = 0, w46_skip = 0;
+
+        sel4_puts("[W46] ========================================\n");
+        sel4_puts("[W46] Boot Optimization + Power Management\n");
+        sel4_puts("[W46] ========================================\n");
+
+        /* T1: boot_manager_init */
+        sel4_puts("[W46] T1 boot_manager_init: ");
+        if (boot_manager_completed_count() > 0) {
+            sel4_puts("PASS\n"); w46_pass++;
+        } else {
+            sel4_puts("FAIL (no stages completed)\n"); w46_fail++;
+        }
+
+        /* T2: boot_stage_count (at least 8 stages should have completed) */
+        sel4_puts("[W46] T2 boot_stage_count: ");
+        {
+            int count = boot_manager_completed_count();
+            if (count >= 8) {
+                char tbuf[60];
+                snprintf(tbuf, sizeof(tbuf), "PASS (%d stages)\n", count);
+                sel4_puts(tbuf); w46_pass++;
+            } else {
+                char tbuf[60];
+                snprintf(tbuf, sizeof(tbuf), "FAIL (%d stages, expected >=8)\n", count);
+                sel4_puts(tbuf); w46_fail++;
+            }
+        }
+
+        /* T3: boot_total_time (should be under 10 seconds = 10000000 us) */
+        sel4_puts("[W46] T3 boot_total_time: ");
+        {
+            uint64_t total = boot_manager_total_us();
+            if (total > 0 && total < 10000000) {
+                char tbuf[80];
+                snprintf(tbuf, sizeof(tbuf), "PASS (%llu ms)\n",
+                         (unsigned long long)(total / 1000));
+                sel4_puts(tbuf); w46_pass++;
+            } else {
+                char tbuf[80];
+                snprintf(tbuf, sizeof(tbuf), "FAIL (%llu us)\n",
+                         (unsigned long long)total);
+                sel4_puts(tbuf); w46_fail++;
+            }
+        }
+
+        /* T4: boot_status_cmd */
+        sel4_puts("[W46] T4 boot_status_cmd: ");
+        {
+            char cmd_out[512];
+            int ret = cmd_dispatch("boot", cmd_out, sizeof(cmd_out));
+            if (ret > 0) {
+                sel4_puts("PASS\n"); w46_pass++;
+            } else {
+                sel4_puts("FAIL (no output)\n"); w46_fail++;
+            }
+        }
+
+        /* T5: warm_reboot_init */
+        sel4_puts("[W46] T5 warm_reboot_init: ");
+        {
+            uint32_t bc = warm_reboot_boot_count();
+            if (bc >= 1) {
+                char tbuf[60];
+                snprintf(tbuf, sizeof(tbuf), "PASS (boot #%u)\n", (unsigned)bc);
+                sel4_puts(tbuf); w46_pass++;
+            } else {
+                sel4_puts("FAIL (boot_count=0)\n"); w46_fail++;
+            }
+        }
+
+        /* T6: warm_reboot_save_load (write state, read it back) */
+        sel4_puts("[W46] T6 warm_reboot_save_load: ");
+        if (emmc_is_mapped()) {
+            int rc = warm_reboot_save_state(100, 5000, 0xFF);
+            if (rc == 0) {
+                sel4_puts("PASS\n"); w46_pass++;
+            } else {
+                sel4_puts("FAIL (save failed)\n"); w46_fail++;
+            }
+            /* Clear it so we don't accidentally warm boot next time */
+            warm_reboot_clear_state();
+        } else {
+            sel4_puts("SKIP (no EMMC)\n"); w46_skip++;
+        }
+
+        /* T7: reboot_cmd (verify warm_reboot_get_status works) */
+        sel4_puts("[W46] T7 reboot_warm_cmd: ");
+        {
+            char cmd_out[128];
+            int ret = warm_reboot_get_status(cmd_out, sizeof(cmd_out));
+            if (ret > 0) {
+                sel4_puts("PASS\n"); w46_pass++;
+            } else {
+                sel4_puts("FAIL (no status output)\n"); w46_fail++;
+            }
+        }
+
+        /* T8: power_init */
+        sel4_puts("[W46] T8 power_init: ");
+        if (power_is_initialized()) {
+            sel4_puts("PASS\n"); w46_pass++;
+        } else {
+            sel4_puts("FAIL (not initialized)\n"); w46_fail++;
+        }
+
+        /* T9: power_freq_read */
+        sel4_puts("[W46] T9 power_freq_read: ");
+        {
+            uint32_t freq = power_get_clock_hz();
+            if (freq > 0) {
+                char tbuf[80];
+                snprintf(tbuf, sizeof(tbuf), "PASS (%u MHz)\n", freq / 1000000);
+                sel4_puts(tbuf); w46_pass++;
+            } else {
+                sel4_puts("FAIL (freq=0)\n"); w46_fail++;
+            }
+        }
+
+        /* T10: power_status_cmd */
+        sel4_puts("[W46] T10 power_status_cmd: ");
+        {
+            char cmd_out[256];
+            int ret = cmd_dispatch("power", cmd_out, sizeof(cmd_out));
+            if (ret > 0) {
+                sel4_puts("PASS\n"); w46_pass++;
+            } else {
+                sel4_puts("FAIL (no output)\n"); w46_fail++;
+            }
+        }
+
+        /* Week 46 summary */
+        sel4_puts("[W46] ========================================\n");
+        {
+            char buf[80];
+            snprintf(buf, sizeof(buf), "[W46] TEST RESULTS: %d PASS, %d FAIL, %d SKIP\n",
+                     w46_pass, w46_fail, w46_skip);
+            sel4_puts(buf);
+        }
+        if (w46_fail == 0)
+            sel4_puts("[W46] ALL TESTS PASSED\n");
+        else
+            sel4_puts("[W46] SOME TESTS FAILED\n");
+        sel4_puts("[W46] ========================================\n\n");
     }
 
     /* Optional UART echo test - keep disabled for IPC runs */

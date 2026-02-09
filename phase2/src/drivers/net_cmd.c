@@ -15,8 +15,11 @@
 #include "bcm_i2c.h"
 #include "bcm_watchdog.h"
 #include "bcm_thermal.h"
+#include "bcm_power.h"
 #include "emmc_sdhci.h"
 #include "fdt_parser.h"
+#include "boot_manager.h"
+#include "warm_reboot.h"
 
 #include <sel4/sel4.h>
 #include <string.h>
@@ -389,13 +392,47 @@ int cmd_dispatch(const char *cmd_str, char *output, uint32_t output_size)
                       "  Phase: %u  Week: %u\n", phase, week);
         return n;
 
+    } else if (starts_with(cmd, "boot")) {
+        return boot_manager_get_status(output, output_size);
+
+    } else if (starts_with(cmd, "warmreboot")) {
+        return warm_reboot_get_status(output, output_size);
+
+    } else if (starts_with(cmd, "power")) {
+        const char *arg = skip_spaces(cmd + 5);
+        if (starts_with(arg, "idle") || starts_with(arg, "low")) {
+            power_set_profile(POWER_PROFILE_LOW);
+            return snprintf(output, output_size, "Power mode: LOW (600 MHz)\n");
+        } else if (starts_with(arg, "perf") || starts_with(arg, "max")) {
+            power_set_profile(POWER_PROFILE_MAX);
+            return snprintf(output, output_size, "Power mode: MAX (1800 MHz)\n");
+        } else if (starts_with(arg, "normal") || starts_with(arg, "high")) {
+            power_set_profile(POWER_PROFILE_HIGH);
+            return snprintf(output, output_size, "Power mode: HIGH (1500 MHz)\n");
+        } else if (starts_with(arg, "med")) {
+            power_set_profile(POWER_PROFILE_MED);
+            return snprintf(output, output_size, "Power mode: MED (1000 MHz)\n");
+        }
+        return power_get_status(output, output_size);
+
     } else if (starts_with(cmd, "reboot")) {
+        const char *arg = skip_spaces(cmd + 6);
+        if (starts_with(arg, "warm")) {
+            int n = snprintf(output, output_size, "Warm reboot in 1s...\n");
+            warm_reboot_trigger(true);
+            return n;
+        } else if (starts_with(arg, "cold")) {
+            int n = snprintf(output, output_size, "Cold reboot in 1s...\n");
+            warm_reboot_trigger(false);
+            return n;
+        }
+        /* Default: cold reboot for backwards compat */
         int n = snprintf(output, output_size, "Reboot in 1s...\n");
         watchdog_reboot();
-        return n;  /* Likely won't reach here */
+        return n;
 
     } else {
         return snprintf(output, output_size,
-                        "Commands: ping, ifconfig, netstat, usb, gpio, i2c, stress, temp, watchdog, dt, reboot\n");
+                        "Commands: ping, ifconfig, netstat, usb, gpio, i2c, stress, temp, watchdog, dt, boot, power, reboot\n");
     }
 }

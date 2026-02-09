@@ -234,3 +234,44 @@ bool thermal_is_initialized(void)
 {
     return thermal_initialized;
 }
+
+int thermal_mailbox_tag(uint32_t tag, uint32_t *buf, uint32_t buf_words, uint32_t resp_words)
+{
+    if (!thermal_initialized || !mbox_page || !tag_buf) return -1;
+
+    uint32_t max_words = buf_words > resp_words ? buf_words : resp_words;
+    uint32_t buf_size = 24 + max_words * 4;  /* header(12) + tag_header(12) + data */
+    /* Ensure 16-byte alignment for buffer size */
+    buf_size = (buf_size + 15) & ~15u;
+
+    /* Build property tag buffer */
+    tag_buf[0] = buf_size;           /* Buffer size */
+    tag_buf[1] = MBOX_REQUEST;       /* Request code */
+    tag_buf[2] = tag;                /* Tag ID */
+    tag_buf[3] = max_words * 4;      /* Value buffer size */
+    tag_buf[4] = 0;                  /* Request/response code */
+
+    /* Copy input data */
+    for (uint32_t i = 0; i < max_words; i++) {
+        tag_buf[5 + i] = (i < buf_words) ? buf[i] : 0;
+    }
+    tag_buf[5 + max_words] = TAG_END;
+
+    __asm__ volatile("dsb sy" ::: "memory");
+
+    uint32_t bus_addr = ARM_TO_BUS(tag_buf_paddr);
+    if (!mbox_send(bus_addr, MBOX_CHANNEL_PROP)) return -1;
+
+    uint32_t resp = mbox_recv(MBOX_CHANNEL_PROP);
+    (void)resp;
+
+    __asm__ volatile("dsb sy" ::: "memory");
+
+    if (tag_buf[1] != MBOX_RESPONSE_OK) return -1;
+
+    /* Copy response data back */
+    for (uint32_t i = 0; i < resp_words && i < max_words; i++) {
+        buf[i] = tag_buf[5 + i];
+    }
+    return 0;
+}
