@@ -16,6 +16,9 @@
 #include "bcm_watchdog.h"
 #include "bcm_thermal.h"
 #include "bcm_power.h"
+#include "bcm_spi.h"
+#include "bcm_rng.h"
+#include "bcm_pwm.h"
 #include "emmc_sdhci.h"
 #include "fdt_parser.h"
 #include "boot_manager.h"
@@ -415,6 +418,28 @@ int cmd_dispatch(const char *cmd_str, char *output, uint32_t output_size)
         }
         return power_get_status(output, output_size);
 
+    } else if (starts_with(cmd, "spi")) {
+        return spi_get_status(output, output_size);
+
+    } else if (starts_with(cmd, "rng")) {
+        return rng_get_status(output, output_size);
+
+    } else if (starts_with(cmd, "pwm")) {
+        const char *arg = skip_spaces(cmd + 3);
+        if (starts_with(arg, "on")) {
+            int ch = 0, duty = 50;
+            sscanf(arg + 2, "%d %d", &ch, &duty);
+            pwm_set_duty((uint32_t)ch, (uint32_t)duty);
+            pwm_enable((uint32_t)ch, true);
+            return snprintf(output, output_size, "PWM ch%d: ON, duty=%d%%\n", ch, duty);
+        } else if (starts_with(arg, "off")) {
+            int ch = 0;
+            sscanf(arg + 3, "%d", &ch);
+            pwm_enable((uint32_t)ch, false);
+            return snprintf(output, output_size, "PWM ch%d: OFF\n", ch);
+        }
+        return pwm_get_status(output, output_size);
+
     } else if (starts_with(cmd, "reboot")) {
         const char *arg = skip_spaces(cmd + 6);
         if (starts_with(arg, "warm")) {
@@ -433,6 +458,6 @@ int cmd_dispatch(const char *cmd_str, char *output, uint32_t output_size)
 
     } else {
         return snprintf(output, output_size,
-                        "Commands: ping, ifconfig, netstat, usb, gpio, i2c, stress, temp, watchdog, dt, boot, power, reboot\n");
+                        "Commands: ping, ifconfig, netstat, usb, gpio, i2c, spi, rng, pwm, stress, temp, watchdog, dt, boot, power, reboot\n");
     }
 }

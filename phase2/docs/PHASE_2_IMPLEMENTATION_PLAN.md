@@ -12,9 +12,16 @@
 
 This document provides a detailed week-by-week implementation plan for Phase 2. Each week has specific deliverables, estimated effort (calibrated using Phase 1 actual efficiency), and dependencies clearly defined.
 
-**Goal:** Build an alpha JARVIS AI-OS running on real hardware with 15+ operational Tier 1 drivers and 20 active alpha testers.
+**Goal:** Build an alpha JARVIS AI-OS running on Raspberry Pi 4 bare metal with 15+ operational drivers/modules and proven 30-day stability.
 
-**Success Criteria:** 7/7 Phase 2 gate criteria met (Pi 4 bare-metal boot, Python↔seL4 UART IPC, 15+ drivers, 30-day stability, alpha release, security audit, performance on real hardware).
+**Success Criteria (Updated for Pi 4 Pivot):**
+1. Pi 4 bare-metal boot (seL4 + JARVIS rootserver) - ✅ MET
+2. Python↔seL4 UART IPC (bidirectional, <10ms RTT) - ✅ MET
+3. 15+ drivers/modules operational - ✅ MET (17 done, 4 planned)
+4. 30-day stability test passed (0 crashes, <1% errors) - ⏳ Week 49-51
+5. Self-audit passed (static analysis + code review) - ⏳ Week 49
+6. Performance validated on real hardware - ✅ MET
+7. Phase 2 final report + Phase 3 plan - ⏳ Week 52
 
 **Efficiency Calibration (from Phase 1):**
 - Phase 1 Planned: 12-16 hours/week
@@ -1048,238 +1055,293 @@ Solution: Map device frames within the existing VSpace range.
 **Estimated Effort:** 12-16 hours
 **Blockers:** None
 
-**Week 46 Checkpoint:** Pi 4 fully integrated, 6 drivers working, boot optimized
+**Week 46 Checkpoint:** ✅ MET — 17 drivers/modules, boot 1.8s, power management, 89 PASS / 0 FAIL / 3 SKIP
 
 ---
 
-## Month 21-22: Alpha Testing + Security Audit (Weeks 47-50)
+## Month 21-22: Additional Drivers + Stability Harness (Weeks 47-50)
 
-### Focus: User Onboarding + External Security Review
+### Focus: Complete Driver Suite + Automated Stability Testing
 
-**Objective:** Onboard 20 alpha testers and pass external security audit.
+**Objective:** Reach 15+ operational drivers/modules, build automated Python stability harness, begin 30-day stability test, and perform self-audit using open-source tools.
 
 ---
 
-### Week 47: Alpha Tester Onboarding
+### Week 47: SPI Driver + Hardware RNG
 
 **Tasks:**
-1. Distribute JARVIS to alpha testers
-   - Send USB installer images (or download links)
-   - Provide installation support (email, Discord)
-   - Track installation success rate (target: >80%)
+1. Implement BCM2835 SPI0 driver
+   - Files: `phase2/src/drivers/bcm_spi.{c,h}`
+   - SPI0 at 0xFE204000 (shares main peripheral untyped, use `uart_device_map_page()`)
+   - Clock divider configuration (125 MHz base / divider)
+   - Polled mode transfers (FIFO TX/RX)
+   - Chip select control (CE0/CE1 via GPIO)
+   - Shell command: `spi` (bus scan, loopback test)
 
-2. Collect initial feedback
-   - Survey: First impressions, installation experience
-   - Bug reports: Critical issues (P0), high-priority issues (P1)
-   - Feature requests: What's missing, what's confusing
+2. Implement hardware RNG driver
+   - Files: `phase2/src/drivers/bcm_rng.{c,h}`
+   - RNG200 at 0xFE104000 (shares main peripheral untyped)
+   - Map MMIO page, enable RNG, read entropy words
+   - Provide `rng_read(buf, len)` API for SHIELD entropy needs
+   - Shell command: `rng` (read random bytes, health check)
 
-3. Fix critical bugs (P0 issues)
-   - Triage bug reports by priority
-   - Fix crashes, data corruption, boot failures
-   - Release patch: v0.2.1-alpha (bug fixes)
+3. Implement PWM driver
+   - Files: `phase2/src/drivers/bcm_pwm.{c,h}`
+   - PWM at 0xFE20C000 (2 channels)
+   - Clock source configuration via mailbox (clock ID 6 = PWM)
+   - Duty cycle control for fan/LED dimming
+   - Shell command: `pwm` (set channel, duty, frequency)
 
-4. Monitor alpha tester activity
-   - Track: Daily active users (target: 15+/20)
-   - Track: Commands executed per user
-   - Track: Crash reports, error logs
+4. Test suite for Week 47 drivers
+   - 5+ SPI tests (init, loopback, clock config, transfer, error handling)
+   - 3+ RNG tests (init, entropy quality, throughput)
+   - 3+ PWM tests (init, duty cycle, frequency)
 
 **Deliverables:**
-- ⏳ 20 testers using JARVIS
-- ⏳ Initial feedback collected (50+ bug reports expected)
-- ⏳ P0 bugs resolved (5-10 critical issues)
-- ⏳ Patch released (v0.2.1-alpha)
+- ⏳ BCM2835 SPI0 driver operational
+- ⏳ Hardware RNG driver operational (critical for security)
+- ⏳ PWM driver operational
+- ⏳ 14+ drivers/modules operational
 
-**Estimated Effort:** 16-20 hours (bug fixing and support)
-**Blockers:** Alpha tester availability (mitigate: recruit 30, aim for 20 active)
+**Estimated Effort:** 12-16 hours
+**Blockers:** SPI device mapping (mitigate: follows same pattern as I2C, uses shared untyped)
 
 ---
 
-### Week 48: VESA Framebuffer Driver (Tier 1 #10)
+### Week 48: DMA Engine + Stability Harness Setup
 
 **Tasks:**
-1. Study VESA BIOS Extensions (VBE)
-   - Read VBE 3.0 specification
-   - Focus on: Framebuffer mode, linear memory access
-   - Understand: Mode setting, resolution/depth configuration
+1. Implement BCM2711 DMA engine driver
+   - Files: `phase2/src/drivers/bcm_dma.{c,h}`
+   - DMA controller at 0xFE007000 (channels 0-14)
+   - Control block (CB) chain for scatter-gather transfers
+   - Memory-to-memory copy for validation
+   - Future: integrate with EMMC ADMA2 and GENET for improved throughput
 
-2. Implement VESA driver
-   - Files: `phase2/src/drivers/vesa_fb.{c,h}`
-   - Query available modes (VBE function 0x4F01)
-   - Set graphics mode (VBE function 0x4F02)
-   - Map framebuffer to memory
+2. Build automated Python stability harness
+   - File: `phase2/src/ai/stability_harness.py`
+   - Connects via UART IPC protocol (reuse `uart_ipc_client.py` transport)
+   - Test categories:
+     - Cache queries (random mix from 258 patterns, verify responses)
+     - Shell commands via COMMAND/COMMAND_RESULT (0x07/0x08)
+     - Heartbeat monitoring (detect hangs, measure RTT drift)
+     - SHIELD checks (verify block rate maintained)
+     - Network operations (ping, ARP, ifconfig via commands)
+   - Logging: timestamped CSV (command, response, latency, pass/fail)
+   - Crash detection: heartbeat timeout → log crash event, attempt protocol reset
+   - Configurable: duration, command mix ratio, interval between commands
 
-3. Implement basic graphics primitives
-   - Draw pixel (x, y, color)
-   - Fill rectangle (for future GUI)
-   - Draw text (for console output)
+3. Validate stability harness on Pi 4
+   - Run 1-hour smoke test
+   - Verify all test categories execute correctly
+   - Confirm logging and crash detection work
+   - Fix any protocol edge cases discovered
 
-4. Test VESA driver
-   - Set mode: 1920×1080, 32-bit color
-   - Draw test pattern (gradient, checkerboard)
-   - Validate: Framebuffer accessible, no corruption
+4. Test suite for DMA + harness
+   - 4+ DMA tests (init, mem-to-mem copy, channel allocation, error handling)
+   - 3+ harness self-tests (protocol connection, command execution, log output)
 
 **Deliverables:**
-- ✅ VESA framebuffer driver operational
-- ✅ Basic graphics primitives working
-- ✅ 10/20 Tier 1 drivers working (50%)
+- ⏳ BCM2711 DMA engine driver operational
+- ⏳ 15+ drivers/modules operational (Phase 2 target met)
+- ⏳ Automated stability harness ready (`stability_harness.py`)
+- ⏳ 1-hour smoke test passed
 
-**Estimated Effort:** 10-14 hours
-**Blockers:** VBE compatibility (mitigate: fallback to 1024×768 if needed)
+**Estimated Effort:** 14-18 hours
+**Blockers:** DMA CB alignment requirements (mitigate: use dma_alloc uncacheable buffers)
+
+**Week 48 Checkpoint:** 15+ drivers operational, stability harness validated
 
 ---
 
-### Week 49: External Security Audit - Part 1
+### Week 49: 30-Day Stability Test Start + Self-Audit
 
 **Tasks:**
-1. Hire 3rd-party security firm
-   - Research firms: Trail of Bits, NCC Group, Cure53
-   - Request proposals (RFP): scope, timeline, cost
-   - Budget: $75K (realistic for comprehensive audit)
+1. Start 30-day automated stability test
+   - Hardware: Raspberry Pi 4 8GB running continuously
+   - Harness: `stability_harness.py` on host PC via UART
+   - Schedule: 24/7 automated (commands every 1-5 seconds)
+   - Command mix: 70% cache queries, 15% shell commands, 10% heartbeat, 5% SHIELD
+   - Target metrics: 0 crashes, <1% error rate, <20ms RTT P99
+   - Daily log rotation with summary statistics
 
-2. Provide audit scope
-   - Components: seL4 kernel, IPC layer, SHIELD framework, drivers
-   - Focus areas: Memory safety, privilege escalation, input validation
-   - Exclusions: AI model vulnerabilities (out of scope)
+2. Perform self-audit: static analysis
+   - Run `cppcheck` on all C driver sources (detect memory issues, UB, leaks)
+   - Run `gcc -Wall -Wextra -Werror -Wconversion` (stricter warnings pass)
+   - Run `flawfinder` / `rats` for security-focused C analysis
+   - Review all `memcpy`/`memmove` calls for bounds correctness
+   - Document findings in `phase2/docs/SECURITY_SELF_AUDIT.md`
 
-3. Prepare codebase for audit
-   - Code cleanup (remove debug code, unused functions)
-   - Documentation (architecture diagrams, threat model)
-   - Test coverage report (demonstrate testing rigor)
+3. Perform self-audit: code review
+   - Review all network-facing code paths (GENET RX → net_stack → protocol handlers)
+   - Review all user-input paths (UART RX → IPC handler → command dispatch)
+   - Review DMA buffer handling (bounds, alignment, cache coherency)
+   - Verify all index masking (ring buffers, DMA descriptor indices)
+   - Check for integer overflow in length/size calculations
 
-4. Audit kickoff
-   - Initial meeting with auditors
-   - Provide access (GitHub repo, documentation)
-   - Establish communication channels (Slack, email)
+4. Fix audit findings
+   - Triage by severity (Critical → High → Medium)
+   - Fix all Critical and High issues immediately
+   - Document Medium/Low issues as technical debt for Phase 3
 
 **Deliverables:**
-- ✅ Security firm hired
-- ✅ Audit scope defined
-- ✅ Codebase prepared
-- ✅ Audit started
+- ⏳ 30-day stability test running (Day 1-7)
+- ⏳ Static analysis completed (cppcheck, flawfinder)
+- ⏳ Code review completed (network, input, DMA paths)
+- ⏳ SECURITY_SELF_AUDIT.md written
+- ⏳ Critical/High issues fixed
 
-**Estimated Effort:** 10-14 hours (coordination and prep)
-**Blockers:** Budget constraint (mitigate: use open-source tools if needed)
+**Estimated Effort:** 14-18 hours (audit + monitoring + fixes)
+**Blockers:** Stability issues discovered (mitigate: fix critical bugs, restart test if needed)
 
 ---
 
-### Week 50: External Security Audit - Part 2
+### Week 50: Stability Monitoring + Phase 3 Research
 
 **Tasks:**
-1. Support audit activities
-   - Answer auditor questions
-   - Provide additional documentation as requested
-   - Reproduce reported issues
+1. Monitor 30-day stability test (Day 8-14)
+   - Daily log review: crash count, error rate, latency trends
+   - Weekly analysis report: patterns, failure modes, memory growth
+   - Fix any bugs discovered during testing (hot-patch, rebuild, redeploy)
+   - If test restarted due to fix: document reason, reset counter
 
-2. Review audit findings
-   - Receive preliminary report (mid-audit)
-   - Triage findings by severity (Critical, High, Medium, Low)
-   - Prioritize fixes: Critical + High first
+2. Harden drivers based on stability findings
+   - Add defensive checks for any crash-causing patterns
+   - Improve error recovery paths (timeout → reset → retry)
+   - Validate watchdog is feeding correctly during long tests
+   - Ensure thermal monitoring prevents overheating during 24/7 operation
 
-3. Fix critical vulnerabilities
-   - Address memory safety issues (buffer overflows, use-after-free)
-   - Fix privilege escalation bugs
-   - Patch input validation flaws
+3. Phase 3 research and prototyping
+   - Evaluate Phase 3 hardware options (keep options open):
+     - **Option A:** Multi-Pi cluster (Pi 4 seL4 + Pi 5 Linux AI) — both boards already owned
+     - **Option B:** x86 (requires spare PC — no spare currently available)
+     - **Option C:** Pi 5 standalone (pending seL4 BCM2712 support)
+   - Prototype on Pi 5 (4GB, active cooling, already owned):
+     - Install lightweight Linux, benchmark Llama 3.2 1B inference time
+     - Test UART bridge between Pi 4 and Pi 5
+     - Evaluate 4GB RAM constraint for AI models
+   - Document findings in `phase2/docs/PHASE_3_HARDWARE_RESEARCH.md`
 
-4. Prepare for re-audit
-   - Document all fixes (commit messages, pull requests)
-   - Request re-audit of critical findings
-   - Target: No critical vulnerabilities remaining
+4. Python host-side improvements
+   - Enhance `power_manager.py` with stability harness integration
+   - Add harness dashboard: live RTT graph, error rate, uptime counter
+   - Improve `system_bootstrap.py` with auto-reconnect on UART disconnect
 
 **Deliverables:**
-- ⏳ Security audit report received
-- ⏳ Critical vulnerabilities fixed (target: 0 critical)
-- ⏳ Audit passed (no critical issues remaining)
+- ⏳ Stability test Day 14+ (no critical issues)
+- ⏳ Driver hardening patches applied
+- ⏳ PHASE_3_HARDWARE_RESEARCH.md written
+- ⏳ Host-side Python improvements deployed
 
-**Estimated Effort:** 20-30 hours (fixing vulnerabilities)
-**Blockers:** Audit findings severity (mitigate: thorough testing in Phase 1 reduces risk)
+**Estimated Effort:** 12-16 hours (monitoring + research + improvements)
+**Blockers:** Stability failures (mitigate: prioritize fixes over new features)
 
-**Week 50 Checkpoint:** Security audit passed, 30-day stability test started
-
----
-
-## Month 23-24: Stability + Phase 2 Completion (Weeks 51-52)
-
-### Focus: 30-Day Stability Test + Phase 2 Final Report
-
-**Objective:** Validate production-grade stability and complete Phase 2 documentation.
+**Week 50 Checkpoint:** Stability test 50%+ complete, self-audit passed, Phase 3 options documented
 
 ---
 
-### Week 51: 30-Day Stability Test
+## Month 23-24: Stability Completion + Phase 2 Report (Weeks 51-52)
+
+### Focus: Complete 30-Day Stability Test + Phase 2 Final Report + Phase 3 Planning
+
+**Objective:** Pass 30-day stability test, write comprehensive Phase 2 final report, and prepare Phase 3 planning document.
+
+---
+
+### Week 51: Stability Test Completion + Final Validation
 
 **Tasks:**
-1. Set up 30-day stability test infrastructure
-   - Hardware: Raspberry Pi 4 8GB (primary)
-   - Monitoring: Crash logs, error logs, memory leaks
-   - Automation: Script to execute commands 24/7
+1. Complete 30-day stability test (Day 15-30)
+   - Continue monitoring: daily log review, crash tracking
+   - Final statistics collection:
+     - Total uptime hours
+     - Total commands executed
+     - Crash count (target: 0, acceptable: <3)
+     - Error rate (target: <1%)
+     - RTT P50/P95/P99 over 30 days
+     - Memory usage trend (detect leaks)
+   - Document any downtime events with root cause analysis
 
-2. Start 30-day stability test
-   - Target: 0 crashes, <1% error rate
-   - Commands: Random mix (80% safe, 15% validated, 5% blocked)
-   - Logging: Every command executed, every error encountered
+2. Final integration validation
+   - Run full test suite: all 89+ tests must PASS
+   - Run extended stress test: 1000+ sequential commands without error
+   - Validate all drivers operational after 30-day run (no degradation)
+   - Verify boot reliability: 10 consecutive cold reboots without failure
 
-3. Monitor test progress
-   - Daily checks: Crash count, error rate, memory growth
-   - Weekly analysis: Identify patterns, failure modes
-   - Fix issues: Hot-patches for critical bugs
+3. Performance benchmarking (final numbers)
+   - Boot time: cold and warm (target: <5s cold, <2s warm)
+   - IPC latency: cache hit and miss paths
+   - EMMC throughput: ADMA2 read/write speeds
+   - Network: GENET TX/RX packet rates
+   - Document in `phase2/docs/PERFORMANCE_BENCHMARKS.md`
 
-4. Implement Intel i915 graphics driver (Tier 1 #11)
-   - Files: `phase2/src/drivers/i915_core.{c,h}`, `i915_driver.{c,h}`
-   - Intel-specific GPU driver (more complex than VESA)
-   - Accelerated graphics (vs VESA framebuffer)
-   - Test: Boot with i915, validate graphics output
+4. Code cleanup and documentation
+   - Remove dead code, unused #ifdef branches
+   - Ensure all public APIs have header doc comments
+   - Update PI4_PLATFORM_GUIDE.md with final driver matrix
+   - Archive stability test logs
 
 **Deliverables:**
-- ✅ 30-day stability test started
-- ✅ Monitoring infrastructure operational
-- ✅ Intel i915 driver operational (bonus)
-- ✅ 11/20 Tier 1 drivers working (55%)
+- ⏳ 30-day stability test PASSED
+- ⏳ All 89+ tests passing (final validation)
+- ⏳ PERFORMANCE_BENCHMARKS.md written
+- ⏳ Codebase cleaned and documented
 
-**Estimated Effort:** 12-16 hours (mostly monitoring, some driver work)
-**Blockers:** Stability issues (mitigate: extensive Phase 1 testing reduces risk)
+**Estimated Effort:** 12-16 hours (monitoring + validation + docs)
+**Blockers:** Late-breaking stability issues (mitigate: 2 weeks of monitoring already completed)
 
 ---
 
-### Week 52: Phase 2 Final Report
+### Week 52: Phase 2 Final Report + Phase 3 Planning
 
 **Tasks:**
-1. Complete 30-day stability test
-   - Collect final statistics: Crash count, error rate, commands executed
-   - Validate: 0 crashes (or <3 crashes), <1% error rate
-   - Document: Failure analysis for any crashes
-
-2. Write PHASE_2_FINAL_REPORT.md
+1. Write PHASE_2_FINAL_REPORT.md
    - Structure (mirror PHASE_1_FINAL_REPORT.md):
-     - Executive Summary (GO/NO-GO for Phase 3)
+     - Executive Summary (GO/NO-GO recommendation for Phase 3)
      - Phase 2 Objectives vs Achievements
-     - Performance Metrics (real hardware validation)
-     - Gate Criteria Status (7/7 MET)
-     - Driver Implementation (15/20 operational = 75%)
-     - Lessons Learned
-     - Technical Debt for Phase 3
-     - Phase 3 Recommendations
-   - Length: 15,000+ lines (comprehensive)
+     - Performance Metrics (real hardware validation, all benchmarks)
+     - Gate Criteria Status (updated for Pi 4 pivot)
+     - Driver Implementation Summary (15+ operational)
+     - 30-Day Stability Test Results
+     - Self-Audit Findings and Resolutions
+     - Architecture Lessons Learned (seL4 on BCM2711)
+     - Technical Debt Inventory for Phase 3
+     - Phase 3 Recommendations (hardware direction, priorities)
+   - Include: boot logs, test output, performance charts, memory maps
 
-3. Collect alpha tester feedback
-   - Survey: Overall satisfaction (target: >70%)
-   - Interviews: 5-10 detailed feedback sessions
-   - Metrics: Daily active users, feature usage, bug reports
+2. Write PHASE_3_KICKOFF.md
+   - Phase 3 objectives (options kept open):
+     - Standalone AI inference (on-device, no host PC dependency)
+     - Hardware platform decision (Pi 5 / x86 / multi-Pi)
+     - Enhanced driver suite (VideoCore VI, HDMI, audio)
+     - Security hardening (formal verification of critical paths)
+     - Beta stability (multi-month continuous operation)
+   - Preliminary timeline estimate (6-12 months)
+   - Hardware budget and procurement plan
+   - Migration path from split architecture to standalone
 
-4. Prepare Phase 3 planning
-   - Create `PHASE_3_KICKOFF.md` (preview)
-   - Define Phase 3 objectives (beta system, 10+ hardware configs)
-   - Estimate Phase 3 timeline (12-18 months)
+3. Update all project documentation
+   - Update CLAUDE.md with Phase 2 completion status
+   - Update JARVIS_UNIFIED_PLAN.md with Phase 2 actuals
+   - Update PHASE_2_PROGRESS_TRACKER.md (all weeks complete)
+   - Archive Phase 2 weekly status docs
+
+4. Final commit and tag
+   - Git tag: `v0.2.0-alpha` (Phase 2 complete)
+   - Commit: "Phase 2 COMPLETE: Alpha system on Pi 4 (X PASS, 0 FAIL)"
+   - Ensure all source, docs, and test artifacts committed
 
 **Deliverables:**
-- ⏳ 30-day stability test passed (0 crashes target)
-- ⏳ PHASE_2_FINAL_REPORT.md complete (~15,000 lines)
-- ⏳ Alpha tester satisfaction >70%
-- ⏳ Phase 3 kickoff ready
+- ⏳ PHASE_2_FINAL_REPORT.md complete (comprehensive)
+- ⏳ PHASE_3_KICKOFF.md complete
+- ⏳ All documentation updated
+- ⏳ Git tag v0.2.0-alpha created
+- ⏳ Phase 2 COMPLETE
 
 **Estimated Effort:** 10-14 hours (primarily documentation)
 **Blockers:** None (final week, wrap-up tasks)
 
-**Week 52 Checkpoint:** Phase 2 complete, all 7 gate criteria met
+**Week 52 Checkpoint:** Phase 2 complete, all gate criteria met, Phase 3 planned
 
 ---
 
@@ -1289,64 +1351,65 @@ Solution: Map device frames within the existing VSpace range.
 
 ### Core Drivers (Required)
 
-| Driver | Week | Status | Priority | Notes |
-|--------|------|--------|----------|-------|
-| 1. PL011 UART | 32-33 | ✅ DONE | Critical | Serial console + IPC (TX+RX working) |
-| 2. SD/EMMC | 35-36 | ⏳ Planned | Critical | Boot + primary storage |
-| 3. Broadcom GENET | 37-38 | ⏳ Planned | Critical | Gigabit Ethernet |
-| 4. USB HID | 39-40 | ⏳ Planned | Critical | Keyboard/mouse input |
-| 5. GPIO | 43 | ⏳ Planned | High | General I/O, LED status |
-| 6. Watchdog | 44 | ⏳ Planned | High | System recovery |
+| # | Driver | Week | Status | Priority | Notes |
+|---|--------|------|--------|----------|-------|
+| 1 | PL011 UART | 32-33 | ✅ DONE | Critical | Serial console + IPC (TX+RX) |
+| 2 | SD/EMMC (SDHCI) | 35-36 | ✅ DONE | Critical | Boot + storage (ADMA2, 11.9 MB/s) |
+| 3 | Broadcom GENET | 37-38 | ✅ DONE | Critical | Gigabit Ethernet (TX+RX, ARP, ICMP) |
+| 4 | USB HID (DWC2) | 39-41 | ✅ DONE | Critical | Keyboard input (boot protocol) |
+| 5 | GPIO | 43 | ✅ DONE | High | Pin control, LED, pull-up/down |
+| 6 | PM Watchdog | 44 | ✅ DONE | High | 10s timeout, system recovery |
 
 ### System Drivers
 
-| Driver | Week | Status | Priority | Notes |
-|--------|------|--------|----------|-------|
-| 7. Device Tree | 45-46 | ⏳ Planned | High | Hardware description |
-| 8. Temperature | 44 | ⏳ Planned | Medium | Thermal monitoring |
-| 9. I2C (BSC) | 43 | ⏳ Optional | Medium | Peripheral support |
-| 10. SPI | Phase 3 | ⏳ Deferred | Low | Peripheral support |
+| # | Driver | Week | Status | Priority | Notes |
+|---|--------|------|--------|----------|-------|
+| 7 | Device Tree (FDT) | 45 | ✅ DONE | High | Embedded DTB parser (~500 LOC) |
+| 8 | Thermal (Mailbox) | 44 | ✅ DONE | High | GPU temp, generic property API |
+| 9 | I2C (BSC1) | 43 | ✅ DONE | Medium | 100/400 kHz, bus scan |
+| 10 | System Timer | 35 | ✅ DONE | Critical | 1 MHz free-running counter |
+| 11 | Boot Manager | 46 | ✅ DONE | High | Per-stage timing, lazy init |
+| 12 | Warm Reboot | 46 | ✅ DONE | Medium | SD persistence, warm/cold detect |
+| 13 | Power Management | 46 | ✅ DONE | High | WFI idle, ARM clock scaling |
+| 14 | Network Stack | 38 | ✅ DONE | Critical | ARP, ICMP, IP (net_stack.c) |
 
-### Graphics (Future)
+### Infrastructure Modules
 
-| Driver | Week | Status | Priority | Notes |
-|--------|------|--------|----------|-------|
-| 11. VideoCore VI | Phase 3 | ⏳ Deferred | Medium | GPU framebuffer |
-| 12. HDMI | Phase 3 | ⏳ Deferred | Medium | Display output |
+| # | Module | Week | Status | Notes |
+|---|--------|------|--------|-------|
+| 15 | Slot Allocator | 35 | ✅ DONE | seL4 CNode slot management |
+| 16 | DMA Allocator | 35 | ✅ DONE | Uncacheable DMA buffer pool |
+| 17 | Block Device | 36 | ✅ DONE | Sector read/write abstraction |
 
-### Audio (Future)
+### Week 47-48 Drivers (Planned)
 
-| Driver | Week | Status | Priority | Notes |
-|--------|------|--------|----------|-------|
-| 13. PWM Audio | Phase 3 | ⏳ Deferred | Low | Basic audio output |
-| 14. I2S | Phase 3 | ⏳ Deferred | Low | Digital audio |
+| # | Driver | Week | Status | Priority | Notes |
+|---|--------|------|--------|----------|-------|
+| 18 | SPI (BCM2835) | 47 | ⏳ Planned | Medium | SPI0 polled transfers |
+| 19 | Hardware RNG | 47 | ⏳ Planned | High | RNG200, entropy for SHIELD |
+| 20 | PWM | 47 | ⏳ Planned | Medium | 2-channel, fan/LED control |
+| 21 | DMA Engine | 48 | ⏳ Planned | Medium | BCM2711 DMA, mem-to-mem |
 
-### Comparison: x86 vs ARM64
+### Deferred to Phase 3
 
-| x86 Driver (Removed) | ARM64 Replacement | Notes |
-|---------------------|-------------------|-------|
-| NVMe | SD/EMMC | No PCIe on Pi 4 |
-| Intel e1000e | Broadcom GENET | Pi 4 built-in NIC |
-| Intel i915 | VideoCore VI | Pi 4 GPU |
-| ACPI S3 | Device Tree + Watchdog | ARM power model |
-| PS/2 | USB HID only | No legacy ports |
-| PCI/PCIe | N/A | No PCI bus on Pi 4 |
+| Driver | Priority | Notes |
+|--------|----------|-------|
+| VideoCore VI | Medium | GPU framebuffer (requires VC firmware interface) |
+| HDMI | Medium | Display output (depends on VideoCore) |
+| I2S | Low | Digital audio |
+| PCIe (Pi 5) | Low | Only if Phase 3 targets BCM2712 |
 
-**Phase 2 Target: 8/10 core drivers (80%)**
+### Phase 2 Driver Count
 
-**Drivers Planned for Phase 2:**
-1. ✅ PL011 UART (Week 32-33) - TX via seL4_DebugPutChar, RX via device frame mapping
-2. ⏳ SD/EMMC (Weeks 35-36)
-3. ⏳ Broadcom GENET (Weeks 37-38)
-4. ⏳ USB HID (Weeks 39-40)
-5. ⏳ GPIO (Week 43)
-6. ⏳ Watchdog (Week 44)
-7. ⏳ Device Tree (Weeks 45-46)
-8. ⏳ Temperature (Week 44)
-9. ⏳ I2C (Week 43, optional)
+| Category | Count | Status |
+|----------|-------|--------|
+| Core drivers (UART, EMMC, GENET, USB, GPIO, Watchdog) | 6 | ✅ All DONE |
+| System drivers (FDT, Thermal, I2C, Timer, Boot, Reboot, Power, NetStack) | 8 | ✅ All DONE |
+| Infrastructure (Slot, DMA, BlkDev) | 3 | ✅ All DONE |
+| Week 47-48 drivers (SPI, RNG, PWM, DMA Engine) | 4 | ⏳ Planned |
+| **Total Phase 2** | **21** | **17 DONE + 4 planned** |
 
-**Drivers Deferred to Phase 3:**
-- VideoCore VI, HDMI, PWM Audio, I2S, SPI
+**Phase 2 Target: 15+ operational drivers/modules — currently at 17, targeting 21 by Week 48**
 
 ---
 
@@ -1354,77 +1417,81 @@ Solution: Map device frames within the existing VSpace range.
 
 ### Every 4 Weeks (Gate Criteria Checkpoints)
 
-**Week 30 Checkpoint:**
-- ✅ IPC integration working
-- ✅ Python shell cache >80% (via seL4)
-- ✅ All managers initialized
-- **Test Suite:** 30+ IPC integration tests, 10+ manager tests
+**Week 30 Checkpoint:** ✅ MET
+- ✅ IPC integration working (Phase 1 validated, dual ring buffer)
+- ✅ Decision cache operational (258 patterns, 85.7% hit rate)
+- **Test Suite:** 57 tests (22 UART IPC + 25 bootstrap + 10 integration)
 
-**Week 34 Checkpoint:**
-- ✅ Raspberry Pi 4 boots JARVIS
-- ✅ UART IPC working (Python↔seL4)
-- ✅ Cache hit rate >80% validated
-- **Test Suite:** 20+ UART IPC tests, 10+ cache tests
+**Week 34 Checkpoint:** ✅ MET
+- ✅ Raspberry Pi 4 boots JARVIS via U-Boot
+- ✅ UART IPC working (Python↔seL4, 7ms RTT, 500-query bench 100%)
+- ✅ Cache hit rate >80% validated on hardware
+- **Test Suite:** 57 Python tests + 30 C tests
 
-**Week 38 Checkpoint:**
-- ✅ SD/EMMC + GENET drivers operational
-- ✅ 4/8 core drivers working (50%)
-- ✅ Network ping working on Pi 4
-- **Test Suite:** 15+ storage tests, 15+ network tests
+**Week 38 Checkpoint:** ✅ MET
+- ✅ SD/EMMC driver operational (ADMA2, 11.9 MB/s, 12 tests)
+- ✅ GENET Ethernet operational (TX+RX, ARP, ICMP)
+- ✅ Network stack: ping, ifconfig, netstat working
+- **Test Suite:** 12 EMMC + 6 GENET + 5 RX/net + 10 shell tests
 
-**Week 42 Checkpoint:**
-- ✅ USB HID driver working
-- ✅ Physical keyboard input functional
-- ✅ Alpha testers recruited (20-30 people)
-- **Test Suite:** 20+ USB HID tests, alpha tester onboarding
+**Week 42 Checkpoint:** ✅ MET
+- ✅ USB HID keyboard operational (DWC2 host, boot protocol)
+- ✅ Interactive shell via USB keyboard
+- ✅ Alpha infrastructure ready (installer, docs, SD imaging)
+- **Test Suite:** 6 USB + 10 keyboard + install scripts tested
 
-**Week 46 Checkpoint:**
-- ✅ GPIO + Device Tree integrated
-- ✅ Boot optimized (<10s cold, <5s warm)
-- ✅ 8/8 core drivers working (100%)
-- **Test Suite:** 25+ integration tests, 10+ boot tests
+**Week 46 Checkpoint:** ✅ MET (Hardware Verified Feb 9, 2026)
+- ✅ GPIO + I2C + Device Tree integrated
+- ✅ Boot optimized (1.8s total, <2s warm)
+- ✅ Power management (WFI idle, ARM clock scaling)
+- ✅ 17 drivers/modules operational
+- **Test Suite:** 89 PASS, 0 FAIL, 3 SKIP (cumulative)
 
-**Week 50 Checkpoint:**
-- ✅ Security audit passed (no critical issues)
-- ✅ 30-day stability test started
-- ✅ 15/20 Tier 1 drivers working (75%) [stretch]
-- **Test Suite:** Security test suite (100+ security tests), alpha tester feedback
+**Week 48 Checkpoint:** ⏳ PLANNED
+- ⏳ SPI + RNG + PWM + DMA drivers operational
+- ⏳ 15+ drivers target met (21 planned)
+- ⏳ Automated stability harness validated
+- **Test Suite:** Target 100+ tests total
 
-**Week 52 Checkpoint:**
-- ✅ 30-day stability test passed (0 crashes)
-- ✅ Phase 2 complete (all 7 gate criteria met)
-- ✅ Phase 3 planning approved
-- **Test Suite:** Final validation suite (200+ comprehensive tests)
+**Week 50 Checkpoint:** ⏳ PLANNED
+- ⏳ 30-day stability test 50%+ complete
+- ⏳ Self-audit completed (static analysis + code review)
+- ⏳ Critical/High security issues resolved
+- ⏳ Phase 3 hardware research documented
+
+**Week 52 Checkpoint:** ⏳ PLANNED
+- ⏳ 30-day stability test PASSED (0 crashes target)
+- ⏳ Phase 2 final report complete
+- ⏳ Phase 3 planning document ready
+- ⏳ Git tag v0.2.0-alpha
+- **Test Suite:** Final validation (all tests passing, stability proven)
 
 ---
 
-## Risk Register (Informed by Phase 1 Discoveries)
+## Risk Register (Updated for Pi 4 Reality)
 
 ### Technical Risks
 
-| Risk | Probability | Impact | Phase 1 Learning | Mitigation |
-|------|-------------|--------|------------------|------------|
-| **Real-time IPC integration fails** | Medium | Critical | Phase 1 split demo; IPC 54μs validated | Incremental integration (Weeks 27-30); fallback to mock mode if needed; extensive testing |
-| **Driver complexity underestimated** | Medium | High | VirtIO took 2 weeks; Pi 4 drivers simpler | Allocate 2-3 weeks per driver; start with UART/SD (highest priority); reference Linux drivers |
-| **Hardware compatibility issues** | Low | Medium | Phase 1 QEMU-only; Pi 4 seL4 verified | Single Pi 4 platform; well-documented BCM2711; reference Linux drivers |
-| **Cache capacity overflow** | Low | Medium | Phase 1 overflow at 256→512 (Week 25) | Start with 1024 capacity; implement dynamic resizing; monitor pattern growth |
-| **Documentation lag** | Medium | Low | Week 17 scope change caused lag | Update PHASE_2_PROGRESS_TRACKER.md within 24h; bi-weekly status docs |
-| **Security vulnerabilities** | Medium | Critical | Phase 1 focused on functionality | External audit (Month 22); fix critical issues before alpha release; community bug bounty |
-| **Alpha tester recruitment** | Medium | Medium | No Phase 1 external testing | Start recruiting Month 16; aim for 30 (buffer for 20 target); incentivize with early access |
-| **Stability on real hardware** | Medium | High | Phase 1 QEMU only; 12h test passed | Start with 7-day test (Week 40); scale to 30-day (Week 51); continuous monitoring |
-| **ACPI S3 complexity** | Medium | Medium | Phase 1 suspend/resume instant | Phase 1 validated framework; Week 45-46 focus; extensive debugging via serial console |
-| **AI inference on different GPUs** | Low | Medium | Phase 1 RTX 2070 only | Test on Arc A380 (Intel) and Radeon 780M (AMD); fallback to CPU if GPU fails |
+| Risk | Probability | Impact | Status | Mitigation |
+|------|-------------|--------|--------|------------|
+| **Real-time IPC integration fails** | Low | Critical | ✅ RESOLVED | UART IPC working: 7ms RTT, 500-query 100% success |
+| **Driver complexity underestimated** | Low | High | ✅ MITIGATED | 17 drivers done; BCM2711 well-documented; Linux driver references |
+| **Hardware compatibility issues** | Low | Low | ✅ RESOLVED | Single Pi 4 target, all peripherals mapped and tested |
+| **Cache capacity overflow** | Low | Medium | ✅ RESOLVED | 258 patterns at 85.7% hit rate, stable |
+| **Stability on real hardware** | Medium | High | ⏳ IN PROGRESS | 30-day automated test planned (Week 49-51); Python harness |
+| **seL4 untyped watermark bugs** | Low | Critical | ✅ RESOLVED | Forward-only mapping, buddy skip, shared untyped tracking |
+| **DMA cache coherency** | Low | High | ✅ RESOLVED | All DMA buffers mapped uncacheable (vm_attributes=0) |
+| **Security vulnerabilities** | Medium | High | ⏳ PLANNED | Self-audit (Week 49): cppcheck, flawfinder, manual code review |
+| **Network-facing code exploits** | Medium | High | ⏳ PLANNED | Code review of GENET RX → net_stack paths (Week 49) |
 
 ### Non-Technical Risks
 
 | Risk | Probability | Impact | Mitigation |
 |------|-------------|--------|------------|
-| **Hardware acquisition delays** | Low | Low | Pi 4 already owned; accessories ($65) ship in 1-2 days |
-| **No funding secured** | Low | Low | Pi 4 pivot eliminates hardware budget need | Self-fund Phase 2 ($65-175 total); Pi 4 already owned |
-| **Timeline slips (solo dev)** | High | Medium | Adjust scope (defer 20→15 drivers acceptable); focus on 7 gate criteria; 24% buffer from Phase 1 |
-| **Security audit cost** | Medium | Low | Budget $75K; consider open-source tools (KLEE, AFL, Valgrind); defer to Month 23 if needed |
-| **Alpha tester drop-off** | Medium | Medium | Recruit 30 (aim for 20 active); provide responsive support; release patches quickly (P0 within 48h) |
-| **Scope creep** | Medium | Medium | Maintain discipline (Phase 1 lesson); defer non-critical features; focus on 7 gate criteria only |
+| **Hardware acquisition delays** | Low | Low | Pi 4 already owned and operational |
+| **Timeline slips (solo dev)** | Medium | Medium | 6 weeks remaining; scope flexible (defer PWM/DMA if needed) |
+| **Scope creep** | Low | Medium | Clear gate criteria; focus on stability over new features |
+| **Phase 3 hardware decision** | Low | Low | Keeping options open; research in Week 50, decide in Phase 3 |
 
 ---
 
@@ -1437,23 +1504,24 @@ Solution: Map device frames within the existing VSpace range.
 - Weeks 31-34 (Pi 4 setup + UART IPC): 42-58 hours (4 weeks × 10.5-14.5h/week)
 - Weeks 35-38 (SD/EMMC + GENET drivers): 48-64 hours (4 weeks × 12-16h/week)
 - Weeks 39-42 (USB HID + alpha prep): 42-56 hours (4 weeks × 10.5-14h/week)
-- Weeks 43-46 (GPIO + Device Tree): 38-52 hours (4 weeks × 9.5-13h/week)
-- Weeks 47-50 (Alpha + security): 56-74 hours (4 weeks × 14-18.5h/week, bug fixing)
-- Weeks 51-52 (Stability + report): 22-30 hours (2 weeks × 11-15h/week)
+- Weeks 43-46 (GPIO + Device Tree + Power): 38-52 hours (4 weeks × 9.5-13h/week)
+- Weeks 47-48 (SPI/RNG/PWM/DMA + stability harness): 26-34 hours (2 weeks × 13-17h/week)
+- Weeks 49-50 (Stability test + self-audit + research): 26-34 hours (2 weeks × 13-17h/week)
+- Weeks 51-52 (Stability completion + report): 22-30 hours (2 weeks × 11-15h/week)
 
-**Total Estimated: 286-382 hours**
+**Total Estimated: 282-376 hours**
 
-**Conservative Estimate: ~400 hours** (reduced from 500h due to simpler Pi 4 vs x86)
+**Conservative Estimate: ~380 hours** (simpler Pi 4 target, no external audit coordination)
 
 **Comparison to Phase 1:**
 - Phase 1 actual: 286 hours (26 weeks)
-- Phase 2 estimate: 400 hours (52 weeks)
-- Scaling factor: 1.4× (reduced complexity with single Pi 4 target)
+- Phase 2 estimate: 380 hours (52 weeks)
+- Scaling factor: 1.33× (single Pi 4 target, reuse of Phase 1 patterns)
 
-**Hardware Cost Savings:**
-- Original (x86): $5,000 (Intel NUC + Framework + Dell)
-- Revised (Pi 4): $65-175
-- Savings: $4,825-4,935 (97-99%)
+**Hardware Cost:**
+- Original plan (x86): $5,000 (Intel NUC + Framework + Dell)
+- Actual (Pi 4): $215.82 AUD
+- Savings: ~$4,800+ (96%)
 
 **Confidence Level: High** (based on Phase 1 efficiency, proven seL4 Pi 4 support)
 
@@ -1463,39 +1531,52 @@ Solution: Map device frames within the existing VSpace range.
 
 The Phase 2 split architecture is **temporary**. The original vision and end goal remains a fully self-contained system where AI runs on the same hardware as the microkernel.
 
+**Why the split exists:** No spare PC available for bare-metal OS testing (risk of bricking primary development machine). Pi 4 provides safe bare-metal target; host PC runs AI in userspace (no risk).
+
 ### Phase 3 Options (2027+)
 
-**Option A: Multi-Pi Cluster**
-- Pi 4: seL4 microkernel (bare metal)
-- Pi 5: Linux + TinyLlama (AI inference)
-- UART connection between boards
-- Cost: ~$200 additional
-- Benefit: Keeps ARM64 architecture, incremental upgrade
+**Option A: Multi-Pi Cluster (Lowest Risk — Hardware Already Owned)**
+- Pi 4 (8GB): seL4 microkernel (bare metal) — already running JARVIS
+- Pi 5 (4GB, active cooling): Linux + TinyLlama/Llama 3.2 1B (AI inference)
+- UART or USB connection between boards
+- Cost: $0 additional (both boards already owned)
+- Benefit: Keeps ARM64, incremental upgrade, no risk to main PC
+- Constraint: Pi 5 has 4GB RAM — limits model size (1B-3B parameter models)
 
-**Option B: x86 Return (Original Vision)**
-- Intel NUC or equivalent x86-64 hardware
-- All AI runs on-device (Phi-3 Mini + TinyLlama)
+**Option B: x86 Return (Original Vision — Requires Spare PC)**
+- Dedicated x86-64 machine (NUC, mini-PC, or second-hand desktop)
+- All AI runs on-device (Phi-3 Mini 3.8B + larger models)
 - ivshmem shared memory IPC (<100μs, not UART)
-- Cost: ~$1,200+
-- Benefit: Full performance, original architecture restored
+- Cost: ~$500-1,200 (used mini-PC or NUC)
+- Benefit: Full performance, original architecture, 16-32GB RAM for larger models
+- Blocker: Need a spare machine that can be safely wiped
 
-### Hardware Requirements for Standalone
-- **CPU:** 8-core minimum (2 kernel, 6 AI)
-- **RAM:** 16-32GB (dynamic scaling support)
-- **GPU:** Discrete GPU (RTX 3060+ / Arc A380) for <500ms inference
-- **Storage:** NVMe SSD (fast model loading)
+**Option C: Pi 5 Standalone (Pending seL4 Support)**
+- seL4 running directly on Pi 5 (BCM2712)
+- AI inference on-device (4GB constraint)
+- Requires seL4 BCM2712 port (4-8 weeks, see `SEL4_PI5_PORTING_RESEARCH.md`)
+- Cost: $0 additional
+- Risk: seL4 doesn't support BCM2712 yet; RP1 south bridge adds complexity
+
+### Hardware Already Available
+| Hardware | RAM | Status | Role |
+|----------|-----|--------|------|
+| Raspberry Pi 4 Model B | 8GB | ✅ Running JARVIS | seL4 microkernel |
+| Raspberry Pi 5 | 4GB | ✅ Owned (active cooling) | Available for Phase 3 AI |
+| Host PC | — | ✅ Development machine | Python AI (current), builds |
 
 ### Why This Matters
-The split architecture adds latency (1-10ms UART vs 54μs shared memory) and requires a host PC. Phase 3+ should eliminate this dependency for:
-- **Portable deployment** (laptop, embedded systems)
+The split architecture adds latency (7ms UART vs 54μs shared memory) and requires a host PC. Phase 3+ should eliminate this dependency for:
+- **Portable deployment** (self-contained embedded system)
 - **Air-gapped operation** (no network/host required)
-- **Production reliability** (single device = single point of failure eliminated)
+- **Simpler setup** (one device instead of two + cable)
 
 ### Migration Path
 1. **Phase 2 (Now):** Validate architecture on Pi 4 + Host PC
-2. **Phase 3 Option A:** Add Pi 5 for local AI (if budget limited)
-3. **Phase 3 Option B:** Return to x86 (if budget available)
-4. **Phase 4:** Production standalone deployment
+2. **Phase 3 Step 1:** Prototype AI on Pi 5 Linux (test inference speed, 4GB limit)
+3. **Phase 3 Step 2:** Bridge Pi 4 ↔ Pi 5 (UART or USB IPC)
+4. **Phase 3 Step 3:** Evaluate x86 if Pi 5 RAM proves insufficient
+5. **Phase 4:** Production standalone deployment (final platform TBD)
 
 ---
 
@@ -1555,10 +1636,9 @@ The split architecture adds latency (1-10ms UART vs 54μs shared memory) and req
 **Total Hardware Cost: $215.82 AUD** (vs $5,000+ USD original x86 plan)
 **Savings: ~$4,800+ (96%)**
 
-**Optional (Future):**
-- Raspberry Pi 5 for AI inference (~$120 AUD)
-- Larger SD card 64GB+ (~$30 AUD)
-- Active cooling case (~$35 AUD)
+**Also Available (Already Owned):**
+- Raspberry Pi 5 4GB (with active cooling fan + case) — for Phase 3 AI prototyping
+- Larger SD card 64GB+ (~$30 AUD, if needed)
 
 ### Pi 4 Specifications (BCM2711)
 
@@ -1575,33 +1655,36 @@ The split architecture adds latency (1-10ms UART vs 54μs shared memory) and req
 
 ---
 
-## Appendix C: Alpha Tester Recruitment Plan
+## Appendix C: Automated Stability Test Plan
 
-**Target: 30 recruited, 20 active**
+**Approach: Python-based automated harness (no external testers — private project)**
 
-**Channels:**
-- Reddit: r/linux, r/programming, r/selfhosted, r/homelab
-- Hacker News: Show HN post
-- Twitter/X: Announce alpha release
-- Discord: JARVIS community server
-- GitHub: Star/watch repository
+**Infrastructure:**
+- Host PC running `stability_harness.py` connected via UART to Pi 4
+- Pi 4 running JARVIS seL4 continuously (24/7 for 30 days)
+- Timestamped CSV logging on host PC
+- Crash detection via heartbeat timeout
 
-**Requirements:**
-- Technical background (comfortable with Linux, command line)
-- Willing to provide feedback (bug reports, feature requests)
-- Hardware compatible (Intel/AMD x86-64, 8GB+ RAM, GPU optional)
+**Test Categories:**
+| Category | Mix % | Description |
+|----------|-------|-------------|
+| Cache queries | 70% | Random selection from 258 patterns, verify response |
+| Shell commands | 15% | ping, ifconfig, temp, boot, dt, gpio, i2c, usb |
+| Heartbeat | 10% | RTT measurement, hang detection |
+| SHIELD checks | 5% | Risk assessment requests, verify block rate |
 
-**Incentives:**
-- Early access to JARVIS AI-OS
-- Acknowledgment in credits (CREDITS.md)
-- Community recognition (alpha tester badge)
-- Potential co-authorship on future papers/publications
+**Success Criteria:**
+- 0 crashes over 30 days (acceptable: <3 with root cause analysis)
+- <1% error rate across all command categories
+- RTT P99 < 20ms (no latency degradation over time)
+- No memory leaks (stable memory usage trend)
+- Watchdog never triggers (all heartbeats fed)
 
 **Timeline:**
-- Week 40: Start recruitment (Reddit, Hacker News posts)
-- Week 41: Onboarding guide created
-- Week 42: Alpha release distributed
-- Week 47: Active user count validated (target: 15-20)
+- Week 48: Harness built and smoke-tested (1-hour run)
+- Week 49: 30-day test starts (Day 1)
+- Week 50: Midpoint check (Day 14), fix any issues
+- Week 51: Test completion (Day 30), final statistics
 
 ---
 
@@ -1610,13 +1693,16 @@ The split architecture adds latency (1-10ms UART vs 54μs shared memory) and req
 ---
 
 *Implementation Plan Date: December 2025*
-*Updated: January 10, 2026 (Week 33 COMPLETE - UART RX Enabled)*
+*Updated: February 10, 2026 (Week 46 HARDWARE VERIFIED — Weeks 47-52 rewritten for Pi 4)*
 *Author: JARVIS Development Team (Solo Developer)*
 *Phase 1 Complete: 26/26 weeks (100%), 286 hours*
-*Phase 2 Estimate: 52 weeks, ~400 hours*
+*Phase 2 Estimate: 52 weeks, ~380 hours*
 *Hardware: Raspberry Pi 4 8GB (BCM2711, Cortex-A72)*
-*Hardware Cost: $65-175 (savings: $4,825-4,935 vs original x86 plan)*
-*Current Status: Week 33 COMPLETE - UART RX enabled + IPC handler waiting for Python queries*
-*Next Milestone: Week 34 - Python↔seL4 bidirectional IPC validation*
+*Hardware Cost: $215.82 AUD (savings: ~$4,800+ vs original x86 plan)*
+*Current Status: Week 46 HARDWARE VERIFIED — 89 PASS, 0 FAIL, 3 SKIP*
+*Next Milestone: Week 47 — SPI + Hardware RNG + PWM drivers*
 
-**See Also:** `PHASE_2_HARDWARE_PIVOT.md` for full pivot rationale
+**See Also:**
+- `PHASE_2_HARDWARE_PIVOT.md` — Full pivot rationale (NUC → Pi 4)
+- `SEL4_PI5_PORTING_RESEARCH.md` — Pi 5 porting research for Phase 3+
+- `PI4_PLATFORM_GUIDE.md` — Driver matrix, memory maps, benchmarks

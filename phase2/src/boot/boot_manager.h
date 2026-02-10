@@ -27,6 +27,9 @@ typedef enum {
     BOOT_STAGE_GPIO,
     BOOT_STAGE_I2C,
     BOOT_STAGE_USB,
+    BOOT_STAGE_SPI,
+    BOOT_STAGE_RNG,
+    BOOT_STAGE_PWM,
     BOOT_STAGE_COUNT
 } boot_stage_t;
 

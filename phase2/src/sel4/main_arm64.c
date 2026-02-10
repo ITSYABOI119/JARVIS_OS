@@ -174,6 +174,9 @@ static void emmc_dump_block(uint32_t lba, const uint8_t *buf, size_t dump_len)
 #include "boot/boot_manager.h"
 #include "boot/warm_reboot.h"
 #include "drivers/bcm_power.h"
+#include "drivers/bcm_spi.h"
+#include "drivers/bcm_rng.h"
+#include "drivers/bcm_pwm.h"
 
 #define BANNER \
     "\n" \
@@ -886,6 +889,15 @@ int main(int argc, char *argv[])
     }
     boot_stage_end(BOOT_STAGE_WATCHDOG);
 
+    /* Week 47: RNG at 0xFE104000 — AFTER watchdog (0xFE100000),
+     * BEFORE UART (0xFE200000+). Uses buddy skip ~1 retype. */
+    boot_stage_begin(BOOT_STAGE_RNG);
+    sel4_putchar('R'); sel4_putchar('G');  /* "RG" = RNG mapping */
+    if (rng_init() != 0) {
+        sel4_putchar('!');  /* Non-fatal */
+    }
+    boot_stage_end(BOOT_STAGE_RNG);
+
     /* Week 45: Initialize embedded FDT (no MMIO needed, pure parsing) */
     boot_stage_begin(BOOT_STAGE_FDT);
     sel4_putchar('D'); sel4_putchar('T');  /* "DT" = device tree init */
@@ -1006,6 +1018,27 @@ int main(int argc, char *argv[])
     } else {
         sel4_puts("[INIT] Power: init failed (non-fatal)\n");
     }
+
+    /* Week 47: Initialize GPIO early (reuses UART mapping, no new pages)
+     * so SPI and PWM can configure their GPIO pins during init.
+     * GPIO boot stage tracking + LED blink happens later at Week 43 section. */
+    gpio_init();  /* idempotent — returns immediately if called again */
+
+    /* Week 47: SPI0 at 0xFE204000 — AFTER UART (cursor ~0xFE202000),
+     * BEFORE EMMC (0xFE340000). Must map here for watermark ordering. */
+    boot_stage_begin(BOOT_STAGE_SPI);
+    sel4_puts("[INIT] SPI0 controller...\n");
+    bool spi_ok = (spi_init() == 0);
+    sel4_puts(spi_ok ? "[INIT] SPI: initialized OK\n" : "[INIT] SPI: init failed (non-fatal)\n");
+    boot_stage_end(BOOT_STAGE_SPI);
+
+    /* Week 47: PWM at 0xFE20C000 — AFTER SPI (0xFE205000),
+     * BEFORE EMMC (0xFE340000). Uses mailbox for clock config. */
+    boot_stage_begin(BOOT_STAGE_PWM);
+    sel4_puts("[INIT] PWM controller...\n");
+    bool pwm_ok = (pwm_init() == 0);
+    sel4_puts(pwm_ok ? "[INIT] PWM: initialized OK\n" : "[INIT] PWM: init failed (non-fatal)\n");
+    boot_stage_end(BOOT_STAGE_PWM);
 
     /* Initialize decision cache */
     boot_stage_begin(BOOT_STAGE_CACHE);
@@ -3143,6 +3176,182 @@ genet_test_done:
         else
             sel4_puts("[W46] SOME TESTS FAILED\n");
         sel4_puts("[W46] ========================================\n\n");
+    }
+
+    /* ============================================================
+     * Week 47: SPI + RNG + PWM Driver Tests (11 tests)
+     * ============================================================ */
+    {
+        int w47_pass = 0, w47_fail = 0, w47_skip = 0;
+        sel4_puts("[W47] ========================================\n");
+        sel4_puts("[W47] SPI + RNG + PWM DRIVER TESTS\n");
+        sel4_puts("[W47] ========================================\n");
+
+        /* --- SPI Tests (5) --- */
+
+        /* T1: spi_init */
+        sel4_puts("[W47] T1 spi_init: ");
+        if (spi_ok) {
+            sel4_puts("PASS\n"); w47_pass++;
+        } else {
+            sel4_puts("FAIL (spi_init returned error)\n"); w47_fail++;
+        }
+
+        /* T2: spi_loopback - transfer 4 bytes, verify no timeout */
+        sel4_puts("[W47] T2 spi_loopback: ");
+        if (spi_ok) {
+            uint8_t tx[4] = {0xDE, 0xAD, 0xBE, 0xEF};
+            uint8_t rx[4] = {0};
+            int rc = spi_transfer(tx, rx, 4);
+            if (rc == SPI_OK) {
+                sel4_puts("PASS\n"); w47_pass++;
+            } else {
+                char tbuf[64];
+                snprintf(tbuf, sizeof(tbuf), "FAIL (rc=%d)\n", rc);
+                sel4_puts(tbuf); w47_fail++;
+            }
+        } else {
+            sel4_puts("SKIP (SPI not init)\n"); w47_skip++;
+        }
+
+        /* T3: spi_clock_config */
+        sel4_puts("[W47] T3 spi_clock_config: ");
+        if (spi_ok) {
+            int rc = spi_set_clock(64);  /* ~1.95 MHz */
+            if (rc == SPI_OK) {
+                /* Restore default */
+                spi_set_clock(256);
+                sel4_puts("PASS\n"); w47_pass++;
+            } else {
+                sel4_puts("FAIL\n"); w47_fail++;
+            }
+        } else {
+            sel4_puts("SKIP\n"); w47_skip++;
+        }
+
+        /* T4: spi_cs_select */
+        sel4_puts("[W47] T4 spi_cs_select: ");
+        if (spi_ok) {
+            int r0 = spi_select(SPI_CS0);
+            int r1 = spi_select(SPI_CS1);
+            int r_bad = spi_select(5);  /* Should fail */
+            spi_select(SPI_CS0);  /* Restore */
+            if (r0 == SPI_OK && r1 == SPI_OK && r_bad == SPI_ERR_PARAM) {
+                sel4_puts("PASS\n"); w47_pass++;
+            } else {
+                sel4_puts("FAIL\n"); w47_fail++;
+            }
+        } else {
+            sel4_puts("SKIP\n"); w47_skip++;
+        }
+
+        /* T5: spi_status_cmd */
+        sel4_puts("[W47] T5 spi_status_cmd: ");
+        {
+            char cmd_out[256];
+            int ret = cmd_dispatch("spi", cmd_out, sizeof(cmd_out));
+            if (ret > 0) {
+                sel4_puts("PASS\n"); w47_pass++;
+            } else {
+                sel4_puts("FAIL (no output)\n"); w47_fail++;
+            }
+        }
+
+        /* --- RNG Tests (3) --- */
+
+        /* T6: rng_init */
+        sel4_puts("[W47] T6 rng_init: ");
+        if (rng_is_initialized()) {
+            sel4_puts("PASS\n"); w47_pass++;
+        } else {
+            sel4_puts("FAIL (rng not initialized)\n"); w47_fail++;
+        }
+
+        /* T7: rng_read_word - read 2 words, verify non-zero and different */
+        sel4_puts("[W47] T7 rng_read_word: ");
+        if (rng_is_initialized()) {
+            uint32_t w1 = rng_read_word();
+            uint32_t w2 = rng_read_word();
+            if (w1 != 0 && w2 != 0 && w1 != w2) {
+                char tbuf[80];
+                snprintf(tbuf, sizeof(tbuf), "PASS (0x%08x, 0x%08x)\n",
+                         (unsigned)w1, (unsigned)w2);
+                sel4_puts(tbuf); w47_pass++;
+            } else if (w1 == w2) {
+                sel4_puts("FAIL (identical words)\n"); w47_fail++;
+            } else {
+                sel4_puts("FAIL (zero word)\n"); w47_fail++;
+            }
+        } else {
+            sel4_puts("SKIP (RNG not init)\n"); w47_skip++;
+        }
+
+        /* T8: rng_status_cmd */
+        sel4_puts("[W47] T8 rng_status_cmd: ");
+        {
+            char cmd_out[256];
+            int ret = cmd_dispatch("rng", cmd_out, sizeof(cmd_out));
+            if (ret > 0) {
+                sel4_puts("PASS\n"); w47_pass++;
+            } else {
+                sel4_puts("FAIL (no output)\n"); w47_fail++;
+            }
+        }
+
+        /* --- PWM Tests (3) --- */
+
+        /* T9: pwm_init */
+        sel4_puts("[W47] T9 pwm_init: ");
+        if (pwm_ok) {
+            sel4_puts("PASS\n"); w47_pass++;
+        } else {
+            sel4_puts("FAIL (pwm_init returned error)\n"); w47_fail++;
+        }
+
+        /* T10: pwm_enable_disable - enable ch0, verify, disable */
+        sel4_puts("[W47] T10 pwm_enable_disable: ");
+        if (pwm_ok) {
+            int r1 = pwm_set_duty(0, 50);
+            int r2 = pwm_enable(0, true);
+            /* Brief delay to let PWM run */
+            for (volatile int d = 0; d < 100000; d++);
+            int r3 = pwm_enable(0, false);
+            if (r1 == PWM_OK && r2 == PWM_OK && r3 == PWM_OK) {
+                sel4_puts("PASS\n"); w47_pass++;
+            } else {
+                char tbuf[80];
+                snprintf(tbuf, sizeof(tbuf), "FAIL (r1=%d r2=%d r3=%d)\n", r1, r2, r3);
+                sel4_puts(tbuf); w47_fail++;
+            }
+        } else {
+            sel4_puts("SKIP (PWM not init)\n"); w47_skip++;
+        }
+
+        /* T11: pwm_status_cmd */
+        sel4_puts("[W47] T11 pwm_status_cmd: ");
+        {
+            char cmd_out[256];
+            int ret = cmd_dispatch("pwm", cmd_out, sizeof(cmd_out));
+            if (ret > 0) {
+                sel4_puts("PASS\n"); w47_pass++;
+            } else {
+                sel4_puts("FAIL (no output)\n"); w47_fail++;
+            }
+        }
+
+        /* Week 47 summary */
+        sel4_puts("[W47] ========================================\n");
+        {
+            char buf[80];
+            snprintf(buf, sizeof(buf), "[W47] TEST RESULTS: %d PASS, %d FAIL, %d SKIP\n",
+                     w47_pass, w47_fail, w47_skip);
+            sel4_puts(buf);
+        }
+        if (w47_fail == 0)
+            sel4_puts("[W47] ALL TESTS PASSED\n");
+        else
+            sel4_puts("[W47] SOME TESTS FAILED\n");
+        sel4_puts("[W47] ========================================\n\n");
     }
 
     /* Optional UART echo test - keep disabled for IPC runs */

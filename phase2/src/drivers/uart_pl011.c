@@ -322,11 +322,14 @@ bool uart_device_map_page(uintptr_t paddr, uintptr_t requested_vaddr,
 
     if (req_vaddr == 0) {
         req_vaddr = device_vaddr_next;
-        /* Week 44: Skip DMA pool (0x5c4000-0x603FFF) and GENET MMIO
-         * (0x604000-0x609FFF) to prevent vaddr collisions. These ranges
-         * are used by dma_alloc and bcm_genet respectively. */
-        if (req_vaddr >= 0x5c4000 && req_vaddr < 0x60a000) {
-            req_vaddr = 0x60a000;
+        /* Skip all hardcoded vaddr ranges to prevent collisions:
+         * 0x5c4000-0x603FFF  DMA pool (dma_alloc)
+         * 0x604000-0x609FFF  GENET MMIO (bcm_genet, 6 pages)
+         * 0x60A000-0x60CFFF  DWC2 USB (usb_hid, 3 pages)
+         * 0x610000           VideoCore Mailbox (bcm_thermal)
+         * 0x611000           PM Watchdog (bcm_watchdog) */
+        if (req_vaddr >= 0x5c4000 && req_vaddr < 0x612000) {
+            req_vaddr = 0x612000;
         }
         device_vaddr_next = req_vaddr + PAGE_SIZE_4K;
     }

@@ -102,6 +102,11 @@ add_executable(jarvis-sel4
     src/boot/boot_manager.c
     src/boot/warm_reboot.c
     src/drivers/bcm_power.c
+
+    # SPI + RNG + PWM drivers (Week 47)
+    src/drivers/bcm_spi.c
+    src/drivers/bcm_rng.c
+    src/drivers/bcm_pwm.c
 )
 
 # Include directories

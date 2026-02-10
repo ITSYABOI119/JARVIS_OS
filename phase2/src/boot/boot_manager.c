@@ -52,6 +52,9 @@ void boot_manager_init(void)
     stages[BOOT_STAGE_GPIO].name     = "gpio";
     stages[BOOT_STAGE_I2C].name      = "i2c";
     stages[BOOT_STAGE_USB].name      = "usb";
+    stages[BOOT_STAGE_SPI].name      = "spi";
+    stages[BOOT_STAGE_RNG].name      = "rng";
+    stages[BOOT_STAGE_PWM].name      = "pwm";
 
     /* Core subsystems that must succeed for a functional boot */
     stages[BOOT_STAGE_SYSTIMER].required = true;
