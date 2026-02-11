@@ -1,26 +1,37 @@
 # Week 48 Status: DMA Engine + Stability Harness
 
 **Date:** February 10-11, 2026
-**Status:** HARDWARE VERIFIED - 100% Stability (298/298 PASS)
+**Status:** HARDWARE VERIFIED - 1-Hour Smoke Test PASSED (3,562/3,570, 99.8%)
 
 ## Summary
 
 Week 48 implements the BCM2711 DMA engine driver for memory-to-memory transfers and a Python stability test harness for automated UART IPC regression testing. Critical UART TX bug found and fixed: `seL4_DebugPutChar()` performs CR/LF translation on binary data, corrupting IPC frames. Switched to direct MMIO TX.
 
-## Key Achievement: 100% Stability Test Pass Rate
+## Key Achievement: 1-Hour Smoke Test PASSED
 
-5-minute automated stability test exercising all subsystems via UART IPC:
+60-minute automated stability test exercising all subsystems via UART IPC:
+
+| Metric | Value |
+|--------|-------|
+| Duration | 60.0 min |
+| Total tests | 3,570 |
+| Pass rate | **99.8% (3,562/3,570)** |
+| Fail rate | 0.0% (0 failures) |
+| Warnings | 8 (0.2%) — heartbeat timeouts, auto-recovered |
+| Hang events | 4 (~every 15 min, all auto-recovered via protocol reset) |
+| Heartbeat RTT | avg=4.1ms, min=3.3ms, max=5.3ms |
+| Cache hit rate | 88.2% (1,265/1,435) |
+| SHIELD block rate | 38.0% (137/361) |
+| Throughput | 1.0 test/sec |
+
+### 5-Minute Quick Test (pre-smoke)
 
 | Metric | Value |
 |--------|-------|
 | Total tests | 298 |
 | Pass rate | **100.0%** |
-| Fail rate | 0.0% |
 | Crash events | 0 |
 | Heartbeat RTT | avg=4.2ms, min=3.4ms, max=5.2ms |
-| Cache hit rate | 87.4% (111/127) |
-| SHIELD block rate | 39.3% (11/28) |
-| Throughput | 1.0 test/sec |
 
 ## Critical Bug Fix: UART TX Corruption
 
@@ -69,7 +80,7 @@ Week 48 implements the BCM2711 DMA engine driver for memory-to-memory transfers 
 
 - **Total Tests:** 108 PASS, 0 FAIL, 3 SKIP (expected)
 - **Build:** VERIFIED (0 errors, 1.9MB kernel8.img)
-- **Stability:** 298/298 PASS (5-min harness, hardware verified)
+- **Stability:** 3,562/3,570 PASS (99.8%, 60-min smoke test, hardware verified)
 
 ## DMA Engine Details
 
@@ -86,7 +97,7 @@ Week 48 implements the BCM2711 DMA engine driver for memory-to-memory transfers 
 - **Test Mix:** 40% cache queries, 25% shell commands, 15% heartbeat, 10% SHIELD, 10% network
 - **Logging:** CSV format with timestamps, latency, pass/fail
 - **Hang Detection:** 30s heartbeat timeout, auto protocol reset + reconnect
-- **Duration:** Configurable (default 60 min, tested 5 min)
+- **Duration:** Configurable (default 60 min, 1-hour smoke test verified)
 
 ## Lessons Learned
 
