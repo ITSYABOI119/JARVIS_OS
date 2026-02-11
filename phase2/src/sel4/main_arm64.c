@@ -177,6 +177,7 @@ static void emmc_dump_block(uint32_t lba, const uint8_t *buf, size_t dump_len)
 #include "drivers/bcm_spi.h"
 #include "drivers/bcm_rng.h"
 #include "drivers/bcm_pwm.h"
+#include "drivers/bcm_dma.h"
 
 #define BANNER \
     "\n" \
@@ -240,6 +241,8 @@ static void emmc_dump_block(uint32_t lba, const uint8_t *buf, size_t dump_len)
 #define MSG_TYPE_STATS_RESPONSE 0x06
 #define MSG_TYPE_COMMAND        0x07
 #define MSG_TYPE_COMMAND_RESULT 0x08
+#define MSG_TYPE_SHIELD_CHECK   0x09
+#define MSG_TYPE_SHIELD_RESULT  0x0A
 #define MSG_TYPE_ERROR          0x0B
 
 /* UART IPC Frame Structure */
@@ -341,6 +344,18 @@ static bool uart_send_frame(uint8_t type, const uint8_t *payload, size_t payload
  * Receive UART frame with CRC validation
  * Returns true if valid frame received, false on timeout/error
  */
+/*
+ * Systimer-based 1ms delay (replaces volatile loop which is 55x too fast at 600 MHz).
+ * systimer_read() returns microseconds from a 1 MHz free-running counter.
+ */
+static void delay_1ms(void)
+{
+    uint64_t start = systimer_read();
+    while ((systimer_read() - start) < 1000) {
+        __asm__ volatile("yield" ::: "memory");
+    }
+}
+
 static bool uart_recv_frame(uart_frame_t *frame, uint32_t timeout_ms)
 {
     uint8_t *buf = (uint8_t *)frame;
@@ -407,8 +422,7 @@ wait_for_sync:
             }
 #endif
         } else {
-            /* Simple delay ~1ms */
-            for (volatile int i = 0; i < 1000; i++);
+            delay_1ms();
             timeout_ms--;
         }
     }
@@ -441,7 +455,7 @@ wait_for_sync:
             header_remaining--;
             byte_timeout_ms = byte_timeout_default;
         } else {
-            for (volatile int i = 0; i < 1000; i++);
+            delay_1ms();
             timeout_ms--;
             if (byte_timeout_ms > 0) {
                 byte_timeout_ms--;
@@ -473,7 +487,7 @@ wait_for_sync:
             payload_remaining--;
             byte_timeout_ms = byte_timeout_default;
         } else {
-            for (volatile int i = 0; i < 1000; i++);
+            delay_1ms();
             timeout_ms--;
             if (byte_timeout_ms > 0) {
                 byte_timeout_ms--;
@@ -503,7 +517,7 @@ wait_for_sync:
             crc_remaining--;
             byte_timeout_ms = byte_timeout_default;
         } else {
-            for (volatile int i = 0; i < 1000; i++);
+            delay_1ms();
             timeout_ms--;
             if (byte_timeout_ms > 0) {
                 byte_timeout_ms--;
@@ -587,6 +601,9 @@ static void handle_query(uart_frame_t *request)
 #endif
     }
 
+    /* Clamp snprintf return value to actual buffer size */
+    if (resp_len >= (int)sizeof(response)) resp_len = (int)sizeof(response) - 1;
+
     /* Send response */
     uart_send_frame_with_seq(MSG_TYPE_RESPONSE, request->seq,
                              (uint8_t *)response, resp_len);
@@ -626,6 +643,7 @@ static void handle_stats_request(uart_frame_t *request)
         (unsigned long long)stats.cache_hits,
         (unsigned long long)stats.cache_misses,
         stats.hit_rate * 100.0);
+    if (resp_len >= (int)sizeof(response)) resp_len = (int)sizeof(response) - 1;
 
     uart_send_frame_with_seq(MSG_TYPE_STATS_RESPONSE, seq,
                              (uint8_t *)response, resp_len);
@@ -654,9 +672,54 @@ static void handle_command(uart_frame_t *request)
     char result[UART_MAX_PAYLOAD];
     int result_len = cmd_dispatch(cmd_str, result, sizeof(result));
     if (result_len < 0) result_len = 0;
+    /* snprintf returns would-be length; clamp to actual buffer size */
+    if (result_len >= (int)sizeof(result)) result_len = (int)sizeof(result) - 1;
 
     uart_send_frame_with_seq(MSG_TYPE_COMMAND_RESULT, seq,
                              (uint8_t *)result, (uint16_t)result_len);
+}
+
+/*
+ * Handle SHIELD_CHECK - simple risk assessment
+ * Returns JSON-like response: risk_score and recommendation
+ */
+static void handle_shield_check(uart_frame_t *request)
+{
+    uint16_t seq = request->seq;
+
+    char action[UART_MAX_PAYLOAD + 1];
+    uint16_t len = request->length;
+    if (len > UART_MAX_PAYLOAD) len = UART_MAX_PAYLOAD;
+    memcpy(action, request->payload, len);
+    action[len] = '\0';
+
+    /* Simple keyword-based risk scoring */
+    float risk = 0.1f;
+    const char *rec = "allow";
+
+    /* Check for high-risk keywords */
+    const char *dangerous[] = {
+        "rm -rf", "format", "delete_all", "disable_security",
+        "exfiltrate", "drop table", "shutdown", NULL
+    };
+    for (int i = 0; dangerous[i]; i++) {
+        /* Simple substring search */
+        const char *d = dangerous[i];
+        for (const char *p = action; *p; p++) {
+            const char *a = p, *b = d;
+            while (*a && *b && *a == *b) { a++; b++; }
+            if (!*b) { risk = 0.95f; rec = "block"; break; }
+        }
+        if (risk > 0.5f) break;
+    }
+
+    char response[UART_MAX_PAYLOAD];
+    int resp_len = snprintf(response, sizeof(response),
+        "risk_score:%.2f|recommendation:%s", risk, rec);
+    if (resp_len >= (int)sizeof(response)) resp_len = (int)sizeof(response) - 1;
+
+    uart_send_frame_with_seq(MSG_TYPE_SHIELD_RESULT, seq,
+                             (uint8_t *)response, (uint16_t)resp_len);
 }
 
 /*
@@ -699,6 +762,10 @@ static void ipc_main_loop(void)
 
                 case MSG_TYPE_COMMAND:
                     handle_command(&frame);
+                    break;
+
+                case MSG_TYPE_SHIELD_CHECK:
+                    handle_shield_check(&frame);
                     break;
 
                 default:
@@ -773,8 +840,10 @@ static void ipc_main_loop(void)
             watchdog_feed();
         }
 
-        /* Week 46: WFI before yield for power savings */
-        power_wfi();
+        /* Week 46: WFI removed from IPC loop — causes 100-500ms sleep
+         * between UART polls (seL4 kernel timer tick period). This made
+         * the Pi unresponsive to IPC frames. Power savings deferred to
+         * Phase 3 with proper UART RX interrupt support. */
 
 #ifdef __sel4__
         /* Yield to other threads */
@@ -859,14 +928,23 @@ int main(int argc, char *argv[])
     }
     boot_stage_end(BOOT_STAGE_SYSTIMER);
 
+    /* Week 48: DMA engine at 0xFE007000 — AFTER systimer (0xFE003000),
+     * BEFORE mailbox (0xFE00B000). 3 page skips from cursor. */
+    boot_stage_begin(BOOT_STAGE_DMA);
+    sel4_putchar('D'); sel4_putchar('E');  /* "DE" = DMA engine */
+    if (dma_engine_init() != 0) {
+        sel4_putchar('!');  /* Non-fatal */
+    }
+    boot_stage_end(BOOT_STAGE_DMA);
+
     /* Week 45: Boot timing - capture timestamps at key init phases */
     uint64_t boot_t0 = systimer_read();  /* After systimer init */
 
     /* ================================================================
      * Week 44: Map mailbox and PM BEFORE UART (ascending paddr order).
      *
-     * Physical address cursor after systimer: 0xFE004000
-     * Mailbox at 0xFE00B000 → cursor 0xFE00C000 (7 page skips)
+     * Physical address cursor after DMA engine: 0xFE008000
+     * Mailbox at 0xFE00B000 → cursor 0xFE00C000 (3 page skips)
      * PM at 0xFE100000 → cursor 0xFE101000 (buddy skip ~5 retypes)
      * UART at 0xFE200000 → buddy skip from 0xFE101000 (~8 retypes)
      *
@@ -3352,6 +3430,174 @@ genet_test_done:
         else
             sel4_puts("[W47] SOME TESTS FAILED\n");
         sel4_puts("[W47] ========================================\n\n");
+    }
+
+    /* ============================================================
+     * Week 48: DMA Engine Tests (8 tests)
+     * ============================================================ */
+    {
+        int w48_pass = 0, w48_fail = 0, w48_skip = 0;
+        sel4_puts("[W48] ========================================\n");
+        sel4_puts("[W48] DMA ENGINE TESTS\n");
+        sel4_puts("[W48] ========================================\n");
+
+        /* T1: dma_engine_init */
+        sel4_puts("[W48] T1 dma_engine_init: ");
+        if (dma_engine_is_initialized()) {
+            sel4_puts("PASS\n"); w48_pass++;
+        } else {
+            sel4_puts("FAIL (not initialized)\n"); w48_fail++;
+        }
+
+        /* T2: dma_chan_alloc */
+        sel4_puts("[W48] T2 dma_chan_alloc: ");
+        {
+            int ch = dma_chan_alloc();
+            if (ch >= 0 && ch < 7) {
+                char tbuf[64];
+                snprintf(tbuf, sizeof(tbuf), "PASS (ch=%d)\n", ch);
+                sel4_puts(tbuf); w48_pass++;
+
+                /* T3: dma_memcpy - copy 256 bytes, verify */
+                sel4_puts("[W48] T3 dma_memcpy: ");
+                if (dma_engine_is_initialized() && dma_alloc_is_ready()) {
+                    uintptr_t src_paddr, dst_paddr;
+                    uint8_t *src = (uint8_t *)dma_alloc(256, &src_paddr);
+                    uint8_t *dst = (uint8_t *)dma_alloc(256, &dst_paddr);
+                    if (src && dst) {
+                        /* Fill source with pattern */
+                        for (int i = 0; i < 256; i++) src[i] = (uint8_t)(i & 0xFF);
+                        memset(dst, 0, 256);
+
+                        int rc = dma_memcpy(ch, dst_paddr, src_paddr, 256);
+                        if (rc == 0) {
+                            rc = dma_wait(ch, 1000000);
+                            if (rc == 0) {
+                                /* Verify */
+                                bool match = true;
+                                for (int i = 0; i < 256; i++) {
+                                    if (dst[i] != (uint8_t)(i & 0xFF)) {
+                                        match = false;
+                                        break;
+                                    }
+                                }
+                                if (match) {
+                                    sel4_puts("PASS\n"); w48_pass++;
+                                } else {
+                                    sel4_puts("FAIL (data mismatch)\n"); w48_fail++;
+                                }
+                            } else {
+                                sel4_puts("FAIL (wait timeout)\n"); w48_fail++;
+                            }
+                        } else {
+                            char tbuf2[64];
+                            snprintf(tbuf2, sizeof(tbuf2), "FAIL (memcpy rc=%d)\n", rc);
+                            sel4_puts(tbuf2); w48_fail++;
+                        }
+                    } else {
+                        sel4_puts("SKIP (dma_alloc failed)\n"); w48_skip++;
+                    }
+                } else {
+                    sel4_puts("SKIP (DMA not ready)\n"); w48_skip++;
+                }
+
+                /* T4: dma_chan_free + realloc */
+                sel4_puts("[W48] T4 dma_chan_free: ");
+                {
+                    int rc = dma_chan_free(ch);
+                    if (rc == 0) {
+                        int ch2 = dma_chan_alloc();
+                        if (ch2 >= 0) {
+                            sel4_puts("PASS\n"); w48_pass++;
+                            dma_chan_free(ch2);
+                        } else {
+                            sel4_puts("FAIL (realloc failed)\n"); w48_fail++;
+                        }
+                    } else {
+                        sel4_puts("FAIL (free failed)\n"); w48_fail++;
+                    }
+                }
+
+                /* T5: dma_wait after memcpy */
+                sel4_puts("[W48] T5 dma_wait: ");
+                {
+                    int ch3 = dma_chan_alloc();
+                    if (ch3 >= 0 && dma_alloc_is_ready()) {
+                        uintptr_t sp, dp;
+                        uint8_t *s = (uint8_t *)dma_alloc(64, &sp);
+                        uint8_t *d = (uint8_t *)dma_alloc(64, &dp);
+                        if (s && d) {
+                            memset(s, 0xAB, 64);
+                            dma_memcpy(ch3, dp, sp, 64);
+                            int rc = dma_wait(ch3, 500000);
+                            if (rc == 0) {
+                                sel4_puts("PASS\n"); w48_pass++;
+                            } else {
+                                sel4_puts("FAIL (wait error)\n"); w48_fail++;
+                            }
+                        } else {
+                            sel4_puts("SKIP (alloc)\n"); w48_skip++;
+                        }
+                        dma_chan_free(ch3);
+                    } else {
+                        sel4_puts("SKIP\n"); w48_skip++;
+                    }
+                }
+            } else {
+                sel4_puts("FAIL (no channel)\n"); w48_fail++;
+                sel4_puts("[W48] T3 dma_memcpy: SKIP\n"); w48_skip++;
+                sel4_puts("[W48] T4 dma_chan_free: SKIP\n"); w48_skip++;
+                sel4_puts("[W48] T5 dma_wait: SKIP\n"); w48_skip++;
+            }
+        }
+
+        /* T6: dma_invalid_channel */
+        sel4_puts("[W48] T6 dma_invalid_channel: ");
+        {
+            int rc = dma_chan_free(99);
+            if (rc != 0) {
+                sel4_puts("PASS\n"); w48_pass++;
+            } else {
+                sel4_puts("FAIL (should reject invalid)\n"); w48_fail++;
+            }
+        }
+
+        /* T7: dma_memcpy with bad channel */
+        sel4_puts("[W48] T7 dma_bad_channel_memcpy: ");
+        {
+            int rc = dma_memcpy(-1, 0x1000, 0x2000, 64);
+            if (rc != 0) {
+                sel4_puts("PASS\n"); w48_pass++;
+            } else {
+                sel4_puts("FAIL (should reject)\n"); w48_fail++;
+            }
+        }
+
+        /* T8: dma_status_cmd */
+        sel4_puts("[W48] T8 dma_status_cmd: ");
+        {
+            char cmd_out[256];
+            int ret = cmd_dispatch("dma", cmd_out, sizeof(cmd_out));
+            if (ret > 0) {
+                sel4_puts("PASS\n"); w48_pass++;
+            } else {
+                sel4_puts("FAIL (no output)\n"); w48_fail++;
+            }
+        }
+
+        /* Week 48 summary */
+        sel4_puts("[W48] ========================================\n");
+        {
+            char buf[80];
+            snprintf(buf, sizeof(buf), "[W48] TEST RESULTS: %d PASS, %d FAIL, %d SKIP\n",
+                     w48_pass, w48_fail, w48_skip);
+            sel4_puts(buf);
+        }
+        if (w48_fail == 0)
+            sel4_puts("[W48] ALL TESTS PASSED\n");
+        else
+            sel4_puts("[W48] SOME TESTS FAILED\n");
+        sel4_puts("[W48] ========================================\n\n");
     }
 
     /* Optional UART echo test - keep disabled for IPC runs */

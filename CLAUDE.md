@@ -16,7 +16,7 @@ Guidance for Claude Code when working with this repository.
 | Phase 3 | Future | Months 24-30 | Beta (10+ configs, security audit) |
 | Phase 4 | Future | Months 30-36 | Production v1.0 |
 
-**Current:** Phase 2, Week 47 BUILD VERIFIED (February 10, 2026). Next: Week 47 Hardware Test + Commit.
+**Current:** Phase 2, Week 48 HARDWARE VERIFIED (February 11, 2026). 108 PASS, 0 FAIL, 3 SKIP + 298/298 stability test. Next: Week 48 Commit + Week 49.
 
 ---
 
@@ -151,7 +151,7 @@ JARVIS_OS/
 │   │   ├── ipc/               # dual_ring_buffer, ipc_handler + tests
 │   │   ├── drivers/           # uart_pl011, emmc_sdhci, bcm2711_timer,
 │   │   │                      # bcm_genet, net_stack, net_cmd, usb_hid, bcm_gpio, bcm_i2c,
-│   │   │                      # bcm_spi, bcm_rng, bcm_pwm, slot_alloc, dma_alloc, blk_dev
+│   │   │                      # bcm_spi, bcm_rng, bcm_pwm, bcm_dma, slot_alloc, dma_alloc, blk_dev
 │   │   ├── ai/                # uart_ipc_client.py, system_bootstrap.py + tests
 │   │   ├── boot/              # jarvis.dts, jarvis.dtb, jarvis_dtb_data.h, fdt_parser.h/c
 │   │   ├── sel4/              # main_arm64.c, CMakeLists.txt
@@ -219,9 +219,9 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 
 ---
 
-## Current Status (Phase 2, Week 47)
+## Current Status (Phase 2, Week 48)
 
-**Week 47 BUILD VERIFIED** (February 10, 2026) - SPI + RNG + PWM Drivers: 100 PASS, 0 FAIL, 3 SKIP (expected)
+**Week 48 HARDWARE VERIFIED** (February 11, 2026) - DMA Engine + Stability Harness: 108 PASS, 0 FAIL, 3 SKIP + 298/298 stability (100%)
 
 | Milestone | Status |
 |-----------|--------|
@@ -295,8 +295,14 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | BCM2835 PWM driver (2-channel, M/S mode, mailbox clock) | DONE |
 | Shell commands: spi, rng, pwm | DONE |
 | 11-test SPI + RNG + PWM suite (build verified) | DONE |
+| BCM2711 DMA engine (channels 0-6, mem-to-mem, CB pool) | DONE |
+| Shell command: dma | DONE |
+| Python stability harness (UART IPC, CSV logging, hang detect) | DONE |
+| 8-test DMA engine suite (build verified) | DONE |
+| **Critical fix: direct MMIO TX (seL4 kernel CR/LF corruption)** | DONE |
+| **5-min stability test: 298/298 PASS (100%)** | DONE |
 
-**Next:** Week 47 Hardware Test + Commit
+**Next:** Week 48 Commit + Week 49
 
 ### Remaining Work
 
@@ -310,7 +316,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | 45 | Device tree + boot timing (FDT parser, embedded DTB) - DONE |
 | 46 | Boot optimization + power management - DONE |
 | 47 | SPI + RNG + PWM drivers - DONE |
-| 48 | DMA engine + performance optimization |
+| 48 | DMA engine + stability harness - DONE |
 | 49 | Stability test harness + self-audit |
 | 50 | Phase 3 research + Pi 5 prototyping |
 | 51-52 | 30-day stability testing + final report |
@@ -397,7 +403,7 @@ Backup: `temp_sd_backup/uboot_working/`
 
 - **Forward-only cursor:** seL4 Untyped_Retype watermark only moves forward. Map devices in ascending paddr order.
 - **VSpace range:** vaddr must be within mapped VSpace (0x400000-0x5b9fff). Error 6 = seL4_FailedLookup means vaddr not in VSpace.
-- **Init order:** systimer(0xFE003000) → mailbox(0xFE00B000) → watchdog(0xFE100000) → RNG(0xFE104000) → UART/GPIO(0xFE200000-0xFE201000) → SPI(0xFE204000) → PWM(0xFE20C000) → EMMC(0xFE340000) → I2C(0xFE804000) → USB(0xFE980000)
+- **Init order:** systimer(0xFE003000) → DMA(0xFE007000) → mailbox(0xFE00B000) → watchdog(0xFE100000) → RNG(0xFE104000) → UART/GPIO(0xFE200000-0xFE201000) → SPI(0xFE204000) → PWM(0xFE20C000) → EMMC(0xFE340000) → I2C(0xFE804000) → USB(0xFE980000)
 - **Binary buddy skip:** When timer is mapped before UART, use power-of-2 Untyped retypes to advance watermark from 0xFE004000→0xFE200000 (7 retypes: 16KB→32KB→64KB→128KB→256KB→512KB→1MB) instead of 2MB LargePage skip (which would consume GPIO's frame).
 - **Device cursor after mapping:** GPIO_BASE + 2*4KB = 0xFE202000
 - **DMA = uncacheable:** seL4 does NOT set `SCTLR_EL1.UCI`, so ALL cache maintenance instructions (`DC IVAC/CIVAC/CVAC`) trap from EL0. Map DMA buffers with `vm_attributes = 0` (uncacheable) instead.
@@ -413,6 +419,7 @@ Backup: `temp_sd_backup/uboot_working/`
 0x604000-0x609FFF - GENET MMIO (6 pages, own device untyped)
 0x610000 - VideoCore Mailbox (explicit vaddr, maps 0xFE00B000)
 0x611000 - PM Watchdog (explicit vaddr, maps 0xFE100000)
+0x612000 - DMA Engine (explicit vaddr, maps 0xFE007000)
 RNG, SPI, PWM - auto-assigned (0xFE104000, 0xFE204000, 0xFE20C000)
 0x60A000-0x60CFFF - DWC2 USB (3 pages, paddr 0xFE980000)
 ```
@@ -467,6 +474,8 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **SPI driver:** `phase2/src/drivers/bcm_spi.c`
 - **RNG driver:** `phase2/src/drivers/bcm_rng.c`
 - **PWM driver:** `phase2/src/drivers/bcm_pwm.c`
+- **DMA engine:** `phase2/src/drivers/bcm_dma.c`
+- **Stability harness:** `phase2/src/ai/stability_harness.py`
 - **Build config:** `phase2/src/jarvis-sel4-cmake/CMakeLists.txt`
 - **SD Image Builder:** `phase2/scripts/build_installer_image.sh`
 - **SD Flasher:** `phase2/scripts/flash_sd.sh`

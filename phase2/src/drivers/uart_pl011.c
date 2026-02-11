@@ -327,9 +327,10 @@ bool uart_device_map_page(uintptr_t paddr, uintptr_t requested_vaddr,
          * 0x604000-0x609FFF  GENET MMIO (bcm_genet, 6 pages)
          * 0x60A000-0x60CFFF  DWC2 USB (usb_hid, 3 pages)
          * 0x610000           VideoCore Mailbox (bcm_thermal)
-         * 0x611000           PM Watchdog (bcm_watchdog) */
-        if (req_vaddr >= 0x5c4000 && req_vaddr < 0x612000) {
-            req_vaddr = 0x612000;
+         * 0x611000           PM Watchdog (bcm_watchdog)
+         * 0x612000           DMA Engine (bcm_dma) */
+        if (req_vaddr >= 0x5c4000 && req_vaddr < 0x613000) {
+            req_vaddr = 0x613000;
         }
         device_vaddr_next = req_vaddr + PAGE_SIZE_4K;
     }
@@ -1177,9 +1178,28 @@ size_t uart_write(const uint8_t *data, size_t len)
         return 0;
     }
 
-    for (size_t i = 0; i < len; i++) {
-        uart_putc((char)data[i]);
+    /*
+     * Binary IPC frames MUST bypass seL4_DebugPutChar() because the kernel's
+     * putDebugChar() does CR/LF translation ('\n' -> '\r\n'), which inserts
+     * extra 0x0D bytes into the binary stream and corrupts frame CRCs.
+     * Use direct MMIO writes to the PL011 TX FIFO instead.
+     */
+    if (uart_mmio_base) {
+        for (size_t i = 0; i < len; i++) {
+            /* Wait for TX FIFO to have space */
+            while (uart_mmio_base[UART_FR / 4] & UART_FR_TXFF) {
+                __asm__ volatile("yield" ::: "memory");
+            }
+            uart_mmio_base[UART_DR / 4] = (uint32_t)data[i];
+        }
+        uart_state.tx_bytes += len;
+    } else {
+        /* Fallback to kernel debug path (before device frame is mapped) */
+        for (size_t i = 0; i < len; i++) {
+            uart_putc((char)data[i]);  /* uart_putc increments tx_bytes */
+        }
     }
+
     return len;
 }
 

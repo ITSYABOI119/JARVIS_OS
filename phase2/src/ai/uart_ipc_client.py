@@ -92,8 +92,8 @@ class MsgType(IntEnum):
     STATS_RESPONSE = 0x06
     COMMAND = 0x07
     COMMAND_RESULT = 0x08
-    SHIELD_CHECK = 0x10
-    SHIELD_RESULT = 0x11
+    SHIELD_CHECK = 0x09
+    SHIELD_RESULT = 0x0A
     STATE_CHANGE = 0x20
     STATE_ACK = 0x21
     ERROR = 0xFE
@@ -975,12 +975,7 @@ class UARTIPCClient:
         Returns:
             Dict with 'risk_score', 'recommendation', 'factors' or None.
         """
-        # Encode action + context as JSON-like string
-        import json
-        data = {'action': action}
-        if context:
-            data['context'] = context
-        payload = json.dumps(data).encode('utf-8') + b'\x00'
+        payload = action.encode('utf-8') + b'\x00'
 
         if self.in_mock_mode:
             self._simulate_latency()
@@ -994,11 +989,18 @@ class UARTIPCClient:
         if not msg:
             return None
 
+        result_str = msg.payload.decode('utf-8', errors='replace').rstrip('\x00')
+        kv = self._parse_kv_text(result_str)
         try:
-            result_str = msg.payload.decode('utf-8', errors='replace').rstrip('\x00')
-            return json.loads(result_str)
-        except json.JSONDecodeError:
-            return None
+            risk_score = float(kv.get('RISK_SCORE', '0'))
+        except ValueError:
+            risk_score = 0.0
+        recommendation = kv.get('RECOMMENDATION', 'unknown').lower()
+        return {
+            'risk_score': risk_score,
+            'recommendation': recommendation,
+            'factors': []
+        }
 
     def reset_protocol(self):
         """Send protocol reset and reinitialize state."""

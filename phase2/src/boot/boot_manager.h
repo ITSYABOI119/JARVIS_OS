@@ -16,6 +16,7 @@
 
 typedef enum {
     BOOT_STAGE_SYSTIMER = 0,
+    BOOT_STAGE_DMA,        /* Week 48 - DMA engine at 0xFE007000 */
     BOOT_STAGE_THERMAL,
     BOOT_STAGE_WATCHDOG,
     BOOT_STAGE_FDT,

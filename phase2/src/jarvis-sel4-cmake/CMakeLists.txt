@@ -107,6 +107,9 @@ add_executable(jarvis-sel4
     src/drivers/bcm_spi.c
     src/drivers/bcm_rng.c
     src/drivers/bcm_pwm.c
+
+    # DMA engine (Week 48)
+    src/drivers/bcm_dma.c
 )
 
 # Include directories

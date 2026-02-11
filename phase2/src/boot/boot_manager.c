@@ -41,6 +41,7 @@ void boot_manager_init(void)
     memset(stages, 0, sizeof(stages));
 
     stages[BOOT_STAGE_SYSTIMER].name = "systimer";
+    stages[BOOT_STAGE_DMA].name      = "dma";
     stages[BOOT_STAGE_THERMAL].name  = "thermal";
     stages[BOOT_STAGE_WATCHDOG].name = "watchdog";
     stages[BOOT_STAGE_FDT].name      = "fdt";

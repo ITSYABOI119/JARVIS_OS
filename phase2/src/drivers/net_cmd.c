@@ -19,6 +19,7 @@
 #include "bcm_spi.h"
 #include "bcm_rng.h"
 #include "bcm_pwm.h"
+#include "bcm_dma.h"
 #include "emmc_sdhci.h"
 #include "fdt_parser.h"
 #include "boot_manager.h"
@@ -440,6 +441,9 @@ int cmd_dispatch(const char *cmd_str, char *output, uint32_t output_size)
         }
         return pwm_get_status(output, output_size);
 
+    } else if (starts_with(cmd, "dma")) {
+        return dma_engine_get_status(output, output_size);
+
     } else if (starts_with(cmd, "reboot")) {
         const char *arg = skip_spaces(cmd + 6);
         if (starts_with(arg, "warm")) {
@@ -458,6 +462,6 @@ int cmd_dispatch(const char *cmd_str, char *output, uint32_t output_size)
 
     } else {
         return snprintf(output, output_size,
-                        "Commands: ping, ifconfig, netstat, usb, gpio, i2c, spi, rng, pwm, stress, temp, watchdog, dt, boot, power, reboot\n");
+                        "Commands: ping, ifconfig, netstat, usb, gpio, i2c, spi, rng, pwm, dma, stress, temp, watchdog, dt, boot, power, reboot\n");
     }
 }
