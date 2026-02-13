@@ -1005,8 +1005,8 @@ bool genet_rx_recv(uint8_t *buf, uint32_t buf_size, uint32_t *len_out)
         return false;  /* No frames pending */
     }
 
-    /* Read descriptor at consumer index */
-    uint32_t desc_idx = rx_ring.cons_index % rx_ring.size;
+    /* Read descriptor at consumer index (mask to 16-bit like hardware) */
+    uint32_t desc_idx = (rx_ring.cons_index & DMA_INDEX_MASK) % rx_ring.size;
     uint32_t desc_off = GENET_RDMA_OFF + (desc_idx * DMA_DESC_SIZE);
     uint32_t length_status = genet_reg_read(desc_off + DMA_DESC_LENGTH_STATUS);
 

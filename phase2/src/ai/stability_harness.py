@@ -1,28 +1,33 @@
 #!/usr/bin/env python3
 """
 JARVIS AI-OS - Stability Test Harness
-Phase 2 Week 48
+Phase 2 Week 49
 
 Automated long-running stability test that exercises all seL4 subsystems
 via UART IPC: cache queries, shell commands, heartbeat, SHIELD checks,
 and network commands.
 
-Logs every test to CSV. Detects hangs, attempts recovery, and prints
-a summary report at the end.
+Logs every test to CSV with daily rotation. Writes daily summaries and
+hourly checkpoints for 30-day continuous operation.
 
 Usage:
-    # 60-minute stability run on real hardware
-    python stability_harness.py --port /dev/ttyUSB0 --duration 60
+    # 30-day stability run on real hardware
+    python stability_harness.py --port COM5 --duration 43200
 
     # Quick 5-minute test with verbose logging
-    python stability_harness.py --port /dev/ttyUSB0 --duration 5 --verbose
+    python stability_harness.py --port COM5 --duration 5 --verbose
+
+    # Resume from checkpoint after process restart
+    python stability_harness.py --port COM5 --duration 43200 --resume
 
     # Self-test (mock mode, no hardware needed)
     python stability_harness.py --self-test
 """
 
 import argparse
+import collections
 import csv
+import json
 import logging
 import os
 import random
@@ -80,6 +85,8 @@ HARMFUL_ACTIONS: List[str] = [
 
 HANG_TIMEOUT_SEC: float = 30.0
 STATS_PRINT_INTERVAL_SEC: float = 60.0
+CHECKPOINT_INTERVAL_SEC: float = 3600.0  # Hourly checkpoint
+RTT_WINDOW_SIZE: int = 10000  # Keep last N RTT samples in memory
 
 
 @dataclass
@@ -99,9 +106,10 @@ class HarnessConfig:
     baud: int = 115200
     duration_minutes: float = 60.0
     interval_sec: float = 1.0
-    log_file: str = "stability_log.csv"
+    log_dir: str = "stability_logs"
     verbose: bool = False
     mock_mode: bool = False
+    resume: bool = False
     mix: TestMix = field(default_factory=TestMix)
 
 
@@ -112,13 +120,19 @@ class HarnessStats:
     pass_count: int = 0
     fail_count: int = 0
     warn_count: int = 0
-    crash_events: int = 0
+    hang_events: int = 0
 
     cache_hits: int = 0
     cache_misses: int = 0
     cache_total: int = 0
 
-    heartbeat_rtts: List[float] = field(default_factory=list)
+    # RTT tracking: bounded deque for recent samples, running counters for lifetime
+    heartbeat_rtts: collections.deque = field(
+        default_factory=lambda: collections.deque(maxlen=RTT_WINDOW_SIZE)
+    )
+    rtt_count: int = 0
+    rtt_sum: float = 0.0
+    rtt_max: float = 0.0
 
     shield_allows: int = 0
     shield_blocks: int = 0
@@ -126,6 +140,20 @@ class HarnessStats:
 
     start_time: float = 0.0
     end_time: float = 0.0
+
+    # Daily tracking
+    day_total: int = 0
+    day_pass: int = 0
+    day_fail: int = 0
+    day_warn: int = 0
+    day_hangs: int = 0
+    day_rtt_count: int = 0
+    day_rtt_sum: float = 0.0
+    day_rtt_max: float = 0.0
+    day_cache_hits: int = 0
+    day_cache_total: int = 0
+    day_shield_blocks: int = 0
+    day_shield_total: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +171,12 @@ class StabilityHarness:
         self._csv_writer = None
         self._last_heartbeat_ok: float = 0.0
         self._last_stats_print: float = 0.0
+        self._last_checkpoint: float = 0.0
+        self._current_day: str = ""
         self._running: bool = False
+        self._log_dir = Path(config.log_dir)
+        self._summary_path = self._log_dir / "stability_summary.csv"
+        self._checkpoint_path = self._log_dir / "stability_checkpoint.json"
 
     # ------------------------------------------------------------------
     # Connection management
@@ -168,20 +201,28 @@ class StabilityHarness:
             self.client = None
 
     # ------------------------------------------------------------------
-    # CSV logging
+    # CSV logging with daily rotation
     # ------------------------------------------------------------------
 
+    def _today_str(self) -> str:
+        return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
     def _open_log(self) -> None:
-        """Open the CSV log file and write the header row."""
+        """Open a dated CSV log file and write the header row."""
+        self._log_dir.mkdir(parents=True, exist_ok=True)
+        self._current_day = self._today_str()
+        log_path = self._log_dir / f"stability_log_{self._current_day}.csv"
+        file_exists = log_path.exists() and log_path.stat().st_size > 0
         self._csv_file = open(
-            self.config.log_file, "w", encoding="utf-8", newline=""
+            log_path, "a", encoding="utf-8", newline=""
         )
         self._csv_writer = csv.writer(self._csv_file)
-        self._csv_writer.writerow([
-            "timestamp", "test_type", "command",
-            "response_summary", "latency_ms", "result",
-        ])
-        self._csv_file.flush()
+        if not file_exists:
+            self._csv_writer.writerow([
+                "timestamp", "test_type", "command",
+                "response_summary", "latency_ms", "result",
+            ])
+            self._csv_file.flush()
 
     def _close_log(self) -> None:
         """Close the CSV log file."""
@@ -189,6 +230,22 @@ class StabilityHarness:
             self._csv_file.close()
             self._csv_file = None
             self._csv_writer = None
+
+    def _check_day_rollover(self) -> None:
+        """If the day has changed, write daily summary, rotate log file."""
+        today = self._today_str()
+        if today == self._current_day:
+            return
+
+        # Write daily summary for the completed day
+        self._write_daily_summary(self._current_day)
+
+        # Reset daily counters
+        self._reset_day_stats()
+
+        # Rotate log file
+        self._close_log()
+        self._open_log()
 
     def _log(self, test_type: str, command: str,
              response_summary: str, latency_ms: float,
@@ -202,14 +259,161 @@ class StabilityHarness:
             ])
             self._csv_file.flush()
 
-        # Update stats
+        # Update cumulative stats
         self.stats.total += 1
+        self.stats.day_total += 1
         if result == "PASS":
             self.stats.pass_count += 1
+            self.stats.day_pass += 1
         elif result == "FAIL":
             self.stats.fail_count += 1
+            self.stats.day_fail += 1
         elif result == "WARN":
             self.stats.warn_count += 1
+            self.stats.day_warn += 1
+
+    # ------------------------------------------------------------------
+    # Daily summary
+    # ------------------------------------------------------------------
+
+    def _write_daily_summary(self, day: str) -> None:
+        """Append one row to stability_summary.csv for the given day."""
+        s = self.stats
+        file_exists = self._summary_path.exists() and self._summary_path.stat().st_size > 0
+        with open(self._summary_path, "a", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            if not file_exists:
+                writer.writerow([
+                    "date", "tests", "pass", "fail", "warn", "hangs",
+                    "pass_pct", "avg_rtt_ms", "p99_rtt_ms", "max_rtt_ms",
+                    "cache_hit_pct", "shield_block_pct",
+                ])
+            # Compute day RTT stats
+            avg_rtt = s.day_rtt_sum / s.day_rtt_count if s.day_rtt_count else 0
+            # P99 from recent window (best we have)
+            sorted_rtts = sorted(s.heartbeat_rtts) if s.heartbeat_rtts else []
+            p99_rtt = sorted_rtts[int(len(sorted_rtts) * 0.99)] if sorted_rtts else 0
+            pass_pct = s.day_pass / s.day_total * 100 if s.day_total else 0
+            cache_pct = s.day_cache_hits / s.day_cache_total * 100 if s.day_cache_total else 0
+            shield_pct = s.day_shield_blocks / s.day_shield_total * 100 if s.day_shield_total else 0
+
+            writer.writerow([
+                day, s.day_total, s.day_pass, s.day_fail, s.day_warn, s.day_hangs,
+                f"{pass_pct:.1f}", f"{avg_rtt:.1f}", f"{p99_rtt:.1f}",
+                f"{s.day_rtt_max:.1f}", f"{cache_pct:.1f}", f"{shield_pct:.1f}",
+            ])
+        logger.info("Daily summary written for %s: %d tests, %d pass",
+                     day, s.day_total, s.day_pass)
+
+    def _reset_day_stats(self) -> None:
+        """Reset daily counters to zero."""
+        s = self.stats
+        s.day_total = s.day_pass = s.day_fail = s.day_warn = s.day_hangs = 0
+        s.day_rtt_count = 0
+        s.day_rtt_sum = 0.0
+        s.day_rtt_max = 0.0
+        s.day_cache_hits = s.day_cache_total = 0
+        s.day_shield_blocks = s.day_shield_total = 0
+
+    # ------------------------------------------------------------------
+    # Checkpoint save/restore
+    # ------------------------------------------------------------------
+
+    def _save_checkpoint(self) -> None:
+        """Save current stats to JSON checkpoint file."""
+        s = self.stats
+        checkpoint = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "total": s.total,
+            "pass_count": s.pass_count,
+            "fail_count": s.fail_count,
+            "warn_count": s.warn_count,
+            "hang_events": s.hang_events,
+            "cache_hits": s.cache_hits,
+            "cache_misses": s.cache_misses,
+            "cache_total": s.cache_total,
+            "rtt_count": s.rtt_count,
+            "rtt_sum": s.rtt_sum,
+            "rtt_max": s.rtt_max,
+            "shield_allows": s.shield_allows,
+            "shield_blocks": s.shield_blocks,
+            "shield_total": s.shield_total,
+            "start_time": s.start_time,
+            "elapsed_minutes": (time.time() - s.start_time) / 60.0,
+            # Day stats
+            "current_day": self._current_day,
+            "day_total": s.day_total,
+            "day_pass": s.day_pass,
+            "day_fail": s.day_fail,
+            "day_warn": s.day_warn,
+            "day_hangs": s.day_hangs,
+            "day_rtt_count": s.day_rtt_count,
+            "day_rtt_sum": s.day_rtt_sum,
+            "day_rtt_max": s.day_rtt_max,
+            "day_cache_hits": s.day_cache_hits,
+            "day_cache_total": s.day_cache_total,
+            "day_shield_blocks": s.day_shield_blocks,
+            "day_shield_total": s.day_shield_total,
+        }
+        tmp_path = str(self._checkpoint_path) + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(checkpoint, f, indent=2)
+        os.replace(tmp_path, self._checkpoint_path)
+        logger.info("Checkpoint saved: %d tests, %.1f min elapsed",
+                     s.total, checkpoint["elapsed_minutes"])
+
+    def _load_checkpoint(self) -> bool:
+        """Load stats from checkpoint file. Returns True if loaded."""
+        if not self._checkpoint_path.exists():
+            logger.warning("No checkpoint file found at %s", self._checkpoint_path)
+            return False
+        try:
+            with open(self._checkpoint_path, "r", encoding="utf-8") as f:
+                cp = json.load(f)
+            s = self.stats
+            s.total = cp["total"]
+            s.pass_count = cp["pass_count"]
+            s.fail_count = cp["fail_count"]
+            s.warn_count = cp["warn_count"]
+            s.hang_events = cp["hang_events"]
+            s.cache_hits = cp["cache_hits"]
+            s.cache_misses = cp["cache_misses"]
+            s.cache_total = cp["cache_total"]
+            s.rtt_count = cp["rtt_count"]
+            s.rtt_sum = cp["rtt_sum"]
+            s.rtt_max = cp["rtt_max"]
+            s.shield_allows = cp["shield_allows"]
+            s.shield_blocks = cp["shield_blocks"]
+            s.shield_total = cp["shield_total"]
+            # Restore day stats if same day
+            if cp.get("current_day") == self._today_str():
+                s.day_total = cp.get("day_total", 0)
+                s.day_pass = cp.get("day_pass", 0)
+                s.day_fail = cp.get("day_fail", 0)
+                s.day_warn = cp.get("day_warn", 0)
+                s.day_hangs = cp.get("day_hangs", 0)
+                s.day_rtt_count = cp.get("day_rtt_count", 0)
+                s.day_rtt_sum = cp.get("day_rtt_sum", 0.0)
+                s.day_rtt_max = cp.get("day_rtt_max", 0.0)
+                s.day_cache_hits = cp.get("day_cache_hits", 0)
+                s.day_cache_total = cp.get("day_cache_total", 0)
+                s.day_shield_blocks = cp.get("day_shield_blocks", 0)
+                s.day_shield_total = cp.get("day_shield_total", 0)
+            logger.info("Checkpoint loaded: %d tests, %.1f min elapsed",
+                         s.total, cp.get("elapsed_minutes", 0))
+            print(f"[RESUME] Loaded checkpoint: {s.total:,} tests from previous run")
+            return True
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.error("Failed to load checkpoint: %s", e)
+            return False
+
+    def _maybe_checkpoint(self) -> None:
+        """Save checkpoint every CHECKPOINT_INTERVAL_SEC."""
+        now = time.time()
+        if now - self._last_checkpoint < CHECKPOINT_INTERVAL_SEC:
+            return
+        self._last_checkpoint = now
+        self._save_checkpoint()
 
     # ------------------------------------------------------------------
     # Individual test methods
@@ -232,8 +436,10 @@ class StabilityHarness:
         self._log("cache", query, summary, latency_ms, "PASS")
 
         self.stats.cache_total += 1
+        self.stats.day_cache_total += 1
         if hit:
             self.stats.cache_hits += 1
+            self.stats.day_cache_hits += 1
         else:
             self.stats.cache_misses += 1
 
@@ -260,7 +466,7 @@ class StabilityHarness:
         if self.client.in_mock_mode:
             self._last_heartbeat_ok = time.time()
             latency_ms = random.uniform(5.0, 15.0)
-            self.stats.heartbeat_rtts.append(latency_ms)
+            self._record_rtt(latency_ms)
             self._log("heartbeat", "", f"RTT={latency_ms:.1f}ms", latency_ms, "PASS")
             return
 
@@ -270,10 +476,22 @@ class StabilityHarness:
 
         if ok:
             self._last_heartbeat_ok = time.time()
-            self.stats.heartbeat_rtts.append(latency_ms)
+            self._record_rtt(latency_ms)
             self._log("heartbeat", "", f"RTT={latency_ms:.1f}ms", latency_ms, "PASS")
         else:
             self._log("heartbeat", "", "TIMEOUT", latency_ms, "FAIL")
+
+    def _record_rtt(self, latency_ms: float) -> None:
+        """Record an RTT sample in bounded deque and running counters."""
+        self.stats.heartbeat_rtts.append(latency_ms)
+        self.stats.rtt_count += 1
+        self.stats.rtt_sum += latency_ms
+        if latency_ms > self.stats.rtt_max:
+            self.stats.rtt_max = latency_ms
+        self.stats.day_rtt_count += 1
+        self.stats.day_rtt_sum += latency_ms
+        if latency_ms > self.stats.day_rtt_max:
+            self.stats.day_rtt_max = latency_ms
 
     def _test_shield_check(self) -> None:
         """Send a SHIELD risk assessment and verify the response."""
@@ -299,8 +517,10 @@ class StabilityHarness:
         blocked = recommendation in ("block", "deny")
 
         self.stats.shield_total += 1
+        self.stats.day_shield_total += 1
         if blocked:
             self.stats.shield_blocks += 1
+            self.stats.day_shield_blocks += 1
         else:
             self.stats.shield_allows += 1
 
@@ -346,7 +566,8 @@ class StabilityHarness:
             return False
 
         logger.warning("Hang detected: %.1fs since last heartbeat ACK", elapsed)
-        self.stats.crash_events += 1
+        self.stats.hang_events += 1
+        self.stats.day_hangs += 1
         self._log("recovery", "", "hang_detected", elapsed * 1000.0, "WARN")
 
         # Attempt protocol reset
@@ -436,7 +657,7 @@ class StabilityHarness:
             f"pass={self.stats.pass_count} ({pct:.1f}%) "
             f"fail={self.stats.fail_count} "
             f"warn={self.stats.warn_count} "
-            f"crashes={self.stats.crash_events} "
+            f"hangs={self.stats.hang_events} "
             f"rate={rate:.1f}/s"
         )
 
@@ -446,12 +667,13 @@ class StabilityHarness:
 
     def run(self) -> None:
         """Main test loop -- runs for the configured duration."""
-        print(f"=== JARVIS Stability Harness ===")
+        print("=== JARVIS Stability Harness ===")
         print(f"Port:     {self.config.port}")
         print(f"Duration: {self.config.duration_minutes} min")
         print(f"Interval: {self.config.interval_sec}s")
-        print(f"Log:      {self.config.log_file}")
+        print(f"Log dir:  {self.config.log_dir}")
         print(f"Mock:     {self.config.mock_mode}")
+        print(f"Resume:   {self.config.resume}")
         print()
 
         # Connect
@@ -459,16 +681,24 @@ class StabilityHarness:
             print("ERROR: Failed to connect to UART. Aborting.")
             return
 
-        # Open CSV log
+        # Resume from checkpoint if requested
+        if self.config.resume:
+            self._load_checkpoint()
+
+        # Open CSV log (daily rotation, append mode)
         self._open_log()
 
         self.stats.start_time = time.time()
         self._last_stats_print = self.stats.start_time
+        self._last_checkpoint = self.stats.start_time
         self._running = True
         deadline = self.stats.start_time + (self.config.duration_minutes * 60.0)
 
         try:
             while self._running and time.time() < deadline:
+                # Day rollover check
+                self._check_day_rollover()
+
                 # Hang detection (before each test)
                 self._detect_hang()
 
@@ -479,6 +709,9 @@ class StabilityHarness:
                 # Periodic status print
                 self._maybe_print_stats()
 
+                # Periodic checkpoint
+                self._maybe_checkpoint()
+
                 # Inter-test delay
                 time.sleep(self.config.interval_sec)
 
@@ -487,6 +720,9 @@ class StabilityHarness:
         finally:
             self.stats.end_time = time.time()
             self._running = False
+            # Write final daily summary + checkpoint
+            self._write_daily_summary(self._current_day)
+            self._save_checkpoint()
             self._close_log()
             self._disconnect()
 
@@ -509,13 +745,14 @@ class StabilityHarness:
             s.cache_hits / s.cache_total * 100.0 if s.cache_total else 0
         )
 
-        rtts = s.heartbeat_rtts
-        if rtts:
-            avg_rtt = sum(rtts) / len(rtts)
-            min_rtt = min(rtts)
-            max_rtt = max(rtts)
-        else:
-            avg_rtt = min_rtt = max_rtt = 0.0
+        # Lifetime RTT from running counters
+        avg_rtt = s.rtt_sum / s.rtt_count if s.rtt_count else 0
+        min_rtt = min(s.heartbeat_rtts) if s.heartbeat_rtts else 0
+        max_rtt = s.rtt_max
+
+        # P99 from recent window
+        sorted_rtts = sorted(s.heartbeat_rtts) if s.heartbeat_rtts else []
+        p99_rtt = sorted_rtts[int(len(sorted_rtts) * 0.99)] if sorted_rtts else 0
 
         shield_block_rate = (
             s.shield_blocks / s.shield_total * 100.0 if s.shield_total else 0
@@ -529,18 +766,19 @@ class StabilityHarness:
         print(f"  PASS: {s.pass_count:,} ({pass_pct:.1f}%)")
         print(f"  FAIL: {s.fail_count:,} ({fail_pct:.1f}%)")
         print(f"  WARN: {s.warn_count:,} ({warn_pct:.1f}%)")
-        print(f"Crash events: {s.crash_events}")
-        if rtts:
+        print(f"Hang events: {s.hang_events}")
+        if s.rtt_count:
             print(f"Heartbeat RTT: avg={avg_rtt:.1f}ms, "
-                  f"min={min_rtt:.1f}ms, max={max_rtt:.1f}ms")
+                  f"min={min_rtt:.1f}ms, max={max_rtt:.1f}ms, "
+                  f"p99={p99_rtt:.1f}ms")
         else:
             print("Heartbeat RTT: n/a")
         print(f"Cache hit rate: {cache_hit_rate:.1f}% "
               f"({s.cache_hits}/{s.cache_total})")
         print(f"SHIELD block rate: {shield_block_rate:.1f}% "
               f"({s.shield_blocks}/{s.shield_total})")
-        print(f"Log file: {self.config.log_file} ({s.total:,} entries)")
-        print("====================================")
+        print(f"Log dir: {self.config.log_dir}")
+        print(f"Log file: stability_log_{self._current_day}.csv ({s.total:,} entries)")
 
 
 # ---------------------------------------------------------------------------
@@ -586,12 +824,12 @@ def _self_test_command_parse() -> bool:
 def _self_test_log_creation() -> bool:
     """Test: create CSV log, write entries, verify format."""
     print("  test_log_creation ... ", end="", flush=True)
-    log_path = "_self_test_stability.csv"
+    log_dir = "_self_test_logs"
     try:
         config = HarnessConfig(
             mock_mode=True,
             duration_minutes=0,
-            log_file=log_path,
+            log_dir=log_dir,
         )
         harness = StabilityHarness(config)
         harness._open_log()
@@ -600,12 +838,13 @@ def _self_test_log_creation() -> bool:
         harness._log("shell", "temp", "Temperature: 45C", 8.1, "PASS")
         harness._close_log()
 
-        # Verify the file
-        if not os.path.exists(log_path):
-            print("FAIL (file not created)")
+        # Verify a log file was created in the directory
+        log_files = list(Path(log_dir).glob("stability_log_*.csv"))
+        if not log_files:
+            print("FAIL (no log file created)")
             return False
 
-        with open(log_path, "r", encoding="utf-8") as f:
+        with open(log_files[0], "r", encoding="utf-8") as f:
             reader = csv.reader(f)
             rows = list(reader)
 
@@ -629,20 +868,21 @@ def _self_test_log_creation() -> bool:
         print("PASS")
         return True
     finally:
-        if os.path.exists(log_path):
-            os.remove(log_path)
+        import shutil
+        if os.path.exists(log_dir):
+            shutil.rmtree(log_dir)
 
 
 def _self_test_harness_mock_run() -> bool:
     """Test: run harness in mock mode for a few seconds."""
     print("  test_harness_mock_run ... ", end="", flush=True)
-    log_path = "_self_test_mock_run.csv"
+    log_dir = "_self_test_mock_run"
     try:
         config = HarnessConfig(
             mock_mode=True,
             duration_minutes=0.05,  # 3 seconds
             interval_sec=0.1,
-            log_file=log_path,
+            log_dir=log_dir,
         )
         harness = StabilityHarness(config)
         harness.run()
@@ -655,15 +895,104 @@ def _self_test_harness_mock_run() -> bool:
             print(f"FAIL ({harness.stats.fail_count} failures in mock mode)")
             return False
 
-        if not os.path.exists(log_path):
+        log_files = list(Path(log_dir).glob("stability_log_*.csv"))
+        if not log_files:
             print("FAIL (log file missing)")
             return False
 
         print(f"PASS ({harness.stats.total} tests)")
         return True
     finally:
-        if os.path.exists(log_path):
-            os.remove(log_path)
+        import shutil
+        if os.path.exists(log_dir):
+            shutil.rmtree(log_dir)
+
+
+def _self_test_checkpoint() -> bool:
+    """Test: save and load checkpoint."""
+    print("  test_checkpoint ... ", end="", flush=True)
+    log_dir = "_self_test_checkpoint"
+    try:
+        config = HarnessConfig(mock_mode=True, log_dir=log_dir)
+        harness = StabilityHarness(config)
+        harness.stats.total = 1000
+        harness.stats.pass_count = 995
+        harness.stats.hang_events = 2
+        harness.stats.rtt_count = 150
+        harness.stats.rtt_sum = 600.0
+        harness.stats.rtt_max = 8.5
+        harness.stats.start_time = time.time() - 3600
+        harness._current_day = harness._today_str()
+        harness._log_dir.mkdir(parents=True, exist_ok=True)
+        harness._save_checkpoint()
+
+        # Load into fresh harness
+        harness2 = StabilityHarness(config)
+        ok = harness2._load_checkpoint()
+        if not ok:
+            print("FAIL (load returned False)")
+            return False
+        if harness2.stats.total != 1000:
+            print(f"FAIL (total={harness2.stats.total}, expected 1000)")
+            return False
+        if harness2.stats.hang_events != 2:
+            print(f"FAIL (hang_events={harness2.stats.hang_events})")
+            return False
+        if harness2.stats.rtt_count != 150:
+            print(f"FAIL (rtt_count={harness2.stats.rtt_count})")
+            return False
+
+        print("PASS")
+        return True
+    finally:
+        import shutil
+        if os.path.exists(log_dir):
+            shutil.rmtree(log_dir)
+
+
+def _self_test_daily_summary() -> bool:
+    """Test: write daily summary and verify CSV."""
+    print("  test_daily_summary ... ", end="", flush=True)
+    log_dir = "_self_test_summary"
+    try:
+        config = HarnessConfig(mock_mode=True, log_dir=log_dir)
+        harness = StabilityHarness(config)
+        harness._log_dir.mkdir(parents=True, exist_ok=True)
+        harness.stats.day_total = 500
+        harness.stats.day_pass = 498
+        harness.stats.day_fail = 0
+        harness.stats.day_warn = 2
+        harness.stats.day_hangs = 1
+        harness.stats.day_rtt_count = 75
+        harness.stats.day_rtt_sum = 300.0
+        harness.stats.day_rtt_max = 7.0
+        harness.stats.day_cache_hits = 180
+        harness.stats.day_cache_total = 200
+        harness.stats.day_shield_blocks = 12
+        harness.stats.day_shield_total = 50
+        harness.stats.heartbeat_rtts.append(4.0)
+
+        harness._write_daily_summary("2026-02-13")
+
+        if not harness._summary_path.exists():
+            print("FAIL (summary file not created)")
+            return False
+
+        with open(harness._summary_path, "r", encoding="utf-8") as f:
+            rows = list(csv.reader(f))
+        if len(rows) != 2:  # header + 1 data
+            print(f"FAIL (expected 2 rows, got {len(rows)})")
+            return False
+        if rows[1][0] != "2026-02-13" or rows[1][1] != "500":
+            print(f"FAIL (bad data: {rows[1]})")
+            return False
+
+        print("PASS")
+        return True
+    finally:
+        import shutil
+        if os.path.exists(log_dir):
+            shutil.rmtree(log_dir)
 
 
 def run_self_tests() -> bool:
@@ -674,6 +1003,8 @@ def run_self_tests() -> bool:
         _self_test_command_parse(),
         _self_test_log_creation(),
         _self_test_harness_mock_run(),
+        _self_test_checkpoint(),
+        _self_test_daily_summary(),
     ]
     passed = sum(results)
     total = len(results)
@@ -700,7 +1031,7 @@ def main() -> None:
     parser.add_argument(
         "--duration", type=float, default=60.0,
         metavar="MINUTES",
-        help="Test duration in minutes (default: 60)",
+        help="Test duration in minutes (default: 60, use 43200 for 30 days)",
     )
     parser.add_argument(
         "--interval", type=float, default=1.0,
@@ -708,9 +1039,13 @@ def main() -> None:
         help="Seconds between tests (default: 1.0)",
     )
     parser.add_argument(
-        "--log", default="stability_log.csv",
-        metavar="LOG_FILE",
-        help="CSV log file path (default: stability_log.csv)",
+        "--log-dir", default="stability_logs",
+        metavar="DIR",
+        help="Log directory (default: stability_logs/)",
+    )
+    parser.add_argument(
+        "--resume", action="store_true",
+        help="Resume from last checkpoint (load accumulated stats)",
     )
     parser.add_argument(
         "--self-test", action="store_true",
@@ -744,9 +1079,10 @@ def main() -> None:
         baud=args.baud,
         duration_minutes=args.duration,
         interval_sec=args.interval,
-        log_file=args.log,
+        log_dir=args.log_dir,
         verbose=args.verbose,
         mock_mode=args.mock,
+        resume=args.resume,
     )
 
     harness = StabilityHarness(config)

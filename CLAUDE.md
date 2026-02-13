@@ -16,7 +16,7 @@ Guidance for Claude Code when working with this repository.
 | Phase 3 | Future | Months 24-30 | Beta (10+ configs, security audit) |
 | Phase 4 | Future | Months 30-36 | Production v1.0 |
 
-**Current:** Phase 2, Week 48 HARDWARE VERIFIED (February 11, 2026). 108 PASS, 0 FAIL, 3 SKIP + 298/298 stability test. Next: Week 48 Commit + Week 49.
+**Current:** Phase 2, Week 49 IN PROGRESS (February 13, 2026). 30-day stability test prep + security self-audit. 3 bugs fixed (1 HIGH, 2 MEDIUM).
 
 ---
 
@@ -219,9 +219,9 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 
 ---
 
-## Current Status (Phase 2, Week 48)
+## Current Status (Phase 2, Week 49)
 
-**Week 48 HARDWARE VERIFIED** (February 11, 2026) - DMA Engine + Stability Harness: 108 PASS, 0 FAIL, 3 SKIP + 298/298 stability (100%)
+**Week 49 IN PROGRESS** (February 13, 2026) - 30-Day Stability Test Start + Self-Audit
 
 | Milestone | Status |
 |-----------|--------|
@@ -301,8 +301,13 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | 8-test DMA engine suite (build verified) | DONE |
 | **Critical fix: direct MMIO TX (seL4 kernel CR/LF corruption)** | DONE |
 | **5-min stability test: 298/298 PASS (100%)** | DONE |
+| **1-hour smoke test: 3,562/3,570 PASS (99.8%)** | DONE |
+| Stability harness: daily rotation, checkpoints, resume | DONE |
+| Security self-audit: 3 bugs fixed (1 HIGH, 2 MEDIUM) | DONE |
+| SECURITY_SELF_AUDIT.md written | DONE |
+| 30-day stability test started | PENDING |
 
-**Next:** Week 48 Commit + Week 49
+**Next:** Deploy + start 30-day stability test
 
 ### Remaining Work
 
@@ -317,7 +322,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | 46 | Boot optimization + power management - DONE |
 | 47 | SPI + RNG + PWM drivers - DONE |
 | 48 | DMA engine + stability harness - DONE |
-| 49 | Stability test harness + self-audit |
+| 49 | 30-day stability test start + self-audit - IN PROGRESS |
 | 50 | Phase 3 research + Pi 5 prototyping |
 | 51-52 | 30-day stability testing + final report |
 
@@ -483,6 +488,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **User Guide:** `phase2/docs/USER_GUIDE.md`
 - **Tester Guide:** `phase2/docs/ALPHA_TESTER_GUIDE.md`
 - **Platform Guide:** `phase2/docs/PI4_PLATFORM_GUIDE.md`
+- **Security Audit:** `phase2/docs/SECURITY_SELF_AUDIT.md`
 
 ### Rules
 - Always update CLAUDE.md and week status files after completing work

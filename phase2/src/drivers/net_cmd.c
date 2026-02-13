@@ -29,6 +29,18 @@
 #include <string.h>
 #include <stdio.h>
 
+/* Safe remaining buffer size: prevents unsigned underflow when pos > size */
+static inline uint32_t safe_remaining(int pos, uint32_t size)
+{
+    return (pos >= 0 && (uint32_t)pos < size) ? size - (uint32_t)pos : 0;
+}
+
+/* Clamp snprintf pos: if snprintf returned more than remaining, cap at size */
+static inline int clamp_pos(int pos, uint32_t size)
+{
+    return (pos >= 0 && (uint32_t)pos <= size) ? pos : (int)size;
+}
+
 /* ================================================================
  * Debug Output
  * ================================================================ */
@@ -129,7 +141,7 @@ int cmd_ping(uint32_t target_ip_be, uint32_t count, uint32_t timeout_ms,
 
     /* Check link */
     if (!genet_get_link_status()) {
-        pos += snprintf(output + pos, output_size - pos,
+        pos += snprintf(output + pos, safe_remaining(pos, output_size),
                         "ping %s: link DOWN\n", ip_str);
         return pos;
     }
@@ -137,7 +149,7 @@ int cmd_ping(uint32_t target_ip_be, uint32_t count, uint32_t timeout_ms,
     /* ARP resolve */
     uint8_t dst_mac[6];
     if (!net_arp_resolve(target_ip_be, dst_mac, 2000)) {
-        pos += snprintf(output + pos, output_size - pos,
+        pos += snprintf(output + pos, safe_remaining(pos, output_size),
                         "ping %s: ARP timeout\n", ip_str);
         return pos;
     }
@@ -147,7 +159,7 @@ int cmd_ping(uint32_t target_ip_be, uint32_t count, uint32_t timeout_ms,
     uint32_t sent = 0, received = 0;
     uint64_t total_rtt_us = 0;
 
-    for (uint32_t seq = 1; seq <= count && pos < (int)(output_size - 60); seq++) {
+    for (uint32_t seq = 1; seq <= count && safe_remaining(pos, output_size) > 60; seq++) {
         uint8_t frame[128];
         uint32_t frame_len = net_build_icmp_request(target_ip_be, dst_mac,
                                                      ident, (uint16_t)seq,
@@ -178,7 +190,7 @@ int cmd_ping(uint32_t target_ip_be, uint32_t count, uint32_t timeout_ms,
                     /* Format: "Reply from X.X.X.X: time=N.Nms TTL=64" */
                     uint32_t rtt_ms = (uint32_t)(rtt / 1000);
                     uint32_t rtt_frac = (uint32_t)((rtt % 1000) / 100);
-                    pos += snprintf(output + pos, output_size - pos,
+                    pos += snprintf(output + pos, safe_remaining(pos, output_size),
                                     "Reply from %s: time=%u.%ums TTL=%u\n",
                                     ip_str, rtt_ms, rtt_frac, ttl);
                     break;
@@ -196,7 +208,7 @@ int cmd_ping(uint32_t target_ip_be, uint32_t count, uint32_t timeout_ms,
         }
 
         if (!got_reply) {
-            pos += snprintf(output + pos, output_size - pos,
+            pos += snprintf(output + pos, safe_remaining(pos, output_size),
                             "Request timed out\n");
         }
     }
@@ -204,15 +216,15 @@ int cmd_ping(uint32_t target_ip_be, uint32_t count, uint32_t timeout_ms,
     /* Summary */
     if (sent > 0) {
         uint32_t loss = ((sent - received) * 100) / sent;
-        pos += snprintf(output + pos, output_size - pos,
+        pos += snprintf(output + pos, safe_remaining(pos, output_size),
                         "%u/%u received, %u%% loss",
                         received, sent, loss);
         if (received > 0) {
             uint32_t avg_ms = (uint32_t)(total_rtt_us / received / 1000);
-            pos += snprintf(output + pos, output_size - pos,
+            pos += snprintf(output + pos, safe_remaining(pos, output_size),
                             ", avg=%ums", avg_ms);
         }
-        pos += snprintf(output + pos, output_size - pos, "\n");
+        pos += snprintf(output + pos, safe_remaining(pos, output_size), "\n");
     }
 
     return pos;
@@ -235,7 +247,7 @@ int cmd_ifconfig(char *output, uint32_t output_size)
     bool link = genet_get_link_status();
     genet_link_speed_t speed = genet_get_link_speed();
 
-    pos += snprintf(output + pos, output_size - pos,
+    pos += snprintf(output + pos, safe_remaining(pos, output_size),
                     "eth0: %s\n"
                     "  MAC: %s\n"
                     "  IP:  %s\n"
@@ -257,7 +269,7 @@ int cmd_netstat(char *output, uint32_t output_size)
     genet_stats_t stats;
     genet_get_stats(&stats);
 
-    pos += snprintf(output + pos, output_size - pos,
+    pos += snprintf(output + pos, safe_remaining(pos, output_size),
                     "TX: %u pkts, %u bytes, %u err\n"
                     "RX: %u pkts, %u bytes, %u err, %u drop\n"
                     "ARP cache: %u entries\n",
@@ -306,7 +318,7 @@ int cmd_stress(char *output, uint32_t output_size)
         s_pass++;
     }
 
-    pos += snprintf(output + pos, output_size - pos,
+    pos += snprintf(output + pos, safe_remaining(pos, output_size),
                     "Stress: %d iterations, %d pass, %d fail\n",
                     iterations, s_pass, s_fail);
     return pos;
@@ -384,15 +396,15 @@ int cmd_dispatch(const char *cmd_str, char *output, uint32_t output_size)
         }
         int n = 0;
         const char *model = jarvis_fdt_get_string("/", "model");
-        n += snprintf(output + n, output_size - (uint32_t)n,
+        n += snprintf(output + n, safe_remaining(n, output_size),
                       "Device Tree: %s\n", model ? model : "unknown");
-        n += snprintf(output + n, output_size - (uint32_t)n,
+        n += snprintf(output + n, safe_remaining(n, output_size),
                       "  Size: %u bytes\n", jarvis_fdt_totalsize());
-        n += snprintf(output + n, output_size - (uint32_t)n,
+        n += snprintf(output + n, safe_remaining(n, output_size),
                       "  SOC children: %d\n", jarvis_fdt_count_children("/soc"));
         uint32_t phase = jarvis_fdt_get_u32("/chosen", "jarvis,phase", 0);
         uint32_t week  = jarvis_fdt_get_u32("/chosen", "jarvis,week", 0);
-        n += snprintf(output + n, output_size - (uint32_t)n,
+        n += snprintf(output + n, safe_remaining(n, output_size),
                       "  Phase: %u  Week: %u\n", phase, week);
         return n;
 
