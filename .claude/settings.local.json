@@ -58,9 +58,26 @@
       "Bash(powershell.exe -Command 'Copy-Item \"\"C:\\\\Users\\\\jluca\\\\Documents\\\\JARVIS_OS\\\\phase2\\\\firmware\\\\bcm2711-rpi-4-b.dtb\"\" \"\"D:\\\\\"\" -Force')",
       "Bash(find:*)",
       "Bash(wsl cat:*)",
-      "Bash(wsl ls:*)"
+      "Bash(wsl ls:*)",
+      "Bash(wsl -e bash -lc \"cd /mnt/c/Users/jluca/Documents/JARVIS_OS/phase2/scripts && tr -d ''\\\\r'' < build_and_copy_kernel.sh | bash\")",
+      "Bash(wsl pwd:*)",
+      "Bash(cmd.exe:*)",
+      "Bash(powershell.exe -Command \"Set-Location ''C:\\\\Users\\\\jluca\\\\Documents\\\\JARVIS_OS''; $files = @\\(''test_cache_demo'', ''test_cache_demo.c'', ''test_cache_hits'', ''test_cache_hits.c'', ''test_realistic_usage'', ''test_realistic_usage.c'', ''test_sysadmin'', ''test_sysadmin.c'', ''test.txt'', ''config.txt'', ''start4.elf'', ''fixup4.dat'', ''kernel8.img'', ''temp_build.sh'', ''build_sel4_jarvis.sh'', ''SESSION_2025-11-17_SUMMARY.md'', ''WEEK_9_QUICKSTART_CLI.md'', ''Read-in-this-order.txt''\\); foreach \\($f in $files\\) { if \\(Test-Path $f\\) { Remove-Item $f -Force; Write-Host \"\"DELETED: $f\"\" } else { Write-Host \"\"ALREADY GONE: $f\"\" } }\")",
+      "mcp__sequential-thinking__sequentialthinking",
+      "Bash(wsl -e bash -lc:*)",
+      "Bash(git status:*)",
+      "Bash(git -C \"C:\\\\Users\\\\jluca\\\\Documents\\\\JARVIS_OS\" log --oneline -5)",
+      "Bash(git -C \"C:\\\\Users\\\\jluca\\\\Documents\\\\JARVIS_OS\" add CLAUDE.md phase2/firmware/jarvis-sel4-image-arm-bcm2711 phase2/src/ai/uart_ipc_client.py phase2/src/ai/stability_harness.py phase2/src/boot/boot_manager.c phase2/src/boot/boot_manager.h phase2/src/drivers/net_cmd.c phase2/src/drivers/net_cmd.h phase2/src/drivers/uart_pl011.c phase2/src/drivers/bcm_dma.c phase2/src/drivers/bcm_dma.h phase2/src/jarvis-sel4-cmake/CMakeLists.txt phase2/src/sel4/main_arm64.c phase2/weeks/week48/)",
+      "Bash(git -C \"C:\\\\Users\\\\jluca\\\\Documents\\\\JARVIS_OS\" diff --cached --stat)",
+      "Bash(git -C \"C:\\\\Users\\\\jluca\\\\Documents\\\\JARVIS_OS\" status)"
     ],
     "deny": [],
     "ask": []
-  }
+  },
+  "enabledMcpjsonServers": [
+    "github",
+    "filesystem",
+    "memory",
+    "sequential-thinking"
+  ]
 }

@@ -1,0 +1,23 @@
+{
+    "mcpServers": {
+      "github": {
+        "command": "cmd",
+        "args": ["/c", "npx", "@modelcontextprotocol/server-github"],
+        "env": {
+          "GITHUB_PERSONAL_ACCESS_TOKEN": "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"
+        }
+      },
+      "filesystem": {
+        "command": "cmd",
+        "args": ["/c", "npx", "@modelcontextprotocol/server-filesystem", "C:\\Users\\jluca\\Documents\\JARVIS_OS"]
+      },
+      "memory": {
+        "command": "cmd",
+        "args": ["/c", "npx", "@modelcontextprotocol/server-memory"]
+      },
+      "sequential-thinking": {
+        "command": "cmd",
+        "args": ["/c", "npx", "@modelcontextprotocol/server-sequential-thinking"]
+      }
+    }
+  }
