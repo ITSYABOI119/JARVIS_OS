@@ -4,6 +4,12 @@
 **Scope:** All Phase 2 C sources (~10,000 LOC across 21 drivers/modules)
 **Methodology:** GCC `-Werror` build verification + manual code review of critical paths
 
+## Related: Dependency Security Audit (Snyk)
+
+Week 49 also includes a host-side Python dependency audit using Snyk CLI. Results are tracked separately here:
+
+- `phase2/weeks/week49/SECURITY_DEPENDENCY_AUDIT_SNYK.md`
+
 ## Build Verification
 
 The TII seL4 build system compiles with `-Werror` (warnings as errors). A full Ninja build produces **0 errors, 0 warnings** from JARVIS application code. Standalone `cppcheck` analysis was not feasible due to seL4 header dependencies (generated types require full build tree), but the `-Werror` build provides equivalent coverage for standard warning classes.
