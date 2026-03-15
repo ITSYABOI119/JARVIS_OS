@@ -26529,3 +26529,22 @@ timestamp,test_type,command,response_summary,latency_ms,result
 2026-02-15T07:25:34,shield,run_diagnostic,"risk=0.10,rec=allow",7.8,PASS
 2026-02-15T07:25:35,cache,date,hit:show_current_date,6.0,PASS
 2026-02-15T07:25:36,heartbeat,,RTT=4.2ms,4.2,PASS
+2026-02-15T11:28:44,cache,date,hit:exec_ls,0.0,PASS
+2026-02-15T11:28:45,shell,watchdog,[Mock] Would execute: watchdog,0.0,PASS
+2026-02-15T11:28:46,heartbeat,,RTT=6.9ms,6.9,PASS
+2026-02-15T11:28:47,shell,watchdog,[Mock] Would execute: watchdog,0.0,PASS
+2026-02-15T11:28:48,cache,uptime,hit:exec_ls,0.0,PASS
+2026-02-15T11:30:04,cache,top,hit:show_process_monitor,8.2,PASS
+2026-02-15T11:30:05,cache,top,hit:show_process_monitor,7.2,PASS
+2026-02-15T11:30:06,cache,disk,miss:unknown,6.7,PASS
+2026-02-15T11:30:07,shell,pwm,PWM Status (BCM2835)   Base vaddr: 0x614000   Clock: 250000000 Hz   CH0 (GPIO...,17.2,PASS
+2026-02-15T11:30:08,cache,time,hit:show_current_time,7.5,PASS
+2026-02-15T11:30:09,cache,status,hit:show_status,6.6,PASS
+2026-02-15T11:30:10,heartbeat,,RTT=4.4ms,4.4,PASS
+2026-02-15T11:30:11,shell,temp,Temperature: 34.5C,5.7,PASS
+2026-02-15T11:30:12,shell,stress,"Stress: 100 iterations, 500 pass, 0 fail",40.7,PASS
+2026-02-15T11:30:13,cache,hello,hit:print: Hello from JARVIS!,8.2,PASS
+2026-02-15T11:30:14,heartbeat,,RTT=4.3ms,4.3,PASS
+2026-02-15T11:30:15,cache,info,hit:show_system_info,6.9,PASS
+2026-02-15T11:30:16,heartbeat,,RTT=3.7ms,3.7,PASS
+2026-02-15T11:30:17,network,ifconfig,eth0: DOWN   MAC: de:ad:be:ef:ca:fe   IP:  10.0.0.2   Link: DOWN,10.3,PASS
