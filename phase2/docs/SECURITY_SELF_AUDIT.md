@@ -23,6 +23,7 @@ The TII seL4 build system compiles with `-Werror` (warnings as errors). A full N
 | 3 | MEDIUM | bcm_genet.c | 1009 | RX cons_index not masked before descriptor lookup | **FIXED** |
 | 4 | LOW | net_stack.c | 496 | Timeout deadline uint64 wraparound (theoretical) | Accepted |
 | 5 | LOW | main_arm64.c | 588-589 | Cache action field in snprintf (bounded by cache init) | Accepted |
+| 6 | HIGH | net_stack.c | handle_icmp(), net_is_icmp_echo_reply() | IPv4 total_len vs IHL underflow could drive out-of-bounds checksum read | **FIXED** |
 
 ## Finding Details
 
@@ -65,6 +66,19 @@ The TII seL4 build system compiles with `-Werror` (warnings as errors). A full N
 **Description:** The `action` field from cache lookup results is formatted directly into an IPC response. If cache data were corrupted (missing null terminator), snprintf could read past the action buffer. Currently safe because all cache data is initialized at startup from compiled-in patterns.
 
 **Decision:** Accepted as-is. Would need fixing if cache becomes dynamically loadable in Phase 3.
+
+### F6 (HIGH): IPv4 total_len vs IHL Underflow in ICMP Handling
+
+**File:** `phase2/src/drivers/net_stack.c`, `handle_icmp()` and `net_is_icmp_echo_reply()`
+
+**Description:** `handle_icmp()` computed `icmp_len = ip_total - ip_hdr_len` without first validating that `ip_total >= ip_hdr_len`. A malformed IPv4 header with `total_len < IHL` could underflow the unsigned subtraction and pass a very large length into `net_checksum()`, causing an out-of-bounds read from the reply buffer. `net_is_icmp_echo_reply()` also accepted arbitrary IHL values (including `< 5`) and derived offsets without first bounding `ip_hdr_len` to the IPv4 header range.
+
+**Fix:** Added IPv4 length sanity checks:
+- Reject frames where `ip_hdr_len` is not in \([20, 60]\) bytes.
+- Reject frames where `len < ETH_HLEN + ip_hdr_len`.
+- Reject frames where `ip_total < ip_hdr_len` or `ip_total > (len - ETH_HLEN)`.
+
+This ensures checksum and parsing logic never operate on impossible lengths.
 
 ## Code Review: Critical Paths
 

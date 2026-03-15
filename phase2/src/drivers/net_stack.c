@@ -185,6 +185,20 @@ static bool handle_icmp(const uint8_t *frame, uint32_t len,
     uint32_t ip_total = ntohs(ip->total_len);
     uint32_t icmp_off = ETH_HLEN + ip_hdr_len;
 
+    /* Basic IPv4 header sanity: IHL is in 32-bit words, min 20 bytes, max 60. */
+    if (ip_hdr_len < 20 || ip_hdr_len > 60) {
+        return false;
+    }
+
+    /* Ensure claimed IP length is coherent and within received frame. */
+    if (len < ETH_HLEN + ip_hdr_len) {
+        return false;
+    }
+    uint32_t ip_available = len - ETH_HLEN;
+    if (ip_total < ip_hdr_len || ip_total > ip_available) {
+        return false;
+    }
+
     if (len < icmp_off + sizeof(net_icmp_echo_t)) {
         return false;
     }
@@ -580,6 +594,13 @@ bool net_is_icmp_echo_reply(const uint8_t *frame, uint32_t len,
 
     uint32_t ip_hdr_len = (ip->ver_ihl & 0x0F) * 4;
     uint32_t icmp_off = ETH_HLEN + ip_hdr_len;
+
+    if (ip_hdr_len < 20 || ip_hdr_len > 60) {
+        return false;
+    }
+    if (len < ETH_HLEN + ip_hdr_len) {
+        return false;
+    }
 
     if (len < icmp_off + 8) {
         return false;
