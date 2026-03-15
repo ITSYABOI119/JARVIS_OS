@@ -1,0 +1,27 @@
+timestamp,test_type,command,response_summary,latency_ms,result
+2026-02-18T03:32:50,recovery,,hang_detected,230553124.1,WARN
+2026-02-18T03:32:50,recovery,,protocol_reset_ok,4.4,WARN
+2026-02-18T03:32:50,shell,temp,Temperature: 42.8C,8.4,PASS
+2026-02-18T03:32:52,cache,network,miss:unknown,7.0,PASS
+2026-02-18T03:32:53,shell,gpio,GPIO Status (BCM2711)   Base vaddr: 0x5c1000   LED (GPIO42): OFF   GPIO14 (TX...,18.9,PASS
+2026-02-18T03:32:54,cache,date,hit:show_current_date,7.1,PASS
+2026-02-18T03:32:55,cache,disk,miss:unknown,6.4,PASS
+2026-02-18T03:32:56,network,netstat,"TX: 1 pkts, 42 bytes, 0 err RX: 0 pkts, 0 bytes, 0 err, 0 drop ARP cache: 2 e...",11.9,PASS
+2026-02-18T03:32:57,network,netstat,"TX: 1 pkts, 42 bytes, 0 err RX: 0 pkts, 0 bytes, 0 err, 0 drop ARP cache: 2 e...",11.7,PASS
+2026-02-18T03:32:58,shield,install_package curl,"risk=0.10,rec=allow",8.1,PASS
+2026-02-18T03:32:59,network,ifconfig,eth0: DOWN   MAC: de:ad:be:ef:ca:fe   IP:  10.0.0.2   Link: DOWN,10.4,PASS
+2026-02-18T03:33:00,heartbeat,,RTT=4.3ms,4.3,PASS
+2026-02-18T03:33:01,cache,ls -a,hit:list_directory --all,7.6,PASS
+2026-02-18T03:33:03,shell,usb,USB DWC2: not initialized Device: not connected (unknown) Caps Lock: OFF,11.8,PASS
+2026-02-18T03:33:04,cache,help,hit:show_help,7.2,PASS
+2026-02-18T03:33:05,cache,top,hit:show_process_monitor,7.8,PASS
+2026-02-18T03:33:06,cache,df,hit:show_disk_usage,7.2,PASS
+2026-02-18T03:33:07,shield,reboot_system,"risk=0.10,rec=allow",8.3,PASS
+2026-02-18T03:33:08,cache,cpu,hit:show_cpu_info,9.3,PASS
+2026-02-18T03:33:09,cache,hello,hit:print: Hello from JARVIS!,9.9,PASS
+2026-02-18T03:33:10,heartbeat,,RTT=5.5ms,5.5,PASS
+2026-02-18T03:33:11,cache,free,hit:show_memory_usage,7.0,PASS
+2026-02-18T03:33:12,cache,cpu,hit:show_cpu_info,7.2,PASS
+2026-02-18T03:33:13,shell,i2c,I2C Bus Scan (BSC1)      0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f 00:  ...,22.0,PASS
+2026-02-18T03:33:14,cache,df,hit:show_disk_usage,7.1,PASS
+2026-03-15T03:34:49,cache,disk,miss:unknown,2160094070.4,PASS
