@@ -13,11 +13,13 @@
 
 Phase 2 delivered a working AI-controlled operating system on Raspberry Pi 4: 21 drivers, 30-day stability (0 crashes), security audit passed, 108 tests green. The architecture is proven. But the split deployment (Pi 4 seL4 + host PC AI over 7ms UART) was always temporary.
 
-**Phase 3 eliminates the split.** A spare x86 PC (Ryzen 5 5600 + RTX 3060 12GB) enables the original vision: seL4 microkernel and AI inference on the same machine. GPU-accelerated inference delivers 75+ tokens/second for 7B models — replacing 558ms CPU inference and 7ms UART round-trips with sub-microsecond shared memory IPC.
+**Phase 3 eliminates the split.** A spare x86 PC (Ryzen 5 5600 + RTX 3060 12GB) enables the original vision: seL4 microkernel and AI inference on the same machine. Pure bare metal — no Linux, no VMs. AI runs as a native seL4 userspace process via ggml/llama.cpp compiled as C. CPU inference on the Ryzen 5 5600 with sub-microsecond shared memory IPC.
 
-**Approach: Staged migration (Option D from hardware research).** Phase 3a moves AI to the spare PC immediately (4-6 weeks, zero risk). Phase 3b migrates seL4 to x86 with CAmkES VM for GPU access (14-22 weeks). Pi 4 stays as fallback throughout.
+**Approach: Staged migration (Option D from hardware research).** Phase 3a moves AI to the spare PC running Linux with GPU (4-6 weeks, stepping stone). Phase 3b ports seL4 to bare-metal x86 with native AI inference (14-22 weeks). Pi 4 stays as fallback throughout.
 
-**What "done" looks like:** JARVIS running standalone on one x86 machine — seL4 kernel with Linux VM guest for GPU AI, cross-VM shared memory IPC, 7B+ model inference at 75+ tok/s, 30-day stability on new platform.
+**What "done" looks like:** JARVIS running standalone on one x86 machine — pure seL4 bare metal, AI inference in native C userspace, shared memory IPC (<1μs), decision cache + CPU inference handling all queries, 30-day stability on new platform. GPU acceleration deferred to Phase 4 (Vulkan compute).
+
+**Note:** The spare x86 PC is not yet assembled. Phase 3 starts when hardware is ready.
 
 ---
 
@@ -109,26 +111,33 @@ VideoCore VI driver for Pi 4 or framebuffer for x86. Visual status display inste
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                   Spare x86 PC                           │
+│              JARVIS OS (Spare x86 PC)                    │
 │            Ryzen 5 5600 + RTX 3060 12GB                 │
 │                                                          │
-│   ┌──────────────────┐     shared    ┌────────────────┐ │
-│   │  seL4 Native     │◄────memory───►│  Linux VM      │ │
-│   │  (CAmkES)        │    <10μs IPC  │  (CAmkES guest)│ │
-│   │                  │              │                │ │
-│   │  JARVIS Kernel   │              │  RTX 3060 GPU  │ │
-│   │  - Decision Cache│              │  - llama.cpp   │ │
-│   │  - IPC Handler   │              │  - CUDA 7B+    │ │
-│   │  - SHIELD Core   │              │  - Python AI   │ │
-│   │  - x86 drivers   │              │  - Agents      │ │
-│   └──────────────────┘              └────────────────┘ │
-│              ↑                              ↑           │
-│         seL4 kernel                   GPU passthrough   │
-│     (formally verified)              (PCIe → Linux VM)  │
+│   seL4 Microkernel (Ring 0)                              │
+│   ├── Interrupt handling (<1μs)                          │
+│   ├── Memory management                                 │
+│   └── IPC primitives                                    │
+│              ↕ shared memory (<1μs)                      │
+│   AI Decision Engine (Ring 3)                            │
+│   ├── ggml/llama.cpp (native C, CPU inference)          │
+│   ├── Decision cache (258 patterns, <1ms)               │
+│   ├── SHIELD safety framework                           │
+│   └── Dynamic model scaling                             │
+│              ↕                                           │
+│   Drivers (Ring 3)                                       │
+│   ├── AHCI/NVMe storage                                │
+│   ├── Intel/Realtek NIC                                 │
+│   ├── USB HID                                           │
+│   └── Serial console (debug)                            │
+│                                                          │
+│   No Linux. No VM. Pure seL4 bare metal.                │
 └─────────────────────────────────────────────────────────┘
 ```
 
-**Changes:** Everything on one machine. seL4 hypervisor with Linux VM for GPU. Cross-VM shared memory IPC replaces UART. 700x+ latency improvement.
+**Changes:** Everything on one machine. Pure bare-metal seL4 — no Linux, no VMs. AI inference via ggml/llama.cpp compiled as native C seL4 userspace. CPU-only inference initially (Ryzen 5 5600, ~5-15 tok/s for 7B, ~20-50 tok/s for 1B-3B). GPU access (RTX 3060) deferred to Phase 4 (Vulkan compute or native driver). Decision cache handles 85%+ of queries in <1ms regardless.
+
+**Note:** The spare x86 PC is not yet assembled. Phase 3 starts when hardware is ready.
 
 ---
 
@@ -154,27 +163,28 @@ VideoCore VI driver for Pi 4 or framebuffer for x86. Visual status display inste
 - UART IPC stable: 99.7%+ pass rate over 3 days
 - End-to-end latency for cache misses measured and documented
 
-### Phase 3b: seL4 x86 Migration (Weeks 7-28)
+### Phase 3b: seL4 x86 Bare Metal (Weeks 7-28)
 
-**Goal:** Move seL4 to x86, establish CAmkES VM, achieve standalone operation.
+**Goal:** Port seL4 to x86-64 spare PC. Run JARVIS as a pure bare-metal OS — no Linux, no VMs.
 
 | Week | Task | Deliverable |
 |------|------|-------------|
-| 7-8 | seL4 x86-64 build environment setup | Cross-compilation toolchain, PC99 platform config |
+| 7-8 | seL4 x86-64 build environment setup | PC99 platform config, GRUB/EFI boot |
 | 8-9 | Boot seL4 on spare PC (minimal — serial output) | `Hello World` from seL4 rootserver on x86 |
-| 10-11 | Port decision cache + IPC handler to x86 rootserver | Cache queries working via serial console |
-| 12-14 | CAmkES setup: Linux VM guest on x86 | Linux booting inside seL4 VM, serial access |
-| 15-17 | GPU passthrough: RTX 3060 → Linux VM | `nvidia-smi` working inside VM, CUDA inference |
-| 18-19 | Cross-VM shared memory IPC | Dataport connector: rootserver ↔ Linux VM |
-| 20-21 | Port IPC protocol to shared memory | Replace UART framing with shared memory ring buffer |
-| 22-23 | Integrate AI pipeline in Linux VM | llama.cpp + Python agents in VM, connected to rootserver |
-| 24-25 | Integration testing | End-to-end: query → cache miss → VM → GPU → response |
+| 10-11 | Port decision cache + SHIELD to x86 rootserver | Cache queries working via serial console |
+| 12-13 | x86 driver: serial UART (16550/PCH) | Debug console + IPC fallback |
+| 14-15 | x86 driver: AHCI/NVMe storage | Basic read/write for persistence |
+| 16-17 | x86 driver: Intel/Realtek NIC | Basic networking (ARP, ICMP) |
+| 18-19 | Integrate ggml library as seL4 userspace | llama.cpp core compiled as C library |
+| 20-21 | AI inference in seL4 userspace (CPU) | 1B-3B model running, benchmark tok/s |
+| 22-23 | Shared memory IPC: rootserver ↔ AI process | Replace UART framing with shared memory ring buffer |
+| 24-25 | Integration testing | End-to-end: query → cache/AI → response, all native |
 | 26-28 | Stability testing (30-day on x86) | Match Phase 2 criteria |
 
 **Phase 3b Exit Criteria:**
-- Standalone x86 operation (single machine, no Pi 4 required)
-- Cross-VM IPC latency <10μs
-- GPU inference in Linux VM: 50+ tok/s for 7B
+- Standalone x86 operation (single machine, no Pi 4, no Linux, no VM)
+- Native seL4 IPC latency <1μs (shared memory between processes)
+- AI inference: 1B-3B model running natively in seL4 userspace
 - 30-day stability: 0 crashes, <1% errors
 
 ### Phase 3c: Hardening & Polish (Weeks 29-40)
@@ -182,8 +192,8 @@ VideoCore VI driver for Pi 4 or framebuffer for x86. Visual status display inste
 | Week | Task | Deliverable |
 |------|------|-------------|
 | 29-30 | Fuzz testing: network packet parsing | Fuzz harness for ICMP/ARP/IPv4 |
-| 31-32 | Security audit: CAmkES VM + cross-VM IPC | SECURITY_AUDIT_PHASE3.md |
-| 33-34 | Dynamic model scaling (4-state GPU) | IDLE/ACTIVE/CRITICAL/EMERGENCY on GPU |
+| 31-32 | Security audit: x86 drivers + IPC | SECURITY_AUDIT_PHASE3.md |
+| 33-34 | Dynamic model scaling (4-state CPU) | IDLE(1B)/ACTIVE(3B)/CRITICAL(3B+validator)/EMERGENCY(rules) |
 | 35-36 | Enhanced SHIELD (full 6-component) | Shadow execution + learning from failures |
 | 37-38 | Pi 4 ARM64 build maintenance | Verify Phase 2 code still builds + tests pass |
 | 39-40 | Documentation + final report | PHASE_3_FINAL_REPORT.md |
@@ -200,32 +210,32 @@ RTT: 7ms median, 8.19ms p95
 Bandwidth: ~11.5 KB/s
 ```
 
-### Target: Cross-VM Shared Memory (Phase 3b)
+### Target: Native Shared Memory IPC (Phase 3b)
 
 ```
-Linux VM → write to shared dataport → notification → seL4 rootserver reads dataport → cache lookup → write response to dataport → notification → Linux VM reads
-RTT: <10μs estimated (seL4 native IPC is 0.4μs; VM exit/entry adds overhead)
-Bandwidth: Memory speed (~10 GB/s)
+AI Process (seL4 userspace) → write to shared memory page → seL4 notification → Rootserver reads shared memory → cache lookup → write response → notification → AI Process reads
+RTT: <1μs (seL4 native IPC is 0.4μs on x86-64 Skylake, ~0.3μs on Ryzen)
+Bandwidth: Memory speed (~25 GB/s DDR4-3200)
 ```
 
 ### Migration Steps
 
-1. **Define shared memory protocol** — replace UART frame format with shared memory ring buffer. Keep the same message types (QUERY, RESPONSE, HEARTBEAT, etc.) but remove SYNC bytes, CRC, and length framing (shared memory is reliable).
+1. **Define shared memory protocol** — replace UART frame format with shared memory ring buffer. Keep the same message types (QUERY, RESPONSE, HEARTBEAT, etc.) but remove SYNC bytes, CRC, and length framing (shared memory is reliable, no corruption).
 
-2. **Implement CAmkES cross-VM connector** — use seL4's dataport mechanism for shared memory between native rootserver and Linux VM. Use notification objects for doorbell signaling.
+2. **Implement seL4 shared page** — map a shared memory region between rootserver and AI process. Use seL4 notification objects for doorbell signaling (wake on new message).
 
-3. **Port Python client** — replace `serial.Serial` with `mmap` or shared memory access in the Linux VM. Same protocol semantics, different transport.
+3. **Port AI client to C** — the AI inference process is native C (ggml library), so the IPC client is also C. Replace Python `serial.Serial` with direct shared memory reads/writes.
 
-4. **Backward compatibility** — keep UART protocol code for Pi 4 builds. Use compile-time flag (`#ifdef JARVIS_IPC_UART` / `#ifdef JARVIS_IPC_SHMEM`) to select transport.
+4. **Backward compatibility** — keep UART protocol code for Pi 4 ARM64 builds. Use compile-time flag (`#ifdef JARVIS_IPC_UART` / `#ifdef JARVIS_IPC_SHMEM`) to select transport.
 
 ### Expected Performance Improvement
 
 | Metric | Phase 2 (UART) | Phase 3b (Shared Mem) | Improvement |
 |--------|----------------|----------------------|-------------|
-| IPC RTT | 7ms | <10μs | 700x+ |
-| Bandwidth | 11.5 KB/s | ~10 GB/s | 870,000x |
-| Cache miss → AI response | 558ms + 7ms | <20ms (GPU) + <10μs | 28x+ |
-| Cache hit → response | <1ms + 7ms | <1ms + <10μs | ~8x |
+| IPC RTT | 7ms | <1μs | 7,000x+ |
+| Bandwidth | 11.5 KB/s | ~25 GB/s (DDR4) | 2,000,000x |
+| Cache miss → AI response | 558ms + 7ms | 50-200ms (CPU) + <1μs | 3-11x |
+| Cache hit → response | <1ms + 7ms | <1ms + <1μs | ~8x |
 
 ---
 
@@ -239,41 +249,63 @@ Bandwidth: Memory speed (~10 GB/s)
 | Llama 3.2 1B | Host PC CPU | <100ms | Fast queries |
 | Decision cache | Pi 4 (seL4) | <1ms | 85.7% of all queries |
 
-### Phase 3 Target
+### Phase 3 Target (Bare-Metal CPU Inference)
 
 | Model | Platform | Inference | Use Case |
 |-------|----------|-----------|----------|
-| Llama 7B (Q4) | RTX 3060 CUDA | ~13ms/tok, 75 tok/s | Complex reasoning |
-| Phi-3 Mini 3.8B (Q4) | RTX 3060 CUDA | ~10ms/tok, ~100 tok/s | Standard queries |
-| Llama 3.2 3B (Q4) | RTX 3060 CUDA | ~8ms/tok, ~125 tok/s | Fast queries |
-| Llama 3.2 1B (Q4) | CPU (in VM) | <50ms | Ultra-fast fallback |
+| Llama 3.2 1B (Q4) | Ryzen 5 5600 CPU (native seL4) | ~20-50 tok/s est. | Fast queries |
+| Llama 3.2 3B (Q4) | Ryzen 5 5600 CPU (native seL4) | ~8-15 tok/s est. | Standard queries |
+| Phi-3 Mini 3.8B (Q4) | Ryzen 5 5600 CPU (native seL4) | ~5-12 tok/s est. | Complex reasoning |
 | Decision cache | seL4 native | <1ms | 85%+ of queries |
+
+**Note:** These are CPU-only estimates. The Ryzen 5 5600 (6C/12T, 3.5-4.4 GHz) with AVX2 should outperform the Cortex-A72 significantly. Exact numbers need benchmarking once hardware is assembled. The decision cache handling 85%+ of queries means only ~15% of operations actually hit the inference path.
+
+### Phase 3a Target (GPU on Linux Host — Stepping Stone)
+
+During Phase 3a, the spare PC runs Linux with RTX 3060 CUDA:
+
+| Model | Platform | Inference | Use Case |
+|-------|----------|-----------|----------|
+| Llama 7B (Q4) | RTX 3060 CUDA | ~75 tok/s | Complex reasoning |
+| Phi-3 Mini 3.8B (Q4) | RTX 3060 CUDA | ~100 tok/s est. | Standard queries |
+| Llama 3.2 3B (Q4) | RTX 3060 CUDA | ~125 tok/s est. | Fast queries |
+
+These GPU speeds are available in Phase 3a while the bare-metal port is in progress.
 
 ### Dynamic Model Scaling (Production)
 
-From ARCHITECTURE_ENHANCEMENTS.md — implemented with GPU acceleration:
+From ARCHITECTURE_ENHANCEMENTS.md — implemented with CPU inference on bare metal:
 
 ```
 State Transitions:
   IDLE ──(query)──► ACTIVE ──(risk>0.7)──► CRITICAL ──(system threat)──► EMERGENCY
    │                  │                       │                            │
-   │ 1B CPU          │ 3.8B GPU             │ 7B GPU + validator         │ Rules only
-   │ <50ms           │ ~10ms/tok            │ ~26ms/tok                  │ <1ms
+   │ 1B CPU          │ 3B CPU               │ 3.8B CPU + validator       │ Rules only
+   │ ~20ms/tok       │ ~80ms/tok            │ ~100ms/tok                 │ <1ms
    │                  │                       │                            │
    ◄──(idle 30s)─────◄──(risk<0.3)──────────◄──(threat cleared)──────────┘
 ```
 
-**Memory strategy:** 12GB VRAM holds the active model. Model swapping takes 2-5 seconds (load from NVMe to VRAM). Cache handles queries during model transitions.
+**Memory strategy:** 16GB system RAM holds the active model + seL4 + drivers. Model swapping takes 1-3 seconds (load from NVMe to RAM). Cache handles queries during model transitions. Upgrade to 32GB DDR4 (~$50) recommended if running multiple models simultaneously.
 
 ### Quantization Strategy
 
-| Model | Full Size | Q4_K_M | Q8_0 | Fits 12GB VRAM? |
-|-------|-----------|--------|------|-----------------|
+| Model | Full Size | Q4_K_M | Q8_0 | Fits 16GB RAM? |
+|-------|-----------|--------|------|----------------|
 | Llama 3.2 1B | 2GB | ~0.7GB | ~1.2GB | Yes (with room) |
 | Llama 3.2 3B | 6GB | ~2.0GB | ~3.5GB | Yes (with room) |
 | Phi-3 Mini 3.8B | 7.6GB | ~2.5GB | ~4.2GB | Yes (with room) |
 | Llama 7B | 14GB | ~4.0GB | ~7.5GB | Yes (Q4) / Yes (Q8) |
-| Llama 13B | 26GB | ~7.5GB | ~14GB | Yes (Q4) / No (Q8) |
+| Llama 13B | 26GB | ~7.5GB | ~14GB | Tight (Q4) / No (Q8) |
+
+### GPU Access — Phase 4 Goal
+
+GPU acceleration (RTX 3060 CUDA) is deferred to Phase 4. Options to explore:
+- **Vulkan compute** — open-source, no proprietary drivers, llama.cpp has Vulkan backend
+- **Native GPU driver** — write minimal NVIDIA register-level driver for compute shaders (very hard)
+- **Hybrid approach** — seL4 bare metal for kernel/AI, minimal Linux shim for GPU only (last resort)
+
+For Phase 3, CPU inference on the Ryzen 5 5600 is the target. The 85% cache hit rate means most queries never touch inference anyway.
 
 ---
 
@@ -283,13 +315,13 @@ State Transitions:
 
 | # | Risk | Probability | Impact | Mitigation |
 |---|------|-------------|--------|------------|
-| 1 | GPU passthrough in CAmkES fails | Medium | High | Fallback: Linux-native with container isolation; or keep UART to Pi 4 |
-| 2 | CAmkES learning curve longer than estimated | Medium | Medium | Well-documented tutorials; start with examples, iterate |
-| 3 | AMD Ryzen incompatibility with seL4 PC99 | Low | High | PC99 is generic x86-64; test early (Week 7-8); Intel NUC as backup |
-| 4 | Cross-VM IPC latency higher than expected | Low | Medium | Even 100μs is 70x better than UART; acceptable degradation |
-| 5 | 16GB RAM insufficient for VM + AI | Low | Medium | Upgrade to 32GB DDR4 (~$50); or use smaller models |
+| 1 | AMD Ryzen incompatibility with seL4 PC99 | Low | High | PC99 is generic x86-64; test early (Week 7-8) |
+| 2 | ggml/llama.cpp won't compile for seL4 userspace | Medium | High | ggml is portable C; may need muslc stubs for missing POSIX calls |
+| 3 | x86 driver complexity (AHCI/NIC) | Medium | Medium | Start with serial-only, add drivers incrementally; Linux references |
+| 4 | CPU inference too slow for usability | Low | Medium | Cache handles 85%+ queries; 1B model at ~20+ tok/s is acceptable |
+| 5 | 16GB RAM insufficient for model + seL4 | Low | Medium | Upgrade to 32GB DDR4 (~$50); or use smaller models |
 | 6 | Stability regression on new platform | Medium | Medium | Pi 4 stays as fallback; staged migration reduces blast radius |
-| 7 | NVMe/AHCI driver complexity in seL4 | Low | Low | Not needed for Phase 3 — Linux VM handles storage |
+| 7 | Spare PC not assembled (blocks Phase 3) | Medium | High | Phase 3a can use main PC temporarily if needed; Pi 4 keeps running |
 
 ### Non-Technical Risks
 
@@ -324,9 +356,9 @@ State Transitions:
 
 | # | Criterion | Target | How to Validate |
 |---|-----------|--------|-----------------|
-| 1 | Standalone operation | Single x86 machine, no Pi 4 required | Boot and run queries without external hardware |
-| 2 | GPU-accelerated inference | 7B model at 50+ tok/s | llama-bench on RTX 3060 in VM |
-| 3 | Cross-VM IPC | <100μs round-trip | Benchmark shared memory dataport |
+| 1 | Standalone operation | Single x86 machine, no Pi 4, no Linux, no VM | Boot and run queries without external hardware |
+| 2 | Native AI inference | 1B-3B model in seL4 userspace (CPU) | ggml benchmark on Ryzen 5 5600 |
+| 3 | Native IPC | <1μs round-trip (shared memory) | Benchmark seL4 shared page IPC |
 | 4 | 30-day stability (x86) | 0 crashes, <1% errors | Run stability harness 30 days |
 | 5 | Security audit (Phase 3) | All HIGH/CRITICAL fixed | Self-audit + fuzz testing of network/IPC |
 | 6 | Cache performance maintained | >80% hit rate | Stability harness metrics |
@@ -335,7 +367,7 @@ State Transitions:
 
 | # | Criterion | Target |
 |---|-----------|--------|
-| 7 | Dynamic model scaling | 4-state GPU scaling operational |
+| 7 | Dynamic model scaling | 4-state CPU scaling operational |
 | 8 | Pi 4 build maintained | Phase 2 tests still pass on ARM64 |
 | 9 | Enhanced SHIELD | All 6 components implemented |
 
@@ -375,12 +407,12 @@ Items flagged in PHASE_2_FINAL_REPORT.md and SECURITY_SELF_AUDIT.md:
 |-------|-------|-------|-------|-----------------|
 | **Month 1** | 1-4 | 3a | Spare PC setup + GPU AI | RTX 3060 benchmarks, UART IPC from new host |
 | **Month 2** | 5-8 | 3a→3b | Stability validation, seL4 x86 boot | 3-day stability test, seL4 `Hello World` on x86 |
-| **Month 3** | 9-12 | 3b | Decision cache port, CAmkES setup | Cache working on x86, Linux VM booting |
-| **Month 4** | 13-16 | 3b | GPU passthrough + cross-VM IPC | `nvidia-smi` in VM, shared memory working |
-| **Month 5** | 17-20 | 3b | IPC migration + AI integration | Full pipeline: query → cache/GPU → response |
+| **Month 3** | 9-12 | 3b | Decision cache port + x86 drivers | Cache working on x86, serial + basic storage |
+| **Month 4** | 13-16 | 3b | NIC driver + ggml integration | Networking + AI inference compiling for seL4 |
+| **Month 5** | 17-20 | 3b | Native AI inference + shared memory IPC | Full pipeline: query → cache/CPU AI → response |
 | **Month 6** | 21-24 | 3b | Integration testing | End-to-end standalone operation |
 | **Month 7-8** | 25-32 | 3b→3c | 30-day stability + fuzz testing | Stability PASSED on x86, fuzz harness |
-| **Month 9-10** | 33-36 | 3c | Security audit + model scaling | 4-state GPU scaling, SHIELD expansion |
+| **Month 9-10** | 33-36 | 3c | Security audit + model scaling | 4-state CPU scaling, SHIELD expansion |
 | **Month 11** | 37-40 | 3c | Polish + Pi 4 maintenance | Multi-platform build, documentation |
 | **Month 12** | 41-44 | Report | Final report + Phase 4 planning | PHASE_3_FINAL_REPORT.md, git tag v0.3.0-beta |
 
@@ -391,15 +423,17 @@ Items flagged in PHASE_2_FINAL_REPORT.md and SECURITY_SELF_AUDIT.md:
 ```
 Week 1: Spare PC assembled + Linux
   ↓
-Week 2-3: GPU benchmarks + UART IPC
+Week 2-3: GPU benchmarks + UART IPC to Pi 4
   ↓
 Week 5-6: 3-day stability (Phase 3a DONE)
-  ↓ ← Can stop here if x86 migration is blocked
-Week 8-9: seL4 boots on x86
+  ↓ ← Can stop here if x86 bare-metal port is blocked
+Week 8-9: seL4 boots on x86 bare metal
   ↓
-Week 15-17: GPU passthrough in CAmkES VM
-  ↓ ← HIGHEST RISK POINT
-Week 18-21: Cross-VM IPC + AI integration
+Week 14-15: x86 drivers (serial, AHCI, NIC)
+  ↓
+Week 18-21: ggml compiled for seL4 userspace
+  ↓ ← HIGHEST RISK POINT (ggml portability to seL4)
+Week 22-25: Shared memory IPC + integration
   ↓
 Week 26-28: 30-day stability on x86 (Phase 3b DONE)
   ↓
@@ -407,8 +441,9 @@ Week 40: Phase 3c complete, final report
 ```
 
 **Key decision points:**
-- **Week 6:** Phase 3a complete. GPU AI working with Pi 4 over UART. Go/no-go for Phase 3b.
-- **Week 17:** GPU passthrough working or not. If blocked, evaluate fallback (Linux-native, no seL4 hypervisor).
+- **Week 6:** Phase 3a complete. GPU AI working with Pi 4 over UART from spare PC. Go/no-go for bare-metal port.
+- **Week 9:** seL4 boots on Ryzen or not. If AMD incompatibility, investigate early.
+- **Week 21:** ggml running in seL4 userspace or not. If portability issues, evaluate what POSIX stubs are needed.
 - **Week 28:** 30-day stability on x86. If passed, Phase 3b complete. If not, debug and re-run.
 
 ---

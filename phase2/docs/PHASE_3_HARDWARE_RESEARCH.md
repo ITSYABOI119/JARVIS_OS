@@ -13,7 +13,7 @@ Phase 2 proved the JARVIS architecture works: seL4 microkernel at Ring 0, AI dec
 
 **Hardware situation has changed since Phase 2 planning.** A spare x86 PC (Ryzen 5 5600 + RTX 3060 12GB) is being assembled, making the original x86 vision viable. This document evaluates four options with real benchmark data.
 
-**Recommendation: Option A (x86 Standalone)** — the spare PC with RTX 3060 provides 75+ tokens/sec for 7B models via CUDA, eliminates the UART bottleneck, and enables the original standalone vision. seL4 x86-64 is formally verified and supports CAmkES VM for Linux guest GPU access.
+**Recommendation: Option D (Hybrid staged → pure bare-metal x86)** — Phase 3a uses the spare PC as a Linux GPU host (immediate win), then Phase 3b ports seL4 to bare-metal x86 with native C AI inference (ggml/llama.cpp). No VMs. Pure standalone OS. GPU access deferred to Phase 4 (Vulkan compute).
 
 ---
 
@@ -307,30 +307,33 @@ Phase 3a (Transitional):
 │   - 75 tok/s     │                   │   - Decision cache│
 └──────────────────┘                   └──────────────────┘
 
-Phase 3b (Migration):
+Phase 3b (Target — Pure Bare Metal):
 ┌─────────────────────────────────────────────────────┐
-│                 Spare x86 PC                         │
-│   seL4 hypervisor + Linux VM (GPU) + native JARVIS  │
+│              JARVIS OS (Spare x86 PC)                │
+│   seL4 bare metal + native C AI (ggml/llama.cpp)    │
+│   No Linux. No VM. Pure standalone OS.               │
 └─────────────────────────────────────────────────────┘
 ```
 
 ### How It Works
 
-**Phase 3a:** Immediately replace main PC with spare PC as the UART host. Pi 4 code unchanged. Spare PC runs Linux with CUDA-accelerated AI. Same architecture as Phase 2, just with a dedicated (wipeable) host and GPU inference.
+**Phase 3a:** Immediately replace main PC with spare PC as the UART host. Pi 4 code unchanged. Spare PC runs Linux with CUDA-accelerated AI (stepping stone — GPU used here while bare-metal port is in progress).
 
-**Phase 3b:** Incrementally migrate seL4 to x86. Prove CAmkES VM + GPU passthrough on spare PC while Pi 4 stays as fallback. When x86 is working, transition to standalone.
+**Phase 3b:** Port seL4 to bare-metal x86. Compile ggml/llama.cpp as native C seL4 userspace process. CPU-only inference on Ryzen 5 5600. Shared memory IPC between rootserver and AI process. No Linux, no VM — pure standalone JARVIS OS. GPU acceleration deferred to Phase 4 (Vulkan compute).
 
 ### What Transfers
 
 - **Phase 3a:** 100% of Phase 2 code transfers unchanged. Just move Python AI to spare PC.
-- **Phase 3b:** Same as Option A (CAmkES port + cross-VM IPC).
+- **Phase 3b:** ~40% of Phase 2 C code (decision cache, SHIELD, IPC logic). BCM2711 drivers replaced by x86 equivalents. ggml library is new.
 
 ### Risk Assessment
 
 | Risk | Probability | Impact | Mitigation |
 |------|-------------|--------|------------|
 | None for Phase 3a | - | - | Identical to Phase 2 with better GPU |
-| Phase 3b risks = Option A risks | See Option A | See Option A | Pi 4 stays as fallback throughout |
+| ggml portability to seL4 | Medium | High | ggml is portable C; may need muslc stubs |
+| x86 driver effort | Medium | Medium | Standard PC hardware, well-documented |
+| CPU inference speed | Low | Medium | Cache handles 85%+; 1B at 20+ tok/s is fine |
 
 ### Effort Estimate
 
@@ -344,17 +347,20 @@ Phase 3b (Migration):
 | Validation + stability test | 1-2 | Quick confidence test |
 | **Phase 3a Total** | **4-6 weeks** | Zero risk |
 | **Phase 3b** | | |
-| Same as Option A | 14-22 | See Option A estimate |
-| **Phase 3b Total** | **14-22 weeks** | Medium risk, Pi 4 fallback |
-| **Combined** | **18-28 weeks** | Staged risk |
+| seL4 x86 boot + basic drivers | 6-8 | PC99, serial, AHCI, NIC |
+| ggml integration as seL4 userspace | 4-6 | Compile ggml, port to muslc |
+| Shared memory IPC + integration | 2-4 | Replace UART with shared pages |
+| 30-day stability | 4-6 | Match Phase 2 criteria |
+| **Phase 3b Total** | **16-24 weeks** | Medium risk, Pi 4 fallback |
+| **Combined** | **20-30 weeks** | Staged risk |
 
 ### Cost
 
-**$0** — hardware already owned.
+**$0** — hardware already owned (spare PC not yet assembled).
 
 ### Verdict
 
-**Best risk management.** Gets immediate GPU-accelerated AI (Phase 3a in 4-6 weeks) while preserving Pi 4 as proven fallback. Then migrates to standalone x86 (Phase 3b) with zero pressure. If CAmkES/GPU passthrough hits problems, Pi 4 still works.
+**Best of both worlds.** Gets immediate GPU-accelerated AI (Phase 3a) while building toward the real thing: a pure bare-metal JARVIS OS on x86 (Phase 3b). Pi 4 stays as fallback throughout. GPU stays useful in Phase 3a; CPU inference on Ryzen is the Phase 3b target. GPU acceleration via Vulkan is a Phase 4 goal.
 
 ---
 
@@ -362,33 +368,35 @@ Phase 3b (Migration):
 
 | Criterion | A: x86 Standalone | B: Multi-Pi | C: Pi 5 Standalone | D: Hybrid (Rec.) |
 |-----------|-------------------|-------------|--------------------|--------------------|
-| **Standalone?** | Yes | No (split) | Yes | Eventually |
-| **AI capability** | 7B+ @ 75 tok/s | 1B @ 12 tok/s | 1B @ 12 tok/s | 7B+ @ 75 tok/s |
-| **GPU acceleration** | RTX 3060 CUDA | None | None | RTX 3060 CUDA |
-| **IPC latency** | <1-10μs | 7ms (UART) | <1μs (shared mem) | 7ms → <10μs |
+| **Standalone?** | Yes | No (split) | Yes | Eventually (pure bare metal) |
+| **AI capability** | 3B-7B CPU native | 1B @ 12 tok/s | 1B @ 12 tok/s | 7B GPU (3a) → 1B-3B CPU (3b) |
+| **GPU acceleration** | No (CPU only) | None | None | Phase 3a only (Linux host) |
+| **IPC latency** | <1μs | 7ms (UART) | <1μs (shared mem) | 7ms → <1μs |
 | **Code reuse** | ~40% | 100% | ~20% | 100% → ~40% |
-| **Effort (weeks)** | 14-22 | 5-8 | 21-34 | 4-6 then 14-22 |
+| **Effort (weeks)** | 14-22 | 5-8 | 21-34 | 4-6 then 16-24 |
 | **Risk** | Medium | Low | High | Low → Medium |
 | **Cost** | $0 (+$50 RAM opt.) | $0 | $0 | $0 (+$50 RAM opt.) |
-| **Original vision** | Yes | No | Partial | Yes (staged) |
+| **Original vision** | Yes | No | Partial | Yes (staged, pure bare metal) |
 
 ---
 
 ## 8. Recommendation
 
-### Primary: Option D (Hybrid x86 + Pi 4) with staged migration
+### Primary: Option D (Hybrid x86 + Pi 4) with staged migration to pure bare metal
 
 **Rationale:**
 
 1. **Immediate win (Phase 3a, weeks 1-6):** Move AI to spare PC with RTX 3060. Get 75+ tok/s GPU inference immediately. Pi 4 keeps running proven Phase 2 code. Zero risk, zero code changes.
 
-2. **Standalone migration (Phase 3b, weeks 7-28):** Port seL4 to x86, set up CAmkES VM with Linux guest, prove GPU passthrough. Pi 4 stays as fallback the entire time. If x86 hits blockers, the system still works.
+2. **Standalone migration (Phase 3b, weeks 7-30):** Port seL4 to bare-metal x86. Compile ggml/llama.cpp as native seL4 userspace. CPU-only inference on Ryzen 5 5600. No Linux, no VMs — a real OS. Pi 4 stays as fallback the entire time.
 
 3. **Preserves Pi 4 investment.** All 21 drivers, 30-day stability proof, and 108 tests keep running. Nothing is thrown away.
 
-4. **Enables the original vision.** The spare x86 PC with RTX 3060 is exactly what the unified plan envisioned — AI and kernel on the same machine with shared memory IPC.
+4. **Enables the original vision.** One machine, one OS. seL4 microkernel + AI decision engine, shared memory IPC, pure bare metal. This is JARVIS OS.
 
-5. **Risk-managed.** The hardest part (CAmkES VM + GPU passthrough) happens while Pi 4 is the live system. No single point of failure.
+5. **Risk-managed.** The hardest part (ggml portability to seL4, x86 drivers) happens while Pi 4 is the live system. No single point of failure.
+
+6. **GPU deferred, not abandoned.** Phase 3a uses the RTX 3060 via Linux. Phase 4 can explore Vulkan compute for native GPU access. The 85% cache hit rate means CPU inference only handles 15% of queries anyway.
 
 ### Secondary: Keep Option B (Multi-Pi) as a quick experiment
 
@@ -406,7 +414,7 @@ The 21-34 week porting effort for a 4GB/1B-model platform is not justified when 
 
 - Formally verified (functional correctness proved)
 - IPC: 1,302 cycles on Skylake (~0.4μs at 3.4 GHz)
-- CAmkES VM supports x86-64 with Linux guest and cross-VM connectors
+- CAmkES VM available for x86-64 (not needed for Phase 3 — pure bare metal target)
 - Device passthrough documented (ethernet); GPU passthrough feasible but requires manual config
 
 ### RTX 3060 12GB Is Excellent for Local AI
