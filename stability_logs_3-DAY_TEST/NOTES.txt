@@ -1,0 +1,48 @@
+Laptop of course ran out of space while performing this test. it made it to day 3 but was hours short of finishing.
+
+the space issuie wasn't caused by the program, was my own fault as this laptop doesn't have much space at all
+
+[4199.2 min] tests=249810 pass=249172 (99.7%) fail=0 warn=638 hangs=319 rate=1.0/s
+2026-03-18 12:22:30,216 [WARNING] stability_harness: Hang detected: 30.3s since last heartbeat ACK
+2026-03-18 12:22:30,216 [INFO] stability_harness: Attempting protocol reset...
+2026-03-18 12:22:30,722 [INFO] stability_harness: Protocol reset succeeded
+[4200.3 min] tests=249871 pass=249231 (99.7%) fail=0 warn=640 hangs=320 rate=1.0/s
+2026-03-18 12:23:11,122 [INFO] stability_harness: Daily summary written for 2026-03-18: 8516 tests, 8496 pass
+OSError: [Errno 28] No space left on device
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\Admin\Documents\GitHub\JARVIS_OS\phase2\src\ai\stability_harness.py", line 713, in run
+    self._maybe_checkpoint()
+    ~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Admin\Documents\GitHub\JARVIS_OS\phase2\src\ai\stability_harness.py", line 416, in _maybe_checkpoint
+    self._save_checkpoint()
+    ~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Admin\Documents\GitHub\JARVIS_OS\phase2\src\ai\stability_harness.py", line 359, in _save_checkpoint
+    with open(tmp_path, "w", encoding="utf-8") as f:
+         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+OSError: [Errno 28] No space left on device
+
+During handling of the above exception, another exception occurred:
+
+OSError: [Errno 28] No space left on device
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\Admin\Documents\GitHub\JARVIS_OS\phase2\src\ai\stability_harness.py", line 1093, in <module>
+    main()
+    ~~~~^^
+  File "C:\Users\Admin\Documents\GitHub\JARVIS_OS\phase2\src\ai\stability_harness.py", line 1089, in main
+    harness.run()
+    ~~~~~~~~~~~^^
+  File "C:\Users\Admin\Documents\GitHub\JARVIS_OS\phase2\src\ai\stability_harness.py", line 725, in run
+    self._save_checkpoint()
+    ~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Admin\Documents\GitHub\JARVIS_OS\phase2\src\ai\stability_harness.py", line 359, in _save_checkpoint
+    with open(tmp_path, "w", encoding="utf-8") as f:
+         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+OSError: [Errno 28] No space left on device
+
+(2ndpc) C:\Users\Admin\Documents\GitHub\JARVIS_OS>
