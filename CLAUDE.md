@@ -230,9 +230,9 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 
 ---
 
-## Current Status (Phase 2, Week 50)
+## Current Status (Phase 3 Pre-Work)
 
-**Week 50 IN PROGRESS** (March 18, 2026) - Phase 3 Research + Planning
+**Phase 3 Pre-Work IN PROGRESS** (March 19, 2026) - Interim tasks before spare x86 PC assembly
 
 | Milestone | Status |
 |-----------|--------|
@@ -321,16 +321,29 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | PHASE_3_HARDWARE_RESEARCH.md written | DONE |
 | PHASE_3_KICKOFF.md written | DONE |
 
-**Next:** Week 51-52 — Final validation, git tag v0.2.0-alpha, Phase 2 close
+**Next:** Phase 3 pre-work tasks (seL4 QEMU, ggml test, IPC protocol) while spare PC is being assembled
 
-### Remaining Work
+### Pre-Work Tasks (Before Spare PC)
+
+| # | Task | Status |
+|---|------|--------|
+| 1 | seL4 x86-64 on QEMU (main PC WSL) | PENDING |
+| 2 | ggml standalone musl compilation test | PENDING |
+| 3 | Shared memory IPC protocol design + test | PENDING |
+| 4 | Port portable code to x86 build | PENDING |
+| 5 | x86 driver skeleton headers | PENDING |
+| 6 | Git tag v0.2.0-alpha | PENDING |
+| 7 | Pi 5 llama.cpp benchmark | PENDING |
+| 8 | Custom rootserver in QEMU | PENDING |
+
+### Phase 3 Weeks (After Spare PC Assembly)
 
 | Weeks | Task |
 |-------|------|
-| 48 | DMA engine + stability harness - DONE |
-| 49 | 30-day stability test + self-audit - DONE |
-| 50 | Phase 3 research + planning docs - DONE |
-| 51-52 | Final validation + git tag v0.2.0-alpha |
+| 1-6 | Phase 3a: Spare PC as GPU host + Pi 4 UART |
+| 7-28 | Phase 3b: Pure bare-metal seL4 x86-64 |
+| 29-40 | Phase 3c: Hardening, fuzz testing, SHIELD |
+| 41-44 | Final report + git tag v0.3.0-beta |
 
 ### Validated Metrics
 

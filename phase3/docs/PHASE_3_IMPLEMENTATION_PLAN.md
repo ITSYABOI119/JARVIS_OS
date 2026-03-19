@@ -4,7 +4,7 @@
 **Date:** March 18, 2026
 **Phase:** Phase 3 - Beta System (Months 24-36)
 **Duration:** 40-44 weeks (~10 months at 8-12 hours/week)
-**Status:** PLANNING (spare x86 PC not yet assembled)
+**Status:** PRE-WORK IN PROGRESS (spare x86 PC not yet assembled)
 
 ---
 
@@ -32,9 +32,10 @@ This document provides a detailed week-by-week implementation plan for Phase 3. 
 
 ---
 
-## CURRENT STATUS (March 18, 2026)
+## CURRENT STATUS (March 19, 2026)
 
 **Phase 2 COMPLETE** — GO recommendation for Phase 3
+**Pre-Work:** IN PROGRESS — interim tasks before spare PC assembly (see Pre-Work section below)
 
 ### Phase 2 Baseline (What Carries Forward)
 
@@ -60,7 +61,7 @@ This document provides a detailed week-by-week implementation plan for Phase 3. 
 | Spare x86 PC | 16GB DDR4 | **NOT YET ASSEMBLED** | Phase 3a host → Phase 3b target |
 | Main PC (RTX 2070) | 32GB | Daily driver, cannot wipe | Development + cross-compilation |
 
-**Phase 3 starts when the spare PC is assembled.**
+**Phase 3 week numbering starts when the spare PC is assembled.** Pre-work tasks happen before Week 1 using current hardware (main PC WSL, Pi 4, Pi 5).
 
 ### Code Portability Assessment
 
@@ -149,6 +150,306 @@ Same as Phase 2 architecture but with dedicated GPU host. Pi 4 code untouched.
 | GPU | None (on Pi 4) | RTX 3060 CUDA | None (Phase 4) |
 | Linux | Required (host) | Required (host) | **None** |
 | Standalone | No | No | **Yes** |
+
+---
+
+## Phase 3 Pre-Work: Interim Tasks (Before Hardware)
+
+### Focus: De-Risk Phase 3b Unknowns Using Current Hardware
+
+**Objective:** While the spare x86 PC is not yet assembled, advance Phase 3 using the main PC (WSL), Pi 4, and Pi 5. These tasks target the three biggest Phase 3b risks: seL4 x86 build environment, ggml portability to seL4/musl, and shared memory IPC design. Completing all Tier 1 tasks saves an estimated 4-6 weeks of Phase 3b calendar time.
+
+**Hardware used:** Main PC (RTX 2070, 32GB, WSL), Pi 4 (running Phase 2), Pi 5 (available)
+
+**Note:** Phase 3 week numbering (Week 1+) starts when the spare PC is assembled. These pre-work tasks happen before Week 1.
+
+### Summary
+
+| # | Task | Hours | Unblocks (Phase 3b) | Priority |
+|---|------|-------|---------------------|----------|
+| 1 | seL4 x86-64 on QEMU | 6-8 | Weeks 7-10 | **Tier 1** |
+| 2 | ggml standalone compilation test | 4-6 | Weeks 19-20 | **Tier 1** |
+| 3 | Shared memory IPC protocol | 6-8 | Weeks 23-24 | **Tier 1** |
+| 4 | Port portable code to x86 build | 3-4 | Weeks 11-12 | Tier 2 |
+| 5 | x86 driver research + skeleton headers | 4-6 | Weeks 13-18 | Tier 2 |
+| 6 | Phase 2 close-out: git tag v0.2.0-alpha | 0.25 | — | Tier 2 |
+| 7 | Pi 5 llama.cpp benchmark | 2-3 | — | Tier 3 |
+| 8 | Custom rootserver in QEMU | 8-12 | Weeks 9-12 | Tier 3 |
+| | **Total** | **35-50** | | |
+
+---
+
+### Tier 1: Immediate — Saves Weeks of Phase 3b Time
+
+#### Pre-Work Task 1: seL4 x86-64 on QEMU (6-8 hours)
+
+**Tasks:**
+1. Install seL4 build dependencies in WSL
+   - `sudo apt install build-essential cmake ninja-build python3 python3-pip gcc-multilib g++-multilib qemu-system-x86 repo git`
+
+2. Clone and build seL4 for x86-64 QEMU
+   ```bash
+   mkdir ~/sel4-x86 && cd ~/sel4-x86
+   repo init -u https://github.com/seL4/sel4test-manifest.git
+   repo sync
+   mkdir cbuild && cd cbuild
+   ../init-build.sh -DPLATFORM=x86_64 -DSIMULATION=1
+   ninja
+   ./simulate
+   ```
+
+3. Verify seL4 boots, kernel banner appears, test suite runs
+4. Document any build issues and fixes
+
+**Deliverables:**
+- seL4 x86-64 building and running in QEMU on main PC
+- Build environment documented (packages, versions, commands)
+
+**Effort:** 6-8 hours
+**Dependencies:** None
+**Acceptance:** seL4 test suite boots and runs in QEMU, serial output captured
+**Unblocks:** All Phase 3b rootserver development can happen in QEMU emulation before real hardware arrives. This is Phase 3b Weeks 7-8 done early.
+
+---
+
+#### Pre-Work Task 2: ggml Standalone Compilation Test (4-6 hours)
+
+**Tasks:**
+1. Clone llama.cpp and build CPU-only (standard glibc first, validate baseline)
+   ```bash
+   git clone https://github.com/ggml-org/llama.cpp.git
+   cd llama.cpp
+   cmake -B build -DGGML_CUDA=OFF -DGGML_VULKAN=OFF -DGGML_METAL=OFF \
+     -DGGML_OPENMP=OFF -DGGML_LLAMAFILE=OFF -DBUILD_SHARED_LIBS=OFF
+   cmake --build build -j$(nproc)
+   ```
+
+2. Attempt compiling ggml core files with musl-gcc
+   ```bash
+   sudo apt install musl-tools
+   musl-gcc -c ggml/src/ggml.c -I ggml/include -O2 -DNDEBUG
+   musl-gcc -c ggml/src/ggml-alloc.c -I ggml/include -O2 -DNDEBUG
+   musl-gcc -c ggml/src/ggml-backend.c -I ggml/include -O2 -DNDEBUG
+   ```
+
+3. Document every compilation error — each one maps to a POSIX stub needed for seL4
+   - Known issues:
+     - `execinfo.h` — backtrace, already fixed upstream (musl detected and skipped)
+     - `mmap()`/`munmap()` — model loading; stub with `malloc()` + `read()`
+     - `pthreads` — parallel inference; compile single-threaded with `-DGGML_OPENMP=OFF`
+     - `fopen()`/`fread()`/`fclose()` — model file I/O; stub with AHCI block reads on seL4
+     - `clock_gettime()` — timing; map to x86 timer driver
+
+4. Write `phase3/src/ai/GGML_PORTABILITY_NOTES.md` documenting all findings
+
+**Deliverables:**
+- ggml compilation attempt results (pass/fail per file)
+- Complete list of POSIX stubs needed for seL4 port
+- GGML_PORTABILITY_NOTES.md
+
+**Effort:** 4-6 hours
+**Dependencies:** None
+**Acceptance:** ggml core compiles with musl-gcc (with documented workarounds), or complete list of blockers identified
+**Unblocks:** Phase 3b Weeks 19-20 (ggml integration). Knowing exact stubs means `posix_stubs.c` can be written before the PC arrives.
+
+---
+
+#### Pre-Work Task 3: Shared Memory IPC — Design + Implement + Test (6-8 hours)
+
+**Tasks:**
+1. Design shared memory ring buffer protocol
+   - File: `phase3/src/ipc/shmem_ipc.h` — header with structs, constants, API
+   - File: `phase3/src/ipc/shmem_ipc.c` — ring buffer implementation
+   - Keep same 14 message types from Phase 2 (QUERY=0x01 through STATE_ACK=0x0E)
+   - Remove UART framing (no SYNC 0xAA55, no CRC-CCITT) — shared memory is reliable
+   - Message format: TYPE(1) + SEQ(2) + LENGTH(2) + PAYLOAD(0-240) = 5 bytes overhead
+   - Ring buffer: 16 slots × 256 bytes = 4KB (one page)
+   - Producer/consumer with atomic head/tail indices
+   - Header: write_idx, read_idx, size, magic (0xDEADBEEF)
+
+2. Implement in portable C (no seL4 deps — pure userspace)
+   - `shmem_ipc_init()` — initialize ring buffer header
+   - `shmem_ipc_send()` — write message to next slot, advance write_idx
+   - `shmem_ipc_recv()` — read message from next slot, advance read_idx
+   - `shmem_ipc_pending()` — check if messages available
+   - Use `__atomic_load_n` / `__atomic_store_n` for index access (portable atomics)
+
+3. Write Linux userspace test program
+   - File: `phase3/src/ipc/test_shmem_ipc.c`
+   - Two processes sharing an `mmap(MAP_SHARED|MAP_ANONYMOUS)` region
+   - Producer sends 10,000 messages, consumer verifies all received correctly
+   - Test: wrap-around, full buffer (producer waits), empty buffer (consumer waits)
+   - Test: interleaved send/recv, burst patterns
+   - Measure: messages/second throughput
+
+4. Define backward compatibility interface
+   ```c
+   // phase3/src/ipc/ipc_transport.h
+   #ifdef JARVIS_IPC_UART
+     #include "uart_ipc.h"
+   #elif defined(JARVIS_IPC_SHMEM)
+     #include "shmem_ipc.h"
+   #endif
+   int ipc_send(uint8_t type, uint16_t seq, const void* payload, uint16_t len);
+   int ipc_recv(uint8_t* type, uint16_t* seq, void* payload, uint16_t* len);
+   ```
+
+**Deliverables:**
+- `shmem_ipc.h`, `shmem_ipc.c` — complete shared memory IPC implementation
+- `test_shmem_ipc.c` — test suite (8+ tests)
+- `ipc_transport.h` — abstraction header for UART/SHMEM selection
+- Test results: 10,000 messages, 0 corruption, throughput measured
+
+**Effort:** 6-8 hours
+**Dependencies:** None
+**Acceptance:** 10,000 messages sent/received with 0 errors, correct wrap-around behavior
+**Unblocks:** Phase 3b Weeks 23-24. When spare PC arrives, swap `mmap` → `seL4_Page_Map` and `sem_post` → `seL4_Signal`. Ring buffer logic is identical.
+
+---
+
+### Tier 2: Next — Steady Progress
+
+#### Pre-Work Task 4: Port Portable Code to x86 Build (3-4 hours)
+
+**Tasks:**
+1. Copy portable Phase 2 modules to `phase3/src/`
+   - `decision_cache.c/h` + `cache_patterns.c/h` → `phase3/src/ai/`
+   - `ring_buffer.c/h` → `phase3/src/ipc/`
+   - `dual_ring_buffer.c/h` → `phase3/src/ipc/`
+   - `net_stack.c/h` (protocol layer) → `phase3/src/drivers/`
+   - `net_cmd.c/h` → `phase3/src/drivers/`
+
+2. Write `phase3/src/CMakeLists.txt` that compiles all portable modules on x86-64 Linux
+   - Use `gcc` (not cross-compiler) — just validates no ARM-isms
+
+3. Run Phase 2 C tests against x86 build
+   - IPC ring buffer tests (12 tests)
+   - Decision cache tests (if extractable from Phase 2 test harness)
+
+**Deliverables:**
+- Portable modules compiling on x86-64
+- Phase 2 tests passing on x86
+
+**Effort:** 3-4 hours
+**Dependencies:** None
+**Acceptance:** All portable modules compile with `gcc -Wall -Werror` on x86-64, tests pass
+
+---
+
+#### Pre-Work Task 5: x86 Driver Research + Skeleton Headers (4-6 hours)
+
+**Tasks:**
+1. Study OSDev wiki reference pages:
+   - [16550A UART / Serial Ports](https://wiki.osdev.org/Serial_Ports) — I/O port registers at 0x3F8
+   - [AHCI](https://wiki.osdev.org/AHCI) — HBA registers, command list, FIS layout, port init
+   - [PCI](https://wiki.osdev.org/PCI) — config space access via 0xCF8/0xCFC, class codes, BARs
+
+2. Write skeleton header files with register definitions and struct layouts:
+   - `phase3/src/drivers/uart_16550.h` — register offsets (THR, RBR, IER, LCR, LSR, etc.), baud rate divisors, function prototypes
+   - `phase3/src/drivers/ahci.h` — HBA_MEM, HBA_PORT, HBA_CMD_HEADER, HBA_CMD_TBL, HBA_FIS structs, capability bits
+   - `phase3/src/drivers/pci.h` — config read/write prototypes, PCI_CLASS constants, BAR parsing helpers
+
+3. Don't implement function bodies — headers and struct definitions only
+
+**Deliverables:**
+- `uart_16550.h`, `ahci.h`, `pci.h` with complete register/struct definitions
+- Reference links documented in each header
+
+**Effort:** 4-6 hours
+**Dependencies:** None
+**Acceptance:** Headers compile cleanly, struct sizes match hardware spec
+
+---
+
+#### Pre-Work Task 6: Phase 2 Close-Out — Git Tag v0.2.0-alpha (15 min)
+
+**Tasks:**
+1. Create annotated git tag:
+   ```bash
+   git tag -a v0.2.0-alpha -m "Phase 2 COMPLETE: Alpha system on Pi 4 (108 PASS, 0 FAIL, 30-day stability)"
+   ```
+
+**Deliverables:**
+- Git tag `v0.2.0-alpha` created
+
+**Effort:** 15 minutes
+**Dependencies:** None
+**Acceptance:** `git tag -l` shows v0.2.0-alpha
+
+---
+
+### Tier 3: Nice-to-Have
+
+#### Pre-Work Task 7: Pi 5 llama.cpp Benchmark (2-3 hours)
+
+**Tasks:**
+1. Install Raspberry Pi OS Lite on Pi 5 (4GB)
+2. Install llama.cpp (CPU build) or Ollama
+3. Benchmark models:
+   - `gemma3:1b` — expected ~13 tok/s, ~2.5 GB RAM
+   - `llama3.2:1b-instruct` — expected ~12 tok/s, ~2.8 GB RAM
+   - `llama3.2:3b` — expected ~5 tok/s, ~4.2 GB RAM (may OOM on 4GB Pi 5)
+4. Document actual numbers in `phase3/docs/PI5_BENCHMARK_RESULTS.md`
+
+**Deliverables:**
+- Real benchmark numbers for Pi 5 4GB
+- Confirmation whether 3B model fits in 4GB
+
+**Effort:** 2-3 hours
+**Dependencies:** Pi 5 available
+**Acceptance:** At least 2 models benchmarked with tok/s and RAM usage recorded
+
+---
+
+#### Pre-Work Task 8: Custom Rootserver in QEMU (8-12 hours)
+
+**Tasks:**
+1. After Task 1 (seL4 x86-64 QEMU boot), create a custom rootserver that:
+   - Loads decision cache (258 patterns) from compiled-in data
+   - Accepts queries via serial console (QEMU serial)
+   - Performs cache lookups and returns responses
+   - Runs SHIELD risk scoring on queries
+   - Measures seL4 IPC latency (native round-trip)
+
+2. This is effectively Phase 3b Weeks 9-12 running in emulation
+3. When spare PC arrives, boot same rootserver on real hardware — code already works
+
+**Deliverables:**
+- Custom seL4 x86-64 rootserver with decision cache + SHIELD
+- IPC latency benchmark in QEMU
+- Serial shell with `cache`, `shield`, `stats` commands
+
+**Effort:** 8-12 hours
+**Dependencies:** Pre-Work Task 1 complete
+**Acceptance:** Query via QEMU serial → cache hit response in <1ms
+
+---
+
+### Pre-Work Critical Path
+
+```
+Pre-Work Tasks (before spare PC):
+  Task 6: Git tag v0.2.0-alpha (15 min)
+  Task 1: seL4 x86-64 QEMU boot (6-8h)
+    ↓
+  Task 8: Custom rootserver in QEMU (8-12h)     Task 2: ggml musl test (4-6h)
+    ↓                                               ↓
+  [rootserver code ready for real HW]            [POSIX stubs identified]
+                                                    ↓
+  Task 3: Shared memory IPC (6-8h)              Task 4: Port code (3-4h)
+    ↓                                               ↓
+  [IPC protocol tested]                          [Portable modules verified]
+                                                    ↓
+  Task 5: Driver skeleton headers (4-6h)        Task 7: Pi 5 bench (2-3h)
+    ↓
+  [Driver structs ready for implementation]
+
+────────────── SPARE PC ASSEMBLED ──────────────
+    ↓
+  Week 1: Phase 3a starts (GPU host + Pi 4 UART)
+    ↓
+  Week 7: Phase 3b starts — most unknowns already resolved
+```
 
 ---
 

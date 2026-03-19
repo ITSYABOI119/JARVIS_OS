@@ -511,7 +511,16 @@ The JARVIS_UNIFIED_PLAN.md defines Phase 3 with a $720K budget, 6-person team, 1
 
 ## 15. Next Steps (Immediate)
 
-1. **Finish assembling spare PC** — install Linux, NVIDIA drivers, CUDA
+### Pre-Hardware Interim Work (NOW — before spare PC assembly)
+
+While the spare PC is being assembled, 8 interim tasks are defined in `PHASE_3_IMPLEMENTATION_PLAN.md` (Pre-Work section). These de-risk the biggest Phase 3b unknowns and save 4-6 weeks once hardware arrives:
+- **Tier 1:** seL4 x86-64 QEMU boot, ggml musl compilation test, shared memory IPC protocol
+- **Tier 2:** Portable code port, driver skeleton headers, Phase 2 git tag
+- **Tier 3:** Pi 5 benchmarks, custom rootserver in QEMU
+
+### Once Spare PC is Assembled (Week 1+)
+
+1. **Install Linux + NVIDIA drivers + CUDA** on spare PC
 2. **Benchmark RTX 3060** — run `llama-bench` with Phi-3, Llama 3B, Llama 7B
 3. **Connect UART to Pi 4** — verify IPC from new host
 4. **Run 1-hour stability test** — confirm spare PC ↔ Pi 4 works
