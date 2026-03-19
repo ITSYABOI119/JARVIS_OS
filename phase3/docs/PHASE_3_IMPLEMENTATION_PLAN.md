@@ -58,8 +58,23 @@ This document provides a detailed week-by-week implementation plan for Phase 3. 
 |----------|-----|--------|--------------|
 | Raspberry Pi 4 8GB | 8GB | Running Phase 2 | Fallback through Phase 3a |
 | Raspberry Pi 5 4GB | 4GB | Owned, unused | Available for experiments |
-| Spare x86 PC | 16GB DDR4 | **NOT YET ASSEMBLED** | Phase 3a host → Phase 3b target |
+| Spare x86 PC | 16GB DDR4 | **PARTS ORDERING IN PROGRESS** | Phase 3a host → Phase 3b target |
 | Main PC (RTX 2070) | 32GB | Daily driver, cannot wipe | Development + cross-compilation |
+
+**Spare PC Build Progress (ordering incrementally):**
+
+| Part | Model | Price (AUD) | Status |
+|------|-------|-------------|--------|
+| RAM | G.Skill Ripjaws V 16GB DDR4-3200 | $179 | **BOUGHT** (Mwave) |
+| SSD | Netac NV3000 500GB NVMe | $110 | Pending (Amazon AU) |
+| PSU | Corsair RM650e 650W | $125 | Pending (Amazon AU) |
+| Mobo | Gigabyte B550M K | $109 | Pending (MSY/Centre Com) |
+| CPU | AMD Ryzen 5 5600 | $176 | Pending (Centre Com) |
+| GPU | MSI RTX 3060 12GB | $429 | Pending (Centre Com) |
+| Case | Antec NX200M | $49 | Pending (MSY) |
+| **Total** | | **~$1,177** | **1/7 bought** |
+
+**Note:** DDR4 prices inflated 150-200% due to global DRAM shortage (AI demand). RAM bought early to avoid further increases. Recovery not expected until late 2027.
 
 **Phase 3 week numbering starts when the spare PC is assembled.** Pre-work tasks happen before Week 1 using current hardware (main PC WSL, Pi 4, Pi 5).
 
