@@ -158,6 +158,17 @@ JARVIS_OS/
 │   │   └── jarvis-sel4-cmake/ # CMakeLists.txt for TII build system
 │   ├── weeks/                  # week27-week47 status docs
 │   └── scripts/               # build_and_copy_kernel.sh, build_installer_image.sh, flash_sd.sh, install_jarvis.sh
+├── phase3/                     # PLANNING (spare x86 PC pending)
+│   ├── docs/                   # PHASE_3_KICKOFF.md, HARDWARE_RESEARCH.md, IMPLEMENTATION_PLAN.md
+│   ├── src/
+│   │   ├── ai/                # ggml integration, model loading, inference
+│   │   ├── boot/              # x86 boot config (GRUB/EFI)
+│   │   ├── drivers/           # x86 drivers (16550A UART, AHCI, NIC)
+│   │   ├── ipc/              # Shared memory IPC
+│   │   └── sel4/             # seL4 x86-64 rootserver
+│   ├── scripts/               # Build scripts
+│   ├── firmware/              # Boot images, GRUB configs
+│   └── weeks/                 # Weekly status docs
 ├── JARVIS_UNIFIED_PLAN.md     # 36-month master plan
 ├── ARCHITECTURE_ENHANCEMENTS.md
 ├── archive/                    # Historical research
@@ -487,6 +498,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Phase 2 Final Report:** `phase2/docs/PHASE_2_FINAL_REPORT.md`
 - **Phase 3 Hardware Research:** `phase2/docs/PHASE_3_HARDWARE_RESEARCH.md`
 - **Phase 3 Kickoff:** `phase2/docs/PHASE_3_KICKOFF.md`
+- **Phase 3 Implementation Plan:** `phase3/docs/PHASE_3_IMPLEMENTATION_PLAN.md`
 
 ### Rules
 - Always update CLAUDE.md and week status files after completing work
