@@ -328,13 +328,13 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | # | Task | Status |
 |---|------|--------|
 | 1 | seL4 x86-64 on QEMU (main PC WSL) | PENDING |
-| 2 | ggml standalone musl compilation test | PENDING |
-| 3 | Shared memory IPC protocol design + test | PENDING |
-| 4 | Port portable code to x86 build | PENDING |
-| 5 | x86 driver skeleton headers | PENDING |
-| 6 | Git tag v0.2.0-alpha | PENDING |
+| 2 | ggml standalone musl compilation test | DONE — 5 stubs needed, C++ backend is main challenge |
+| 3 | Shared memory IPC protocol design + test | DONE — 10/10 PASS, 23.7M msg/sec |
+| 4 | Port portable code to x86 build | DONE — 22/22 tests pass, 5/7 modules zero changes |
+| 5 | x86 driver skeleton headers | DONE — uart_16550.h, pci.h, ahci.h |
+| 6 | Git tag v0.2.0-alpha | DONE |
 | 7 | Pi 5 llama.cpp benchmark | PENDING |
-| 8 | Custom rootserver in QEMU | PENDING |
+| 8 | Custom rootserver in QEMU | PENDING (depends on Task 1) |
 
 ### Phase 3 Weeks (After Spare PC Assembly)
 

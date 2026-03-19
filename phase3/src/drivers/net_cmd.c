@@ -1,0 +1,530 @@
+/*
+ * JARVIS AI-OS - Network Shell Commands Implementation
+ *
+ * Week 39: ping, ifconfig, netstat for bare-metal seL4.
+ * Uses net_stack for frame building/matching, bcm_genet for TX/RX,
+ * and bcm2711_timer for RTT measurement.
+ *
+ * Phase 3 x86 port: Platform-specific driver calls are guarded with
+ * #ifdef JARVIS_PLATFORM_PI4. Portable utility functions (parse_ipv4,
+ * format_ip, format_mac, skip_spaces, starts_with, cmd_dispatch shell)
+ * are available on all platforms.
+ */
+
+#include "net_cmd.h"
+#include "net_stack.h"
+#include <string.h>
+#include <stdio.h>
+
+#ifdef JARVIS_PLATFORM_PI4
+#include "bcm_genet.h"
+#include "bcm2711_timer.h"
+#include "usb_hid.h"
+#include "bcm_gpio.h"
+#include "bcm_i2c.h"
+#include "bcm_watchdog.h"
+#include "bcm_thermal.h"
+#include "bcm_power.h"
+#include "bcm_spi.h"
+#include "bcm_rng.h"
+#include "bcm_pwm.h"
+#include "bcm_dma.h"
+#include "emmc_sdhci.h"
+#include "fdt_parser.h"
+#include "boot_manager.h"
+#include "warm_reboot.h"
+#include <sel4/sel4.h>
+#endif
+
+/* Safe remaining buffer size: prevents unsigned underflow when pos > size */
+static inline uint32_t safe_remaining(int pos, uint32_t size)
+{
+    return (pos >= 0 && (uint32_t)pos < size) ? size - (uint32_t)pos : 0;
+}
+
+/* Clamp snprintf pos: if snprintf returned more than remaining, cap at size */
+static inline int __attribute__((unused)) clamp_pos(int pos, uint32_t size)
+{
+    return (pos >= 0 && (uint32_t)pos <= size) ? pos : (int)size;
+}
+
+/* ================================================================
+ * Debug Output
+ * ================================================================ */
+
+#ifdef JARVIS_PLATFORM_PI4
+static void debug_puts(const char *s)
+{
+    while (*s) {
+        if (*s == '\n') seL4_DebugPutChar('\r');
+        seL4_DebugPutChar(*s++);
+    }
+}
+#else
+static void debug_puts(const char *s) __attribute__((unused));
+static void debug_puts(const char *s) { fputs(s, stderr); }
+#endif
+
+/* ================================================================
+ * IP Address Parsing (portable)
+ * ================================================================ */
+
+uint32_t parse_ipv4(const char *str)
+{
+    if (!str) return 0;
+
+    uint32_t octets[4] = {0};
+    int octet_idx = 0;
+    uint32_t val = 0;
+    bool has_digit = false;
+
+    for (const char *p = str; ; p++) {
+        if (*p >= '0' && *p <= '9') {
+            val = val * 10 + (*p - '0');
+            has_digit = true;
+            if (val > 255) return 0;
+        } else if (*p == '.' || *p == '\0') {
+            if (!has_digit || octet_idx > 3) return 0;
+            octets[octet_idx++] = val;
+            val = 0;
+            has_digit = false;
+            if (*p == '\0') break;
+        } else {
+            return 0;  /* Invalid character */
+        }
+    }
+
+    if (octet_idx != 4) return 0;
+
+    /* Network byte order (big-endian) */
+    uint8_t ip_bytes[4] = {
+        (uint8_t)octets[0], (uint8_t)octets[1],
+        (uint8_t)octets[2], (uint8_t)octets[3]
+    };
+    uint32_t ip_be;
+    memcpy(&ip_be, ip_bytes, 4);
+    return ip_be;
+}
+
+/* Format IP address from network byte order to string */
+static int format_ip(uint32_t ip_be, char *buf, uint32_t size)
+{
+    uint8_t b[4];
+    memcpy(b, &ip_be, 4);
+    return snprintf(buf, size, "%u.%u.%u.%u", b[0], b[1], b[2], b[3]);
+}
+
+/* Format MAC address to string */
+static int format_mac(const uint8_t mac[6], char *buf, uint32_t size)
+{
+    return snprintf(buf, size, "%02x:%02x:%02x:%02x:%02x:%02x",
+                    mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
+/* ================================================================
+ * Skip leading whitespace (portable)
+ * ================================================================ */
+
+static const char *skip_spaces(const char *s)
+{
+    while (*s == ' ' || *s == '\t') s++;
+    return s;
+}
+
+/* Check if string starts with prefix (case-insensitive for alpha) */
+static bool starts_with(const char *str, const char *prefix)
+{
+    while (*prefix) {
+        char a = *str, b = *prefix;
+        if (a >= 'A' && a <= 'Z') a += 32;
+        if (b >= 'A' && b <= 'Z') b += 32;
+        if (a != b) return false;
+        str++;
+        prefix++;
+    }
+    return true;
+}
+
+#ifdef JARVIS_PLATFORM_PI4
+/* ================================================================
+ * Pi 4 platform-specific commands
+ * ================================================================ */
+
+static const char *speed_str(genet_link_speed_t speed)
+{
+    switch (speed) {
+        case GENET_LINK_DOWN:   return "DOWN";
+        case GENET_LINK_10HD:   return "10 Mbps Half";
+        case GENET_LINK_10FD:   return "10 Mbps Full";
+        case GENET_LINK_100HD:  return "100 Mbps Half";
+        case GENET_LINK_100FD:  return "100 Mbps Full";
+        case GENET_LINK_1000HD: return "1000 Mbps Half";
+        case GENET_LINK_1000FD: return "1000 Mbps Full";
+        default:                return "Unknown";
+    }
+}
+
+int cmd_ping(uint32_t target_ip_be, uint32_t count, uint32_t timeout_ms,
+             char *output, uint32_t output_size)
+{
+    int pos = 0;
+    char ip_str[16];
+
+    format_ip(target_ip_be, ip_str, sizeof(ip_str));
+
+    /* Check link */
+    if (!genet_get_link_status()) {
+        pos += snprintf(output + pos, safe_remaining(pos, output_size),
+                        "ping %s: link DOWN\n", ip_str);
+        return pos;
+    }
+
+    /* ARP resolve */
+    uint8_t dst_mac[6];
+    if (!net_arp_resolve(target_ip_be, dst_mac, 2000)) {
+        pos += snprintf(output + pos, safe_remaining(pos, output_size),
+                        "ping %s: ARP timeout\n", ip_str);
+        return pos;
+    }
+
+    /* Send ICMP echo requests */
+    uint16_t ident = (uint16_t)(systimer_read() & 0xFFFF);
+    uint32_t sent = 0, received = 0;
+    uint64_t total_rtt_us = 0;
+
+    for (uint32_t seq = 1; seq <= count && safe_remaining(pos, output_size) > 60; seq++) {
+        uint8_t frame[128];
+        uint32_t frame_len = net_build_icmp_request(target_ip_be, dst_mac,
+                                                     ident, (uint16_t)seq,
+                                                     frame, sizeof(frame));
+        if (frame_len == 0) continue;
+
+        if (!genet_tx_send(frame, frame_len)) continue;
+        sent++;
+
+        /* Poll for reply */
+        uint64_t send_time = systimer_read();
+        uint64_t deadline = send_time + (uint64_t)timeout_ms * 1000;
+        bool got_reply = false;
+
+        while (systimer_read() < deadline) {
+            uint8_t rx_buf[NET_MAX_FRAME];
+            uint32_t rx_len = 0;
+
+            if (genet_rx_recv(rx_buf, sizeof(rx_buf), &rx_len)) {
+                uint8_t ttl = 0;
+                if (net_is_icmp_echo_reply(rx_buf, rx_len,
+                                           ident, (uint16_t)seq, &ttl)) {
+                    uint64_t rtt = systimer_read() - send_time;
+                    total_rtt_us += rtt;
+                    received++;
+                    got_reply = true;
+
+                    /* Format: "Reply from X.X.X.X: time=N.Nms TTL=64" */
+                    uint32_t rtt_ms = (uint32_t)(rtt / 1000);
+                    uint32_t rtt_frac = (uint32_t)((rtt % 1000) / 100);
+                    pos += snprintf(output + pos, safe_remaining(pos, output_size),
+                                    "Reply from %s: time=%u.%ums TTL=%u\n",
+                                    ip_str, rtt_ms, rtt_frac, ttl);
+                    break;
+                }
+                /* Not our reply - could be other traffic, process ARP */
+                if (rx_len >= 14) {
+                    uint16_t et = ((uint16_t)rx_buf[12] << 8) | rx_buf[13];
+                    if (et == 0x0806) {
+                        net_process_arp_reply(rx_buf, rx_len);
+                    }
+                }
+            }
+
+            for (volatile int d = 0; d < 100; d++);
+        }
+
+        if (!got_reply) {
+            pos += snprintf(output + pos, safe_remaining(pos, output_size),
+                            "Request timed out\n");
+        }
+    }
+
+    /* Summary */
+    if (sent > 0) {
+        uint32_t loss = ((sent - received) * 100) / sent;
+        pos += snprintf(output + pos, safe_remaining(pos, output_size),
+                        "%u/%u received, %u%% loss",
+                        received, sent, loss);
+        if (received > 0) {
+            uint32_t avg_ms = (uint32_t)(total_rtt_us / received / 1000);
+            pos += snprintf(output + pos, safe_remaining(pos, output_size),
+                            ", avg=%ums", avg_ms);
+        }
+        pos += snprintf(output + pos, safe_remaining(pos, output_size), "\n");
+    }
+
+    return pos;
+}
+
+int cmd_ifconfig(char *output, uint32_t output_size)
+{
+    int pos = 0;
+    uint8_t mac[6];
+    char mac_str[18], ip_str[16];
+
+    net_get_mac(mac);
+    format_mac(mac, mac_str, sizeof(mac_str));
+    format_ip(net_get_ip(), ip_str, sizeof(ip_str));
+
+    bool link = genet_get_link_status();
+    genet_link_speed_t speed = genet_get_link_speed();
+
+    pos += snprintf(output + pos, safe_remaining(pos, output_size),
+                    "eth0: %s\n"
+                    "  MAC: %s\n"
+                    "  IP:  %s\n"
+                    "  Link: %s\n",
+                    link ? "UP" : "DOWN",
+                    mac_str, ip_str,
+                    speed_str(speed));
+
+    return pos;
+}
+
+int cmd_netstat(char *output, uint32_t output_size)
+{
+    int pos = 0;
+    genet_stats_t stats;
+    genet_get_stats(&stats);
+
+    pos += snprintf(output + pos, safe_remaining(pos, output_size),
+                    "TX: %u pkts, %u bytes, %u err\n"
+                    "RX: %u pkts, %u bytes, %u err, %u drop\n"
+                    "ARP cache: %u entries\n",
+                    stats.tx_packets, stats.tx_bytes, stats.tx_errors,
+                    stats.rx_packets, stats.rx_bytes, stats.rx_errors,
+                    stats.rx_dropped,
+                    net_arp_cache_count());
+
+    return pos;
+}
+
+int cmd_stress(char *output, uint32_t output_size)
+{
+    int pos = 0;
+    int s_pass = 0, s_fail = 0;
+    int iterations = 100;
+
+    for (int i = 0; i < iterations; i++) {
+        /* Timer read */
+        uint64_t t = systimer_read();
+        if (t != 0) s_pass++; else s_fail++;
+
+        /* GPIO toggle (if initialized) */
+        if (gpio_is_initialized()) {
+            gpio_write(42, 1);
+            gpio_write(42, 0);
+            s_pass++;
+        } else {
+            s_pass++; /* skip but don't fail */
+        }
+
+        /* EMMC: read LBA 0 */
+        uint8_t sector[512];
+        if (emmc_read_block(0, sector)) s_pass++; else s_fail++;
+
+        /* GENET: link status check (no-hang) */
+        (void)genet_get_link_status();
+        s_pass++;
+
+        /* USB HID: connected check (returns quickly) */
+        (void)usb_hid_device_connected();
+        s_pass++;
+    }
+
+    pos += snprintf(output + pos, safe_remaining(pos, output_size),
+                    "Stress: %d iterations, %d pass, %d fail\n",
+                    iterations, s_pass, s_fail);
+    return pos;
+}
+
+#else /* !JARVIS_PLATFORM_PI4 */
+
+/* ================================================================
+ * x86 stubs: commands that need hardware return "not available"
+ * ================================================================ */
+
+int cmd_ping(uint32_t target_ip_be, uint32_t count, uint32_t timeout_ms,
+             char *output, uint32_t output_size)
+{
+    (void)count; (void)timeout_ms;
+    char ip_str[16];
+    format_ip(target_ip_be, ip_str, sizeof(ip_str));
+    return snprintf(output, output_size, "ping %s: not available on x86\n", ip_str);
+}
+
+int cmd_ifconfig(char *output, uint32_t output_size)
+{
+    uint8_t mac[6];
+    char mac_str[18], ip_str[16];
+    net_get_mac(mac);
+    format_mac(mac, mac_str, sizeof(mac_str));
+    format_ip(net_get_ip(), ip_str, sizeof(ip_str));
+    return snprintf(output, output_size,
+                    "eth0: x86 (no hardware)\n"
+                    "  MAC: %s\n"
+                    "  IP:  %s\n"
+                    "  ARP cache: %u entries\n",
+                    mac_str, ip_str, net_arp_cache_count());
+}
+
+int cmd_netstat(char *output, uint32_t output_size)
+{
+    return snprintf(output, output_size,
+                    "ARP cache: %u entries\n"
+                    "(no hardware stats on x86)\n",
+                    net_arp_cache_count());
+}
+
+int cmd_stress(char *output, uint32_t output_size)
+{
+    return snprintf(output, output_size, "Stress test: not available on x86\n");
+}
+
+#endif /* JARVIS_PLATFORM_PI4 */
+
+/* ================================================================
+ * Command Dispatcher (portable)
+ * ================================================================ */
+
+int cmd_dispatch(const char *cmd_str, char *output, uint32_t output_size)
+{
+    if (!cmd_str || !output || output_size == 0) {
+        return 0;
+    }
+
+    output[0] = '\0';
+    const char *cmd = skip_spaces(cmd_str);
+
+    if (starts_with(cmd, "ping ")) {
+        const char *arg = skip_spaces(cmd + 5);
+        uint32_t ip = parse_ipv4(arg);
+        if (ip == 0) {
+            return snprintf(output, output_size, "Usage: ping <ip>\n");
+        }
+        return cmd_ping(ip, 4, 1000, output, output_size);
+
+    } else if (starts_with(cmd, "ifconfig")) {
+        return cmd_ifconfig(output, output_size);
+
+    } else if (starts_with(cmd, "netstat")) {
+        return cmd_netstat(output, output_size);
+
+#ifdef JARVIS_PLATFORM_PI4
+    } else if (starts_with(cmd, "usb")) {
+        return usb_hid_get_status(output, output_size);
+
+    } else if (starts_with(cmd, "gpio")) {
+        return gpio_get_status(output, output_size);
+
+    } else if (starts_with(cmd, "i2c")) {
+        return i2c_scan(output, output_size);
+
+    } else if (starts_with(cmd, "stress")) {
+        return cmd_stress(output, output_size);
+
+    } else if (starts_with(cmd, "temp")) {
+        return thermal_get_status(output, output_size);
+
+    } else if (starts_with(cmd, "watchdog")) {
+        return watchdog_get_status(output, output_size);
+
+    } else if (starts_with(cmd, "dt")) {
+        if (!jarvis_fdt_is_valid()) {
+            return snprintf(output, output_size, "Device tree: not loaded\n");
+        }
+        int n = 0;
+        const char *model = jarvis_fdt_get_string("/", "model");
+        n += snprintf(output + n, safe_remaining(n, output_size),
+                      "Device Tree: %s\n", model ? model : "unknown");
+        n += snprintf(output + n, safe_remaining(n, output_size),
+                      "  Size: %u bytes\n", jarvis_fdt_totalsize());
+        n += snprintf(output + n, safe_remaining(n, output_size),
+                      "  SOC children: %d\n", jarvis_fdt_count_children("/soc"));
+        uint32_t phase = jarvis_fdt_get_u32("/chosen", "jarvis,phase", 0);
+        uint32_t week  = jarvis_fdt_get_u32("/chosen", "jarvis,week", 0);
+        n += snprintf(output + n, safe_remaining(n, output_size),
+                      "  Phase: %u  Week: %u\n", phase, week);
+        return n;
+
+    } else if (starts_with(cmd, "boot")) {
+        return boot_manager_get_status(output, output_size);
+
+    } else if (starts_with(cmd, "warmreboot")) {
+        return warm_reboot_get_status(output, output_size);
+
+    } else if (starts_with(cmd, "power")) {
+        const char *arg = skip_spaces(cmd + 5);
+        if (starts_with(arg, "idle") || starts_with(arg, "low")) {
+            power_set_profile(POWER_PROFILE_LOW);
+            return snprintf(output, output_size, "Power mode: LOW (600 MHz)\n");
+        } else if (starts_with(arg, "perf") || starts_with(arg, "max")) {
+            power_set_profile(POWER_PROFILE_MAX);
+            return snprintf(output, output_size, "Power mode: MAX (1800 MHz)\n");
+        } else if (starts_with(arg, "normal") || starts_with(arg, "high")) {
+            power_set_profile(POWER_PROFILE_HIGH);
+            return snprintf(output, output_size, "Power mode: HIGH (1500 MHz)\n");
+        } else if (starts_with(arg, "med")) {
+            power_set_profile(POWER_PROFILE_MED);
+            return snprintf(output, output_size, "Power mode: MED (1000 MHz)\n");
+        }
+        return power_get_status(output, output_size);
+
+    } else if (starts_with(cmd, "spi")) {
+        return spi_get_status(output, output_size);
+
+    } else if (starts_with(cmd, "rng")) {
+        return rng_get_status(output, output_size);
+
+    } else if (starts_with(cmd, "pwm")) {
+        const char *arg = skip_spaces(cmd + 3);
+        if (starts_with(arg, "on")) {
+            int ch = 0, duty = 50;
+            sscanf(arg + 2, "%d %d", &ch, &duty);
+            pwm_set_duty((uint32_t)ch, (uint32_t)duty);
+            pwm_enable((uint32_t)ch, true);
+            return snprintf(output, output_size, "PWM ch%d: ON, duty=%d%%\n", ch, duty);
+        } else if (starts_with(arg, "off")) {
+            int ch = 0;
+            sscanf(arg + 3, "%d", &ch);
+            pwm_enable((uint32_t)ch, false);
+            return snprintf(output, output_size, "PWM ch%d: OFF\n", ch);
+        }
+        return pwm_get_status(output, output_size);
+
+    } else if (starts_with(cmd, "dma")) {
+        return dma_engine_get_status(output, output_size);
+
+    } else if (starts_with(cmd, "reboot")) {
+        const char *arg = skip_spaces(cmd + 6);
+        if (starts_with(arg, "warm")) {
+            int n = snprintf(output, output_size, "Warm reboot in 1s...\n");
+            warm_reboot_trigger(true);
+            return n;
+        } else if (starts_with(arg, "cold")) {
+            int n = snprintf(output, output_size, "Cold reboot in 1s...\n");
+            warm_reboot_trigger(false);
+            return n;
+        }
+        /* Default: cold reboot for backwards compat */
+        int n = snprintf(output, output_size, "Reboot in 1s...\n");
+        watchdog_reboot();
+        return n;
+#endif /* JARVIS_PLATFORM_PI4 */
+
+    } else {
+        return snprintf(output, output_size,
+                        "Commands: ping, ifconfig, netstat"
+#ifdef JARVIS_PLATFORM_PI4
+                        ", usb, gpio, i2c, spi, rng, pwm, dma, stress, temp, watchdog, dt, boot, power, reboot"
+#endif
+                        "\n");
+    }
+}
