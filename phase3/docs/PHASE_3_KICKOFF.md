@@ -511,12 +511,13 @@ The JARVIS_UNIFIED_PLAN.md defines Phase 3 with a $720K budget, 6-person team, 1
 
 ## 15. Next Steps (Immediate)
 
-### Pre-Hardware Interim Work (NOW — before spare PC assembly)
+### Pre-Hardware Interim Work — ✅ ALL DONE
 
-While the spare PC is being assembled, 8 interim tasks are defined in `PHASE_3_IMPLEMENTATION_PLAN.md` (Pre-Work section). These de-risk the biggest Phase 3b unknowns and save 4-6 weeks once hardware arrives:
-- **Tier 1:** seL4 x86-64 QEMU boot, ggml musl compilation test, shared memory IPC protocol
-- **Tier 2:** Portable code port, driver skeleton headers, Phase 2 git tag
-- **Tier 3:** Pi 5 benchmarks, custom rootserver in QEMU
+All 8 pre-work tasks completed. Additionally, significant Phase 3b code written early:
+- **All 8 pre-work tasks:** DONE (seL4 QEMU, ggml test, IPC, portable code, headers, tag, Pi 5, rootserver)
+- **GGUF parser:** C-only replacement for C++ gguf.cpp — 9/9 tests pass
+- **x86 drivers:** UART 16550A (7/7), PCI enumeration (11/11), AHCI discovery (5/5)
+- **Total:** 32 files, 8,636 LOC, 64 tests in phase3/src/
 
 ### Once Spare PC is Assembled (Week 1+)
 

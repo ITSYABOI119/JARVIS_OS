@@ -472,6 +472,28 @@ Pre-Work Tasks (before spare PC):
   Week 7: Phase 3b starts — most unknowns already resolved
 ```
 
+### Early Phase 3b Work (Done Ahead of Schedule)
+
+While waiting for the spare PC, significant Phase 3b implementation work was completed in QEMU and with mock testing. This reduces Phase 3b timeline by an estimated 4-6 weeks.
+
+| Component | Planned Week | Status | Files | Tests |
+|-----------|-------------|--------|-------|-------|
+| GGUF parser (C-only) | 19-20 | ✅ DONE | gguf_parser.h/c | 9/9 PASS |
+| UART 16550A driver | 13-14 | ✅ DONE | uart_16550.c | 7/7 PASS |
+| PCI enumeration | 15-16 | ✅ DONE | pci.c | 11/11 PASS |
+| AHCI discovery | 15-16 | ✅ DONE | ahci.c | 5/5 PASS |
+| Custom rootserver | 9-12 | ✅ DONE (QEMU) | main_x86.c | Boots, cache works |
+
+**Total Phase 3 code so far:** 32 files, 8,636 LOC, 64 tests (all passing)
+
+**What remains for Phase 3b on real hardware:**
+- Boot seL4 on actual Ryzen hardware (vs QEMU)
+- AHCI full read/write (discovery done, commands pending)
+- NIC driver (PCI enumeration done, NIC-specific TX/RX pending)
+- ggml integration into seL4 rootserver (GGUF parser done, tensor math integration pending)
+- Shared memory IPC integration into seL4 (protocol done, seL4 page mapping pending)
+- 30-day stability test
+
 ---
 
 ## Month 1-2: Phase 3a — GPU-Accelerated Host (Weeks 1-6)

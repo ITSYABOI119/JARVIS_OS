@@ -230,9 +230,9 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 
 ---
 
-## Current Status (Phase 3 Pre-Work)
+## Current Status (Phase 3 Pre-Work + Early Development)
 
-**Phase 3 Pre-Work IN PROGRESS** (March 19, 2026) - Interim tasks before spare x86 PC assembly
+**Phase 3 Pre-Work COMPLETE + Early Phase 3b work done** (March 20, 2026) - Awaiting spare PC assembly
 
 | Milestone | Status |
 |-----------|--------|
@@ -336,12 +336,23 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | 7 | Pi 5 llama.cpp benchmark | DONE — script + research estimates written |
 | 8 | Custom rootserver in QEMU | DONE — builds and runs in QEMU, cache loads 308 patterns, SHIELD works |
 
+### Phase 3 Early Work (Done in QEMU — ahead of schedule)
+
+| Component | Files | Tests | Status |
+|-----------|-------|-------|--------|
+| GGUF parser (C-only) | gguf_parser.h/c | 9/9 PASS | Replaces C++ gguf.cpp (was Week 19-20) |
+| UART 16550A driver | uart_16550.c | 7/7 PASS | Full serial I/O (was Week 13-14) |
+| PCI enumeration | pci.c | 11/11 PASS | Bus scan, BAR, class find (needed for Week 15-18) |
+| AHCI discovery | ahci.c | 5/5 PASS | Controller probe, port detect (was Week 15-16) |
+| Custom rootserver | main_x86.c | Boots in QEMU | Decision cache + SHIELD working |
+| **Total early** | **32 files** | **32/32 PASS** | **8,636 LOC in phase3/src/** |
+
 ### Phase 3 Weeks (After Spare PC Assembly)
 
 | Weeks | Task |
 |-------|------|
 | 1-6 | Phase 3a: Spare PC as GPU host + Pi 4 UART |
-| 7-28 | Phase 3b: Pure bare-metal seL4 x86-64 |
+| 7-28 | Phase 3b: Pure bare-metal seL4 x86-64 (drivers + GGUF parser partially done) |
 | 29-40 | Phase 3c: Hardening, fuzz testing, SHIELD |
 | 41-44 | Final report + git tag v0.3.0-beta |
 
@@ -512,6 +523,15 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Phase 3 Hardware Research:** `phase2/docs/PHASE_3_HARDWARE_RESEARCH.md`
 - **Phase 3 Kickoff:** `phase2/docs/PHASE_3_KICKOFF.md`
 - **Phase 3 Implementation Plan:** `phase3/docs/PHASE_3_IMPLEMENTATION_PLAN.md`
+- **seL4 x86 QEMU Setup:** `phase3/docs/SEL4_X86_QEMU_SETUP.md`
+- **x86 Rootserver Notes:** `phase3/docs/SEL4_X86_ROOTSERVER_NOTES.md`
+- **GGML Portability Notes:** `phase3/src/ai/GGML_PORTABILITY_NOTES.md`
+- **GGUF Parser:** `phase3/src/ai/gguf_parser.c/h`
+- **x86 Rootserver:** `phase3/src/sel4/main_x86.c`
+- **Shared Memory IPC:** `phase3/src/ipc/shmem_ipc.c/h`
+- **UART 16550A Driver:** `phase3/src/drivers/uart_16550.c`
+- **PCI Enumeration:** `phase3/src/drivers/pci.c`
+- **AHCI Discovery:** `phase3/src/drivers/ahci.c`
 
 ### Rules
 - Always update CLAUDE.md and week status files after completing work
@@ -523,8 +543,9 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 ### Codebase Metrics
 
 - **Phase 1:** 39,106 LOC, 95 files, 338 test functions (COMPLETE)
-- **Phase 2:** ~10,000+ LOC, growing (drivers, IPC, build system)
-- **Total:** ~50,000+ LOC, 127+ markdown docs
+- **Phase 2:** ~27,000 LOC, 65 files, 108 tests (COMPLETE)
+- **Phase 3:** ~8,636 LOC, 32 files, 64 tests (IN PROGRESS — pre-work + early dev)
+- **Total:** ~75,000+ LOC, 190+ files, 510+ tests
 
 ### Hardware Pivot Context
 
