@@ -334,7 +334,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | 5 | x86 driver skeleton headers | DONE — uart_16550.h, pci.h, ahci.h |
 | 6 | Git tag v0.2.0-alpha | DONE |
 | 7 | Pi 5 llama.cpp benchmark | DONE — script + research estimates written |
-| 8 | Custom rootserver in QEMU | DONE — main_x86.c + CMakeLists.txt, build integration pending |
+| 8 | Custom rootserver in QEMU | DONE — builds and runs in QEMU, cache loads 308 patterns, SHIELD works |
 
 ### Phase 3 Weeks (After Spare PC Assembly)
 

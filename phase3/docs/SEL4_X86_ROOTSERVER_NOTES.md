@@ -1,7 +1,39 @@
 # seL4 x86-64 Custom Rootserver — Development Notes
 
 **Date:** March 19, 2026
-**Status:** Source code written, build integration pending
+**Status:** BUILD COMPLETE — running in QEMU
+
+---
+
+## Result: JARVIS Boots on seL4 x86-64
+
+Successfully built and ran the JARVIS rootserver in QEMU. Output captured:
+
+```
+==================================================
+  JARVIS AI-OS v0.3.0-dev | seL4 x86-64 | PC99
+==================================================
+
+Boot: 94 untypeds
+
+[JARVIS] Init decision cache...
+Loaded 258 total patterns into cache
+[JARVIS] Loaded 308 patterns
+
+--- Cache Queries ---
+  [HIT]  check disk space -> show_disk_usage
+  [MISS] unknown query test
+  ...
+
+--- SHIELD ---
+  [SHIELD] delete all data -> BLOCKED
+  [SHIELD] rm -rf / -> BLOCKED
+
+--- Stats ---
+  Queries: 8, Hits: 1, Rate: 12%
+
+[JARVIS] Done. System idle.
+```
 
 ---
 
@@ -9,10 +41,12 @@
 
 ### main_x86.c — JARVIS x86-64 Rootserver
 
-A complete rootserver source file at `phase3/src/sel4/main_x86.c` that:
-- Prints JARVIS ASCII banner on serial
-- Loads decision cache (258 patterns from compiled-in `cache_patterns.c`)
-- Provides shell commands: `query`, `shield`, `stats`, `cache info`, `version`, `help`
+The rootserver at `phase3/src/sel4/main_x86.c`:
+- Prints JARVIS banner on serial console
+- Loads decision cache (308 patterns from compiled-in `cache_patterns.c`)
+- Runs demo cache queries (HIT/MISS results)
+- Runs SHIELD safety checks (BLOCKED/ALLOWED)
+- Prints statistics
 - Runs SHIELD risk scoring with keyword-based detection
 - Tracks cache hit/miss statistics
 - Runs demo queries to prove functionality on boot
@@ -27,39 +61,34 @@ At `phase3/src/sel4/CMakeLists.txt`. Links against:
 
 ---
 
-## What's Pending
+## Build Integration — DONE
 
-### Build Integration
+**Approach used: Fork sel4test, replace driver with JARVIS sources.**
 
-The rootserver needs to be integrated into the seL4 build system. Two approaches:
-
-**Approach A: Fork sel4test manifest, replace test app with JARVIS**
 ```bash
-# In ~/sel4-x86/projects/
-cp -r sel4test jarvis-x86
-# Edit jarvis-x86/CMakeLists.txt to point to JARVIS sources
-# Edit top-level CMakeLists.txt to build jarvis-x86 instead of sel4test
+# What was done:
+cp -r ~/sel4-x86/projects/sel4test ~/sel4-x86/projects/jarvis-x86
+# Removed: sel4test-tests, test source files, libsel4testsupport
+# Added: main.c, decision_cache.c/h, cache_patterns.c/h
+# Rewrote: apps/sel4test-driver/CMakeLists.txt (minimal, no test deps)
+# Rewrote: top-level CMakeLists.txt (removed test subdirs)
+
+# Build:
+cd ~/sel4-x86
+mkdir jbuild && cd jbuild
+cmake -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE=../kernel/gcc.cmake \
+  -DPLATFORM=x86_64 -DSIMULATION=1 \
+  -DSEL4_CACHE_DIR=$HOME/.sel4_cache \
+  -C ../projects/jarvis-x86/settings.cmake \
+  ../projects/jarvis-x86
+ninja  # 197 steps
+
+# Run:
+./simulate  # Ctrl-A,X to exit
 ```
 
-**Approach B: Create standalone JARVIS manifest**
-```xml
-<!-- jarvis-x86-manifest/default.xml -->
-<manifest>
-  <remote name="sel4" fetch="https://github.com/seL4"/>
-  <remote name="jarvis" fetch="file:///mnt/c/Users/jluca/Documents/JARVIS_OS"/>
-  <default revision="master" remote="sel4"/>
-  <project name="seL4" path="kernel"/>
-  <project name="seL4_tools" path="tools/seL4"/>
-  <project name="musllibc" path="projects/musllibc"/>
-  <project name="util_libs" path="projects/util_libs"/>
-  <project name="seL4_libs" path="projects/seL4_libs"/>
-  <project name="sel4runtime" path="projects/sel4runtime"/>
-  <!-- JARVIS project -->
-  <project name="JARVIS_OS" path="projects/jarvis-x86" remote="jarvis"/>
-</manifest>
-```
-
-**Recommended: Approach A** — simpler, proven to work (sel4test already builds).
+**Key insight:** The seL4 build system expects the project to live under `projects/` with a `settings.cmake` that resolves paths relative to `../../`. Forking sel4test preserves all these path relationships. The `apps/sel4test-driver/` directory name is kept to avoid breaking internal CMake references.
 
 ### Interactive Serial Input
 
