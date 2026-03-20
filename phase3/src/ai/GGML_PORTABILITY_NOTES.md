@@ -158,6 +158,13 @@ The biggest portability challenge is NOT the C tensor math — it's the C++ back
 
 **Recommendation:** Start with **Option D** — the tensor math (ggml.c, ggml-quants.c, ggml-alloc.c) is pure C and compiles with trivial stubs. Write a minimal GGUF parser in C (~500-800 LOC) that loads weights into ggml tensors. Skip the full backend system. This avoids C++ entirely.
 
+**UPDATE (March 19, 2026): Option D IMPLEMENTED.** C-only GGUF parser written and tested:
+- `gguf_parser.h` — header with all GGUF types, ggml type enum, structs, API
+- `gguf_parser.c` — ~400 LOC, parses header/KV/tensor info/data, fopen/fread only
+- `test_gguf_parser.c` — 9/9 tests pass (embedded test data, no external files)
+- Handles: strings, uint32, float32, arrays (skipped), tensor data read, alignment
+- Ready for seL4 integration: replace fopen/fread with AHCI block reads
+
 ---
 
 ## 7. x86-Specific Optimizations Available
