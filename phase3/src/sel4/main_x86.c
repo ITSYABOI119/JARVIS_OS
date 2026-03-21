@@ -1,6 +1,7 @@
 /*
  * JARVIS AI-OS Phase 3 — x86-64 Rootserver
  * Minimal seL4 rootserver: banner, decision cache, demo queries.
+ * Optional shared memory IPC (enabled with -DJARVIS_IPC_SHMEM).
  */
 
 #include <autoconf.h>
@@ -15,6 +16,10 @@
 
 #include "decision_cache.h"
 #include "cache_patterns.h"
+
+#ifdef JARVIS_IPC_SHMEM
+#include "shmem_ipc.h"
+#endif
 
 /* ---- Serial output via seL4 debug syscall ---- */
 
@@ -43,6 +48,11 @@ static decision_cache_t g_cache;
 static uint32_t total_queries = 0;
 static uint32_t cache_hits = 0;
 static uint32_t cache_misses = 0;
+
+#ifdef JARVIS_IPC_SHMEM
+static shmem_ring_t g_request_ring;
+static shmem_ring_t g_response_ring;
+#endif
 
 static void do_query(const char *query)
 {
@@ -80,6 +90,83 @@ static void shield_check(const char *query)
     else
         puts_serial(" -> ALLOWED\n");
 }
+
+/* ---- Shared Memory IPC ---- */
+
+#ifdef JARVIS_IPC_SHMEM
+static void init_ipc(void)
+{
+    shmem_ipc_init(&g_request_ring);
+    shmem_ipc_init(&g_response_ring);
+    puts_serial("[JARVIS] Shared memory IPC initialized\n");
+}
+
+static void ipc_process_one(void)
+{
+    uint8_t type;
+    uint16_t seq;
+    uint8_t payload[SHMEM_MAX_PAYLOAD];
+    uint16_t len;
+
+    if (shmem_ipc_recv(&g_request_ring, &type, &seq, payload, &len) != 0)
+        return;  /* No pending message */
+
+    /* Process based on type */
+    switch (type) {
+    case MSG_QUERY: {
+        /* Null-terminate the query */
+        char query[241];
+        if (len > 240) len = 240;
+        memcpy(query, payload, len);
+        query[len] = '\0';
+
+        /* Cache lookup */
+        char action[256];
+        trust_level_t trust;
+        total_queries++;
+
+        if (cache_lookup(&g_cache, query, action, sizeof(action), &trust)) {
+            cache_hits++;
+            uint16_t alen = (uint16_t)strlen(action);
+            shmem_ipc_send(&g_response_ring, MSG_RESPONSE, seq,
+                           action, alen);
+        } else {
+            cache_misses++;
+            const char *miss = "CACHE_MISS";
+            shmem_ipc_send(&g_response_ring, MSG_RESPONSE, seq,
+                           miss, 10);
+        }
+        break;
+    }
+    case MSG_HEARTBEAT:
+        shmem_ipc_send(&g_response_ring, MSG_HEARTBEAT_ACK, seq,
+                       NULL, 0);
+        break;
+    case MSG_SHIELD_CHECK: {
+        /* Simple keyword check */
+        char query[241];
+        if (len > 240) len = 240;
+        memcpy(query, payload, len);
+        query[len] = '\0';
+
+        const char *bad[] = {
+            "delete", "remove", "kill", "destroy", "format", "rm -rf", NULL
+        };
+        int blocked = 0;
+        for (int i = 0; bad[i]; i++) {
+            if (strstr(query, bad[i])) { blocked = 1; break; }
+        }
+
+        uint8_t result = blocked ? 1 : 0;
+        shmem_ipc_send(&g_response_ring, MSG_SHIELD_RESULT, seq,
+                       &result, 1);
+        break;
+    }
+    default:
+        break;
+    }
+}
+#endif /* JARVIS_IPC_SHMEM */
 
 /* ---- Main ---- */
 
@@ -135,8 +222,18 @@ int main(void)
         puts_serial("%\n");
     }
 
+#ifdef JARVIS_IPC_SHMEM
+    /* Initialize shared memory IPC and enter main loop */
+    init_ipc();
+    puts_serial("\n[JARVIS] Entering IPC main loop...\n");
+    while (1) {
+        ipc_process_one();
+        seL4_Yield();
+    }
+#else
+    /* Demo-only path: no IPC, idle forever */
     puts_serial("\n[JARVIS] Done. System idle.\n");
-
     while (1) { seL4_Yield(); }
+#endif
     return 0;
 }
