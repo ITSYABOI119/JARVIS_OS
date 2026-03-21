@@ -12,11 +12,11 @@ Guidance for Claude Code when working with this repository.
 |-------|--------|--------|---------|
 | Phase 0 | COMPLETE | Months 1-6 | Validation (80% success, GO decision) |
 | Phase 1 | COMPLETE | Months 6-12 | PoC on x86 QEMU (26/26 weeks, Dec 2025) |
-| **Phase 2** | **ACTIVE** | Months 12-24 | Alpha on Pi 4 bare metal |
-| Phase 3 | Future | Months 24-30 | Beta (10+ configs, security audit) |
-| Phase 4 | Future | Months 30-36 | Production v1.0 |
+| Phase 2 | COMPLETE | Months 12-24 | Alpha on Pi 4 bare metal (21 drivers, 30-day stability) |
+| **Phase 3** | **IN PROGRESS** | Months 24-36 | Beta on x86-64 bare metal (pre-work + early dev done) |
+| Phase 4 | Future | Months 36+ | Production v1.0 |
 
-**Current:** Phase 2, Week 49 IN PROGRESS (February 13, 2026). 30-day stability test prep + security self-audit. 3 bugs fixed (1 HIGH, 2 MEDIUM).
+**Current:** Phase 3, Early Development (March 2026). Pre-work complete, x86 drivers + GGUF parser done. Awaiting spare PC assembly.
 
 ---
 
@@ -144,7 +144,7 @@ JARVIS_OS/
 ├── phase0/                     # COMPLETE - validation experiments
 ├── phase1/                     # COMPLETE (26/26 weeks)
 │   └── src/                    # cache/, ipc/, sel4/, ai/, shell/
-├── phase2/                     # ACTIVE
+├── phase2/                     # COMPLETE
 │   ├── docs/                   # PHASE_2_KICKOFF.md, UART_IPC_PROTOCOL.md, USER_GUIDE.md, ALPHA_TESTER_GUIDE.md, PI4_PLATFORM_GUIDE.md
 │   ├── firmware/               # kernel8.img, u-boot.bin, boot files
 │   ├── src/
@@ -362,7 +362,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 |--------|--------|--------|
 | IPC latency | <100us | 54us (Phase 1), 7ms UART (Phase 2) |
 | Cache hit rate | >80% | 85.7% |
-| AI inference | <500ms | 558ms GPU Phi-3, <100ms Llama 3.2 1B |
+| AI inference | <500ms | 558ms CPU Phi-3, <100ms Llama 3.2 1B (host PC benchmarks, no log artifact) |
 | Boot time | <60s | ~2s |
 | SHIELD block rate | >90% | 100% harmful blocked, 0% FP |
 | Multi-agent routing | >90% | 100% |

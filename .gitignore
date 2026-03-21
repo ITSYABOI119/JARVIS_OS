@@ -64,6 +64,16 @@ tmp/
 # Firmware overlays
 *.dtbo
 
+# Build artifacts (firmware binaries)
+phase2/firmware/kernel8.img
+phase2/firmware/jarvis-sel4-image-arm-bcm2711
+temp_sd_backup/**/*.img
+temp_sd_backup/**/*.elf
+
+# Test binaries
+phase3/src/*/test_*
+!phase3/src/*/test_*.c
+
 # System files
 Thumbs.db
 .directory
