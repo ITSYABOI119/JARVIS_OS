@@ -19,7 +19,7 @@ jobs:
         python-version: '3.12'
 
     - name: Install Python dependencies
-      run: pip install pyserial
+      run: pip install pyserial psutil
 
     # =====================================================================
     # Phase 1 C tests
