@@ -110,7 +110,7 @@ jobs:
 
     - name: "Phase 3: Shared Memory IPC (C)"
       run: |
-        gcc -Wall -Werror -O2 -std=c11 -D_POSIX_C_SOURCE=199309L \
+        gcc -Wall -Werror -O2 -std=c11 -D_GNU_SOURCE \
           phase3/src/ipc/test_shmem_ipc.c phase3/src/ipc/shmem_ipc.c \
           -I phase3/src/ipc -o /tmp/test_shmem
         /tmp/test_shmem
