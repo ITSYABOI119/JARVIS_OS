@@ -4,6 +4,9 @@
  *
  * No SYNC bytes, no CRC (shared memory is reliable).
  * Uses atomic load/store with acquire/release for lock-free SPSC operation.
+ *
+ * TODO: Add per-message CRC-32 for integrity verification on shared
+ * memory corruption (bit flips, partial writes). See SEC-020.
  */
 
 #ifndef SHMEM_IPC_H

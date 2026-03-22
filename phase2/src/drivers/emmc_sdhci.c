@@ -866,6 +866,7 @@ bool emmc_init(void)
              * C_SIZE_MULT = CSD[49:47] → resp[1] bits [9:7]
              * Capacity = (C_SIZE + 1) * 2^(C_SIZE_MULT + 2) * 2^READ_BL_LEN */
             uint32_t read_bl_len = (resp[2] >> 8) & 0xF;
+            if (read_bl_len > 11) read_bl_len = 11;  /* SEC-022: max 2048-byte blocks */
             uint32_t c_size = ((resp[1] & 0x3) << 10) | (resp[0] >> 22);
             uint32_t c_size_mult = (resp[1] >> 7) & 0x7;
             emmc_capacity = (uint64_t)(c_size + 1) * (1u << (c_size_mult + 2)) * (1u << read_bl_len);

@@ -83,11 +83,20 @@ int shmem_ipc_recv(shmem_ring_t *ring, uint8_t *type, uint16_t *seq,
     uint32_t slot_idx = rd % ring->header.size;
     shmem_msg_t *slot = &ring->slots[slot_idx];
 
-    *type = slot->type;
-    *seq  = slot->seq;
-    *len  = slot->length;
-    if (slot->length > 0 && payload)
-        memcpy(payload, slot->payload, slot->length);
+    /* SEC-001: Read ALL fields into locals ONCE — prevent TOCTOU race */
+    uint8_t  local_type   = slot->type;
+    uint16_t local_seq    = slot->seq;
+    uint16_t local_length = slot->length;
+
+    /* Validate length BEFORE any use — malicious producer could set > MAX */
+    if (local_length > SHMEM_MAX_PAYLOAD)
+        local_length = SHMEM_MAX_PAYLOAD;
+
+    *type = local_type;
+    *seq  = local_seq;
+    *len  = local_length;
+    if (local_length > 0 && payload)
+        memcpy(payload, slot->payload, local_length);
 
     /* Release: ensure slot reads complete before read_idx update */
     __atomic_store_n(&ring->header.read_idx, rd + 1, __ATOMIC_RELEASE);

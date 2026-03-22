@@ -137,8 +137,15 @@ target_link_libraries(jarvis-sel4
         platsupport        # Platform support (for ps_io_map)
 )
 
-# Compile options
-target_compile_options(jarvis-sel4 PRIVATE -Werror -g)
+# SEC-011: Compile options with hardening flags
+target_compile_options(jarvis-sel4 PRIVATE
+    -Werror -Wall -Wextra -g
+    -Wformat=2 -Wformat-security
+    # Note: -fstack-protector-strong requires __stack_chk_fail in libc.
+    # seL4 musllibc may not provide this — test before enabling.
+    # -fstack-protector-strong
+    # -D_FORTIFY_SOURCE=2  # Requires -O2+
+)
 
 # Declare as bootable rootserver
 include(rootserver)

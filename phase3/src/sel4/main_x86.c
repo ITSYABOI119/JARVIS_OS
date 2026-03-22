@@ -2,6 +2,10 @@
  * JARVIS AI-OS Phase 3 — x86-64 Rootserver
  * Minimal seL4 rootserver: banner, decision cache, demo queries.
  * Optional shared memory IPC (enabled with -DJARVIS_IPC_SHMEM).
+ *
+ * TODO(Phase 3c): Separate drivers into isolated seL4 processes for
+ * capability-based isolation. Current single-rootserver design means
+ * a driver bug compromises the entire system. See SEC-014.
  */
 
 #include <autoconf.h>
@@ -76,12 +80,33 @@ static void do_query(const char *query)
     }
 }
 
+/* SEC-010: Normalize query for SHIELD — lowercase + collapse whitespace */
+static void normalize_for_shield(const char *input, char *output, size_t max_len)
+{
+    size_t j = 0;
+    int prev_space = 0;
+    for (size_t i = 0; input[i] && j < max_len - 1; i++) {
+        char c = input[i];
+        if (c >= 'A' && c <= 'Z') c = c + ('a' - 'A');
+        if (c == ' ' || c == '\t') {
+            if (!prev_space && j > 0) { output[j++] = ' '; }
+            prev_space = 1;
+        } else {
+            output[j++] = c;
+            prev_space = 0;
+        }
+    }
+    output[j] = '\0';
+}
+
 static void shield_check(const char *query)
 {
+    char normalized[256];
+    normalize_for_shield(query, normalized, sizeof(normalized));
     const char *bad[] = {"delete", "remove", "kill", "destroy", "format", "rm -rf", NULL};
     int blocked = 0;
     for (int i = 0; bad[i]; i++) {
-        if (strstr(query, bad[i])) { blocked = 1; break; }
+        if (strstr(normalized, bad[i])) { blocked = 1; break; }
     }
     puts_serial("  [SHIELD] ");
     puts_serial(query);
@@ -143,18 +168,21 @@ static void ipc_process_one(void)
                        NULL, 0);
         break;
     case MSG_SHIELD_CHECK: {
-        /* Simple keyword check */
+        /* SEC-010: Normalize + keyword check */
         char query[241];
         if (len > 240) len = 240;
         memcpy(query, payload, len);
         query[len] = '\0';
+
+        char normalized[241];
+        normalize_for_shield(query, normalized, sizeof(normalized));
 
         const char *bad[] = {
             "delete", "remove", "kill", "destroy", "format", "rm -rf", NULL
         };
         int blocked = 0;
         for (int i = 0; bad[i]; i++) {
-            if (strstr(query, bad[i])) { blocked = 1; break; }
+            if (strstr(normalized, bad[i])) { blocked = 1; break; }
         }
 
         uint8_t result = blocked ? 1 : 0;

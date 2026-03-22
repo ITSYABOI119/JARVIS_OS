@@ -22,10 +22,13 @@
 #define GGUF_VERSION_3      3
 #define GGUF_DEFAULT_ALIGN  32
 
-#define GGUF_MAX_NAME_LEN   256
-#define GGUF_MAX_KV_KEY_LEN 256
-#define GGUF_MAX_DIMS       4
-#define GGUF_MAX_KV_STR_LEN 4096
+#define GGUF_MAX_NAME_LEN      256
+#define GGUF_MAX_KV_KEY_LEN    256
+#define GGUF_MAX_DIMS          4
+#define GGUF_MAX_KV_STR_LEN    4096
+#define GGUF_MAX_ARRAY_DEPTH   8      /* SEC-007: max nested array recursion */
+#define GGUF_MAX_KV_PAIRS      65536  /* SEC-008: max metadata entries */
+#define GGUF_MAX_TENSORS        65536  /* SEC-008: max tensor count */
 
 /* ---- GGUF Metadata Value Types ---- */
 

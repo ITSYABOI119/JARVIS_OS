@@ -13,6 +13,8 @@
  *   - net_is_icmp_echo_reply   (ICMP echo reply matcher)
  *   - IPv4 IHL validation      (reject IHL < 5 or > 15)
  *   - Packet length validation  (reject total_len < ip_hdr_len)
+ *   - SEC-004: ARP reply rejection without pending request
+ *   - SEC-025: Fragmented IPv4 packet rejection
  *
  * Functions behind #ifdef JARVIS_PLATFORM_PI4 that are NOT testable here:
  *   - net_arp_resolve()  (the TX/poll/timer path; cache-hit path tested)
@@ -503,7 +505,7 @@ static void test_arp_cache_eviction(void)
 
     int ok = (net_arp_cache_count() == NET_ARP_CACHE_SIZE);
 
-    /* Add 9th entry: should evict the first (10.0.0.1) */
+    /* Add 9th entry: should evict entry at index 1 (index 0 is gateway-protected) */
     uint8_t ninth_ip_bytes[4] = {10, 0, 0, 9};
     uint32_t ninth_ip;
     memcpy(&ninth_ip, ninth_ip_bytes, 4);
@@ -512,13 +514,21 @@ static void test_arp_cache_eviction(void)
 
     ok = ok && (net_arp_cache_count() == NET_ARP_CACHE_SIZE);
 
-    /* 10.0.0.1 should be evicted */
+    /* SEC-004: 10.0.0.1 (index 0, gateway) should be preserved */
     uint8_t first_ip_bytes[4] = {10, 0, 0, 1};
     uint32_t first_ip;
     memcpy(&first_ip, first_ip_bytes, 4);
+    uint8_t first_mac[6];
+    bool found_first = net_arp_lookup(first_ip, first_mac);
+    ok = ok && found_first;
+
+    /* 10.0.0.2 (was index 1) should be evicted */
+    uint8_t second_ip_bytes[4] = {10, 0, 0, 2};
+    uint32_t second_ip;
+    memcpy(&second_ip, second_ip_bytes, 4);
     uint8_t evicted_mac[6];
-    bool found_first = net_arp_lookup(first_ip, evicted_mac);
-    ok = ok && !found_first;
+    bool found_second = net_arp_lookup(second_ip, evicted_mac);
+    ok = ok && !found_second;
 
     /* 10.0.0.9 should be present */
     uint8_t ninth_found[6];
@@ -651,6 +661,7 @@ static void test_process_frame_icmp_reply(void)
     uint32_t our_ip;
     memcpy(&our_ip, our_ip_bytes, 4);
     net_init(our_ip, our_mac);
+    net_icmp_rate_reset();  /* Reset rate limiter for test */
 
     uint8_t peer_mac[6] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01};
     uint8_t peer_ip_bytes[4] = {192, 168, 1, 1};
@@ -964,12 +975,12 @@ static void test_build_icmp_request(void)
 }
 
 /* ========================================================================
- * Test: net_process_arp_reply caches sender
+ * Test: net_process_arp_reply caches sender (with pending IP set)
  * ======================================================================== */
 
 static void test_process_arp_reply(void)
 {
-    TEST("net_process_arp_reply caches sender");
+    TEST("net_process_arp_reply caches sender (pending set)");
 
     uint8_t our_mac[6] = {0x02, 0x00, 0x00, 0x00, 0x00, 0x01};
     uint8_t our_ip_bytes[4] = {192, 168, 1, 100};
@@ -981,6 +992,9 @@ static void test_process_arp_reply(void)
     uint8_t peer_ip_bytes[4] = {192, 168, 1, 50};
     uint32_t peer_ip;
     memcpy(&peer_ip, peer_ip_bytes, 4);
+
+    /* SEC-004: Must set pending IP before reply will be accepted */
+    net_arp_set_pending_ip(peer_ip);
 
     uint8_t frame[64];
     uint32_t frame_len = build_arp_reply_frame(frame, sizeof(frame),
@@ -1137,6 +1151,7 @@ static void test_icmp_reply_eth_swap(void)
     uint32_t our_ip;
     memcpy(&our_ip, our_ip_bytes, 4);
     net_init(our_ip, our_mac);
+    net_icmp_rate_reset();  /* Reset rate limiter for test */
 
     uint8_t peer_mac[6] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01};
     uint8_t peer_ip_bytes[4] = {192, 168, 1, 1};
@@ -1176,6 +1191,7 @@ static void test_icmp_reply_ip_checksum(void)
     uint32_t our_ip;
     memcpy(&our_ip, our_ip_bytes, 4);
     net_init(our_ip, our_mac);
+    net_icmp_rate_reset();  /* Reset rate limiter for test */
 
     uint8_t peer_mac[6] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01};
     uint8_t peer_ip_bytes[4] = {192, 168, 1, 1};
@@ -1228,6 +1244,167 @@ static void test_unknown_ethertype(void)
     bool generated = net_process_frame(frame, 32, reply, &reply_len);
 
     CHECK(!generated, "unknown ethertype should be ignored");
+}
+
+/* ========================================================================
+ * Test: SEC-004 - ARP reply rejected when no pending request
+ * ======================================================================== */
+
+static void test_arp_reply_rejected_no_pending(void)
+{
+    TEST("SEC-004: ARP reply rejected without pending request");
+
+    uint8_t our_mac[6] = {0x02, 0x00, 0x00, 0x00, 0x00, 0x01};
+    uint8_t our_ip_bytes[4] = {192, 168, 1, 100};
+    uint32_t our_ip;
+    memcpy(&our_ip, our_ip_bytes, 4);
+    net_init(our_ip, our_mac);  /* net_init resets arp_pending_ip to 0 */
+
+    uint8_t attacker_mac[6] = {0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE};
+    uint8_t attacker_ip_bytes[4] = {192, 168, 1, 1};
+    uint32_t attacker_ip;
+    memcpy(&attacker_ip, attacker_ip_bytes, 4);
+
+    /* Do NOT set arp_pending_ip - this simulates an unsolicited ARP reply */
+    /* arp_pending_ip is 0 after net_init */
+
+    uint8_t frame[64];
+    uint32_t frame_len = build_arp_reply_frame(frame, sizeof(frame),
+                                                attacker_ip, attacker_mac,
+                                                our_ip, our_mac);
+
+    net_process_arp_reply(frame, frame_len);
+
+    /* The attacker's IP should NOT be in the ARP cache */
+    uint8_t found[6];
+    bool cached = net_arp_lookup(attacker_ip, found);
+
+    CHECK(!cached, "unsolicited ARP reply should be rejected");
+}
+
+/* ========================================================================
+ * Test: SEC-004 - ARP reply rejected when pending IP doesn't match
+ * ======================================================================== */
+
+static void test_arp_reply_rejected_wrong_pending(void)
+{
+    TEST("SEC-004: ARP reply rejected for wrong pending IP");
+
+    uint8_t our_mac[6] = {0x02, 0x00, 0x00, 0x00, 0x00, 0x01};
+    uint8_t our_ip_bytes[4] = {192, 168, 1, 100};
+    uint32_t our_ip;
+    memcpy(&our_ip, our_ip_bytes, 4);
+    net_init(our_ip, our_mac);
+
+    /* Set pending for a different IP */
+    uint8_t expected_ip_bytes[4] = {192, 168, 1, 2};
+    uint32_t expected_ip;
+    memcpy(&expected_ip, expected_ip_bytes, 4);
+    net_arp_set_pending_ip(expected_ip);
+
+    /* But we receive a reply from a different IP (attacker) */
+    uint8_t attacker_mac[6] = {0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE};
+    uint8_t attacker_ip_bytes[4] = {192, 168, 1, 1};
+    uint32_t attacker_ip;
+    memcpy(&attacker_ip, attacker_ip_bytes, 4);
+
+    uint8_t frame[64];
+    uint32_t frame_len = build_arp_reply_frame(frame, sizeof(frame),
+                                                attacker_ip, attacker_mac,
+                                                our_ip, our_mac);
+
+    net_process_arp_reply(frame, frame_len);
+
+    /* The attacker's IP should NOT be in the ARP cache */
+    uint8_t found[6];
+    bool cached = net_arp_lookup(attacker_ip, found);
+
+    CHECK(!cached, "ARP reply from wrong IP should be rejected");
+}
+
+/* ========================================================================
+ * Test: SEC-025 - Fragmented IPv4 packet rejected (MF flag set)
+ * ======================================================================== */
+
+static void test_fragmented_ipv4_rejected_mf(void)
+{
+    TEST("SEC-025: Fragmented IPv4 rejected (MF flag set)");
+
+    uint8_t our_mac[6] = {0x02, 0x00, 0x00, 0x00, 0x00, 0x01};
+    uint8_t our_ip_bytes[4] = {192, 168, 1, 100};
+    uint32_t our_ip;
+    memcpy(&our_ip, our_ip_bytes, 4);
+    net_init(our_ip, our_mac);
+    net_icmp_rate_reset();
+
+    uint8_t peer_mac[6] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01};
+    uint8_t peer_ip_bytes[4] = {192, 168, 1, 1};
+    uint32_t peer_ip;
+    memcpy(&peer_ip, peer_ip_bytes, 4);
+
+    /* Build a valid ICMP echo request frame, then set MF flag */
+    uint8_t frame[128];
+    uint32_t frame_len = build_icmp_echo_request(frame, sizeof(frame),
+                                                  peer_mac, peer_ip,
+                                                  our_mac, our_ip,
+                                                  0x5555, 1);
+
+    /* Set MF (More Fragments) flag: flags_frag field at IP header offset 6-7.
+     * MF = 0x2000 in host order, which is 0x0020 in big-endian on wire. */
+    net_ip_hdr_t *ip = (net_ip_hdr_t *)(frame + ETH_HLEN);
+    ip->flags_frag = test_htons(0x2000);  /* MF flag set */
+
+    /* Recompute IP checksum since we changed flags_frag */
+    ip->checksum = 0;
+    ip->checksum = test_htons(net_checksum(ip, 20));
+
+    uint8_t reply[128];
+    uint32_t reply_len = 0;
+    bool generated = net_process_frame(frame, frame_len, reply, &reply_len);
+
+    CHECK(!generated, "fragmented packet (MF set) should be dropped");
+}
+
+/* ========================================================================
+ * Test: SEC-025 - Fragmented IPv4 packet rejected (fragment offset non-zero)
+ * ======================================================================== */
+
+static void test_fragmented_ipv4_rejected_offset(void)
+{
+    TEST("SEC-025: Fragmented IPv4 rejected (frag offset != 0)");
+
+    uint8_t our_mac[6] = {0x02, 0x00, 0x00, 0x00, 0x00, 0x01};
+    uint8_t our_ip_bytes[4] = {192, 168, 1, 100};
+    uint32_t our_ip;
+    memcpy(&our_ip, our_ip_bytes, 4);
+    net_init(our_ip, our_mac);
+    net_icmp_rate_reset();
+
+    uint8_t peer_mac[6] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01};
+    uint8_t peer_ip_bytes[4] = {192, 168, 1, 1};
+    uint32_t peer_ip;
+    memcpy(&peer_ip, peer_ip_bytes, 4);
+
+    /* Build a valid ICMP frame, then set fragment offset */
+    uint8_t frame[128];
+    uint32_t frame_len = build_icmp_echo_request(frame, sizeof(frame),
+                                                  peer_mac, peer_ip,
+                                                  our_mac, our_ip,
+                                                  0x6666, 1);
+
+    /* Set fragment offset to 100 (non-zero, no MF flag) */
+    net_ip_hdr_t *ip = (net_ip_hdr_t *)(frame + ETH_HLEN);
+    ip->flags_frag = test_htons(100);  /* Fragment offset = 100 */
+
+    /* Recompute IP checksum */
+    ip->checksum = 0;
+    ip->checksum = test_htons(net_checksum(ip, 20));
+
+    uint8_t reply[128];
+    uint32_t reply_len = 0;
+    bool generated = net_process_frame(frame, frame_len, reply, &reply_len);
+
+    CHECK(!generated, "fragmented packet (offset != 0) should be dropped");
 }
 
 /* ========================================================================
@@ -1292,6 +1469,14 @@ int main(void)
 
     /* Unknown protocol */
     test_unknown_ethertype();
+
+    /* SEC-004: ARP cache poisoning prevention */
+    test_arp_reply_rejected_no_pending();
+    test_arp_reply_rejected_wrong_pending();
+
+    /* SEC-025: Fragmented IPv4 rejection */
+    test_fragmented_ipv4_rejected_mf();
+    test_fragmented_ipv4_rejected_offset();
 
     printf("\n=== Results: %d PASS, %d FAIL (of %d) ===\n",
            pass_count, fail_count, pass_count + fail_count);

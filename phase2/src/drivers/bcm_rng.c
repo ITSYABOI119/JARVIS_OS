@@ -150,6 +150,12 @@ int rng_init(void)
         debug_puts("\n");
     }
 
+    /* SEC-018: Discard first 32 words for warmup (initial entropy may be low) */
+    for (int i = 0; i < 32; i++) {
+        if (!rng_wait_fifo()) break;  /* Stop if FIFO stalls */
+        (void)rng_reg_read(RNG_FIFO_DATA);  /* Read and discard */
+    }
+
     total_bytes_read = 0;
     rng_initialized = true;
 

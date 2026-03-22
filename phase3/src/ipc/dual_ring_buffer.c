@@ -211,8 +211,11 @@ static bool parse_cache_response(const char *payload, cache_response_t *response
     memcpy(response->action, action_start, action_len);
     response->action[action_len] = '\0';
 
-    /* Extract trust level */
+    /* SEC-002: Extract trust level with bounds check */
     int trust_int = atoi(trust_start + 1);
+    if (trust_int < 0 || trust_int > 5) {
+        return false;  /* Reject invalid trust level */
+    }
     response->trust_level = (trust_level_t)trust_int;
 
     response->hit = true;
@@ -246,11 +249,13 @@ bool dual_ring_recv_response(dual_ring_buffer_t *drb,
         return false;
     }
 
-    /* Check message ID */
+    /* SEC-026: Reject mismatched message ID */
     if (msg.id != msg_id) {
-        /* ID mismatch - this is a problem in synchronous mode */
-        /* For now, still parse it (could be from previous request) */
+        return false;
     }
+
+    /* SEC-023: Ensure null termination before string parsing */
+    msg.payload[msg.payload_size < MAX_MESSAGE_SIZE ? msg.payload_size : MAX_MESSAGE_SIZE - 1] = '\0';
 
     /* Parse response payload */
     if (!parse_cache_response(msg.payload, response_out)) {

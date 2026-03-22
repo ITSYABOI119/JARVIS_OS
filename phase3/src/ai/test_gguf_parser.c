@@ -383,6 +383,86 @@ static void test_kv_missing_type(void)
     PASS();
 }
 
+/* SEC-003: Test dimension overflow detection */
+static void test_overflow_detection(void)
+{
+    TEST("SEC-003: Tensor dimension overflow detection");
+
+    uint8_t data[8192];
+    uint8_t *p = data;
+    memset(data, 0, sizeof(data));
+
+    /* Header */
+    uint32_t magic = GGUF_MAGIC, version = 3;
+    uint64_t n_tensors = 1, n_kv = 0;
+    memcpy(p, &magic, 4); p += 4;
+    memcpy(p, &version, 4); p += 4;
+    memcpy(p, &n_tensors, 8); p += 8;
+    memcpy(p, &n_kv, 8); p += 8;
+
+    /* Tensor with overflowing dims: [2^33, 2^33] — product = 2^66, overflows uint64 */
+    uint64_t name_len = 4;
+    memcpy(p, &name_len, 8); p += 8;
+    memcpy(p, "test", 4); p += 4;
+    uint32_t ndims = 2;
+    memcpy(p, &ndims, 4); p += 4;
+    uint64_t dim_huge = (1ULL << 33);  /* 8589934592 */
+    memcpy(p, &dim_huge, 8); p += 8;
+    memcpy(p, &dim_huge, 8); p += 8;
+    uint32_t type = 0;
+    memcpy(p, &type, 4); p += 4;
+    uint64_t offset = 0;
+    memcpy(p, &offset, 8); p += 8;
+
+    const char *path = write_temp_gguf(data, (size_t)(p - data));
+    gguf_ctx_t ctx;
+    int err = gguf_open(&ctx, path);
+    ASSERT(err == GGUF_ERR_OVERFLOW, "expected OVERFLOW error for huge dims");
+    PASS();
+}
+
+/* SEC-008: Test excessive n_kv rejection */
+static void test_excessive_kv(void)
+{
+    TEST("SEC-008: Excessive n_kv rejection");
+
+    uint8_t data[32];
+    uint8_t *p = data;
+    uint32_t magic = GGUF_MAGIC, version = 3;
+    uint64_t n_tensors = 0, n_kv = 100000;
+    memcpy(p, &magic, 4); p += 4;
+    memcpy(p, &version, 4); p += 4;
+    memcpy(p, &n_tensors, 8); p += 8;
+    memcpy(p, &n_kv, 8); p += 8;
+
+    const char *path = write_temp_gguf(data, (size_t)(p - data));
+    gguf_ctx_t ctx;
+    int err = gguf_open(&ctx, path);
+    ASSERT(err == GGUF_ERR_FORMAT, "expected FORMAT error for excessive n_kv");
+    PASS();
+}
+
+/* SEC-008: Test excessive n_tensors rejection */
+static void test_excessive_tensors(void)
+{
+    TEST("SEC-008: Excessive n_tensors rejection");
+
+    uint8_t data[32];
+    uint8_t *p = data;
+    uint32_t magic = GGUF_MAGIC, version = 3;
+    uint64_t n_tensors = 100000, n_kv = 0;
+    memcpy(p, &magic, 4); p += 4;
+    memcpy(p, &version, 4); p += 4;
+    memcpy(p, &n_tensors, 8); p += 8;
+    memcpy(p, &n_kv, 8); p += 8;
+
+    const char *path = write_temp_gguf(data, (size_t)(p - data));
+    gguf_ctx_t ctx;
+    int err = gguf_open(&ctx, path);
+    ASSERT(err == GGUF_ERR_FORMAT, "expected FORMAT error for excessive n_tensors");
+    PASS();
+}
+
 /* ---- Main ---- */
 
 int main(void)
@@ -398,6 +478,9 @@ int main(void)
     test_error_handling();
     test_type_names();
     test_kv_missing_type();
+    test_overflow_detection();
+    test_excessive_kv();
+    test_excessive_tensors();
 
     printf("\n=== Results: %d/%d PASS ===\n", tests_passed, tests_run);
 

@@ -867,11 +867,13 @@ bool usb_hid_enumerate(void)
     uint8_t hid_iface = 0;
     int offset = 0;
 
-    while (offset < total_len - 1) {
+    while (offset < total_len) {
+        if (offset + 2 > total_len) break;  /* SEC-021: need 2 bytes min */
         uint8_t desc_len = usb_xfer_buf[offset];
         uint8_t desc_type = usb_xfer_buf[offset + 1];
 
-        if (desc_len == 0) break;   /* Prevent infinite loop */
+        if (desc_len < 2) break;                    /* SEC-021: min descriptor is 2 bytes */
+        if (desc_len > (total_len - offset)) break; /* SEC-021: don't read past end */
 
         if (desc_type == USB_DESC_INTERFACE && desc_len >= 9) {
             usb_interface_descriptor_t *iface =

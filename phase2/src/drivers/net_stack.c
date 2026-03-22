@@ -43,8 +43,17 @@ static bool     net_initialized = false;
 static net_arp_entry_t arp_cache[NET_ARP_CACHE_SIZE];
 static uint32_t arp_cache_used = 0;
 
+/* SEC-004: ARP pending request tracker - only accept replies for this IP */
+static uint32_t arp_pending_ip = 0;
+
 /* IP identification counter for outbound packets */
 static uint16_t ip_ident_counter = 1;
+
+/* SEC-006: ICMP rate limiting */
+#define ICMP_MAX_REPLIES_PER_SEC 10
+
+static uint32_t icmp_reply_count = 0;
+static uint64_t icmp_window_start = 0;
 
 /* ================================================================
  * Byte Order Helpers (ARM is little-endian, network is big-endian)
@@ -95,6 +104,14 @@ void net_init(uint32_t ip_be, const uint8_t mac[ETH_ALEN])
     our_ip = ip_be;
     memcpy(our_mac, mac, ETH_ALEN);
     net_initialized = true;
+    /* Clear ARP cache on re-init (old entries are stale) */
+    memset(arp_cache, 0, sizeof(arp_cache));
+    arp_cache_used = 0;
+    /* SEC-004: Reset pending IP on re-init */
+    arp_pending_ip = 0;
+    /* SEC-006: Reset ICMP rate limiter on re-init */
+    icmp_reply_count = 0;
+    icmp_window_start = 0;
     debug_puts("[NET] Initialized\n");
 }
 
@@ -141,10 +158,11 @@ static bool handle_arp(const uint8_t *frame, uint32_t len,
 
     debug_puts("[NET] ARP request for our IP, sending reply\n");
 
-    /* Learn sender's MAC from the request */
+    /* SEC-004: Only UPDATE existing cache entries from ARP requests.
+     * Do NOT add new entries from unsolicited requests (prevents cache poisoning). */
     uint32_t sender_ip;
     memcpy(&sender_ip, arp->spa, 4);
-    net_arp_add(sender_ip, arp->sha);
+    net_arp_update_existing(sender_ip, arp->sha);
 
     /* Build ARP reply */
     net_eth_hdr_t *eth_reply = (net_eth_hdr_t *)reply;
@@ -208,6 +226,19 @@ static bool handle_icmp(const uint8_t *frame, uint32_t len,
     /* Only handle echo requests */
     if (icmp->type != ICMP_ECHO_REQUEST || icmp->code != 0) {
         return false;
+    }
+
+    /* SEC-006: ICMP rate limiting */
+    {
+        uint64_t now = systimer_read();
+        if (now - icmp_window_start > 1000000) {  /* 1 second in microseconds */
+            icmp_window_start = now;
+            icmp_reply_count = 0;
+        }
+        if (icmp_reply_count >= ICMP_MAX_REPLIES_PER_SEC) {
+            return false;  /* Rate limited */
+        }
+        icmp_reply_count++;
     }
 
     debug_puts("[NET] ICMP echo request, sending reply\n");
@@ -279,6 +310,17 @@ static bool handle_ip(const uint8_t *frame, uint32_t len,
     if (calc_cksum != saved_cksum) {
         debug_puts("[NET] IP checksum mismatch\n");
         return false;
+    }
+
+    /* SEC-025: Reject fragmented IPv4 packets.
+     * flags_frag field: bit 13 = MF (More Fragments), bits 0-12 = Fragment Offset.
+     * If MF is set or fragment offset is non-zero, drop the packet. */
+    {
+        uint16_t flags_frag = ntohs(ip->flags_frag);
+        if ((flags_frag & 0x2000) || (flags_frag & 0x1FFF)) {
+            debug_puts("[NET] Fragmented IPv4 packet dropped\n");
+            return false;
+        }
     }
 
     /* Check if packet is for us */
@@ -372,13 +414,36 @@ void net_arp_add(uint32_t ip_be, const uint8_t mac[ETH_ALEN])
         memcpy(arp_cache[arp_cache_used].mac, mac, ETH_ALEN);
         arp_cache_used++;
     } else {
-        /* Evict slot 0 (simple FIFO), shift others down */
-        for (uint32_t i = 0; i < NET_ARP_CACHE_SIZE - 1; i++) {
+        /* SEC-004: Evict oldest entry, but skip index 0 if it's the gateway
+         * (gateway entries are non-evictable to prevent ARP cache poisoning) */
+        uint32_t evict_start = 0;
+        if (arp_cache_used > 0 && arp_cache[0].ip != 0) {
+            /* Check if index 0 looks like a gateway (first entry added).
+             * If the cache is full and index 0 is populated, protect it. */
+            evict_start = 1;
+        }
+        for (uint32_t i = evict_start; i < NET_ARP_CACHE_SIZE - 1; i++) {
             arp_cache[i] = arp_cache[i + 1];
         }
         arp_cache[NET_ARP_CACHE_SIZE - 1].ip = ip_be;
         memcpy(arp_cache[NET_ARP_CACHE_SIZE - 1].mac, mac, ETH_ALEN);
     }
+}
+
+/* SEC-004: Update ONLY existing ARP cache entries (no new additions).
+ * Used by handle_arp() for incoming ARP requests to prevent cache poisoning
+ * from unsolicited ARP requests. */
+void net_arp_update_existing(uint32_t ip_be, const uint8_t mac[ETH_ALEN])
+{
+    if (ip_be == 0) return;
+
+    for (uint32_t i = 0; i < arp_cache_used; i++) {
+        if (arp_cache[i].ip == ip_be) {
+            memcpy(arp_cache[i].mac, mac, ETH_ALEN);
+            return;
+        }
+    }
+    /* IP not in cache - do NOT add it */
 }
 
 uint32_t net_arp_cache_count(void)
@@ -397,6 +462,9 @@ uint32_t net_build_arp_request(uint32_t target_ip_be,
     if (buf_size < frame_len || !net_initialized) {
         return 0;
     }
+
+    /* SEC-004: Set pending IP so we only accept replies for this target */
+    arp_pending_ip = target_ip_be;
 
     memset(frame_buf, 0, frame_len);
 
@@ -559,10 +627,20 @@ void net_process_arp_reply(const uint8_t *frame, uint32_t len)
         return;
     }
 
-    /* Add sender to cache */
+    /* SEC-004: Only accept ARP replies for IPs we have a pending request for */
     uint32_t sender_ip;
     memcpy(&sender_ip, arp->spa, 4);
+
+    if (arp_pending_ip == 0 || sender_ip != arp_pending_ip) {
+        debug_puts("[NET] ARP reply rejected: no pending request for this IP\n");
+        return;
+    }
+
+    /* Add sender to cache */
     net_arp_add(sender_ip, arp->sha);
+
+    /* Clear pending once we've accepted a reply */
+    arp_pending_ip = 0;
 
     debug_puts("[NET] ARP reply cached\n");
 }
@@ -623,4 +701,28 @@ bool net_is_icmp_echo_reply(const uint8_t *frame, uint32_t len,
     }
 
     return true;
+}
+
+/* ================================================================
+ * SEC-006: ICMP rate limiter reset (for testing)
+ * ================================================================ */
+
+void net_icmp_rate_reset(void)
+{
+    icmp_reply_count = 0;
+    icmp_window_start = 0;
+}
+
+/* ================================================================
+ * SEC-004: Get/set ARP pending IP (for testing)
+ * ================================================================ */
+
+uint32_t net_arp_get_pending_ip(void)
+{
+    return arp_pending_ip;
+}
+
+void net_arp_set_pending_ip(uint32_t ip_be)
+{
+    arp_pending_ip = ip_be;
 }

@@ -17,6 +17,7 @@
 #include "gguf_parser.h"
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 
 /* ---- Helpers ---- */
 
@@ -73,19 +74,25 @@ static int read_gguf_string(FILE *fp, char *buf, size_t buf_size, uint64_t *out_
     return GGUF_OK;
 }
 
-/* Skip bytes in file */
+/* SEC-017: Skip bytes — chunk seeks for 32-bit portability (LONG_MAX may be 2^31-1) */
 static int skip_bytes(FILE *fp, uint64_t n)
 {
     if (n == 0) return GGUF_OK;
-    if (fseek(fp, (long)n, SEEK_CUR) != 0) {
-        /* fseek may fail on pipes/special files — fallback to reading */
-        char discard[4096];
-        while (n > 0) {
-            size_t chunk = n > sizeof(discard) ? sizeof(discard) : (size_t)n;
-            if (fread(discard, 1, chunk, fp) != chunk)
-                return GGUF_ERR_READ;
-            n -= chunk;
+    while (n > 0) {
+        long chunk = (n > (uint64_t)LONG_MAX) ? LONG_MAX : (long)n;
+        if (fseek(fp, chunk, SEEK_CUR) != 0) {
+            /* Fallback: read and discard */
+            char discard[4096];
+            uint64_t remaining = n;
+            while (remaining > 0) {
+                size_t rd = remaining > sizeof(discard) ? sizeof(discard) : (size_t)remaining;
+                if (fread(discard, 1, rd, fp) != rd)
+                    return GGUF_ERR_READ;
+                remaining -= rd;
+            }
+            return GGUF_OK;
         }
+        n -= (uint64_t)chunk;
     }
     return GGUF_OK;
 }
@@ -179,9 +186,11 @@ static uint64_t ggml_tensor_bytes(uint32_t type, uint64_t n_elements)
 
 /* ---- KV Parsing ---- */
 
-/* Skip a single GGUF value (used for arrays and unsupported types) */
-static int skip_gguf_value(FILE *fp, uint32_t type)
+/* SEC-007: Skip a GGUF value with bounded recursion depth */
+static int skip_gguf_value(FILE *fp, uint32_t type, int depth)
 {
+    if (depth > GGUF_MAX_ARRAY_DEPTH) return GGUF_ERR_FORMAT;
+
     if (type == GGUF_TYPE_STRING) {
         uint64_t len;
         int err = read_u64(fp, &len);
@@ -195,7 +204,7 @@ static int skip_gguf_value(FILE *fp, uint32_t type)
         err = read_u64(fp, &count);
         if (err) return err;
         for (uint64_t i = 0; i < count; i++) {
-            err = skip_gguf_value(fp, elem_type);
+            err = skip_gguf_value(fp, elem_type, depth + 1);
             if (err) return err;
         }
         return GGUF_OK;
@@ -242,7 +251,7 @@ static int read_kv_pair(FILE *fp, gguf_kv_t *kv)
             if (err) return err;
             /* Skip array elements */
             for (uint64_t i = 0; i < kv->value.arr.count; i++) {
-                err = skip_gguf_value(fp, kv->value.arr.elem_type);
+                err = skip_gguf_value(fp, kv->value.arr.elem_type, 0);
                 if (err) return err;
             }
             return GGUF_OK;
@@ -268,11 +277,13 @@ static int read_tensor_info(FILE *fp, gguf_tensor_info_t *t)
     if (t->n_dims > GGUF_MAX_DIMS)
         return GGUF_ERR_FORMAT;
 
-    /* Dimensions */
+    /* Dimensions — SEC-003: check for overflow */
     t->n_elements = 1;
     for (uint32_t i = 0; i < t->n_dims; i++) {
         err = read_u64(fp, &t->dims[i]);
         if (err) return err;
+        if (t->dims[i] > 0 && t->n_elements > UINT64_MAX / t->dims[i])
+            return GGUF_ERR_OVERFLOW;
         t->n_elements *= t->dims[i];
     }
     /* Zero unused dims */
@@ -329,6 +340,10 @@ int gguf_open(gguf_ctx_t *ctx, const char *path)
 
     err = read_u64(ctx->fp, &ctx->n_kv);
     if (err) goto fail;
+
+    /* SEC-008: Reject excessive counts to prevent memory exhaustion */
+    if (ctx->n_tensors > GGUF_MAX_TENSORS) { err = GGUF_ERR_FORMAT; goto fail; }
+    if (ctx->n_kv > GGUF_MAX_KV_PAIRS) { err = GGUF_ERR_FORMAT; goto fail; }
 
     /* Allocate KV array */
     if (ctx->n_kv > 0) {

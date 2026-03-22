@@ -120,6 +120,10 @@ bool net_arp_lookup(uint32_t ip_be, uint8_t mac_out[ETH_ALEN]);
 /* Add/update an entry in the ARP cache */
 void net_arp_add(uint32_t ip_be, const uint8_t mac[ETH_ALEN]);
 
+/* SEC-004: Update ONLY existing entries (no new additions).
+ * Used for ARP requests to prevent cache poisoning. */
+void net_arp_update_existing(uint32_t ip_be, const uint8_t mac[ETH_ALEN]);
+
 /* Return number of valid entries in cache */
 uint32_t net_arp_cache_count(void);
 
@@ -160,7 +164,25 @@ bool net_is_icmp_echo_reply(const uint8_t *frame, uint32_t len,
                             uint8_t *ttl_out);
 
 /* Process an incoming ARP reply and update the cache.
+ * SEC-004: Only accepts replies for IPs we have a pending request for.
  * Called by the RX polling loop. */
 void net_process_arp_reply(const uint8_t *frame, uint32_t len);
+
+/* ================================================================
+ * SEC-004: ARP pending IP accessors (for testing and external use)
+ * ================================================================ */
+
+/* Get the IP we're currently waiting for an ARP reply from */
+uint32_t net_arp_get_pending_ip(void);
+
+/* Set the pending ARP request IP (normally set by net_build_arp_request) */
+void net_arp_set_pending_ip(uint32_t ip_be);
+
+/* ================================================================
+ * SEC-006: ICMP rate limiter reset (for testing)
+ * ================================================================ */
+
+/* Reset the ICMP rate limiting counter and window */
+void net_icmp_rate_reset(void);
 
 #endif /* NET_STACK_H */
