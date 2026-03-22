@@ -1,3 +1,5 @@
+![CI](https://github.com/ITSYABOI119/JARVIS_OS/actions/workflows/ci.yml/badge.svg)
+
 # JARVIS AI-OS — Phase 3: Beta System
 
 **Status:** PRE-WORK COMPLETE + early Phase 3b development done. Awaiting spare PC assembly.

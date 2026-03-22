@@ -1,0 +1,157 @@
+name: JARVIS AI-OS Test Suite
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install Python dependencies
+      run: pip install pyserial
+
+    # =====================================================================
+    # Phase 1 C tests
+    # =====================================================================
+
+    - name: "Phase 1: Ring Buffer IPC (C)"
+      run: |
+        cd phase1/src/ipc
+        gcc -Wall -Wextra -O2 -std=c11 -pthread \
+          test_ipc.c ring_buffer.c \
+          -o test_ipc -lrt -pthread
+        ./test_ipc
+
+    - name: "Phase 1: Decision Cache (C)"
+      run: |
+        cd phase1/src/cache
+        gcc -Wall -Wextra -O2 -std=c11 \
+          test_cache.c decision_cache.c cache_patterns.c \
+          -o test_cache -lrt
+        ./test_cache
+
+    - name: "Phase 1: Driver Registry (C)"
+      run: |
+        cd phase1/src/drivers
+        gcc -Wall -O2 -std=c11 -pthread \
+          test_driver_registry.c driver_registry.c \
+          -o test_driver_registry -pthread
+        ./test_driver_registry
+
+    - name: "Phase 1: VirtIO Block Driver (C)"
+      run: |
+        cd phase1/src/drivers
+        gcc -Wall -O2 -std=c11 -pthread \
+          test_virtio_blk.c virtio_blk.c virtio_core.c driver_registry.c \
+          -o test_virtio_blk -pthread
+        ./test_virtio_blk
+
+    # =====================================================================
+    # Phase 2 C tests
+    # =====================================================================
+
+    - name: "Phase 2: Dual Ring Buffer (C)"
+      run: |
+        cd phase2/src/ipc
+        gcc -O2 -I../../../phase1/src/cache -I../../../phase1/src/ipc \
+          dual_ring_buffer.c test_dual_ring.c ../../../phase1/src/ipc/ring_buffer.c \
+          -o test_dual_ring
+        ./test_dual_ring
+
+    - name: "Phase 2: IPC Handler (C)"
+      run: |
+        cd phase2/src/ipc
+        gcc -O2 -I../../../phase1/src/cache -I../../../phase1/src/ipc \
+          ipc_handler.c dual_ring_buffer.c ../../../phase1/src/ipc/ring_buffer.c \
+          ../../../phase1/src/cache/decision_cache.c ../../../phase1/src/cache/cache_patterns.c \
+          test_ipc_handler.c -o test_ipc_handler
+        ./test_ipc_handler
+
+    - name: "Phase 2: UART Logic (C)"
+      run: |
+        cd phase2/src/drivers
+        gcc -O2 test_uart_logic.c -o test_uart_logic
+        ./test_uart_logic
+
+    # =====================================================================
+    # Phase 2 Python tests
+    # =====================================================================
+
+    - name: "Phase 2: UART IPC Client (Python)"
+      run: python3 phase2/src/ai/test_uart_ipc_client.py
+
+    - name: "Phase 2: System Bootstrap (Python)"
+      run: python3 phase2/src/ai/test_system_bootstrap.py
+
+    - name: "Phase 2: Integration (Python)"
+      run: python3 phase2/src/ai/test_integration.py
+
+    # =====================================================================
+    # Phase 3 C tests
+    # =====================================================================
+
+    - name: "Phase 3: GGUF Parser (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 \
+          phase3/src/ai/test_gguf_parser.c phase3/src/ai/gguf_parser.c \
+          -I phase3/src/ai -o /tmp/test_gguf
+        /tmp/test_gguf
+
+    - name: "Phase 3: Shared Memory IPC (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -D_POSIX_C_SOURCE=199309L \
+          phase3/src/ipc/test_shmem_ipc.c phase3/src/ipc/shmem_ipc.c \
+          -I phase3/src/ipc -o /tmp/test_shmem
+        /tmp/test_shmem
+
+    - name: "Phase 3: UART 16550 (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -DJARVIS_TEST_MOCK \
+          -I phase3/src/drivers \
+          phase3/src/drivers/test_uart_16550.c phase3/src/drivers/uart_16550.c \
+          -o /tmp/test_uart_16550
+        /tmp/test_uart_16550
+
+    - name: "Phase 3: PCI Enumeration (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -DJARVIS_TEST_MOCK \
+          -I phase3/src/drivers \
+          phase3/src/drivers/test_pci.c phase3/src/drivers/pci.c \
+          -o /tmp/test_pci
+        /tmp/test_pci
+
+    - name: "Phase 3: AHCI Discovery (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -DJARVIS_TEST_MOCK \
+          -I phase3/src/drivers \
+          phase3/src/drivers/test_ahci.c phase3/src/drivers/ahci.c \
+          -o /tmp/test_ahci
+        /tmp/test_ahci
+
+    - name: "Phase 3: Net Stack (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -DJARVIS_TEST_MOCK \
+          -I phase3/src/drivers \
+          phase3/src/drivers/test_net_stack.c phase3/src/drivers/net_stack.c \
+          -o /tmp/test_net_stack
+        /tmp/test_net_stack
+
+    - name: "Phase 3: Net Cmd (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -DJARVIS_TEST_MOCK \
+          -I phase3/src/drivers \
+          phase3/src/drivers/test_net_cmd.c phase3/src/drivers/net_cmd.c \
+          phase3/src/drivers/net_stack.c \
+          -o /tmp/test_net_cmd
+        /tmp/test_net_cmd

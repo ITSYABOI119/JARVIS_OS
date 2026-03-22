@@ -612,4 +612,97 @@ int ahci_flush(hba_port_t *port);
  */
 int ahci_port_is_active(hba_port_t *port);
 
+/* ========================================================================
+ * Disk I/O Functions (implemented in ahci.c Part 2)
+ * ======================================================================== */
+
+/**
+ * ahci_setup_command - Prepare a command slot for execution
+ * @port:    Port registers
+ * @slot:    Command slot number (0-31)
+ * @fis:     H2D FIS to copy into command table CFIS
+ * @buf:     DMA buffer address for data transfer (or 0)
+ * @buf_len: Total transfer length in bytes
+ * @write:   Non-zero for host-to-device (write) direction
+ *
+ * Returns 0 on success, -1 on error.
+ */
+int ahci_setup_command(hba_port_t *port, int slot,
+                       const fis_reg_h2d_t *fis,
+                       uintptr_t buf, uint32_t buf_len,
+                       int write);
+
+/**
+ * ahci_issue_command - Issue a prepared command and poll for completion
+ * @port: Port registers
+ * @slot: Command slot number (0-31)
+ *
+ * Returns 0 on success, -1 on timeout, -2 on device error.
+ */
+int ahci_issue_command(hba_port_t *port, int slot);
+
+/**
+ * ahci_identify_parse_model - Extract model string from identify data
+ * @identify_buf: Raw identify data as uint16_t[256]
+ * @out:          Output buffer (at least 41 bytes)
+ */
+void ahci_identify_parse_model(const uint16_t *identify_buf, char *out);
+
+/**
+ * ahci_identify_parse_serial - Extract serial number from identify data
+ * @identify_buf: Raw identify data as uint16_t[256]
+ * @out:          Output buffer (at least 21 bytes)
+ */
+void ahci_identify_parse_serial(const uint16_t *identify_buf, char *out);
+
+/**
+ * ahci_identify_parse_capacity - Extract LBA48 sector count
+ * @identify_buf: Raw identify data as uint16_t[256]
+ *
+ * Returns total addressable sectors (from words 100-103).
+ */
+uint64_t ahci_identify_parse_capacity(const uint16_t *identify_buf);
+
+/**
+ * ahci_identify_parse_sector_size - Get logical sector size
+ * @identify_buf: Raw identify data as uint16_t[256]
+ *
+ * Returns sector size in bytes (512 if standard).
+ */
+uint32_t ahci_identify_parse_sector_size(const uint16_t *identify_buf);
+
+/**
+ * ahci_build_rw_fis - Build H2D FIS for READ/WRITE DMA EXT
+ * @fis:     Output FIS
+ * @command: ATA_CMD_READ_DMA_EXT or ATA_CMD_WRITE_DMA_EXT
+ * @lba:     48-bit LBA
+ * @count:   Sector count (1-65536)
+ */
+void ahci_build_rw_fis(fis_reg_h2d_t *fis, uint8_t command,
+                        uint64_t lba, uint16_t count);
+
+/**
+ * ahci_read_sectors - Read sectors via READ DMA EXT (0x25)
+ * @port:  Port registers
+ * @lba:   Starting 48-bit LBA
+ * @count: Number of sectors (1-65536)
+ * @buf:   Output buffer
+ *
+ * Returns 0 on success, negative on error.
+ */
+int ahci_read_sectors(hba_port_t *port, uint64_t lba,
+                      uint32_t count, void *buf);
+
+/**
+ * ahci_write_sectors - Write sectors via WRITE DMA EXT (0x35)
+ * @port:  Port registers
+ * @lba:   Starting 48-bit LBA
+ * @count: Number of sectors (1-65536)
+ * @buf:   Input buffer
+ *
+ * Returns 0 on success, negative on error.
+ */
+int ahci_write_sectors(hba_port_t *port, uint64_t lba,
+                       uint32_t count, const void *buf);
+
 #endif /* JARVIS_AHCI_H */
