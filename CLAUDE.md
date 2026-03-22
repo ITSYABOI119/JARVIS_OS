@@ -16,7 +16,7 @@ Guidance for Claude Code when working with this repository.
 | **Phase 3** | **IN PROGRESS** | Months 24-36 | Beta on x86-64 bare metal (pre-work + early dev done) |
 | Phase 4 | Future | Months 36+ | Production v1.0 |
 
-**Current:** Phase 3, Early Development (March 2026). Pre-work complete, x86 drivers + GGUF parser done. Awaiting spare PC assembly.
+**Current:** Phase 3, Early Development (March 2026). Pre-work complete, x86 drivers + GGUF parser done, adversarial security audit complete (26/26 fixed). Awaiting spare PC assembly.
 
 ---
 
@@ -44,7 +44,7 @@ User Space Services (Ring 3)
 
 **Why:** AI inference (50-500ms) is 3 orders of magnitude too slow for Ring 0 interrupt handling (<1ms). Microkernel isolates time-critical ops from AI.
 
-### Phase 2 Split Deployment (CURRENT)
+### Phase 2 Split Deployment (COMPLETE)
 
 ```
 ┌──────────────────┐       UART        ┌──────────────────┐
@@ -232,7 +232,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 
 ## Current Status (Phase 3 Pre-Work + Early Development)
 
-**Phase 3 Pre-Work COMPLETE + Early Phase 3b work done** (March 20, 2026) - Awaiting spare PC assembly
+**Phase 3 Pre-Work COMPLETE + Early Phase 3b work done + Security audit COMPLETE** (March 22, 2026) - Awaiting spare PC assembly
 
 | Milestone | Status |
 |-----------|--------|
@@ -320,8 +320,11 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | PHASE_2_FINAL_REPORT.md written | DONE |
 | PHASE_3_HARDWARE_RESEARCH.md written | DONE |
 | PHASE_3_KICKOFF.md written | DONE |
+| Adversarial security audit: 26 findings (1 CRIT, 6 HIGH, 7 MED, 8 LOW, 4 INFO) | DONE |
+| All 26 security findings fixed (2 commits: 0ff1cde + 708aa15) | DONE |
+| 211/211 tests passing after security hardening | DONE |
 
-**Next:** All 8 pre-work tasks DONE. Ready for Phase 3a when spare PC is assembled.
+**Next:** All 8 pre-work tasks DONE. Security audit complete (26/26 fixed). Ready for Phase 3a when spare PC is assembled.
 
 ### Pre-Work Tasks (Before Spare PC)
 
@@ -340,12 +343,12 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 
 | Component | Files | Tests | Status |
 |-----------|-------|-------|--------|
-| GGUF parser (C-only) | gguf_parser.h/c | 9/9 PASS | Replaces C++ gguf.cpp (was Week 19-20) |
+| GGUF parser (C-only) | gguf_parser.h/c | 12/12 PASS | Replaces C++ gguf.cpp (was Week 19-20) + SEC-003/007/008/017 |
 | UART 16550A driver | uart_16550.c | 7/7 PASS | Full serial I/O (was Week 13-14) |
 | PCI enumeration | pci.c | 11/11 PASS | Bus scan, BAR, class find (needed for Week 15-18) |
 | AHCI discovery | ahci.c | 5/5 PASS | Controller probe, port detect (was Week 15-16) |
 | Custom rootserver | main_x86.c | Boots in QEMU | Decision cache + SHIELD working |
-| **Total early** | **32 files** | **32/32 PASS** | **8,636 LOC in phase3/src/** |
+| **Total early** | **32 files** | **35/35 PASS** | **8,636 LOC in phase3/src/** |
 
 ### Phase 3 Weeks (After Spare PC Assembly)
 
@@ -518,7 +521,8 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **User Guide:** `phase2/docs/USER_GUIDE.md`
 - **Tester Guide:** `phase2/docs/ALPHA_TESTER_GUIDE.md`
 - **Platform Guide:** `phase2/docs/PI4_PLATFORM_GUIDE.md`
-- **Security Audit:** `phase2/docs/SECURITY_SELF_AUDIT.md`
+- **Security Self-Audit:** `phase2/docs/SECURITY_SELF_AUDIT.md`
+- **Adversarial Security Audit:** `phase3/docs/SECURITY_AUDIT_2026-03-22.md`
 - **Phase 2 Final Report:** `phase2/docs/PHASE_2_FINAL_REPORT.md`
 - **Phase 3 Hardware Research:** `phase2/docs/PHASE_3_HARDWARE_RESEARCH.md`
 - **Phase 3 Kickoff:** `phase2/docs/PHASE_3_KICKOFF.md`
@@ -544,8 +548,9 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 
 - **Phase 1:** 39,106 LOC, 95 files, 338 test functions (COMPLETE)
 - **Phase 2:** ~27,000 LOC, 65 files, 108 tests (COMPLETE)
-- **Phase 3:** ~8,636 LOC, 32 files, 64 tests (IN PROGRESS — pre-work + early dev)
-- **Total:** ~75,000+ LOC, 190+ files, 510+ tests
+- **Phase 3:** ~8,636 LOC, 32 files, 67 tests (IN PROGRESS — pre-work + early dev + security hardening)
+- **Total:** ~75,000+ LOC, 190+ files, 513+ tests
+- **Security:** 26/26 adversarial audit findings resolved (March 2026)
 
 ### Hardware Pivot Context
 
