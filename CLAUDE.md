@@ -536,12 +536,16 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **UART 16550A Driver:** `phase3/src/drivers/uart_16550.c`
 - **PCI Enumeration:** `phase3/src/drivers/pci.c`
 - **AHCI Discovery:** `phase3/src/drivers/ahci.c`
+- **CI Workflow:** `.github/workflows/ci.yml`
+- **Check CI:** `gh run list --limit 1` then `gh run view <id> --log-failed` if failed
 
 ### Rules
 - Always update CLAUDE.md and week status files after completing work
 - COMMIT WEEKLY with week number in message
 - Update `phase2/docs/PHASE_2_PROGRESS_TRACKER.md` when completing work
 - Test everything: aim for 100% pass rate
+- When creating new test files (test_*.c or test_*.py), ALWAYS add a corresponding step to `.github/workflows/ci.yml` with the exact compile+run command. Verify the new CI step compiles locally before committing.
+- After every `git push`, check the GitHub Actions workflow status with `gh run list --limit 1` and `gh run view` to verify CI passed. If any step failed, investigate with `gh run view --log-failed` and fix before continuing.
 - Phase 2 is C-only on Pi 4 (no Python runtime on seL4)
 
 ### Codebase Metrics
