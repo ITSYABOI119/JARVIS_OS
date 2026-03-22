@@ -12,6 +12,7 @@
 static bool g_slot_alloc_ready = false;
 static seL4_CPtr g_slot_next = seL4_CapNull;
 static seL4_CPtr g_slot_end = seL4_CapNull;
+static seL4_CPtr g_slot_start = seL4_CapNull;  /* SEC-015: track initial start */
 
 /* Debug output via kernel */
 static void slot_debug_puts(const char *s)
@@ -47,8 +48,9 @@ bool slot_alloc_init(seL4_BootInfo *bi)
         return false;
     }
 
-    g_slot_next = bi->empty.start;
-    g_slot_end = bi->empty.end;
+    g_slot_next  = bi->empty.start;
+    g_slot_start = bi->empty.start;  /* SEC-015: remember initial start */
+    g_slot_end   = bi->empty.end;
     g_slot_alloc_ready = true;
 
     slot_debug_puts("[SLOT] Init: start=");
@@ -75,6 +77,15 @@ seL4_CPtr slot_alloc_next(const char *purpose)
     }
 
     seL4_CPtr slot = g_slot_next++;
+
+    /* SEC-015: Warn when slot pool utilization exceeds 80% */
+    uint32_t total = g_slot_end - g_slot_start;
+    uint32_t used  = g_slot_next - g_slot_start;
+    if (total > 0 && used * 5 > total * 4) {
+        slot_debug_puts("[SLOT] WARNING: >80% utilized\n");
+    }
+    /* NOTE: Slot freeing not implemented. seL4 CNode slots are consumed
+     * forward-only in this allocator. See SEC-015. */
 
     slot_debug_puts("[SLOT] Alloc #");
     slot_debug_hex(slot);

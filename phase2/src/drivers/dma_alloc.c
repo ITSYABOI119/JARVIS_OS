@@ -267,6 +267,17 @@ void *dma_alloc(size_t size, uintptr_t *paddr_out)
     /* Update allocator state */
     dma_alloc_offset += alloc_size;
 
+    /* SEC-015: Warn when DMA pool utilization exceeds 80% */
+    if (dma_alloc_offset * 5 > DMA_POOL_SIZE * 4) {
+        debug_puts("[DMA] WARNING: pool >80% utilized (");
+        debug_hex(dma_alloc_offset);
+        debug_puts("/");
+        debug_hex(DMA_POOL_SIZE);
+        debug_puts(")\n");
+    }
+    /* NOTE: DMA freeing not implemented. seL4 untyped retypes are forward-only —
+     * once consumed, frames cannot be returned. See SEC-015. */
+
     debug_puts("[DMA] Allocated: vaddr=");
     debug_hex(result_vaddr);
     debug_puts(" paddr=");

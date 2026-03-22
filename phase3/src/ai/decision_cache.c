@@ -211,8 +211,32 @@ bool cache_insert(decision_cache_t *cache,
         index = (index + 1) % CACHE_SIZE;
     } while (index != original_index);
 
-    /* Cache is full */
-    return false;
+    /* SEC-024: Cache full — LRU eviction. Find entry with oldest access time. */
+    {
+        size_t lru_index = 0;
+        uint64_t oldest_time = UINT64_MAX;
+        for (size_t i = 0; i < CACHE_SIZE; i++) {
+            if (cache->entries[i].state == ENTRY_VALID &&
+                cache->entries[i].last_access_time < oldest_time) {
+                oldest_time = cache->entries[i].last_access_time;
+                lru_index = i;
+            }
+        }
+
+        /* Evict the LRU entry */
+        cache_entry_t *evict = &cache->entries[lru_index];
+        evict->state = ENTRY_VALID;
+        evict->hash = hash;
+        strncpy(evict->query, normalized_query, MAX_QUERY_LEN - 1);
+        evict->query[MAX_QUERY_LEN - 1] = '\0';
+        strncpy(evict->action, action, MAX_ACTION_LEN - 1);
+        evict->action[MAX_ACTION_LEN - 1] = '\0';
+        evict->trust_level = trust_level;
+        evict->hit_count = 0;
+        evict->last_access_time = cache->time_counter++;
+        /* entries_used stays the same (replaced, not added) */
+        return true;
+    }
 }
 
 bool cache_remove(decision_cache_t *cache, const char *normalized_query)

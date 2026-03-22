@@ -274,6 +274,14 @@ extern int cache_load_extended_patterns(decision_cache_t *cache);
 /*
  * CRC-16-CCITT (polynomial 0x1021, initial value 0xFFFF)
  * Same algorithm as Python uart_ipc_client.py
+ *
+ * SEC-009: CRC-16 detects corruption but NOT tampering. Phase 3 shared-memory
+ * IPC should add HMAC-SHA256 for authentication. UART is point-to-point so
+ * tampering requires physical access (accepted for Phase 2).
+ *
+ * SEC-012: All UART IPC is plaintext. Acceptable for Phase 2 (physical serial
+ * link). Phase 3 shared-memory IPC should consider encryption for sensitive
+ * commands if threat model includes local privilege escalation.
  */
 static uint16_t crc16_ccitt(const uint8_t *data, size_t len)
 {
@@ -578,6 +586,7 @@ static void handle_query(uart_frame_t *request)
     char action[MAX_ACTION_LEN];
     trust_level_t trust;
     bool hit = cache_lookup(&g_cache, query, action, MAX_ACTION_LEN, &trust);
+    action[MAX_ACTION_LEN - 1] = '\0';  /* SEC-016: defensive null-termination */
 
     /* Build response payload: "ACTION:<action>|TRUST:<trust>|HIT:<0|1>" */
     char response[UART_MAX_PAYLOAD];
@@ -742,6 +751,10 @@ static void ipc_main_loop(void)
     int usb_line_pos = 0;
     hid_keyboard_report_t usb_prev_report;
     memset(&usb_prev_report, 0, sizeof(usb_prev_report));
+
+    /* SEC-013: No authentication on IPC messages. Any process that can write
+     * to the UART can send commands. Phase 3 should use seL4 endpoint badges
+     * or capability tokens for sender verification. */
 
     while (1) {
         /* Wait for incoming frame (50ms timeout for responsive USB polling) */

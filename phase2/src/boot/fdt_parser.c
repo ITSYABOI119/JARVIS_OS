@@ -74,16 +74,26 @@ static size_t jfdt_strlen(const char *s)
     return (size_t)(p - s);
 }
 
+/* SEC-005: Bounded strlen — stops at max bytes to prevent OOB reads */
+static size_t jfdt_strlen_bounded(const char *s, size_t max)
+{
+    size_t len = 0;
+    while (len < max && s[len] != '\0') len++;
+    return len;
+}
+
 /* ------------------------------------------------------------------ */
 /* Parser state (module-global, single-DTB)                            */
 /* ------------------------------------------------------------------ */
 
-static const uint8_t       *dtb_base   = NULL;
-static const struct jarvis_fdt_header *hdr    = NULL;
-static const uint8_t       *dt_struct  = NULL;
-static const char           *dt_strings = NULL;
-static uint32_t              struct_size = 0;
-static bool                  jfdt_valid  = false;
+static const uint8_t       *dtb_base     = NULL;
+static const struct jarvis_fdt_header *hdr      = NULL;
+static const uint8_t       *dt_struct    = NULL;
+static const char           *dt_strings   = NULL;
+static uint32_t              struct_size   = 0;
+static uint32_t              strings_size  = 0;   /* SEC-005 */
+static uint32_t              total_size    = 0;   /* SEC-019 */
+static bool                  jfdt_valid    = false;
 
 /* ------------------------------------------------------------------ */
 /* jarvis_fdt_init                                                     */
@@ -114,10 +124,26 @@ int jarvis_fdt_init(const void *dtb_blob)
         return -1;
     }
 
-    /* Store pointers to structure and strings blocks */
-    dt_struct   = dtb_base + fdt32_to_cpu(hdr->off_dt_struct);
-    dt_strings  = (const char *)(dtb_base + fdt32_to_cpu(hdr->off_dt_strings));
-    struct_size = fdt32_to_cpu(hdr->size_dt_struct);
+    /* SEC-019: Validate offsets against totalsize before storing pointers */
+    total_size = fdt32_to_cpu(hdr->totalsize);
+    uint32_t s_off  = fdt32_to_cpu(hdr->off_dt_struct);
+    uint32_t s_size = fdt32_to_cpu(hdr->size_dt_struct);
+    uint32_t str_off  = fdt32_to_cpu(hdr->off_dt_strings);
+    uint32_t str_size = fdt32_to_cpu(hdr->size_dt_strings);
+
+    if (s_off > total_size || s_off + s_size > total_size) {
+        debug_puts("[FDT] struct block exceeds totalsize\n");
+        return -1;
+    }
+    if (str_off > total_size || str_off + str_size > total_size) {
+        debug_puts("[FDT] strings block exceeds totalsize\n");
+        return -1;
+    }
+
+    dt_struct    = dtb_base + s_off;
+    dt_strings   = (const char *)(dtb_base + str_off);
+    struct_size  = s_size;
+    strings_size = str_size;
 
     jfdt_valid = true;
 
@@ -226,6 +252,8 @@ static int find_node_offset(const char *path)
             break;
 
         case JARVIS_FDT_PROP: {
+            /* SEC-005: Bounds check before reading property header */
+            if (offset + 8 > struct_size) return -1;
             uint32_t len = fdt32_to_cpu(*(const uint32_t *)(dt_struct + offset));
             offset += 8;             /* skip len + nameoff */
             offset += align4(len);
@@ -285,12 +313,18 @@ struct jarvis_fdt_prop_result jarvis_fdt_get_prop(const char *path, const char *
         offset += 4;
 
         if (token == JARVIS_FDT_PROP) {
+            /* SEC-005: Bounds check before reading len + nameoff */
+            if (offset + 8 > struct_size) return result;
             uint32_t len     = fdt32_to_cpu(*(const uint32_t *)(dt_struct + offset));
             uint32_t nameoff = fdt32_to_cpu(*(const uint32_t *)(dt_struct + offset + 4));
             offset += 8;
 
+            /* SEC-005: Validate string offset against strings block size */
+            if (nameoff >= strings_size) return result;
             const char *pname = dt_strings + nameoff;
             if (jfdt_strcmp(pname, propname) == 0) {
+                /* SEC-005: Validate property data doesn't exceed struct block */
+                if (offset + len > struct_size) return result;
                 result.data  = dt_struct + offset;
                 result.len   = len;
                 result.found = true;
