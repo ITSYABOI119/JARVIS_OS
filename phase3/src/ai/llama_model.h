@@ -77,4 +77,12 @@ void llama_free_model(llama_model_t *model);
 int  llama_alloc_state(llama_state_t *state, const llama_config_t *config);
 void llama_free_state(llama_state_t *state);
 
+/* Forward pass + generation (implemented in llama_forward.c) */
+void llama_forward(const llama_model_t *model, llama_state_t *state, int token);
+int  llama_generate(const llama_model_t *model, llama_state_t *state,
+                    const int *prompt_tokens, int n_prompt,
+                    int *output_tokens, int max_output,
+                    int eos_token, float temperature, int top_k,
+                    uint64_t seed);
+
 #endif /* LLAMA_MODEL_H */
