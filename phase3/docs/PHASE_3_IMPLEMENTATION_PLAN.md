@@ -474,25 +474,37 @@ Pre-Work Tasks (before spare PC):
 
 ### Early Phase 3b Work (Done Ahead of Schedule)
 
-While waiting for the spare PC, significant Phase 3b implementation work was completed in QEMU and with mock testing. This reduces Phase 3b timeline by an estimated 4-6 weeks.
+While waiting for the spare PC, the majority of Phase 3b implementation was completed in QEMU and with mock testing. This reduces Phase 3b timeline by an estimated 8-12 weeks.
 
 | Component | Planned Week | Status | Files | Tests |
 |-----------|-------------|--------|-------|-------|
-| GGUF parser (C-only) | 19-20 | ✅ DONE | gguf_parser.h/c | 9/9 PASS |
-| UART 16550A driver | 13-14 | ✅ DONE | uart_16550.c | 7/7 PASS |
-| PCI enumeration | 15-16 | ✅ DONE | pci.c | 11/11 PASS |
-| AHCI discovery | 15-16 | ✅ DONE | ahci.c | 5/5 PASS |
-| Custom rootserver | 9-12 | ✅ DONE (QEMU) | main_x86.c | Boots, cache works |
+| GGUF parser (C-only) | 19-20 | ✅ DONE | gguf_parser.h/c | 12 PASS |
+| UART 16550A driver | 13-14 | ✅ DONE | uart_16550.c/h | 7 PASS |
+| PCI enumeration | 15-16 | ✅ DONE | pci.c/h | 11 PASS |
+| AHCI full I/O | 15-16 | ✅ DONE | ahci.c/h | 13 PASS |
+| NIC RTL8168 skeleton | 17-18 | ✅ DONE | nic_rtl8168.c/h | 6 PASS |
+| x86 Timer (PIT/HPET/TSC) | 13-14 | ✅ DONE | x86_timer.c/h | 8 PASS |
+| Block device abstraction | 15-16 | ✅ DONE | blk_dev_x86.c/h | 9 PASS |
+| C tensor ops (10 ops) | 19-20 | ✅ DONE | tensor_ops.c/h | 14 PASS |
+| Dequantization (Q4_0/Q8_0/F16) | 19-20 | ✅ DONE | dequant.c/h | 23 PASS |
+| BPE Tokenizer | 21-22 | ✅ DONE | tokenizer.c/h | 12 PASS |
+| Model architecture + loading | 21-22 | ✅ DONE | llama_model.h, llama_load.c | 7 PASS |
+| Sampling (greedy + top-k) | 21-22 | ✅ DONE | sampling.c/h | 9 PASS |
+| Transformer forward pass | 21-22 | ✅ DONE | llama_forward.c | 9 PASS |
+| Inference API | 21-22 | ✅ DONE | inference.c/h | 4 PASS |
+| Shared memory IPC | 23-24 | ✅ DONE | shmem_ipc.c/h | 10 PASS |
+| Custom x86 rootserver | 9-12 | ✅ DONE (QEMU) | main_x86.c | Boots |
 
-**Total Phase 3 code so far:** 32 files, 8,636 LOC, 64 tests (all passing)
+**Total Phase 3 code:** 69 files, 18,344 LOC, 159 tests (all passing), 29 CI steps
 
 **What remains for Phase 3b on real hardware:**
 - Boot seL4 on actual Ryzen hardware (vs QEMU)
-- AHCI full read/write (discovery done, commands pending)
-- NIC driver (PCI enumeration done, NIC-specific TX/RX pending)
-- ggml integration into seL4 rootserver (GGUF parser done, tensor math integration pending)
-- Shared memory IPC integration into seL4 (protocol done, seL4 page mapping pending)
-- 30-day stability test
+- AHCI full read/write against real NVMe (mock-tested, real I/O pending)
+- NIC driver TX/RX against real NIC (skeleton done, real I/O pending)
+- Load real GGUF model from NVMe and run inference end-to-end
+- Extract tokenizer vocab from GGUF metadata (currently manual init)
+- QEMU rootserver rebuild with latest code
+- 30-day stability test on x86
 
 ---
 

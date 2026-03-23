@@ -38,6 +38,13 @@ void llama_forward(const llama_model_t *model, llama_state_t *state, int token)
     int max_seq   = state->max_seq_len;
     int heads_per_kv = n_heads / n_kv_heads;
 
+    /* Bounds check token ID (critical on bare-metal seL4 — no memory protection) */
+    if (token < 0 || token >= c->vocab_size) {
+        memset(state->logits, 0, c->vocab_size * sizeof(float));
+        state->pos++;
+        return;
+    }
+
     /* 1. EMBEDDING: copy token row into x */
     memcpy(state->x, model->token_embed + token * dim, dim * sizeof(float));
 

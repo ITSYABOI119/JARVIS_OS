@@ -341,14 +341,34 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 
 ### Phase 3 Early Work (Done in QEMU — ahead of schedule)
 
-| Component | Files | Tests | Status |
-|-----------|-------|-------|--------|
-| GGUF parser (C-only) | gguf_parser.h/c | 12/12 PASS | Replaces C++ gguf.cpp (was Week 19-20) + SEC-003/007/008/017 |
-| UART 16550A driver | uart_16550.c | 7/7 PASS | Full serial I/O (was Week 13-14) |
-| PCI enumeration | pci.c | 11/11 PASS | Bus scan, BAR, class find (needed for Week 15-18) |
-| AHCI discovery | ahci.c | 5/5 PASS | Controller probe, port detect (was Week 15-16) |
-| Custom rootserver | main_x86.c | Boots in QEMU | Decision cache + SHIELD working |
-| **Total early** | **32 files** | **35/35 PASS** | **8,636 LOC in phase3/src/** |
+| Component | Planned Week | Status | Files | Tests |
+|-----------|-------------|--------|-------|-------|
+| GGUF parser (C-only) | 19-20 | DONE | gguf_parser.h/c | 12 PASS |
+| UART 16550A driver | 13-14 | DONE | uart_16550.c/h | 7 PASS |
+| PCI enumeration | 15-16 | DONE | pci.c/h | 11 PASS |
+| AHCI full I/O | 15-16 | DONE | ahci.c/h | 13 PASS |
+| NIC RTL8168 skeleton | 17-18 | DONE | nic_rtl8168.c/h | 6 PASS |
+| x86 Timer (PIT/HPET/TSC) | 13-14 | DONE | x86_timer.c/h | 8 PASS |
+| Block device abstraction | 15-16 | DONE | blk_dev_x86.c/h | 9 PASS |
+| C tensor ops (10 ops) | 19-20 | DONE | tensor_ops.c/h | 14 PASS |
+| Dequantization (Q4_0/Q8_0/F16) | 19-20 | DONE | dequant.c/h | 23 PASS |
+| BPE Tokenizer | 21-22 | DONE | tokenizer.c/h | 12 PASS |
+| Model architecture + loading | 21-22 | DONE | llama_model.h, llama_load.c | 7 PASS |
+| Sampling (greedy + top-k) | 21-22 | DONE | sampling.c/h | 9 PASS |
+| Transformer forward pass | 21-22 | DONE | llama_forward.c | 9 PASS |
+| Inference API | 21-22 | DONE | inference.c/h | 4 PASS |
+| Shared memory IPC | 23-24 | DONE | shmem_ipc.c/h | 10 PASS |
+| Custom x86 rootserver | 9-12 | DONE (QEMU) | main_x86.c | Boots |
+| **Total** | | | **69 files** | **159 tests, 18,344 LOC** |
+
+**What remains for Phase 3b on real hardware:**
+- Boot seL4 on actual Ryzen hardware (vs QEMU)
+- AHCI full read/write against real NVMe (mock-tested, real I/O pending)
+- NIC driver TX/RX against real NIC (skeleton done, real I/O pending)
+- Load real GGUF model from NVMe and run inference end-to-end
+- Extract tokenizer vocab from GGUF metadata (currently manual init)
+- QEMU rootserver rebuild with latest code
+- 30-day stability test on x86
 
 ### Phase 3 Weeks (After Spare PC Assembly)
 
@@ -542,6 +562,11 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Tensor Ops:** `phase3/src/ai/tensor_ops.c/h`
 - **Dequantization:** `phase3/src/ai/dequant.c/h`
 - **BPE Tokenizer:** `phase3/src/ai/tokenizer.c/h`
+- **Llama Model Header:** `phase3/src/ai/llama_model.h`
+- **Llama Weight Loading:** `phase3/src/ai/llama_load.c`
+- **Llama Forward Pass:** `phase3/src/ai/llama_forward.c`
+- **Sampling:** `phase3/src/ai/sampling.c/h`
+- **Inference API:** `phase3/src/ai/inference.c/h`
 - **CI Workflow:** `.github/workflows/ci.yml`
 - **Check CI:** `gh run list --limit 1` then `gh run view <id> --log-failed` if failed
 
@@ -558,7 +583,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 
 - **Phase 1:** 39,106 LOC, 95 files, 338 test functions (COMPLETE)
 - **Phase 2:** ~27,000 LOC, 65 files, 108 tests (COMPLETE)
-- **Phase 3:** ~16,470 LOC, 58 files, 128 tests (IN PROGRESS — pre-work + early dev + security hardening)
+- **Phase 3:** ~18,344 LOC, 69 files, 159 tests (IN PROGRESS — pre-work + early dev + inference engine)
 - **Total:** ~75,000+ LOC, 190+ files, 513+ tests
 - **Security:** 26/26 adversarial audit findings resolved (March 2026)
 
