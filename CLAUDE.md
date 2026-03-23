@@ -359,7 +359,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | Inference API | 21-22 | DONE | inference.c/h | 4 PASS |
 | Shared memory IPC | 23-24 | DONE | shmem_ipc.c/h | 10 PASS |
 | Custom x86 rootserver | 9-12 | DONE (QEMU) | main_x86.c | 5/5 self-test PASS |
-| **Total** | | | **69 files** | **162 tests, 18,476 LOC** |
+| **Total** | | | **69 files** | **247 tests, 18,476 LOC** |
 
 **What remains for Phase 3b on real hardware:**
 - Boot seL4 on actual Ryzen hardware (vs QEMU)
@@ -582,7 +582,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 
 - **Phase 1:** 39,106 LOC, 95 files, 338 test functions (COMPLETE)
 - **Phase 2:** ~27,000 LOC, 65 files, 108 tests (COMPLETE)
-- **Phase 3:** ~18,476 LOC, 69 files, 162 tests (IN PROGRESS — pre-work + early dev + inference engine)
+- **Phase 3:** ~18,476 LOC, 69 files, 247 tests (IN PROGRESS — pre-work + early dev + inference engine)
 - **Total:** ~75,000+ LOC, 190+ files, 513+ tests
 - **Security:** 26/26 adversarial audit findings resolved (March 2026)
 

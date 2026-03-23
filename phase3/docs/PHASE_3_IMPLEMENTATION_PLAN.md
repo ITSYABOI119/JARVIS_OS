@@ -497,7 +497,7 @@ While waiting for the spare PC, the majority of Phase 3b implementation was comp
 | Shared memory IPC | 23-24 | ✅ DONE | shmem_ipc.c/h | 10 PASS |
 | Custom x86 rootserver | 9-12 | ✅ DONE (QEMU) | main_x86.c | 5/5 self-test PASS |
 
-**Total Phase 3 code:** 69 files, 18,476 LOC, 162 tests (all passing), 29 CI steps, 5/5 seL4 QEMU self-tests
+**Total Phase 3 code:** 69 files, 18,476 LOC, 247 tests (all passing), 29 CI steps, 5/5 seL4 QEMU self-tests
 
 **What remains for Phase 3b on real hardware:**
 - Boot seL4 on actual Ryzen hardware (vs QEMU)
