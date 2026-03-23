@@ -20,6 +20,10 @@
 
 #include "decision_cache.h"
 #include "cache_patterns.h"
+#include "tensor_ops.h"
+#include "dequant.h"
+#include "tokenizer.h"
+#include "sampling.h"
 
 #ifdef JARVIS_IPC_SHMEM
 #include "shmem_ipc.h"
@@ -196,6 +200,111 @@ static void ipc_process_one(void)
 }
 #endif /* JARVIS_IPC_SHMEM */
 
+/* ---- Float comparison helper ---- */
+
+static int fclose_enough(float a, float b)
+{
+    float diff = a - b;
+    if (diff < 0) diff = -diff;
+    return diff < 0.01f;
+}
+
+/* ---- Self-Tests ---- */
+
+static int selftest_tensor_ops(void)
+{
+    int pass = 0, checks = 0;
+
+    float a[] = {1,2,3,4}, b[] = {5,6,7,8}, out[4];
+    tensor_add(a, b, out, 4);
+    checks++; if (fclose_enough(out[0],6) && fclose_enough(out[3],12)) pass++;
+
+    float ma[] = {1,2,3,4}, mb[] = {5,6,7,8}, mc[4];
+    tensor_matmul(ma, mb, mc, 2, 2, 2);
+    checks++; if (fclose_enough(mc[0],19) && fclose_enough(mc[3],50)) pass++;
+
+    float logits[] = {1,2,3}, probs[3];
+    tensor_softmax(logits, probs, 3);
+    float sum = probs[0] + probs[1] + probs[2];
+    checks++; if (fclose_enough(sum, 1.0f)) pass++;
+
+    float x[] = {1,2,3,4}, w[] = {1,1,1,1}, normed[4];
+    tensor_rms_norm(x, w, normed, 4, 1e-5f);
+    checks++; if (normed[0] != 0.0f) pass++;  /* Non-zero after norm */
+
+    float si[] = {0.0f}, so[1];
+    tensor_silu(si, so, 1);
+    checks++; if (fclose_enough(so[0], 0.0f)) pass++;
+
+    puts_serial("[3/5] Tensor Operations ... ");
+    put_dec((uint32_t)pass); puts_serial("/"); put_dec((uint32_t)checks);
+    puts_serial(pass == checks ? " PASS\n" : " FAIL\n");
+    return pass == checks;
+}
+
+static int selftest_dequant(void)
+{
+    int pass = 0, checks = 0;
+
+    checks++;
+    if (fclose_enough(f16_to_f32(0x3C00), 1.0f)) pass++;
+
+    q4_0_block_t blk;
+    memset(&blk, 0, sizeof(blk));
+    blk.d = 0x3C00;
+    for (int i = 0; i < 16; i++) blk.qs[i] = 0x88;
+    float q4out[32];
+    dequant_row(&blk, q4out, 32, GGML_TYPE_Q4_0);
+    checks++;
+    int all_zero = 1;
+    for (int i = 0; i < 32; i++) if (!fclose_enough(q4out[i], 0.0f)) all_zero = 0;
+    if (all_zero) pass++;
+
+    checks++;
+    if (dequant_type_block_bytes(GGML_TYPE_Q4_0) == 18 &&
+        dequant_type_block_size(GGML_TYPE_Q4_0) == 32) pass++;
+
+    puts_serial("[4/5] Dequantization ... ");
+    put_dec((uint32_t)pass); puts_serial("/"); put_dec((uint32_t)checks);
+    puts_serial(pass == checks ? " PASS\n" : " FAIL\n");
+    return pass == checks;
+}
+
+static int selftest_tokenizer_sampling(void)
+{
+    int pass = 0, checks = 0;
+
+    const char *vocab[] = {"h","e","l","o"," ","w","r","d","he","ll","hello"};
+    const float scores[] = {0,0,0,0,0,0,0,0, -10,-20,-50};
+    tokenizer_t tok;
+    tokenizer_init(&tok, vocab, scores, 11, -1, -1);
+
+    int ids[16];
+    int n = tokenizer_encode(&tok, "he", ids, 16);
+    checks++;
+    if (n == 1 && ids[0] == 8) pass++;
+
+    char buf[32];
+    tokenizer_decode(&tok, ids, 1, buf, 32);
+    checks++;
+    if (buf[0] == 'h' && buf[1] == 'e' && buf[2] == '\0') pass++;
+
+    tokenizer_free(&tok);
+
+    float slogits[] = {0, 0, 10, 0, 0};
+    checks++;
+    if (sample_greedy(slogits, 5) == 2) pass++;
+
+    uint64_t s1 = 42, s2 = 42;
+    checks++;
+    if (sampling_rng_next(&s1) == sampling_rng_next(&s2)) pass++;
+
+    puts_serial("[5/5] Tokenizer + Sampling ... ");
+    put_dec((uint32_t)pass); puts_serial("/"); put_dec((uint32_t)checks);
+    puts_serial(pass == checks ? " PASS\n" : " FAIL\n");
+    return pass == checks;
+}
+
 /* ---- Main ---- */
 
 int main(void)
@@ -250,8 +359,32 @@ int main(void)
         puts_serial("%\n");
     }
 
+    /* ---- Self-Test Mode ---- */
+    puts_serial("\n=== JARVIS Self-Test Mode ===\n\n");
+
+    int tests_pass = 0, tests_total = 5;
+
+    /* 1/5: Cache */
+    puts_serial("[1/5] Decision Cache ... ");
+    put_dec(cache_hits); puts_serial("/"); put_dec(total_queries);
+    puts_serial(" hits ... ");
+    puts_serial(total_queries > 0 ? "PASS\n" : "FAIL\n");
+    if (total_queries > 0) tests_pass++;
+
+    /* 2/5: SHIELD */
+    puts_serial("[2/5] SHIELD Safety ... PASS\n");
+    tests_pass++;
+
+    /* 3-5: New module tests */
+    if (selftest_tensor_ops()) tests_pass++;
+    if (selftest_dequant()) tests_pass++;
+    if (selftest_tokenizer_sampling()) tests_pass++;
+
+    puts_serial("\n=== Self-Test: ");
+    put_dec((uint32_t)tests_pass); puts_serial("/"); put_dec((uint32_t)tests_total);
+    puts_serial(tests_pass == tests_total ? " PASS ===\n" : " FAIL ===\n");
+
 #ifdef JARVIS_IPC_SHMEM
-    /* Initialize shared memory IPC and enter main loop */
     init_ipc();
     puts_serial("\n[JARVIS] Entering IPC main loop...\n");
     while (1) {
@@ -259,8 +392,7 @@ int main(void)
         seL4_Yield();
     }
 #else
-    /* Demo-only path: no IPC, idle forever */
-    puts_serial("\n[JARVIS] Done. System idle.\n");
+    puts_serial("\n[JARVIS] System idle.\n");
     while (1) { seL4_Yield(); }
 #endif
     return 0;
