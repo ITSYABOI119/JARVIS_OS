@@ -1,10 +1,10 @@
 # JARVIS AI-OS: Phase 3 Implementation Plan
 
-**Version:** 1.0
-**Date:** March 18, 2026
+**Version:** 2.0
+**Date:** March 23, 2026
 **Phase:** Phase 3 - Beta System (Months 24-36)
-**Duration:** 40-44 weeks (~10 months at 8-12 hours/week)
-**Status:** PRE-WORK COMPLETE, awaiting spare PC for Phase 3a
+**Duration:** Original 40-44 weeks, revised to ~18-22 weeks remaining after PC assembly
+**Status:** SOFTWARE COMPLETE — inference engine built and tested in QEMU, awaiting spare PC for hardware integration
 
 ---
 
@@ -32,10 +32,12 @@ This document provides a detailed week-by-week implementation plan for Phase 3. 
 
 ---
 
-## CURRENT STATUS (March 19, 2026)
+## CURRENT STATUS (March 23, 2026)
 
 **Phase 2 COMPLETE** — GO recommendation for Phase 3
-**Pre-Work:** ✅ COMPLETE — all 8 interim tasks done (see Pre-Work section below)
+**Pre-Work:** ✅ COMPLETE — all 8 interim tasks done
+**Phase 3b Software:** ✅ COMPLETE — full inference engine (GGUF→dequant→tensor ops→tokenizer→forward pass→sampling→generation), all drivers mock-tested, rootserver self-test passing in QEMU
+**Blocking:** Spare PC assembly (1/7 parts bought)
 
 ### Phase 2 Baseline (What Carries Forward)
 
@@ -65,14 +67,14 @@ This document provides a detailed week-by-week implementation plan for Phase 3. 
 
 | Part | Model | Price (AUD) | Status |
 |------|-------|-------------|--------|
-| RAM | G.Skill Ripjaws V 16GB DDR4-3200 | $179 | **BOUGHT** (Mwave) |
-| SSD | Netac NV3000 500GB NVMe | $110 | Pending (Amazon AU) |
-| PSU | Corsair RM650e 650W | $125 | Pending (Amazon AU) |
-| Mobo | Gigabyte B550M K | $109 | Pending (MSY/Centre Com) |
-| CPU | AMD Ryzen 5 5600 | $176 | Pending (Centre Com) |
-| GPU | MSI RTX 3060 12GB | $429 | Pending (Centre Com) |
+| RAM | G.Skill Ripjaws V 16GB DDR4-3200 | $189 | **BOUGHT** (Mwave) |
+| SSD | Netac NV3000 500GB NVMe | $130 | Pending (Amazon AU) |
+| PSU | Corsair RM650e (2025) 650W | $125 | Pending (Amazon AU) |
+| Mobo | Gigabyte B550M K | $109 | Pending (Centre Com) |
+| CPU | AMD Ryzen 5 5600 | $175 | Pending (Centre Com) |
+| GPU | MSI RTX 3060 Ventus 2X 12GB | $429 | Pending (Centre Com) |
 | Case | Antec NX200M | $49 | Pending (MSY) |
-| **Total** | | **~$1,177** | **1/7 bought** |
+| **Total** | | **~$1,206** | **1/7 bought** |
 
 **Note:** DDR4 prices inflated 150-200% due to global DRAM shortage (AI demand). RAM bought early to avoid further increases. Recovery not expected until late 2027.
 
@@ -505,13 +507,34 @@ While waiting for the spare PC, the majority of Phase 3b implementation was comp
 - Extract tokenizer vocab from GGUF metadata (currently manual init)
 - 30-day stability test on x86
 
+### Revised Timeline (March 23, 2026)
+
+With Phase 3b Weeks 7-24 software complete, the remaining work is hardware integration + validation. Original 44-week plan compressed to ~18-22 weeks:
+
+| Phase | Weeks | Status | What Remains |
+|-------|-------|--------|-------------|
+| 3a compressed | 1-2 | NOT STARTED (need PC) | Assembly, benchmarks, seL4 boot |
+| 3b HW integration | 3-6 | SOFTWARE DONE | Real AHCI/NIC/UART I/O, model loading |
+| 3b stability | 7-10 | NOT STARTED | Integration testing + 30-day test |
+| 3c hardening | 11-14 | NOT STARTED | Security audit, fuzz testing, model scaling |
+| 3c finalization | 15-18 | NOT STARTED | SHIELD, docs, final report, v0.3.0-beta tag |
+
+**Estimated completion:** ~18 weeks after spare PC assembly (vs original 44 weeks).
+**Time saved:** ~26 weeks of software development done pre-hardware.
+
 ---
 
-## Month 1-2: Phase 3a — GPU-Accelerated Host (Weeks 1-6)
+## Phase 3a — Compressed Hardware Bring-Up (Weeks 1-2)
 
-### Focus: Replace Main PC with Dedicated Spare PC
+### Focus: Assemble PC, Validate Hardware, Boot seL4
 
-**Objective:** Move AI inference from the main PC (cannot wipe) to the spare PC (dedicated, wipeable) with RTX 3060 GPU acceleration. Pi 4 continues running Phase 2 code unchanged. Zero code changes, zero risk.
+**Objective:** Assemble the spare PC, validate hardware works with Linux + GPU benchmarks, then boot seL4 on real Ryzen hardware. Skip the Phase 2 UART/Pi 4 stability re-test (already proven: 30.6 days, 0 crashes). Go directly to bare-metal seL4.
+
+**Rationale for compression:** The original 6-week Phase 3a assumed the Pi 4 would remain the seL4 platform while the spare PC served as GPU host. Since Phase 3b software is already complete (inference engine, all drivers, self-test mode), there's no value in running the Pi 4 UART test harness against a different host PC. Instead, validate GPU performance (one afternoon) then go straight to seL4 bare metal.
+
+> **Original Phase 3a plan (Weeks 1-6) preserved below for reference. These tasks are now compressed into 2 weeks.**
+
+**Objective (original):** Move AI inference from the main PC (cannot wipe) to the spare PC (dedicated, wipeable) with RTX 3060 GPU acceleration. Pi 4 continues running Phase 2 code unchanged. Zero code changes, zero risk.
 
 ---
 
@@ -652,7 +675,41 @@ While waiting for the spare PC, the majority of Phase 3b implementation was comp
 **Dependencies:** Week 4 complete
 **Acceptance:** 3-day stability 99.7%+, seL4 x86-64 builds for QEMU
 
-**Phase 3a Checkpoint:** Spare PC operational, GPU AI validated, UART IPC stable, seL4 build env ready
+**Phase 3a Checkpoint (original):** Spare PC operational, GPU AI validated, UART IPC stable, seL4 build env ready
+
+---
+
+### Compressed Phase 3a: Week 1 — Assembly + Linux + GPU Benchmarks
+
+**Tasks:**
+1. Assemble spare PC (Ryzen 5 5600, 16GB DDR4, RTX 3060, NVMe SSD)
+2. Install Ubuntu 22.04, NVIDIA drivers + CUDA, verify `nvidia-smi`
+3. Install llama.cpp with CUDA, benchmark: Llama 3.2 1B Q4, 3B Q4, 7B Q4
+4. Install seL4 build dependencies (gcc, cmake, ninja, repo)
+5. Clone seL4 repos, build kernel for x86-64 PC99, verify QEMU boot on spare PC
+
+**Deliverables:** Hardware validated, GPU benchmark results, seL4 build env ready
+**Effort:** 8-12 hours
+**Acceptance:** `nvidia-smi` shows RTX 3060, llama-bench results captured, seL4 QEMU boots
+
+---
+
+### Compressed Phase 3a: Week 2 — Boot seL4 on Real Ryzen Hardware
+
+**Tasks:**
+1. Prepare boot media (GRUB2 USB stick using `create_boot_usb.sh`)
+2. Boot seL4 on Ryzen 5 5600 — connect serial console
+3. Debug any IOAPIC/LAPIC/HPET hardware issues
+4. Run JARVIS rootserver with self-test mode on real hardware
+5. IPC benchmark: measure native seL4 IPC round-trip (~0.3-0.5μs expected)
+6. Validate: cache, SHIELD, tensor ops, dequant, tokenizer, sampling all PASS
+
+**Deliverables:** seL4 on real Ryzen, self-test 5/5 PASS, IPC benchmark
+**Effort:** 8-12 hours
+**Acceptance:** JARVIS rootserver 5/5 self-test on real x86 hardware
+**Risk:** AMD Ryzen PC99 compatibility. Mitigation: already tested in QEMU.
+
+**Compressed Phase 3a Checkpoint:** Spare PC operational, GPU benchmarked, seL4 booting on real hardware with self-test PASS.
 
 ---
 
@@ -663,6 +720,8 @@ While waiting for the spare PC, the majority of Phase 3b implementation was comp
 ---
 
 ### Week 7-8: seL4 x86-64 Build Environment + QEMU Validation
+
+> **STATUS:** ✅ SOFTWARE COMPLETE — seL4 x86 rootserver built and running in QEMU (pre-work task 1+8). Validated with 5/5 self-test. Hardware validation pending Week 2.
 
 **Tasks:**
 1. Configure seL4 for x86-64 PC99 platform
@@ -691,6 +750,8 @@ While waiting for the spare PC, the majority of Phase 3b implementation was comp
 ---
 
 ### Week 9-10: Boot seL4 on Spare PC (Real Hardware)
+
+> **STATUS:** ⏳ PENDING HARDWARE — Boot on real Ryzen hardware. Covered by compressed Week 2 above.
 
 **Tasks:**
 1. Prepare boot media
@@ -725,6 +786,8 @@ While waiting for the spare PC, the majority of Phase 3b implementation was comp
 ---
 
 ### Week 11-12: Port Decision Cache + SHIELD to x86
+
+> **STATUS:** ✅ SOFTWARE COMPLETE — Decision cache (308 patterns), SHIELD safety, shell framework all ported and working in QEMU rootserver.
 
 **Tasks:**
 1. Port decision cache to x86 rootserver
@@ -769,6 +832,8 @@ While waiting for the spare PC, the majority of Phase 3b implementation was comp
 
 ### Week 13-14: x86 Serial Driver + Timer
 
+> **STATUS:** ✅ SOFTWARE COMPLETE — UART 16550A (7 tests), x86 timer PIT/HPET/TSC (8 tests). Mock-tested. Hardware I/O port integration pending.
+
 **Tasks:**
 1. Complete 16550A UART driver
    - File: `phase3/src/drivers/uart_16550.c`
@@ -799,6 +864,8 @@ While waiting for the spare PC, the majority of Phase 3b implementation was comp
 ---
 
 ### Week 15-16: AHCI Storage Driver
+
+> **STATUS:** ✅ SOFTWARE COMPLETE — PCI enumeration (11 tests), AHCI full I/O (13 tests), block device abstraction (9 tests). Mock-tested. Real NVMe I/O pending.
 
 **Tasks:**
 1. Implement PCI enumeration
@@ -836,6 +903,8 @@ While waiting for the spare PC, the majority of Phase 3b implementation was comp
 ---
 
 ### Week 17-18: Network Driver (Intel/Realtek NIC)
+
+> **STATUS:** ✅ SOFTWARE COMPLETE — RTL8168 NIC driver skeleton (6 tests). Real NIC TX/RX pending. Board NIC chipset needs verification on actual B550M K.
 
 **Tasks:**
 1. Identify NIC on spare PC
@@ -880,6 +949,8 @@ While waiting for the spare PC, the majority of Phase 3b implementation was comp
 
 ### Week 19-20: ggml Library Integration
 
+> **STATUS:** ✅ SOFTWARE COMPLETE — Replaced ggml C++ backend entirely. Pure C implementations: tensor ops (14 tests), dequant Q4_0/Q8_0/F16 (23 tests), GGUF parser (12 tests), POSIX stubs, ggml integration (16 tests). All verified in QEMU self-test.
+
 **Tasks:**
 1. Research ggml build requirements for seL4
    - ggml is C/C++ with no mandatory external dependencies
@@ -919,6 +990,8 @@ While waiting for the spare PC, the majority of Phase 3b implementation was comp
 ---
 
 ### Week 21-22: AI Inference in seL4 Userspace
+
+> **STATUS:** ✅ SOFTWARE COMPLETE — Full inference engine: Llama model architecture + weight loading (7 tests), transformer forward pass with GQA attention + SwiGLU FFN + RoPE + KV cache (9 tests), BPE tokenizer (12 tests), sampling greedy + top-k (9 tests), top-level inference API (4 tests). Tested with tiny synthetic model. Real GGUF model loading pending NVMe driver on real hardware.
 
 **Tasks:**
 1. Load GGUF model file from NVMe
