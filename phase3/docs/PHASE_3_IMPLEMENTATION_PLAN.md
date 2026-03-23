@@ -36,7 +36,7 @@ This document provides a detailed week-by-week implementation plan for Phase 3. 
 
 **Phase 2 COMPLETE** — GO recommendation for Phase 3
 **Pre-Work:** ✅ COMPLETE — all 8 interim tasks done
-**Phase 3b Software:** ✅ COMPLETE — full inference engine (GGUF→dequant→tensor ops→tokenizer→forward pass→sampling→generation), all drivers mock-tested, rootserver self-test passing in QEMU
+**Phase 3b Software:** ✅ COMPLETE — full inference engine (GGUF→dequant→tensor ops→tokenizer→forward pass→sampling→generation), all drivers mock-tested, rootserver self-test 5/5 PASS in QEMU
 **Blocking:** Spare PC assembly (1/7 parts bought)
 
 ### Phase 2 Baseline (What Carries Forward)
@@ -721,7 +721,7 @@ With Phase 3b Weeks 7-24 software complete, the remaining work is hardware integ
 
 ### Week 7-8: seL4 x86-64 Build Environment + QEMU Validation
 
-> **STATUS:** ✅ SOFTWARE COMPLETE — seL4 x86 rootserver built and running in QEMU (pre-work task 1+8). Validated with 5/5 self-test. Hardware validation pending Week 2.
+> **STATUS:** ✅ SOFTWARE COMPLETE — seL4 x86 rootserver built and running in QEMU (pre-work tasks 1+8). Rebuilt with self-test mode: 5/5 PASS. Hardware validation pending Week 2.
 
 **Tasks:**
 1. Configure seL4 for x86-64 PC99 platform
@@ -1027,6 +1027,8 @@ With Phase 3b Weeks 7-24 software complete, the remaining work is hardware integ
 ---
 
 ### Week 23-24: Shared Memory IPC
+
+> **STATUS:** ✅ SOFTWARE COMPLETE — Shared memory IPC (10 tests), 23.7M msg/sec on Linux. Integrated into rootserver behind `#ifdef JARVIS_IPC_SHMEM`. seL4 page mapping pending real hardware (swap mmap → seL4_Page_Map).
 
 **Tasks:**
 1. Design shared memory protocol
