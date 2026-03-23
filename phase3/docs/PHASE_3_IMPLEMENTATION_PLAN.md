@@ -68,13 +68,13 @@ This document provides a detailed week-by-week implementation plan for Phase 3. 
 | Part | Model | Price (AUD) | Status |
 |------|-------|-------------|--------|
 | RAM | G.Skill Ripjaws V 16GB DDR4-3200 | $189 | **BOUGHT** (Mwave) |
-| SSD | Netac NV3000 500GB NVMe | $130 | Pending (Amazon AU) |
-| PSU | Corsair RM650e (2025) 650W | $125 | Pending (Amazon AU) |
-| Mobo | Gigabyte B550M K | $109 | Pending (Centre Com) |
-| CPU | AMD Ryzen 5 5600 | $175 | Pending (Centre Com) |
-| GPU | MSI RTX 3060 Ventus 2X 12GB | $429 | Pending (Centre Com) |
-| Case | Antec NX200M | $49 | Pending (MSY) |
-| **Total** | | **~$1,206** | **1/7 bought** |
+| CPU | AMD Ryzen 5 5600 | $176 | Pending (JW Computers) |
+| SSD | Team Group MP44L 500GB NVMe PCIe Gen4 | $119 | Pending (JW Computers) |
+| Case | Cooler Master MasterBox NR200 Mini-ITX | $89 | Pending (JW Computers) |
+| Mobo | ASRock B550M-ITX/ac (Mini-ITX) | $209 | Pending (Scorptec) |
+| PSU | Corsair SF750 750W SFX | $239 | Pending (Scorptec) |
+| GPU | MSI RTX 3060 Ventus 2X 12GB | $429 | Pending |
+| **Total** | | **~$1,450** | **1/7 bought** |
 
 **Note:** DDR4 prices inflated 150-200% due to global DRAM shortage (AI demand). RAM bought early to avoid further increases. Recovery not expected until late 2027.
 
