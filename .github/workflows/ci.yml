@@ -217,3 +217,19 @@ jobs:
           phase3/src/ai/test_tokenizer.c phase3/src/ai/tokenizer.c \
           -I phase3/src/ai -lm -o /tmp/test_tokenizer
         /tmp/test_tokenizer
+
+    - name: "Phase 3: Llama Model Loading (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 \
+          -I phase3/src/ai \
+          phase3/src/ai/test_llama_load.c phase3/src/ai/llama_load.c \
+          phase3/src/ai/dequant.c phase3/src/ai/gguf_parser.c \
+          -lm -o /tmp/test_llama_load
+        /tmp/test_llama_load
+
+    - name: "Phase 3: Sampling (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 \
+          phase3/src/ai/test_sampling.c phase3/src/ai/sampling.c \
+          -I phase3/src/ai -lm -o /tmp/test_sampling
+        /tmp/test_sampling
