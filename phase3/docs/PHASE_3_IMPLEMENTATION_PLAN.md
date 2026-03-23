@@ -493,9 +493,9 @@ While waiting for the spare PC, the majority of Phase 3b implementation was comp
 | Transformer forward pass | 21-22 | ✅ DONE | llama_forward.c | 9 PASS |
 | Inference API | 21-22 | ✅ DONE | inference.c/h | 4 PASS |
 | Shared memory IPC | 23-24 | ✅ DONE | shmem_ipc.c/h | 10 PASS |
-| Custom x86 rootserver | 9-12 | ✅ DONE (QEMU) | main_x86.c | Boots |
+| Custom x86 rootserver | 9-12 | ✅ DONE (QEMU) | main_x86.c | 5/5 self-test PASS |
 
-**Total Phase 3 code:** 69 files, 18,344 LOC, 159 tests (all passing), 29 CI steps
+**Total Phase 3 code:** 69 files, 18,476 LOC, 162 tests (all passing), 29 CI steps, 5/5 seL4 QEMU self-tests
 
 **What remains for Phase 3b on real hardware:**
 - Boot seL4 on actual Ryzen hardware (vs QEMU)
@@ -503,7 +503,6 @@ While waiting for the spare PC, the majority of Phase 3b implementation was comp
 - NIC driver TX/RX against real NIC (skeleton done, real I/O pending)
 - Load real GGUF model from NVMe and run inference end-to-end
 - Extract tokenizer vocab from GGUF metadata (currently manual init)
-- QEMU rootserver rebuild with latest code
 - 30-day stability test on x86
 
 ---

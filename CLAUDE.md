@@ -358,8 +358,8 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | Transformer forward pass | 21-22 | DONE | llama_forward.c | 9 PASS |
 | Inference API | 21-22 | DONE | inference.c/h | 4 PASS |
 | Shared memory IPC | 23-24 | DONE | shmem_ipc.c/h | 10 PASS |
-| Custom x86 rootserver | 9-12 | DONE (QEMU) | main_x86.c | Boots |
-| **Total** | | | **69 files** | **159 tests, 18,344 LOC** |
+| Custom x86 rootserver | 9-12 | DONE (QEMU) | main_x86.c | 5/5 self-test PASS |
+| **Total** | | | **69 files** | **162 tests, 18,476 LOC** |
 
 **What remains for Phase 3b on real hardware:**
 - Boot seL4 on actual Ryzen hardware (vs QEMU)
@@ -367,7 +367,6 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 - NIC driver TX/RX against real NIC (skeleton done, real I/O pending)
 - Load real GGUF model from NVMe and run inference end-to-end
 - Extract tokenizer vocab from GGUF metadata (currently manual init)
-- QEMU rootserver rebuild with latest code
 - 30-day stability test on x86
 
 ### Phase 3 Weeks (After Spare PC Assembly)
@@ -583,7 +582,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 
 - **Phase 1:** 39,106 LOC, 95 files, 338 test functions (COMPLETE)
 - **Phase 2:** ~27,000 LOC, 65 files, 108 tests (COMPLETE)
-- **Phase 3:** ~18,344 LOC, 69 files, 159 tests (IN PROGRESS — pre-work + early dev + inference engine)
+- **Phase 3:** ~18,476 LOC, 69 files, 162 tests (IN PROGRESS — pre-work + early dev + inference engine)
 - **Total:** ~75,000+ LOC, 190+ files, 513+ tests
 - **Security:** 26/26 adversarial audit findings resolved (March 2026)
 
