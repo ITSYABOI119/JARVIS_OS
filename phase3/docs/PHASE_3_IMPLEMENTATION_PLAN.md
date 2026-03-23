@@ -904,13 +904,13 @@ With Phase 3b Weeks 7-24 software complete, the remaining work is hardware integ
 
 ### Week 17-18: Network Driver (Intel/Realtek NIC)
 
-> **STATUS:** ✅ SOFTWARE COMPLETE — RTL8168 NIC driver skeleton (6 tests). Real NIC TX/RX pending. Board NIC chipset needs verification on actual B550M K.
+> **STATUS:** ✅ SOFTWARE COMPLETE — RTL8168 NIC driver skeleton (6 tests). Real NIC TX/RX pending. NIC confirmed: Realtek RTL8111H on ASRock B550M-ITX/ac (PCI ID 10EC:8168 — matches driver).
 
 **Tasks:**
 1. Identify NIC on spare PC
    - PCI scan for Ethernet controller
    - Likely: Intel I225-V (2.5GbE) or Realtek RTL8111/8125 (common on B550 boards)
-   - Check MSI B550M specifications for exact NIC chipset
+   - ASRock B550M-ITX/ac has Realtek RTL8111H (confirmed) — matches nic_rtl8168.c driver
 
 2. Implement NIC driver
    - File: `phase3/src/drivers/nic_x86.c`
@@ -935,7 +935,7 @@ With Phase 3b Weeks 7-24 software complete, the remaining work is hardware integ
 **Effort:** 14-18 hours (2 weeks)
 **Dependencies:** Week 15-16 complete (PCI enumeration needed)
 **Acceptance:** Successful ping to local network gateway
-**Risk:** NIC chipset uncertainty. Mitigation: check B550M specs before ordering, or use USB Ethernet as fallback.
+**Risk:** NIC chipset uncertainty. ✅ RESOLVED: ASRock B550M-ITX/ac confirmed Realtek RTL8111H — matches existing nic_rtl8168.c driver.
 
 **Week 18 Checkpoint:** x86 drivers operational (serial, timer, AHCI, NIC). seL4 bare metal with storage + networking.
 
@@ -1616,7 +1616,7 @@ Q4_K_M recommended for Phase 3b — best balance of quality and memory efficienc
 | 1 | AMD Ryzen PC99 seL4 boot fails | Low | High | Test on QEMU first (Week 7-8); debug IOAPIC/LAPIC; Intel NUC as last resort |
 | 2 | ggml POSIX stubs too complex | Medium | High | Start single-threaded; stub only what's called; evaluate ggml pure C subset |
 | 3 | AHCI driver complexity | Medium | Medium | Start with PIO mode; upgrade to DMA later; OSDev has reference code |
-| 4 | NIC chipset unknown until board inspected | Low | Medium | Check B550M specs; USB Ethernet as fallback |
+| 4 | NIC chipset unknown until board inspected | Low | ✅ RESOLVED | ASRock B550M-ITX/ac has Realtek RTL8111H — matches nic_rtl8168.c |
 | 5 | CPU inference too slow | Low | Medium | Cache handles 85%+; 1B at ~20 tok/s is usable; optimize later |
 | 6 | 16GB RAM insufficient | Low | Medium | 1B Q4 needs 0.7GB + seL4 <1GB; plenty of headroom; upgrade to 32GB (~$50) |
 | 7 | Stability regression on new platform | Medium | Medium | Pi 4 stays as fallback; staged migration |
