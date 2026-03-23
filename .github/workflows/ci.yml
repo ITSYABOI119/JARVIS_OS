@@ -179,3 +179,27 @@ jobs:
           phase3/src/drivers/pci.c \
           -o /tmp/test_nic
         /tmp/test_nic
+
+    - name: "Phase 3: x86 Timer (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -DJARVIS_TEST_MOCK \
+          -I phase3/src/drivers \
+          phase3/src/drivers/test_x86_timer.c phase3/src/drivers/x86_timer.c \
+          -o /tmp/test_x86_timer
+        /tmp/test_x86_timer
+
+    - name: "Phase 3: Block Device (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -DJARVIS_TEST_MOCK \
+          -I phase3/src/drivers \
+          phase3/src/drivers/test_blk_dev.c phase3/src/drivers/blk_dev_x86.c \
+          phase3/src/drivers/ahci.c \
+          -o /tmp/test_blk_dev
+        /tmp/test_blk_dev
+
+    - name: "Phase 3: Tensor Ops (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 \
+          phase3/src/ai/test_tensor_ops.c phase3/src/ai/tensor_ops.c \
+          -I phase3/src/ai -lm -o /tmp/test_tensor_ops
+        /tmp/test_tensor_ops
