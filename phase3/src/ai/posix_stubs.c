@@ -54,14 +54,25 @@
 #include "posix_stubs.h"
 #include <stdio.h>
 
+#ifdef JARVIS_HAS_TIMER
+#include "../drivers/x86_timer.h"
+#endif
+
 /* clock_gettime: On seL4 x86-64, map to HPET or TSC timer driver.
- * The real implementation will read the hardware timer and convert
- * ticks to seconds + nanoseconds.
- * Stub returns 0 (all timings will be zero). */
+ * When JARVIS_HAS_TIMER is defined, uses the real x86 timer.
+ * Otherwise returns 0 (stub mode). */
 int clock_gettime(int clk_id, struct timespec *tp)
 {
     (void)clk_id;
-    if (tp) { tp->tv_sec = 0; tp->tv_nsec = 0; }
+    if (!tp) return -1;
+#ifdef JARVIS_HAS_TIMER
+    uint64_t us = timer_ticks_to_us(timer_read_ticks());
+    tp->tv_sec  = (long)(us / 1000000ULL);
+    tp->tv_nsec = (long)((us % 1000000ULL) * 1000);
+#else
+    tp->tv_sec = 0;
+    tp->tv_nsec = 0;
+#endif
     return 0;
 }
 

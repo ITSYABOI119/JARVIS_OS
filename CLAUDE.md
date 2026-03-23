@@ -536,6 +536,12 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **UART 16550A Driver:** `phase3/src/drivers/uart_16550.c`
 - **PCI Enumeration:** `phase3/src/drivers/pci.c`
 - **AHCI Discovery:** `phase3/src/drivers/ahci.c`
+- **Block Device (x86):** `phase3/src/drivers/blk_dev_x86.c/h`
+- **x86 Timer:** `phase3/src/drivers/x86_timer.c/h`
+- **NIC RTL8168:** `phase3/src/drivers/nic_rtl8168.c/h`
+- **Tensor Ops:** `phase3/src/ai/tensor_ops.c/h`
+- **Dequantization:** `phase3/src/ai/dequant.c/h`
+- **BPE Tokenizer:** `phase3/src/ai/tokenizer.c/h`
 - **CI Workflow:** `.github/workflows/ci.yml`
 - **Check CI:** `gh run list --limit 1` then `gh run view <id> --log-failed` if failed
 
@@ -552,7 +558,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 
 - **Phase 1:** 39,106 LOC, 95 files, 338 test functions (COMPLETE)
 - **Phase 2:** ~27,000 LOC, 65 files, 108 tests (COMPLETE)
-- **Phase 3:** ~8,636 LOC, 32 files, 67 tests (IN PROGRESS — pre-work + early dev + security hardening)
+- **Phase 3:** ~16,470 LOC, 58 files, 128 tests (IN PROGRESS — pre-work + early dev + security hardening)
 - **Total:** ~75,000+ LOC, 190+ files, 513+ tests
 - **Security:** 26/26 adversarial audit findings resolved (March 2026)
 

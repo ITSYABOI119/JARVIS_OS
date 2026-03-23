@@ -101,14 +101,11 @@ static void test_write_beyond_capacity(void)
     PASS();
 }
 
-static void test_read_uninitialized(void)
+static void test_read_after_init(void)
 {
-    TEST("read before init: returns -1");
-    /* Force uninitialized state by getting a fresh info check */
-    /* This test relies on running early or resetting state */
-    uint8_t buf[512];
-    /* We can't easily reset static state, so just verify init works */
+    TEST("read after init: returns 0");
     blk_dev_init();
+    uint8_t buf[512];
     int err = blk_dev_read(0, 1, buf);
     ASSERT(err == 0, "read after init should work");
     PASS();
@@ -146,7 +143,7 @@ int main(void)
     test_read_multiple();
     test_write_read_roundtrip();
     test_write_beyond_capacity();
-    test_read_uninitialized();
+    test_read_after_init();
     test_zero_count();
     test_sector_size();
 
