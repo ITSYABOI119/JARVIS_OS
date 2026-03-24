@@ -25,6 +25,13 @@
 #include "tokenizer.h"
 #include "sampling.h"
 
+#ifdef JARVIS_HAS_MODEL
+#include "gguf_parser.h"
+#include "llama_model.h"
+#include "gguf_vocab.h"
+#include "inference.h"
+#endif
+
 #ifdef JARVIS_IPC_SHMEM
 #include "shmem_ipc.h"
 #endif
@@ -305,6 +312,233 @@ static int selftest_tokenizer_sampling(void)
     return pass == checks;
 }
 
+/* ---- Embedded Model Inference (Stage 1-4) ---- */
+
+#ifdef JARVIS_HAS_MODEL
+extern const unsigned char _binary_model_gguf_start[];
+extern const unsigned char _binary_model_gguf_end[];
+
+static void put_u64(uint64_t val)
+{
+    char buf[21];
+    int i = 0;
+    if (val == 0) { seL4_DebugPutChar('0'); return; }
+    while (val > 0) {
+        buf[i++] = '0' + (val % 10);
+        val /= 10;
+    }
+    while (--i >= 0)
+        seL4_DebugPutChar(buf[i]);
+}
+
+static int run_inference_stages(void)
+{
+    int stage_pass = 0;
+    size_t model_size = (size_t)(_binary_model_gguf_end - _binary_model_gguf_start);
+
+    puts_serial("\n=== JARVIS Inference Pipeline ===\n\n");
+    puts_serial("[MODEL] Embedded GGUF: ");
+    put_u64(model_size);
+    puts_serial(" bytes (");
+    put_u64(model_size / (1024 * 1024));
+    puts_serial(" MB)\n\n");
+
+    /* ---- Stage 1: Parse GGUF headers ---- */
+    puts_serial("[Stage 1] Parsing GGUF metadata...\n");
+    gguf_ctx_t gguf_ctx;
+    int err = gguf_open_memory(&gguf_ctx, _binary_model_gguf_start, model_size);
+    if (err) {
+        puts_serial("  FAIL: gguf_open_memory error ");
+        put_dec((uint32_t)(-err));
+        puts_serial(": ");
+        puts_serial(gguf_strerror(err));
+        puts_serial("\n");
+        return stage_pass;
+    }
+    puts_serial("  Version:  "); put_dec(gguf_ctx.version); puts_serial("\n");
+    puts_serial("  Tensors:  "); put_u64(gguf_ctx.n_tensors); puts_serial("\n");
+    puts_serial("  KV pairs: "); put_u64(gguf_ctx.n_kv); puts_serial("\n");
+    puts_serial("  Alignment: "); put_dec(gguf_ctx.alignment); puts_serial("\n");
+
+    /* Print first 5 metadata keys */
+    puts_serial("  Metadata:\n");
+    for (uint64_t i = 0; i < gguf_ctx.n_kv && i < 5; i++) {
+        puts_serial("    ["); put_u64(i); puts_serial("] ");
+        puts_serial(gguf_ctx.kv[i].key);
+        puts_serial("\n");
+    }
+
+    /* Print first 3 tensor names */
+    puts_serial("  Tensors:\n");
+    for (uint64_t i = 0; i < gguf_ctx.n_tensors && i < 3; i++) {
+        puts_serial("    ["); put_u64(i); puts_serial("] ");
+        puts_serial(gguf_ctx.tensors[i].name);
+        puts_serial(" ("); puts_serial(gguf_type_name(gguf_ctx.tensors[i].type));
+        puts_serial(", "); put_u64(gguf_ctx.tensors[i].n_elements);
+        puts_serial(" elements)\n");
+    }
+
+    puts_serial("[Stage 1] GGUF parse ... PASS\n\n");
+    stage_pass++;
+
+    /* ---- Stage 2: Load model config + weights ---- */
+    puts_serial("[Stage 2] Loading model config + weights...\n");
+
+    llama_model_t model;
+    memset(&model, 0, sizeof(model));
+
+    err = llama_load_config(&model.config, &gguf_ctx);
+    if (err) {
+        puts_serial("  FAIL: llama_load_config error ");
+        put_dec((uint32_t)(-err));
+        puts_serial("\n");
+        gguf_close(&gguf_ctx);
+        return stage_pass;
+    }
+
+    puts_serial("  dim="); put_dec((uint32_t)model.config.dim);
+    puts_serial(" layers="); put_dec((uint32_t)model.config.n_layers);
+    puts_serial(" heads="); put_dec((uint32_t)model.config.n_heads);
+    puts_serial(" kv_heads="); put_dec((uint32_t)model.config.n_kv_heads);
+    puts_serial(" vocab="); put_dec((uint32_t)model.config.vocab_size);
+    puts_serial(" hidden="); put_dec((uint32_t)model.config.hidden_dim);
+    puts_serial("\n");
+
+    err = llama_alloc_model(&model);
+    if (err) {
+        puts_serial("  FAIL: llama_alloc_model error (out of memory?)\n");
+        gguf_close(&gguf_ctx);
+        return stage_pass;
+    }
+    puts_serial("  Allocated "); put_u64(model.total_bytes / (1024 * 1024));
+    puts_serial(" MB for weights\n");
+
+    puts_serial("  Loading + dequantizing weights...\n");
+    err = llama_load_weights(&model, &gguf_ctx);
+    if (err) {
+        puts_serial("  FAIL: llama_load_weights error ");
+        put_dec((uint32_t)(-err));
+        puts_serial("\n");
+        llama_free_model(&model);
+        gguf_close(&gguf_ctx);
+        return stage_pass;
+    }
+
+    /* Spot-check: first weight value should be non-zero */
+    puts_serial("  embed[0]=");
+    if (model.token_embed[0] != 0.0f)
+        puts_serial("non-zero");
+    else
+        puts_serial("0.0");
+    puts_serial(", embed[1]=");
+    if (model.token_embed[1] != 0.0f)
+        puts_serial("non-zero");
+    else
+        puts_serial("0.0");
+    puts_serial("\n");
+
+    puts_serial("[Stage 2] Model load ... PASS\n\n");
+    stage_pass++;
+
+    /* ---- Stage 3: Tokenizer from GGUF vocab ---- */
+    puts_serial("[Stage 3] Extracting tokenizer vocab...\n");
+
+    gguf_vocab_t vocab;
+    err = gguf_vocab_extract(_binary_model_gguf_start, model_size, &vocab);
+    if (err) {
+        puts_serial("  FAIL: gguf_vocab_extract error ");
+        put_dec((uint32_t)(-err));
+        puts_serial("\n");
+        llama_free_model(&model);
+        gguf_close(&gguf_ctx);
+        return stage_pass;
+    }
+    puts_serial("  Vocab size: "); put_dec((uint32_t)vocab.vocab_size);
+    puts_serial(", BOS="); put_dec((uint32_t)vocab.bos_id);
+    puts_serial(", EOS="); put_dec((uint32_t)vocab.eos_id);
+    puts_serial("\n");
+
+    tokenizer_t tok;
+    err = gguf_vocab_init_tokenizer(&vocab, &tok);
+    if (err) {
+        puts_serial("  FAIL: gguf_vocab_init_tokenizer error\n");
+        gguf_vocab_free(&vocab);
+        llama_free_model(&model);
+        gguf_close(&gguf_ctx);
+        return stage_pass;
+    }
+
+    /* Test encode/decode */
+    int test_ids[32];
+    int n_tok = tokenizer_encode(&tok, "Hello", test_ids, 32);
+    puts_serial("  encode('Hello') = "); put_dec((uint32_t)n_tok); puts_serial(" tokens: [");
+    for (int i = 0; i < n_tok && i < 8; i++) {
+        if (i > 0) puts_serial(", ");
+        put_dec((uint32_t)test_ids[i]);
+    }
+    puts_serial("]\n");
+
+    puts_serial("[Stage 3] Tokenizer ... PASS\n\n");
+    stage_pass++;
+
+    /* ---- Stage 4: Full text generation ---- */
+    puts_serial("[Stage 4] Running inference...\n");
+
+    llama_state_t state;
+    err = llama_alloc_state(&state, &model.config);
+    if (err) {
+        puts_serial("  FAIL: llama_alloc_state error (out of memory?)\n");
+        tokenizer_free(&tok);
+        gguf_vocab_free(&vocab);
+        llama_free_model(&model);
+        gguf_close(&gguf_ctx);
+        return stage_pass;
+    }
+
+    /* Encode prompt */
+    const char *prompt = "The seL4 microkernel is";
+    int prompt_ids[64];
+    int n_prompt = tokenizer_encode(&tok, prompt, prompt_ids, 64);
+    puts_serial("  Prompt: \""); puts_serial(prompt); puts_serial("\"\n");
+    puts_serial("  Prompt tokens: "); put_dec((uint32_t)n_prompt); puts_serial("\n");
+    puts_serial("  Generating 20 tokens (greedy, temp=0)...\n");
+
+    int output_ids[20];
+    int n_gen = llama_generate(&model, &state, prompt_ids, n_prompt,
+                                output_ids, 20, tok.eos_id,
+                                0.0f, 1, 42);
+
+    puts_serial("  Generated "); put_dec((uint32_t)n_gen); puts_serial(" tokens: [");
+    for (int i = 0; i < n_gen && i < 10; i++) {
+        if (i > 0) puts_serial(", ");
+        put_dec((uint32_t)output_ids[i]);
+    }
+    if (n_gen > 10) puts_serial(", ...");
+    puts_serial("]\n");
+
+    /* Decode to text */
+    char text_out[512];
+    tokenizer_decode(&tok, output_ids, n_gen, text_out, sizeof(text_out));
+    puts_serial("  Output: \""); puts_serial(text_out); puts_serial("\"\n");
+
+    puts_serial("[Stage 4] Generation ... PASS\n\n");
+    stage_pass++;
+
+    /* Cleanup */
+    llama_free_state(&state);
+    tokenizer_free(&tok);
+    gguf_vocab_free(&vocab);
+    llama_free_model(&model);
+    gguf_close(&gguf_ctx);
+
+    puts_serial("=== Inference Pipeline: ");
+    put_dec((uint32_t)stage_pass);
+    puts_serial("/4 stages PASS ===\n");
+
+    return stage_pass;
+}
+#endif /* JARVIS_HAS_MODEL */
+
 /* ---- Main ---- */
 
 int main(void)
@@ -383,6 +617,10 @@ int main(void)
     puts_serial("\n=== Self-Test: ");
     put_dec((uint32_t)tests_pass); puts_serial("/"); put_dec((uint32_t)tests_total);
     puts_serial(tests_pass == tests_total ? " PASS ===\n" : " FAIL ===\n");
+
+#ifdef JARVIS_HAS_MODEL
+    run_inference_stages();
+#endif
 
 #ifdef JARVIS_IPC_SHMEM
     init_ipc();

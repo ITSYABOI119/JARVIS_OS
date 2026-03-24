@@ -18,7 +18,7 @@
 
 /* ---- Constants ---- */
 
-#define GGUF_MAGIC          0x46475547  /* "GGUF" in little-endian */
+#define GGUF_MAGIC          0x46554747  /* "GGUF" as little-endian u32: G(47) G(47) U(55) F(46) */
 #define GGUF_VERSION_3      3
 #define GGUF_DEFAULT_ALIGN  32
 
@@ -169,6 +169,14 @@ typedef struct {
  * Returns GGUF_OK on success, negative error code on failure.
  */
 int gguf_open(gguf_ctx_t *ctx, const char *path);
+
+/**
+ * Open and parse GGUF data from a memory buffer.
+ * Uses fmemopen() internally — same parsing as gguf_open().
+ * The caller must keep 'data' alive until gguf_close().
+ * Returns GGUF_OK on success, negative error code on failure.
+ */
+int gguf_open_memory(gguf_ctx_t *ctx, const void *data, size_t len);
 
 /**
  * Close a GGUF context and free resources.

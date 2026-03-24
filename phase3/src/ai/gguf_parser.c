@@ -3,6 +3,7 @@
  *
  * Pure C11 implementation. No C++, no STL, no mmap.
  * Uses fopen/fread for file I/O (stubbed on seL4 to read from AHCI).
+ * Supports fmemopen() for parsing from memory buffers.
  *
  * GGUF binary format (little-endian):
  *   [Header]        magic(u32) version(u32) n_tensors(u64) n_kv(u64)
@@ -13,6 +14,8 @@
  *
  * Strings: uint64_t length + char[length] (NOT null-terminated in file)
  */
+
+#define _POSIX_C_SOURCE 200809L  /* for fmemopen() */
 
 #include "gguf_parser.h"
 #include <stdlib.h>
@@ -304,61 +307,48 @@ static int read_tensor_info(FILE *fp, gguf_tensor_info_t *t)
     return GGUF_OK;
 }
 
-/* ---- Public API ---- */
+/* ---- Internal: shared GGUF parsing (called after ctx->fp is set) ---- */
 
-int gguf_open(gguf_ctx_t *ctx, const char *path)
+static int parse_gguf(gguf_ctx_t *ctx)
 {
     int err;
-
-    memset(ctx, 0, sizeof(*ctx));
-
-    /* Open file */
-    ctx->fp = fopen(path, "rb");
-    if (!ctx->fp)
-        return GGUF_ERR_OPEN;
 
     /* Read header */
     uint32_t magic;
     err = read_u32(ctx->fp, &magic);
-    if (err) goto fail;
+    if (err) return err;
 
-    if (magic != GGUF_MAGIC) {
-        err = GGUF_ERR_MAGIC;
-        goto fail;
-    }
+    if (magic != GGUF_MAGIC)
+        return GGUF_ERR_MAGIC;
 
     err = read_u32(ctx->fp, &ctx->version);
-    if (err) goto fail;
+    if (err) return err;
 
-    if (ctx->version < 2 || ctx->version > 3) {
-        err = GGUF_ERR_VERSION;
-        goto fail;
-    }
+    if (ctx->version < 2 || ctx->version > 3)
+        return GGUF_ERR_VERSION;
 
     err = read_u64(ctx->fp, &ctx->n_tensors);
-    if (err) goto fail;
+    if (err) return err;
 
     err = read_u64(ctx->fp, &ctx->n_kv);
-    if (err) goto fail;
+    if (err) return err;
 
     /* SEC-008: Reject excessive counts to prevent memory exhaustion */
-    if (ctx->n_tensors > GGUF_MAX_TENSORS) { err = GGUF_ERR_FORMAT; goto fail; }
-    if (ctx->n_kv > GGUF_MAX_KV_PAIRS) { err = GGUF_ERR_FORMAT; goto fail; }
+    if (ctx->n_tensors > GGUF_MAX_TENSORS) return GGUF_ERR_FORMAT;
+    if (ctx->n_kv > GGUF_MAX_KV_PAIRS) return GGUF_ERR_FORMAT;
 
     /* Allocate KV array */
     if (ctx->n_kv > 0) {
         ctx->kv = (gguf_kv_t *)calloc((size_t)ctx->n_kv, sizeof(gguf_kv_t));
-        if (!ctx->kv) {
-            err = GGUF_ERR_ALLOC;
-            goto fail;
-        }
+        if (!ctx->kv)
+            return GGUF_ERR_ALLOC;
     }
 
     /* Read KV pairs */
     ctx->alignment = GGUF_DEFAULT_ALIGN;
     for (uint64_t i = 0; i < ctx->n_kv; i++) {
         err = read_kv_pair(ctx->fp, &ctx->kv[i]);
-        if (err) goto fail;
+        if (err) return err;
 
         /* Check for alignment override */
         if (ctx->kv[i].type == GGUF_TYPE_UINT32 &&
@@ -371,32 +361,62 @@ int gguf_open(gguf_ctx_t *ctx, const char *path)
     if (ctx->n_tensors > 0) {
         ctx->tensors = (gguf_tensor_info_t *)calloc((size_t)ctx->n_tensors,
                                                      sizeof(gguf_tensor_info_t));
-        if (!ctx->tensors) {
-            err = GGUF_ERR_ALLOC;
-            goto fail;
-        }
+        if (!ctx->tensors)
+            return GGUF_ERR_ALLOC;
     }
 
     /* Read tensor info */
     for (uint64_t i = 0; i < ctx->n_tensors; i++) {
         err = read_tensor_info(ctx->fp, &ctx->tensors[i]);
-        if (err) goto fail;
+        if (err) return err;
     }
 
     /* Calculate tensor data offset: current position, aligned up */
     long pos = ftell(ctx->fp);
-    if (pos < 0) {
-        err = GGUF_ERR_READ;
-        goto fail;
-    }
+    if (pos < 0)
+        return GGUF_ERR_READ;
+
     uint64_t align = ctx->alignment;
     ctx->data_offset = ((uint64_t)pos + align - 1) & ~(align - 1);
 
     return GGUF_OK;
+}
 
-fail:
-    gguf_close(ctx);
-    return err;
+/* ---- Public API ---- */
+
+int gguf_open(gguf_ctx_t *ctx, const char *path)
+{
+    memset(ctx, 0, sizeof(*ctx));
+
+    ctx->fp = fopen(path, "rb");
+    if (!ctx->fp)
+        return GGUF_ERR_OPEN;
+
+    int err = parse_gguf(ctx);
+    if (err) {
+        gguf_close(ctx);
+        return err;
+    }
+    return GGUF_OK;
+}
+
+int gguf_open_memory(gguf_ctx_t *ctx, const void *data, size_t len)
+{
+    memset(ctx, 0, sizeof(*ctx));
+
+    if (!data || len == 0)
+        return GGUF_ERR_OPEN;
+
+    ctx->fp = fmemopen((void *)data, len, "rb");
+    if (!ctx->fp)
+        return GGUF_ERR_OPEN;
+
+    int err = parse_gguf(ctx);
+    if (err) {
+        gguf_close(ctx);
+        return err;
+    }
+    return GGUF_OK;
 }
 
 void gguf_close(gguf_ctx_t *ctx)
