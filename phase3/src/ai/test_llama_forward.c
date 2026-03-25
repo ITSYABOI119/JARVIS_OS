@@ -51,6 +51,7 @@ static void fill_norms(llama_model_t *m)
 
 static int init_tiny_model(llama_model_t *model)
 {
+    memset(model, 0, sizeof(*model));
     model->config = tiny_config;
     if (llama_alloc_model(model) != 0) return -1;
 

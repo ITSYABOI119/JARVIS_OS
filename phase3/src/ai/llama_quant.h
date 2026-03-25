@@ -52,6 +52,7 @@ typedef struct {
     qtensor_t token_embed;     /* Q6_K — [vocab_size x dim], lookup by row */
     qtensor_t output_norm;     /* F32 — small (dim floats) */
     qtensor_t output_weight;   /* Q6_K — [vocab_size x dim], final projection */
+    const float *rope_freqs;   /* Custom RoPE frequencies (pointer into .rodata), or NULL */
     qlayer_t *layers;          /* Array of n_layers (malloc'd, but each qlayer_t just holds pointers) */
     bool      loaded;
 } qmodel_t;

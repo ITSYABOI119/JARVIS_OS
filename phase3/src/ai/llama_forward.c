@@ -62,11 +62,13 @@ void llama_forward(const llama_model_t *model, llama_state_t *state, int token)
         tensor_matmul(layer->wk, state->xb, state->k, kv_dim, dim, 1);
         tensor_matmul(layer->wv, state->xb, state->v, kv_dim, dim, 1);
 
-        /* e. RoPE on Q and K */
+        /* e. RoPE on Q and K
+         * Use model->rope_freqs if available (custom freqs for extended context),
+         * otherwise compute standard frequencies from theta. */
         for (int h = 0; h < n_heads; h++) {
             for (int i = 0; i < head_dim / 2; i++) {
-                float freq = 1.0f / powf(c->rope_theta,
-                                          (float)(2 * i) / (float)head_dim);
+                float freq = 1.0f / powf(c->rope_theta, (float)(2 * i) / (float)head_dim);
+                if (model->rope_freqs) freq *= model->rope_freqs[i];
                 float angle = (float)pos * freq;
                 float cos_a = cosf(angle);
                 float sin_a = sinf(angle);
@@ -78,8 +80,8 @@ void llama_forward(const llama_model_t *model, llama_state_t *state, int token)
         }
         for (int h = 0; h < n_kv_heads; h++) {
             for (int i = 0; i < head_dim / 2; i++) {
-                float freq = 1.0f / powf(c->rope_theta,
-                                          (float)(2 * i) / (float)head_dim);
+                float freq = 1.0f / powf(c->rope_theta, (float)(2 * i) / (float)head_dim);
+                if (model->rope_freqs) freq *= model->rope_freqs[i];
                 float angle = (float)pos * freq;
                 float cos_a = cosf(angle);
                 float sin_a = sinf(angle);

@@ -199,6 +199,16 @@ int qmodel_load(qmodel_t *qm, const gguf_ctx_t *ctx, const void *gguf_base)
         }
     }
 
+    /* RoPE frequencies (optional — custom freqs for extended context models) */
+    {
+        const gguf_tensor_info_t *rf = gguf_find_tensor(ctx, "rope_freqs.weight");
+        if (rf && rf->type == GGML_TYPE_F32 &&
+            rf->n_elements == (uint64_t)(c->head_dim / 2)) {
+            qm->rope_freqs = (const float *)((const uint8_t *)gguf_base +
+                              ctx->data_offset + rf->offset);
+        }
+    }
+
     /* Resolve per-layer tensors */
     char name[128];
     for (int i = 0; i < c->n_layers; i++) {
@@ -308,11 +318,12 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
         qmatmul_vec(&layer->wk, state->xb, state->k,  kv_dim, dim);
         qmatmul_vec(&layer->wv, state->xb, state->v,  kv_dim, dim);
 
-        /* e. RoPE on Q and K */
+        /* e. RoPE on Q and K
+         * Use qm->rope_freqs if available (custom freqs for extended context) */
         for (int h = 0; h < n_heads; h++) {
             for (int i = 0; i < head_dim / 2; i++) {
-                float freq = 1.0f / powf(c->rope_theta,
-                                          (float)(2 * i) / (float)head_dim);
+                float freq = 1.0f / powf(c->rope_theta, (float)(2 * i) / (float)head_dim);
+                if (qm->rope_freqs) freq *= qm->rope_freqs[i];
                 float angle = (float)pos * freq;
                 float cos_a = cosf(angle);
                 float sin_a = sinf(angle);
@@ -324,8 +335,8 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
         }
         for (int h = 0; h < n_kv_heads; h++) {
             for (int i = 0; i < head_dim / 2; i++) {
-                float freq = 1.0f / powf(c->rope_theta,
-                                          (float)(2 * i) / (float)head_dim);
+                float freq = 1.0f / powf(c->rope_theta, (float)(2 * i) / (float)head_dim);
+                if (qm->rope_freqs) freq *= qm->rope_freqs[i];
                 float angle = (float)pos * freq;
                 float cos_a = cosf(angle);
                 float sin_a = sinf(angle);

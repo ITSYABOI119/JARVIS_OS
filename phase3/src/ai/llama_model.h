@@ -44,6 +44,7 @@ typedef struct {
     float *token_embed;
     float *output_norm;
     float *output_weight;
+    float *rope_freqs;     /* Custom RoPE frequencies (head_dim/2 values), or NULL for standard */
     llama_layer_t *layers;
     size_t total_bytes;
     bool loaded;

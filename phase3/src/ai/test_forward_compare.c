@@ -178,6 +178,16 @@ static int load_f32_model(llama_model_t *model, const char *path)
         }
     }
 
+    /* RoPE frequencies (optional) */
+    {
+        const gguf_tensor_info_t *rf = gguf_find_tensor(&ctx, "rope_freqs.weight");
+        if (rf && rf->type == GGML_TYPE_F32 && rf->n_elements == (uint64_t)(head_dim / 2)) {
+            model->rope_freqs = (float *)malloc(rf->n_bytes);
+            if (model->rope_freqs)
+                gguf_read_tensor_data(&ctx, rf, model->rope_freqs);
+        }
+    }
+
     /* Per-layer weights */
     char name[128];
     for (int i = 0; i < n_layers; i++) {

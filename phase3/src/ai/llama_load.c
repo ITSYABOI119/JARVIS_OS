@@ -282,10 +282,31 @@ int llama_load_weights(llama_model_t *model, gguf_ctx_t *ctx)
     err = load_tensor_f32(ctx, "output_norm.weight", model->output_norm, dim);
     if (err) return err;
 
-    /* Output weight (LM head) */
-    err = load_tensor_f32(ctx, "output.weight", model->output_weight,
-                          vocab_size * dim);
-    if (err) return err;
+    /* Output weight (LM head) — may not exist if model uses weight tying */
+    {
+        const gguf_tensor_info_t *out_t = gguf_find_tensor(ctx, "output.weight");
+        if (out_t) {
+            err = load_tensor_f32(ctx, "output.weight", model->output_weight,
+                                  vocab_size * dim);
+            if (err) return err;
+        } else {
+            /* Weight tying: output projection shares token embedding */
+            memcpy(model->output_weight, model->token_embed,
+                   (size_t)vocab_size * (size_t)dim * sizeof(float));
+        }
+    }
+
+    /* RoPE frequencies (optional — custom freqs for extended context models) */
+    {
+        const gguf_tensor_info_t *rf = gguf_find_tensor(ctx, "rope_freqs.weight");
+        if (rf && rf->type == GGML_TYPE_F32 && rf->n_elements == (uint64_t)(head_dim / 2)) {
+            model->rope_freqs = (float *)malloc(rf->n_bytes);
+            if (model->rope_freqs) {
+                gguf_read_tensor_data(ctx, rf, model->rope_freqs);
+                model->total_bytes += rf->n_bytes;
+            }
+        }
+    }
 
     /* Per-layer weights */
     char name[128];
@@ -400,6 +421,7 @@ void llama_free_model(llama_model_t *model)
     free(model->token_embed);
     free(model->output_norm);
     free(model->output_weight);
+    free(model->rope_freqs);
 
     memset(model, 0, sizeof(*model));
 }
