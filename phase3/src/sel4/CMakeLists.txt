@@ -35,6 +35,7 @@ add_executable(jarvis-rootserver EXCLUDE_FROM_ALL
     src/ai/llama_forward.c
     src/ai/inference.c
     src/ai/gguf_vocab.c
+    src/ai/llama_quant.c
 )
 
 target_include_directories(jarvis-rootserver PRIVATE "src" "src/ai" "src/ipc")

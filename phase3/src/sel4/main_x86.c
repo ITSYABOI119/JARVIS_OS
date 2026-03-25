@@ -28,8 +28,8 @@
 #ifdef JARVIS_HAS_MODEL
 #include "gguf_parser.h"
 #include "llama_model.h"
+#include "llama_quant.h"
 #include "gguf_vocab.h"
-#include "inference.h"
 #endif
 
 #ifdef JARVIS_IPC_SHMEM
@@ -350,101 +350,42 @@ static int run_inference_stages(void)
     if (err) {
         puts_serial("  FAIL: gguf_open_memory error ");
         put_dec((uint32_t)(-err));
-        puts_serial(": ");
-        puts_serial(gguf_strerror(err));
         puts_serial("\n");
         return stage_pass;
     }
     puts_serial("  Version:  "); put_dec(gguf_ctx.version); puts_serial("\n");
     puts_serial("  Tensors:  "); put_u64(gguf_ctx.n_tensors); puts_serial("\n");
     puts_serial("  KV pairs: "); put_u64(gguf_ctx.n_kv); puts_serial("\n");
-    puts_serial("  Alignment: "); put_dec(gguf_ctx.alignment); puts_serial("\n");
-
-    /* Print first 5 metadata keys */
-    puts_serial("  Metadata:\n");
-    for (uint64_t i = 0; i < gguf_ctx.n_kv && i < 5; i++) {
-        puts_serial("    ["); put_u64(i); puts_serial("] ");
-        puts_serial(gguf_ctx.kv[i].key);
-        puts_serial("\n");
-    }
-
-    /* Print first 3 tensor names */
-    puts_serial("  Tensors:\n");
-    for (uint64_t i = 0; i < gguf_ctx.n_tensors && i < 3; i++) {
-        puts_serial("    ["); put_u64(i); puts_serial("] ");
-        puts_serial(gguf_ctx.tensors[i].name);
-        puts_serial(" ("); puts_serial(gguf_type_name(gguf_ctx.tensors[i].type));
-        puts_serial(", "); put_u64(gguf_ctx.tensors[i].n_elements);
-        puts_serial(" elements)\n");
-    }
 
     puts_serial("[Stage 1] GGUF parse ... PASS\n\n");
     stage_pass++;
 
-    /* ---- Stage 2: Load model config + weights ---- */
-    puts_serial("[Stage 2] Loading model config + weights...\n");
+    /* ---- Stage 2: Quantized model load (zero-copy) ---- */
+    puts_serial("[Stage 2] Loading quantized model (zero-copy into .rodata)...\n");
 
-    llama_model_t model;
-    memset(&model, 0, sizeof(model));
-
-    err = llama_load_config(&model.config, &gguf_ctx);
+    qmodel_t qm;
+    err = qmodel_load(&qm, &gguf_ctx, _binary_model_gguf_start);
     if (err) {
-        puts_serial("  FAIL: llama_load_config error ");
+        puts_serial("  FAIL: qmodel_load error ");
         put_dec((uint32_t)(-err));
         puts_serial("\n");
         gguf_close(&gguf_ctx);
         return stage_pass;
     }
 
-    puts_serial("  dim="); put_dec((uint32_t)model.config.dim);
-    puts_serial(" layers="); put_dec((uint32_t)model.config.n_layers);
-    puts_serial(" heads="); put_dec((uint32_t)model.config.n_heads);
-    puts_serial(" kv_heads="); put_dec((uint32_t)model.config.n_kv_heads);
-    puts_serial(" vocab="); put_dec((uint32_t)model.config.vocab_size);
-    puts_serial(" hidden="); put_dec((uint32_t)model.config.hidden_dim);
+    puts_serial("  dim="); put_dec((uint32_t)qm.config.dim);
+    puts_serial(" layers="); put_dec((uint32_t)qm.config.n_layers);
+    puts_serial(" heads="); put_dec((uint32_t)qm.config.n_heads);
+    puts_serial(" kv_heads="); put_dec((uint32_t)qm.config.n_kv_heads);
+    puts_serial(" vocab="); put_dec((uint32_t)qm.config.vocab_size);
+    puts_serial(" hidden="); put_dec((uint32_t)qm.config.hidden_dim);
     puts_serial("\n");
+    puts_serial("  embed type: "); puts_serial(gguf_type_name(qm.token_embed.type)); puts_serial("\n");
+    puts_serial("  Weight data: zero-copy (no heap for weights)\n");
 
-    int model_loaded = 0;
-    err = llama_alloc_model(&model);
-    if (err) {
-        puts_serial("  SKIP: llama_alloc_model failed (need ~5.7 GB heap, have 256 MB)\n");
-        puts_serial("  Config loaded OK — skipping weight loading, proceeding to tokenizer\n");
-        puts_serial("[Stage 2] Model config ... PASS (weights SKIPPED — need quantized matmul)\n\n");
-        stage_pass++;
-        goto stage3;
-    }
-    puts_serial("  Allocated "); put_u64(model.total_bytes / (1024 * 1024));
-    puts_serial(" MB for weights\n");
-
-    puts_serial("  Loading + dequantizing weights...\n");
-    err = llama_load_weights(&model, &gguf_ctx);
-    if (err) {
-        puts_serial("  FAIL: llama_load_weights error ");
-        put_dec((uint32_t)(-err));
-        puts_serial("\n");
-        llama_free_model(&model);
-        gguf_close(&gguf_ctx);
-        return stage_pass;
-    }
-
-    /* Spot-check: first weight value should be non-zero */
-    puts_serial("  embed[0]=");
-    if (model.token_embed[0] != 0.0f)
-        puts_serial("non-zero");
-    else
-        puts_serial("0.0");
-    puts_serial(", embed[1]=");
-    if (model.token_embed[1] != 0.0f)
-        puts_serial("non-zero");
-    else
-        puts_serial("0.0");
-    puts_serial("\n");
-
-    model_loaded = 1;
-    puts_serial("[Stage 2] Model load ... PASS\n\n");
+    puts_serial("[Stage 2] Quantized model load ... PASS\n\n");
     stage_pass++;
 
-stage3:
     /* ---- Stage 3: Tokenizer from GGUF vocab ---- */
     puts_serial("[Stage 3] Extracting tokenizer vocab...\n");
 
@@ -454,7 +395,7 @@ stage3:
         puts_serial("  FAIL: gguf_vocab_extract error ");
         put_dec((uint32_t)(-err));
         puts_serial("\n");
-        llama_free_model(&model);
+        qmodel_free(&qm);
         gguf_close(&gguf_ctx);
         return stage_pass;
     }
@@ -468,12 +409,11 @@ stage3:
     if (err) {
         puts_serial("  FAIL: gguf_vocab_init_tokenizer error\n");
         gguf_vocab_free(&vocab);
-        llama_free_model(&model);
+        qmodel_free(&qm);
         gguf_close(&gguf_ctx);
         return stage_pass;
     }
 
-    /* Test encode/decode */
     int test_ids[32];
     int n_tok = tokenizer_encode(&tok, "Hello", test_ids, 32);
     puts_serial("  encode('Hello') = "); put_dec((uint32_t)n_tok); puts_serial(" tokens: [");
@@ -486,30 +426,20 @@ stage3:
     puts_serial("[Stage 3] Tokenizer ... PASS\n\n");
     stage_pass++;
 
-    /* ---- Stage 4: Full text generation ---- */
-    if (!model_loaded) {
-        puts_serial("[Stage 4] SKIP: Model weights not loaded (need quantized matmul for <256MB heap)\n");
-        puts_serial("  Future: implement Q4_K/Q6_K matmul to avoid F32 dequantization\n\n");
-        tokenizer_free(&tok);
-        gguf_vocab_free(&vocab);
-        gguf_close(&gguf_ctx);
-        goto done;
-    }
-
-    puts_serial("[Stage 4] Running inference...\n");
+    /* ---- Stage 4: Quantized text generation ---- */
+    puts_serial("[Stage 4] Running quantized inference...\n");
 
     llama_state_t state;
-    err = llama_alloc_state(&state, &model.config);
+    err = llama_alloc_state(&state, &qm.config);
     if (err) {
         puts_serial("  FAIL: llama_alloc_state error (out of memory?)\n");
         tokenizer_free(&tok);
         gguf_vocab_free(&vocab);
-        llama_free_model(&model);
+        qmodel_free(&qm);
         gguf_close(&gguf_ctx);
         return stage_pass;
     }
 
-    /* Encode prompt */
     const char *prompt = "The seL4 microkernel is";
     int prompt_ids[64];
     int n_prompt = tokenizer_encode(&tok, prompt, prompt_ids, 64);
@@ -518,9 +448,9 @@ stage3:
     puts_serial("  Generating 20 tokens (greedy, temp=0)...\n");
 
     int output_ids[20];
-    int n_gen = llama_generate(&model, &state, prompt_ids, n_prompt,
-                                output_ids, 20, tok.eos_id,
-                                0.0f, 1, 42);
+    int n_gen = qmodel_generate(&qm, &state, prompt_ids, n_prompt,
+                                 output_ids, 20, tok.eos_id,
+                                 0.0f, 1, 42);
 
     puts_serial("  Generated "); put_dec((uint32_t)n_gen); puts_serial(" tokens: [");
     for (int i = 0; i < n_gen && i < 10; i++) {
@@ -530,7 +460,6 @@ stage3:
     if (n_gen > 10) puts_serial(", ...");
     puts_serial("]\n");
 
-    /* Decode to text */
     char text_out[512];
     tokenizer_decode(&tok, output_ids, n_gen, text_out, sizeof(text_out));
     puts_serial("  Output: \""); puts_serial(text_out); puts_serial("\"\n");
@@ -542,10 +471,9 @@ stage3:
     llama_free_state(&state);
     tokenizer_free(&tok);
     gguf_vocab_free(&vocab);
-    llama_free_model(&model);
+    qmodel_free(&qm);
     gguf_close(&gguf_ctx);
 
-done:
     puts_serial("=== Inference Pipeline: ");
     put_dec((uint32_t)stage_pass);
     puts_serial("/4 stages PASS ===\n");
