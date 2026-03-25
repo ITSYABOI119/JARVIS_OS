@@ -44,6 +44,14 @@ static void puts_serial(const char *s)
         seL4_DebugPutChar(*s++);
 }
 
+static void put_hex(uint32_t val)
+{
+    const char hex[] = "0123456789abcdef";
+    puts_serial("0x");
+    for (int i = 28; i >= 0; i -= 4)
+        seL4_DebugPutChar(hex[(val >> i) & 0xF]);
+}
+
 static void put_dec(uint32_t val)
 {
     char buf[12];
