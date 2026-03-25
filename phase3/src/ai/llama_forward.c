@@ -68,7 +68,7 @@ void llama_forward(const llama_model_t *model, llama_state_t *state, int token)
         for (int h = 0; h < n_heads; h++) {
             for (int i = 0; i < head_dim / 2; i++) {
                 float freq = 1.0f / powf(c->rope_theta, (float)(2 * i) / (float)head_dim);
-                if (model->rope_freqs) freq *= model->rope_freqs[i];
+                if (model->rope_freqs) freq /= model->rope_freqs[i];
                 float angle = (float)pos * freq;
                 float cos_a = cosf(angle);
                 float sin_a = sinf(angle);
@@ -81,7 +81,7 @@ void llama_forward(const llama_model_t *model, llama_state_t *state, int token)
         for (int h = 0; h < n_kv_heads; h++) {
             for (int i = 0; i < head_dim / 2; i++) {
                 float freq = 1.0f / powf(c->rope_theta, (float)(2 * i) / (float)head_dim);
-                if (model->rope_freqs) freq *= model->rope_freqs[i];
+                if (model->rope_freqs) freq /= model->rope_freqs[i];
                 float angle = (float)pos * freq;
                 float cos_a = cosf(angle);
                 float sin_a = sinf(angle);

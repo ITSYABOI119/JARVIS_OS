@@ -323,7 +323,7 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
         for (int h = 0; h < n_heads; h++) {
             for (int i = 0; i < head_dim / 2; i++) {
                 float freq = 1.0f / powf(c->rope_theta, (float)(2 * i) / (float)head_dim);
-                if (qm->rope_freqs) freq *= qm->rope_freqs[i];
+                if (qm->rope_freqs) freq /= qm->rope_freqs[i];
                 float angle = (float)pos * freq;
                 float cos_a = cosf(angle);
                 float sin_a = sinf(angle);
@@ -336,7 +336,7 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
         for (int h = 0; h < n_kv_heads; h++) {
             for (int i = 0; i < head_dim / 2; i++) {
                 float freq = 1.0f / powf(c->rope_theta, (float)(2 * i) / (float)head_dim);
-                if (qm->rope_freqs) freq *= qm->rope_freqs[i];
+                if (qm->rope_freqs) freq /= qm->rope_freqs[i];
                 float angle = (float)pos * freq;
                 float cos_a = cosf(angle);
                 float sin_a = sinf(angle);
