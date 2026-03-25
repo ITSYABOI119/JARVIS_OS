@@ -450,8 +450,10 @@ static int run_inference_stages(void)
 
     const char *prompt = "The seL4 microkernel is";
     int prompt_ids[64];
-    int n_prompt = tokenizer_encode(&tok, prompt, prompt_ids, 64);
-    puts_serial("  Prompt: \""); puts_serial(prompt); puts_serial("\"\n");
+    /* Prepend BOS token — Llama 3.2 requires it */
+    prompt_ids[0] = vocab.bos_id;
+    int n_prompt = 1 + tokenizer_encode(&tok, prompt, prompt_ids + 1, 63);
+    puts_serial("  Prompt: BOS + \""); puts_serial(prompt); puts_serial("\"\n");
     puts_serial("  Prompt tokens: "); put_dec((uint32_t)n_prompt); puts_serial("\n");
     puts_serial("  Generating 20 tokens (greedy, temp=0)...\n");
 
