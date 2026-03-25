@@ -84,8 +84,13 @@ static void dequant_f16(const void *src, float *dst, int n_values)
         dst[i] = f16_to_f32(f16[i]);
 }
 
-/* ---- Q4_K dequantization (256 values per block, 144 bytes) ---- */
-
+/* ---- Q4_K dequantization (256 values per block, 144 bytes) ----
+ *
+ * Matches ggml's dequantize_row_q4_K exactly. 128 qs bytes encode
+ * 256 nibbles in an interleaved layout: 4 groups of 64 values each.
+ * Within each group: lower nibbles of 32 bytes → first 32 values,
+ * upper nibbles of same 32 bytes → next 32 values, using DIFFERENT scales.
+ */
 static void dequant_q4_k(const void *src, float *dst, int n_blocks)
 {
     const q4_k_block_t *blocks = (const q4_k_block_t *)src;
@@ -93,6 +98,7 @@ static void dequant_q4_k(const void *src, float *dst, int n_blocks)
         const q4_k_block_t *blk = &blocks[b];
         float d    = f16_to_f32(blk->d);
         float dmin = f16_to_f32(blk->dmin);
+        const uint8_t *q = blk->qs;
 
         /* Unpack 6-bit scales and mins from 12 packed bytes */
         uint8_t sc[8], mn[8];
@@ -103,46 +109,55 @@ static void dequant_q4_k(const void *src, float *dst, int n_blocks)
             mn[i + 4] = (blk->scales[i + 8] >> 4) | ((blk->scales[i + 4] >> 6) << 4);
         }
 
-        /* Dequantize 8 sub-blocks of 32 values each */
-        for (int j = 0; j < 8; j++) {
-            float d_sc  = d * sc[j];
-            float d_min = dmin * mn[j];
-            for (int k = 0; k < 32; k++) {
-                uint8_t q;
-                if (k < 16)
-                    q = blk->qs[j * 16 + k] & 0xF;
-                else
-                    q = blk->qs[j * 16 + (k - 16)] >> 4;
-                dst[b * 256 + j * 32 + k] = d_sc * q - d_min;
+        float *y = dst + b * 256;
+
+        /* 4 groups of 64 values: lower nibbles → first 32, upper → next 32 */
+        for (int j = 0; j < 4; j++) {
+            float d1 = d * sc[2 * j];
+            float d2 = d * sc[2 * j + 1];
+            float m1 = dmin * mn[2 * j];
+            float m2 = dmin * mn[2 * j + 1];
+            for (int l = 0; l < 32; l++) {
+                y[64 * j + l]      = d1 * (q[32 * j + l] & 0xF) - m1;
+                y[64 * j + l + 32] = d2 * (q[32 * j + l] >> 4)  - m2;
             }
         }
     }
 }
 
-/* ---- Q6_K dequantization (256 values per block, 210 bytes) ---- */
-
+/* ---- Q6_K dequantization (256 values per block, 210 bytes) ----
+ *
+ * Matches ggml's dequantize_row_q6_K exactly. The ql/qh/scales layout
+ * uses a complex interleaving pattern — NOT a simple linear mapping.
+ *
+ * Each block of 256 values is processed in two halves of 128.
+ * Within each half, 32 iterations produce 4 output values each:
+ *   y[n+l],  y[n+l+32],  y[n+l+64],  y[n+l+96]
+ * using ql lower nibbles, ql upper nibbles, and qh 2-bit pairs.
+ */
 static void dequant_q6_k(const void *src, float *dst, int n_blocks)
 {
     const q6_k_block_t *blocks = (const q6_k_block_t *)src;
     for (int b = 0; b < n_blocks; b++) {
         const q6_k_block_t *blk = &blocks[b];
         float d = f16_to_f32(blk->d);
+        const uint8_t *ql = blk->ql;
+        const uint8_t *qh = blk->qh;
+        const int8_t  *sc = blk->scales;
+        float *y = dst + b * 256;
 
-        /* 256 values = 16 sub-blocks of 16 values each */
-        for (int j = 0; j < 256; j++) {
-            /* Extract 6-bit value: 4 bits from ql, 2 bits from qh */
-            int ql_idx   = j / 2;
-            int ql_shift = (j % 2) * 4;
-            uint8_t ql_val = (blk->ql[ql_idx] >> ql_shift) & 0xF;
-
-            int qh_idx   = j / 4;
-            int qh_shift = (j % 4) * 2;
-            uint8_t qh_val = (blk->qh[qh_idx] >> qh_shift) & 0x3;
-
-            int8_t q = (int8_t)((ql_val | (qh_val << 4)) - 32);
-
-            int scale_idx = j / 16;
-            dst[b * 256 + j] = d * blk->scales[scale_idx] * q;
+        for (int n = 0; n < 256; n += 128) {
+            for (int l = 0; l < 32; ++l) {
+                int is = n / 16;
+                int8_t q1 = (int8_t)((ql[n/2+l]    & 0xF) | (((qh[n/4+l] >> 0) & 3) << 4)) - 32;
+                int8_t q2 = (int8_t)((ql[n/2+l+32]  & 0xF) | (((qh[n/4+l] >> 2) & 3) << 4)) - 32;
+                int8_t q3 = (int8_t)((ql[n/2+l]     >> 4)  | (((qh[n/4+l] >> 4) & 3) << 4)) - 32;
+                int8_t q4 = (int8_t)((ql[n/2+l+32]  >> 4)  | (((qh[n/4+l] >> 6) & 3) << 4)) - 32;
+                y[n+l+ 0] = d * sc[is+0] * q1;
+                y[n+l+32] = d * sc[is+2] * q2;
+                y[n+l+64] = d * sc[is+4] * q3;
+                y[n+l+96] = d * sc[is+6] * q4;
+            }
         }
     }
 }
