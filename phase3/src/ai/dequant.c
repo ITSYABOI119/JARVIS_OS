@@ -148,7 +148,7 @@ static void dequant_q6_k(const void *src, float *dst, int n_blocks)
 
         for (int n = 0; n < 256; n += 128) {
             for (int l = 0; l < 32; ++l) {
-                int is = n / 16;
+                int is = n / 16 + l / 16;
                 int8_t q1 = (int8_t)((ql[n/2+l]    & 0xF) | (((qh[n/4+l] >> 0) & 3) << 4)) - 32;
                 int8_t q2 = (int8_t)((ql[n/2+l+32]  & 0xF) | (((qh[n/4+l] >> 2) & 3) << 4)) - 32;
                 int8_t q3 = (int8_t)((ql[n/2+l]     >> 4)  | (((qh[n/4+l] >> 4) & 3) << 4)) - 32;
