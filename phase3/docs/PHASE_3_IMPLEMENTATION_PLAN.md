@@ -1,10 +1,10 @@
 # JARVIS AI-OS: Phase 3 Implementation Plan
 
-**Version:** 2.0
-**Date:** March 23, 2026
+**Version:** 3.0
+**Date:** March 25, 2026
 **Phase:** Phase 3 - Beta System (Months 24-36)
 **Duration:** Original 40-44 weeks, revised to ~18-22 weeks remaining after PC assembly
-**Status:** SOFTWARE COMPLETE — inference engine built and tested in QEMU, awaiting spare PC for hardware integration
+**Status:** INFERENCE MILESTONE — coherent LLM text generation on seL4 QEMU, verified against llama.cpp reference
 
 ---
 
@@ -32,11 +32,17 @@ This document provides a detailed week-by-week implementation plan for Phase 3. 
 
 ---
 
-## CURRENT STATUS (March 23, 2026)
+## CURRENT STATUS (March 25, 2026)
 
 **Phase 2 COMPLETE** — GO recommendation for Phase 3
 **Pre-Work:** ✅ COMPLETE — all 8 interim tasks done
-**Phase 3b Software:** ✅ COMPLETE — full inference engine (GGUF→dequant→tensor ops→tokenizer→forward pass→sampling→generation), all drivers mock-tested, rootserver self-test 5/5 PASS in QEMU
+**Phase 3a:** ✅ COMPLETE — GPU benchmarks, native Linux build env, test validation (on main PC)
+**Phase 3b Inference:** ✅ **MILESTONE** — Llama 3.2 1B generating coherent text on seL4 QEMU
+- Quantized zero-copy inference: 50MB heap (vs 5.7GB for F32 dequant)
+- 4/4 stages PASS: GGUF parse → quantized load → tokenizer (128K vocab) → generation
+- Output: "a microkernel implementation of the L4 microkernel architecture. It is designed to be a lightweight alternative"
+- Logits verified against llama.cpp reference (top-5 match exactly)
+- KVM confirmed working on AMD Ryzen (-enable-kvm -cpu host, 4GB QEMU)
 **Blocking:** Spare PC assembly (1/7 parts bought)
 
 ### Phase 2 Baseline (What Carries Forward)
@@ -47,9 +53,9 @@ This document provides a detailed week-by-week implementation plan for Phase 3. 
 | Drivers | 21 operational | x86 equivalents |
 | Stability | 30.6 days, 0 crashes | 30 days on x86 |
 | IPC latency | 7ms (UART) | <1μs (shared memory) |
-| AI inference | 558ms Phi-3 CPU / <100ms 1B CPU | Native C in seL4 userspace |
+| AI inference | 558ms Phi-3 CPU / <100ms 1B CPU | **Coherent text on seL4 QEMU (Llama 3.2 1B Q4_K_M)** |
 | Cache hit rate | 87.5% | >80% |
-| Tests | 108 PASS, 0 FAIL | 120+ PASS |
+| Tests | 108 PASS, 0 FAIL | **307 PASS (120+ target exceeded)** |
 | LOC | 27,029 (65 files) | Growing |
 | Security | 6 findings, 4 fixed | Fuzz testing + expanded audit |
 | Hardware cost | $215.82 AUD | +$0-50 |

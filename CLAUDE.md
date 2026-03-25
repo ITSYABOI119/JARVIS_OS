@@ -13,10 +13,10 @@ Guidance for Claude Code when working with this repository.
 | Phase 0 | COMPLETE | Months 1-6 | Validation (80% success, GO decision) |
 | Phase 1 | COMPLETE | Months 6-12 | PoC on x86 QEMU (26/26 weeks, Dec 2025) |
 | Phase 2 | COMPLETE | Months 12-24 | Alpha on Pi 4 bare metal (21 drivers, 30-day stability) |
-| **Phase 3** | **IN PROGRESS** | Months 24-36 | Beta on x86-64 bare metal (pre-work + early dev done) |
+| **Phase 3** | **IN PROGRESS** | Months 24-36 | Beta on x86-64 bare metal (**LLM inference on seL4 VERIFIED**) |
 | Phase 4 | Future | Months 36+ | Production v1.0 |
 
-**Current:** Phase 3, Early Development (March 2026). Pre-work complete, x86 drivers + GGUF parser done, adversarial security audit complete (26/26 fixed). Awaiting spare PC assembly.
+**Current:** Phase 3, Active Development (March 25, 2026). **MILESTONE: Coherent LLM text generation on seL4 microkernel.** Llama 3.2 1B running in QEMU with quantized zero-copy inference (~50MB heap). Logits verified against llama.cpp reference. Spare PC still 1/7 parts — all QEMU-possible work done.
 
 ---
 
@@ -230,9 +230,9 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 
 ---
 
-## Current Status (Phase 3 Pre-Work + Early Development)
+## Current Status (Phase 3 — LLM Inference on seL4 VERIFIED)
 
-**Phase 3 Pre-Work COMPLETE + Early Phase 3b work done + Security audit COMPLETE** (March 22, 2026) - Awaiting spare PC assembly
+**INFERENCE MILESTONE** (March 25, 2026) — Llama 3.2 1B generates coherent text on seL4 in QEMU. Quantized zero-copy inference uses ~50MB heap (not 5.7GB). Logits match llama.cpp reference (top-5 identical). Spare PC still awaiting assembly (1/7 parts).
 
 | Milestone | Status |
 |-----------|--------|
@@ -323,8 +323,20 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | Adversarial security audit: 26 findings (1 CRIT, 6 HIGH, 7 MED, 8 LOW, 4 INFO) | DONE |
 | All 26 security findings fixed (2 commits: 0ff1cde + 708aa15) | DONE |
 | 211/211 tests passing after security hardening | DONE |
+| **Phase 3a: GPU benchmarks (RTX 2070, 1B: 273 tok/s GPU, 44 CPU)** | **DONE** |
+| **Phase 3a: seL4 native Linux build env (123/123 PASS, KVM)** | **DONE** |
+| **Phase 3a: 247/247 Phase 3 tests validated on native x86-64** | **DONE** |
+| **GGUF memory API (gguf_open_memory via fmemopen)** | **DONE** |
+| **Q4_K/Q6_K dequantization (verified bit-exact vs llama.cpp)** | **DONE** |
+| **Quantized zero-copy model loading (llama_quant.c, ~50MB heap)** | **DONE** |
+| **GGUF vocab extraction (128,256 BPE tokens from raw binary)** | **DONE** |
+| **Weight tying (output.weight → token_embd.weight fallback)** | **DONE** |
+| **RoPE freq factors (rope_freqs.weight loaded, applied as divisors)** | **DONE** |
+| **4/4 inference stages PASS on seL4 QEMU (parse→load→tokenize→generate)** | **DONE** |
+| **Coherent text: "a microkernel implementation of the L4 architecture..."** | **DONE** |
+| **Logits verified vs llama.cpp reference (top-5 match exactly)** | **DONE** |
 
-**Next:** All 8 pre-work tasks DONE. Security audit complete (26/26 fixed). Ready for Phase 3a when spare PC is assembled.
+**Next:** Spare PC assembly (1/7 parts bought). All QEMU-achievable work complete. Ready for real hardware.
 
 ### Pre-Work Tasks (Before Spare PC)
 
@@ -351,22 +363,26 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | x86 Timer (PIT/HPET/TSC) | 13-14 | DONE | x86_timer.c/h | 8 PASS |
 | Block device abstraction | 15-16 | DONE | blk_dev_x86.c/h | 9 PASS |
 | C tensor ops (10 ops) | 19-20 | DONE | tensor_ops.c/h | 14 PASS |
-| Dequantization (Q4_0/Q8_0/F16) | 19-20 | DONE | dequant.c/h | 23 PASS |
+| Dequantization (Q4_0/Q8_0/F16/Q4_K/Q6_K) | 19-20 | DONE | dequant.c/h | 36 PASS |
 | BPE Tokenizer | 21-22 | DONE | tokenizer.c/h | 12 PASS |
 | Model architecture + loading | 21-22 | DONE | llama_model.h, llama_load.c | 7 PASS |
 | Sampling (greedy + top-k) | 21-22 | DONE | sampling.c/h | 9 PASS |
 | Transformer forward pass | 21-22 | DONE | llama_forward.c | 9 PASS |
 | Inference API | 21-22 | DONE | inference.c/h | 4 PASS |
 | Shared memory IPC | 23-24 | DONE | shmem_ipc.c/h | 10 PASS |
-| Custom x86 rootserver | 9-12 | DONE (QEMU) | main_x86.c | 5/5 self-test PASS |
-| **Total** | | | **69 files** | **247 tests, 18,476 LOC** |
+| Quantized zero-copy inference | 21-22 | DONE | llama_quant.c/h | 10 PASS |
+| GGUF vocab extraction | 21-22 | DONE | gguf_vocab.c/h | 10 PASS |
+| GGUF memory API | 19-20 | DONE | gguf_parser.c/h (extended) | 7 PASS |
+| F32 vs quantized comparison | — | DONE | test_forward_compare.c | SKIP on CI |
+| Custom x86 rootserver | 9-12 | DONE (QEMU) | main_x86.c | 5/5 self-test + 4/4 inference PASS |
+| **Total** | | | **80+ files** | **307 tests, ~20,000 LOC** |
 
 **What remains for Phase 3b on real hardware:**
 - Boot seL4 on actual Ryzen hardware (vs QEMU)
 - AHCI full read/write against real NVMe (mock-tested, real I/O pending)
 - NIC driver TX/RX against real NIC (skeleton done, real I/O pending)
-- Load real GGUF model from NVMe and run inference end-to-end
-- Extract tokenizer vocab from GGUF metadata (currently manual init)
+- Load GGUF model from NVMe (currently embedded in .rodata via objcopy)
+- Fix BPE tokenizer space handling (Ġ characters in output)
 - 30-day stability test on x86
 
 ### Phase 3 Weeks (After Spare PC Assembly)
@@ -566,6 +582,11 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Llama Forward Pass:** `phase3/src/ai/llama_forward.c`
 - **Sampling:** `phase3/src/ai/sampling.c/h`
 - **Inference API:** `phase3/src/ai/inference.c/h`
+- **Quantized Inference:** `phase3/src/ai/llama_quant.c/h`
+- **GGUF Vocab Extraction:** `phase3/src/ai/gguf_vocab.c/h`
+- **GPU Benchmarks:** `phase3/docs/GPU_BENCHMARK_RTX2070.md`
+- **Native Linux Setup:** `phase3/docs/SEL4_NATIVE_LINUX_SETUP.md`
+- **Native Test Results:** `phase3/docs/NATIVE_TEST_RESULTS.md`
 - **CI Workflow:** `.github/workflows/ci.yml`
 - **Check CI:** `gh run list --limit 1` then `gh run view <id> --log-failed` if failed
 
@@ -582,9 +603,10 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 
 - **Phase 1:** 39,106 LOC, 95 files, 338 test functions (COMPLETE)
 - **Phase 2:** ~27,000 LOC, 65 files, 108 tests (COMPLETE)
-- **Phase 3:** ~18,476 LOC, 69 files, 247 tests (IN PROGRESS — pre-work + early dev + inference engine)
-- **Total:** ~75,000+ LOC, 190+ files, 513+ tests
+- **Phase 3:** ~20,000 LOC, 80+ files, 307 tests (IN PROGRESS — **LLM inference on seL4 verified**)
+- **Total:** ~86,000+ LOC, 200+ files, 573+ tests
 - **Security:** 26/26 adversarial audit findings resolved (March 2026)
+- **Inference:** Llama 3.2 1B Q4_K_M on seL4 QEMU, coherent output, 50MB heap
 
 ### Hardware Pivot Context
 
@@ -594,9 +616,11 @@ Doc: `phase2/docs/PHASE_2_HARDWARE_PIVOT.md`
 
 ### Technology Stack
 
-- **Microkernel:** seL4 (formally verified) on ARM64
-- **AI Models:** Phi-3 Mini 3.8B, Llama 3.2 1B (on host PC)
+- **Microkernel:** seL4 (formally verified) on ARM64 + x86-64
+- **AI Models:** Llama 3.2 1B Q4_K_M (native C on seL4), Phi-3 Mini 3.8B (host PC)
+- **Inference:** Quantized zero-copy (Q4_K/Q6_K dequant on-the-fly, ~50MB heap)
 - **Build:** TII seL4 build system + CMake/Ninja
-- **Cross-compiler:** aarch64-linux-gnu-gcc 13.3.0
-- **Bootloader:** U-Boot 2026.01
-- **Hardware:** Raspberry Pi 4 (BCM2711, Cortex-A72, 8GB RAM)
+- **Cross-compiler:** aarch64-linux-gnu-gcc 13.3.0 (ARM64), gcc 13.3.0 (x86-64)
+- **Bootloader:** U-Boot 2026.01 (Pi 4), GRUB2/multiboot (x86 QEMU)
+- **Hardware:** Raspberry Pi 4 (BCM2711, 8GB), Main PC (Ryzen 7 2700X, RTX 2070, 32GB)
+- **QEMU:** KVM-accelerated x86-64, 4GB RAM, CNode 19 (524K slots)
