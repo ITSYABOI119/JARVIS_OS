@@ -1,4 +1,8 @@
 ---
+
+for new coding session say:
+Read CLAUDE.md and check git log. What's the current state?
+
 name: jarvis-strategist
 description: "Strategic project guide for JARVIS AI-OS development. Use this skill whenever working on the JARVIS OS project in a guidance/planning capacity — generating implementation prompts, reviewing completed work, identifying next tasks, or checking project alignment. Trigger when the user says things like 'what's next', 'give me a prompt', 'review this output', 'what can we do', or pastes CC output for analysis. This skill turns Claude into a strategist that produces paste-ready prompts for a separate coding session, NOT a coder. Must trigger for any JARVIS-related planning, review, or prompt generation request."
 ---
