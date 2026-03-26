@@ -177,18 +177,46 @@ int tokenizer_decode(const tokenizer_t *t, const int *token_ids, int n_tokens,
     }
     out_text[pos] = '\0';
 
-    /* GPT-2 BPE uses Unicode characters to represent bytes.
-     * Decode the most common ones back to their actual byte values:
-     *   Ġ (U+0120, UTF-8: 0xC4 0xA0) → space (0x20)
-     *   Ċ (U+010A, UTF-8: 0xC4 0x8A) → newline (0x0A)
-     * In-place replacement: 2-byte sequence → 1 byte, shrinks string. */
+    /* GPT-2 BPE reverse mapping: 2-byte UTF-8 -> original byte.
+     * All 256 byte values are mapped to printable Unicode characters.
+     * Bytes 0x21-0x7E, 0xA1-0xAC, 0xAE-0xFF map to themselves (identity).
+     * The remaining 68 bytes (0x00-0x20, 0x7F-0xA0, 0xAD) map to
+     * Unicode U+0100-U+0143 in order:
+     *   U+0100-U+013F (UTF-8: 0xC4 0x80-0xBF): first 64 of 68
+     *   U+0140-U+0143 (UTF-8: 0xC5 0x80-0x83): last 4 of 68
+     * In-place replacement: 2-byte sequence -> 1 byte, shrinks string. */
     {
+        static const int gpt2_c4_map[64] = {
+            0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07, /* U+0100-0107 */
+            0x08,0x09,0x0A,0x0B,0x0C,0x0D,0x0E,0x0F, /* U+0108-010F */
+            0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17, /* U+0110-0117 */
+            0x18,0x19,0x1A,0x1B,0x1C,0x1D,0x1E,0x1F, /* U+0118-011F */
+            0x20,0x7F,0x80,0x81,0x82,0x83,0x84,0x85, /* U+0120-0127 */
+            0x86,0x87,0x88,0x89,0x8A,0x8B,0x8C,0x8D, /* U+0128-012F */
+            0x8E,0x8F,0x90,0x91,0x92,0x93,0x94,0x95, /* U+0130-0137 */
+            0x96,0x97,0x98,0x99,0x9A,0x9B,0x9C,0x9D, /* U+0138-013F */
+        };
+        static const int gpt2_c5_map[4] = {
+            0x9E,0x9F,0xA0,0xAD, /* U+0140-0143 */
+        };
+
         int r = 0, w = 0;
         while (r < pos) {
-            if (r + 1 < pos && (unsigned char)out_text[r] == 0xC4) {
-                unsigned char next = (unsigned char)out_text[r + 1];
-                if (next == 0xA0) { out_text[w++] = ' ';  r += 2; continue; }
-                if (next == 0x8A) { out_text[w++] = '\n'; r += 2; continue; }
+            unsigned char c = (unsigned char)out_text[r];
+            if (c == 0xC4 && r + 1 < pos) {
+                unsigned char c2 = (unsigned char)out_text[r + 1];
+                if (c2 >= 0x80 && c2 <= 0xBF) {
+                    out_text[w++] = (char)gpt2_c4_map[c2 - 0x80];
+                    r += 2;
+                    continue;
+                }
+            } else if (c == 0xC5 && r + 1 < pos) {
+                unsigned char c2 = (unsigned char)out_text[r + 1];
+                if (c2 >= 0x80 && c2 <= 0x83) {
+                    out_text[w++] = (char)gpt2_c5_map[c2 - 0x80];
+                    r += 2;
+                    continue;
+                }
             }
             out_text[w++] = out_text[r++];
         }
