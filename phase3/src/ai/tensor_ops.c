@@ -7,6 +7,7 @@
 
 #include "tensor_ops.h"
 #include <math.h>
+#include <string.h>
 
 void tensor_add(const float *a, const float *b, float *out, int n)
 {
@@ -28,15 +29,38 @@ void tensor_scale(const float *a, float s, float *out, int n)
 
 void tensor_matmul(const float *a, const float *b, float *out, int M, int K, int N)
 {
-    /* Naive triple loop. TODO: tile + AVX2 for cache-friendly SIMD. */
-    for (int i = 0; i < M; i++) {
-        for (int j = 0; j < N; j++) {
+    /* N=1 fast path: matrix-vector multiply (all inference matmuls) */
+    if (N == 1) {
+        for (int i = 0; i < M; i++) {
+            const float *row = a + (size_t)i * K;
             float sum = 0.0f;
-            for (int k = 0; k < K; k++)
-                sum += a[i * K + k] * b[k * N + j];
-            out[i * N + j] = sum;
+            int k = 0;
+            /* 4-wide loop unroll for better ILP */
+            for (; k + 3 < K; k += 4)
+                sum += row[k]*b[k] + row[k+1]*b[k+1] + row[k+2]*b[k+2] + row[k+3]*b[k+3];
+            for (; k < K; k++)
+                sum += row[k] * b[k];
+            out[i] = sum;
         }
+        return;
     }
+
+    /* General case: tiled matmul for cache locality */
+    memset(out, 0, (size_t)M * (size_t)N * sizeof(float));
+    const int TILE = 32;
+    for (int i0 = 0; i0 < M; i0 += TILE)
+        for (int k0 = 0; k0 < K; k0 += TILE)
+            for (int j0 = 0; j0 < N; j0 += TILE) {
+                int imax = i0 + TILE < M ? i0 + TILE : M;
+                int kmax = k0 + TILE < K ? k0 + TILE : K;
+                int jmax = j0 + TILE < N ? j0 + TILE : N;
+                for (int i = i0; i < imax; i++)
+                    for (int k = k0; k < kmax; k++) {
+                        float aik = a[(size_t)i * K + k];
+                        for (int j = j0; j < jmax; j++)
+                            out[(size_t)i * N + j] += aik * b[(size_t)k * N + j];
+                    }
+            }
 }
 
 void tensor_relu(const float *in, float *out, int n)

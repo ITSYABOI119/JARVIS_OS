@@ -108,7 +108,10 @@ static void qmatmul_vec(const qtensor_t *W, const float *x, float *out,
             dequant_row(block_ptr, tmp, block_size, wtype);
 
             const float *xb = x + b * block_size;
-            for (int j = 0; j < block_size; j++)
+            int j = 0;
+            for (; j + 3 < block_size; j += 4)
+                dot += tmp[j]*xb[j] + tmp[j+1]*xb[j+1] + tmp[j+2]*xb[j+2] + tmp[j+3]*xb[j+3];
+            for (; j < block_size; j++)
                 dot += tmp[j] * xb[j];
 
             block_ptr += block_bytes;
