@@ -1,8 +1,26 @@
 #define _POSIX_C_SOURCE 200809L
 #include "tokenizer.h"
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <float.h>
+
+static uint64_t fnv1a_hash(const char *str)
+{
+    uint64_t h = 14695981039346656037ULL;
+    while (*str) {
+        h ^= (uint8_t)*str++;
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
+static int next_pow2(int n)
+{
+    int p = 1;
+    while (p < n) p <<= 1;
+    return p;
+}
 
 int tokenizer_init(tokenizer_t *t, const char **tokens, const float *scores,
                    int vocab_size, int bos_id, int eos_id)
@@ -12,6 +30,8 @@ int tokenizer_init(tokenizer_t *t, const char **tokens, const float *scores,
     t->eos_id = eos_id;
     t->tokens = NULL;
     t->scores = NULL;
+    t->ht_table = NULL;
+    t->ht_capacity = 0;
 
     t->tokens = (char **)malloc(sizeof(char *) * (size_t)vocab_size);
     t->scores = (float *)malloc(sizeof(float) * (size_t)vocab_size);
@@ -25,14 +45,37 @@ int tokenizer_init(tokenizer_t *t, const char **tokens, const float *scores,
         if (!t->tokens[i]) { tokenizer_free(t); return -1; }
         t->scores[i] = scores ? scores[i] : 0.0f;
     }
+
+    /* Build hash table for O(1) tokenizer_find() */
+    t->ht_capacity = next_pow2(vocab_size * 2);
+    t->ht_table = (int *)malloc(sizeof(int) * (size_t)t->ht_capacity);
+    if (!t->ht_table) { tokenizer_free(t); return -1; }
+    memset(t->ht_table, 0xFF, sizeof(int) * (size_t)t->ht_capacity); /* fill with -1 */
+
+    for (int i = 0; i < vocab_size; i++) {
+        uint64_t h = fnv1a_hash(t->tokens[i]) % (uint64_t)t->ht_capacity;
+        while (t->ht_table[h] != -1)
+            h = (h + 1) % (uint64_t)t->ht_capacity;
+        t->ht_table[h] = i;
+    }
+
     return 0;
 }
 
 int tokenizer_find(const tokenizer_t *t, const char *token_str)
 {
-    /* TODO: hash table for O(1) lookup. Linear scan for now. */
-    for (int i = 0; i < t->vocab_size; i++)
-        if (strcmp(t->tokens[i], token_str) == 0) return i;
+    if (!t->ht_table) {
+        /* Fallback: linear scan if hash table not built */
+        for (int i = 0; i < t->vocab_size; i++)
+            if (strcmp(t->tokens[i], token_str) == 0) return i;
+        return -1;
+    }
+    uint64_t h = fnv1a_hash(token_str) % (uint64_t)t->ht_capacity;
+    while (t->ht_table[h] != -1) {
+        if (strcmp(t->tokens[t->ht_table[h]], token_str) == 0)
+            return t->ht_table[h];
+        h = (h + 1) % (uint64_t)t->ht_capacity;
+    }
     return -1;
 }
 
@@ -169,5 +212,8 @@ void tokenizer_free(tokenizer_t *t)
         free(t->scores);
         t->scores = NULL;
     }
+    free(t->ht_table);
+    t->ht_table = NULL;
+    t->ht_capacity = 0;
     t->vocab_size = 0;
 }

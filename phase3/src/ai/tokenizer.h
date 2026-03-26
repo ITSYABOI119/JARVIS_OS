@@ -11,6 +11,8 @@ typedef struct {
     int      vocab_size;
     int      bos_id;
     int      eos_id;
+    int     *ht_table;    /* Hash table: token index or -1 (empty) */
+    int      ht_capacity; /* Power of 2, >= 2 * vocab_size */
 } tokenizer_t;
 
 int  tokenizer_init(tokenizer_t *t, const char **tokens, const float *scores,
