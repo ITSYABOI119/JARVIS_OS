@@ -375,7 +375,9 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | GGUF memory API | 19-20 | DONE | gguf_parser.c/h (extended) | 7 PASS |
 | F32 vs quantized comparison | — | DONE | test_forward_compare.c | SKIP on CI |
 | Custom x86 rootserver | 9-12 | DONE (QEMU) | main_x86.c | 5/5 self-test + 4/4 inference PASS |
-| **Total** | | | **80+ files** | **307 tests, ~20,000 LOC** |
+| SHIELD safety module | — | DONE | shield.c/h | 8 PASS |
+| Generation quality tests | — | DONE | test_generation.c | 6 PASS (model needed) |
+| **Total** | | | **80+ files** | **321 tests, ~20,000 LOC** |
 
 **What remains for Phase 3b on real hardware:**
 - Boot seL4 on actual Ryzen hardware (vs QEMU)
@@ -401,8 +403,9 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | IPC latency | <100us | 54us (Phase 1), 7ms UART (Phase 2) |
 | Cache hit rate | >80% | 85.7% |
 | AI inference | <500ms | 558ms CPU Phi-3, <100ms Llama 3.2 1B (host PC benchmarks, no log artifact) |
+| Native F32 inference | — | 1.09 tok/s (naive matmul, no SIMD; llama.cpp CPU: 44 tok/s with AVX2) |
 | Boot time | <60s | ~2s |
-| SHIELD block rate | >90% | 100% harmful blocked, 0% FP |
+| SHIELD block rate | >90% | 100% harmful blocked, 0% FP (keyword + model-assisted) |
 | Multi-agent routing | >90% | 100% |
 
 ---
@@ -584,7 +587,10 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Inference API:** `phase3/src/ai/inference.c/h`
 - **Quantized Inference:** `phase3/src/ai/llama_quant.c/h`
 - **GGUF Vocab Extraction:** `phase3/src/ai/gguf_vocab.c/h`
+- **SHIELD Safety Module:** `phase3/src/ai/shield.c/h`
+- **Inference Benchmark:** `phase3/src/ai/bench_inference.c`
 - **GPU Benchmarks:** `phase3/docs/GPU_BENCHMARK_RTX2070.md`
+- **Inference Benchmark Results:** `phase3/docs/INFERENCE_BENCHMARK.md`
 - **Native Linux Setup:** `phase3/docs/SEL4_NATIVE_LINUX_SETUP.md`
 - **Native Test Results:** `phase3/docs/NATIVE_TEST_RESULTS.md`
 - **CI Workflow:** `.github/workflows/ci.yml`
@@ -603,9 +609,9 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 
 - **Phase 1:** 39,106 LOC, 95 files, 338 test functions (COMPLETE)
 - **Phase 2:** ~27,000 LOC, 65 files, 108 tests (COMPLETE)
-- **Phase 3:** ~20,000 LOC, 80+ files, 307 tests (IN PROGRESS — **LLM inference on seL4 verified**)
-- **Total:** ~86,000+ LOC, 200+ files, 573+ tests
-- **Security:** 26/26 adversarial audit findings resolved (March 2026)
+- **Phase 3:** ~20,000 LOC, 80+ files, 321 tests (IN PROGRESS — **LLM inference on seL4 verified**)
+- **Total:** ~86,000+ LOC, 200+ files, 587+ tests
+- **Security:** 26/26 adversarial audit findings resolved (March 2026). SHIELD module: keyword + model-assisted risk scoring.
 - **Inference:** Llama 3.2 1B Q4_K_M on seL4 QEMU, coherent output, 50MB heap
 
 ### Hardware Pivot Context
