@@ -133,6 +133,26 @@ int tokenizer_decode(const tokenizer_t *t, const int *token_ids, int n_tokens,
         pos += tok_len;
     }
     out_text[pos] = '\0';
+
+    /* GPT-2 BPE uses Unicode characters to represent bytes.
+     * Decode the most common ones back to their actual byte values:
+     *   Ġ (U+0120, UTF-8: 0xC4 0xA0) → space (0x20)
+     *   Ċ (U+010A, UTF-8: 0xC4 0x8A) → newline (0x0A)
+     * In-place replacement: 2-byte sequence → 1 byte, shrinks string. */
+    {
+        int r = 0, w = 0;
+        while (r < pos) {
+            if (r + 1 < pos && (unsigned char)out_text[r] == 0xC4) {
+                unsigned char next = (unsigned char)out_text[r + 1];
+                if (next == 0xA0) { out_text[w++] = ' ';  r += 2; continue; }
+                if (next == 0x8A) { out_text[w++] = '\n'; r += 2; continue; }
+            }
+            out_text[w++] = out_text[r++];
+        }
+        out_text[w] = '\0';
+        pos = w;
+    }
+
     return pos;
 }
 
