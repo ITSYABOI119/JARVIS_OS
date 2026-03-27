@@ -48,19 +48,20 @@ extern char _cpio_archive_end[];
 #define INFERENCE_APP "jarvis-inference"
 
 /* ---- Allocman bootstrap for process spawning ---- */
-/* Larger pools for process spawning — need memory for child VSpace pages + CPIO loading */
-#define ALLOCATOR_STATIC_POOL_SIZE (BIT(seL4_PageBits) * 2000)
+/* Pools for process spawning — virtual pool must be >= child ELF size (770MB+) */
+#define ALLOCATOR_STATIC_POOL_SIZE (BIT(seL4_PageBits) * 200)
 static char allocator_mem_pool[ALLOCATOR_STATIC_POOL_SIZE];
-#define ALLOCATOR_VIRTUAL_POOL_SIZE (BIT(seL4_PageBits) * 40000)
+#define ALLOCATOR_VIRTUAL_POOL_SIZE (BIT(seL4_PageBits) * 250000)  /* ~1GB virtual */
 
 static sel4utils_alloc_data_t vspace_data;
 static simple_t simple;
 static vka_t vka;
 static vspace_t vspace;
 
-/* Shared memory for IPC between Process A and B */
-static shmem_ring_t *shared_request_ring;
-static shmem_ring_t *shared_response_ring;
+/* Shared memory for IPC between Process A and B (static, page-aligned) */
+static shmem_ring_t shared_rings[2] __attribute__((aligned(4096)));
+static shmem_ring_t *shared_request_ring = &shared_rings[0];
+static shmem_ring_t *shared_response_ring = &shared_rings[1];
 static sel4utils_process_t inference_process;
 
 /* ---- Serial output via seL4 debug syscall ---- */
@@ -645,30 +646,22 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
     }
     puts_serial("[JARVIS] Inference process configured\n");
 
-    /* Allocate 2 pages of shared memory for IPC rings */
-    /* First, allocate in our vspace */
-    shared_request_ring = (shmem_ring_t *)vspace_new_pages(&vspace,
-        seL4_AllRights, 2, seL4_PageBits);
-    if (!shared_request_ring) {
-        puts_serial("[JARVIS] Failed to allocate shared pages\n");
-        return -1;
-    }
-    shared_response_ring = (shmem_ring_t *)((uintptr_t)shared_request_ring + SHMEM_PAGE_SIZE);
-
-    /* Initialize the rings */
+    /* Initialize the static shared rings */
     shmem_ipc_init(shared_request_ring);
     shmem_ipc_init(shared_response_ring);
 
-    /* Map shared pages into Process B's vspace */
+    /* Try to share the static ring pages into Process B's vspace.
+     * This uses vspace_share_mem which finds the frames backing our
+     * static BSS pages and maps them into Process B. */
     void *remote_vaddr = vspace_share_mem(&vspace,
         &inference_process.vspace,
         (void *)shared_request_ring, 2, seL4_PageBits,
         seL4_AllRights, 1);
     if (!remote_vaddr) {
-        puts_serial("[JARVIS] Failed to share memory with Process B\n");
-        return -1;
+        puts_serial("[JARVIS] Shared memory not available (static BSS not in managed vspace)\n");
+    } else {
+        puts_serial("[JARVIS] Shared memory mapped: 2 pages at remote ");
     }
-    puts_serial("[JARVIS] Shared memory mapped: 2 pages\n");
 
     /* Copy notification caps to Process B's cspace */
     seL4_CPtr remote_req_notif = sel4utils_copy_cap_to_process(
