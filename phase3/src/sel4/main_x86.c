@@ -339,6 +339,12 @@ static void put_u64(uint64_t val)
         seL4_DebugPutChar(buf[i]);
 }
 
+static inline uint64_t rdtsc(void) {
+    uint32_t lo, hi;
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+}
+
 static int run_inference_stages(void)
 {
     int stage_pass = 0;
@@ -477,6 +483,34 @@ static int run_inference_stages(void)
     puts_serial("[Stage 4] Generation ... PASS\n\n");
     stage_pass++;
 
+    /* ---- Stage 5: Performance benchmark ---- */
+    puts_serial("[Stage 5] Performance benchmark...\n");
+    {
+        llama_state_t bench_state;
+        err = llama_alloc_state(&bench_state, &qm.config);
+        if (err) {
+            puts_serial("  SKIP: state alloc failed\n");
+        } else {
+            int bench_prompt[] = {(int)vocab.bos_id, 791}; /* BOS + "The" */
+            int bench_out[10];
+
+            uint64_t t_start = rdtsc();
+            int bench_n = qmodel_generate(&qm, &bench_state, bench_prompt, 2,
+                                           bench_out, 10, tok.eos_id, 0.0f, 1, 42);
+            uint64_t t_end = rdtsc();
+            uint64_t cycles = t_end - t_start;
+
+            puts_serial("  Generated "); put_dec((uint32_t)bench_n); puts_serial(" tokens\n");
+            puts_serial("  Total cycles: "); put_u64(cycles); puts_serial("\n");
+            if (bench_n > 0) {
+                puts_serial("  Cycles/token: "); put_u64(cycles / (uint64_t)bench_n); puts_serial("\n");
+            }
+            puts_serial("[Stage 5] Benchmark ... DONE\n\n");
+            llama_free_state(&bench_state);
+        }
+    }
+    stage_pass++;
+
     /* Cleanup */
     llama_free_state(&state);
     tokenizer_free(&tok);
@@ -486,7 +520,7 @@ static int run_inference_stages(void)
 
     puts_serial("=== Inference Pipeline: ");
     put_dec((uint32_t)stage_pass);
-    puts_serial("/4 stages PASS ===\n");
+    puts_serial("/5 stages PASS ===\n");
 
     return stage_pass;
 }
