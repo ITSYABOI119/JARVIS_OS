@@ -261,6 +261,7 @@ jobs:
           phase3/src/ai/dequant.c \
           phase3/src/ai/tokenizer.c \
           phase3/src/ai/gguf_parser.c \
+          phase3/src/ai/gguf_vocab.c \
           -lm -o /tmp/test_inference
         /tmp/test_inference
 

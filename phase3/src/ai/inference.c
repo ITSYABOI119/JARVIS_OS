@@ -3,7 +3,10 @@
  */
 
 #include "inference.h"
+#include "gguf_vocab.h"
 #include "sampling.h"
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 int inference_init(inference_ctx_t *ctx, const char *model_path)
@@ -16,8 +19,28 @@ int inference_init(inference_ctx_t *ctx, const char *model_path)
     err = llama_alloc_state(&ctx->state, &ctx->model.config);
     if (err) { llama_free_model(&ctx->model); return err; }
 
-    /* TODO: Extract vocab from GGUF metadata for tokenizer init.
-     * For now, tokenizer must be initialized separately by caller. */
+    /* Extract vocab from GGUF and init tokenizer */
+    {
+        FILE *f = fopen(model_path, "rb");
+        if (f) {
+            fseek(f, 0, SEEK_END);
+            long fsize = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            if (fsize > 0) {
+                void *buf = malloc((size_t)fsize);
+                if (buf && fread(buf, 1, (size_t)fsize, f) == (size_t)fsize) {
+                    gguf_vocab_t vocab;
+                    if (gguf_vocab_extract(buf, (size_t)fsize, &vocab) == 0) {
+                        gguf_vocab_init_tokenizer(&vocab, &ctx->tokenizer);
+                        gguf_vocab_free(&vocab);
+                    }
+                }
+                free(buf);
+            }
+            fclose(f);
+        }
+    }
+
     ctx->ready = true;
     return 0;
 }
