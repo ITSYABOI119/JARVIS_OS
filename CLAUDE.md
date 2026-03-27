@@ -377,14 +377,18 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | Custom x86 rootserver | 9-12 | DONE (QEMU) | main_x86.c | 5/5 self-test + 4/4 inference PASS |
 | SHIELD safety module | — | DONE | shield.c/h | 8 PASS |
 | Generation quality tests | — | DONE | test_generation.c | 6 PASS (model needed) |
-| **Total** | | | **80+ files** | **321 tests, ~20,000 LOC** |
+| Dynamic model scaling | — | DONE | model_scaling.c/h | 9 PASS |
+| IPC CRC-32 (SEC-020) | — | DONE | shmem_ipc.c/h | 3 PASS (13 total) |
+| GPT-2 full byte mapping | — | DONE | tokenizer.c | 12 PASS |
+| Tiled matmul + unroll | — | DONE | tensor_ops.c, llama_quant.c | 14+10 PASS |
+| RDTSC timing (Stage 5) | — | DONE | main_x86.c | 5/5 stages PASS |
+| **Total** | | | **80+ files** | **333 tests, ~20,000 LOC** |
 
 **What remains for Phase 3b on real hardware:**
 - Boot seL4 on actual Ryzen hardware (vs QEMU)
 - AHCI full read/write against real NVMe (mock-tested, real I/O pending)
 - NIC driver TX/RX against real NIC (skeleton done, real I/O pending)
 - Load GGUF model from NVMe (currently embedded in .rodata via objcopy)
-- Fix BPE tokenizer space handling (Ġ characters in output)
 - 30-day stability test on x86
 
 ### Phase 3 Weeks (After Spare PC Assembly)
@@ -588,6 +592,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Quantized Inference:** `phase3/src/ai/llama_quant.c/h`
 - **GGUF Vocab Extraction:** `phase3/src/ai/gguf_vocab.c/h`
 - **SHIELD Safety Module:** `phase3/src/ai/shield.c/h`
+- **Dynamic Model Scaling:** `phase3/src/ai/model_scaling.c/h`
 - **Inference Benchmark:** `phase3/src/ai/bench_inference.c`
 - **GPU Benchmarks:** `phase3/docs/GPU_BENCHMARK_RTX2070.md`
 - **Inference Benchmark Results:** `phase3/docs/INFERENCE_BENCHMARK.md`
@@ -609,7 +614,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 
 - **Phase 1:** 39,106 LOC, 95 files, 338 test functions (COMPLETE)
 - **Phase 2:** ~27,000 LOC, 65 files, 108 tests (COMPLETE)
-- **Phase 3:** ~20,000 LOC, 80+ files, 321 tests (IN PROGRESS — **LLM inference on seL4 verified**)
+- **Phase 3:** ~20,000 LOC, 80+ files, 333 tests (IN PROGRESS — **LLM inference on seL4 verified**)
 - **Total:** ~86,000+ LOC, 200+ files, 587+ tests
 - **Security:** 26/26 adversarial audit findings resolved (March 2026). SHIELD module: keyword + model-assisted risk scoring.
 - **Inference:** Llama 3.2 1B Q4_K_M on seL4 QEMU, coherent output, 50MB heap
