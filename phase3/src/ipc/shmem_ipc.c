@@ -9,6 +9,32 @@
 #include "shmem_ipc.h"
 
 /*
+ * CRC-32 (Ethernet polynomial, SEC-020).
+ * Covers type + seq + length + payload[0..len-1].
+ */
+static uint32_t shmem_crc32(const void *data, size_t len)
+{
+    const uint8_t *p = (const uint8_t *)data;
+    uint32_t crc = 0xFFFFFFFF;
+    for (size_t i = 0; i < len; i++) {
+        crc ^= p[i];
+        for (int j = 0; j < 8; j++)
+            crc = (crc >> 1) ^ (0xEDB88320 & -(crc & 1));
+    }
+    return ~crc;
+}
+
+/*
+ * Compute CRC-32 over the message header fields and payload.
+ * The struct is packed, so type(1)+seq(2)+length(2)+payload[] is contiguous.
+ * CRC covers: 5 header bytes + payload[0..len-1].
+ */
+static uint32_t shmem_msg_crc(const shmem_msg_t *msg, uint16_t len)
+{
+    return shmem_crc32(msg, 5 + len);
+}
+
+/*
  * Initialize shared memory ring buffer.
  * Sets magic, version, size, zeroes indices and all slots.
  * Returns 0 on success, -1 on failure.
@@ -56,6 +82,9 @@ int shmem_ipc_send(shmem_ring_t *ring, uint8_t type, uint16_t seq,
     if (len > 0)
         memcpy(slot->payload, payload, len);
 
+    /* CRC-32 integrity (SEC-020) */
+    slot->crc = shmem_msg_crc(slot, len);
+
     /* Release: ensure slot writes are visible before write_idx update */
     __atomic_store_n(&ring->header.write_idx, wr + 1, __ATOMIC_RELEASE);
 
@@ -91,6 +120,11 @@ int shmem_ipc_recv(shmem_ring_t *ring, uint8_t *type, uint16_t *seq,
     /* Validate length BEFORE any use — malicious producer could set > MAX */
     if (local_length > SHMEM_MAX_PAYLOAD)
         local_length = SHMEM_MAX_PAYLOAD;
+
+    /* CRC-32 integrity check (SEC-020) — verify before consuming */
+    uint32_t expected_crc = shmem_msg_crc(slot, local_length);
+    if (slot->crc != expected_crc)
+        return SHMEM_ERR_CRC;
 
     *type = local_type;
     *seq  = local_seq;

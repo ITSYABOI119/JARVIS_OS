@@ -2,11 +2,9 @@
  * JARVIS AI-OS - Shared Memory IPC for Phase 3
  * Replaces UART framing with lock-free ring buffer over shared page
  *
- * No SYNC bytes, no CRC (shared memory is reliable).
  * Uses atomic load/store with acquire/release for lock-free SPSC operation.
- *
- * TODO: Add per-message CRC-32 for integrity verification on shared
- * memory corruption (bit flips, partial writes). See SEC-020.
+ * Per-message CRC-32 integrity verification protects against shared memory
+ * corruption (bit flips, partial writes). See SEC-020.
  */
 
 #ifndef SHMEM_IPC_H
@@ -48,13 +46,14 @@ typedef struct {
     uint32_t padding[11]; /* Pad to 64 bytes */
 } shmem_ring_header_t;
 
-/* Message slot (5-byte header + payload, padded to SHMEM_SLOT_SIZE) */
+/* Message slot (5-byte header + payload + CRC, padded to SHMEM_SLOT_SIZE) */
 typedef struct __attribute__((packed)) {
     uint8_t  type;                        /* MSG_QUERY, MSG_RESPONSE, etc. */
     uint16_t seq;                         /* Sequence number */
     uint16_t length;                      /* Payload length (0-240) */
     uint8_t  payload[SHMEM_MAX_PAYLOAD];  /* Payload data */
-    uint8_t  _pad[SHMEM_SLOT_SIZE - 5 - SHMEM_MAX_PAYLOAD]; /* Pad to slot size */
+    uint32_t crc;                         /* CRC-32 over type+seq+length+payload[0..len-1] */
+    uint8_t  _pad[SHMEM_SLOT_SIZE - 5 - SHMEM_MAX_PAYLOAD - 4]; /* Pad to slot size */
 } shmem_msg_t;
 
 /* Full shared memory page layout */
@@ -62,6 +61,9 @@ typedef struct {
     shmem_ring_header_t header;
     shmem_msg_t slots[SHMEM_RING_SLOTS];
 } shmem_ring_t;
+
+/* Error codes */
+#define SHMEM_ERR_CRC      (-2)  /* CRC-32 mismatch on recv (SEC-020) */
 
 /* API */
 int  shmem_ipc_init(shmem_ring_t *ring);

@@ -312,6 +312,13 @@ jobs:
           -lm -o /tmp/test_llama_quant
         /tmp/test_llama_quant
 
+    - name: "Phase 3: Shared Memory IPC CRC (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -D_GNU_SOURCE \
+          phase3/src/ipc/test_shmem_crc.c phase3/src/ipc/shmem_ipc.c \
+          -I phase3/src/ipc -o /tmp/test_shmem_crc
+        /tmp/test_shmem_crc
+
     - name: "Phase 3: SHIELD Safety (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 -D_POSIX_C_SOURCE=200809L \
