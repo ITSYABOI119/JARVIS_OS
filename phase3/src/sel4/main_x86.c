@@ -25,6 +25,7 @@
 #include <sel4utils/process.h>
 #include <sel4utils/process_config.h>
 #include <vka/object.h>
+#include <vka/capops.h>
 #include <simple/simple.h>
 #include <simple-default/simple-default.h>
 #include <cpio/cpio.h>
@@ -596,6 +597,50 @@ static int init_system(void)
     return 0;
 }
 
+/* ---- Direct page mapping helper ---- */
+
+static int map_frame_direct(seL4_CPtr frame, seL4_CPtr vspace_root,
+                             seL4_Word vaddr, seL4_CapRights_t rights)
+{
+    seL4_X86_VMAttributes vmattr = seL4_X86_Default_VMAttributes;
+    int err;
+
+    err = seL4_X86_Page_Map(frame, vspace_root, vaddr, rights, vmattr);
+    if (err == seL4_NoError) return 0;
+
+    /* Create page table hierarchy: PDPT → PD → PT → retry Page */
+    vka_object_t pt_obj;
+    err = vka_alloc_object(&vka, seL4_X86_PageTableObject, 0, &pt_obj);
+    if (err) return -1;
+
+    err = seL4_X86_PageTable_Map(pt_obj.cptr, vspace_root, vaddr, vmattr);
+    if (err == seL4_FailedLookup) {
+        vka_object_t pd_obj;
+        err = vka_alloc_object(&vka, seL4_X86_PageDirectoryObject, 0, &pd_obj);
+        if (err) return -1;
+
+        err = seL4_X86_PageDirectory_Map(pd_obj.cptr, vspace_root, vaddr, vmattr);
+        if (err == seL4_FailedLookup) {
+            vka_object_t pdpt_obj;
+            err = vka_alloc_object(&vka, seL4_X86_PDPTObject, 0, &pdpt_obj);
+            if (err) return -1;
+            err = seL4_X86_PDPT_Map(pdpt_obj.cptr, vspace_root, vaddr, vmattr);
+            if (err) return -1;
+            err = seL4_X86_PageDirectory_Map(pd_obj.cptr, vspace_root, vaddr, vmattr);
+        }
+        if (err) return -1;
+        err = seL4_X86_PageTable_Map(pt_obj.cptr, vspace_root, vaddr, vmattr);
+    }
+    if (err) return -1;
+
+    err = seL4_X86_Page_Map(frame, vspace_root, vaddr, rights, vmattr);
+    return err ? -1 : 0;
+}
+
+/* Fixed virtual addresses for shared memory */
+#define SHMEM_VADDR_A  0x10000000UL  /* In Process A */
+#define SHMEM_VADDR_B  0x50000000UL  /* In Process B */
+
 /* ---- Spawn inference process (Process B) ---- */
 
 static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_notif_out)
@@ -647,28 +692,59 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
     }
     puts_serial("[JARVIS] Inference process configured\n");
 
-    /* Allocate 2 fresh pages AFTER process configuration (configure uses lots of small allocs) */
-    void *shmem_vaddr = vspace_new_pages(&vspace, seL4_AllRights, 2, seL4_PageBits);
-    if (!shmem_vaddr) {
-        puts_serial("[JARVIS] Failed to alloc shared pages\n");
-        return -1;
+    /* Allocate 2 physical frames for shared memory */
+    vka_object_t shmem_frames[2];
+    for (int i = 0; i < 2; i++) {
+        error = vka_alloc_frame(&vka, seL4_PageBits, &shmem_frames[i]);
+        if (error) {
+            puts_serial("[JARVIS] Failed to alloc shared frame\n");
+            return -1;
+        }
     }
-    shared_request_ring = (shmem_ring_t *)shmem_vaddr;
-    shared_response_ring = (shmem_ring_t *)((char *)shmem_vaddr + SHMEM_PAGE_SIZE);
+
+    /* Map frames into Process A at fixed address using direct seL4 syscalls */
+    seL4_CPtr pd_a = simple_get_pd(&simple);
+    for (int i = 0; i < 2; i++) {
+        error = map_frame_direct(shmem_frames[i].cptr, pd_a,
+            SHMEM_VADDR_A + i * 4096, seL4_AllRights);
+        if (error) {
+            puts_serial("[JARVIS] Failed to map shared frame in Process A\n");
+            return -1;
+        }
+    }
+    shared_request_ring = (shmem_ring_t *)SHMEM_VADDR_A;
+    shared_response_ring = (shmem_ring_t *)(SHMEM_VADDR_A + SHMEM_PAGE_SIZE);
     shmem_ipc_init(shared_request_ring);
     shmem_ipc_init(shared_response_ring);
+    puts_serial("[JARVIS] Shared memory mapped in Process A\n");
 
-    /* Share into Process B's vspace */
-    void *remote_vaddr = vspace_share_mem(&vspace,
-        &inference_process.vspace,
-        shmem_vaddr, 2, seL4_PageBits,
-        seL4_AllRights, 1);
-    if (!remote_vaddr) {
-        puts_serial("[JARVIS] Shared memory mapping failed (continuing without)\n");
-        remote_vaddr = (void *)0;  /* Process B won't have shared mem access */
-    } else {
-        puts_serial("[JARVIS] Shared memory mapped: 2 pages\n");
+    /* Map SAME physical pages into Process B's VSpace.
+     * seL4 requires a separate cap per mapping — duplicate the frame caps. */
+    seL4_CPtr pd_b = inference_process.pd.cptr;
+    for (int i = 0; i < 2; i++) {
+        /* Duplicate the frame cap (can't map same cap in two VSpaces) */
+        cspacepath_t src, dest;
+        vka_cspace_make_path(&vka, shmem_frames[i].cptr, &src);
+        error = vka_cspace_alloc_path(&vka, &dest);
+        if (error) {
+            puts_serial("[JARVIS] Failed to alloc cspace slot for frame dup\n");
+            return -1;
+        }
+        error = vka_cnode_copy(&dest, &src, seL4_AllRights);
+        if (error) {
+            puts_serial("[JARVIS] Failed to copy frame cap\n");
+            return -1;
+        }
+
+        error = map_frame_direct(dest.capPtr, pd_b,
+            SHMEM_VADDR_B + i * 4096, seL4_AllRights);
+        if (error) {
+            puts_serial("[JARVIS] Failed to map shared frame in Process B\n");
+            return -1;
+        }
     }
+    puts_serial("[JARVIS] Shared memory mapped in Process B\n");
+    void *remote_vaddr = (void *)SHMEM_VADDR_B;
 
     /* Copy notification caps to Process B's cspace */
     seL4_CPtr remote_req_notif = sel4utils_copy_cap_to_process(
