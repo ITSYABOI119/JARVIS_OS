@@ -48,17 +48,18 @@ extern char _cpio_archive_end[];
 #define INFERENCE_APP "jarvis-inference"
 
 /* ---- Allocman bootstrap for process spawning ---- */
-/* Pools for process spawning — virtual pool must be >= child ELF size (770MB+) */
+/* Pools for process spawning — match sel4test sizes */
 #define ALLOCATOR_STATIC_POOL_SIZE (BIT(seL4_PageBits) * 200)
 static char allocator_mem_pool[ALLOCATOR_STATIC_POOL_SIZE];
-#define ALLOCATOR_VIRTUAL_POOL_SIZE (BIT(seL4_PageBits) * 250000)  /* ~1GB virtual */
+#define ALLOCATOR_VIRTUAL_POOL_SIZE (BIT(seL4_PageBits) * 4000)
 
 static sel4utils_alloc_data_t vspace_data;
 static simple_t simple;
 static vka_t vka;
 static vspace_t vspace;
 
-/* Shared memory for IPC between Process A and B (static, page-aligned) */
+/* Shared memory for IPC between Process A and B.
+ * Static page-aligned BSS — already mapped in rootserver ELF. */
 static shmem_ring_t shared_rings[2] __attribute__((aligned(4096)));
 static shmem_ring_t *shared_request_ring = &shared_rings[0];
 static shmem_ring_t *shared_response_ring = &shared_rings[1];
@@ -646,21 +647,27 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
     }
     puts_serial("[JARVIS] Inference process configured\n");
 
-    /* Initialize the static shared rings */
+    /* Allocate 2 fresh pages AFTER process configuration (configure uses lots of small allocs) */
+    void *shmem_vaddr = vspace_new_pages(&vspace, seL4_AllRights, 2, seL4_PageBits);
+    if (!shmem_vaddr) {
+        puts_serial("[JARVIS] Failed to alloc shared pages\n");
+        return -1;
+    }
+    shared_request_ring = (shmem_ring_t *)shmem_vaddr;
+    shared_response_ring = (shmem_ring_t *)((char *)shmem_vaddr + SHMEM_PAGE_SIZE);
     shmem_ipc_init(shared_request_ring);
     shmem_ipc_init(shared_response_ring);
 
-    /* Try to share the static ring pages into Process B's vspace.
-     * This uses vspace_share_mem which finds the frames backing our
-     * static BSS pages and maps them into Process B. */
+    /* Share into Process B's vspace */
     void *remote_vaddr = vspace_share_mem(&vspace,
         &inference_process.vspace,
-        (void *)shared_request_ring, 2, seL4_PageBits,
+        shmem_vaddr, 2, seL4_PageBits,
         seL4_AllRights, 1);
     if (!remote_vaddr) {
-        puts_serial("[JARVIS] Shared memory not available (static BSS not in managed vspace)\n");
+        puts_serial("[JARVIS] Shared memory mapping failed (continuing without)\n");
+        remote_vaddr = (void *)0;  /* Process B won't have shared mem access */
     } else {
-        puts_serial("[JARVIS] Shared memory mapped: 2 pages at remote ");
+        puts_serial("[JARVIS] Shared memory mapped: 2 pages\n");
     }
 
     /* Copy notification caps to Process B's cspace */
@@ -691,6 +698,56 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
     puts_serial("[JARVIS] Process B started\n");
 
     return 0;
+}
+
+/* ---- Main continuation (runs on vspace-managed stack) ---- */
+
+static void *main_continued(void *arg UNUSED)
+{
+    puts_serial("[JARVIS] Running on vspace-managed stack\n");
+
+    /* ---- Spawn inference process (Process B) ---- */
+    seL4_CPtr req_notif = 0, resp_notif = 0;
+    puts_serial("\n[JARVIS] Spawning inference process...\n");
+    if (spawn_inference_process(&req_notif, &resp_notif) != 0) {
+        puts_serial("[JARVIS] Inference process spawn failed — running without inference\n");
+        goto idle;
+    }
+    puts_serial("[JARVIS] Inference process ready\n");
+
+    /* Give Process B a moment to initialize */
+    for (int i = 0; i < 100; i++) seL4_Yield();
+
+    /* ---- Test: send a query to Process B ---- */
+    puts_serial("\n[JARVIS] Sending test query to Process B...\n");
+    {
+        const char *query = "The seL4 microkernel is";
+        shmem_ipc_send(shared_request_ring, MSG_QUERY, 1,
+                       query, (uint16_t)strlen(query));
+        seL4_Signal(req_notif);
+
+        /* Wait for response */
+        seL4_Wait(resp_notif, NULL);
+
+        uint8_t msg_type;
+        uint16_t msg_seq;
+        uint8_t payload[SHMEM_MAX_PAYLOAD];
+        uint16_t msg_len;
+
+        if (shmem_ipc_recv(shared_response_ring, &msg_type, &msg_seq, payload, &msg_len) == 0) {
+            payload[msg_len] = '\0';
+            puts_serial("[JARVIS] Response: \"");
+            puts_serial((const char *)payload);
+            puts_serial("\"\n");
+        } else {
+            puts_serial("[JARVIS] No response received\n");
+        }
+    }
+
+idle:
+    puts_serial("\n[JARVIS] System idle.\n");
+    while (1) { seL4_Yield(); }
+    return NULL;
 }
 
 /* ---- Main ---- */
@@ -776,50 +833,19 @@ int main(void)
     puts_serial("\n[JARVIS] Bootstrapping system...\n");
     if (init_system() != 0) {
         puts_serial("[JARVIS] System bootstrap failed — running in degraded mode\n");
-        goto idle;
+        puts_serial("\n[JARVIS] System idle.\n");
+        while (1) { seL4_Yield(); }
     }
     puts_serial("[JARVIS] System bootstrapped\n");
 
-    /* ---- Spawn inference process (Process B) ---- */
-    seL4_CPtr req_notif = 0, resp_notif = 0;
-    puts_serial("\n[JARVIS] Spawning inference process...\n");
-    if (spawn_inference_process(&req_notif, &resp_notif) != 0) {
-        puts_serial("[JARVIS] Inference process spawn failed — running without inference\n");
-        goto idle;
-    }
-    puts_serial("[JARVIS] Inference process ready\n");
-
-    /* Give Process B a moment to initialize */
-    for (int i = 0; i < 100; i++) seL4_Yield();
-
-    /* ---- Test: send a query to Process B ---- */
-    puts_serial("\n[JARVIS] Sending test query to Process B...\n");
-    {
-        const char *query = "The seL4 microkernel is";
-        shmem_ipc_send(shared_request_ring, MSG_QUERY, 1,
-                       query, (uint16_t)strlen(query));
-        seL4_Signal(req_notif);
-
-        /* Wait for response */
-        seL4_Wait(resp_notif, NULL);
-
-        uint8_t msg_type;
-        uint16_t msg_seq;
-        uint8_t payload[SHMEM_MAX_PAYLOAD];
-        uint16_t msg_len;
-
-        if (shmem_ipc_recv(shared_response_ring, &msg_type, &msg_seq, payload, &msg_len) == 0) {
-            payload[msg_len] = '\0';
-            puts_serial("[JARVIS] Response: \"");
-            puts_serial((const char *)payload);
-            puts_serial("\"\n");
-        } else {
-            puts_serial("[JARVIS] No response received\n");
-        }
+    /* Switch to vspace-managed stack (required for vspace_new_pages to work) */
+    void *res;
+    int error = sel4utils_run_on_stack(&vspace, main_continued, NULL, &res);
+    if (error) {
+        puts_serial("[JARVIS] Failed to switch to managed stack\n");
     }
 
-idle:
-    puts_serial("\n[JARVIS] System idle.\n");
+    /* Should never reach here */
     while (1) { seL4_Yield(); }
     return 0;
 }
