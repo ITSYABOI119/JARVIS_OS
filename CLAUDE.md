@@ -16,7 +16,7 @@ Guidance for Claude Code when working with this repository.
 | **Phase 3** | **IN PROGRESS** | Months 24-36 | Beta on x86-64 bare metal (**LLM inference on seL4 VERIFIED**) |
 | Phase 4 | Future | Months 36+ | Production v1.0 |
 
-**Current:** Phase 3, Active Development (March 25, 2026). **MILESTONE: Coherent LLM text generation on seL4 microkernel.** Llama 3.2 1B running in QEMU with quantized zero-copy inference (~50MB heap). Logits verified against llama.cpp reference. Spare PC still 1/7 parts — all QEMU-possible work done.
+**Current:** Phase 3, Active Development (March 28, 2026). **MILESTONE: Process-isolated LLM inference on seL4.** Two seL4 processes communicate via shared memory IPC: Process A (rootserver + cache + SHIELD) spawns Process B (Llama 3.2 1B inference) from CPIO. Coherent text generation verified end-to-end through IPC. Spare PC still 1/7 parts — all QEMU-possible work done.
 
 ---
 
@@ -230,9 +230,9 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 
 ---
 
-## Current Status (Phase 3 — LLM Inference on seL4 VERIFIED)
+## Current Status (Phase 3 — Process-Isolated LLM Inference on seL4)
 
-**INFERENCE MILESTONE** (March 25, 2026) — Llama 3.2 1B generates coherent text on seL4 in QEMU. Quantized zero-copy inference uses ~50MB heap (not 5.7GB). Logits match llama.cpp reference (top-5 identical). Spare PC still awaiting assembly (1/7 parts).
+**PROCESS ISOLATION MILESTONE** (March 28, 2026) — Two seL4 processes running: Process A (rootserver, cache, SHIELD) spawns Process B (Llama 3.2 1B inference) from CPIO archive. Process B loads 770MB model zero-copy from .rodata, extracts 128K BPE vocab, generates coherent text. End-to-end IPC verified: Process A sends "The seL4 microkernel is" → Process B generates → response via shared memory. CNode=22 (4M slots), morecore=128MB, 8GB QEMU. Spare PC still awaiting assembly (1/7 parts).
 
 | Milestone | Status |
 |-----------|--------|
@@ -335,6 +335,10 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | **4/4 inference stages PASS on seL4 QEMU (parse→load→tokenize→generate)** | **DONE** |
 | **Coherent text: "a microkernel implementation of the L4 architecture..."** | **DONE** |
 | **Logits verified vs llama.cpp reference (top-5 match exactly)** | **DONE** |
+| **Process isolation: Process A spawns Process B from CPIO (SEC-014)** | **DONE** |
+| **Shared memory IPC between two seL4 processes (direct page mapping)** | **DONE** |
+| **End-to-end IPC: Process A query → Process B inference → response** | **DONE** |
+| **CNode=22, morecore=128MB, allocator pools scaled for 230K frames** | **DONE** |
 
 **Next:** Spare PC assembly (1/7 parts bought). All QEMU-achievable work complete. Ready for real hardware.
 

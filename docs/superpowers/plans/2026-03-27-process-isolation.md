@@ -15,7 +15,7 @@
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                    seL4 Microkernel (Ring 0)                     │
-│              CNode=19 (524K slots), 4GB QEMU+KVM                │
+│              CNode=22 (4M slots), 8GB QEMU+KVM                  │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │  ┌───────────────────────┐    shared    ┌──────────────────────┐│
@@ -155,11 +155,11 @@ For responses longer than 240 bytes: split into multiple MSG_RESPONSE messages w
 - Heap (morecore): ~50 MB (KV cache + activations + tokenizer)
 - Shared pages: 2 × 4KB = 8KB (same physical pages as Process A)
 
-### QEMU Total: 4GB
+### QEMU Total: 8GB (required — CNode=22, 230K+ frame allocs)
 - seL4 kernel: ~10 MB
-- Process A: ~6 MB
-- Process B: ~820 MB
-- Free: ~3.1 GB (available as untypeds)
+- Process A: ~128 MB (morecore) + ~771 MB (.rodata CPIO)
+- Process B: ~128 MB (morecore) + ~771 MB (.rodata model)
+- Free: ~6+ GB (available as untypeds)
 
 ---
 
@@ -229,29 +229,49 @@ endif()
 
 | Task | Hours | Notes |
 |------|-------|-------|
-| Task 1: Create inference_server.c (Process B main) | 4 | IPC loop, model init, generation |
-| Task 2: Modify main_x86.c (Process A, spawn + dispatch) | 6 | sel4utils process creation, shared memory |
-| Task 3: Build system (CMake, CPIO, two targets) | 4 | Follow sel4test pattern |
-| Task 4: Model embedding on Process B | 2 | Move objcopy to Process B's CMakeLists |
-| Task 5: QEMU testing + debugging | 8 | Most time here — capability issues |
-| Task 6: Regression testing (333 existing tests) | 2 | Verify no breakage |
-| **Total** | **~26 hours** | **~3 weeks at 8-12 hrs/week** |
+| Task 1: Create inference_server.c (Process B main) | 4 | DONE — IPC loop, model init, generation |
+| Task 2: Modify main_x86.c (Process A, spawn + dispatch) | 6 | DONE — process spawning, shared memory, ready handshake |
+| Task 3: Build system (CMake, CPIO, two targets) | 4 | DONE — Follow sel4test pattern |
+| Task 4: Model embedding on Process B | 2 | DONE — objcopy in Process B's CMakeLists |
+| Task 5: QEMU testing + debugging | 8 | DONE — CNode 22, 128MB morecore, 8GB QEMU, race fix |
+| Task 6: Regression testing (333 existing tests) | 2 | DONE — 310+ tests pass, 0 regressions |
+| **Total** | **~26 hours** | **ALL COMPLETE — March 28, 2026** |
 
 ---
 
-## Recommendation
+## Status: COMPLETE
 
-**Do this as Phase 3c work (Weeks 29-34), NOT now.** Reasons:
+All 6 tasks finished March 28, 2026. End-to-end IPC with model inference verified in QEMU.
 
-1. **All QEMU-achievable inference work is done.** Process isolation is an architecture improvement, not a functional prerequisite.
-2. **The spare PC (1/7 parts) is the real blocker.** Spending 3 weeks on process isolation delays nothing — there's no hardware to test on.
-3. **However**, if the spare PC is delayed further, this is the highest-impact QEMU work remaining. It directly addresses SEC-014 and is required for production (Phase 4).
-4. **Risk is manageable**: sel4test provides a complete working example of the exact same pattern. We're not inventing anything — just applying a proven seL4 technique.
+### Key Technical Decisions Made During Implementation
 
-**If you want to start now:** Begin with Task 3 (build system) since it's the foundation. If the CPIO + two-target build works, the rest follows.
+1. **CNode size 19 → 22**: The split allocator creates O(N) intermediate untyped capabilities when loading 771MB .rodata (197K frames). CNode 19 (524K slots) overflowed; 22 (4M slots) is sufficient.
+
+2. **Morecore 1MB → 128MB**: Global setting (both processes get it). Process B needs ~50MB for KV cache + tokenizer. Process A wastes ~123MB but it's virtual address space, acceptable with 8GB QEMU.
+
+3. **QEMU 4GB → 8GB**: Required for Process A (~900MB image with CPIO) + Process B (~900MB .rodata + BSS) + untypeds.
+
+4. **Allocator pools**: Static pool 200→500 pages, virtual pool 4000→100000 pages. The allocman needs substantial bookkeeping for 230K+ frame allocations during ELF loading.
+
+5. **Race condition fix**: Process B must NOT call `shmem_ipc_init()` — rings are pre-initialized by Process A. Re-initializing would wipe pending messages. Instead, Process B validates `magic == 0xDEADBEEF` and sends MSG_HEARTBEAT_ACK as ready signal.
+
+6. **shield.c model guard**: `model_classify()` guarded with `#ifdef JARVIS_HAS_MODEL` since Process A doesn't link `llama_quant.c`.
+
+### Verified QEMU Output
+
+```
+[Process B] Model loaded: 16 layers, 128256 vocab
+[Process B] Tokenizer ready: 128256 tokens
+[JARVIS] Process B ready (type=4 seq=0)
+[JARVIS] Query: "The seL4 microkernel is"
+[JARVIS] Response (type=2 len=240): " a microkernel implementation of the L4 microkernel
+architecture. It is designed to be a lightweight alternative to the traditional L4
+microkernel..."
+```
 
 ---
 
 *Plan written: March 27, 2026*
+*Completed: March 28, 2026*
 *seL4 APIs researched from: sel4test-manifest sources at ~/sel4-x86/*
 *Key reference: sel4test/apps/sel4test-driver/src/testtypes.c (process creation pattern)*

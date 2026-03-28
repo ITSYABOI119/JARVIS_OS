@@ -49,10 +49,12 @@ extern char _cpio_archive_end[];
 #define INFERENCE_APP "jarvis-inference"
 
 /* ---- Allocman bootstrap for process spawning ---- */
-/* Pools for process spawning — match sel4test sizes */
-#define ALLOCATOR_STATIC_POOL_SIZE (BIT(seL4_PageBits) * 200)
+/* Process B's ELF has 771MB .rodata + 128MB BSS = ~230K frames.
+ * The split allocator needs O(N) bookkeeping for N frame allocs.
+ * Static pool: initial bootstrap. Virtual pool: runtime bookkeeping. */
+#define ALLOCATOR_STATIC_POOL_SIZE (BIT(seL4_PageBits) * 500)
 static char allocator_mem_pool[ALLOCATOR_STATIC_POOL_SIZE];
-#define ALLOCATOR_VIRTUAL_POOL_SIZE (BIT(seL4_PageBits) * 4000)
+#define ALLOCATOR_VIRTUAL_POOL_SIZE (BIT(seL4_PageBits) * 100000)
 
 static sel4utils_alloc_data_t vspace_data;
 static simple_t simple;
@@ -663,10 +665,28 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
     *req_notif_out = req_notif_obj.cptr;
     *resp_notif_out = resp_notif_obj.cptr;
 
-    /* Debug: check what the simple interface gives us */
-    puts_serial("[JARVIS] DEBUG: simple_get_untyped_count = ");
-    put_dec((uint32_t)simple_get_untyped_count(&simple));
+    /* Debug: print untyped info */
+    int ut_count = (int)simple_get_untyped_count(&simple);
+    puts_serial("[JARVIS] DEBUG: untyped_count = ");
+    put_dec((uint32_t)ut_count);
     puts_serial("\n");
+    {
+        uint64_t total_bytes = 0;
+        for (int i = 0; i < ut_count && i < 10; i++) {
+            size_t sz = 0;
+            uintptr_t paddr = 0;
+            bool device = false;
+            simple_get_nth_untyped(&simple, i, &sz, &paddr, &device);
+            puts_serial("  ut["); put_dec((uint32_t)i);
+            puts_serial("]: size="); put_dec((uint32_t)(sz >> 20));
+            puts_serial("MB paddr="); put_hex((uint32_t)(paddr >> 20));
+            puts_serial("M dev="); put_dec(device);
+            puts_serial("\n");
+            if (!device) total_bytes += sz;
+        }
+        puts_serial("  (first 10 of "); put_dec((uint32_t)ut_count);
+        puts_serial(")\n");
+    }
 
     /* Verify CPIO has the ELF */
     unsigned long cpio_len = _cpio_archive_end - _cpio_archive;
@@ -789,20 +809,36 @@ static void *main_continued(void *arg UNUSED)
         puts_serial("[JARVIS] Inference process spawn failed — running without inference\n");
         goto idle;
     }
-    puts_serial("[JARVIS] Inference process ready\n");
+    /* Wait for Process B to signal ready (blocks until model loaded) */
+    puts_serial("[JARVIS] Waiting for Process B ready signal...\n");
+    seL4_Wait(resp_notif, NULL);
 
-    /* Give Process B a moment to initialize */
-    for (int i = 0; i < 100; i++) seL4_Yield();
+    {
+        uint8_t ready_type;
+        uint16_t ready_seq;
+        uint8_t ready_payload[SHMEM_MAX_PAYLOAD];
+        uint16_t ready_len;
+        if (shmem_ipc_recv(shared_response_ring, &ready_type, &ready_seq,
+                           ready_payload, &ready_len) == 0) {
+            puts_serial("[JARVIS] Process B ready (type=");
+            put_dec(ready_type); puts_serial(" seq="); put_dec(ready_seq);
+            puts_serial(")\n");
+        } else {
+            puts_serial("[JARVIS] WARNING: ready signal but no message\n");
+        }
+    }
 
     /* ---- Test: send a query to Process B ---- */
     puts_serial("\n[JARVIS] Sending test query to Process B...\n");
     {
         const char *query = "The seL4 microkernel is";
+        puts_serial("[JARVIS] Query: \""); puts_serial(query); puts_serial("\"\n");
         shmem_ipc_send(shared_request_ring, MSG_QUERY, 1,
                        query, (uint16_t)strlen(query));
         seL4_Signal(req_notif);
 
         /* Wait for response */
+        puts_serial("[JARVIS] Waiting for inference response...\n");
         seL4_Wait(resp_notif, NULL);
 
         uint8_t msg_type;
@@ -812,7 +848,8 @@ static void *main_continued(void *arg UNUSED)
 
         if (shmem_ipc_recv(shared_response_ring, &msg_type, &msg_seq, payload, &msg_len) == 0) {
             payload[msg_len] = '\0';
-            puts_serial("[JARVIS] Response: \"");
+            puts_serial("[JARVIS] Response (type="); put_dec(msg_type);
+            puts_serial(" len="); put_dec(msg_len); puts_serial("): \"");
             puts_serial((const char *)payload);
             puts_serial("\"\n");
         } else {

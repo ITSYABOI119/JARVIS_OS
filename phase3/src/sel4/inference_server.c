@@ -134,13 +134,18 @@ int main(int argc, char **argv)
     puts_serial(" resp_notif="); put_dec((uint32_t)resp_notif);
     puts_serial("\n");
 
-    /* Set up shared memory IPC rings */
+    /* Validate shared memory IPC rings (pre-initialized by Process A).
+     * Do NOT call shmem_ipc_init() here — that would wipe any pending
+     * messages from Process A (race condition). */
     shmem_ring_t *request_ring  = (shmem_ring_t *)shmem_vaddr;
     shmem_ring_t *response_ring = (shmem_ring_t *)(shmem_vaddr + SHMEM_PAGE_SIZE);
 
-    shmem_ipc_init(request_ring);
-    shmem_ipc_init(response_ring);
-    puts_serial("[Process B] IPC rings initialized\n");
+    if (request_ring->header.magic != SHMEM_MAGIC ||
+        response_ring->header.magic != SHMEM_MAGIC) {
+        puts_serial("[Process B] ERROR: shared memory not initialized by Process A\n");
+        goto idle;
+    }
+    puts_serial("[Process B] IPC rings validated\n");
 
 #ifdef JARVIS_HAS_MODEL
     /* Load model from embedded .rodata */
@@ -202,6 +207,10 @@ int main(int argc, char **argv)
 
     puts_serial("[Process B] Ready for inference requests\n");
 
+    /* Signal Process A that we're ready — eliminates startup race */
+    shmem_ipc_send(response_ring, MSG_HEARTBEAT_ACK, 0, NULL, 0);
+    seL4_Signal(resp_notif);
+
     /* ---- Main IPC loop ---- */
     while (1) {
         /* Wait for signal from Process A */
@@ -250,6 +259,9 @@ int main(int argc, char **argv)
 
 #else
     puts_serial("[Process B] No model embedded — idle mode\n");
+    /* Still signal ready so Process A doesn't hang */
+    shmem_ipc_send(response_ring, MSG_HEARTBEAT_ACK, 0, NULL, 0);
+    seL4_Signal(resp_notif);
 #endif /* JARVIS_HAS_MODEL */
 
 idle:

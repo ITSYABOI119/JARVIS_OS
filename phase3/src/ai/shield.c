@@ -13,9 +13,11 @@
 
 #define _POSIX_C_SOURCE 200809L
 #include "shield.h"
+#ifdef JARVIS_HAS_MODEL
 #include "llama_quant.h"    /* qmodel_t, qmodel_forward, qmodel_generate */
 #include "tokenizer.h"      /* tokenizer_t, tokenizer_encode, tokenizer_decode */
 #include "sampling.h"       /* sample_greedy */
+#endif
 
 #include <stddef.h>
 #include <string.h>
@@ -99,6 +101,7 @@ shield_result_t shield_check_keywords(const char *query)
 
 /* ---- Model-Assisted Check ---- */
 
+#ifdef JARVIS_HAS_MODEL
 /*
  * Run LLM to classify a command as safe or dangerous.
  * Returns SHIELD_BLOCK / SHIELD_ALLOW / SHIELD_WARN.
@@ -184,6 +187,7 @@ static shield_result_t model_classify(const char *query,
     result.reason = "model output unclear";
     return result;
 }
+#endif /* JARVIS_HAS_MODEL */
 
 /* ---- Combined Check ---- */
 
@@ -199,12 +203,16 @@ shield_result_t shield_check(const char *query,
     }
 
     /* If model is available, run model-assisted classification */
+#ifdef JARVIS_HAS_MODEL
     if (model && state && tok) {
         return model_classify(query,
                               (const qmodel_t *)model,
                               (llama_state_t *)state,
                               (const tokenizer_t *)tok);
     }
+#else
+    (void)model; (void)state; (void)tok;
+#endif
 
     /* No model — return keyword result (graceful fallback) */
     return kw_result;
