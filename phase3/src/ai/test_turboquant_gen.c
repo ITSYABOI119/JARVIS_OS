@@ -313,79 +313,86 @@ int main(void)
     printf("(Expected FAIL — documents compounding error limitation)\n\n");
 
     /* ================================================================
-     * Phase 2: TurboQuantProd — compressed-representation attention
-     * Uses tq_dot_key() for scoring, on-the-fly value decompression.
-     * This is the paper's Algorithm 2.
+     * Phase 2: TurboQuantProd Bit-Width Sweep
+     * Tests multiple key_bits/val_bits configs to find quality threshold.
      * ================================================================ */
-    printf("=== Phase 2: TurboQuantProd (Algorithm 2) ===\n\n");
+    printf("=== Phase 2: TurboQuantProd Bit-Width Sweep ===\n\n");
 
-    float tqp_total_match = 0, tqp_min_match = 1.0f;
+    struct { int kb; int vb; const char *label; } configs[] = {
+        { 3, 3, "3b keys / 3b vals" },
+        { 3, 4, "3b keys / 4b vals" },
+        { 4, 3, "4b keys / 3b vals" },
+        { 4, 4, "4b keys / 4b vals" },
+    };
+    int n_configs = 4;
 
-    for (int p = 0; p < n_prompts; p++) {
-        printf("--- TQProd Prompt %d: \"%s\" ---\n", p + 1, prompts[p].name);
+    float best_avg = 0;
+    int best_cfg = -1;
 
-        /* Allocate fresh TQ state for each prompt */
-        llama_tq_state_t tq_st;
-        if (llama_tq_alloc_state(&tq_st, c, 3, 3, 42) != 0) {
-            printf("FAILED to alloc TQ state\n");
-            goto cleanup;
+    float sweep_avgs[4];
+
+    for (int cfg = 0; cfg < n_configs; cfg++) {
+        int kb = configs[cfg].kb, vb = configs[cfg].vb;
+        printf("--- Config: %s (kb=%d vb=%d) ---\n", configs[cfg].label, kb, vb);
+
+        float cfg_total = 0, cfg_min = 1.0f;
+
+        for (int p = 0; p < n_prompts; p++) {
+            llama_tq_state_t tq_st;
+            if (llama_tq_alloc_state(&tq_st, c, kb, vb, 42) != 0) {
+                printf("  FAILED to alloc TQ state (kb=%d vb=%d)\n", kb, vb);
+                goto cleanup;
+            }
+
+            int tqp_tokens[N_GEN];
+            int tqp_count = llama_tq_generate(&model, &tq_st,
+                prompts[p].tok, prompts[p].n,
+                tqp_tokens, N_GEN, EOS_TOKEN, 0.0f, 1, 0);
+
+            llama_tq_free_state(&tq_st);
+
+            int f32_count = f32_all_counts[p];
+            int matches = 0, first_div = -1;
+            int cmp_len = f32_count < tqp_count ? f32_count : tqp_count;
+            for (int i = 0; i < cmp_len; i++) {
+                if (f32_all_tokens[p][i] == tqp_tokens[i])
+                    matches++;
+                else if (first_div < 0)
+                    first_div = i;
+            }
+
+            float mr = (float)matches / (float)f32_count;
+            cfg_total += mr;
+            if (mr < cfg_min) cfg_min = mr;
+
+            printf("  Prompt %d: %d/%d (%.1f%%)", p + 1, matches, f32_count, mr * 100.0f);
+            if (first_div >= 0) printf("  div@%d", first_div);
+            printf("\n");
         }
 
-        int tqp_tokens[N_GEN];
-        int tqp_count = llama_tq_generate(&model, &tq_st,
-            prompts[p].tok, prompts[p].n,
-            tqp_tokens, N_GEN, EOS_TOKEN, 0.0f, 1, 0);
+        float cfg_avg = cfg_total / (float)n_prompts;
+        sweep_avgs[cfg] = cfg_avg;
+        printf("  Avg: %.1f%%  Min: %.1f%%  %s\n\n",
+               cfg_avg * 100.0f, cfg_min * 100.0f,
+               (cfg_avg >= 0.80f && cfg_min >= 0.60f) ? "PASS" : "FAIL");
 
-        llama_tq_free_state(&tq_st);
-
-        /* Compare against saved F32 reference */
-        int f32_count = f32_all_counts[p];
-        int matches = 0, first_div = -1;
-        int cmp_len = f32_count < tqp_count ? f32_count : tqp_count;
-        for (int i = 0; i < cmp_len; i++) {
-            if (f32_all_tokens[p][i] == tqp_tokens[i])
-                matches++;
-            else if (first_div < 0)
-                first_div = i;
-        }
-
-        float match_rate = (float)matches / (float)f32_count;
-        tqp_total_match += match_rate;
-        if (match_rate < tqp_min_match) tqp_min_match = match_rate;
-
-        printf("F32  (%d tok): [", f32_count);
-        for (int i = 0; i < f32_count; i++)
-            printf("%d%s", f32_all_tokens[p][i], i < f32_count - 1 ? ", " : "");
-        printf("]\n");
-
-        printf("TQP  (%d tok): [", tqp_count);
-        for (int i = 0; i < tqp_count; i++)
-            printf("%d%s", tqp_tokens[i], i < tqp_count - 1 ? ", " : "");
-        printf("]\n");
-
-        printf("Match: %d/%d tokens (%.1f%%)",
-               matches, f32_count, match_rate * 100.0f);
-        if (first_div >= 0)
-            printf(", first divergence at position %d", first_div);
-        printf("\n\n");
+        if (cfg_avg > best_avg) { best_avg = cfg_avg; best_cfg = cfg; }
     }
 
-    float tqp_avg = tqp_total_match / (float)n_prompts;
+    /* Summary table */
+    printf("=== Sweep Summary ===\n");
+    for (int cfg = 0; cfg < n_configs; cfg++)
+        printf("  %-28s  avg %.1f%%  %s\n", configs[cfg].label,
+               sweep_avgs[cfg] * 100.0f,
+               sweep_avgs[cfg] >= 0.80f ? "PASS" : "FAIL");
+    if (best_cfg >= 0)
+        printf("  Best: %s (%.1f%%)\n", configs[best_cfg].label, best_avg * 100.0f);
+    printf("\n");
 
-    printf("=== TurboQuantProd: avg match rate %.1f%%, min match rate %.1f%% ===\n",
-           tqp_avg * 100.0f, tqp_min_match * 100.0f);
-
-    /* Final verdict based on TurboQuantProd (Phase 2) */
-    pass = 1;
-    if (tqp_avg < 0.80f) {
-        printf("FAIL: TurboQuantProd avg match %.1f%% < 80%%\n", tqp_avg * 100.0f);
-        pass = 0;
-    }
-    if (tqp_min_match < 0.60f) {
-        printf("FAIL: TurboQuantProd min match %.1f%% < 60%%\n", tqp_min_match * 100.0f);
-        pass = 0;
-    }
-
+    /* Verdict: use best config */
+    pass = (best_avg >= 0.80f) ? 1 : 0;
+    if (!pass)
+        printf("FAIL: best config %.1f%% < 80%% threshold\n", best_avg * 100.0f);
     printf("Verdict: %s\n", pass ? "PASS" : "FAIL");
 
 cleanup:

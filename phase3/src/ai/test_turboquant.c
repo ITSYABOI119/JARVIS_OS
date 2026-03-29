@@ -544,7 +544,60 @@ static void test_mse_matches_paper(void)
 }
 
 /* ================================================================
- * Test 15: QJL inner product is unbiased (mean error near 0)
+ * Test 15: 4-bit MSE matches paper (key 3-bit ≈ 0.034, val 4-bit ≈ 0.009)
+ * ================================================================ */
+static void test_mse_4bit(void)
+{
+    TEST("4-bit MSE matches paper (3-bit key ≈0.034, 4-bit val ≈0.009)");
+
+    tq_state_t state;
+    tq_init(&state, 64, 4, 4, 12345);  /* 4-bit: keys use 3-bit MSE + 1-bit QJL */
+
+    uint64_t rng = 88888;
+    float total_key_mse = 0, total_val_mse = 0;
+    int N = 10000;
+
+    for (int i = 0; i < N; i++) {
+        float vec[64];
+        rand_unit_vec(vec, 64, &rng);
+
+        tq_ckey_t ck;
+        tq_compress_key(&state, vec, &ck);
+        float krecon[64];
+        tq_decompress_key(&state, &ck, krecon);
+        float kmse = 0;
+        for (int d = 0; d < 64; d++)
+            kmse += (vec[d] - krecon[d]) * (vec[d] - krecon[d]);
+        total_key_mse += kmse;
+
+        tq_cval_t cv;
+        tq_compress_val(&state, vec, &cv);
+        float vrecon[64];
+        tq_decompress_val(&state, &cv, vrecon);
+        float vmse = 0;
+        for (int d = 0; d < 64; d++)
+            vmse += (vec[d] - vrecon[d]) * (vec[d] - vrecon[d]);
+        total_val_mse += vmse;
+    }
+
+    float avg_key_mse = total_key_mse / (float)N;
+    float avg_val_mse = total_val_mse / (float)N;
+
+    printf("\n    key(3bit) MSE=%.4f (target 0.034), val(4bit) MSE=%.4f (target 0.009)\n    ",
+           avg_key_mse, avg_val_mse);
+
+    if (fabsf(avg_key_mse - 0.034f) / 0.034f < 0.20f &&
+        fabsf(avg_val_mse - 0.009f) / 0.009f < 0.20f) {
+        PASS();
+    } else {
+        FAIL("4-bit MSE does not match paper");
+    }
+
+    tq_free(&state);
+}
+
+/* ================================================================
+ * Test 16: QJL inner product is unbiased (mean error near 0)
  * ================================================================ */
 static void test_qjl_unbiased(void)
 {
@@ -624,6 +677,7 @@ int main(void)
     test_invalid_params();
     test_full_kv_simulation();
     test_mse_matches_paper();
+    test_mse_4bit();
     test_qjl_unbiased();
 
     printf("\n=== Results: %d PASS, %d FAIL ===\n",
