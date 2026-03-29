@@ -4,7 +4,7 @@
  * Algorithm (arXiv 2504.19874):
  *   1. Generate random orthogonal matrix Pi via QR of Gaussian (Haar measure)
  *   2. Rotate vector: y = Pi * x
- *   3. After rotation, coordinates are near-independent ~ N(0, 1/d)
+ *   3. After rotation, coordinates follow Beta((d-1)/2, (d-1)/2) on [-1,1]
  *   4. Apply Lloyd-Max scalar quantization per coordinate
  *   5. For keys: add 1-bit QJL residual correction for unbiased inner products
  *
@@ -74,17 +74,50 @@ static float f16_to_f32(uint16_t h)
 }
 
 /* ============================================================
- * Lloyd-Max codebooks for N(0,1) — standard optimal values
+ * Lloyd-Max codebooks — Beta-optimal and Gaussian fallback
+ *
+ * After rotating a unit vector by a Haar-distributed orthogonal matrix,
+ * each coordinate follows Beta((d-1)/2, (d-1)/2) on [-1, 1].
+ * These are the exact Lloyd-Max centroids for that distribution.
+ * Source: 0xSero/turboquant (exact numerical integration).
+ *
+ * Gaussian N(0, 1/d) approximation is kept as fallback for unsupported d.
+ * For d=64 the difference is ~2%; for d=128 it's ~1%.
  * ============================================================ */
 
-/* 1-bit (2 centroids) */
+/* ---- Beta-optimal centroids for d=64: Beta(31.5, 31.5) ---- */
+static const float BETA_D64_1BIT[] = { -0.10012591f,  0.10012591f };
+static const float BETA_D64_2BIT[] = { -0.18749585f, -0.05651437f,  0.05651437f,  0.18749585f };
+static const float BETA_D64_3BIT[] = {
+    -0.26390745f, -0.16616104f, -0.09382718f, -0.03046731f,
+     0.03046731f,  0.09382718f,  0.16616104f,  0.26390745f
+};
+static const float BETA_D64_4BIT[] = {
+    -0.33074890f, -0.25285796f, -0.19879805f, -0.15487006f,
+    -0.11643835f, -0.08127422f, -0.04806602f, -0.01591089f,
+     0.01591089f,  0.04806602f,  0.08127422f,  0.11643835f,
+     0.15487006f,  0.19879805f,  0.25285796f,  0.33074890f
+};
+
+/* ---- Beta-optimal centroids for d=128: Beta(63.5, 63.5) ---- */
+static const float BETA_D128_1BIT[] = { -0.07066157f,  0.07066157f };
+static const float BETA_D128_2BIT[] = { -0.13304020f, -0.03999095f,  0.03999095f,  0.13304020f };
+static const float BETA_D128_3BIT[] = {
+    -0.18839061f, -0.11813298f, -0.06658060f, -0.02160247f,
+     0.02160247f,  0.06658060f,  0.11813298f,  0.18839061f
+};
+static const float BETA_D128_4BIT[] = {
+    -0.23762719f, -0.18079373f, -0.14176165f, -0.11024707f,
+    -0.08279257f, -0.05774454f, -0.03413403f, -0.01129650f,
+     0.01129650f,  0.03413403f,  0.05774454f,  0.08279257f,
+     0.11024707f,  0.14176165f,  0.18079373f,  0.23762719f
+};
+
+/* ---- Gaussian N(0,1) fallback (for d != 64 and d != 128) ---- */
 static const float LM_1BIT[] = { -0.7979f, 0.7979f };
-/* 2-bit (4 centroids) */
 static const float LM_2BIT[] = { -1.5104f, -0.4528f, 0.4528f, 1.5104f };
-/* 3-bit (8 centroids) */
 static const float LM_3BIT[] = { -2.1520f, -1.3440f, -0.7560f, -0.2451f,
                                    0.2451f,  0.7560f,  1.3440f,  2.1520f };
-/* 4-bit (16 centroids) */
 static const float LM_4BIT[] = {
     -2.7326f, -2.0690f, -1.6180f, -1.2562f,
     -0.9424f, -0.6568f, -0.3881f, -0.1284f,
@@ -92,29 +125,65 @@ static const float LM_4BIT[] = {
      1.2562f,  1.6180f,  2.0690f,  2.7326f
 };
 
-static void init_codebook(tq_codebook_t *cb, int bits, float sigma)
+/* Return Beta-optimal centroids for known d, or NULL for Gaussian fallback */
+static const float *beta_centroids(int bits, int head_dim)
 {
-    const float *src;
+    if (head_dim == 64) {
+        switch (bits) {
+            case 1: return BETA_D64_1BIT;
+            case 2: return BETA_D64_2BIT;
+            case 3: return BETA_D64_3BIT;
+            case 4: return BETA_D64_4BIT;
+        }
+    } else if (head_dim == 128) {
+        switch (bits) {
+            case 1: return BETA_D128_1BIT;
+            case 2: return BETA_D128_2BIT;
+            case 3: return BETA_D128_3BIT;
+            case 4: return BETA_D128_4BIT;
+        }
+    }
+    return NULL;
+}
+
+static void init_codebook(tq_codebook_t *cb, int bits, int head_dim)
+{
     int n;
     switch (bits) {
-        case 1: src = LM_1BIT; n = 2;  break;
-        case 2: src = LM_2BIT; n = 4;  break;
-        case 3: src = LM_3BIT; n = 8;  break;
-        case 4: src = LM_4BIT; n = 16; break;
-        default: src = LM_2BIT; n = 4; bits = 2; break;
+        case 1: n = 2;  break;
+        case 2: n = 4;  break;
+        case 3: n = 8;  break;
+        case 4: n = 16; break;
+        default: n = 4; bits = 2; break;
     }
     cb->bits = bits;
     cb->n_centroids = n;
-    cb->sigma = sigma;
 
-    /* Scale centroids from N(0,1) to N(0, sigma^2) */
-    for (int i = 0; i < n; i++)
-        cb->centroids[i] = src[i] * sigma;
+    /* Try Beta-optimal centroids first */
+    const float *src = beta_centroids(bits, head_dim);
+    if (src) {
+        /* Pre-computed centroids already in correct range for unit vectors */
+        for (int i = 0; i < n; i++)
+            cb->centroids[i] = src[i];
+    } else {
+        /* Fallback: N(0,1) centroids scaled by 1/sqrt(d) */
+        float sigma = 1.0f / sqrtf((float)head_dim);
+        const float *gauss;
+        switch (bits) {
+            case 1: gauss = LM_1BIT; break;
+            case 2: gauss = LM_2BIT; break;
+            case 3: gauss = LM_3BIT; break;
+            case 4: gauss = LM_4BIT; break;
+            default: gauss = LM_2BIT; break;
+        }
+        for (int i = 0; i < n; i++)
+            cb->centroids[i] = gauss[i] * sigma;
+    }
 
-    /* Decision boundaries: midpoints between adjacent centroids */
+    /* Decision boundaries: interior midpoints + sentinel (matches quantize_scalar) */
     for (int i = 0; i < n - 1; i++)
         cb->boundaries[i] = (cb->centroids[i] + cb->centroids[i + 1]) * 0.5f;
-    cb->boundaries[n - 1] = 1e30f; /* sentinel */
+    cb->boundaries[n - 1] = 1e30f;
 }
 
 /* Find nearest centroid index for a scalar value */
@@ -302,11 +371,9 @@ int tq_init(tq_state_t *state, int head_dim, int key_bits, int val_bits,
     state->val_bits = val_bits;
     state->seed = seed;
 
-    float sigma = 1.0f / sqrtf((float)head_dim);
-
-    /* Initialize codebooks */
-    init_codebook(&state->key_cb, key_bits - 1, sigma);  /* Keys use b-1 bits for MSE */
-    init_codebook(&state->val_cb, val_bits,     sigma);   /* Values use full b bits */
+    /* Initialize codebooks (Beta-optimal for d=64/128, Gaussian fallback otherwise) */
+    init_codebook(&state->key_cb, key_bits - 1, head_dim);  /* Keys use b-1 bits for MSE */
+    init_codebook(&state->val_cb, val_bits,     head_dim);   /* Values use full b bits */
 
     /* Allocate matrices */
     size_t mat_size = (size_t)head_dim * (size_t)head_dim * sizeof(float);

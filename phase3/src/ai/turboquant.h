@@ -28,11 +28,10 @@
 /* ---- Lloyd-Max codebook ---- */
 
 typedef struct {
-    float centroids[TQ_MAX_CENTROIDS];  /* Optimal quantization levels */
-    float boundaries[TQ_MAX_CENTROIDS]; /* Decision boundaries (midpoints) */
-    int   n_centroids;                  /* 2^bits */
-    int   bits;                         /* Bits per coordinate */
-    float sigma;                        /* 1/sqrt(d), distribution scale */
+    float centroids[TQ_MAX_CENTROIDS];      /* Optimal quantization levels */
+    float boundaries[TQ_MAX_CENTROIDS + 1]; /* Decision boundaries (n+1: edges + midpoints) */
+    int   n_centroids;                      /* 2^bits */
+    int   bits;                             /* Bits per coordinate */
 } tq_codebook_t;
 
 /* ---- Pre-computed TurboQuant state (one per layer or shared) ---- */
