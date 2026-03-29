@@ -1,9 +1,8 @@
 /*
  * JARVIS AI-OS Phase 3 -- TurboQuant Multi-Step Generation Quality
  *
- * Tests compounding error by running side-by-side F32 vs TQ-compressed
- * generation for 30 tokens. TQ compression is applied after EVERY forward
- * step (prefill + generation), simulating real integration.
+ * Phase 1: Decompress-overwrite baseline (expected FAIL at ~3.3%)
+ * Phase 2: TurboQuantProd — Algorithm 2 with tq_dot_key() scoring
  *
  * SKIPS gracefully if model file not found (exit 0).
  * Requires ~6 GB RAM (F32 model loading).
@@ -13,6 +12,7 @@
  *     phase3/src/ai/test_turboquant_gen.c \
  *     phase3/src/ai/turboquant.c \
  *     phase3/src/ai/llama_forward.c \
+ *     phase3/src/ai/llama_forward_tq.c \
  *     phase3/src/ai/llama_load.c \
  *     phase3/src/ai/tensor_ops.c \
  *     phase3/src/ai/dequant.c \
@@ -24,6 +24,7 @@
 
 #include "llama_model.h"
 #include "turboquant.h"
+#include "llama_forward_tq.h"
 #include "gguf_parser.h"
 #include "dequant.h"
 #include <stdio.h>
@@ -211,7 +212,13 @@ int main(void)
     int n_prompts = 3;
 
     float total_match = 0, min_match = 1.0f;
-    int pass = 1;
+    int pass = 0;
+
+    /* Storage for F32 reference tokens (reused by Phase 2) */
+    int f32_all_tokens[3][N_GEN];
+    int f32_all_counts[3];
+
+    printf("=== Phase 1: Decompress-Overwrite Baseline ===\n\n");
 
     for (int p = 0; p < n_prompts; p++) {
         printf("--- Prompt %d: \"%s\" ---\n", p + 1, prompts[p].name);
@@ -239,6 +246,10 @@ int main(void)
             llama_forward(&model, &state, tok);
         }
         llama_free_state(&state);
+
+        /* Save for Phase 2 reuse */
+        memcpy(f32_all_tokens[p], f32_tokens, N_GEN * sizeof(int));
+        f32_all_counts[p] = f32_count;
 
         /* ---- TQ generation (compress after every step) ---- */
         if (llama_alloc_state(&state, c) != 0) {
@@ -294,31 +305,88 @@ int main(void)
         printf("\n\n");
     }
 
-    /* ---- Verdict ---- */
+    /* ---- Phase 1 Summary (informational only) ---- */
     float avg_match = total_match / (float)n_prompts;
 
-    printf("=== Overall: avg match rate %.1f%%, min match rate %.1f%% ===\n",
+    printf("=== Phase 1 (decompress-overwrite): avg %.1f%%, min %.1f%% ===\n",
            avg_match * 100.0f, min_match * 100.0f);
+    printf("(Expected FAIL — documents compounding error limitation)\n\n");
 
+    /* ================================================================
+     * Phase 2: TurboQuantProd — compressed-representation attention
+     * Uses tq_dot_key() for scoring, on-the-fly value decompression.
+     * This is the paper's Algorithm 2.
+     * ================================================================ */
+    printf("=== Phase 2: TurboQuantProd (Algorithm 2) ===\n\n");
+
+    float tqp_total_match = 0, tqp_min_match = 1.0f;
+
+    for (int p = 0; p < n_prompts; p++) {
+        printf("--- TQProd Prompt %d: \"%s\" ---\n", p + 1, prompts[p].name);
+
+        /* Allocate fresh TQ state for each prompt */
+        llama_tq_state_t tq_st;
+        if (llama_tq_alloc_state(&tq_st, c, 3, 3, 42) != 0) {
+            printf("FAILED to alloc TQ state\n");
+            goto cleanup;
+        }
+
+        int tqp_tokens[N_GEN];
+        int tqp_count = llama_tq_generate(&model, &tq_st,
+            prompts[p].tok, prompts[p].n,
+            tqp_tokens, N_GEN, EOS_TOKEN, 0.0f, 1, 0);
+
+        llama_tq_free_state(&tq_st);
+
+        /* Compare against saved F32 reference */
+        int f32_count = f32_all_counts[p];
+        int matches = 0, first_div = -1;
+        int cmp_len = f32_count < tqp_count ? f32_count : tqp_count;
+        for (int i = 0; i < cmp_len; i++) {
+            if (f32_all_tokens[p][i] == tqp_tokens[i])
+                matches++;
+            else if (first_div < 0)
+                first_div = i;
+        }
+
+        float match_rate = (float)matches / (float)f32_count;
+        tqp_total_match += match_rate;
+        if (match_rate < tqp_min_match) tqp_min_match = match_rate;
+
+        printf("F32  (%d tok): [", f32_count);
+        for (int i = 0; i < f32_count; i++)
+            printf("%d%s", f32_all_tokens[p][i], i < f32_count - 1 ? ", " : "");
+        printf("]\n");
+
+        printf("TQP  (%d tok): [", tqp_count);
+        for (int i = 0; i < tqp_count; i++)
+            printf("%d%s", tqp_tokens[i], i < tqp_count - 1 ? ", " : "");
+        printf("]\n");
+
+        printf("Match: %d/%d tokens (%.1f%%)",
+               matches, f32_count, match_rate * 100.0f);
+        if (first_div >= 0)
+            printf(", first divergence at position %d", first_div);
+        printf("\n\n");
+    }
+
+    float tqp_avg = tqp_total_match / (float)n_prompts;
+
+    printf("=== TurboQuantProd: avg match rate %.1f%%, min match rate %.1f%% ===\n",
+           tqp_avg * 100.0f, tqp_min_match * 100.0f);
+
+    /* Final verdict based on TurboQuantProd (Phase 2) */
     pass = 1;
-    if (avg_match < 0.80f) {
-        printf("FAIL: avg match rate %.1f%% < 80%%\n", avg_match * 100.0f);
+    if (tqp_avg < 0.80f) {
+        printf("FAIL: TurboQuantProd avg match %.1f%% < 80%%\n", tqp_avg * 100.0f);
         pass = 0;
     }
-    if (min_match < 0.60f) {
-        printf("FAIL: min match rate %.1f%% < 60%%\n", min_match * 100.0f);
+    if (tqp_min_match < 0.60f) {
+        printf("FAIL: TurboQuantProd min match %.1f%% < 60%%\n", tqp_min_match * 100.0f);
         pass = 0;
     }
 
     printf("Verdict: %s\n", pass ? "PASS" : "FAIL");
-
-    if (!pass) {
-        printf("\nNote: This tests decompress-overwrite integration (compress K/V,\n"
-               "decompress back to F32, overwrite cache). This loses QJL correction\n"
-               "and compounds MSE-only errors. The paper's approach keeps compressed\n"
-               "representations and uses tq_dot_key() for attention scoring.\n"
-               "Integration should store tq_ckey_t/tq_cval_t directly, not F32.\n");
-    }
 
 cleanup:
     for (int L = 0; L < c->n_layers && L < MAX_LAYERS; L++)
