@@ -42,7 +42,29 @@ llama.cpp `--cache-type-k q8_0/q4_0` failed for 3B ("failed to create context").
 
 3-bit is the sweet spot: 8.2x compression, 0.94+ key fidelity, 0.96 attention correlation.
 
-## 4. Real Data Validation (Llama 3.2 1B F32)
+## 4. Codebook Correction: Gaussian → Beta-Optimal
+
+**What changed:** Lloyd-Max codebooks were computed for N(0,1) scaled by 1/sqrt(d). The paper uses the exact marginal distribution Beta((d-1)/2, (d-1)/2) for coordinates of rotated unit vectors. Pre-computed Beta-optimal centroids from 0xSero/turboquant now used for d=64 and d=128.
+
+**Magnitude of difference (d=64, 3-bit outer centroid):** 0.2690 → 0.2639 (1.9%). Inner centroids differ by <1%.
+
+**MSE verification against paper (arXiv 2504.19874 Table 1, 10K unit vectors):**
+
+| Bit-width | Paper MSE | Measured MSE | Error |
+|-----------|:---------:|:------------:|:-----:|
+| 2-bit (keys) | 0.117 | **0.1146** | 2.1% |
+| 3-bit (vals) | 0.034 | **0.0334** | 1.8% |
+
+**QJL unbiasedness verification (10K random unit-vector pairs):**
+
+| Estimator | Mean Error | Variance |
+|-----------|:----------:|:--------:|
+| MSE-only | -0.000500 | 0.001837 |
+| QJL-corrected | **-0.000676** | 0.002807 |
+
+Both are near-zero mean (unbiased). QJL has higher variance but removes systematic bias, as the paper predicts.
+
+## 5. Real Data Validation (Llama 3.2 1B F32)
 
 Loaded the real model, ran 8-token forward pass ("The seL4 microkernel is"), extracted real KV cache vectors from the transformer, and compressed them with TurboQuant.
 
@@ -74,7 +96,20 @@ Matches random-vector results within 0.002 — the rotation normalization is eff
 
 **Note:** Individual head cases (e.g., layer 0 head 0) can show softmax correlation as low as 0.88 due to score differences at specific positions being amplified by softmax. The position 7 score drifted by 2.6 points in that case. However, averaged across layers and heads, softmax correlation is 0.9997 and argmax always matches. This is consistent with the paper's finding that attention averaging dampens per-head errors.
 
-## 5. Throughput (per head, d=64, single-threaded)
+**Generation comparison (F32 KV vs TQ-compressed KV):**
+
+Prefilled 7 tokens, saved cache, ran 8th token forward for F32 logits. Then restored cache, TQ-compressed all 7 positions across all 16 layers, re-ran 8th token forward for TQ logits.
+
+| Metric | Result |
+|--------|--------|
+| Top-1 match | **YES** (both predict token 264) |
+| Top-5 overlap | **5/5** (identical set) |
+| F32 top-5 | [264, 459, 279, 1511, 6319] |
+| TQ top-5 | [264, 279, 459, 1511, 6319] |
+
+TQ compression of historical KV cache does not change the model's next-token prediction for this prompt. Tokens 2-3 swap order (459↔279) but the full set is identical.
+
+## 6. Throughput (per head, d=64, single-threaded)
 
 | Operation | Time | Throughput |
 |-----------|-----:|-----------:|
@@ -82,7 +117,7 @@ Matches random-vector results within 0.002 — the rotation normalization is eff
 | Val compress + decompress | 6.1 us | 165 Kops/s |
 | QJL dot product | 5.9 us | 169 Kops/s |
 
-## 5. Memory Layout (d=64, 3-bit)
+## 7. Memory Layout (d=64, 3-bit)
 
 Per head: Key=28 bytes (16 MSE + 8 QJL + 4 norms), Value=26 bytes (24 MSE + 2 norm)
 Per position per layer (8 heads): **432 bytes** vs 4,096 F32
@@ -93,7 +128,7 @@ State overhead: 33 KB/layer (Pi + S matrices), 528 KB total for 16 layers
 Benefits: 28 MB freed, context 512->2048+, 3B model KV fits in seL4
 Cost: +6 ms/token at 512 positions (3.7% overhead), 528 KB matrices
 
-## 7. Test Results: 13/13 PASS
+## 8. Test Results: 15/15 PASS
 
 ```
 Pi is orthogonal (Pi * Pi^T = I)                   PASS
@@ -109,17 +144,19 @@ Attention scores: TQ vs F32 correlation > 0.95     PASS
 State overhead < 64KB for d=64                     PASS
 Invalid parameters rejected                        PASS
 Full KV cache simulation (16 layers, 8 heads)      PASS
+MSE matches paper (2-bit ≈0.117, 3-bit ≈0.034)    PASS
+QJL inner product unbiased (|mean error| < 0.01)   PASS
 ```
 
-## 8. Files
+## 9. Files
 
 | File | LOC | Purpose |
 |------|----:|---------|
-| `phase3/src/ai/turboquant.h` | 107 | API header |
-| `phase3/src/ai/turboquant.c` | 389 | Full implementation |
-| `phase3/src/ai/test_turboquant.c` | 310 | 13 unit tests |
+| `phase3/src/ai/turboquant.h` | 107 | API header (Beta-optimal codebooks, no sigma) |
+| `phase3/src/ai/turboquant.c` | 460 | Implementation (Beta d=64/128 + Gaussian fallback) |
+| `phase3/src/ai/test_turboquant.c` | 540 | 15 unit tests (incl. MSE + QJL verification) |
 | `phase3/src/ai/bench_turboquant.c` | 141 | Benchmark harness |
-| `phase3/src/ai/test_turboquant_real.c` | 280 | Real model validation (SKIP on CI) |
+| `phase3/src/ai/test_turboquant_real.c` | 400 | Real model validation + generation comparison |
 
 ## References
 
