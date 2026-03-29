@@ -380,6 +380,7 @@ jobs:
           phase3/src/ai/test_turboquant_gen.c \
           phase3/src/ai/turboquant.c \
           phase3/src/ai/llama_forward.c \
+          phase3/src/ai/llama_forward_tq.c \
           phase3/src/ai/llama_load.c \
           phase3/src/ai/tensor_ops.c \
           phase3/src/ai/dequant.c \

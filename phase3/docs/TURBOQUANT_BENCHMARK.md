@@ -133,6 +133,29 @@ TQ compression of historical KV cache does not change the model's next-token pre
 
 This changes the integration plan: instead of a simple cache-replacement, the attention loop itself must be modified to work with compressed representations.
 
+### 6b. TurboQuantProd (Algorithm 2) — Compressed-Representation Attention
+
+**Implemented:** `llama_forward_tq.c/h` — stores `tq_ckey_t`/`tq_cval_t` in cache, uses `tq_dot_key()` for attention scoring (QJL-corrected), decompresses values on-the-fly.
+
+| Prompt | Decompress-Overwrite | TurboQuantProd | Improvement |
+|--------|:--------------------:|:--------------:|:-----------:|
+| "The seL4 microkernel is" | 3.3% | **3.3%** | 0x |
+| "Once upon a time there was" | 3.3% | **16.7%** | 5x |
+| "The capital of Australia is" | 3.3% | **6.7%** | 2x |
+| **Average** | **3.3%** | **8.9%** | **2.7x** |
+
+**Result: FAIL — 8.9% avg, still far below 80% target.**
+
+QJL-corrected key scoring helps (2.7x improvement) but is insufficient. The bottleneck is **value decompression**: values use MSE-only (no QJL), and MSE errors compound through the weighted sum across 30 steps x 16 layers.
+
+**Possible mitigations (not yet tested):**
+1. Increase value bits: 4-bit values instead of 3-bit (higher fidelity)
+2. Only compress after prefill (generation tokens keep F32 K/V)
+3. Compress only deep layers (layers 8-15), keep shallow layers F32
+4. Higher quantization bits overall (4-bit keys + 4-bit values)
+
+**Conclusion:** 3-bit TurboQuant achieves excellent single-step quality (0.94 cosine, 5/5 top-5 match) but is too lossy for multi-step autoregressive generation. The compression ratio vs quality tradeoff needs further tuning for production use.
+
 ## 7. Throughput (per head, d=64, single-threaded)
 
 | Operation | Time | Throughput |
@@ -182,7 +205,9 @@ QJL inner product unbiased (|mean error| < 0.01)   PASS
 | `phase3/src/ai/test_turboquant.c` | 540 | 15 unit tests (incl. MSE + QJL verification) |
 | `phase3/src/ai/bench_turboquant.c` | 141 | Benchmark harness |
 | `phase3/src/ai/test_turboquant_real.c` | 400 | Real model validation + generation comparison |
-| `phase3/src/ai/test_turboquant_gen.c` | 230 | Multi-step generation (FAIL: decompress-overwrite) |
+| `phase3/src/ai/llama_forward_tq.h` | 55 | TQ-integrated state struct |
+| `phase3/src/ai/llama_forward_tq.c` | 254 | TurboQuantProd forward pass (Algorithm 2) |
+| `phase3/src/ai/test_turboquant_gen.c` | 385 | Multi-step generation (Phase 1: FAIL, Phase 2: FAIL) |
 
 ## References
 
