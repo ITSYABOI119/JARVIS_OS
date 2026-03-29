@@ -168,15 +168,33 @@ static void tq_compress_position(llama_state_t *state, const llama_config_t *c,
 
 /* ============================================================ */
 
-int main(void)
+int main(int argc, char **argv)
 {
     printf("=== TurboQuant Multi-Step Generation Quality ===\n\n");
 
-    /* Check model exists */
-    FILE *f = fopen(MODEL_PATH, "rb");
+    /* Model path: command-line arg or search defaults */
+    const char *model_path = NULL;
+    if (argc > 1) {
+        model_path = argv[1];
+    } else {
+        static const char *defaults[] = {
+            MODEL_PATH,
+            "phase3/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+            NULL
+        };
+        for (int i = 0; defaults[i]; i++) {
+            FILE *probe = fopen(defaults[i], "rb");
+            if (probe) { fclose(probe); model_path = defaults[i]; break; }
+        }
+    }
+    if (!model_path) {
+        printf("No model found. SKIP (exit 0)\n");
+        return 0;
+    }
+
+    FILE *f = fopen(model_path, "rb");
     if (!f) {
-        printf("Model not found: %s\nSKIP (model required, exit 0)\n",
-               MODEL_PATH);
+        printf("Model not found: %s\nSKIP (exit 0)\n", model_path);
         return 0;
     }
     fclose(f);
@@ -185,7 +203,8 @@ int main(void)
     printf("Loading model... ");
     fflush(stdout);
     llama_model_t model;
-    if (load_f32_model(&model, MODEL_PATH) != 0) {
+    printf("Model: %s\n", model_path);
+    if (load_f32_model(&model, model_path) != 0) {
         printf("FAILED\n");
         return 1;
     }

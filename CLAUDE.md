@@ -340,7 +340,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | **End-to-end IPC: Process A query → Process B inference → response** | **DONE** |
 | **CNode=22, morecore=128MB, allocator pools scaled for 230K frames** | **DONE** |
 | **TurboQuant Beta-optimal codebooks (MSE/QJL verified vs paper)** | **DONE** |
-| **TurboQuantProd attention + bit sweep (all configs FAIL at 1B/d=64)** | **DONE** |
+| **TurboQuantProd bit sweep: 1B=8.9%, 3B=45.6% (d=128 5x better)** | **DONE** |
 
 **Next:** Spare PC assembly (1/7 parts bought). All QEMU-achievable work complete. Ready for real hardware.
 

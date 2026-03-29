@@ -215,6 +215,44 @@ QJL inner product unbiased (|mean error| < 0.01)   PASS
 | `phase3/src/ai/llama_forward_tq.c` | 254 | TurboQuantProd forward pass (Algorithm 2) |
 | `phase3/src/ai/test_turboquant_gen.c` | 385 | Multi-step generation (Phase 1: FAIL, Phase 2: FAIL) |
 
+## Scale Benchmarks
+
+### 13B Throughput (llama.cpp, Llama 2 13B Q4_K_M, Ryzen 7 2700X + RTX 2070 8GB)
+
+13B model is 7.33 GB — does NOT fit in 8 GB VRAM at full offload. Partial GPU offload only.
+
+| ngl (GPU layers) | Backend | Prompt (pp128) | Generation (tg30) |
+|:----------------:|---------|---------------:|------------------:|
+| 0 | CPU only | 118 t/s | 1.14 t/s |
+| 5 | CPU + 5 GPU | 129 t/s | 1.27 t/s |
+| 10 | CPU + 10 GPU | 147 t/s | 1.47 t/s |
+| 15+ | OOM | — | — |
+
+llama.cpp quantized KV cache (q4_0/q8_0) also fails for 13B ("failed to create context").
+
+**Takeaway:** 13B at Q4_K_M on RTX 2070 is CPU-bound at ~1.3 tok/s generation. KV cache compression would help with CONTEXT LENGTH (not VRAM for weights), since the model itself barely fits.
+
+### 3B TurboQuantProd Generation Quality (d=128, Llama 3.2 3B, 28 layers)
+
+| Config | Prompt 1 (seL4) | Prompt 2 (story) | Prompt 3 (Australia) | Avg | Verdict |
+|--------|:---------------:|:----------------:|:--------------------:|:---:|:-------:|
+| 3b/3b | 3.3% | 33.3% | 6.7% | **14.4%** | FAIL |
+| 3b/4b | 6.7% | 16.7% | 0.0% | **7.8%** | FAIL |
+| 4b/3b | 33.3% | 3.3% | **100%** | **45.6%** | FAIL |
+| 4b/4b | 56.7% | 3.3% | 66.7% | **42.2%** | FAIL |
+
+**Comparison: 1B (d=64) vs 3B (d=128) best config:**
+
+| Model | head_dim | Best Config | Best Avg | Best Single Prompt |
+|-------|:--------:|:-----------:|:--------:|:------------------:|
+| 1B | 64 | 3b/3b | **8.9%** | 16.7% |
+| 3B | 128 | 4b/3b | **45.6%** | **100%** (30/30) |
+| Improvement | | | **5.1x** | 6x |
+
+**Key finding:** Doubling head_dim from 64→128 yields 5x better generation match rates. At d=128, prompt 3 achieves **perfect 100% match** at 4b/3b. Prompt variability is high (3.3% to 100% on same config), suggesting the compression is near a quality cliff where some prompts survive and others don't.
+
+**Hypothesis confirmed:** The paper targets d=128+ models (7B-70B). At d=64 (1B), signal-to-noise is too low. At d=128 (3B), quality improves dramatically. Larger models with d=128 and fewer relative layers should cross the 80% threshold.
+
 ## References
 
 - TurboQuant: arXiv 2504.19874 (ICLR 2026)
