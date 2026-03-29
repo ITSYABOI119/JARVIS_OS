@@ -454,7 +454,136 @@ int main(void)
     printf("  Argmax match rate:       %.1f%% (%d/%d)\n\n",
            argmax_rate * 100.0f, total_argmax_match, total_attn_tests);
 
-    /* 7. Verdict */
+    /* 7. Generation comparison: F32 logits vs TQ-influenced logits
+     *
+     * Approach:
+     * 1. Re-run prefill of first 7 tokens (fresh KV cache)
+     * 2. Save KV cache for positions 0-6
+     * 3. Forward last token → f32_logits
+     * 4. Restore cache, TQ-compress positions 0-6, forward last token → tq_logits
+     * 5. Compare top-5 tokens
+     */
+    int top5_overlap = 5; /* Default to passing if generation comparison is skipped */
+
+    printf("--- Generation Comparison ---\n\n");
+
+    /* Re-init state for clean run */
+    tq_free(&tq);
+    llama_free_state(&state);
+    llama_alloc_state(&state, c);
+
+    int n_layers = c->n_layers;
+
+    /* Prefill first n_prompt-1 tokens */
+    int save_pos = n_prompt - 1;
+    for (int i = 0; i < save_pos; i++)
+        llama_forward(&model, &state, prompt[i]);
+
+    /* Save KV cache for positions 0..save_pos-1 */
+    size_t save_per_layer = (size_t)save_pos * (size_t)kv_dim * sizeof(float);
+    float *saved_keys = (float *)malloc((size_t)n_layers * save_per_layer);
+    float *saved_vals = (float *)malloc((size_t)n_layers * save_per_layer);
+    if (!saved_keys || !saved_vals) {
+        printf("SKIP generation comparison (malloc failed)\n");
+        free(saved_keys); free(saved_vals);
+        goto verdict;
+    }
+
+    for (int L = 0; L < n_layers; L++) {
+        memcpy(saved_keys + L * save_pos * kv_dim,
+               state.key_cache + L * max_seq * kv_dim,
+               save_per_layer);
+        memcpy(saved_vals + L * save_pos * kv_dim,
+               state.value_cache + L * max_seq * kv_dim,
+               save_per_layer);
+    }
+
+    /* Forward last token with F32 cache → f32_logits */
+    llama_forward(&model, &state, prompt[n_prompt - 1]);
+    float *f32_logits = (float *)malloc((size_t)c->vocab_size * sizeof(float));
+    memcpy(f32_logits, state.logits, (size_t)c->vocab_size * sizeof(float));
+
+    /* Restore cache, set pos back */
+    state.pos = save_pos;
+    for (int L = 0; L < n_layers; L++) {
+        memcpy(state.key_cache + L * max_seq * kv_dim,
+               saved_keys + L * save_pos * kv_dim,
+               save_per_layer);
+        memcpy(state.value_cache + L * max_seq * kv_dim,
+               saved_vals + L * save_pos * kv_dim,
+               save_per_layer);
+    }
+
+    /* TQ-compress positions 0..save_pos-1 in all layers (in-place) */
+    printf("TQ-compressing %d positions x %d layers x %d heads... ",
+           save_pos, n_layers, n_kv_heads);
+    fflush(stdout);
+    for (int L = 0; L < n_layers; L++) {
+        tq_state_t tq_l;
+        tq_init(&tq_l, head_dim, 3, 3, 42 + (uint64_t)L);
+        float *kl = state.key_cache + L * max_seq * kv_dim;
+        float *vl = state.value_cache + L * max_seq * kv_dim;
+
+        for (int p = 0; p < save_pos; p++) {
+            for (int h = 0; h < n_kv_heads; h++) {
+                float *k = kl + p * kv_dim + h * head_dim;
+                tq_ckey_t ck;
+                tq_compress_key(&tq_l, k, &ck);
+                tq_decompress_key(&tq_l, &ck, k);
+
+                float *v = vl + p * kv_dim + h * head_dim;
+                tq_cval_t cv;
+                tq_compress_val(&tq_l, v, &cv);
+                tq_decompress_val(&tq_l, &cv, v);
+            }
+        }
+        tq_free(&tq_l);
+    }
+    printf("OK\n");
+
+    /* Forward last token with TQ cache → tq_logits */
+    llama_forward(&model, &state, prompt[n_prompt - 1]);
+
+    /* Compare top-5 tokens */
+    /* Work on copies to avoid destructive argmax masking */
+    float *f32_copy = (float *)malloc((size_t)c->vocab_size * sizeof(float));
+    float *tq_copy = (float *)malloc((size_t)c->vocab_size * sizeof(float));
+    memcpy(f32_copy, f32_logits, (size_t)c->vocab_size * sizeof(float));
+    memcpy(tq_copy, state.logits, (size_t)c->vocab_size * sizeof(float));
+
+    int f32_top5[5], tq_top5[5];
+    for (int rank = 0; rank < 5; rank++) {
+        f32_top5[rank] = argmax(f32_copy, c->vocab_size);
+        f32_copy[f32_top5[rank]] = -1e30f;
+
+        tq_top5[rank] = argmax(tq_copy, c->vocab_size);
+        tq_copy[tq_top5[rank]] = -1e30f;
+    }
+
+    int top1_match = (f32_top5[0] == tq_top5[0]);
+    top5_overlap = 0;
+    for (int i = 0; i < 5; i++)
+        for (int j = 0; j < 5; j++)
+            if (f32_top5[i] == tq_top5[j]) top5_overlap++;
+
+    printf("\nGeneration comparison (F32 KV vs TQ KV):\n");
+    printf("  Top-1 match: %s (f32=%d tq=%d)\n",
+           top1_match ? "YES" : "NO", f32_top5[0], tq_top5[0]);
+    printf("  Top-5 overlap: %d/5\n", top5_overlap);
+    printf("  F32 top-5: [%d, %d, %d, %d, %d]\n",
+           f32_top5[0], f32_top5[1], f32_top5[2], f32_top5[3], f32_top5[4]);
+    printf("  TQ  top-5: [%d, %d, %d, %d, %d]\n\n",
+           tq_top5[0], tq_top5[1], tq_top5[2], tq_top5[3], tq_top5[4]);
+
+    free(f32_logits);
+    free(f32_copy);
+    free(tq_copy);
+    free(saved_keys);
+    free(saved_vals);
+
+verdict:
+    /* 8. Verdict */
+    ;
     int pass = 1;
     if (key_cos_avg < 0.85f) {
         printf("FAIL: key cosine avg %.4f < 0.85\n", key_cos_avg);
@@ -468,11 +597,14 @@ int main(void)
         printf("FAIL: softmax correlation %.4f < 0.90\n", avg_softmax_corr);
         pass = 0;
     }
+    if (top5_overlap < 3) {
+        printf("FAIL: top-5 overlap %d/5 < 3\n", top5_overlap);
+        pass = 0;
+    }
 
     printf("Verdict: %s\n", pass ? "PASS" : "FAIL");
 
     /* Cleanup */
-    tq_free(&tq);
     llama_free_state(&state);
     llama_free_model(&model);
 
