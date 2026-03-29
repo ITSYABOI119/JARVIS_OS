@@ -41,17 +41,47 @@ static float vec_norm_f(const float *a, int n)
 
 /* Simple RNG for test vectors */
 static uint64_t test_rng_state = 12345678ULL;
+
+static uint64_t test_rng(uint64_t *s)
+{
+    uint64_t x = *s;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    *s = x;
+    return x;
+}
+
 static float test_randf(void)
 {
-    test_rng_state ^= test_rng_state << 13;
-    test_rng_state ^= test_rng_state >> 7;
-    test_rng_state ^= test_rng_state << 17;
+    test_rng(&test_rng_state);
     return (float)(test_rng_state >> 11) / (float)(1ULL << 53) * 2.0f - 1.0f;
 }
 
 static void gen_random_vec(float *v, int n)
 {
     for (int i = 0; i < n; i++) v[i] = test_randf();
+}
+
+/* Gaussian RNG via Box-Muller (for unit vector generation) */
+static float test_randn(uint64_t *s)
+{
+    float u1 = (float)((test_rng(s) >> 11) + 1) / (float)((1ULL << 53) + 1);
+    float u2 = (float)((test_rng(s) >> 11) + 1) / (float)((1ULL << 53) + 1);
+    return sqrtf(-2.0f * logf(u1)) * cosf(6.283185307f * u2);
+}
+
+/* Generate random unit vector on S^{d-1} */
+static void rand_unit_vec(float *v, int d, uint64_t *s)
+{
+    float norm = 0;
+    for (int i = 0; i < d; i++) {
+        v[i] = test_randn(s);
+        norm += v[i] * v[i];
+    }
+    norm = sqrtf(norm);
+    if (norm > 1e-10f)
+        for (int i = 0; i < d; i++) v[i] /= norm;
 }
 
 /* ================================================================
@@ -209,8 +239,8 @@ static void test_qjl_inner_product(void)
     float qjl_rmse = sqrtf(total_qjl_err / (float)n_pairs);
 
     printf("[mse_rmse=%.4f qjl_rmse=%.4f] ", mse_rmse, qjl_rmse);
-    /* QJL should be at least comparable to MSE (often better due to unbiased correction) */
-    if (qjl_rmse < mse_rmse * 2.0f) PASS();
+    /* QJL should not be significantly worse than MSE-only */
+    if (qjl_rmse < mse_rmse * 1.5f) PASS();
     else FAIL("QJL error much worse than MSE");
 
     tq_free(&state);
@@ -456,6 +486,124 @@ static void test_full_kv_simulation(void)
     for (int L = 0; L < n_layers; L++) tq_free(&states[L]);
 }
 
+/* ================================================================
+ * Test 14: MSE matches paper values (arXiv 2504.19874 Table 1)
+ * ================================================================ */
+static void test_mse_matches_paper(void)
+{
+    TEST("MSE matches paper (2-bit key ≈0.117, 3-bit val ≈0.034)");
+
+    tq_state_t state;
+    tq_init(&state, 64, 3, 3, 12345);
+
+    uint64_t rng = 99999;
+    float total_key_mse = 0, total_val_mse = 0;
+    int N = 10000;
+
+    for (int i = 0; i < N; i++) {
+        float vec[64];
+        rand_unit_vec(vec, 64, &rng);
+
+        /* Key: compress at (key_bits - 1) = 2 bits */
+        tq_ckey_t ck;
+        tq_compress_key(&state, vec, &ck);
+        float krecon[64];
+        tq_decompress_key(&state, &ck, krecon);
+        float kmse = 0;
+        for (int d = 0; d < 64; d++)
+            kmse += (vec[d] - krecon[d]) * (vec[d] - krecon[d]);
+        total_key_mse += kmse;
+
+        /* Value: compress at val_bits = 3 bits */
+        tq_cval_t cv;
+        tq_compress_val(&state, vec, &cv);
+        float vrecon[64];
+        tq_decompress_val(&state, &cv, vrecon);
+        float vmse = 0;
+        for (int d = 0; d < 64; d++)
+            vmse += (vec[d] - vrecon[d]) * (vec[d] - vrecon[d]);
+        total_val_mse += vmse;
+    }
+
+    float avg_key_mse = total_key_mse / (float)N;
+    float avg_val_mse = total_val_mse / (float)N;
+
+    /* Paper targets for d=64: 2-bit MSE=0.117, 3-bit MSE=0.034 */
+    printf("\n    key(2bit) MSE=%.4f (target 0.117), val(3bit) MSE=%.4f (target 0.034)\n    ",
+           avg_key_mse, avg_val_mse);
+
+    /* 20% tolerance for finite-sample variance + f16 norm quantization */
+    if (fabsf(avg_key_mse - 0.117f) / 0.117f < 0.20f &&
+        fabsf(avg_val_mse - 0.034f) / 0.034f < 0.20f) {
+        PASS();
+    } else {
+        FAIL("MSE does not match paper");
+    }
+
+    tq_free(&state);
+}
+
+/* ================================================================
+ * Test 15: QJL inner product is unbiased (mean error near 0)
+ * ================================================================ */
+static void test_qjl_unbiased(void)
+{
+    TEST("QJL inner product unbiased (|mean error| < 0.01)");
+
+    tq_state_t state;
+    tq_init(&state, 64, 3, 3, 77777);
+
+    uint64_t rng = 54321;
+    int N = 10000;
+    float sum_err_mse = 0, sum_err_qjl = 0;
+    float sum_sq_mse = 0, sum_sq_qjl = 0;
+
+    for (int i = 0; i < N; i++) {
+        float query[64], key[64];
+        rand_unit_vec(query, 64, &rng);
+        rand_unit_vec(key, 64, &rng);
+
+        float true_dot = 0;
+        for (int d = 0; d < 64; d++)
+            true_dot += query[d] * key[d];
+
+        tq_ckey_t ck;
+        tq_compress_key(&state, key, &ck);
+
+        /* MSE-only dot */
+        float krecon[64];
+        tq_decompress_key(&state, &ck, krecon);
+        float mse_dot = 0;
+        for (int d = 0; d < 64; d++)
+            mse_dot += query[d] * krecon[d];
+        float mse_err = mse_dot - true_dot;
+        sum_err_mse += mse_err;
+        sum_sq_mse += mse_err * mse_err;
+
+        /* QJL-corrected dot */
+        float qjl_dot = tq_dot_key(&state, query, &ck);
+        float qjl_err = qjl_dot - true_dot;
+        sum_err_qjl += qjl_err;
+        sum_sq_qjl += qjl_err * qjl_err;
+    }
+
+    float mean_mse = sum_err_mse / (float)N;
+    float mean_qjl = sum_err_qjl / (float)N;
+    float var_mse = sum_sq_mse / (float)N - mean_mse * mean_mse;
+    float var_qjl = sum_sq_qjl / (float)N - mean_qjl * mean_qjl;
+
+    printf("\n    MSE-only: mean_err=%.6f var=%.6f\n", mean_mse, var_mse);
+    printf("    QJL:      mean_err=%.6f var=%.6f\n    ", mean_qjl, var_qjl);
+
+    if (fabsf(mean_qjl) < 0.01f) {
+        PASS();
+    } else {
+        FAIL("QJL not unbiased");
+    }
+
+    tq_free(&state);
+}
+
 /* ================================================================ */
 
 int main(void)
@@ -475,6 +623,8 @@ int main(void)
     test_state_overhead();
     test_invalid_params();
     test_full_kv_simulation();
+    test_mse_matches_paper();
+    test_qjl_unbiased();
 
     printf("\n=== Results: %d PASS, %d FAIL ===\n",
            tests_passed, tests_failed);
