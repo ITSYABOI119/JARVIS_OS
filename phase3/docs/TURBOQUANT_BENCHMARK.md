@@ -109,7 +109,31 @@ Prefilled 7 tokens, saved cache, ran 8th token forward for F32 logits. Then rest
 
 TQ compression of historical KV cache does not change the model's next-token prediction for this prompt. Tokens 2-3 swap order (459↔279) but the full set is identical.
 
-## 6. Throughput (per head, d=64, single-threaded)
+## 6. Multi-Step Generation: Compounding Error (CRITICAL)
+
+**Test:** Side-by-side F32 vs TQ generation for 30 tokens across 3 prompts. TQ compression applied after EVERY forward step (prefill + generation), simulating real integration via decompress-overwrite.
+
+| Prompt | F32 first 5 tokens | TQ first 5 tokens | Match Rate | First Divergence |
+|--------|--------------------|--------------------|:----------:|:----------------:|
+| "The seL4 microkernel is" | 264, 3241, 12914, 369, 4857 | 264, 1401, 3777, 315, 279 | **3.3%** | pos 1 |
+| "Once upon a time there was" | 264, 893, 7086, 3842, 889 | 264, 892, 994, 1070, 574 | **3.3%** | pos 1 |
+| "The capital of Australia is" | 69890, 13, 578, 3363, 374 | 69890, 627, 791, 6864, 315 | **3.3%** | pos 1 |
+
+**Result: FAIL — avg 3.3% match, diverges after 1 token. TQ enters repetition loops.**
+
+**Root cause:** The decompress-overwrite strategy (compress → decompress → overwrite F32 cache) discards QJL correction. Each subsequent token reads MSE-only reconstructions from ALL previous positions. The 0.94 cosine error per vector, compounded across 30+ steps x 16 layers, drives the model into degenerate modes (repetition loops).
+
+**Contrast with single-step test:** Compressing historical cache ONCE and generating ONE token works perfectly (5/5 top-5 match). The difference is compounding: 1 step of error is fine, 30 steps is catastrophic.
+
+**Implication for integration:** Naive decompress-overwrite does NOT work. The correct approach:
+1. Store `tq_ckey_t` / `tq_cval_t` directly (not decompress back to F32)
+2. Use `tq_dot_key()` for attention scoring (preserves QJL unbiased correction)
+3. Decompress values on-the-fly for weighted sum only
+4. This matches the paper's Algorithm 2 (TurboQuantProd)
+
+This changes the integration plan: instead of a simple cache-replacement, the attention loop itself must be modified to work with compressed representations.
+
+## 7. Throughput (per head, d=64, single-threaded)
 
 | Operation | Time | Throughput |
 |-----------|-----:|-----------:|
@@ -123,12 +147,13 @@ Per head: Key=28 bytes (16 MSE + 8 QJL + 4 norms), Value=26 bytes (24 MSE + 2 no
 Per position per layer (8 heads): **432 bytes** vs 4,096 F32
 State overhead: 33 KB/layer (Pi + S matrices), 528 KB total for 16 layers
 
-## 6. Assessment: YES for Phase 3c
+## 9. Assessment: YES for Phase 3c (with correct integration)
 
 Benefits: 28 MB freed, context 512->2048+, 3B model KV fits in seL4
 Cost: +6 ms/token at 512 positions (3.7% overhead), 528 KB matrices
+**Caveat:** Must use compressed-representation attention (tq_dot_key), NOT decompress-overwrite
 
-## 8. Test Results: 15/15 PASS
+## 10. Test Results: 15/15 PASS + 1 FAIL (generation)
 
 ```
 Pi is orthogonal (Pi * Pi^T = I)                   PASS
@@ -157,6 +182,7 @@ QJL inner product unbiased (|mean error| < 0.01)   PASS
 | `phase3/src/ai/test_turboquant.c` | 540 | 15 unit tests (incl. MSE + QJL verification) |
 | `phase3/src/ai/bench_turboquant.c` | 141 | Benchmark harness |
 | `phase3/src/ai/test_turboquant_real.c` | 400 | Real model validation + generation comparison |
+| `phase3/src/ai/test_turboquant_gen.c` | 230 | Multi-step generation (FAIL: decompress-overwrite) |
 
 ## References
 

@@ -389,7 +389,8 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | RDTSC timing (Stage 5) | — | DONE | main_x86.c | 5/5 stages PASS |
 | TurboQuant KV compression | — | DONE | turboquant.c/h | 15 PASS |
 | TurboQuant real-data validation | — | DONE | test_turboquant_real.c | SKIP on CI (model needed) |
-| **Total** | | | **80+ files** | **335 tests, ~20,000 LOC** |
+| TurboQuant generation quality | — | DONE | test_turboquant_gen.c | FAIL (decompress-overwrite) |
+| **Total** | | | **80+ files** | **336 tests, ~20,000 LOC** |
 
 **What remains for Phase 3b on real hardware:**
 - Boot seL4 on actual Ryzen hardware (vs QEMU)
@@ -601,6 +602,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **SHIELD Safety Module:** `phase3/src/ai/shield.c/h`
 - **Dynamic Model Scaling:** `phase3/src/ai/model_scaling.c/h`
 - **TurboQuant KV Compression:** `phase3/src/ai/turboquant.c/h`
+- **TurboQuant Gen Quality:** `phase3/src/ai/test_turboquant_gen.c`
 - **TurboQuant Benchmark:** `phase3/docs/TURBOQUANT_BENCHMARK.md`
 - **Inference Benchmark:** `phase3/src/ai/bench_inference.c`
 - **GPU Benchmarks:** `phase3/docs/GPU_BENCHMARK_RTX2070.md`
@@ -623,8 +625,8 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 
 - **Phase 1:** 39,106 LOC, 95 files, 338 test functions (COMPLETE)
 - **Phase 2:** ~27,000 LOC, 65 files, 108 tests (COMPLETE)
-- **Phase 3:** ~20,000 LOC, 80+ files, 335 tests (IN PROGRESS — **LLM inference on seL4 verified**)
-- **Total:** ~86,000+ LOC, 200+ files, 589+ tests
+- **Phase 3:** ~20,000 LOC, 80+ files, 336 tests (IN PROGRESS — **LLM inference on seL4 verified**)
+- **Total:** ~86,000+ LOC, 200+ files, 590+ tests
 - **Security:** 26/26 adversarial audit findings resolved (March 2026). SHIELD module: keyword + model-assisted risk scoring.
 - **Inference:** Llama 3.2 1B Q4_K_M on seL4 QEMU, coherent output, 50MB heap
 

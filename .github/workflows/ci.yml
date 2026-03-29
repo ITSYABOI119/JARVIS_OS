@@ -372,3 +372,19 @@ jobs:
           phase3/src/ai/tokenizer.c \
           -lm -o /tmp/test_turboquant_real
         /tmp/test_turboquant_real
+
+    - name: "Phase 3: TurboQuant Generation Quality (C)"
+      run: |
+        gcc -Wall -O2 -std=c11 -D_POSIX_C_SOURCE=200809L \
+          -I phase3/src/ai \
+          phase3/src/ai/test_turboquant_gen.c \
+          phase3/src/ai/turboquant.c \
+          phase3/src/ai/llama_forward.c \
+          phase3/src/ai/llama_load.c \
+          phase3/src/ai/tensor_ops.c \
+          phase3/src/ai/dequant.c \
+          phase3/src/ai/sampling.c \
+          phase3/src/ai/gguf_parser.c \
+          phase3/src/ai/tokenizer.c \
+          -lm -o /tmp/test_turboquant_gen
+        /tmp/test_turboquant_gen
