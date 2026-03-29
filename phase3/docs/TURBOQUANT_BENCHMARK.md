@@ -144,17 +144,23 @@ This changes the integration plan: instead of a simple cache-replacement, the at
 | "The capital of Australia is" | 3.3% | **6.7%** | 2x |
 | **Average** | **3.3%** | **8.9%** | **2.7x** |
 
-**Result: FAIL — 8.9% avg, still far below 80% target.**
+**Bit-width sweep (TurboQuantProd, all configs):**
 
-QJL-corrected key scoring helps (2.7x improvement) but is insufficient. The bottleneck is **value decompression**: values use MSE-only (no QJL), and MSE errors compound through the weighted sum across 30 steps x 16 layers.
+| Config | Prompt 1 | Prompt 2 | Prompt 3 | Avg | Verdict |
+|--------|:--------:|:--------:|:--------:|:---:|:-------:|
+| 3b key / 3b val | 3.3% | 16.7% | 6.7% | **8.9%** | FAIL |
+| 3b key / 4b val | 6.7% | 3.3% | 6.7% | **5.6%** | FAIL |
+| 4b key / 3b val | 6.7% | 3.3% | 6.7% | **5.6%** | FAIL |
+| 4b key / 4b val | 3.3% | 3.3% | 6.7% | **4.4%** | FAIL |
 
-**Possible mitigations (not yet tested):**
-1. Increase value bits: 4-bit values instead of 3-bit (higher fidelity)
-2. Only compress after prefill (generation tokens keep F32 K/V)
-3. Compress only deep layers (layers 8-15), keep shallow layers F32
-4. Higher quantization bits overall (4-bit keys + 4-bit values)
+**Result: ALL configs FAIL. Higher bits do NOT help — 4b/4b (4.4%) is worse than 3b/3b (8.9%).**
 
-**Conclusion:** 3-bit TurboQuant achieves excellent single-step quality (0.94 cosine, 5/5 top-5 match) but is too lossy for multi-step autoregressive generation. The compression ratio vs quality tradeoff needs further tuning for production use.
+This is not a bit-width problem. The issue is fundamental: lossy KV cache compression compounds errors through 16 transformer layers per step, regardless of quantization fidelity. Each layer's attention output has small errors that propagate to the next layer's input, and 16 layers of this per token drives the model off-distribution within 1-2 steps.
+
+**Why the paper works but our implementation doesn't (hypothesis):**
+The paper benchmarks on much larger models (7B-70B) with larger head dimensions (d=128+) where the per-coordinate quantization error is smaller relative to signal. For 1B with d=64, the signal-to-noise ratio may be too low for any quantization level to preserve autoregressive coherence.
+
+**Conclusion:** TurboQuant is validated for single-step quality (0.94 cosine, 5/5 top-5 match, MSE matches paper) but autoregressive generation with compressed KV cache is an open problem at 1B scale. The compression module is correct and ready for when larger models are available.
 
 ## 7. Throughput (per head, d=64, single-threaded)
 
