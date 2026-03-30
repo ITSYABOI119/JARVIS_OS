@@ -251,6 +251,13 @@ llama.cpp quantized KV cache (q4_0/q8_0) also fails for 13B ("failed to create c
 
 **Key finding:** Doubling head_dim from 64→128 yields 5x better generation match rates. At d=128, prompt 3 achieves **perfect 100% match** at 4b/3b. Prompt variability is high (3.3% to 100% on same config), suggesting the compression is near a quality cliff where some prompts survive and others don't.
 
+**Why prompt 2 fails (diagnostic, 3B 4b/3b):** Logit confidence at divergence point:
+- Prompt 1: gap=0.54 (uncertain, diverges at pos 10)
+- Prompt 2: gap=**0.06** (coin flip, diverges at pos 1 — model barely knows what comes next)
+- Prompt 3: no divergence (100% match)
+
+K/V norms are similar across prompts (no outliers). This is an inherently ambiguous continuation, not a TQ flaw — even tiny perturbation flips the choice.
+
 **Hypothesis confirmed:** The paper targets d=128+ models (7B-70B). At d=64 (1B), signal-to-noise is too low. At d=128 (3B), quality improves dramatically. Larger models with d=128 and fewer relative layers should cross the 80% threshold.
 
 ## References

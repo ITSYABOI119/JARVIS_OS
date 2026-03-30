@@ -30,6 +30,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #define MODEL_PATH "phase3/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
 #define N_GEN      30
@@ -413,6 +414,150 @@ int main(int argc, char **argv)
     if (!pass)
         printf("FAIL: best config %.1f%% < 80%% threshold\n", best_avg * 100.0f);
     printf("Verdict: %s\n", pass ? "PASS" : "FAIL");
+
+#ifdef DIAGNOSTIC
+    /* ================================================================
+     * Diagnostic: Why does prompt 2 fail?
+     * Runs best config (4b/3b) and prints logit confidence, K/V norms,
+     * and attention entropy for each prompt.
+     * ================================================================ */
+    printf("\n=== DIAGNOSTIC: Per-Prompt Analysis (4b keys / 3b vals) ===\n\n");
+
+    int kv_dim = c->n_kv_heads * c->head_dim;
+    int head_dim = c->head_dim;
+    int n_kv_heads = c->n_kv_heads;
+    int n_heads_d = c->n_heads;
+
+    /* --- Diagnostic 1: Logit confidence at divergence --- */
+    printf("--- Logit Confidence at Divergence ---\n");
+
+    for (int p = 0; p < n_prompts; p++) {
+        /* Find first divergence position from the sweep data.
+         * Re-run F32 + TQ to that point to get logits. */
+        llama_state_t f32_st;
+        llama_alloc_state(&f32_st, c);
+        for (int i = 0; i < prompts[p].n; i++)
+            llama_forward(&model, &f32_st, prompts[p].tok[i]);
+
+        llama_tq_state_t tq_diag;
+        llama_tq_alloc_state(&tq_diag, c, 4, 3, 42);
+
+        int div_pos = -1;
+        int gen_steps = (f32_all_counts[p] < N_GEN) ? f32_all_counts[p] : N_GEN;
+
+        for (int i = 0; i < gen_steps; i++) {
+            int f32_tok = greedy_argmax(f32_st.logits, c->vocab_size);
+
+            /* Get TQ logits at this step */
+            if (i == 0 && tq_diag.pos == 0) {
+                /* Prefill TQ */
+                for (int t = 0; t < prompts[p].n; t++)
+                    llama_tq_forward(&model, &tq_diag, prompts[p].tok[t]);
+            }
+            int tq_tok = greedy_argmax(tq_diag.logits, c->vocab_size);
+
+            if (f32_tok != tq_tok && div_pos < 0) {
+                div_pos = i;
+                /* Find top-2 from F32 logits */
+                int top1 = 0, top2 = 0;
+                for (int j = 1; j < c->vocab_size; j++) {
+                    if (f32_st.logits[j] > f32_st.logits[top1]) {
+                        top2 = top1; top1 = j;
+                    } else if (j != top1 && f32_st.logits[j] > f32_st.logits[top2]) {
+                        top2 = j;
+                    }
+                }
+                float gap = f32_st.logits[top1] - f32_st.logits[top2];
+                printf("  Prompt %d: div@pos %d, f32_tok=%d tq_tok=%d, "
+                       "top1_logit=%.2f top2_logit=%.2f gap=%.2f %s\n",
+                       p + 1, i, f32_tok, tq_tok,
+                       f32_st.logits[top1], f32_st.logits[top2], gap,
+                       gap < 1.0f ? "(UNCERTAIN)" : gap < 3.0f ? "(moderate)" : "(confident)");
+                break;
+            }
+
+            /* Advance both */
+            llama_forward(&model, &f32_st, f32_tok);
+            llama_tq_forward(&model, &tq_diag, tq_tok);
+        }
+        if (div_pos < 0)
+            printf("  Prompt %d: no divergence (100%% match)\n", p + 1);
+
+        llama_free_state(&f32_st);
+        llama_tq_free_state(&tq_diag);
+    }
+
+    /* --- Diagnostic 2: K/V norms after prefill --- */
+    printf("\n--- K/V Norms After Prefill ---\n");
+
+    for (int p = 0; p < n_prompts; p++) {
+        llama_state_t norm_st;
+        llama_alloc_state(&norm_st, c);
+        for (int i = 0; i < prompts[p].n; i++)
+            llama_forward(&model, &norm_st, prompts[p].tok[i]);
+
+        int max_seq = norm_st.max_seq_len;
+        printf("  Prompt %d (\"%s\", %d tokens):\n", p + 1, prompts[p].name, prompts[p].n);
+
+        int sample_layers[] = {0, c->n_layers / 4, c->n_layers / 2, c->n_layers - 1};
+        for (int li = 0; li < 4; li++) {
+            int L = sample_layers[li];
+            float k_sum = 0, k_max = 0, v_sum = 0, v_max = 0;
+            int cnt = 0;
+            for (int pos = 0; pos < prompts[p].n; pos++) {
+                for (int h = 0; h < n_kv_heads; h++) {
+                    float *k = norm_st.key_cache + L * max_seq * kv_dim + pos * kv_dim + h * head_dim;
+                    float *v = norm_st.value_cache + L * max_seq * kv_dim + pos * kv_dim + h * head_dim;
+                    float kn = 0, vn = 0;
+                    for (int d = 0; d < head_dim; d++) { kn += k[d]*k[d]; vn += v[d]*v[d]; }
+                    kn = sqrtf(kn); vn = sqrtf(vn);
+                    k_sum += kn; v_sum += vn;
+                    if (kn > k_max) k_max = kn;
+                    if (vn > v_max) v_max = vn;
+                    cnt++;
+                }
+            }
+            printf("    Layer %2d: key_norm avg=%.2f max=%.2f, val_norm avg=%.4f max=%.4f\n",
+                   L, k_sum / cnt, k_max, v_sum / cnt, v_max);
+        }
+        llama_free_state(&norm_st);
+    }
+
+    /* --- Diagnostic 3: Attention entropy at first generated token --- */
+    printf("\n--- Attention Entropy at First Generated Token ---\n");
+
+    for (int p = 0; p < n_prompts; p++) {
+        llama_state_t ent_st;
+        llama_alloc_state(&ent_st, c);
+        for (int i = 0; i < prompts[p].n; i++)
+            llama_forward(&model, &ent_st, prompts[p].tok[i]);
+
+        /* att buffer contains attention weights from last forward call.
+         * shape: [n_heads][max_seq], softmax over [0..pos-1] */
+        int att_len = prompts[p].n;  /* pos after prefill = n_prompt */
+        int max_seq_e = ent_st.max_seq_len;
+        float avg_entropy = 0;
+        for (int h = 0; h < n_heads_d; h++) {
+            float *att_h = ent_st.att + h * max_seq_e;
+            float ent = 0;
+            for (int t = 0; t < att_len; t++) {
+                if (att_h[t] > 1e-10f)
+                    ent -= att_h[t] * logf(att_h[t]);
+            }
+            avg_entropy += ent;
+        }
+        avg_entropy /= (float)n_heads_d;
+        float max_ent = logf((float)att_len);  /* uniform distribution entropy */
+        printf("  Prompt %d: avg_entropy=%.3f (max possible=%.3f, ratio=%.2f) %s\n",
+               p + 1, avg_entropy, max_ent,
+               avg_entropy / max_ent,
+               avg_entropy / max_ent > 0.7f ? "(BROAD)" : "(peaked)");
+
+        llama_free_state(&ent_st);
+    }
+
+    printf("\n");
+#endif /* DIAGNOSTIC */
 
 cleanup:
     for (int L = 0; L < c->n_layers && L < MAX_LAYERS; L++)
