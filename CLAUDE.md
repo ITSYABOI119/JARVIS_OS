@@ -16,7 +16,7 @@ Guidance for Claude Code when working with this repository.
 | **Phase 3** | **IN PROGRESS** | Months 24-36 | Beta on x86-64 bare metal (**LLM inference on seL4 VERIFIED**) |
 | Phase 4 | Future | Months 36+ | Production v1.0 |
 
-**Current:** Phase 3, Active Development (March 28, 2026). **MILESTONE: Process-isolated LLM inference on seL4.** Two seL4 processes communicate via shared memory IPC: Process A (rootserver + cache + SHIELD) spawns Process B (Llama 3.2 1B inference) from CPIO. Coherent text generation verified end-to-end through IPC. Spare PC still 1/7 parts — all QEMU-possible work done.
+**Current:** Phase 3, Active Development (March 28, 2026). **MILESTONE: Process-isolated LLM inference on seL4.** Two seL4 processes communicate via shared memory IPC: Process A (rootserver + cache + SHIELD) spawns Process B (Llama 3.2 1B inference) from CPIO. Coherent text generation verified end-to-end through IPC. JARVIS Project PC awaiting RTX 3060 — all QEMU-possible work done.
 
 ---
 
@@ -232,7 +232,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 
 ## Current Status (Phase 3 — Process-Isolated LLM Inference on seL4)
 
-**PROCESS ISOLATION MILESTONE** (March 28, 2026) — Two seL4 processes running: Process A (rootserver, cache, SHIELD) spawns Process B (Llama 3.2 1B inference) from CPIO archive. Process B loads 770MB model zero-copy from .rodata, extracts 128K BPE vocab, generates coherent text. End-to-end IPC verified: Process A sends "The seL4 microkernel is" → Process B generates → response via shared memory. CNode=22 (4M slots), morecore=128MB, 8GB QEMU. Spare PC still awaiting assembly (1/7 parts).
+**PROCESS ISOLATION MILESTONE** (March 28, 2026) — Two seL4 processes running: Process A (rootserver, cache, SHIELD) spawns Process B (Llama 3.2 1B inference) from CPIO archive. Process B loads 770MB model zero-copy from .rodata, extracts 128K BPE vocab, generates coherent text. End-to-end IPC verified: Process A sends "The seL4 microkernel is" → Process B generates → response via shared memory. CNode=22 (4M slots), morecore=128MB, 8GB QEMU. JARVIS Project PC awaiting RTX 3060 install, then wipe for bare-metal.
 
 | Milestone | Status |
 |-----------|--------|
@@ -340,9 +340,9 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | **End-to-end IPC: Process A query → Process B inference → response** | **DONE** |
 | **CNode=22, morecore=128MB, allocator pools scaled for 230K frames** | **DONE** |
 
-**Next:** Spare PC assembly (1/7 parts bought). All QEMU-achievable work complete. Ready for real hardware.
+**Next:** RTX 3060 purchase for JARVIS Project PC. All QEMU-achievable work complete. Ready for real hardware.
 
-### Pre-Work Tasks (Before Spare PC)
+### Pre-Work Tasks (Before JARVIS Project PC)
 
 | # | Task | Status |
 |---|------|--------|
@@ -395,11 +395,11 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 - Load GGUF model from NVMe (currently embedded in .rodata via objcopy)
 - 30-day stability test on x86
 
-### Phase 3 Weeks (After Spare PC Assembly)
+### Phase 3 Weeks (After RTX 3060 Install + Wipe)
 
 | Weeks | Task |
 |-------|------|
-| 1-6 | Phase 3a: Spare PC as GPU host + Pi 4 UART |
+| 1-6 | Phase 3a: JARVIS Project PC GPU setup + bare-metal boot |
 | 7-28 | Phase 3b: Pure bare-metal seL4 x86-64 (drivers + GGUF parser partially done) |
 | 29-40 | Phase 3c: Hardening, fuzz testing, SHIELD |
 | 41-44 | Final report + git tag v0.3.0-beta |
@@ -637,5 +637,5 @@ Doc: `phase2/docs/PHASE_2_HARDWARE_PIVOT.md`
 - **Build:** TII seL4 build system + CMake/Ninja
 - **Cross-compiler:** aarch64-linux-gnu-gcc 13.3.0 (ARM64), gcc 13.3.0 (x86-64)
 - **Bootloader:** U-Boot 2026.01 (Pi 4), GRUB2/multiboot (x86 QEMU)
-- **Hardware:** Raspberry Pi 4 (BCM2711, 8GB), Main PC (Ryzen 7 2700X, RTX 2070, 32GB)
+- **Hardware:** Raspberry Pi 4 (BCM2711, 8GB), JARVIS Project PC (Ryzen 7 2700X, RTX 3060 pending, 16GB), Dev PC (Ryzen 5 5600 pending, RTX 2070, 32GB)
 - **QEMU:** KVM-accelerated x86-64, 4GB RAM, CNode 19 (524K slots)

@@ -43,7 +43,7 @@ This document provides a detailed week-by-week implementation plan for Phase 3. 
 - Output: "a microkernel implementation of the L4 microkernel architecture. It is designed to be a lightweight alternative"
 - Logits verified against llama.cpp reference (top-5 match exactly)
 - KVM confirmed working on AMD Ryzen (-enable-kvm -cpu host, 4GB QEMU)
-**Blocking:** Spare PC assembly (1/7 parts bought)
+**Blocking:** RTX 3060 purchase, then wipe current PC for bare-metal seL4
 
 ### Phase 2 Baseline (What Carries Forward)
 
@@ -60,31 +60,42 @@ This document provides a detailed week-by-week implementation plan for Phase 3. 
 | Security | 6 findings, 4 fixed | Fuzz testing + expanded audit |
 | Hardware cost | $215.82 AUD | +$0-50 |
 
-### Hardware Status
+### Hardware Status (Revised March 30, 2026)
 
-| Hardware | RAM | Status | Phase 3 Role |
-|----------|-----|--------|--------------|
-| Raspberry Pi 4 8GB | 8GB | Running Phase 2 | Fallback through Phase 3a |
-| Raspberry Pi 5 4GB | 4GB | Owned, unused | Available for experiments |
-| Spare x86 PC | 16GB DDR4 | **PARTS ORDERING IN PROGRESS** | Phase 3a host → Phase 3b target |
-| Main PC (RTX 2070) | 32GB | Daily driver, cannot wipe | Development + cross-compilation |
+| Hardware | Specs | Status | Role |
+|----------|-------|--------|------|
+| Raspberry Pi 4 8GB | BCM2711 ARM64 | Running Phase 2 | Fallback / ARM testing |
+| Raspberry Pi 5 4GB | BCM2712 ARM64 | Owned, unused | Available for experiments |
+| **JARVIS Project PC** | Ryzen 7 2700X, 16GB DDR4, X470-F, RTX 3060 12GB | **GPU pending** | **seL4 bare-metal target + GPU inference** |
+| New Main PC | Ryzen 5 5600, 32GB DDR4, ASRock B550M-ITX/ac, RTX 2070 | Pending build | Daily driver + development |
 
-**Spare PC Build Progress (ordering incrementally):**
+**Hardware Plan:**
+- Current PC (Ryzen 7 2700X + X470-F) becomes the dedicated JARVIS project PC
+- RTX 2070 moves to the new main PC build
+- RTX 3060 12GB goes into the JARVIS PC (to be purchased)
+- 1TB SSD wiped for bare-metal seL4
+- 16GB DDR4 (already bought) goes into the JARVIS PC
+- New main PC inherits 32GB DDR4 + RTX 2070
 
-| Part | Model | Price (AUD) | Status |
-|------|-------|-------------|--------|
-| RAM | G.Skill Ripjaws V 16GB DDR4-3200 | $189 | **BOUGHT** (Mwave) |
-| CPU | AMD Ryzen 5 5600 | $176 | Pending (JW Computers) |
-| SSD | Team Group MP44L 500GB NVMe PCIe Gen4 | $119 | Pending (JW Computers) |
-| Case | Cooler Master MasterBox NR200 Mini-ITX | $89 | Pending (JW Computers) |
-| Mobo | ASRock B550M-ITX/ac (Mini-ITX) | $209 | Pending (Scorptec) |
-| PSU | Corsair SF750 750W SFX | $239 | Pending (Scorptec) |
-| GPU | MSI RTX 3060 Ventus 2X 12GB | $429 | Pending |
-| **Total** | | **~$1,450** | **1/7 bought** |
+**Remaining purchases for JARVIS PC:**
 
-**Note:** DDR4 prices inflated 150-200% due to global DRAM shortage (AI demand). RAM bought early to avoid further increases. Recovery not expected until late 2027.
+| Part | Model | Status |
+|------|-------|--------|
+| GPU | RTX 3060 12GB | **Pending** |
 
-**Phase 3 week numbering starts when the spare PC is assembled.** Pre-work tasks happen before Week 1 using current hardware (main PC WSL, Pi 4, Pi 5).
+**New Main PC parts (separate from JARVIS budget):**
+
+| Part | Model | Status |
+|------|-------|--------|
+| CPU | AMD Ryzen 5 5600 | Pending |
+| Mobo | ASRock B550M-ITX/ac | Pending |
+| RAM | 32GB DDR4 (from current PC) | Available |
+| GPU | RTX 2070 (from current PC) | Available |
+| SSD | TBD | Pending |
+| Case | TBD | Pending |
+| PSU | TBD | Pending |
+
+**Phase 3 week numbering starts when the RTX 3060 is installed and the PC is wiped for bare-metal.** Pre-work tasks use the current dual-boot Ubuntu setup.
 
 ### Code Portability Assessment
 
@@ -120,7 +131,7 @@ This document provides a detailed week-by-week implementation plan for Phase 3. 
 
 ```
 ┌──────────────────┐       UART        ┌──────────────────┐
-│   Spare x86 PC   │◄─────────────────►│   Pi 4 (seL4)    │
+│  JARVIS Project PC  │◄─────────────────►│   Pi 4 (seL4)    │
 │   (Linux + CUDA) │   7ms RTT         │   (Unchanged)    │
 │                  │                   │                  │
 │   RTX 3060 AI    │                   │   Decision Cache  │
@@ -135,7 +146,7 @@ Same as Phase 2 architecture but with dedicated GPU host. Pi 4 code untouched.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│              JARVIS OS (Spare x86 PC)                    │
+│              JARVIS OS (JARVIS Project PC)                    │
 │            Ryzen 5 5600 + RTX 3060 12GB                 │
 │                                                          │
 │   seL4 Microkernel (Ring 0)                              │
@@ -165,7 +176,7 @@ Same as Phase 2 architecture but with dedicated GPU host. Pi 4 code untouched.
 
 | Aspect | Phase 2 | Phase 3a | Phase 3b |
 |--------|---------|----------|----------|
-| Machines | 2 (Pi 4 + PC) | 2 (Pi 4 + spare PC) | **1 (spare PC)** |
+| Machines | 2 (Pi 4 + PC) | 2 (Pi 4 + project PC) | **1 (JARVIS Project PC)** |
 | Microkernel | seL4 ARM64 | seL4 ARM64 | **seL4 x86-64** |
 | AI runtime | Python (host PC) | Python + CUDA | **Native C (seL4 userspace)** |
 | IPC | UART 7ms | UART 7ms | **Shared memory <1μs** |
@@ -184,7 +195,7 @@ Same as Phase 2 architecture but with dedicated GPU host. Pi 4 code untouched.
 
 **Hardware used:** Main PC (RTX 2070, 32GB, WSL), Pi 4 (running Phase 2), Pi 5 (available)
 
-**Note:** Phase 3 week numbering (Week 1+) starts when the spare PC is assembled. These pre-work tasks happen before Week 1.
+**Note:** Phase 3 week numbering (Week 1+) starts when the JARVIS Project PC is assembled. These pre-work tasks happen before Week 1.
 
 ### Summary
 
@@ -326,7 +337,7 @@ Same as Phase 2 architecture but with dedicated GPU host. Pi 4 code untouched.
 **Effort:** 6-8 hours
 **Dependencies:** None
 **Acceptance:** ✅ 10,000 messages sent/received with 0 errors, correct wrap-around behavior
-**Unblocks:** Phase 3b Weeks 23-24. When spare PC arrives, swap `mmap` → `seL4_Page_Map` and `sem_post` → `seL4_Signal`. Ring buffer logic is identical.
+**Unblocks:** Phase 3b Weeks 23-24. When JARVIS Project PC arrives, swap `mmap` → `seL4_Page_Map` and `sem_post` → `seL4_Signal`. Ring buffer logic is identical.
 
 ---
 
@@ -439,7 +450,7 @@ Same as Phase 2 architecture but with dedicated GPU host. Pi 4 code untouched.
    - Measures seL4 IPC latency (native round-trip)
 
 2. This is effectively Phase 3b Weeks 9-12 running in emulation
-3. When spare PC arrives, boot same rootserver on real hardware — code already works
+3. When JARVIS Project PC arrives, boot same rootserver on real hardware — code already works
 
 **Deliverables:**
 - ✅ `phase3/src/sel4/main_x86.c` — rootserver with JARVIS banner, decision cache, SHIELD, shell commands
@@ -457,7 +468,7 @@ Same as Phase 2 architecture but with dedicated GPU host. Pi 4 code untouched.
 ### Pre-Work Critical Path
 
 ```
-Pre-Work Tasks (before spare PC):
+Pre-Work Tasks (before JARVIS Project PC):
   Task 6: Git tag v0.2.0-alpha (15 min)
   Task 1: seL4 x86-64 QEMU boot (6-8h)
     ↓
@@ -482,7 +493,7 @@ Pre-Work Tasks (before spare PC):
 
 ### Early Phase 3b Work (Done Ahead of Schedule)
 
-While waiting for the spare PC, the majority of Phase 3b implementation was completed in QEMU and with mock testing. This reduces Phase 3b timeline by an estimated 8-12 weeks.
+While waiting for the JARVIS Project PC, the majority of Phase 3b implementation was completed in QEMU and with mock testing. This reduces Phase 3b timeline by an estimated 8-12 weeks.
 
 | Component | Planned Week | Status | Files | Tests |
 |-----------|-------------|--------|-------|-------|
@@ -525,7 +536,7 @@ With Phase 3b Weeks 7-24 software complete, the remaining work is hardware integ
 | 3c hardening | 11-14 | NOT STARTED | Security audit, fuzz testing, model scaling |
 | 3c finalization | 15-18 | NOT STARTED | SHIELD, docs, final report, v0.3.0-beta tag |
 
-**Estimated completion:** ~18 weeks after spare PC assembly (vs original 44 weeks).
+**Estimated completion:** ~18 weeks after JARVIS Project PC assembly (vs original 44 weeks).
 **Time saved:** ~26 weeks of software development done pre-hardware.
 
 ---
@@ -534,20 +545,20 @@ With Phase 3b Weeks 7-24 software complete, the remaining work is hardware integ
 
 ### Focus: Assemble PC, Validate Hardware, Boot seL4
 
-**Objective:** Assemble the spare PC, validate hardware works with Linux + GPU benchmarks, then boot seL4 on real Ryzen hardware. Skip the Phase 2 UART/Pi 4 stability re-test (already proven: 30.6 days, 0 crashes). Go directly to bare-metal seL4.
+**Objective:** Assemble the JARVIS Project PC, validate hardware works with Linux + GPU benchmarks, then boot seL4 on real Ryzen hardware. Skip the Phase 2 UART/Pi 4 stability re-test (already proven: 30.6 days, 0 crashes). Go directly to bare-metal seL4.
 
-**Rationale for compression:** The original 6-week Phase 3a assumed the Pi 4 would remain the seL4 platform while the spare PC served as GPU host. Since Phase 3b software is already complete (inference engine, all drivers, self-test mode), there's no value in running the Pi 4 UART test harness against a different host PC. Instead, validate GPU performance (one afternoon) then go straight to seL4 bare metal.
+**Rationale for compression:** The original 6-week Phase 3a assumed the Pi 4 would remain the seL4 platform while the JARVIS Project PC served as GPU host. Since Phase 3b software is already complete (inference engine, all drivers, self-test mode), there's no value in running the Pi 4 UART test harness against a different host PC. Instead, validate GPU performance (one afternoon) then go straight to seL4 bare metal.
 
 > **Original Phase 3a plan (Weeks 1-6) preserved below for reference. These tasks are now compressed into 2 weeks.**
 
-**Objective (original):** Move AI inference from the main PC (cannot wipe) to the spare PC (dedicated, wipeable) with RTX 3060 GPU acceleration. Pi 4 continues running Phase 2 code unchanged. Zero code changes, zero risk.
+**Objective (original):** Move AI inference to the JARVIS Project PC (dedicated, wipeable) with RTX 3060 GPU acceleration. Pi 4 continues running Phase 2 code unchanged. Zero code changes, zero risk.
 
 ---
 
-### Week 1: Spare PC Assembly + Linux Setup
+### Week 1: JARVIS Project PC Assembly + Linux Setup
 
 **Tasks:**
-1. Assemble spare PC hardware
+1. Assemble JARVIS Project PC hardware
    - Install Ryzen 5 5600, 16GB DDR4, RTX 3060, NVMe SSD
    - Verify POST, BIOS settings (enable IOMMU, disable secure boot for later seL4 use)
    - Note: Keep UEFI boot mode (not legacy BIOS) — seL4 x86-64 uses EFI
@@ -563,12 +574,12 @@ With Phase 3b Weeks 7-24 software complete, the remaining work is hardware integ
    - Verify: `nvidia-smi` shows RTX 3060, `nvcc --version` shows CUDA
 
 **Deliverables:**
-- Spare PC assembled and booting Linux
+- JARVIS Project PC assembled and booting Linux
 - NVIDIA driver + CUDA working
 - `nvidia-smi` output documented
 
 **Effort:** 6-8 hours
-**Dependencies:** Spare PC parts available
+**Dependencies:** JARVIS Project PC parts available
 **Acceptance:** `nvidia-smi` shows RTX 3060 12GB, CUDA 12.x installed
 
 ---
@@ -602,7 +613,7 @@ With Phase 3b Weeks 7-24 software complete, the remaining work is hardware integ
 ### Week 3: Python Environment + UART Connection
 
 **Tasks:**
-1. Set up Python environment on spare PC
+1. Set up Python environment on JARVIS Project PC
    - Python 3.10+, pyserial, numpy
    - Copy Phase 2 Python files: `uart_ipc_client.py`, `system_bootstrap.py`, `stability_harness.py`, `power_manager.py`, `local_ai_handler.py`
 
@@ -616,7 +627,7 @@ With Phase 3b Weeks 7-24 software complete, the remaining work is hardware integ
    - Run 100-query quick test — verify 100% success rate
 
 **Deliverables:**
-- Python environment working on spare PC
+- Python environment working on JARVIS Project PC
 - UART IPC to Pi 4 verified
 
 **Effort:** 4-6 hours
@@ -625,7 +636,7 @@ With Phase 3b Weeks 7-24 software complete, the remaining work is hardware integ
 
 ---
 
-### Week 4: Stability Testing (Spare PC Host)
+### Week 4: Stability Testing (JARVIS Project PC Host)
 
 **Tasks:**
 1. Run 1-hour stability test
@@ -668,7 +679,7 @@ With Phase 3b Weeks 7-24 software complete, the remaining work is hardware integ
    - Create `phase3/docs/PHASE_3A_RESULTS.md`
 
 4. Prepare Phase 3b environment (Week 6)
-   - Install seL4 build dependencies on spare PC (or main PC for cross-compilation)
+   - Install seL4 build dependencies on JARVIS Project PC (or main PC for cross-compilation)
    - Clone seL4 repositories: kernel, seL4_tools, muslc, sel4runtime, sel4_libs
    - Verify x86-64 PC99 platform builds (on QEMU first)
 
@@ -681,18 +692,18 @@ With Phase 3b Weeks 7-24 software complete, the remaining work is hardware integ
 **Dependencies:** Week 4 complete
 **Acceptance:** 3-day stability 99.7%+, seL4 x86-64 builds for QEMU
 
-**Phase 3a Checkpoint (original):** Spare PC operational, GPU AI validated, UART IPC stable, seL4 build env ready
+**Phase 3a Checkpoint (original):** JARVIS Project PC operational, GPU AI validated, UART IPC stable, seL4 build env ready
 
 ---
 
 ### Compressed Phase 3a: Week 1 — Assembly + Linux + GPU Benchmarks
 
 **Tasks:**
-1. Assemble spare PC (Ryzen 5 5600, 16GB DDR4, RTX 3060, NVMe SSD)
+1. Install RTX 3060 in JARVIS Project PC (Ryzen 7 2700X, 16GB DDR4, X470-F, NVMe SSD)
 2. Install Ubuntu 22.04, NVIDIA drivers + CUDA, verify `nvidia-smi`
 3. Install llama.cpp with CUDA, benchmark: Llama 3.2 1B Q4, 3B Q4, 7B Q4
 4. Install seL4 build dependencies (gcc, cmake, ninja, repo)
-5. Clone seL4 repos, build kernel for x86-64 PC99, verify QEMU boot on spare PC
+5. Clone seL4 repos, build kernel for x86-64 PC99, verify QEMU boot on JARVIS Project PC
 
 **Deliverables:** Hardware validated, GPU benchmark results, seL4 build env ready
 **Effort:** 8-12 hours
@@ -715,7 +726,7 @@ With Phase 3b Weeks 7-24 software complete, the remaining work is hardware integ
 **Acceptance:** JARVIS rootserver 5/5 self-test on real x86 hardware
 **Risk:** AMD Ryzen PC99 compatibility. Mitigation: already tested in QEMU.
 
-**Compressed Phase 3a Checkpoint:** Spare PC operational, GPU benchmarked, seL4 booting on real hardware with self-test PASS.
+**Compressed Phase 3a Checkpoint:** JARVIS Project PC operational, GPU benchmarked, seL4 booting on real hardware with self-test PASS.
 
 ---
 
@@ -743,7 +754,7 @@ With Phase 3b Weeks 7-24 software complete, the remaining work is hardware integ
 3. Research x86 boot on real hardware
    - GRUB2 multiboot or seL4 EFI loader
    - USB boot stick preparation
-   - Serial console setup (USB-serial adapter to spare PC's COM port or USB debug)
+   - Serial console setup (USB-serial adapter to JARVIS Project PC's COM port or USB debug)
 
 **Deliverables:**
 - seL4 x86-64 rootserver building and running on QEMU
@@ -755,7 +766,7 @@ With Phase 3b Weeks 7-24 software complete, the remaining work is hardware integ
 
 ---
 
-### Week 9-10: Boot seL4 on Spare PC (Real Hardware)
+### Week 9-10: Boot seL4 on JARVIS Project PC (Real Hardware)
 
 > **STATUS:** ⏳ PENDING HARDWARE — Boot on real Ryzen hardware. Covered by compressed Week 2 above.
 
@@ -785,7 +796,7 @@ With Phase 3b Weeks 7-24 software complete, the remaining work is hardware integ
 - Serial console working
 
 **Effort:** 12-16 hours (2 weeks)
-**Dependencies:** Week 7-8 complete, spare PC assembled
+**Dependencies:** Week 7-8 complete, JARVIS Project PC assembled
 **Acceptance:** seL4 rootserver running on real hardware, IPC benchmark completed
 **Risk:** AMD Ryzen PC99 compatibility. Mitigation: test on QEMU first, debug IOAPIC/LAPIC issues.
 
@@ -913,7 +924,7 @@ With Phase 3b Weeks 7-24 software complete, the remaining work is hardware integ
 > **STATUS:** ✅ SOFTWARE COMPLETE — RTL8168 NIC driver skeleton (6 tests). Real NIC TX/RX pending. NIC confirmed: Realtek RTL8111H on ASRock B550M-ITX/ac (PCI ID 10EC:8168 — matches driver).
 
 **Tasks:**
-1. Identify NIC on spare PC
+1. Identify NIC on JARVIS Project PC
    - PCI scan for Ethernet controller
    - Likely: Intel I225-V (2.5GbE) or Realtek RTL8111/8125 (common on B550 boards)
    - ASRock B550M-ITX/ac has Realtek RTL8111H (confirmed) — matches nic_rtl8168.c driver
@@ -1627,7 +1638,7 @@ Q4_K_M recommended for Phase 3b — best balance of quality and memory efficienc
 | 6 | 16GB RAM insufficient | Low | Medium | 1B Q4 needs 0.7GB + seL4 <1GB; plenty of headroom; upgrade to 32GB (~$50) |
 | 7 | Stability regression on new platform | Medium | Medium | Pi 4 stays as fallback; staged migration |
 | 8 | seL4 x86 debugging difficult | Medium | Medium | Serial console from Day 1; QEMU for initial development |
-| 9 | Spare PC not assembled (blocks Phase 3) | Medium | High | Phase 3a can temporarily use main PC; Pi 4 keeps running |
+| 9 | JARVIS Project PC not assembled (blocks Phase 3) | Medium | High | Phase 3a can temporarily use main PC; Pi 4 keeps running |
 | 10 | Model file loading from NVMe | Low | Medium | AHCI driver needed first; start with RAM-loaded models during dev |
 
 ### Non-Technical Risks
@@ -1747,7 +1758,7 @@ Adapted from Phase 2 Appendix C.
 | Phase | Items | Cost (AUD) |
 |-------|-------|-----------|
 | Phase 2 | Pi 4 8GB, SD card, power supply, cables, case | $215.82 |
-| Phase 3 | Spare PC (already owned), Optional 32GB DDR4 | $0-50 |
+| Phase 3 | JARVIS Project PC (already owned), Optional 32GB DDR4 | $0-50 |
 | **Total** | | **$215.82 - $265.82** |
 
 ---
@@ -1758,9 +1769,9 @@ Adapted from Phase 2 Appendix C.
 
 *Plan Date: March 18, 2026*
 *Phase 2 Completion: March 18, 2026*
-*Phase 3 Start: Pending spare PC assembly*
+*Phase 3 Start: Pending JARVIS Project PC assembly*
 *Duration: 40-44 weeks (~10 months at 8-12 hrs/week)*
-*Hardware: Spare x86 PC (Ryzen 5 5600, RTX 3060 12GB, 16GB DDR4)*
+*Hardware: JARVIS Project PC (Ryzen 7 2700X, RTX 3060 12GB, 16GB DDR4)*
 *Target: Pure bare-metal seL4 x86-64 + native ggml AI inference*
 *Budget: $0-50 AUD additional*
 *Author: JARVIS Development Team (Solo Developer)*
