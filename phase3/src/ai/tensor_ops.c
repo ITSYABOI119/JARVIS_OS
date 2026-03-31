@@ -179,23 +179,3 @@ void tensor_softmax(const float *in, float *out, int n)
         out[i] *= inv_sum;
 }
 
-void tensor_rope(float *q, float *k, int dim, int head_dim, int pos)
-{
-    /* Rotary Position Embedding — apply rotation to each pair of elements */
-    int half = head_dim / 2;
-    for (int i = 0; i < dim / 2; i++) {
-        int idx = i % half;
-        float freq = 1.0f / powf(10000.0f, (float)(2 * idx) / (float)head_dim);
-        float angle = (float)pos * freq;
-        float cos_a = cosf(angle);
-        float sin_a = sinf(angle);
-
-        float q0 = q[2 * i], q1 = q[2 * i + 1];
-        q[2 * i]     = q0 * cos_a - q1 * sin_a;
-        q[2 * i + 1] = q0 * sin_a + q1 * cos_a;
-
-        float k0 = k[2 * i], k1 = k[2 * i + 1];
-        k[2 * i]     = k0 * cos_a - k1 * sin_a;
-        k[2 * i + 1] = k0 * sin_a + k1 * cos_a;
-    }
-}

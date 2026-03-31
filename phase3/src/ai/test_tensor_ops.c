@@ -138,36 +138,6 @@ static void test_softmax_stability(void)
     CHECK(ok, "NaN/Inf or sum != 1.0");
 }
 
-static void test_rope_pos0(void)
-{
-    TEST("rope: position 0 -> no rotation (identity)");
-    float q[] = {1.0f, 2.0f, 3.0f, 4.0f};
-    float k[] = {5.0f, 6.0f, 7.0f, 8.0f};
-    float q_orig[] = {1.0f, 2.0f, 3.0f, 4.0f};
-    float k_orig[] = {5.0f, 6.0f, 7.0f, 8.0f};
-    tensor_rope(q, k, 4, 4, 0);
-    /* At pos=0, angle=0 for all, cos=1 sin=0, so output=input */
-    int ok = 1;
-    for (int i = 0; i < 4; i++) {
-        if (!CLOSE(q[i], q_orig[i])) ok = 0;
-        if (!CLOSE(k[i], k_orig[i])) ok = 0;
-    }
-    CHECK(ok, "pos=0 should be identity");
-}
-
-static void test_rope_basic(void)
-{
-    TEST("rope: position 1 -> rotation applied");
-    float q[] = {1.0f, 0.0f, 1.0f, 0.0f};
-    float k[] = {1.0f, 0.0f, 1.0f, 0.0f};
-    tensor_rope(q, k, 4, 4, 1);
-    /* At pos=1, freq[0] = 1/10000^(0/4) = 1.0, angle = 1.0
-     * q[0] = 1*cos(1) - 0*sin(1) = cos(1) ~ 0.5403
-     * q[1] = 1*sin(1) + 0*cos(1) = sin(1) ~ 0.8415 */
-    CHECK(CLOSE(q[0], cosf(1.0f)) && CLOSE(q[1], sinf(1.0f)),
-          "wrong rope rotation at pos=1");
-}
-
 /* ---- Main ---- */
 
 int main(void)
@@ -186,8 +156,6 @@ int main(void)
     test_rms_norm();
     test_softmax();
     test_softmax_stability();
-    test_rope_pos0();
-    test_rope_basic();
 
     printf("\n=== Results: %d/%d PASS ===\n", pass, total);
     return (pass == total) ? 0 : 1;

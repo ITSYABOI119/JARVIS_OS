@@ -26,7 +26,4 @@ void tensor_silu(const float *in, float *out, int n);
 void tensor_rms_norm(const float *in, const float *weight, float *out, int n, float eps);
 void tensor_softmax(const float *in, float *out, int n);
 
-/* Positional encoding */
-void tensor_rope(float *q, float *k, int dim, int head_dim, int pos);
-
 #endif
