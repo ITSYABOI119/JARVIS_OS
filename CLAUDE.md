@@ -411,7 +411,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | IPC latency | <100us | 54us (Phase 1), 7ms UART (Phase 2) |
 | Cache hit rate | >80% | 85.7% |
 | AI inference | <500ms | 558ms CPU Phi-3, <100ms Llama 3.2 1B (host PC benchmarks, no log artifact) |
-| Native F32 inference | — | 1.09 tok/s (naive matmul, no SIMD; llama.cpp CPU: 44 tok/s with AVX2) |
+| Native F32 inference | — | 3.08 tok/s (AVX2+FMA; llama.cpp CPU: 44 tok/s with quantized matmul) |
 | Boot time | <60s | ~2s |
 | SHIELD block rate | >90% | 100% harmful blocked, 0% FP (keyword + model-assisted) |
 | Multi-agent routing | >90% | 100% |
@@ -636,6 +636,7 @@ Doc: `phase2/docs/PHASE_2_HARDWARE_PIVOT.md`
 - **Inference:** Quantized zero-copy (Q4_K/Q6_K dequant on-the-fly, ~50MB heap)
 - **Build:** TII seL4 build system + CMake/Ninja
 - **Cross-compiler:** aarch64-linux-gnu-gcc 13.3.0 (ARM64), gcc 13.3.0 (x86-64)
+- **SIMD:** AVX2+FMA for tensor_matmul/rms_norm/qmatmul_vec (`-mavx2 -mfma`); `#ifdef __AVX2__` fallback to scalar
 - **Bootloader:** U-Boot 2026.01 (Pi 4), GRUB2/multiboot (x86 QEMU)
 - **Hardware:** Raspberry Pi 4 (BCM2711, 8GB), JARVIS Project PC (Ryzen 7 2700X, RTX 3060 pending, 16GB), Dev PC (Ryzen 5 5600 pending, RTX 2070, 32GB)
 - **QEMU:** KVM-accelerated x86-64, 4GB RAM, CNode 19 (524K slots)
