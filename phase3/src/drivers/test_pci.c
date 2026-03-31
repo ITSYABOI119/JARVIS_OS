@@ -61,11 +61,15 @@ static uint32_t dev1_cfg[16];
 /* Dev 2: Ethernet NIC — vendor 0x8086, device 0x100E, class 0x02/0x00 */
 static uint32_t dev2_cfg[16];
 
+/* Dev 3: GPU — vendor 0x10DE (NVIDIA), device 0x2544, class 0x03/0x00, 64-bit BAR0 */
+static uint32_t dev3_cfg[16];
+
 static void setup_mock_devices(void)
 {
     memset(dev0_cfg, 0, sizeof(dev0_cfg));
     memset(dev1_cfg, 0, sizeof(dev1_cfg));
     memset(dev2_cfg, 0, sizeof(dev2_cfg));
+    memset(dev3_cfg, 0, sizeof(dev3_cfg));
 
     /* Dev 0: Host bridge */
     dev0_cfg[0]  = 0x12348086;           /* vendor=0x8086, device=0x1234 */
@@ -92,6 +96,16 @@ static void setup_mock_devices(void)
     dev2_cfg[4]  = 0xFEBC0000;           /* BAR0: MMIO at 0xFEBC0000 */
     dev2_cfg[5]  = 0x0000C001;           /* BAR1: I/O at 0xC000 */
     dev2_cfg[15] = 0x00010A00;           /* int_line=0, int_pin=INTA, ... */
+
+    /* Dev 3: GPU with 64-bit BAR (simulates RTX 3060) */
+    dev3_cfg[0]  = 0x254410DE;           /* vendor=0x10DE (NVIDIA), device=0x2544 */
+    dev3_cfg[1]  = 0x00000007;           /* command=0x0007 (IO+Mem+BusMaster) */
+    dev3_cfg[2]  = 0x03000001;           /* class=0x03, sub=0x00, prog=0x00, rev=0x01 */
+    dev3_cfg[3]  = 0x00000000;           /* header_type=0x00 */
+    dev3_cfg[4]  = 0xFC000004;           /* BAR0: 64-bit MMIO (type=0x04), low bits addr=0xFC000000 */
+    dev3_cfg[5]  = 0x00000001;           /* BAR1: upper 32 bits of BAR0 = 0x00000001 -> full addr = 0x1_FC000000 */
+    dev3_cfg[6]  = 0xDE000000;           /* BAR2: 32-bit MMIO at 0xDE000000 */
+    dev3_cfg[15] = 0x00010B00;           /* int_line=0, int_pin=INTA */
 }
 
 /* --- Mock outl/inl --- */
@@ -113,6 +127,7 @@ void outl(uint16_t port, uint32_t val)
         if (dev == 0)      cfg = dev0_cfg;
         else if (dev == 1) cfg = dev1_cfg;
         else if (dev == 2) cfg = dev2_cfg;
+        else if (dev == 3) cfg = dev3_cfg;
         else return;
 
         cfg[off / 4] = val;
@@ -136,6 +151,7 @@ uint32_t inl(uint16_t port)
     if (dev == 0)      cfg = dev0_cfg;
     else if (dev == 1) cfg = dev1_cfg;
     else if (dev == 2) cfg = dev2_cfg;
+    else if (dev == 3) cfg = dev3_cfg;
     else               return 0xFFFFFFFF;
 
     return cfg[off / 4];
@@ -182,13 +198,13 @@ static void test_config_read_address_format(void)
 
 static void test_pci_scan_finds_3_devices(void)
 {
-    TEST("PCI scan finds exactly 3 devices");
+    TEST("PCI scan finds exactly 4 devices");
 
     pci_device_t devices[32];
     memset(devices, 0, sizeof(devices));
     int count = pci_scan(devices, 32);
 
-    CHECK(count == 3, "expected 3 devices");
+    CHECK(count == 4, "expected 4 devices");
 }
 
 static void test_pci_scan_device_fields(void)
@@ -280,8 +296,8 @@ static void test_bar_mmio_address(void)
     pci_scan(devices, 32);
 
     /* AHCI BAR0 = 0xFEBFF000 (MMIO, low 4 bits should be 0) */
-    uint32_t addr = pci_get_bar_address(&devices[1], 0);
-    CHECK(addr == 0xFEBFF000, "AHCI BAR0 address wrong");
+    uint64_t addr = pci_get_bar_address(&devices[1], 0);
+    CHECK(addr == 0xFEBFF000ULL, "AHCI BAR0 address wrong");
 }
 
 static void test_bar_io_address(void)
@@ -293,8 +309,8 @@ static void test_bar_io_address(void)
     pci_scan(devices, 32);
 
     /* AHCI BAR1 = 0x0000E001 -> I/O at 0xE000 (mask low 2 bits) */
-    uint32_t addr = pci_get_bar_address(&devices[1], 1);
-    CHECK(addr == 0x0000E000, "AHCI BAR1 I/O address wrong");
+    uint64_t addr = pci_get_bar_address(&devices[1], 1);
+    CHECK(addr == 0x0000E000ULL, "AHCI BAR1 I/O address wrong");
 }
 
 static void test_bar_type_detection(void)
@@ -351,6 +367,75 @@ static void test_missing_device_skipped(void)
     CHECK(ok, "device with vendor 0xFFFF found in results");
 }
 
+/* ---- 64-bit BAR tests ---- */
+
+static void test_bar_64bit_address(void)
+{
+    TEST("64-bit BAR combines BAR[n] and BAR[n+1]");
+
+    pci_device_t devices[32];
+    memset(devices, 0, sizeof(devices));
+    int count = pci_scan(devices, 32);
+
+    pci_device_t *gpu = pci_find_device(PCI_CLASS_DISPLAY, PCI_SUBCLASS_VGA,
+                                         devices, count);
+    int ok = (gpu != NULL);
+    if (ok) {
+        uint64_t bar0 = pci_get_bar_address(gpu, 0);
+        ok = (bar0 == 0x00000001FC000000ULL);
+    }
+    CHECK(ok, "64-bit BAR address mismatch");
+}
+
+static void test_bar_64bit_detect(void)
+{
+    TEST("pci_is_bar_64bit detects 64-bit type");
+
+    pci_device_t devices[32];
+    memset(devices, 0, sizeof(devices));
+    int count = pci_scan(devices, 32);
+
+    pci_device_t *gpu = pci_find_device(PCI_CLASS_DISPLAY, PCI_SUBCLASS_VGA,
+                                         devices, count);
+    int ok = (gpu != NULL);
+    ok = ok && pci_is_bar_64bit(gpu, 0);   /* BAR0 is 64-bit */
+    ok = ok && !pci_is_bar_64bit(gpu, 2);  /* BAR2 is 32-bit */
+    CHECK(ok, "64-bit detection wrong");
+}
+
+static void test_bar_64bit_upper_bits(void)
+{
+    TEST("BAR[n+1] contains upper 32 bits for 64-bit BAR");
+
+    pci_device_t devices[32];
+    memset(devices, 0, sizeof(devices));
+    int count = pci_scan(devices, 32);
+
+    pci_device_t *gpu = pci_find_device(PCI_CLASS_DISPLAY, PCI_SUBCLASS_VGA,
+                                         devices, count);
+    int ok = (gpu != NULL);
+    ok = ok && (gpu->bar[1] == 0x00000001);
+    CHECK(ok, "upper 32 bits wrong");
+}
+
+static void test_bar_32bit_on_64bit_device(void)
+{
+    TEST("32-bit BAR on 64-bit capable device");
+
+    pci_device_t devices[32];
+    memset(devices, 0, sizeof(devices));
+    int count = pci_scan(devices, 32);
+
+    pci_device_t *gpu = pci_find_device(PCI_CLASS_DISPLAY, PCI_SUBCLASS_VGA,
+                                         devices, count);
+    int ok = (gpu != NULL);
+    if (ok) {
+        uint64_t bar2 = pci_get_bar_address(gpu, 2);
+        ok = (bar2 == 0xDE000000ULL);
+    }
+    CHECK(ok, "32-bit BAR on 64-bit device wrong");
+}
+
 /* ========================================================================
  * Main
  * ======================================================================== */
@@ -372,6 +457,10 @@ int main(void)
     test_bar_type_detection();
     test_bus_master_enable();
     test_missing_device_skipped();
+    test_bar_64bit_address();
+    test_bar_64bit_detect();
+    test_bar_64bit_upper_bits();
+    test_bar_32bit_on_64bit_device();
 
     printf("\n=== Results: %d PASS, %d FAIL (of %d) ===\n",
            pass_count, fail_count, pass_count + fail_count);

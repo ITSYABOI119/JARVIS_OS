@@ -285,7 +285,7 @@ int rtl_nic_probe_pci(rtl_nic_t *nic)
 {
     pci_device_t devices[32];
     int count, i;
-    uint32_t bar_addr;
+    uint64_t bar_addr;
 
     if (!nic)
         return -1;

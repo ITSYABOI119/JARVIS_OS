@@ -183,7 +183,7 @@ pci_device_t *pci_find_device(uint8_t class_code, uint8_t subclass,
  * BAR Helpers
  * ======================================================================== */
 
-uint32_t pci_get_bar_address(pci_device_t *dev, int bar_index)
+uint64_t pci_get_bar_address(pci_device_t *dev, int bar_index)
 {
     if (bar_index < 0 || bar_index > 5)
         return 0;
@@ -191,12 +191,32 @@ uint32_t pci_get_bar_address(pci_device_t *dev, int bar_index)
     uint32_t bar = dev->bar[bar_index];
 
     if (bar & PCI_BAR_IO_SPACE) {
-        /* I/O space BAR: mask off low 2 bits */
-        return bar & PCI_BAR_IO_ADDR_MASK;
-    } else {
-        /* Memory space BAR: mask off low 4 bits */
-        return bar & PCI_BAR_MEM_ADDR_MASK;
+        /* I/O space BAR: 32-bit only */
+        return (uint64_t)(bar & PCI_BAR_IO_ADDR_MASK);
     }
+
+    /* Memory space BAR */
+    uint64_t addr = (uint64_t)(bar & PCI_BAR_MEM_ADDR_MASK);
+
+    /* Check if 64-bit BAR (type bits 2:1 = 10b = 0x04) */
+    if ((bar & PCI_BAR_MEM_TYPE_MASK) == PCI_BAR_MEM_TYPE_64) {
+        if (bar_index < 5) {
+            uint64_t high = (uint64_t)dev->bar[bar_index + 1];
+            addr |= (high << 32);
+        }
+    }
+
+    return addr;
+}
+
+int pci_is_bar_64bit(pci_device_t *dev, int bar_index)
+{
+    if (bar_index < 0 || bar_index > 5)
+        return 0;
+    uint32_t bar = dev->bar[bar_index];
+    if (bar & PCI_BAR_IO_SPACE)
+        return 0;
+    return (bar & PCI_BAR_MEM_TYPE_MASK) == PCI_BAR_MEM_TYPE_64;
 }
 
 int pci_is_bar_mmio(pci_device_t *dev, int bar_index)

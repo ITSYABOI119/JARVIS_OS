@@ -248,7 +248,7 @@ static void test_pci_probe(void)
                 FAIL("expected subclass 0x00 (ethernet)");
 
             /* Verify BAR2 = MMIO base */
-            uint32_t bar2 = pci_get_bar_address(&devices[i], 2);
+            uint64_t bar2 = pci_get_bar_address(&devices[i], 2);
             if (bar2 != MOCK_MMIO_BASE)
                 FAIL("BAR2 address mismatch");
 

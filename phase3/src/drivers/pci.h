@@ -262,7 +262,17 @@ pci_device_t *pci_find_device(uint8_t class_code, uint8_t subclass,
  * Masks off type/flag bits. For 64-bit BARs, combines BAR[n] and BAR[n+1].
  * Returns the physical base address.
  */
-uint32_t pci_get_bar_address(pci_device_t *dev, int bar_index);
+uint64_t pci_get_bar_address(pci_device_t *dev, int bar_index);
+
+/**
+ * pci_is_bar_64bit - Check if a BAR uses 64-bit addressing
+ * @dev:       PCI device
+ * @bar_index: BAR index (0-5)
+ *
+ * Returns non-zero if BAR type bits indicate 64-bit (type = 0x04).
+ * If true, BAR[index+1] contains the upper 32 bits.
+ */
+int pci_is_bar_64bit(pci_device_t *dev, int bar_index);
 
 /**
  * pci_is_bar_mmio - Check if a BAR is memory-mapped I/O
