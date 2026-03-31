@@ -32,6 +32,10 @@
 #include <stdio.h>
 #include <math.h>
 
+#ifdef __AVX2__
+#include <immintrin.h>
+#endif
+
 #define RMS_EPS 1e-5f
 
 /* ============================================================
@@ -108,11 +112,29 @@ static void qmatmul_vec(const qtensor_t *W, const float *x, float *out,
             dequant_row(block_ptr, tmp, block_size, wtype);
 
             const float *xb = x + b * block_size;
+#ifdef __AVX2__
+            {
+                __m256 acc = _mm256_setzero_ps();
+                int j = 0;
+                for (; j + 7 < block_size; j += 8)
+                    acc = _mm256_fmadd_ps(_mm256_loadu_ps(tmp + j),
+                                           _mm256_loadu_ps(xb + j), acc);
+                __m128 hi = _mm256_extractf128_ps(acc, 1);
+                __m128 lo = _mm256_castps256_ps128(acc);
+                __m128 s = _mm_add_ps(lo, hi);
+                s = _mm_hadd_ps(s, s);
+                s = _mm_hadd_ps(s, s);
+                dot += _mm_cvtss_f32(s);
+                for (; j < block_size; j++)
+                    dot += tmp[j] * xb[j];
+            }
+#else
             int j = 0;
             for (; j + 3 < block_size; j += 4)
                 dot += tmp[j]*xb[j] + tmp[j+1]*xb[j+1] + tmp[j+2]*xb[j+2] + tmp[j+3]*xb[j+3];
             for (; j < block_size; j++)
                 dot += tmp[j] * xb[j];
+#endif
 
             block_ptr += block_bytes;
         }

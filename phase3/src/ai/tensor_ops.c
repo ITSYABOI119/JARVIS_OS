@@ -1,13 +1,17 @@
 /*
- * JARVIS AI-OS Phase 3 — Pure C Tensor Operations
+ * JARVIS AI-OS Phase 3 — Tensor Operations
  *
- * Naive implementations — correctness first.
- * TODO: AVX2/FMA SIMD optimization for Ryzen 5 5600.
+ * AVX2/FMA SIMD for matmul and rms_norm (guarded by #ifdef __AVX2__).
+ * Scalar fallback preserved for seL4/CI builds without -mavx2.
  */
 
 #include "tensor_ops.h"
 #include <math.h>
 #include <string.h>
+
+#ifdef __AVX2__
+#include <immintrin.h>
+#endif
 
 void tensor_add(const float *a, const float *b, float *out, int n)
 {
@@ -33,14 +37,46 @@ void tensor_matmul(const float *a, const float *b, float *out, int M, int K, int
     if (N == 1) {
         for (int i = 0; i < M; i++) {
             const float *row = a + (size_t)i * K;
+#ifdef __AVX2__
+            __m256 sum0 = _mm256_setzero_ps();
+            __m256 sum1 = _mm256_setzero_ps();
+            __m256 sum2 = _mm256_setzero_ps();
+            __m256 sum3 = _mm256_setzero_ps();
+            int k = 0;
+            /* 32-wide: 4 accumulators × 8 floats to hide FMA latency */
+            for (; k + 31 < K; k += 32) {
+                sum0 = _mm256_fmadd_ps(_mm256_loadu_ps(row + k),
+                                        _mm256_loadu_ps(b + k), sum0);
+                sum1 = _mm256_fmadd_ps(_mm256_loadu_ps(row + k + 8),
+                                        _mm256_loadu_ps(b + k + 8), sum1);
+                sum2 = _mm256_fmadd_ps(_mm256_loadu_ps(row + k + 16),
+                                        _mm256_loadu_ps(b + k + 16), sum2);
+                sum3 = _mm256_fmadd_ps(_mm256_loadu_ps(row + k + 24),
+                                        _mm256_loadu_ps(b + k + 24), sum3);
+            }
+            sum0 = _mm256_add_ps(_mm256_add_ps(sum0, sum1),
+                                  _mm256_add_ps(sum2, sum3));
+            for (; k + 7 < K; k += 8)
+                sum0 = _mm256_fmadd_ps(_mm256_loadu_ps(row + k),
+                                        _mm256_loadu_ps(b + k), sum0);
+            __m128 hi = _mm256_extractf128_ps(sum0, 1);
+            __m128 lo = _mm256_castps256_ps128(sum0);
+            __m128 s = _mm_add_ps(lo, hi);
+            s = _mm_hadd_ps(s, s);
+            s = _mm_hadd_ps(s, s);
+            float dot = _mm_cvtss_f32(s);
+            for (; k < K; k++)
+                dot += row[k] * b[k];
+            out[i] = dot;
+#else
             float sum = 0.0f;
             int k = 0;
-            /* 4-wide loop unroll for better ILP */
             for (; k + 3 < K; k += 4)
                 sum += row[k]*b[k] + row[k+1]*b[k+1] + row[k+2]*b[k+2] + row[k+3]*b[k+3];
             for (; k < K; k++)
                 sum += row[k] * b[k];
             out[i] = sum;
+#endif
         }
         return;
     }
@@ -91,7 +127,31 @@ void tensor_silu(const float *in, float *out, int n)
 
 void tensor_rms_norm(const float *in, const float *weight, float *out, int n, float eps)
 {
-    /* RMS = sqrt(mean(x^2) + eps); out = (in / RMS) * weight */
+#ifdef __AVX2__
+    __m256 vsum = _mm256_setzero_ps();
+    int i = 0;
+    for (; i + 7 < n; i += 8) {
+        __m256 v = _mm256_loadu_ps(in + i);
+        vsum = _mm256_fmadd_ps(v, v, vsum);
+    }
+    __m128 hi = _mm256_extractf128_ps(vsum, 1);
+    __m128 lo = _mm256_castps256_ps128(vsum);
+    __m128 s = _mm_add_ps(lo, hi);
+    s = _mm_hadd_ps(s, s);
+    s = _mm_hadd_ps(s, s);
+    float sum_sq = _mm_cvtss_f32(s);
+    for (; i < n; i++) sum_sq += in[i] * in[i];
+    float scale = 1.0f / sqrtf(sum_sq / (float)n + eps);
+    __m256 vscale = _mm256_set1_ps(scale);
+    i = 0;
+    for (; i + 7 < n; i += 8) {
+        __m256 v = _mm256_loadu_ps(in + i);
+        __m256 w = _mm256_loadu_ps(weight + i);
+        _mm256_storeu_ps(out + i, _mm256_mul_ps(_mm256_mul_ps(v, vscale), w));
+    }
+    for (; i < n; i++)
+        out[i] = in[i] * scale * weight[i];
+#else
     float sum_sq = 0.0f;
     for (int i = 0; i < n; i++)
         sum_sq += in[i] * in[i];
@@ -99,6 +159,7 @@ void tensor_rms_norm(const float *in, const float *weight, float *out, int n, fl
     float inv_rms = 1.0f / rms;
     for (int i = 0; i < n; i++)
         out[i] = in[i] * inv_rms * weight[i];
+#endif
 }
 
 void tensor_softmax(const float *in, float *out, int n)
