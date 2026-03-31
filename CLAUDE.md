@@ -158,7 +158,7 @@ JARVIS_OS/
 │   │   └── jarvis-sel4-cmake/ # CMakeLists.txt for TII build system
 │   ├── weeks/                  # week27-week47 status docs
 │   └── scripts/               # build_and_copy_kernel.sh, build_installer_image.sh, flash_sd.sh, install_jarvis.sh
-├── phase3/                     # PLANNING (spare x86 PC pending)
+├── phase3/                     # IN PROGRESS (JARVIS Project PC operational)
 │   ├── docs/                   # PHASE_3_KICKOFF.md, HARDWARE_RESEARCH.md, IMPLEMENTATION_PLAN.md
 │   ├── src/
 │   │   ├── ai/                # ggml integration, model loading, inference
