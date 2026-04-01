@@ -262,6 +262,10 @@ K/V norms are similar across prompts (no outliers). This is an inherently ambigu
 
 ## References
 
-- TurboQuant: arXiv 2504.19874 (ICLR 2026)
+- TurboQuant: arXiv 2504.19874 (ICLR 2026) — random rotation + Lloyd-Max + QJL residual for KV cache compression
 - PyTorch ref: github.com/tonbistudio/turboquant-pytorch
 - llama.cpp KV cache: `--cache-type-k` / `--cache-type-v` flags
+
+### Related Work
+
+- **Attention Residuals (AttnRes):** arXiv 2603.15031 (March 2026) — Chen, Zhang, Su et al. Replaces fixed-weight residual connections with softmax attention over preceding layer outputs. Block AttnRes partitions layers into blocks for efficiency. Demonstrated on Kimi Linear (48B total, 3B activated). Relevant because our TurboQuant compounding error analysis shows errors propagating through residual connections across layers — AttnRes's selective layer aggregation could potentially mitigate this by reducing dependence on any single layer's KV cache fidelity.
