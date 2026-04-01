@@ -857,6 +857,68 @@ static void *main_continued(void *arg UNUSED)
         }
     }
 
+    /* ---- TurboQuant A/B Comparison Demo ---- */
+    puts_serial("\n[JARVIS] === TurboQuant A/B Comparison ===\n");
+
+    /* Standard query */
+    puts_serial("[JARVIS] [Standard] Query: \"The seL4 microkernel is\"\n");
+    {
+        const char *q2 = "The seL4 microkernel is";
+        shmem_ipc_send(shared_request_ring, MSG_QUERY, 10,
+                       q2, (uint16_t)strlen(q2));
+        seL4_Signal(req_notif);
+        seL4_Wait(resp_notif, NULL);
+
+        uint8_t rt; uint16_t rs; uint8_t rp[SHMEM_MAX_PAYLOAD]; uint16_t rl;
+        if (shmem_ipc_recv(shared_response_ring, &rt, &rs, rp, &rl) == 0) {
+            rp[rl] = '\0';
+            puts_serial("[JARVIS] [Standard] Response: \"");
+            puts_serial((const char *)rp);
+            puts_serial("\"\n");
+        }
+    }
+
+    /* Enable TQ mode */
+    puts_serial("[JARVIS] Enabling TurboQuant mode...\n");
+    {
+        uint8_t enable = 1;
+        shmem_ipc_send(shared_request_ring, MSG_SET_TQ_MODE, 20, &enable, 1);
+        seL4_Signal(req_notif);
+        seL4_Wait(resp_notif, NULL);
+        uint8_t rt; uint16_t rs; uint8_t rp[SHMEM_MAX_PAYLOAD]; uint16_t rl;
+        shmem_ipc_recv(shared_response_ring, &rt, &rs, rp, &rl);
+    }
+
+    /* TQ query (same prompt) */
+    puts_serial("[JARVIS] [TurboQuant] Query: \"The seL4 microkernel is\"\n");
+    {
+        const char *q3 = "The seL4 microkernel is";
+        shmem_ipc_send(shared_request_ring, MSG_QUERY, 11,
+                       q3, (uint16_t)strlen(q3));
+        seL4_Signal(req_notif);
+        seL4_Wait(resp_notif, NULL);
+
+        uint8_t rt; uint16_t rs; uint8_t rp[SHMEM_MAX_PAYLOAD]; uint16_t rl;
+        if (shmem_ipc_recv(shared_response_ring, &rt, &rs, rp, &rl) == 0) {
+            rp[rl] = '\0';
+            puts_serial("[JARVIS] [TurboQuant] Response: \"");
+            puts_serial((const char *)rp);
+            puts_serial("\"\n");
+        }
+    }
+
+    /* Disable TQ mode */
+    {
+        uint8_t disable = 0;
+        shmem_ipc_send(shared_request_ring, MSG_SET_TQ_MODE, 21, &disable, 1);
+        seL4_Signal(req_notif);
+        seL4_Wait(resp_notif, NULL);
+        uint8_t rt; uint16_t rs; uint8_t rp[SHMEM_MAX_PAYLOAD]; uint16_t rl;
+        shmem_ipc_recv(shared_response_ring, &rt, &rs, rp, &rl);
+    }
+
+    puts_serial("[JARVIS] === A/B Comparison Complete ===\n\n");
+
 idle:
     puts_serial("\n[JARVIS] System idle.\n");
     while (1) { seL4_Yield(); }
