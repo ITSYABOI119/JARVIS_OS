@@ -344,6 +344,9 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | **TurboQuantProd bit sweep: 1B=8.9%, 3B=45.6% (d=128 5x better)** | **DONE** |
 | **TurboQuant mixed bit-width (2.5/3.5-bit, arXiv 2504.19874)** | **DONE** |
 | **TurboQuant × llama.cpp benchmark: 8B/13B/70B (3.5-bit coherent, 2.5-bit fails on 8B/13B)** | **DONE** |
+| **qmodel_tq_forward: quantized weights + TQ compressed KV cache** | **DONE** |
+| **MSG_SET_TQ_MODE: runtime TQ toggle in Process B** | **DONE** |
+| **A/B comparison demo (standard vs TQ) in Process A** | **DONE** |
 
 **Next:** Spare PC assembly (1/7 parts bought). All QEMU-achievable work complete. Ready for real hardware.
 
@@ -397,7 +400,8 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | TurboQuantProd forward pass | — | DONE | llama_forward_tq.c/h | SKIP on CI |
 | TurboQuant mixed bit-width (3.5/2.5-bit) | — | DONE | turboquant.c/h (extended) | 21 PASS |
 | TurboQuant × llama.cpp benchmark | — | DONE | BENCHMARK_RESULTS.md, turboquant-llamacpp.patch | 3 models tested |
-| **Total** | | | **80+ files** | **344 tests, ~21,000 LOC** |
+| Quantized TQ forward pass | — | DONE | qmodel_tq_forward.c/h, qmatmul.h | 3 PASS |
+| **Total** | | | **80+ files** | **347 tests, ~21,000 LOC** |
 
 **What remains for Phase 3b on real hardware:**
 - Boot seL4 on actual Ryzen hardware (vs QEMU)
@@ -614,6 +618,8 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **TurboQuant Benchmark:** `phase3/docs/TURBOQUANT_BENCHMARK.md`
 - **TurboQuant × llama.cpp Results:** `phase3/docs/BENCHMARK_RESULTS.md`
 - **TurboQuant llama.cpp Patch:** `phase3/benchmarks/turboquant-llamacpp.patch`
+- **Quantized TQ Forward:** `phase3/src/ai/qmodel_tq_forward.c/h`
+- **Shared Matmul Header:** `phase3/src/ai/qmatmul.h`
 - **TurboQuant Benchmark Script:** `phase3/scripts/benchmark_tq.sh`
 - **Inference Benchmark:** `phase3/src/ai/bench_inference.c`
 - **GPU Benchmarks:** `phase3/docs/GPU_BENCHMARK_RTX2070.md`

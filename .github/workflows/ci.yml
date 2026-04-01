@@ -389,3 +389,20 @@ jobs:
           phase3/src/ai/tokenizer.c \
           -lm -o /tmp/test_turboquant_gen
         /tmp/test_turboquant_gen
+
+    - name: "Phase 3: Quantized TQ Forward Pass (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 \
+          -I phase3/src/ai \
+          phase3/src/ai/test_qmodel_tq.c \
+          phase3/src/ai/qmodel_tq_forward.c \
+          phase3/src/ai/llama_quant.c \
+          phase3/src/ai/dequant.c \
+          phase3/src/ai/tensor_ops.c \
+          phase3/src/ai/sampling.c \
+          phase3/src/ai/gguf_parser.c \
+          phase3/src/ai/tokenizer.c \
+          phase3/src/ai/turboquant.c \
+          phase3/src/ai/llama_load.c \
+          -lm -o /tmp/test_qmodel_tq
+        /tmp/test_qmodel_tq
