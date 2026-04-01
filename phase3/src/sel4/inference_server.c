@@ -30,6 +30,7 @@
 #include "gguf_vocab.h"
 #include "tokenizer.h"
 #include "sampling.h"
+#include "qmodel_tq_forward.h"
 
 extern const unsigned char _binary_model_gguf_start[];
 extern const unsigned char _binary_model_gguf_end[];
@@ -55,6 +56,51 @@ static void put_dec(uint32_t val)
 /* ---- Process incoming IPC requests ---- */
 
 #ifdef JARVIS_HAS_MODEL
+static void handle_query_tq(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
+                             uint16_t seq, const char *query, uint16_t query_len,
+                             qmodel_t *qm, qmodel_tq_state_t *state, tokenizer_t *tok,
+                             int bos_id) {
+    char query_buf[241];
+    int copy_len = (query_len < 240) ? query_len : 240;
+    memcpy(query_buf, query, copy_len);
+    query_buf[copy_len] = '\0';
+
+    puts_serial("[Process B] [TQ] Processing: tokenize + generate + decode\n");
+
+    int prompt_ids[64];
+    prompt_ids[0] = bos_id;
+    int n_extra = tokenizer_encode(tok, query_buf, prompt_ids + 1, 63);
+    int n_prompt = 1 + (n_extra > 0 ? n_extra : 0);
+
+    /* Reset TQ state */
+    state->pos = 0;
+    memset(state->key_cache, 0,
+           (size_t)state->n_layers * state->max_seq_len * state->n_kv_heads * sizeof(tq_ckey_t));
+    memset(state->val_cache, 0,
+           (size_t)state->n_layers * state->max_seq_len * state->n_kv_heads * sizeof(tq_cval_t));
+
+    int output_ids[64];
+    int n_out = qmodel_tq_generate(qm, state, prompt_ids, n_prompt,
+                                    output_ids, 50, tok->eos_id, 0.0f, 1, 42);
+
+    char response[512];
+    int rlen = tokenizer_decode(tok, output_ids, n_out, response, (int)sizeof(response) - 1);
+    if (rlen < 0) rlen = 0;
+    response[rlen] = '\0';
+
+    int offset = 0;
+    while (offset < rlen) {
+        int chunk = (rlen - offset > SHMEM_MAX_PAYLOAD) ? SHMEM_MAX_PAYLOAD : (rlen - offset);
+        shmem_ipc_send(response_ring, MSG_RESPONSE, seq,
+                       response + offset, (uint16_t)chunk);
+        offset += chunk;
+    }
+    if (rlen == 0) {
+        shmem_ipc_send(response_ring, MSG_RESPONSE, seq, "[TQ: no output]", 15);
+    }
+    seL4_Signal(resp_notif);
+}
+
 static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
                           uint16_t seq, const char *query, uint16_t query_len,
                           qmodel_t *qm, llama_state_t *state, tokenizer_t *tok,
@@ -205,6 +251,14 @@ int main(int argc, char **argv)
         goto idle;
     }
 
+    qmodel_tq_state_t tq_state;
+    bool tq_enabled = false;
+    if (qmodel_tq_alloc_state(&tq_state, &qm.config, 3, 3, 42) == 0) {
+        puts_serial("[Process B] TQ state allocated\n");
+    } else {
+        puts_serial("[Process B] WARNING: TQ state alloc failed\n");
+    }
+
     puts_serial("[Process B] Ready for inference requests\n");
 
     /* Signal Process A that we're ready — eliminates startup race */
@@ -225,9 +279,15 @@ int main(int argc, char **argv)
         while (shmem_ipc_recv(request_ring, &msg_type, &msg_seq, payload, &msg_len) == 0) {
             switch (msg_type) {
             case MSG_QUERY:
-                handle_query(response_ring, resp_notif,
-                             msg_seq, (const char *)payload, msg_len,
-                             &qm, &state, &tok, vocab.bos_id);
+                if (tq_enabled) {
+                    handle_query_tq(response_ring, resp_notif, msg_seq,
+                                   (const char*)payload, msg_len,
+                                   &qm, &tq_state, &tok, vocab.bos_id);
+                } else {
+                    handle_query(response_ring, resp_notif, msg_seq,
+                                (const char*)payload, msg_len,
+                                &qm, &state, &tok, vocab.bos_id);
+                }
                 break;
 
             case MSG_HEARTBEAT:
@@ -239,6 +299,16 @@ int main(int argc, char **argv)
                 /* For now, just echo back ALLOW — full model-assisted SHIELD is future work */
                 uint8_t result = 0; /* SHIELD_ALLOW */
                 shmem_ipc_send(response_ring, MSG_SHIELD_RESULT, msg_seq, &result, 1);
+                seL4_Signal(resp_notif);
+                break;
+            }
+
+            case MSG_SET_TQ_MODE: {
+                tq_enabled = (msg_len > 0 && payload[0] == 1);
+                puts_serial("[Process B] TQ mode: ");
+                puts_serial(tq_enabled ? "ENABLED\n" : "DISABLED\n");
+                uint8_t ack = tq_enabled ? 1 : 0;
+                shmem_ipc_send(response_ring, MSG_STATE_ACK, msg_seq, &ack, 1);
                 seL4_Signal(resp_notif);
                 break;
             }

@@ -35,6 +35,7 @@
 #define MSG_RESET          0x0C
 #define MSG_STATE_CHANGE   0x0D
 #define MSG_STATE_ACK      0x0E
+#define MSG_SET_TQ_MODE    0x0F  /* Enable/disable TurboQuant: payload[0]=1 enable, 0 disable */
 
 /* Ring buffer header (64 bytes, at start of shared page) */
 typedef struct {
