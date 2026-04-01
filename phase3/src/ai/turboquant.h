@@ -41,14 +41,23 @@ typedef struct {
 /* ---- Pre-computed TurboQuant state (one per layer or shared) ---- */
 
 typedef struct {
-    int   d;                /* head_dim */
-    int   key_bits;         /* Total bits for keys (e.g., 3) */
-    int   val_bits;         /* Total bits for values (e.g., 3) */
-    float *Pi;              /* Rotation matrix: d x d orthogonal (Haar-distributed) */
-    float *S;               /* QJL projection matrix: d x d Gaussian */
-    tq_codebook_t key_cb;   /* Lloyd-Max codebook for keys: (key_bits-1) bits */
-    tq_codebook_t val_cb;   /* Lloyd-Max codebook for values: val_bits bits */
-    uint64_t seed;          /* RNG seed used to generate Pi and S */
+    int   d;                    /* head_dim */
+    int   key_bits;             /* Uniform key bits (backward compat) */
+    int   val_bits;             /* Uniform val bits (backward compat) */
+    int   key_bits_high;        /* Bits for outlier key coordinates */
+    int   key_bits_low;         /* Bits for regular key coordinates */
+    int   val_bits_high;        /* Bits for outlier val coordinates */
+    int   val_bits_low;         /* Bits for regular val coordinates */
+    int   n_outlier;            /* Number of outlier coordinates (0 = uniform) */
+    float *Pi;                  /* d×d orthogonal rotation matrix */
+    float *S;                   /* d×d Gaussian QJL projection matrix */
+    tq_codebook_t key_cb;       /* Legacy uniform key codebook */
+    tq_codebook_t val_cb;       /* Legacy uniform val codebook */
+    tq_codebook_t key_cb_high;  /* Outlier key codebook */
+    tq_codebook_t key_cb_low;   /* Regular key codebook */
+    tq_codebook_t val_cb_high;  /* Outlier val codebook */
+    tq_codebook_t val_cb_low;   /* Regular val codebook */
+    uint64_t seed;              /* RNG seed used to generate Pi and S */
 } tq_state_t;
 
 /* ---- Compressed key: (b-1)-bit MSE + 1-bit QJL + norms ----
@@ -91,6 +100,27 @@ typedef struct {
  */
 int tq_init(tq_state_t *state, int head_dim, int key_bits, int val_bits,
             uint64_t seed);
+
+/**
+ * Initialize TurboQuant state with mixed bit-width allocation.
+ * Supports per-coordinate bit allocation: n_outlier coordinates use
+ * key_bits_high/val_bits_high, remaining (head_dim - n_outlier) use
+ * key_bits_low/val_bits_low. Set n_outlier=0 for uniform quantization.
+ *
+ * @param state          Output state struct
+ * @param head_dim       Head dimension (must be <= TQ_MAX_HEAD_DIM and divisible by 8)
+ * @param key_bits_high  Total bits for outlier key coordinates (2-4)
+ * @param key_bits_low   Total bits for regular key coordinates (2-4)
+ * @param val_bits_high  Total bits for outlier value coordinates (1-4)
+ * @param val_bits_low   Total bits for regular value coordinates (1-4)
+ * @param n_outlier      Number of outlier coordinates (0 = uniform)
+ * @param seed           RNG seed for rotation/projection matrix generation
+ * @return 0 on success, -1 on error
+ */
+int tq_init_mixed(tq_state_t *state, int head_dim,
+                  int key_bits_high, int key_bits_low,
+                  int val_bits_high, int val_bits_low,
+                  int n_outlier, uint64_t seed);
 
 /**
  * Compress a key vector (one attention head, d floats).

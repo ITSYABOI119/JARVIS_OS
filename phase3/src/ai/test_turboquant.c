@@ -707,6 +707,58 @@ static int test_bitstream_pack(void) {
     return 0;
 }
 
+/* ================================================================
+ * Test 18: tq_init_mixed — mixed bit-width initialization
+ * ================================================================ */
+static int test_mixed_init(void) {
+    printf("  test_mixed_init...");
+    tq_state_t state;
+
+    /* 3.5-bit config for d=128: 32 outlier coords at 4-bit, 96 at 3-bit */
+    int rc = tq_init_mixed(&state, 128, 4, 3, 4, 3, 32, 42);
+    if (rc != 0) { printf(" FAIL (init returned %d)\n", rc); return 1; }
+    if (state.d != 128) { printf(" FAIL (d)\n"); return 1; }
+    if (state.n_outlier != 32) { printf(" FAIL (n_outlier)\n"); return 1; }
+    if (state.key_bits_high != 4) { printf(" FAIL (kbh)\n"); return 1; }
+    if (state.key_bits_low  != 3) { printf(" FAIL (kbl)\n"); return 1; }
+    if (state.val_bits_high != 4) { printf(" FAIL (vbh)\n"); return 1; }
+    if (state.val_bits_low  != 3) { printf(" FAIL (vbl)\n"); return 1; }
+
+    /* Key high CB should have 2^(4-1)=8 centroids (3 MSE bits for keys) */
+    if (state.key_cb_high.n_centroids != 8) {
+        printf(" FAIL (key_cb_high.n=%d, expected 8)\n", state.key_cb_high.n_centroids); return 1;
+    }
+    /* Key low CB should have 2^(3-1)=4 centroids (2 MSE bits for keys) */
+    if (state.key_cb_low.n_centroids != 4) {
+        printf(" FAIL (key_cb_low.n=%d, expected 4)\n", state.key_cb_low.n_centroids); return 1;
+    }
+    /* Val high CB should have 2^4=16 centroids */
+    if (state.val_cb_high.n_centroids != 16) {
+        printf(" FAIL (val_cb_high.n=%d, expected 16)\n", state.val_cb_high.n_centroids); return 1;
+    }
+    /* Val low CB should have 2^3=8 centroids */
+    if (state.val_cb_low.n_centroids != 8) {
+        printf(" FAIL (val_cb_low.n=%d, expected 8)\n", state.val_cb_low.n_centroids); return 1;
+    }
+
+    /* Pi and S must be allocated */
+    if (!state.Pi || !state.S) { printf(" FAIL (matrices)\n"); return 1; }
+
+    /* Backward compat: uniform init (n_outlier=0) */
+    tq_state_t s2;
+    rc = tq_init(&s2, 64, 3, 3, 42);
+    if (rc != 0) { printf(" FAIL (uniform init)\n"); return 1; }
+    if (s2.n_outlier != 0) { printf(" FAIL (uniform n_outlier)\n"); return 1; }
+    if (s2.key_cb.n_centroids != 4) { /* 2^(3-1)=4 */
+        printf(" FAIL (uniform key_cb.n=%d)\n", s2.key_cb.n_centroids); return 1;
+    }
+
+    tq_free(&state);
+    tq_free(&s2);
+    printf(" PASS\n");
+    return 0;
+}
+
 /* ================================================================ */
 
 int main(void)
@@ -732,6 +784,7 @@ int main(void)
 
     int fails = 0;
     fails += test_bitstream_pack();
+    fails += test_mixed_init();
 
     printf("\n=== Results: %d PASS, %d FAIL ===\n",
            tests_passed, tests_failed + fails);

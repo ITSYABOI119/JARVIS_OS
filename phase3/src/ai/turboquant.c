@@ -383,25 +383,31 @@ int tq_unpack_bits(const uint8_t *buf, int idx, int bits) {
  * Public API
  * ============================================================ */
 
-int tq_init(tq_state_t *state, int head_dim, int key_bits, int val_bits,
-            uint64_t seed)
+int tq_init_mixed(tq_state_t *state, int head_dim,
+                  int key_bits_high, int key_bits_low,
+                  int val_bits_high, int val_bits_low,
+                  int n_outlier, uint64_t seed)
 {
-    if (!state) return -1;
-    if (head_dim <= 0 || head_dim > TQ_MAX_HEAD_DIM || (head_dim & 7)) return -1;
-    if (key_bits < 2 || key_bits > TQ_MAX_BITS) return -1;
-    if (val_bits < 1 || val_bits > TQ_MAX_BITS) return -1;
+    if (!state || head_dim <= 0 || head_dim > TQ_MAX_HEAD_DIM) return -1;
+    if (head_dim % 8 != 0) return -1;
+    if (key_bits_high < 2 || key_bits_high > TQ_MAX_BITS) return -1;
+    if (key_bits_low  < 2 || key_bits_low  > TQ_MAX_BITS) return -1;
+    if (val_bits_high < 1 || val_bits_high > TQ_MAX_BITS) return -1;
+    if (val_bits_low  < 1 || val_bits_low  > TQ_MAX_BITS) return -1;
+    if (n_outlier < 0 || n_outlier > head_dim) return -1;
 
     memset(state, 0, sizeof(*state));
-    state->d = head_dim;
-    state->key_bits = key_bits;
-    state->val_bits = val_bits;
-    state->seed = seed;
+    state->d             = head_dim;
+    state->key_bits      = key_bits_high;  /* backward compat: legacy field mirrors high */
+    state->val_bits      = val_bits_high;  /* backward compat */
+    state->key_bits_high = key_bits_high;
+    state->key_bits_low  = key_bits_low;
+    state->val_bits_high = val_bits_high;
+    state->val_bits_low  = val_bits_low;
+    state->n_outlier     = n_outlier;
+    state->seed          = seed;
 
-    /* Initialize codebooks (Beta-optimal for d=64/128, Gaussian fallback otherwise) */
-    init_codebook(&state->key_cb, key_bits - 1, head_dim);  /* Keys use b-1 bits for MSE */
-    init_codebook(&state->val_cb, val_bits,     head_dim);   /* Values use full b bits */
-
-    /* Allocate matrices */
+    /* Allocate rotation and QJL matrices */
     size_t mat_size = (size_t)head_dim * (size_t)head_dim * sizeof(float);
     state->Pi = (float *)malloc(mat_size);
     state->S  = (float *)malloc(mat_size);
@@ -410,14 +416,33 @@ int tq_init(tq_state_t *state, int head_dim, int key_bits, int val_bits,
         return -1;
     }
 
-    /* Generate random orthogonal rotation matrix */
     uint64_t rng = seed;
     gen_orthogonal_matrix(state->Pi, head_dim, &rng);
+    gen_gaussian_matrix(state->S,  head_dim, &rng);
 
-    /* Generate random Gaussian projection matrix for QJL */
-    gen_gaussian_matrix(state->S, head_dim, &rng);
+    /* Initialize all six codebooks.
+     * Keys use (bits-1) for MSE (1 bit reserved for QJL residual).
+     * Values use full bits for MSE (no QJL).
+     * Legacy key_cb / val_cb mirror the high codebooks for backward compat. */
+    init_codebook(&state->key_cb_high, key_bits_high - 1, head_dim);
+    init_codebook(&state->key_cb_low,  key_bits_low  - 1, head_dim);
+    init_codebook(&state->val_cb_high, val_bits_high,     head_dim);
+    init_codebook(&state->val_cb_low,  val_bits_low,      head_dim);
+
+    /* Legacy uniform codebooks point to the same parameters as high codebooks */
+    init_codebook(&state->key_cb, key_bits_high - 1, head_dim);
+    init_codebook(&state->val_cb, val_bits_high,     head_dim);
 
     return 0;
+}
+
+int tq_init(tq_state_t *state, int head_dim, int key_bits, int val_bits,
+            uint64_t seed)
+{
+    return tq_init_mixed(state, head_dim,
+                         key_bits, key_bits,
+                         val_bits, val_bits,
+                         0, seed);
 }
 
 void tq_free(tq_state_t *state)
