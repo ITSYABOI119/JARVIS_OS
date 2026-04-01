@@ -1,0 +1,1162 @@
+diff --git a/common/arg.cpp b/common/arg.cpp
+index 538d2a4b0..7caae0c57 100644
+--- a/common/arg.cpp
++++ b/common/arg.cpp
+@@ -2018,6 +2018,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+             params.cache_type_v = kv_cache_type_from_str(value);
+         }
+     ).set_env("LLAMA_ARG_CACHE_TYPE_V"));
++    add_opt(common_arg(
++        {"--tq-key-bits"}, "N",
++        string_format("TurboQuant key bits (2.5 or 3.5). 0 = disabled (default: %.1f)", (double)params.tq_key_bits),
++        [](common_params & params, const std::string & value) {
++            params.tq_key_bits = std::stof(value);
++        }
++    ).set_env("LLAMA_ARG_TQ_KEY_BITS"));
++    add_opt(common_arg(
++        {"--tq-val-bits"}, "N",
++        string_format("TurboQuant value bits (2.5 or 3.5). 0 = disabled (default: %.1f)", (double)params.tq_val_bits),
++        [](common_params & params, const std::string & value) {
++            params.tq_val_bits = std::stof(value);
++        }
++    ).set_env("LLAMA_ARG_TQ_VAL_BITS"));
+     add_opt(common_arg(
+         {"--hellaswag"},
+         "compute HellaSwag score over random tasks from datafile supplied with -f",
+diff --git a/common/common.h b/common/common.h
+index 17dc3fb23..3b45717cc 100644
+--- a/common/common.h
++++ b/common/common.h
+@@ -549,6 +549,11 @@ struct common_params {
+     ggml_type cache_type_k = GGML_TYPE_F16; // KV cache data type for the K
+     ggml_type cache_type_v = GGML_TYPE_F16; // KV cache data type for the V
+ 
++    // TurboQuant KV cache compression (local benchmarking)
++    float tq_key_bits     = 0.0f;  // 0 = disabled, 2.5 or 3.5 = paper configs
++    float tq_val_bits     = 0.0f;  // 0 = disabled
++    float tq_outlier_frac = 0.25f; // fraction of coords with +1 bit
++
+     common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
+ 
+     // multimodal models (see tools/mtmd)
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 283823fa9..fb35bcd12 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -148,8 +148,11 @@ add_library(llama
+             models/t5-enc.cpp
+             models/wavtokenizer-dec.cpp
+             models/xverse.cpp
++            turboquant.c
+             )
+ 
++set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/turboquant.c PROPERTIES LANGUAGE C)
++
+ set_target_properties(llama PROPERTIES
+     VERSION ${LLAMA_INSTALL_VERSION}
+     SOVERSION 0
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index 5f57ba9e1..d53a53836 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -8,11 +8,45 @@
+ #include <algorithm>
+ #include <cassert>
+ #include <cmath>
++#include <cstdlib>
+ #include <cstring>
+ #include <limits>
+ #include <map>
+ #include <stdexcept>
+ 
++// TurboQuant compress->decompress roundtrip callback for ggml_map_custom1
++static void tq_roundtrip_op(struct ggml_tensor * dst,
++                             const struct ggml_tensor * src,
++                             int ith, int nth, void * userdata) {
++    const auto * ctx =
++        (const llama_kv_cache::tq_layer_ctx *)userdata;
++
++    const int head_dim = ctx->head_dim;
++    const int n_heads  = ctx->n_kv_heads;
++    const int n_tokens = (int)src->ne[1];
++
++    // Parallelize across tokens
++    for (int t = ith; t < n_tokens; t += nth) {
++        const float * src_row = (const float *)((const char *)src->data + t * src->nb[1]);
++        float * dst_row       = (float *)((char *)dst->data + t * dst->nb[1]);
++
++        for (int h = 0; h < n_heads; h++) {
++            const float * in  = src_row + h * head_dim;
++            float * out       = dst_row + h * head_dim;
++
++            if (ctx->is_key) {
++                tq_ckey_t ck;
++                tq_compress_key(ctx->state, in, &ck);
++                tq_decompress_key(ctx->state, &ck, out);
++            } else {
++                tq_cval_t cv;
++                tq_compress_val(ctx->state, in, &cv);
++                tq_decompress_val(ctx->state, &cv, out);
++            }
++        }
++    }
++}
++
+ //
+ // llama_kv_cache
+ //
+@@ -211,6 +245,46 @@ llama_kv_cache::llama_kv_cache(
+ 
+     const char * LLAMA_KV_CACHE_DEBUG = getenv("LLAMA_KV_CACHE_DEBUG");
+     debug = LLAMA_KV_CACHE_DEBUG ? atoi(LLAMA_KV_CACHE_DEBUG) : 0;
++
++    // TurboQuant initialization from environment variables
++    {
++        const char * tq_k_env = getenv("LLAMA_TQ_KEY_BITS");
++        const char * tq_v_env = getenv("LLAMA_TQ_VAL_BITS");
++        if (tq_k_env && tq_v_env) {
++            float tq_key_bits = (float)atof(tq_k_env);
++            float tq_val_bits = (float)atof(tq_v_env);
++            if (tq_key_bits > 0 && tq_val_bits > 0) {
++                tq_enabled = true;
++                tq_head_dim = (int)hparams.n_embd_head_k();
++                tq_n_kv_heads = (int)hparams.n_head_kv(0);
++
++                float outlier_frac = 0.25f;
++                int n_outlier = (int)(outlier_frac * tq_head_dim);
++                int key_bits_low  = (int)tq_key_bits;
++                int key_bits_high = key_bits_low + (tq_key_bits > key_bits_low ? 1 : 0);
++                int val_bits_low  = (int)tq_val_bits;
++                int val_bits_high = val_bits_low + (tq_val_bits > val_bits_low ? 1 : 0);
++
++                uint32_t n_layer = (uint32_t)layers.size();
++                tq_states.resize(n_layer);
++                tq_ctxs_k.resize(n_layer);
++                tq_ctxs_v.resize(n_layer);
++
++                for (uint32_t il = 0; il < n_layer; il++) {
++                    tq_init_mixed(&tq_states[il], tq_head_dim,
++                                  key_bits_high, key_bits_low,
++                                  val_bits_high, val_bits_low,
++                                  n_outlier, 42 + il);
++
++                    tq_ctxs_k[il] = { &tq_states[il], tq_head_dim, tq_n_kv_heads, true };
++                    tq_ctxs_v[il] = { &tq_states[il], tq_head_dim, tq_n_kv_heads, false };
++                }
++
++                LLAMA_LOG_INFO("%s: TurboQuant enabled: key=%.1f-bit, val=%.1f-bit, outlier=%d/%d, layers=%u\n",
++                               __func__, tq_key_bits, tq_val_bits, n_outlier, tq_head_dim, n_layer);
++            }
++        }
++    }
+ }
+ 
+ void llama_kv_cache::clear(bool data) {
+@@ -1103,6 +1177,14 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
+         k = ggml_reshape_2d(ctx, k, n_embd_gqa, kv_size*n_stream);
+     }
+ 
++    // TurboQuant roundtrip (lossy simulation)
++    if (tq_enabled) {
++        const int32_t ikv_tq = map_layer_ids.at(il);
++        k_cur = ggml_map_custom1(ctx, k_cur, tq_roundtrip_op,
++                                  GGML_N_TASKS_MAX,
++                                  const_cast<void *>(static_cast<const void *>(&tq_ctxs_k[ikv_tq])));
++    }
++
+     // store the current K values into the cache
+     return ggml_set_rows(ctx, k, k_cur, k_idxs);
+ }
+@@ -1123,6 +1205,18 @@ ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggm
+     // we can merge dims 0 and 1
+     GGML_ASSERT(ggml_row_size(v_cur->type, n_embd_head) == v_cur->nb[1]);
+ 
++    // TurboQuant roundtrip (lossy simulation)
++    if (tq_enabled) {
++        const int32_t ikv_tq = map_layer_ids.at(il);
++        // v_cur shape: [n_embd_head, n_head, n_tokens]
++        // Reshape to 2D for the roundtrip: [n_embd_gqa, n_tokens]
++        ggml_tensor * v_flat = ggml_view_2d(ctx, v_cur, n_embd_gqa, n_tokens, v_cur->nb[2], 0);
++        v_flat = ggml_map_custom1(ctx, v_flat, tq_roundtrip_op,
++                                   GGML_N_TASKS_MAX,
++                                   const_cast<void *>(static_cast<const void *>(&tq_ctxs_v[ikv_tq])));
++        v_cur = ggml_reshape_3d(ctx, v_flat, n_embd_head, n_head, n_tokens);
++    }
++
+     const int64_t n_stream = v->ne[2];
+ 
+     // take this branch when FA is enabled (the V cache is not transposed)
+diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
+index 33c78c5f2..1881b9af8 100644
+--- a/src/llama-kv-cache.h
++++ b/src/llama-kv-cache.h
+@@ -1,5 +1,7 @@
+ #pragma once
+ 
++#include "turboquant.h"
++
+ #include "llama-batch.h"
+ #include "llama-graph.h"
+ #include "llama-kv-cells.h"
+@@ -252,6 +254,22 @@ private:
+     // model layer id -> KV cache layer id
+     std::unordered_map<int32_t, int32_t> map_layer_ids;
+ 
++    // TurboQuant state (local benchmarking) -- public struct for callback access
++public:
++    struct tq_layer_ctx {
++        tq_state_t *state;
++        int head_dim;
++        int n_kv_heads;
++        bool is_key;
++    };
++private:
++    bool tq_enabled = false;
++    int tq_head_dim = 0;
++    int tq_n_kv_heads = 0;
++    std::vector<tq_state_t> tq_states;
++    std::vector<tq_layer_ctx> tq_ctxs_k;
++    std::vector<tq_layer_ctx> tq_ctxs_v;
++
+     size_t total_size() const;
+ 
+     size_t size_k_bytes() const;
+diff --git a/src/turboquant.c b/src/turboquant.c
+new file mode 100644
+index 000000000..ec440b709
+--- /dev/null
++++ b/src/turboquant.c
+@@ -0,0 +1,729 @@
++/*
++ * JARVIS AI-OS Phase 3 -- TurboQuant KV Cache Compression
++ *
++ * Algorithm (arXiv 2504.19874):
++ *   1. Generate random orthogonal matrix Pi via QR of Gaussian (Haar measure)
++ *   2. Rotate vector: y = Pi * x
++ *   3. After rotation, coordinates follow Beta((d-1)/2, (d-1)/2) on [-1,1]
++ *   4. Apply Lloyd-Max scalar quantization per coordinate
++ *   5. For keys: add 1-bit QJL residual correction for unbiased inner products
++ *
++ * Pure C11, no C++ dependencies.
++ */
++
++#include "turboquant.h"
++#include <stdlib.h>
++#include <string.h>
++#include <math.h>
++
++/* ============================================================
++ * RNG (XORshift64 + Box-Muller for Gaussian)
++ * ============================================================ */
++
++static uint64_t tq_rng_next(uint64_t *s)
++{
++    uint64_t x = *s;
++    x ^= x << 13;
++    x ^= x >> 7;
++    x ^= x << 17;
++    *s = x;
++    return x;
++}
++
++static float tq_rng_uniform(uint64_t *s)
++{
++    return (float)(tq_rng_next(s) >> 11) / (float)(1ULL << 53);
++}
++
++/* Box-Muller: generate one N(0,1) sample (discards the second) */
++static float tq_rng_gaussian(uint64_t *s)
++{
++    float u1, u2;
++    do { u1 = tq_rng_uniform(s); } while (u1 < 1e-30f);
++    u2 = tq_rng_uniform(s);
++    return sqrtf(-2.0f * logf(u1)) * cosf(2.0f * 3.14159265358979f * u2);
++}
++
++/* ============================================================
++ * F16 conversion (matches dequant.h convention)
++ * ============================================================ */
++
++static uint16_t f32_to_f16(float f)
++{
++    union { float f; uint32_t u; } v;
++    v.f = f;
++    uint32_t s = (v.u >> 16) & 0x8000;
++    int e = ((v.u >> 23) & 0xFF) - 127 + 15;
++    uint32_t m = v.u & 0x007FFFFF;
++    if (e <= 0) return (uint16_t)s;              /* Underflow to zero */
++    if (e >= 31) return (uint16_t)(s | 0x7C00);  /* Overflow to inf */
++    return (uint16_t)(s | ((uint32_t)e << 10) | (m >> 13));
++}
++
++static float f16_to_f32(uint16_t h)
++{
++    uint32_t s = (uint32_t)(h & 0x8000) << 16;
++    uint32_t e = (h >> 10) & 0x1F;
++    uint32_t m = h & 0x03FF;
++    if (e == 0) { if (m == 0) { union { uint32_t u; float f; } r; r.u = s; return r.f; }
++                  e = 1; while (!(m & 0x0400)) { m <<= 1; e--; } m &= 0x03FF; }
++    else if (e == 31) { union { uint32_t u; float f; } r; r.u = s | 0x7F800000 | (m << 13); return r.f; }
++    union { uint32_t u; float f; } r;
++    r.u = s | ((e + 127 - 15) << 23) | (m << 13);
++    return r.f;
++}
++
++/* ============================================================
++ * Lloyd-Max codebooks — Beta-optimal and Gaussian fallback
++ *
++ * After rotating a unit vector by a Haar-distributed orthogonal matrix,
++ * each coordinate follows Beta((d-1)/2, (d-1)/2) on [-1, 1].
++ * These are the exact Lloyd-Max centroids for that distribution.
++ * Source: 0xSero/turboquant (exact numerical integration).
++ *
++ * Gaussian N(0, 1/d) approximation is kept as fallback for unsupported d.
++ * For d=64 the difference is ~2%; for d=128 it's ~1%.
++ * ============================================================ */
++
++/* ---- Beta-optimal centroids for d=64: Beta(31.5, 31.5) ---- */
++static const float BETA_D64_1BIT[] = { -0.10012591f,  0.10012591f };
++static const float BETA_D64_2BIT[] = { -0.18749585f, -0.05651437f,  0.05651437f,  0.18749585f };
++static const float BETA_D64_3BIT[] = {
++    -0.26390745f, -0.16616104f, -0.09382718f, -0.03046731f,
++     0.03046731f,  0.09382718f,  0.16616104f,  0.26390745f
++};
++static const float BETA_D64_4BIT[] = {
++    -0.33074890f, -0.25285796f, -0.19879805f, -0.15487006f,
++    -0.11643835f, -0.08127422f, -0.04806602f, -0.01591089f,
++     0.01591089f,  0.04806602f,  0.08127422f,  0.11643835f,
++     0.15487006f,  0.19879805f,  0.25285796f,  0.33074890f
++};
++
++/* ---- Beta-optimal centroids for d=128: Beta(63.5, 63.5) ---- */
++static const float BETA_D128_1BIT[] = { -0.07066157f,  0.07066157f };
++static const float BETA_D128_2BIT[] = { -0.13304020f, -0.03999095f,  0.03999095f,  0.13304020f };
++static const float BETA_D128_3BIT[] = {
++    -0.18839061f, -0.11813298f, -0.06658060f, -0.02160247f,
++     0.02160247f,  0.06658060f,  0.11813298f,  0.18839061f
++};
++static const float BETA_D128_4BIT[] = {
++    -0.23762719f, -0.18079373f, -0.14176165f, -0.11024707f,
++    -0.08279257f, -0.05774454f, -0.03413403f, -0.01129650f,
++     0.01129650f,  0.03413403f,  0.05774454f,  0.08279257f,
++     0.11024707f,  0.14176165f,  0.18079373f,  0.23762719f
++};
++
++/* ---- Gaussian N(0,1) fallback (for d != 64 and d != 128) ---- */
++static const float LM_1BIT[] = { -0.7979f, 0.7979f };
++static const float LM_2BIT[] = { -1.5104f, -0.4528f, 0.4528f, 1.5104f };
++static const float LM_3BIT[] = { -2.1520f, -1.3440f, -0.7560f, -0.2451f,
++                                   0.2451f,  0.7560f,  1.3440f,  2.1520f };
++static const float LM_4BIT[] = {
++    -2.7326f, -2.0690f, -1.6180f, -1.2562f,
++    -0.9424f, -0.6568f, -0.3881f, -0.1284f,
++     0.1284f,  0.3881f,  0.6568f,  0.9424f,
++     1.2562f,  1.6180f,  2.0690f,  2.7326f
++};
++
++/* Return Beta-optimal centroids for known d, or NULL for Gaussian fallback */
++static const float *beta_centroids(int bits, int head_dim)
++{
++    if (head_dim == 64) {
++        switch (bits) {
++            case 1: return BETA_D64_1BIT;
++            case 2: return BETA_D64_2BIT;
++            case 3: return BETA_D64_3BIT;
++            case 4: return BETA_D64_4BIT;
++        }
++    } else if (head_dim == 128) {
++        switch (bits) {
++            case 1: return BETA_D128_1BIT;
++            case 2: return BETA_D128_2BIT;
++            case 3: return BETA_D128_3BIT;
++            case 4: return BETA_D128_4BIT;
++        }
++    }
++    return NULL;
++}
++
++static void init_codebook(tq_codebook_t *cb, int bits, int head_dim)
++{
++    int n;
++    switch (bits) {
++        case 1: n = 2;  break;
++        case 2: n = 4;  break;
++        case 3: n = 8;  break;
++        case 4: n = 16; break;
++        default: n = 4; bits = 2; break;
++    }
++    cb->bits = bits;
++    cb->n_centroids = n;
++
++    /* Try Beta-optimal centroids first */
++    const float *src = beta_centroids(bits, head_dim);
++    if (src) {
++        /* Pre-computed centroids already in correct range for unit vectors */
++        for (int i = 0; i < n; i++)
++            cb->centroids[i] = src[i];
++    } else {
++        /* Fallback: N(0,1) centroids scaled by 1/sqrt(d) */
++        float sigma = 1.0f / sqrtf((float)head_dim);
++        const float *gauss;
++        switch (bits) {
++            case 1: gauss = LM_1BIT; break;
++            case 2: gauss = LM_2BIT; break;
++            case 3: gauss = LM_3BIT; break;
++            case 4: gauss = LM_4BIT; break;
++            default: gauss = LM_2BIT; break;
++        }
++        for (int i = 0; i < n; i++)
++            cb->centroids[i] = gauss[i] * sigma;
++    }
++
++    /* Decision boundaries: interior midpoints + sentinel (matches quantize_scalar) */
++    for (int i = 0; i < n - 1; i++)
++        cb->boundaries[i] = (cb->centroids[i] + cb->centroids[i + 1]) * 0.5f;
++    cb->boundaries[n - 1] = 1e30f;
++}
++
++/* Find nearest centroid index for a scalar value */
++static int quantize_scalar(const tq_codebook_t *cb, float val)
++{
++    /* Linear search (n_centroids <= 16, branch-free for small n) */
++    for (int i = 0; i < cb->n_centroids - 1; i++) {
++        if (val < cb->boundaries[i])
++            return i;
++    }
++    return cb->n_centroids - 1;
++}
++
++/* ============================================================
++ * Random orthogonal matrix via Modified Gram-Schmidt
++ * ============================================================ */
++
++static float vec_dot(const float *a, const float *b, int n)
++{
++    float s = 0.0f;
++    for (int i = 0; i < n; i++) s += a[i] * b[i];
++    return s;
++}
++
++static float vec_norm(const float *a, int n)
++{
++    return sqrtf(vec_dot(a, a, n));
++}
++
++static void gen_orthogonal_matrix(float *Q, int d, uint64_t *rng)
++{
++    /* Fill with Gaussian random values */
++    for (int i = 0; i < d * d; i++)
++        Q[i] = tq_rng_gaussian(rng);
++
++    /* Modified Gram-Schmidt orthogonalization */
++    for (int j = 0; j < d; j++) {
++        float *col_j = Q + j * d;  /* Column j stored as contiguous d floats */
++
++        /* Subtract projections onto previous columns */
++        for (int i = 0; i < j; i++) {
++            float *col_i = Q + i * d;
++            float proj = vec_dot(col_j, col_i, d);
++            for (int k = 0; k < d; k++)
++                col_j[k] -= proj * col_i[k];
++        }
++
++        /* Normalize */
++        float nrm = vec_norm(col_j, d);
++        if (nrm > 1e-10f) {
++            float inv = 1.0f / nrm;
++            for (int k = 0; k < d; k++)
++                col_j[k] *= inv;
++        }
++    }
++}
++
++static void gen_gaussian_matrix(float *M, int d, uint64_t *rng)
++{
++    for (int i = 0; i < d * d; i++)
++        M[i] = tq_rng_gaussian(rng);
++}
++
++/* ============================================================
++ * Matrix-vector multiply: out = M * x  (M is d x d, column-major)
++ * ============================================================ */
++
++static void matvec(const float *M, const float *x, float *out, int d)
++{
++    /* M stored column-major: M[col * d + row] */
++    memset(out, 0, (size_t)d * sizeof(float));
++    for (int col = 0; col < d; col++) {
++        float xc = x[col];
++        const float *mcol = M + col * d;
++        for (int row = 0; row < d; row++)
++            out[row] += mcol[row] * xc;
++    }
++}
++
++/* Transpose multiply: out = M^T * x */
++static void matvec_t(const float *M, const float *x, float *out, int d)
++{
++    for (int col = 0; col < d; col++) {
++        const float *mcol = M + col * d;
++        out[col] = vec_dot(mcol, x, d);
++    }
++}
++
++/* ============================================================
++ * Bit packing helpers
++ * ============================================================ */
++
++/* Pack 2-bit index at position i */
++static void __attribute__((unused)) pack_2bit(uint8_t *buf, int i, int val)
++{
++    int byte = i >> 2;
++    int shift = (i & 3) * 2;
++    buf[byte] = (uint8_t)((buf[byte] & ~(3 << shift)) | ((val & 3) << shift));
++}
++
++/* Unpack 2-bit index at position i */
++static int __attribute__((unused)) unpack_2bit(const uint8_t *buf, int i)
++{
++    return (buf[i >> 2] >> ((i & 3) * 2)) & 3;
++}
++
++/* Pack 4-bit (nibble) index at position i */
++static void __attribute__((unused)) pack_4bit(uint8_t *buf, int i, int val)
++{
++    int byte = i >> 1;
++    if (i & 1)
++        buf[byte] = (uint8_t)((buf[byte] & 0x0F) | ((val & 0xF) << 4));
++    else
++        buf[byte] = (uint8_t)((buf[byte] & 0xF0) | (val & 0xF));
++}
++
++/* Unpack 4-bit index at position i */
++static int __attribute__((unused)) unpack_4bit(const uint8_t *buf, int i)
++{
++    if (i & 1)
++        return (buf[i >> 1] >> 4) & 0xF;
++    else
++        return buf[i >> 1] & 0xF;
++}
++
++/* Generic index pack/unpack based on bit width (kept for reference) */
++static void __attribute__((unused)) pack_idx(uint8_t *buf, int i, int val, int bits)
++{
++    switch (bits) {
++        case 1: {
++            int byte = i >> 3;
++            int bit  = i & 7;
++            if (val)
++                buf[byte] |= (uint8_t)(1 << bit);
++            else
++                buf[byte] &= (uint8_t)~(1 << bit);
++            break;
++        }
++        case 2: pack_2bit(buf, i, val); break;
++        default: pack_4bit(buf, i, val); break;
++    }
++}
++
++static int __attribute__((unused)) unpack_idx(const uint8_t *buf, int i, int bits)
++{
++    switch (bits) {
++        case 1: return (buf[i >> 3] >> (i & 7)) & 1;
++        case 2: return unpack_2bit(buf, i);
++        default: return unpack_4bit(buf, i);
++    }
++}
++
++/* Pack 1-bit sign at position i */
++static void pack_1bit(uint8_t *buf, int i, int val)
++{
++    int byte = i >> 3;
++    int bit  = i & 7;
++    if (val)
++        buf[byte] |= (uint8_t)(1 << bit);
++    else
++        buf[byte] &= (uint8_t)~(1 << bit);
++}
++
++/* Unpack 1-bit sign at position i (returns 0 or 1) */
++static int unpack_1bit(const uint8_t *buf, int i)
++{
++    return (buf[i >> 3] >> (i & 7)) & 1;
++}
++
++/* General bitstream packer: pack 'bits' bits of 'val' at position 'idx' */
++void tq_pack_bits(uint8_t *buf, int idx, int val, int bits) {
++    int bit_pos = idx * bits;
++    for (int b = 0; b < bits; b++) {
++        int byte_idx = (bit_pos + b) / 8;
++        int bit_idx  = (bit_pos + b) % 8;
++        if (val & (1 << b))
++            buf[byte_idx] |= (uint8_t)(1 << bit_idx);
++        else
++            buf[byte_idx] &= (uint8_t)~(1 << bit_idx);
++    }
++}
++
++/* General bitstream unpacker */
++int tq_unpack_bits(const uint8_t *buf, int idx, int bits) {
++    int bit_pos = idx * bits;
++    int val = 0;
++    for (int b = 0; b < bits; b++) {
++        int byte_idx = (bit_pos + b) / 8;
++        int bit_idx  = (bit_pos + b) % 8;
++        if (buf[byte_idx] & (1 << bit_idx))
++            val |= (1 << b);
++    }
++    return val;
++}
++
++/* ============================================================
++ * Public API
++ * ============================================================ */
++
++int tq_init_mixed(tq_state_t *state, int head_dim,
++                  int key_bits_high, int key_bits_low,
++                  int val_bits_high, int val_bits_low,
++                  int n_outlier, uint64_t seed)
++{
++    if (!state || head_dim <= 0 || head_dim > TQ_MAX_HEAD_DIM) return -1;
++    if (head_dim % 8 != 0) return -1;
++    if (key_bits_high < 2 || key_bits_high > TQ_MAX_BITS) return -1;
++    if (key_bits_low  < 2 || key_bits_low  > TQ_MAX_BITS) return -1;
++    if (val_bits_high < 1 || val_bits_high > TQ_MAX_BITS) return -1;
++    if (val_bits_low  < 1 || val_bits_low  > TQ_MAX_BITS) return -1;
++    if (n_outlier < 0 || n_outlier > head_dim) return -1;
++
++    memset(state, 0, sizeof(*state));
++    state->d             = head_dim;
++    state->key_bits      = key_bits_high;  /* backward compat: legacy field mirrors high */
++    state->val_bits      = val_bits_high;  /* backward compat */
++    state->key_bits_high = key_bits_high;
++    state->key_bits_low  = key_bits_low;
++    state->val_bits_high = val_bits_high;
++    state->val_bits_low  = val_bits_low;
++    state->n_outlier     = n_outlier;
++    state->seed          = seed;
++
++    /* Allocate rotation and QJL matrices */
++    size_t mat_size = (size_t)head_dim * (size_t)head_dim * sizeof(float);
++    state->Pi = (float *)malloc(mat_size);
++    state->S  = (float *)malloc(mat_size);
++    if (!state->Pi || !state->S) {
++        tq_free(state);
++        return -1;
++    }
++
++    uint64_t rng = seed;
++    gen_orthogonal_matrix(state->Pi, head_dim, &rng);
++    gen_gaussian_matrix(state->S,  head_dim, &rng);
++
++    /* Initialize all six codebooks.
++     * Keys use (bits-1) for MSE (1 bit reserved for QJL residual).
++     * Values use full bits for MSE (no QJL).
++     * Legacy key_cb / val_cb mirror the high codebooks for backward compat. */
++    init_codebook(&state->key_cb_high, key_bits_high - 1, head_dim);
++    init_codebook(&state->key_cb_low,  key_bits_low  - 1, head_dim);
++    init_codebook(&state->val_cb_high, val_bits_high,     head_dim);
++    init_codebook(&state->val_cb_low,  val_bits_low,      head_dim);
++
++    /* Legacy uniform codebooks point to the same parameters as high codebooks */
++    init_codebook(&state->key_cb, key_bits_high - 1, head_dim);
++    init_codebook(&state->val_cb, val_bits_high,     head_dim);
++
++    return 0;
++}
++
++int tq_init(tq_state_t *state, int head_dim, int key_bits, int val_bits,
++            uint64_t seed)
++{
++    return tq_init_mixed(state, head_dim,
++                         key_bits, key_bits,
++                         val_bits, val_bits,
++                         0, seed);
++}
++
++void tq_free(tq_state_t *state)
++{
++    if (!state) return;
++    free(state->Pi);
++    free(state->S);
++    memset(state, 0, sizeof(*state));
++}
++
++void tq_compress_key(const tq_state_t *state, const float *key,
++                     tq_ckey_t *out)
++{
++    int d = state->d;
++    float rotated[TQ_MAX_HEAD_DIM];
++    float mse_recon[TQ_MAX_HEAD_DIM];
++
++    /* Compute and store vector norm */
++    float vnorm = vec_norm(key, d);
++    out->vec_norm_f16 = f32_to_f16(vnorm);
++
++    /* Normalize to unit vector for quantization */
++    float unit[TQ_MAX_HEAD_DIM];
++    if (vnorm > 1e-10f) {
++        float inv = 1.0f / vnorm;
++        for (int i = 0; i < d; i++) unit[i] = key[i] * inv;
++    } else {
++        memset(unit, 0, (size_t)d * sizeof(float));
++    }
++
++    /* Stage 1: Rotate */
++    matvec(state->Pi, unit, rotated, d);
++
++    /* Stage 1: Lloyd-Max quantize each coordinate (mixed bit-width when n_outlier > 0) */
++    memset(out->mse_idx, 0, sizeof(out->mse_idx));
++    int bit_offset = 0;
++    for (int i = 0; i < d; i++) {
++        const tq_codebook_t *cb;
++        int mse_bits;
++        if (state->n_outlier > 0 && i < state->n_outlier) {
++            cb = &state->key_cb_high;
++            mse_bits = state->key_bits_high - 1;
++        } else if (state->n_outlier > 0) {
++            cb = &state->key_cb_low;
++            mse_bits = state->key_bits_low - 1;
++        } else {
++            cb = &state->key_cb;
++            mse_bits = state->key_cb.bits;
++        }
++        int idx = quantize_scalar(cb, rotated[i]);
++        /* Pack at explicit bit offset */
++        for (int b = 0; b < mse_bits; b++) {
++            int byte_idx = (bit_offset + b) / 8;
++            int bit_idx  = (bit_offset + b) % 8;
++            if (idx & (1 << b))
++                out->mse_idx[byte_idx] |= (uint8_t)(1 << bit_idx);
++        }
++        rotated[i] = cb->centroids[idx];  /* Quantized value */
++        bit_offset += mse_bits;
++    }
++
++    /* Inverse rotate to get MSE reconstruction (for residual) */
++    matvec_t(state->Pi, rotated, mse_recon, d);
++
++    /* Compute residual r = unit - mse_recon */
++    float residual[TQ_MAX_HEAD_DIM];
++    memset(residual, 0, sizeof(residual));
++    for (int i = 0; i < d; i++)
++        residual[i] = unit[i] - mse_recon[i];
++
++    float rnorm = vec_norm(residual, d);
++    out->residual_norm_f16 = f32_to_f16(rnorm);
++
++    /* Stage 2: QJL — sign(S * residual) */
++    float s_r[TQ_MAX_HEAD_DIM];
++    matvec(state->S, residual, s_r, d);
++
++    memset(out->qjl_signs, 0, sizeof(out->qjl_signs));
++    for (int i = 0; i < d; i++)
++        pack_1bit(out->qjl_signs, i, s_r[i] >= 0.0f ? 1 : 0);
++}
++
++void tq_compress_val(const tq_state_t *state, const float *val,
++                     tq_cval_t *out)
++{
++    int d = state->d;
++    float rotated[TQ_MAX_HEAD_DIM];
++
++    /* Store vector norm */
++    float vnorm = vec_norm(val, d);
++    out->vec_norm_f16 = f32_to_f16(vnorm);
++
++    /* Normalize */
++    float unit[TQ_MAX_HEAD_DIM];
++    if (vnorm > 1e-10f) {
++        float inv = 1.0f / vnorm;
++        for (int i = 0; i < d; i++) unit[i] = val[i] * inv;
++    } else {
++        memset(unit, 0, (size_t)d * sizeof(float));
++    }
++
++    /* Rotate */
++    matvec(state->Pi, unit, rotated, d);
++
++    /* Lloyd-Max quantize (mixed bit-width when n_outlier > 0) */
++    memset(out->mse_idx, 0, sizeof(out->mse_idx));
++    int bit_offset = 0;
++    for (int i = 0; i < d; i++) {
++        const tq_codebook_t *cb;
++        int mse_bits;
++        if (state->n_outlier > 0 && i < state->n_outlier) {
++            cb = &state->val_cb_high;
++            mse_bits = state->val_bits_high;
++        } else if (state->n_outlier > 0) {
++            cb = &state->val_cb_low;
++            mse_bits = state->val_bits_low;
++        } else {
++            cb = &state->val_cb;
++            mse_bits = state->val_cb.bits;
++        }
++        int idx = quantize_scalar(cb, rotated[i]);
++        /* Pack at explicit bit offset */
++        for (int b = 0; b < mse_bits; b++) {
++            int byte_idx = (bit_offset + b) / 8;
++            int bit_idx  = (bit_offset + b) % 8;
++            if (idx & (1 << b))
++                out->mse_idx[byte_idx] |= (uint8_t)(1 << bit_idx);
++        }
++        bit_offset += mse_bits;
++    }
++}
++
++void tq_decompress_key(const tq_state_t *state, const tq_ckey_t *in,
++                       float *key)
++{
++    int d = state->d;
++    float quantized[TQ_MAX_HEAD_DIM];
++
++    /* Reconstruct quantized rotated vector (mixed bit-width when n_outlier > 0) */
++    int bit_offset = 0;
++    for (int i = 0; i < d; i++) {
++        const tq_codebook_t *cb;
++        int mse_bits;
++        if (state->n_outlier > 0 && i < state->n_outlier) {
++            cb = &state->key_cb_high;
++            mse_bits = state->key_bits_high - 1;
++        } else if (state->n_outlier > 0) {
++            cb = &state->key_cb_low;
++            mse_bits = state->key_bits_low - 1;
++        } else {
++            cb = &state->key_cb;
++            mse_bits = state->key_cb.bits;
++        }
++        int idx = 0;
++        for (int b = 0; b < mse_bits; b++) {
++            int byte_idx = (bit_offset + b) / 8;
++            int bit_idx  = (bit_offset + b) % 8;
++            if (in->mse_idx[byte_idx] & (1 << bit_idx))
++                idx |= (1 << b);
++        }
++        if (idx >= cb->n_centroids) idx = cb->n_centroids - 1;
++        quantized[i] = cb->centroids[idx];
++        bit_offset += mse_bits;
++    }
++
++    /* Inverse rotate */
++    float unit_recon[TQ_MAX_HEAD_DIM];
++    matvec_t(state->Pi, quantized, unit_recon, d);
++
++    /* Re-scale by stored norm */
++    float vnorm = f16_to_f32(in->vec_norm_f16);
++    for (int i = 0; i < d; i++)
++        key[i] = unit_recon[i] * vnorm;
++}
++
++void tq_decompress_val(const tq_state_t *state, const tq_cval_t *in,
++                       float *val)
++{
++    int d = state->d;
++    float quantized[TQ_MAX_HEAD_DIM];
++
++    /* Reconstruct quantized rotated vector (mixed bit-width when n_outlier > 0) */
++    int bit_offset = 0;
++    for (int i = 0; i < d; i++) {
++        const tq_codebook_t *cb;
++        int mse_bits;
++        if (state->n_outlier > 0 && i < state->n_outlier) {
++            cb = &state->val_cb_high;
++            mse_bits = state->val_bits_high;
++        } else if (state->n_outlier > 0) {
++            cb = &state->val_cb_low;
++            mse_bits = state->val_bits_low;
++        } else {
++            cb = &state->val_cb;
++            mse_bits = state->val_cb.bits;
++        }
++        int idx = 0;
++        for (int b = 0; b < mse_bits; b++) {
++            int byte_idx = (bit_offset + b) / 8;
++            int bit_idx  = (bit_offset + b) % 8;
++            if (in->mse_idx[byte_idx] & (1 << bit_idx))
++                idx |= (1 << b);
++        }
++        if (idx >= cb->n_centroids) idx = cb->n_centroids - 1;
++        quantized[i] = cb->centroids[idx];
++        bit_offset += mse_bits;
++    }
++
++    /* Inverse rotate */
++    float unit_recon[TQ_MAX_HEAD_DIM];
++    matvec_t(state->Pi, quantized, unit_recon, d);
++
++    /* Re-scale by stored norm */
++    float vnorm = f16_to_f32(in->vec_norm_f16);
++    for (int i = 0; i < d; i++)
++        val[i] = unit_recon[i] * vnorm;
++}
++
++float tq_dot_key(const tq_state_t *state, const float *query,
++                 const tq_ckey_t *ckey)
++{
++    int d = state->d;
++
++    /* Term 1: <query, key_mse_reconstruction> */
++    float key_mse[TQ_MAX_HEAD_DIM];
++    tq_decompress_key(state, ckey, key_mse);
++    float term1 = vec_dot(query, key_mse, d);
++
++    /* Term 2: QJL correction
++     * gamma * sqrt(pi/2) / d * <S*query, signs>
++     * where signs are {-1, +1} from the stored QJL bits */
++    float gamma = f16_to_f32(ckey->residual_norm_f16);
++    float vnorm = f16_to_f32(ckey->vec_norm_f16);
++
++    if (gamma < 1e-10f || vnorm < 1e-10f)
++        return term1;
++
++    /* Compute S * query */
++    float s_q[TQ_MAX_HEAD_DIM];
++    matvec(state->S, query, s_q, d);
++
++    /* <S*query, signs> where signs are +1/-1 */
++    float dot_signs = 0.0f;
++    for (int i = 0; i < d; i++) {
++        float sign_val = unpack_1bit(ckey->qjl_signs, i) ? 1.0f : -1.0f;
++        dot_signs += s_q[i] * sign_val;
++    }
++
++    /* QJL correction: gamma * vnorm * sqrt(pi/2) / d * dot_signs */
++    float sqrt_pi_over_2 = 1.2533141f;  /* sqrt(pi/2) */
++    float term2 = gamma * vnorm * sqrt_pi_over_2 / (float)d * dot_signs;
++
++    return term1 + term2;
++}
++
++size_t tq_compressed_kv_bytes(const tq_state_t *state, int n_kv_heads)
++{
++    int d = state->d;
++    int key_mse_bits = state->key_cb.bits;   /* b-1 */
++    int val_mse_bits = state->val_cb.bits;   /* b */
++
++    /* Key MSE indices: ceil(d * key_mse_bits / 8) */
++    size_t key_mse_bytes = ((size_t)d * (size_t)key_mse_bits + 7) / 8;
++    /* Key: MSE + d/8 (QJL signs) + 2 (rnorm) + 2 (vnorm) */
++    size_t key_bytes = key_mse_bytes + (size_t)(d / 8) + 4;
++
++    /* Value MSE indices: ceil(d * val_mse_bits / 8) */
++    size_t val_mse_bytes = ((size_t)d * (size_t)val_mse_bits + 7) / 8;
++    /* Value: MSE + 2 (vnorm) */
++    size_t val_bytes = val_mse_bytes + 2;
++
++    return (size_t)n_kv_heads * (key_bytes + val_bytes);
++}
++
++size_t tq_baseline_kv_bytes(int head_dim, int n_kv_heads)
++{
++    return (size_t)n_kv_heads * (size_t)head_dim * 2 * sizeof(float);
++}
++
++size_t tq_state_bytes(const tq_state_t *state)
++{
++    size_t mat = (size_t)state->d * (size_t)state->d * sizeof(float);
++    return sizeof(tq_state_t) + 2 * mat;  /* Pi + S */
++}
+diff --git a/src/turboquant.h b/src/turboquant.h
+new file mode 100644
+index 000000000..db6f5f433
+--- /dev/null
++++ b/src/turboquant.h
+@@ -0,0 +1,198 @@
++/*
++ * JARVIS AI-OS Phase 3 -- TurboQuant KV Cache Compression
++ *
++ * Implements the TurboQuant algorithm (arXiv 2504.19874, ICLR 2026):
++ *   Stage 1: Random rotation + Lloyd-Max scalar quantization (MSE-optimal)
++ *   Stage 2: 1-bit QJL residual correction (unbiased inner products for keys)
++ *
++ * Keys use (b-1)-bit MSE + 1-bit QJL = b total bits per coordinate.
++ * Values use b-bit MSE only (softmax averaging mitigates per-vector MSE errors).
++ *
++ * For Llama 3.2 1B (head_dim=64, 3-bit):
++ *   F32 KV cache:   32 MB
++ *   TQ compressed:  ~3.9 MB  (8.2x compression)
++ *
++ * Pure C11, no C++ dependencies.
++ */
++
++#ifndef TURBOQUANT_H
++#define TURBOQUANT_H
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#include <stdint.h>
++#include <stddef.h>
++
++#define TQ_MAX_HEAD_DIM   128
++#define TQ_MAX_BITS       4
++#define TQ_MAX_CENTROIDS  (1 << TQ_MAX_BITS)  /* 16 */
++
++/* Paper configs for d=128 (arXiv 2504.19874 Table 1) */
++/* 3.5-bit effective: 32 outlier at 4b, 96 regular at 3b */
++#define TQ_CONFIG_35BIT(state, seed) \
++    tq_init_mixed((state), 128, 4, 3, 4, 3, 32, (seed))
++
++/* 2.5-bit effective: 32 outlier at 3b, 96 regular at 2b */
++#define TQ_CONFIG_25BIT(state, seed) \
++    tq_init_mixed((state), 128, 3, 2, 3, 2, 32, (seed))
++
++/* ---- Lloyd-Max codebook ---- */
++
++typedef struct {
++    float centroids[TQ_MAX_CENTROIDS];      /* Optimal quantization levels */
++    float boundaries[TQ_MAX_CENTROIDS + 1]; /* Decision boundaries (n+1: edges + midpoints) */
++    int   n_centroids;                      /* 2^bits */
++    int   bits;                             /* Bits per coordinate */
++} tq_codebook_t;
++
++/* ---- Pre-computed TurboQuant state (one per layer or shared) ---- */
++
++typedef struct {
++    int   d;                    /* head_dim */
++    int   key_bits;             /* Uniform key bits (backward compat) */
++    int   val_bits;             /* Uniform val bits (backward compat) */
++    int   key_bits_high;        /* Bits for outlier key coordinates */
++    int   key_bits_low;         /* Bits for regular key coordinates */
++    int   val_bits_high;        /* Bits for outlier val coordinates */
++    int   val_bits_low;         /* Bits for regular val coordinates */
++    int   n_outlier;            /* Number of outlier coordinates (0 = uniform) */
++    float *Pi;                  /* d×d orthogonal rotation matrix */
++    float *S;                   /* d×d Gaussian QJL projection matrix */
++    tq_codebook_t key_cb;       /* Legacy uniform key codebook */
++    tq_codebook_t val_cb;       /* Legacy uniform val codebook */
++    tq_codebook_t key_cb_high;  /* Outlier key codebook */
++    tq_codebook_t key_cb_low;   /* Regular key codebook */
++    tq_codebook_t val_cb_high;  /* Outlier val codebook */
++    tq_codebook_t val_cb_low;   /* Regular val codebook */
++    uint64_t seed;              /* RNG seed used to generate Pi and S */
++} tq_state_t;
++
++/* ---- Compressed key: (b-1)-bit MSE + 1-bit QJL + norms ----
++ *
++ * Sizes depend on bit-width (d=64 examples):
++ *   b=3: 16 (2-bit MSE) + 8 (QJL) + 4 (norms) = 28 bytes vs 256 F32 = 9.1x
++ *   b=4: 32 (3-bit MSE) + 8 (QJL) + 4 (norms) = 44 bytes vs 256 F32 = 5.8x
++ * Struct is max-sized; use tq_compressed_kv_bytes() for actual sizes.
++ */
++typedef struct {
++    uint8_t  mse_idx[TQ_MAX_HEAD_DIM / 2];    /* Up to 4-bit packed (2 per byte) */
++    uint8_t  qjl_signs[TQ_MAX_HEAD_DIM / 8];  /* 1-bit packed, 8 per byte */
++    uint16_t residual_norm_f16;                /* ||x - x_mse||_2 */
++    uint16_t vec_norm_f16;                     /* ||x||_2 */
++} tq_ckey_t;
++
++/* ---- Compressed value: b-bit MSE + norm ----
++ *
++ * For d=64, b=3: 32 + 2 = 34 bytes (vs 256 F32 = 7.5x)
++ * For d=128, b=3: 64 + 2 = 66 bytes (vs 512 F32 = 7.8x)
++ */
++typedef struct {
++    uint8_t  mse_idx[TQ_MAX_HEAD_DIM / 2];    /* 4-bit packed, 2 per byte */
++    uint16_t vec_norm_f16;                     /* ||x||_2 */
++} tq_cval_t;
++
++/* ---- API ---- */
++
++/**
++ * Initialize TurboQuant state.
++ * Generates rotation matrix Pi and QJL matrix S from seed.
++ * Computes Lloyd-Max codebooks for the given bit widths.
++ *
++ * @param state    Output state struct
++ * @param head_dim Head dimension (must be <= TQ_MAX_HEAD_DIM and even)
++ * @param key_bits Total bits per key coordinate (2-4, keys use key_bits-1 for MSE + 1 for QJL)
++ * @param val_bits Bits per value coordinate (1-4, values use all bits for MSE)
++ * @param seed     RNG seed for rotation/projection matrix generation
++ * @return 0 on success, -1 on error
++ */
++int tq_init(tq_state_t *state, int head_dim, int key_bits, int val_bits,
++            uint64_t seed);
++
++/**
++ * Initialize TurboQuant state with mixed bit-width allocation.
++ * Supports per-coordinate bit allocation: n_outlier coordinates use
++ * key_bits_high/val_bits_high, remaining (head_dim - n_outlier) use
++ * key_bits_low/val_bits_low. Set n_outlier=0 for uniform quantization.
++ *
++ * @param state          Output state struct
++ * @param head_dim       Head dimension (must be <= TQ_MAX_HEAD_DIM and divisible by 8)
++ * @param key_bits_high  Total bits for outlier key coordinates (2-4)
++ * @param key_bits_low   Total bits for regular key coordinates (2-4)
++ * @param val_bits_high  Total bits for outlier value coordinates (1-4)
++ * @param val_bits_low   Total bits for regular value coordinates (1-4)
++ * @param n_outlier      Number of outlier coordinates (0 = uniform)
++ * @param seed           RNG seed for rotation/projection matrix generation
++ * @return 0 on success, -1 on error
++ */
++int tq_init_mixed(tq_state_t *state, int head_dim,
++                  int key_bits_high, int key_bits_low,
++                  int val_bits_high, int val_bits_low,
++                  int n_outlier, uint64_t seed);
++
++/**
++ * Compress a key vector (one attention head, d floats).
++ * Applies rotation, Lloyd-Max quantization, and QJL residual correction.
++ */
++void tq_compress_key(const tq_state_t *state, const float *key,
++                     tq_ckey_t *out);
++
++/**
++ * Compress a value vector (one attention head, d floats).
++ * Applies rotation and Lloyd-Max quantization (no QJL).
++ */
++void tq_compress_val(const tq_state_t *state, const float *val,
++                     tq_cval_t *out);
++
++/**
++ * Decompress a key vector (MSE reconstruction only, no QJL correction).
++ * Output is the MSE-optimal reconstruction, not the QJL-corrected version.
++ */
++void tq_decompress_key(const tq_state_t *state, const tq_ckey_t *in,
++                       float *key);
++
++/**
++ * Decompress a value vector.
++ */
++void tq_decompress_val(const tq_state_t *state, const tq_cval_t *in,
++                       float *val);
++
++/**
++ * Compute inner product <query, compressed_key> using QJL correction.
++ * Returns unbiased estimate: <query, key_mse> + gamma * sqrt(pi/2)/d * <S*query, signs>
++ *
++ * This is the key operation for attention score computation.
++ */
++float tq_dot_key(const tq_state_t *state, const float *query,
++                 const tq_ckey_t *ckey);
++
++/**
++ * Compressed size per position per layer (bytes), for n_kv_heads heads.
++ */
++size_t tq_compressed_kv_bytes(const tq_state_t *state, int n_kv_heads);
++
++/**
++ * F32 baseline size per position per layer (bytes), for n_kv_heads heads.
++ */
++size_t tq_baseline_kv_bytes(int head_dim, int n_kv_heads);
++
++/**
++ * TQ state overhead (bytes) — rotation + projection matrices.
++ */
++size_t tq_state_bytes(const tq_state_t *state);
++
++/**
++ * Free TQ state (Pi and S matrices).
++ */
++void tq_free(tq_state_t *state);
++
++/* General bitstream pack/unpack for mixed bit-width configs */
++void tq_pack_bits(uint8_t *buf, int idx, int val, int bits);
++int  tq_unpack_bits(const uint8_t *buf, int idx, int bits);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* TURBOQUANT_H */
