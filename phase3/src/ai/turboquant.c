@@ -277,7 +277,7 @@ static void matvec_t(const float *M, const float *x, float *out, int d)
  * ============================================================ */
 
 /* Pack 2-bit index at position i */
-static void pack_2bit(uint8_t *buf, int i, int val)
+static void __attribute__((unused)) pack_2bit(uint8_t *buf, int i, int val)
 {
     int byte = i >> 2;
     int shift = (i & 3) * 2;
@@ -285,13 +285,13 @@ static void pack_2bit(uint8_t *buf, int i, int val)
 }
 
 /* Unpack 2-bit index at position i */
-static int unpack_2bit(const uint8_t *buf, int i)
+static int __attribute__((unused)) unpack_2bit(const uint8_t *buf, int i)
 {
     return (buf[i >> 2] >> ((i & 3) * 2)) & 3;
 }
 
 /* Pack 4-bit (nibble) index at position i */
-static void pack_4bit(uint8_t *buf, int i, int val)
+static void __attribute__((unused)) pack_4bit(uint8_t *buf, int i, int val)
 {
     int byte = i >> 1;
     if (i & 1)
@@ -301,7 +301,7 @@ static void pack_4bit(uint8_t *buf, int i, int val)
 }
 
 /* Unpack 4-bit index at position i */
-static int unpack_4bit(const uint8_t *buf, int i)
+static int __attribute__((unused)) unpack_4bit(const uint8_t *buf, int i)
 {
     if (i & 1)
         return (buf[i >> 1] >> 4) & 0xF;
@@ -309,8 +309,8 @@ static int unpack_4bit(const uint8_t *buf, int i)
         return buf[i >> 1] & 0xF;
 }
 
-/* Generic index pack/unpack based on bit width */
-static void pack_idx(uint8_t *buf, int i, int val, int bits)
+/* Generic index pack/unpack based on bit width (kept for reference) */
+static void __attribute__((unused)) pack_idx(uint8_t *buf, int i, int val, int bits)
 {
     switch (bits) {
         case 1: {
@@ -327,7 +327,7 @@ static void pack_idx(uint8_t *buf, int i, int val, int bits)
     }
 }
 
-static int unpack_idx(const uint8_t *buf, int i, int bits)
+static int __attribute__((unused)) unpack_idx(const uint8_t *buf, int i, int bits)
 {
     switch (bits) {
         case 1: return (buf[i >> 3] >> (i & 7)) & 1;
@@ -476,13 +476,32 @@ void tq_compress_key(const tq_state_t *state, const float *key,
     /* Stage 1: Rotate */
     matvec(state->Pi, unit, rotated, d);
 
-    /* Stage 1: Lloyd-Max quantize each coordinate */
-    int mse_bits = state->key_cb.bits;
+    /* Stage 1: Lloyd-Max quantize each coordinate (mixed bit-width when n_outlier > 0) */
     memset(out->mse_idx, 0, sizeof(out->mse_idx));
+    int bit_offset = 0;
     for (int i = 0; i < d; i++) {
-        int idx = quantize_scalar(&state->key_cb, rotated[i]);
-        pack_idx(out->mse_idx, i, idx, mse_bits);
-        rotated[i] = state->key_cb.centroids[idx];  /* Quantized value */
+        const tq_codebook_t *cb;
+        int mse_bits;
+        if (state->n_outlier > 0 && i < state->n_outlier) {
+            cb = &state->key_cb_high;
+            mse_bits = state->key_bits_high - 1;
+        } else if (state->n_outlier > 0) {
+            cb = &state->key_cb_low;
+            mse_bits = state->key_bits_low - 1;
+        } else {
+            cb = &state->key_cb;
+            mse_bits = state->key_cb.bits;
+        }
+        int idx = quantize_scalar(cb, rotated[i]);
+        /* Pack at explicit bit offset */
+        for (int b = 0; b < mse_bits; b++) {
+            int byte_idx = (bit_offset + b) / 8;
+            int bit_idx  = (bit_offset + b) % 8;
+            if (idx & (1 << b))
+                out->mse_idx[byte_idx] |= (uint8_t)(1 << bit_idx);
+        }
+        rotated[i] = cb->centroids[idx];  /* Quantized value */
+        bit_offset += mse_bits;
     }
 
     /* Inverse rotate to get MSE reconstruction (for residual) */
@@ -528,11 +547,31 @@ void tq_compress_val(const tq_state_t *state, const float *val,
     /* Rotate */
     matvec(state->Pi, unit, rotated, d);
 
-    /* Lloyd-Max quantize (full val_bits) */
+    /* Lloyd-Max quantize (mixed bit-width when n_outlier > 0) */
     memset(out->mse_idx, 0, sizeof(out->mse_idx));
+    int bit_offset = 0;
     for (int i = 0; i < d; i++) {
-        int idx = quantize_scalar(&state->val_cb, rotated[i]);
-        pack_4bit(out->mse_idx, i, idx);
+        const tq_codebook_t *cb;
+        int mse_bits;
+        if (state->n_outlier > 0 && i < state->n_outlier) {
+            cb = &state->val_cb_high;
+            mse_bits = state->val_bits_high;
+        } else if (state->n_outlier > 0) {
+            cb = &state->val_cb_low;
+            mse_bits = state->val_bits_low;
+        } else {
+            cb = &state->val_cb;
+            mse_bits = state->val_cb.bits;
+        }
+        int idx = quantize_scalar(cb, rotated[i]);
+        /* Pack at explicit bit offset */
+        for (int b = 0; b < mse_bits; b++) {
+            int byte_idx = (bit_offset + b) / 8;
+            int bit_idx  = (bit_offset + b) % 8;
+            if (idx & (1 << b))
+                out->mse_idx[byte_idx] |= (uint8_t)(1 << bit_idx);
+        }
+        bit_offset += mse_bits;
     }
 }
 
@@ -542,12 +581,31 @@ void tq_decompress_key(const tq_state_t *state, const tq_ckey_t *in,
     int d = state->d;
     float quantized[TQ_MAX_HEAD_DIM];
 
-    /* Reconstruct quantized rotated vector */
-    int mse_bits = state->key_cb.bits;
+    /* Reconstruct quantized rotated vector (mixed bit-width when n_outlier > 0) */
+    int bit_offset = 0;
     for (int i = 0; i < d; i++) {
-        int idx = unpack_idx(in->mse_idx, i, mse_bits);
-        if (idx >= state->key_cb.n_centroids) idx = state->key_cb.n_centroids - 1;
-        quantized[i] = state->key_cb.centroids[idx];
+        const tq_codebook_t *cb;
+        int mse_bits;
+        if (state->n_outlier > 0 && i < state->n_outlier) {
+            cb = &state->key_cb_high;
+            mse_bits = state->key_bits_high - 1;
+        } else if (state->n_outlier > 0) {
+            cb = &state->key_cb_low;
+            mse_bits = state->key_bits_low - 1;
+        } else {
+            cb = &state->key_cb;
+            mse_bits = state->key_cb.bits;
+        }
+        int idx = 0;
+        for (int b = 0; b < mse_bits; b++) {
+            int byte_idx = (bit_offset + b) / 8;
+            int bit_idx  = (bit_offset + b) % 8;
+            if (in->mse_idx[byte_idx] & (1 << bit_idx))
+                idx |= (1 << b);
+        }
+        if (idx >= cb->n_centroids) idx = cb->n_centroids - 1;
+        quantized[i] = cb->centroids[idx];
+        bit_offset += mse_bits;
     }
 
     /* Inverse rotate */
@@ -566,11 +624,31 @@ void tq_decompress_val(const tq_state_t *state, const tq_cval_t *in,
     int d = state->d;
     float quantized[TQ_MAX_HEAD_DIM];
 
-    /* Reconstruct quantized rotated vector */
+    /* Reconstruct quantized rotated vector (mixed bit-width when n_outlier > 0) */
+    int bit_offset = 0;
     for (int i = 0; i < d; i++) {
-        int idx = unpack_4bit(in->mse_idx, i);
-        if (idx >= state->val_cb.n_centroids) idx = state->val_cb.n_centroids - 1;
-        quantized[i] = state->val_cb.centroids[idx];
+        const tq_codebook_t *cb;
+        int mse_bits;
+        if (state->n_outlier > 0 && i < state->n_outlier) {
+            cb = &state->val_cb_high;
+            mse_bits = state->val_bits_high;
+        } else if (state->n_outlier > 0) {
+            cb = &state->val_cb_low;
+            mse_bits = state->val_bits_low;
+        } else {
+            cb = &state->val_cb;
+            mse_bits = state->val_cb.bits;
+        }
+        int idx = 0;
+        for (int b = 0; b < mse_bits; b++) {
+            int byte_idx = (bit_offset + b) / 8;
+            int bit_idx  = (bit_offset + b) % 8;
+            if (in->mse_idx[byte_idx] & (1 << bit_idx))
+                idx |= (1 << b);
+        }
+        if (idx >= cb->n_centroids) idx = cb->n_centroids - 1;
+        quantized[i] = cb->centroids[idx];
+        bit_offset += mse_bits;
     }
 
     /* Inverse rotate */

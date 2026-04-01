@@ -759,6 +759,98 @@ static int test_mixed_init(void) {
     return 0;
 }
 
+/* ================================================================
+ * Test 19: Mixed bit-width key compress/decompress roundtrip
+ * ================================================================ */
+static int test_mixed_key_roundtrip(void) {
+    printf("  test_mixed_key_roundtrip...");
+    tq_state_t state;
+    tq_init_mixed(&state, 128, 4, 3, 4, 3, 32, 42);
+
+    float key[128], recon[128];
+    uint64_t rng = 123;
+    int good = 0;
+
+    for (int t = 0; t < 200; t++) {
+        float norm = 0;
+        for (int j = 0; j < 128; j++) {
+            /* Use simple LCG for test randomness */
+            rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+            key[j] = (float)((int64_t)rng) / (float)INT64_MAX;
+            norm += key[j] * key[j];
+        }
+        norm = sqrtf(norm);
+        if (norm < 1e-10f) continue;
+        for (int j = 0; j < 128; j++) key[j] /= norm;
+
+        tq_ckey_t ck;
+        tq_compress_key(&state, key, &ck);
+        tq_decompress_key(&state, &ck, recon);
+
+        float dot = 0, na = 0, nb = 0;
+        for (int j = 0; j < 128; j++) {
+            dot += key[j] * recon[j];
+            na += key[j] * key[j];
+            nb += recon[j] * recon[j];
+        }
+        float cos_sim = dot / (sqrtf(na) * sqrtf(nb) + 1e-10f);
+        if (cos_sim > 0.90f) good++;
+    }
+
+    tq_free(&state);
+    if (good < 170) {
+        printf(" FAIL (%d/200 above 0.90 cosine)\n", good);
+        return 1;
+    }
+    printf(" PASS (%d/200 above 0.90 cosine)\n", good);
+    return 0;
+}
+
+/* ================================================================
+ * Test 20: Mixed bit-width value compress/decompress roundtrip
+ * ================================================================ */
+static int test_mixed_val_roundtrip(void) {
+    printf("  test_mixed_val_roundtrip...");
+    tq_state_t state;
+    tq_init_mixed(&state, 128, 4, 3, 4, 3, 32, 42);
+
+    float val[128], recon[128];
+    uint64_t rng = 456;
+    int good = 0;
+
+    for (int t = 0; t < 200; t++) {
+        float norm = 0;
+        for (int j = 0; j < 128; j++) {
+            rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+            val[j] = (float)((int64_t)rng) / (float)INT64_MAX;
+            norm += val[j] * val[j];
+        }
+        norm = sqrtf(norm);
+        if (norm < 1e-10f) continue;
+
+        tq_cval_t cv;
+        tq_compress_val(&state, val, &cv);
+        tq_decompress_val(&state, &cv, recon);
+
+        float dot = 0, na = 0, nb = 0;
+        for (int j = 0; j < 128; j++) {
+            dot += val[j] * recon[j];
+            na += val[j] * val[j];
+            nb += recon[j] * recon[j];
+        }
+        float cos_sim = dot / (sqrtf(na) * sqrtf(nb) + 1e-10f);
+        if (cos_sim > 0.92f) good++;
+    }
+
+    tq_free(&state);
+    if (good < 170) {
+        printf(" FAIL (%d/200 above 0.92 cosine)\n", good);
+        return 1;
+    }
+    printf(" PASS (%d/200 above 0.92 cosine)\n", good);
+    return 0;
+}
+
 /* ================================================================ */
 
 int main(void)
@@ -785,6 +877,8 @@ int main(void)
     int fails = 0;
     fails += test_bitstream_pack();
     fails += test_mixed_init();
+    fails += test_mixed_key_roundtrip();
+    fails += test_mixed_val_roundtrip();
 
     printf("\n=== Results: %d PASS, %d FAIL ===\n",
            tests_passed, tests_failed + fails);
