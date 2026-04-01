@@ -18,6 +18,10 @@
 #ifndef TURBOQUANT_H
 #define TURBOQUANT_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 #include <stddef.h>
 
@@ -143,5 +147,9 @@ size_t tq_state_bytes(const tq_state_t *state);
  * Free TQ state (Pi and S matrices).
  */
 void tq_free(tq_state_t *state);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* TURBOQUANT_H */

@@ -13,7 +13,7 @@
 #include "llama_model.h"
 #include "turboquant.h"
 
-#define TQ_MAX_LAYERS 32
+#define TQ_MAX_LAYERS 128
 
 /* TQ-integrated inference state.
  * Replaces F32 key_cache/value_cache with compressed representations.
