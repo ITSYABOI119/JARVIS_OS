@@ -341,6 +341,8 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | **CNode=22, morecore=128MB, allocator pools scaled for 230K frames** | **DONE** |
 | **TurboQuant Beta-optimal codebooks (MSE/QJL verified vs paper)** | **DONE** |
 | **TurboQuantProd bit sweep: 1B=8.9%, 3B=45.6% (d=128 5x better)** | **DONE** |
+| **TurboQuant mixed bit-width (2.5/3.5-bit, arXiv 2504.19874)** | **DONE** |
+| **TurboQuant × llama.cpp benchmark: 8B/13B/70B (3.5-bit coherent, 2.5-bit fails on 8B/13B)** | **DONE** |
 
 **Next:** Spare PC assembly (1/7 parts bought). All QEMU-achievable work complete. Ready for real hardware.
 
@@ -388,11 +390,13 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | GPT-2 full byte mapping | — | DONE | tokenizer.c | 12 PASS |
 | Tiled matmul + unroll | — | DONE | tensor_ops.c, llama_quant.c | 14+10 PASS |
 | RDTSC timing (Stage 5) | — | DONE | main_x86.c | 5/5 stages PASS |
-| TurboQuant KV compression | — | DONE | turboquant.c/h | 15 PASS |
+| TurboQuant KV compression | — | DONE | turboquant.c/h | 21 PASS |
 | TurboQuant real-data validation | — | DONE | test_turboquant_real.c | SKIP on CI (model needed) |
 | TurboQuant generation quality | — | DONE | test_turboquant_gen.c | FAIL (all configs, 1B) |
 | TurboQuantProd forward pass | — | DONE | llama_forward_tq.c/h | SKIP on CI |
-| **Total** | | | **80+ files** | **338 tests, ~20,000 LOC** |
+| TurboQuant mixed bit-width (3.5/2.5-bit) | — | DONE | turboquant.c/h (extended) | 21 PASS |
+| TurboQuant × llama.cpp benchmark | — | DONE | BENCHMARK_RESULTS.md, turboquant-llamacpp.patch | 3 models tested |
+| **Total** | | | **80+ files** | **344 tests, ~21,000 LOC** |
 
 **What remains for Phase 3b on real hardware:**
 - Boot seL4 on actual Ryzen hardware (vs QEMU)
