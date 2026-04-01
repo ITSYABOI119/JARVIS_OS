@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 static int g_pass = 0;
 static int g_fail = 0;
@@ -150,16 +151,77 @@ static void test_memory_savings(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* Test 3: forward pass smoke test — no crash, non-zero logits         */
+/* ------------------------------------------------------------------ */
+static int test_forward_no_crash(void) {
+    printf("  test_forward_no_crash...");
+    llama_config_t config = {
+        .dim = 16, .n_layers = 1, .n_heads = 2, .n_kv_heads = 2,
+        .head_dim = 8, .hidden_dim = 32, .vocab_size = 10,
+        .max_seq_len = 8, .rope_theta = 10000.0f
+    };
+    qmodel_t qm;
+    memset(&qm, 0, sizeof(qm));
+    qm.config = config;
+    /* Create minimal F32 "weights" */
+    size_t embed_bytes = 10 * 16 * sizeof(float);
+    float *embed_data = (float *)calloc(1, embed_bytes);
+    for (int i = 0; i < 10 * 16; i++) embed_data[i] = 0.01f * (i % 7 - 3);
+    qm.token_embed = (qtensor_t){ .data = embed_data, .type = 0, .n_elements = 10*16, .n_bytes = embed_bytes };
+    float *norm_data = (float *)calloc(16, sizeof(float));
+    for (int i = 0; i < 16; i++) norm_data[i] = 1.0f;
+    qm.output_norm = (qtensor_t){ .data = norm_data, .type = 0, .n_elements = 16, .n_bytes = 16*sizeof(float) };
+    qm.output_weight = qm.token_embed;
+    qm.rope_freqs = NULL;
+    qlayer_t layer;
+    memset(&layer, 0, sizeof(layer));
+    float *wq_data = (float *)calloc(16*16, sizeof(float));
+    for (int i = 0; i < 16*16; i++) wq_data[i] = (i/16 == i%16) ? 0.1f : 0.0f;
+    qtensor_t wq = { .data = wq_data, .type = 0, .n_elements = 16*16, .n_bytes = 16*16*sizeof(float) };
+    float *an_data = (float *)calloc(16, sizeof(float));
+    for (int i = 0; i < 16; i++) an_data[i] = 1.0f;
+    layer.attn_norm = (qtensor_t){ .data = an_data, .type = 0, .n_elements = 16, .n_bytes = 16*sizeof(float) };
+    layer.wq = wq; layer.wk = wq; layer.wv = wq; layer.wo = wq;
+    layer.ffn_norm = layer.attn_norm;
+    float *wg_data = (float *)calloc(32*16, sizeof(float));
+    for (int i = 0; i < 32*16; i++) wg_data[i] = 0.01f;
+    layer.w_gate = (qtensor_t){ .data = wg_data, .type = 0, .n_elements = 32*16, .n_bytes = 32*16*sizeof(float) };
+    layer.w_up = layer.w_gate;
+    float *wd_data = (float *)calloc(16*32, sizeof(float));
+    for (int i = 0; i < 16*32; i++) wd_data[i] = 0.01f;
+    layer.w_down = (qtensor_t){ .data = wd_data, .type = 0, .n_elements = 16*32, .n_bytes = 16*32*sizeof(float) };
+    qm.layers = &layer;
+    qm.loaded = true;
+
+    qmodel_tq_state_t state;
+    if (qmodel_tq_alloc_state(&state, &config, 3, 3, 42) != 0) { printf(" FAIL (alloc)\n"); return 1; }
+    qmodel_tq_forward(&qm, &state, 1);
+    float sum = 0;
+    for (int i = 0; i < 10; i++) sum += fabsf(state.logits[i]);
+    if (sum < 1e-10f) { printf(" FAIL (zero logits)\n"); qmodel_tq_free_state(&state); return 1; }
+    qmodel_tq_forward(&qm, &state, 2);
+    if (state.pos != 2) { printf(" FAIL (pos=%d)\n", state.pos); qmodel_tq_free_state(&state); return 1; }
+    qmodel_tq_free_state(&state);
+    free(embed_data); free(norm_data); free(wq_data); free(an_data); free(wg_data); free(wd_data);
+    printf(" PASS\n");
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* main                                                                 */
 /* ------------------------------------------------------------------ */
 int main(void)
 {
     printf("=== test_qmodel_tq ===\n\n");
 
+    int fails = 0;
+
     test_alloc_free();
     printf("\n");
     test_memory_savings();
+    printf("\n");
+    fails += test_forward_no_crash();
 
-    printf("\n=== Results: %d PASS, %d FAIL ===\n", g_pass, g_fail);
-    return (g_fail == 0) ? 0 : 1;
+    printf("\n=== Results: %d PASS, %d FAIL ===\n", g_pass + (fails == 0 ? 1 : 0), g_fail + fails);
+    return (g_fail == 0 && fails == 0) ? 0 : 1;
 }
