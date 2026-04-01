@@ -24,6 +24,7 @@
  */
 
 #include "llama_quant.h"
+#include "qmatmul.h"
 #include "dequant.h"
 #include "tensor_ops.h"
 #include "sampling.h"
@@ -65,8 +66,8 @@ static int resolve_qtensor(qtensor_t *qt, const gguf_ctx_t *ctx,
  * For F32 weights (rare — only used if a weight tensor happens to be F32),
  * we fall through to a direct dot product without dequant overhead.
  */
-static void qmatmul_vec(const qtensor_t *W, const float *x, float *out,
-                         int M, int K)
+void qmatmul_vec(const qtensor_t *W, const float *x, float *out,
+                  int M, int K)
 {
     const ggml_type_t wtype = (ggml_type_t)W->type;
 
@@ -126,8 +127,8 @@ static void qmatmul_vec(const qtensor_t *W, const float *x, float *out,
  * Embedding is [vocab_size x dim] in quantized form (typically Q6_K).
  * Extracts and dequantizes a single row for the given token ID.
  */
-static void qembed_lookup(const qtensor_t *embed, int token, float *out,
-                           int dim)
+void qembed_lookup(const qtensor_t *embed, int token, float *out,
+                   int dim)
 {
     const ggml_type_t etype = (ggml_type_t)embed->type;
 
