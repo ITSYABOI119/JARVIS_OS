@@ -29,6 +29,15 @@ extern "C" {
 #define TQ_MAX_BITS       4
 #define TQ_MAX_CENTROIDS  (1 << TQ_MAX_BITS)  /* 16 */
 
+/* Paper configs for d=128 (arXiv 2504.19874 Table 1) */
+/* 3.5-bit effective: 32 outlier at 4b, 96 regular at 3b */
+#define TQ_CONFIG_35BIT(state, seed) \
+    tq_init_mixed((state), 128, 4, 3, 4, 3, 32, (seed))
+
+/* 2.5-bit effective: 32 outlier at 3b, 96 regular at 2b */
+#define TQ_CONFIG_25BIT(state, seed) \
+    tq_init_mixed((state), 128, 3, 2, 3, 2, 32, (seed))
+
 /* ---- Lloyd-Max codebook ---- */
 
 typedef struct {

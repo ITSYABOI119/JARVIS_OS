@@ -851,6 +851,56 @@ static int test_mixed_val_roundtrip(void) {
     return 0;
 }
 
+/* ================================================================
+ * Test 21: Paper configs (TQ_CONFIG_35BIT/25BIT) and 3.5-bit quality
+ * ================================================================ */
+static int test_paper_configs(void) {
+    printf("  test_paper_configs...");
+    tq_state_t s35, s25;
+
+    if (TQ_CONFIG_35BIT(&s35, 42) != 0) { printf(" FAIL (3.5-bit init)\n"); return 1; }
+    if (TQ_CONFIG_25BIT(&s25, 42) != 0) { printf(" FAIL (2.5-bit init)\n"); return 1; }
+
+    /* Verify 3.5-bit codebook setup */
+    if (s35.key_bits_high != 4 || s35.key_bits_low != 3) { printf(" FAIL (3.5 key bits)\n"); return 1; }
+    if (s35.n_outlier != 32 || s35.d != 128) { printf(" FAIL (3.5 config)\n"); return 1; }
+
+    /* Verify 2.5-bit codebook setup */
+    if (s25.key_bits_high != 3 || s25.key_bits_low != 2) { printf(" FAIL (2.5 key bits)\n"); return 1; }
+    if (s25.n_outlier != 32 || s25.d != 128) { printf(" FAIL (2.5 config)\n"); return 1; }
+
+    /* 3.5-bit quality test: d=128 key roundtrip should be high quality */
+    float key[128], recon[128];
+    uint64_t rng = 999;
+    int good = 0;
+    for (int t = 0; t < 200; t++) {
+        float norm = 0;
+        for (int j = 0; j < 128; j++) {
+            rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+            key[j] = (float)((int64_t)rng) / (float)INT64_MAX;
+            norm += key[j] * key[j];
+        }
+        norm = sqrtf(norm);
+        if (norm < 1e-10f) continue;
+        for (int j = 0; j < 128; j++) key[j] /= norm;
+
+        tq_ckey_t ck;
+        tq_compress_key(&s35, key, &ck);
+        tq_decompress_key(&s35, &ck, recon);
+
+        float dot = 0, na = 0, nb = 0;
+        for (int j = 0; j < 128; j++) { dot += key[j]*recon[j]; na += key[j]*key[j]; nb += recon[j]*recon[j]; }
+        if (dot / (sqrtf(na)*sqrtf(nb) + 1e-10f) > 0.95f) good++;
+    }
+
+    tq_free(&s35);
+    tq_free(&s25);
+
+    if (good < 120) { printf(" FAIL (3.5-bit quality: %d/200 > 0.95 cosine)\n", good); return 1; }
+    printf(" PASS (3.5-bit: %d/200 > 0.95 cosine)\n", good);
+    return 0;
+}
+
 /* ================================================================ */
 
 int main(void)
@@ -879,6 +929,7 @@ int main(void)
     fails += test_mixed_init();
     fails += test_mixed_key_roundtrip();
     fails += test_mixed_val_roundtrip();
+    fails += test_paper_configs();
 
     printf("\n=== Results: %d PASS, %d FAIL ===\n",
            tests_passed, tests_failed + fails);
