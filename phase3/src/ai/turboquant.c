@@ -353,6 +353,32 @@ static int unpack_1bit(const uint8_t *buf, int i)
     return (buf[i >> 3] >> (i & 7)) & 1;
 }
 
+/* General bitstream packer: pack 'bits' bits of 'val' at position 'idx' */
+void tq_pack_bits(uint8_t *buf, int idx, int val, int bits) {
+    int bit_pos = idx * bits;
+    for (int b = 0; b < bits; b++) {
+        int byte_idx = (bit_pos + b) / 8;
+        int bit_idx  = (bit_pos + b) % 8;
+        if (val & (1 << b))
+            buf[byte_idx] |= (uint8_t)(1 << bit_idx);
+        else
+            buf[byte_idx] &= (uint8_t)~(1 << bit_idx);
+    }
+}
+
+/* General bitstream unpacker */
+int tq_unpack_bits(const uint8_t *buf, int idx, int bits) {
+    int bit_pos = idx * bits;
+    int val = 0;
+    for (int b = 0; b < bits; b++) {
+        int byte_idx = (bit_pos + b) / 8;
+        int bit_idx  = (bit_pos + b) % 8;
+        if (buf[byte_idx] & (1 << bit_idx))
+            val |= (1 << b);
+    }
+    return val;
+}
+
 /* ============================================================
  * Public API
  * ============================================================ */

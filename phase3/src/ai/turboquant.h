@@ -148,6 +148,10 @@ size_t tq_state_bytes(const tq_state_t *state);
  */
 void tq_free(tq_state_t *state);
 
+/* General bitstream pack/unpack for mixed bit-width configs */
+void tq_pack_bits(uint8_t *buf, int idx, int val, int bits);
+int  tq_unpack_bits(const uint8_t *buf, int idx, int bits);
+
 #ifdef __cplusplus
 }
 #endif

@@ -657,6 +657,56 @@ static void test_qjl_unbiased(void)
     tq_free(&state);
 }
 
+/* ================================================================
+ * Test 17: General bitstream pack/unpack (tq_pack_bits / tq_unpack_bits)
+ * ================================================================ */
+static int test_bitstream_pack(void) {
+    printf("  test_bitstream_pack...");
+    uint8_t buf[64];
+    memset(buf, 0, sizeof(buf));
+
+    /* Pack 10 values at 3 bits each */
+    for (int i = 0; i < 10; i++)
+        tq_pack_bits(buf, i, i % 8, 3);
+
+    /* Verify roundtrip */
+    for (int i = 0; i < 10; i++) {
+        int val = tq_unpack_bits(buf, i, 3);
+        if (val != i % 8) {
+            printf(" FAIL (idx %d: got %d, expected %d)\n", i, val, i % 8);
+            return 1;
+        }
+    }
+
+    /* Test 1-bit */
+    memset(buf, 0, sizeof(buf));
+    tq_pack_bits(buf, 0, 1, 1);
+    tq_pack_bits(buf, 1, 0, 1);
+    tq_pack_bits(buf, 7, 1, 1);
+    if (tq_unpack_bits(buf, 0, 1) != 1 || tq_unpack_bits(buf, 1, 1) != 0 || tq_unpack_bits(buf, 7, 1) != 1) {
+        printf(" FAIL (1-bit)\n"); return 1;
+    }
+
+    /* Test 2-bit */
+    memset(buf, 0, sizeof(buf));
+    tq_pack_bits(buf, 0, 3, 2);
+    tq_pack_bits(buf, 3, 2, 2);
+    if (tq_unpack_bits(buf, 0, 2) != 3 || tq_unpack_bits(buf, 3, 2) != 2) {
+        printf(" FAIL (2-bit)\n"); return 1;
+    }
+
+    /* Test 4-bit */
+    memset(buf, 0, sizeof(buf));
+    tq_pack_bits(buf, 0, 15, 4);
+    tq_pack_bits(buf, 1, 9, 4);
+    if (tq_unpack_bits(buf, 0, 4) != 15 || tq_unpack_bits(buf, 1, 4) != 9) {
+        printf(" FAIL (4-bit)\n"); return 1;
+    }
+
+    printf(" PASS\n");
+    return 0;
+}
+
 /* ================================================================ */
 
 int main(void)
@@ -680,7 +730,10 @@ int main(void)
     test_mse_4bit();
     test_qjl_unbiased();
 
+    int fails = 0;
+    fails += test_bitstream_pack();
+
     printf("\n=== Results: %d PASS, %d FAIL ===\n",
-           tests_passed, tests_failed);
-    return tests_failed > 0 ? 1 : 0;
+           tests_passed, tests_failed + fails);
+    return (tests_failed + fails) > 0 ? 1 : 0;
 }
