@@ -363,7 +363,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | UART 16550A driver | 13-14 | DONE | uart_16550.c/h | 7 PASS |
 | PCI enumeration | 15-16 | DONE | pci.c/h | 11 PASS |
 | AHCI full I/O | 15-16 | DONE | ahci.c/h | 13 PASS |
-| NIC RTL8168 skeleton | 17-18 | DONE | nic_rtl8168.c/h | 6 PASS |
+| NIC RTL8168 (TX + RX delivery) | 17-18 | DONE | nic_rtl8168.c/h | 7 PASS |
 | x86 Timer (PIT/HPET/TSC) | 13-14 | DONE | x86_timer.c/h | 8 PASS |
 | Block device abstraction | 15-16 | DONE | blk_dev_x86.c/h | 9 PASS |
 | C tensor ops (9 ops, AVX2+FMA) | 19-20 | DONE | tensor_ops.c/h | 12 PASS |
@@ -386,7 +386,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | GPT-2 full byte mapping | — | DONE | tokenizer.c | 12 PASS |
 | Tiled matmul + unroll | — | DONE | tensor_ops.c, llama_quant.c | 14+10 PASS |
 | RDTSC timing (Stage 5) | — | DONE | main_x86.c | 5/5 stages PASS |
-| **Total** | | | **80+ files** | **331 tests, ~20,000 LOC** |
+| **Total** | | | **80+ files** | **332 tests, ~20,000 LOC** |
 
 **What remains for Phase 3b on real hardware:**
 - Boot seL4 on actual Ryzen hardware (vs QEMU)
@@ -618,8 +618,8 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 
 - **Phase 1:** 39,106 LOC, 95 files, 338 test functions (COMPLETE)
 - **Phase 2:** ~27,000 LOC, 65 files, 108 tests (COMPLETE)
-- **Phase 3:** ~20,000 LOC, 80+ files, 331 tests (IN PROGRESS — **LLM inference on seL4 verified**)
-- **Total:** ~86,000+ LOC, 200+ files, 585+ tests
+- **Phase 3:** ~20,000 LOC, 80+ files, 332 tests (IN PROGRESS — **LLM inference on seL4 verified**)
+- **Total:** ~86,000+ LOC, 200+ files, 586+ tests
 - **Security:** 26/26 adversarial audit findings resolved (March 2026). SHIELD module: keyword + model-assisted risk scoring.
 - **Inference:** Llama 3.2 1B Q4_K_M on seL4 QEMU, coherent output, 50MB heap
 

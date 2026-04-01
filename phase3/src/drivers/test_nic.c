@@ -567,6 +567,67 @@ static void test_send_basic(void)
 }
 
 /* ========================================================================
+ * Test 7: RX Frame Delivery
+ * ======================================================================== */
+
+static void test_rx_frame_delivery(void)
+{
+    static rtl_tx_desc_t tx_ring[RTL_TX_RING_SIZE] __attribute__((aligned(256)));
+    static rtl_rx_desc_t rx_ring[RTL_RX_RING_SIZE] __attribute__((aligned(256)));
+    rtl_nic_t nic;
+
+    TEST("RX frame delivery -- data copied to caller buffer");
+
+    setup_mock_nic();
+
+    memset(&nic, 0, sizeof(nic));
+    nic.tx_ring = tx_ring;
+    nic.rx_ring = rx_ring;
+
+    int rc = rtl_nic_init(&nic, MOCK_MMIO_BASE);
+    if (rc != 0) { FAIL("rtl_nic_init failed"); return; }
+
+    /* Allocate a fake RX buffer and assign it to descriptor 0 */
+    static uint8_t rxbuf[RTL_RX_BUF_SIZE];
+    memset(rxbuf, 0, sizeof(rxbuf));
+
+    /* Write a test Ethernet frame into the buffer */
+    const uint8_t test_frame[] = {
+        0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,  /* dst MAC (broadcast) */
+        0xDE,0xAD,0xBE,0xEF,0x00,0x01,  /* src MAC */
+        0x08,0x00,                        /* EtherType: IPv4 */
+        0x45,0x00,0x00,0x1C,             /* IPv4 header stub */
+    };
+    memcpy(rxbuf, test_frame, sizeof(test_frame));
+
+    rtl_nic_set_rx_buffer(&nic, 0, rxbuf, (uint64_t)(uintptr_t)rxbuf,
+                           RTL_RX_BUF_SIZE);
+
+    /* Mark descriptor 0 as NIC-complete: OWN=0, FS+LS, length=68 (64 data + 4 FCS) */
+    rx_ring[0].opts1 = RTL_RX_FS | RTL_RX_LS | 68;
+
+    /* Receive */
+    uint8_t outbuf[2048];
+    memset(outbuf, 0xCC, sizeof(outbuf));
+    int len = rtl_nic_recv(&nic, outbuf, sizeof(outbuf));
+
+    if (len != 64) { FAIL("expected 64 bytes (68 - 4 FCS)"); return; }
+    if (memcmp(outbuf, test_frame, sizeof(test_frame)) != 0) {
+        FAIL("frame data mismatch");
+        return;
+    }
+    if (nic.rx_packets != 1) { FAIL("rx_packets should be 1"); return; }
+
+    /* Descriptor should be re-armed with OWN=1 */
+    if (!(rx_ring[0].opts1 & RTL_RX_OWN)) {
+        FAIL("descriptor should be re-armed with OWN");
+        return;
+    }
+
+    PASS();
+}
+
+/* ========================================================================
  * Main
  * ======================================================================== */
 
@@ -580,6 +641,7 @@ int main(void)
     test_rx_ring_wrap();
     test_link_status();
     test_send_basic();
+    test_rx_frame_delivery();
 
     printf("\n=== Results: %d/%d PASSED ===\n", tests_passed, tests_run);
 

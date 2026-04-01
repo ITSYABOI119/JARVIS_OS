@@ -285,6 +285,10 @@ typedef struct {
     uint32_t        rx_cur;            /* Next descriptor to check */
     uint64_t        rx_ring_phys;      /* Physical address of RX ring */
 
+    /* RX buffer pool — one buffer per descriptor */
+    uint8_t        *rx_bufs[RTL_RX_RING_SIZE];      /* Virtual addresses (for memcpy) */
+    uint64_t        rx_bufs_phys[RTL_RX_RING_SIZE];  /* Physical addresses (for DMA) */
+
     /* Link state */
     int             link_up;           /* 1 if link is up */
     uint32_t        link_speed;        /* 10, 100, or 1000 Mbps */
@@ -354,6 +358,17 @@ int rtl_nic_send(rtl_nic_t *nic, const void *buf, uint32_t len);
  * Returns frame length on success, 0 if no frame available, -1 on error.
  */
 int rtl_nic_recv(rtl_nic_t *nic, void *buf, uint32_t max_len);
+
+/**
+ * rtl_nic_set_rx_buffer - Assign a DMA buffer to an RX descriptor
+ * @nic:   NIC state
+ * @index: Descriptor index (0 to RTL_RX_RING_SIZE-1)
+ * @virt:  Virtual address of the buffer (for memcpy to caller)
+ * @phys:  Physical address (for DMA — written to descriptor addr_lo/addr_hi)
+ * @size:  Buffer size (must be >= RTL_RX_BUF_SIZE)
+ */
+void rtl_nic_set_rx_buffer(rtl_nic_t *nic, uint32_t index,
+                            void *virt, uint64_t phys, uint32_t size);
 
 /**
  * rtl_nic_link_status - Read current link status from PHY

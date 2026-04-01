@@ -196,8 +196,12 @@ static void rtl_init_rx_ring(rtl_nic_t *nic)
             flags |= RTL_RX_EOR;
 
         nic->rx_ring[i].opts1 = flags;
-        /* Buffer addresses would be set by the caller who allocates
-         * the DMA buffers. For now, addr_lo/addr_hi remain 0. */
+
+        /* Wire pre-assigned buffer addresses into descriptors */
+        if (nic->rx_bufs_phys[i]) {
+            nic->rx_ring[i].addr_lo = (uint32_t)(nic->rx_bufs_phys[i] & 0xFFFFFFFF);
+            nic->rx_ring[i].addr_hi = (uint32_t)(nic->rx_bufs_phys[i] >> 32);
+        }
     }
 
     nic->rx_cur = 0;
@@ -375,6 +379,21 @@ int rtl_nic_send(rtl_nic_t *nic, const void *buf, uint32_t len)
     return 0;
 }
 
+void rtl_nic_set_rx_buffer(rtl_nic_t *nic, uint32_t index,
+                            void *virt, uint64_t phys, uint32_t size)
+{
+    if (!nic || index >= RTL_RX_RING_SIZE || !virt || size < RTL_RX_BUF_SIZE)
+        return;
+
+    nic->rx_bufs[index] = (uint8_t *)virt;
+    nic->rx_bufs_phys[index] = phys;
+
+    if (nic->rx_ring) {
+        nic->rx_ring[index].addr_lo = (uint32_t)(phys & 0xFFFFFFFF);
+        nic->rx_ring[index].addr_hi = (uint32_t)(phys >> 32);
+    }
+}
+
 int rtl_nic_recv(rtl_nic_t *nic, void *buf, uint32_t max_len)
 {
     rtl_rx_desc_t *desc;
@@ -412,10 +431,10 @@ int rtl_nic_recv(rtl_nic_t *nic, void *buf, uint32_t max_len)
     if (frame_len > max_len)
         frame_len = max_len;
 
-    /* In a real driver, we would DMA-unmap and copy from the physical
-     * RX buffer. For skeleton, the test mock will set up the buffer. */
-    /* memcpy(buf, rx_buffer_for_desc[idx], frame_len); */
-    (void)buf;  /* Suppresses unused warning in skeleton */
+    /* Copy received frame from DMA buffer to caller's buffer */
+    if (nic->rx_bufs[idx]) {
+        memcpy(buf, nic->rx_bufs[idx], frame_len);
+    }
 
     nic->rx_packets++;
     nic->rx_bytes += frame_len;
