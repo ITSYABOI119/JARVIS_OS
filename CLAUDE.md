@@ -166,7 +166,8 @@ JARVIS_OS/
 │   │   ├── drivers/           # x86 drivers (16550A UART, AHCI, NIC)
 │   │   ├── ipc/              # Shared memory IPC
 │   │   └── sel4/             # seL4 x86-64 rootserver
-│   ├── scripts/               # Build scripts
+│   ├── scripts/               # Build + benchmark scripts (benchmark_tq.sh)
+│   ├── benchmarks/            # Reproducibility patches (turboquant-llamacpp.patch)
 │   ├── firmware/              # Boot images, GRUB configs
 │   └── weeks/                 # Weekly status docs
 ├── JARVIS_UNIFIED_PLAN.md     # 36-month master plan
@@ -611,6 +612,9 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **TurboQuant Forward Pass:** `phase3/src/ai/llama_forward_tq.c/h`
 - **TurboQuant Gen Quality:** `phase3/src/ai/test_turboquant_gen.c`
 - **TurboQuant Benchmark:** `phase3/docs/TURBOQUANT_BENCHMARK.md`
+- **TurboQuant × llama.cpp Results:** `phase3/docs/BENCHMARK_RESULTS.md`
+- **TurboQuant llama.cpp Patch:** `phase3/benchmarks/turboquant-llamacpp.patch`
+- **TurboQuant Benchmark Script:** `phase3/scripts/benchmark_tq.sh`
 - **Inference Benchmark:** `phase3/src/ai/bench_inference.c`
 - **GPU Benchmarks:** `phase3/docs/GPU_BENCHMARK_RTX2070.md`
 - **Inference Benchmark Results:** `phase3/docs/INFERENCE_BENCHMARK.md`
