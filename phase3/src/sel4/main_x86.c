@@ -826,10 +826,30 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
 static void *main_continued(void *arg UNUSED)
 {
 #ifdef __x86_64__
-    /* TODO: Map VGA framebuffer at 0xB8000 via device untyped.
-     * For now, VGA output is disabled — serial only.
-     * VGA mapping needs proper device frame handling (Phase 3b). */
-    puts_serial("[JARVIS] VGA: deferred — serial output only\n");
+    /* Map VGA text framebuffer (physical 0xB8000) into our vspace.
+     * vka_alloc_frame_at handles device untyped lookup + retype. */
+    {
+        vka_object_t vga_frame;
+        int vga_err = vka_alloc_frame_at(&vka, seL4_PageBits, 0xB8000, &vga_frame);
+        if (vga_err == 0) {
+            void *vga_vaddr = vspace_map_pages(&vspace, &vga_frame.cptr, NULL,
+                seL4_AllRights, 1, seL4_PageBits, 0);
+            if (vga_vaddr) {
+                vga_set_buffer(vga_vaddr);
+                vga_init();
+                vga_ready = 1;
+                puts_serial("[JARVIS] VGA mapped at vaddr ");
+                put_hex((uint32_t)(uintptr_t)vga_vaddr);
+                puts_serial("\n");
+            } else {
+                puts_serial("[JARVIS] VGA: vspace map failed\n");
+            }
+        } else {
+            puts_serial("[JARVIS] VGA: alloc frame at 0xB8000 failed (err=");
+            put_dec((uint32_t)vga_err);
+            puts_serial(")\n");
+        }
+    }
 #endif
     puts_serial("[JARVIS] Running on vspace-managed stack\n");
 
