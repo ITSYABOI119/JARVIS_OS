@@ -11,6 +11,10 @@ static int vga_row = 0;
 static int vga_col = 0;
 static uint8_t vga_color = VGA_DEFAULT_COLOR;
 
+void vga_set_buffer(void *mapped_addr) {
+    vga_buffer = (volatile uint16_t *)mapped_addr;
+}
+
 void vga_init(void) {
     vga_row = 0;
     vga_col = 0;

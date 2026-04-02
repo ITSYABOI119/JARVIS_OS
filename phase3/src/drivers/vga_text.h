@@ -18,6 +18,7 @@
 #define VGA_DEFAULT_COLOR ((VGA_BLACK << 4) | VGA_LIGHT_GREY)
 
 void vga_init(void);
+void vga_set_buffer(void *mapped_addr);
 void vga_clear(void);
 void vga_putc(char c);
 void vga_puts(const char *s);
