@@ -42,6 +42,10 @@
 
 #include "shmem_ipc.h"
 
+#ifdef __x86_64__
+#include "vga_text.h"
+#endif
+
 /* ---- CPIO archive (contains Process B's ELF) ---- */
 extern char _cpio_archive[];
 extern char _cpio_archive_end[];
@@ -72,8 +76,12 @@ static sel4utils_process_t inference_process;
 
 static void puts_serial(const char *s)
 {
-    while (*s)
-        seL4_DebugPutChar(*s++);
+    const char *p = s;
+    while (*p)
+        seL4_DebugPutChar(*p++);
+#ifdef __x86_64__
+    vga_puts(s);
+#endif
 }
 
 static void put_hex(uint32_t val)
@@ -82,19 +90,35 @@ static void put_hex(uint32_t val)
     puts_serial("0x");
     for (int i = 28; i >= 0; i -= 4)
         seL4_DebugPutChar(hex[(val >> i) & 0xF]);
+#ifdef __x86_64__
+    /* puts_serial above already wrote "0x" to VGA.
+     * Now write hex digits to VGA too. */
+    for (int i = 28; i >= 0; i -= 4)
+        vga_putc(hex[(val >> i) & 0xF]);
+#endif
 }
 
 static void put_dec(uint32_t val)
 {
     char buf[12];
     int i = 0;
-    if (val == 0) { seL4_DebugPutChar('0'); return; }
+    if (val == 0) {
+        seL4_DebugPutChar('0');
+#ifdef __x86_64__
+        vga_putc('0');
+#endif
+        return;
+    }
     while (val > 0) {
         buf[i++] = '0' + (val % 10);
         val /= 10;
     }
-    while (--i >= 0)
+    while (--i >= 0) {
         seL4_DebugPutChar(buf[i]);
+#ifdef __x86_64__
+        vga_putc(buf[i]);
+#endif
+    }
 }
 
 /* ---- Globals ---- */
@@ -867,6 +891,9 @@ idle:
 
 int main(void)
 {
+#ifdef __x86_64__
+    vga_init();
+#endif
     seL4_BootInfo *info = platsupport_get_bootinfo();
 
     puts_serial("\n\n");

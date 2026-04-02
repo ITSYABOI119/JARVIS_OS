@@ -339,6 +339,10 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | **Shared memory IPC between two seL4 processes (direct page mapping)** | **DONE** |
 | **End-to-end IPC: Process A query → Process B inference → response** | **DONE** |
 | **CNode=22, morecore=128MB, allocator pools scaled for 230K frames** | **DONE** |
+| VGA text mode output (80x25, 0xB8000) | DONE |
+| GRUB2 boot config + USB creator script | DONE |
+| x86 source sync/build script | DONE |
+| Bare-metal boot guide + BIOS checklist | DONE |
 
 **Next:** Boot seL4 bare-metal on JARVIS PC (Ryzen 7 2700X, 16GB, 1TB, Ubuntu). All QEMU-achievable work complete. Two-PC setup operational — JARVIS PC is dedicated and wipeable.
 
@@ -364,6 +368,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | PCI enumeration | 15-16 | DONE | pci.c/h | 11 PASS |
 | AHCI full I/O | 15-16 | DONE | ahci.c/h | 13 PASS |
 | NIC RTL8168 (TX + RX delivery) | 17-18 | DONE | nic_rtl8168.c/h | 7 PASS |
+| VGA text mode driver | 13-14 | DONE | vga_text.c/h | 7 PASS |
 | x86 Timer (PIT/HPET/TSC) | 13-14 | DONE | x86_timer.c/h | 8 PASS |
 | Block device abstraction | 15-16 | DONE | blk_dev_x86.c/h | 9 PASS |
 | C tensor ops (9 ops, AVX2+FMA) | 19-20 | DONE | tensor_ops.c/h | 12 PASS |
@@ -386,7 +391,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | GPT-2 full byte mapping | — | DONE | tokenizer.c | 12 PASS |
 | Tiled matmul + unroll | — | DONE | tensor_ops.c, llama_quant.c | 14+10 PASS |
 | RDTSC timing (Stage 5) | — | DONE | main_x86.c | 5/5 stages PASS |
-| **Total** | | | **80+ files** | **332 tests, ~20,000 LOC** |
+| **Total** | | | **80+ files** | **339 tests, ~20,000 LOC** |
 
 **What remains for Phase 3b on real hardware:**
 - Boot seL4 on actual Ryzen hardware (vs QEMU)
@@ -579,9 +584,11 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **GGUF Parser:** `phase3/src/ai/gguf_parser.c/h`
 - **x86 Rootserver:** `phase3/src/sel4/main_x86.c`
 - **Shared Memory IPC:** `phase3/src/ipc/shmem_ipc.c/h`
+- **USB Boot Creator:** `phase3/scripts/create_boot_usb.sh`
 - **UART 16550A Driver:** `phase3/src/drivers/uart_16550.c`
 - **PCI Enumeration:** `phase3/src/drivers/pci.c`
 - **AHCI Discovery:** `phase3/src/drivers/ahci.c`
+- **Bare-Metal Boot Guide:** `phase3/docs/BARE_METAL_BOOT_GUIDE.md`
 - **Block Device (x86):** `phase3/src/drivers/blk_dev_x86.c/h`
 - **x86 Timer:** `phase3/src/drivers/x86_timer.c/h`
 - **NIC RTL8168:** `phase3/src/drivers/nic_rtl8168.c/h`
@@ -598,11 +605,14 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **SHIELD Safety Module:** `phase3/src/ai/shield.c/h`
 - **Dynamic Model Scaling:** `phase3/src/ai/model_scaling.c/h`
 - **Inference Benchmark:** `phase3/src/ai/bench_inference.c`
+- **GRUB Config:** `phase3/firmware/grub/grub.cfg`
 - **GPU Benchmarks:** `phase3/docs/GPU_BENCHMARK_RTX2070.md`
 - **Inference Benchmark Results:** `phase3/docs/INFERENCE_BENCHMARK.md`
 - **Native Linux Setup:** `phase3/docs/SEL4_NATIVE_LINUX_SETUP.md`
 - **Native Test Results:** `phase3/docs/NATIVE_TEST_RESULTS.md`
 - **CI Workflow:** `.github/workflows/ci.yml`
+- **VGA Text Driver:** `phase3/src/drivers/vga_text.c/h`
+- **x86 Build Script:** `phase3/scripts/build_jarvis_x86.sh`
 - **Check CI:** `gh run list --limit 1` then `gh run view <id> --log-failed` if failed
 
 ### Rules
@@ -618,8 +628,8 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 
 - **Phase 1:** 39,106 LOC, 95 files, 338 test functions (COMPLETE)
 - **Phase 2:** ~27,000 LOC, 65 files, 108 tests (COMPLETE)
-- **Phase 3:** ~20,000 LOC, 80+ files, 332 tests (IN PROGRESS — **LLM inference on seL4 verified**)
-- **Total:** ~86,000+ LOC, 200+ files, 586+ tests
+- **Phase 3:** ~20,000 LOC, 80+ files, 339 tests (IN PROGRESS — **LLM inference on seL4 verified**)
+- **Total:** ~86,000+ LOC, 200+ files, 593+ tests
 - **Security:** 26/26 adversarial audit findings resolved (March 2026). SHIELD module: keyword + model-assisted risk scoring.
 - **Inference:** Llama 3.2 1B Q4_K_M on seL4 QEMU, coherent output, 50MB heap
 

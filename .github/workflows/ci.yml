@@ -197,6 +197,14 @@ jobs:
           -o /tmp/test_blk_dev
         /tmp/test_blk_dev
 
+    - name: "Phase 3: VGA Text Mode (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -DJARVIS_TEST_MOCK \
+          -I phase3/src/drivers \
+          phase3/src/drivers/test_vga_text.c phase3/src/drivers/vga_text.c \
+          -o /tmp/test_vga_text
+        /tmp/test_vga_text
+
     - name: "Phase 3: Tensor Ops (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 \

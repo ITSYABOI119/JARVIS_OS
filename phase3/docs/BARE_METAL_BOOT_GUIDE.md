@@ -1,17 +1,17 @@
 # JARVIS AI-OS — Bare Metal Boot Guide (seL4 x86-64)
 
-**Date:** March 22, 2026
-**Platform:** x86-64 PC99 (Ryzen 5 5600, B550M, 16GB DDR4)
-**Status:** Infrastructure ready, awaiting spare PC assembly
+**Date:** April 2, 2026
+**Platform:** x86-64 PC99 (Ryzen 7 2700X, ASUS X470-F Gaming, 16GB DDR4)
+**Status:** Infrastructure ready, awaiting RTX 3060
 
 ---
 
 ## Overview
 
-This guide covers booting seL4 x86-64 with the JARVIS rootserver on real hardware (the spare PC). The boot chain is:
+This guide covers booting seL4 x86-64 with the JARVIS rootserver on real hardware (the JARVIS Project PC). The boot chain is:
 
 ```
-Power On → BIOS/UEFI → GRUB2 (USB) → seL4 kernel (multiboot) → JARVIS rootserver
+Power On -> BIOS/UEFI -> GRUB2 (USB) -> seL4 kernel (multiboot) -> JARVIS rootserver
 ```
 
 seL4's x86-64 kernel is multiboot-compliant. GRUB loads the kernel and rootserver image as a multiboot module, then seL4 ELF-loads the rootserver into userspace.
@@ -24,13 +24,15 @@ seL4's x86-64 kernel is multiboot-compliant. GRUB loads the kernel and rootserve
 
 | Item | Details |
 |------|---------|
-| Spare PC | Ryzen 5 5600, B550M-K, 16GB DDR4, NV3000 500GB |
+| JARVIS Project PC | Ryzen 7 2700X, ASUS X470-F Gaming, 16GB DDR4, RTX 3060 |
 | USB stick | 2GB+ (FAT32, will be erased) |
-| USB-to-serial adapter | For console output (COM1 header or USB debug) |
-| Serial cable | Connects adapter to PC COM1 header pins |
-| Monitor + keyboard | For BIOS setup (not needed after boot) |
+| Monitor | Connected to GPU or motherboard video output |
+| Keyboard | USB keyboard for BIOS setup |
+| USB-to-serial adapter | Optional, for COM1 serial console (see Section 8) |
 
-### Software (on WSL2 host)
+### Software (on JARVIS PC running Ubuntu)
+
+The JARVIS PC should have Ubuntu installed with the seL4 build toolchain. See `phase3/docs/SEL4_X86_QEMU_SETUP.md` for initial toolchain setup.
 
 ```bash
 # GRUB packages (for creating boot USB)
@@ -39,76 +41,102 @@ sudo apt install grub-pc-bin grub-efi-amd64-bin grub-common
 # Partitioning tools
 sudo apt install parted dosfstools
 
-# Serial terminal
-sudo apt install minicom
-# Or use PuTTY on Windows
+# Serial terminal (optional, for COM1 console)
+sudo apt install minicom screen
 ```
 
-### seL4 Build (must be complete)
+### seL4 Build Tree
+
+The seL4 build tree must be set up and the JARVIS rootserver must build successfully before creating a boot USB:
 
 ```bash
-# Build JARVIS rootserver (in WSL)
-cd ~/sel4-x86/jbuild
-ninja
-
-# Verify output images exist
-ls -la images/
-#   kernel-x86_64-pc99              — seL4 kernel (~9 MB)
-#   jarvis-x86-image-x86_64-pc99   — JARVIS rootserver (~4 MB)
+# Verify build tree exists
+ls ~/sel4-x86/jbuild/images/
+#   kernel-x86_64-pc99              -- seL4 kernel
+#   jarvis-x86-image-x86_64-pc99   -- JARVIS rootserver (+ CPIO)
 ```
-
-If images have different names (e.g., `sel4test-driver-image-x86_64-pc99` from the test build), update `phase3/firmware/grub/grub.cfg` to match.
 
 ---
 
-## 2. BIOS/UEFI Configuration
+## 2. BIOS Settings (ASUS X470-F Gaming)
 
-Enter BIOS on the B550M-K by pressing **DEL** or **F2** during POST.
+Enter BIOS by pressing **DEL** during POST (the ROG logo screen).
 
 ### Required Settings
 
-| Setting | Value | Why |
-|---------|-------|-----|
-| Secure Boot | **Disabled** | seL4 kernel is not signed |
-| CSM/Legacy Boot | **Enabled** (recommended) | multiboot1 works best with BIOS boot |
-| USB Boot | **Enabled** | Boot from USB stick |
-| Boot Order | **USB first** | Boot USB before NVMe |
-| Serial Port | **Enabled** (if available) | COM1 at 0x3F8 for console output |
-| IOMMU | **Disabled** (initially) | Can cause issues; enable later if needed |
+Navigate to these settings and change them as indicated:
 
-### UEFI vs Legacy Boot
+| Path | Setting | Value | Why |
+|------|---------|-------|-----|
+| Advanced > CPU Configuration | SVM Mode | **Enabled** | Hardware virtualization (KVM for QEMU testing) |
+| Boot > Secure Boot | OS Type | **Other OS** | seL4 kernel is not signed; disables Secure Boot |
+| Boot > CSM (Compatibility Support Module) | Launch CSM | **Enabled** | Legacy/MBR GRUB boot (multiboot1 works best here) |
+| Boot > Boot Option Priorities | #1 Boot Option | **USB device** | Boot from USB stick before NVMe |
+| Save & Exit | | **Save Changes and Reset** | Apply settings |
 
-seL4 supports both boot modes via GRUB:
+### Notes
 
-- **Legacy/CSM (recommended for first boot):** Uses `multiboot` command. Most reliable, well-tested path for seL4 on x86.
-- **UEFI:** Uses `multiboot2` command. Works but has known edge cases with some firmware. Try this after Legacy boot succeeds.
-
-The GRUB config provides menu entries for both modes. The USB script installs both BIOS and UEFI GRUB by default.
+- If "Secure Boot" does not show an OS Type option, look for a standalone "Secure Boot" enable/disable toggle under the Boot or Security tab.
+- CSM must be enabled for the Legacy GRUB boot path. If you want to try UEFI boot instead, disable CSM and use the UEFI GRUB menu entry.
+- SVM Mode is not required for bare-metal seL4, but it is useful for QEMU/KVM testing on the same machine.
 
 ---
 
-## 3. Create Boot USB
+## 3. Building JARVIS seL4
 
-### Option A: Automated Script (Recommended)
+Build the JARVIS rootserver using the sync-and-build script:
 
 ```bash
-# In WSL, identify your USB device
-lsblk -d -o NAME,SIZE,TYPE,TRAN,MODEL | grep -E "disk"
+# First time: clone seL4 and set up build tree
+# (see phase3/docs/SEL4_X86_QEMU_SETUP.md for initial setup)
 
-# Create boot USB (replace /dev/sdX with your USB device)
-cd /mnt/c/Users/jluca/Documents/JARVIS_OS
-sudo bash phase3/scripts/create_boot_usb.sh /dev/sdX --confirm
-
-# For BIOS-only (simpler, more reliable for first boot):
-sudo bash phase3/scripts/create_boot_usb.sh /dev/sdX --confirm --bios-only
-
-# For UEFI-only:
-sudo bash phase3/scripts/create_boot_usb.sh /dev/sdX --confirm --uefi-only
+# Sync JARVIS sources from repo into seL4 build tree, then build
+cd ~/Desktop/JARVIS_OS
+./phase3/scripts/build_jarvis_x86.sh
 ```
 
-### Option B: Manual Setup
+The script copies all JARVIS source files (rootserver, AI modules, IPC, drivers) into the seL4 project tree and runs `ninja` to rebuild. Use `--dry-run` to see what would be copied without actually copying:
 
-If the script doesn't work in your environment:
+```bash
+./phase3/scripts/build_jarvis_x86.sh --dry-run
+```
+
+If your JARVIS repo is in a different location, pass it as an argument:
+
+```bash
+./phase3/scripts/build_jarvis_x86.sh /path/to/JARVIS_OS
+```
+
+After a successful build, verify the output images exist:
+
+```bash
+ls -lh ~/sel4-x86/jbuild/images/
+#   kernel-x86_64-pc99              -- seL4 kernel (~9 MB)
+#   jarvis-x86-image-x86_64-pc99   -- JARVIS rootserver (~4 MB)
+```
+
+---
+
+## 4. Creating Boot USB
+
+### Automated (Recommended)
+
+```bash
+# Identify your USB device
+lsblk -d -o NAME,SIZE,TYPE,TRAN,MODEL | grep disk
+
+# Create boot USB (replace /dev/sdX with your USB device)
+sudo ./phase3/scripts/create_boot_usb.sh /dev/sdX --confirm
+
+# For BIOS-only (simpler, more reliable for first boot):
+sudo ./phase3/scripts/create_boot_usb.sh /dev/sdX --confirm --bios-only
+```
+
+The script partitions the USB, copies seL4 images and GRUB config, and installs GRUB. It refuses `/dev/sda` and NVMe devices as a safety measure.
+
+### Manual
+
+If the script does not work in your environment:
 
 ```bash
 # 1. Partition USB (MBR + FAT32)
@@ -122,13 +150,9 @@ sudo mkdir -p /mnt/usb
 sudo mount /dev/sdX1 /mnt/usb
 sudo mkdir -p /mnt/usb/boot/grub
 
-# Copy seL4 images
 sudo cp ~/sel4-x86/jbuild/images/kernel-x86_64-pc99 /mnt/usb/boot/
 sudo cp ~/sel4-x86/jbuild/images/jarvis-x86-image-x86_64-pc99 /mnt/usb/boot/
-
-# Copy GRUB config
-sudo cp /mnt/c/Users/jluca/Documents/JARVIS_OS/phase3/firmware/grub/grub.cfg \
-    /mnt/usb/boot/grub/
+sudo cp ~/Desktop/JARVIS_OS/phase3/firmware/grub/grub.cfg /mnt/usb/boot/grub/
 
 # 3. Install GRUB (BIOS)
 sudo grub-install --target=i386-pc --boot-directory=/mnt/usb/boot \
@@ -142,273 +166,160 @@ sudo umount /mnt/usb
 
 ```
 /boot/
-  kernel-x86_64-pc99                — seL4 microkernel
-  jarvis-x86-image-x86_64-pc99     — JARVIS rootserver
+  kernel-x86_64-pc99              -- seL4 microkernel
+  jarvis-x86-image-x86_64-pc99   -- JARVIS rootserver
   grub/
-    grub.cfg                        — GRUB menu configuration
-    i386-pc/                        — GRUB BIOS modules
-    x86_64-efi/                     — GRUB UEFI modules (if --uefi)
-/EFI/BOOT/
-  BOOTX64.EFI                      — UEFI bootloader (if --uefi)
+    grub.cfg                      -- GRUB menu configuration
+    i386-pc/                      -- GRUB BIOS modules
 ```
 
 ---
 
-## 4. Connect Serial Console
+## 5. Booting
 
-seL4 x86-64 outputs to COM1 (I/O port 0x3F8) at 115200 baud. You need a serial connection to see kernel and rootserver output.
+1. Insert the boot USB into the JARVIS Project PC
+2. Power on (or reboot)
+3. If BIOS boot order was set correctly (Section 2), GRUB loads automatically
+4. Select **"JARVIS seL4 x86-64"** from the GRUB menu
+5. seL4 boots, loads the rootserver, and JARVIS self-tests run
 
-### Option A: Onboard COM Header (B550M-K)
-
-Many B550M boards have a COM1 header on the motherboard (9-pin or 10-pin). Connect a header-to-DB9 cable, then a USB-to-serial adapter to your host PC.
-
-### Option B: PCIe/USB Serial Card
-
-If no onboard header, add a PCIe serial card or use a USB-to-serial adapter connected to the spare PC itself (though this won't capture early boot output).
-
-### Serial Terminal Setup
-
-**Windows (PuTTY):**
-- Connection type: Serial
-- Serial line: COM3 (or whichever port your adapter uses)
-- Speed: 115200
-- Data bits: 8, Stop bits: 1, Parity: None, Flow control: None
-
-**WSL (minicom):**
-```bash
-sudo minicom -b 115200 -D /dev/ttyUSB0
-# Or: sudo minicom -b 115200 -D /dev/ttyS3
-```
-
-**WSL (screen):**
-```bash
-sudo screen /dev/ttyUSB0 115200
-# Exit: Ctrl-A, K, Y
-```
-
-**Windows (built-in):**
-```cmd
-mode COM3 BAUD=115200 PARITY=n DATA=8 STOP=1
-```
+If GRUB does not appear, press **F8** during POST (on X470-F Gaming) to open the one-time boot menu and select the USB device.
 
 ---
 
-## 5. Boot the PC
+## 6. Expected VGA Output
 
-1. **Insert USB** into the spare PC
-2. **Power on** and enter BIOS (DEL or F2)
-3. **Set USB as first boot device** in boot order
-4. **Save and exit** BIOS
-5. **Watch for GRUB menu** on the monitor (and serial console)
-
-GRUB menu shows:
-```
-JARVIS seL4 x86-64
-JARVIS seL4 x86-64 (UEFI)
-JARVIS seL4 x86-64 (Serial Only)
-```
-
-6. **Select "JARVIS seL4 x86-64"** (for Legacy/CSM boot) or the UEFI entry
-7. **Watch serial console** for seL4 boot output
-
----
-
-## 6. Expected Output
-
-Based on QEMU boot output (real hardware will be similar with different memory addresses):
+With CSM enabled and VGA text mode active, the monitor displays the rootserver output via the VGA text driver:
 
 ```
-Loading seL4 kernel...
-Loading JARVIS rootserver...
-
-ELF-loading userland images from boot modules:
-  size=0x3de000 v_entry=0x403b10 ...
-  ...
-
-Booting all finished, dropped to user space
-
 ==================================================
   JARVIS AI-OS v0.3.0-dev | seL4 x86-64 | PC99
 ==================================================
 
-Boot: <N> untypeds
-
 [JARVIS] Init decision cache...
-Loaded 258 total patterns into cache
 [JARVIS] Loaded 308 patterns
 
---- Cache Queries ---
-  [HIT]  check disk space -> show_disk_usage
-  [MISS] unknown query test
-  ...
+=== JARVIS Self-Test Mode ===
 
---- SHIELD ---
-  [SHIELD] delete all data -> BLOCKED
-  [SHIELD] rm -rf / -> BLOCKED
+[1/5] Decision Cache ... PASS
+[2/5] SHIELD Safety ... PASS
+[3/5] Tensor Operations ... 5/5 PASS
+[4/5] Dequantization ... 3/3 PASS
+[5/5] Tokenizer + Sampling ... 4/4 PASS
 
---- Stats ---
-  Queries: 8, Hits: 1, Rate: 12%
+=== Self-Test: 5/5 PASS ===
 
-[JARVIS] Done. System idle.
+[JARVIS] Bootstrapping system...
+[JARVIS] System bootstrapped
+[JARVIS] Spawning inference process...
+[JARVIS] Process B started
+[JARVIS] Waiting for Process B ready signal...
+[JARVIS] Sending test query to Process B...
+[JARVIS] System idle.
 ```
 
-**Key differences from QEMU on real hardware:**
-- More untypeds (16GB RAM vs 3GB)
-- Real ACPI tables (may show multiple CPUs)
+Key differences on real hardware compared to QEMU:
+- More untypeds reported (16GB RAM vs 4-8GB QEMU)
+- Real ACPI tables (may show multiple CPUs / threads for Ryzen 7)
 - Real IOAPIC/LAPIC addresses
+- PCI devices visible (NVMe, RTX 3060, NIC, USB controllers)
 - HPET timer available
-- PCI devices visible (NVMe, GPU, NIC, USB controllers)
 
 ---
 
 ## 7. Troubleshooting
 
-### No GRUB menu appears
-
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| Boots straight to NVMe/other OS | USB not first in boot order | Enter BIOS, move USB to top |
-| Black screen, no GRUB | Secure Boot blocking GRUB | Disable Secure Boot in BIOS |
-| Black screen, no GRUB | USB not bootable | Re-run create_boot_usb.sh; try --bios-only |
-| GRUB rescue prompt | GRUB installed but can't find config | Check grub.cfg is at /boot/grub/grub.cfg on USB |
-
-### GRUB shows "file not found"
-
-The image file names in grub.cfg must match the actual files in `/boot/` on the USB.
-
-```
-# Check what the build actually produced:
-ls ~/sel4-x86/jbuild/images/
-
-# If different from expected, update grub.cfg:
-# e.g., if the rootserver is named "sel4test-driver-image-x86_64-pc99"
-# change the "module" line in grub.cfg accordingly
-```
-
-### GRUB says "no multiboot header found"
-
-- The kernel image may be corrupted. Rebuild: `cd ~/sel4-x86/jbuild && ninja`
-- Try switching between `multiboot` and `multiboot2` in grub.cfg
-- Verify the file on USB matches the build output: `md5sum` both copies
-
-### No serial output after GRUB
-
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| GRUB works, then silence | Serial port not COM1 | Check BIOS: ensure COM1 at 0x3F8 is enabled |
-| GRUB works, then silence | Wrong baud rate | Must be 115200. seL4 kernel hardcodes this. |
-| GRUB works, then silence | Cable issue | Check TX/RX wiring; try swapping TX and RX |
-| GRUB works, then freeze | Kernel panic (no serial) | Memory map issue. Try reducing RAM, disabling IOMMU. |
-
-### seL4 kernel panic / assertion failure
-
-```
-seL4: ASSERTION FAILED: ...
-```
-
-Common causes on real hardware:
-- **IOMMU/VT-d enabled:** Disable AMD-Vi / Intel VT-d in BIOS for first boot
-- **Memory map conflict:** seL4 may not handle certain ACPI reserved regions. Check if kernel config needs adjustment.
-- **UEFI multiboot2 parsing:** Known edge cases. Try Legacy/CSM boot instead.
-- **Kernel built for simulation:** Rebuild without `-DSIMULATION=1`:
-  ```bash
-  cd ~/sel4-x86
-  rm -rf jbuild && mkdir jbuild && cd jbuild
-  cmake -G Ninja \
-    -DCMAKE_TOOLCHAIN_FILE=../kernel/gcc.cmake \
-    -DPLATFORM=x86_64 \
-    -DSEL4_CACHE_DIR=$HOME/.sel4_cache \
-    -C ../projects/jarvis-x86/settings.cmake \
-    ../projects/jarvis-x86
-  ninja
-  ```
-  Note: `-DSIMULATION=1` may set kernel options that don't work on real hardware (e.g., simplified timer, no IOAPIC). Remove it for bare-metal builds.
-
-### seL4 prints "No valid untypeds"
-
-The kernel found no usable memory regions. This means the BIOS memory map (E820 or UEFI memory map) reported no available RAM in ranges seL4 expects.
-
-Fix: Check BIOS memory settings. Ensure CSM is enabled. Some UEFI firmware reports memory differently than legacy BIOS.
-
-### Rootserver doesn't start
-
-If seL4 boots but the rootserver doesn't run:
-- Check that the rootserver image was loaded as a boot module (GRUB `module` line)
-- Verify the rootserver was built for x86-64: `file images/jarvis-x86-image-x86_64-pc99`
-- Check the ELF entry point matches what seL4 expects
+| No output at all | Secure Boot blocking GRUB | Disable Secure Boot in BIOS (Section 2) |
+| No output at all | USB not booting | Press F8 for one-time boot menu; check boot order |
+| GRUB menu appears, but no kernel | Module line in grub.cfg wrong | Check `ls ~/sel4-x86/jbuild/images/` and update grub.cfg image names |
+| Triple fault after GRUB | IOAPIC/LAPIC issue | Try the "Serial Only" GRUB entry; disable IOMMU in BIOS |
+| Hang after seL4 kernel banner | Timer source issue | Check PIT/HPET/TSC config; try rebuilding without `-DSIMULATION=1` |
+| Garbled VGA text | Not in text mode | BIOS CSM must be enabled (UEFI GOP framebuffer is not VGA text) |
+| Works on QEMU, fails on real HW | ACPI or memory map differences | Debug with serial console (Section 8); check IOMMU/VT-d setting |
+| "No valid untypeds" | BIOS memory map issue | Enable CSM; UEFI firmware may report memory differently |
+| Kernel assertion failure | IOMMU/AMD-Vi enabled | Disable AMD-Vi in BIOS for first boot |
+| GRUB rescue prompt | grub.cfg not found on USB | Verify grub.cfg is at `/boot/grub/grub.cfg` on the USB partition |
+| "file not found" in GRUB | Image name mismatch | Image filenames in grub.cfg must match files in `/boot/` |
 
 ---
 
-## 8. Updating the Kernel
+## 8. Serial Console (Optional)
 
-After rebuilding the JARVIS rootserver, update the USB:
+The seL4 kernel outputs to COM1 (I/O port 0x3F8) at 115200 baud. Serial provides kernel-level output that the VGA driver cannot display (the VGA driver only shows rootserver output).
+
+### Connecting
+
+The ASUS X470-F Gaming has a COM1 header on the motherboard (10-pin). Connect a motherboard COM header cable to a DB9-to-USB adapter, then plug the USB end into another machine (or the JARVIS PC itself, pre-boot).
+
+### Terminal Setup
 
 ```bash
-# Rebuild
-cd ~/sel4-x86/jbuild
-ninja
+# Linux (on another machine, or the JARVIS PC before reboot)
+screen /dev/ttyUSB0 115200
+# Exit: Ctrl-A, K, Y
 
-# Mount USB and copy new images
-sudo mount /dev/sdX1 /mnt/usb  # or /dev/sdX2 if dual-mode GPT
-sudo cp images/kernel-x86_64-pc99 /mnt/usb/boot/
-sudo cp images/jarvis-x86-image-x86_64-pc99 /mnt/usb/boot/
-sudo umount /mnt/usb
-
-# Reboot spare PC
+# Or minicom
+minicom -b 115200 -D /dev/ttyUSB0
 ```
 
-This is the development workflow: edit source, build, copy to USB, reboot. Later (Week 15+), boot from NVMe for faster iteration.
+On Windows (PuTTY): Connection type Serial, COM port matching the adapter, 115200 baud, 8N1, no flow control.
 
 ---
 
-## 9. Boot Protocol Details
+## 9. Note About VGA vs Serial Output
 
-### Multiboot1 (Legacy BIOS)
+seL4 x86-64 has two independent output paths:
 
-seL4's `src/arch/x86/multiboot.S` contains a standard Multiboot1 header:
-- Magic: `0x1BADB002`
-- Flags: request memory map, page-aligned modules
-- GRUB loads kernel at 0x100000, passes multiboot info struct in `%ebx`
-- seL4 `boot_sys.c` parses E820 memory map from multiboot info
+- **Serial (COM1 at 0x3F8):** The seL4 kernel writes boot messages, ELF loading status, and assertion failures here. The rootserver also writes here via `puts_serial()` / `seL4_DebugPutChar()`.
 
-### Multiboot2 (UEFI)
+- **VGA text (0xB8000):** The JARVIS VGA driver (`vga_text.c`) writes directly to VGA text-mode memory. This provides rootserver output on the monitor independently of serial. CSM must be enabled for VGA text mode to work.
 
-seL4 also supports Multiboot2 (compile-time `CONFIG_MULTIBOOT2_HEADER`):
-- Magic: `0xE85250D6`
-- GRUB loads via `multiboot2` command
-- UEFI memory map passed instead of E820
-- Required for pure UEFI systems (no CSM)
-
-### Boot Module
-
-The rootserver image is passed as a multiboot module. seL4 kernel:
-1. Finds module in multiboot info struct
-2. ELF-loads it into a new address space
-3. Provides all physical resources as untyped capabilities
-4. Transfers control to rootserver entry point
-
-This is identical to how QEMU boots with `-kernel` and `-initrd` — QEMU's firmware (SeaBIOS) implements multiboot internally.
+Both outputs run simultaneously when available. For initial bring-up, VGA alone is sufficient. Add serial later for kernel-level debugging if needed.
 
 ---
 
-## 10. Reference
+## 10. Updating After Code Changes
+
+The development workflow is: edit source, sync, build, copy to USB, reboot.
+
+```bash
+# 1. Edit JARVIS source files in the repo
+
+# 2. Sync and rebuild
+./phase3/scripts/build_jarvis_x86.sh
+
+# 3. Update the USB
+sudo mount /dev/sdX1 /mnt/usb
+sudo cp ~/sel4-x86/jbuild/images/kernel-x86_64-pc99 /mnt/usb/boot/
+sudo cp ~/sel4-x86/jbuild/images/jarvis-x86-image-x86_64-pc99 /mnt/usb/boot/
+sudo umount /mnt/usb
+
+# 4. Reboot JARVIS PC from USB
+```
+
+Later (after NVMe boot is implemented), the USB step goes away and iteration becomes faster.
+
+---
+
+## 11. Reference
 
 | Resource | Location |
 |----------|----------|
-| GRUB config | `phase3/firmware/grub/grub.cfg` |
+| Build script | `phase3/scripts/build_jarvis_x86.sh` |
 | USB creation script | `phase3/scripts/create_boot_usb.sh` |
+| GRUB config | `phase3/firmware/grub/grub.cfg` |
+| x86 rootserver source | `phase3/src/sel4/main_x86.c` |
+| VGA text driver | `phase3/src/drivers/vga_text.c` |
 | seL4 QEMU setup | `phase3/docs/SEL4_X86_QEMU_SETUP.md` |
 | Rootserver notes | `phase3/docs/SEL4_X86_ROOTSERVER_NOTES.md` |
-| Implementation plan | `phase3/docs/PHASE_3_IMPLEMENTATION_PLAN.md` (Week 9-10) |
-| x86 rootserver source | `phase3/src/sel4/main_x86.c` |
-| Build config | `phase3/src/sel4/CMakeLists.txt` |
-| Pi 4 boot reference | `phase2/firmware/` (different arch, similar concept) |
+| Implementation plan | `phase3/docs/PHASE_3_IMPLEMENTATION_PLAN.md` |
 | seL4 PC99 docs | https://docs.sel4.systems/Hardware/IA32.html |
-| seL4 multiboot source | https://github.com/seL4/seL4/blob/master/src/arch/x86/multiboot.S |
 
 ---
 
-*Guide written: March 22, 2026*
-*Hardware: Ryzen 5 5600, B550M-K, 16GB DDR4 (awaiting assembly)*
-*seL4 QEMU verified: 123/123 tests pass, rootserver boots*
-*Boot protocol: Multiboot1 (BIOS) + Multiboot2 (UEFI) via GRUB2*
+*Guide updated: April 2, 2026*
+*Hardware: Ryzen 7 2700X, ASUS X470-F Gaming, 16GB DDR4, RTX 3060 (pending)*
+*seL4 QEMU verified: 247/247 tests pass, process-isolated LLM inference on seL4*
+*Boot protocol: Multiboot1 (BIOS/CSM) + Multiboot2 (UEFI) via GRUB2*
