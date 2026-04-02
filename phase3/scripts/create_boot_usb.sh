@@ -146,10 +146,10 @@ if [ ! -b "$DEVICE" ]; then
     exit 1
 fi
 
-# Refuse /dev/sda — almost always the system disk
-if [ "$DEVICE" = "/dev/sda" ]; then
-    echo -e "${RED}REFUSED: /dev/sda is typically the system disk${NC}"
-    echo "If you really mean /dev/sda, this script will not allow it."
+# Refuse the disk that holds the root filesystem
+ROOT_DISK=$(lsblk -no PKNAME "$(findmnt -no SOURCE /)" 2>/dev/null || echo "")
+if [ -n "$ROOT_DISK" ] && [ "$DEVICE" = "/dev/$ROOT_DISK" ]; then
+    echo -e "${RED}REFUSED: $DEVICE contains your root filesystem (/)!${NC}"
     exit 1
 fi
 
@@ -157,13 +157,6 @@ fi
 if [[ "$DEVICE" == /dev/nvme* ]]; then
     echo -e "${RED}REFUSED: NVMe devices are likely your system disk${NC}"
     echo "Use a USB stick or secondary SATA drive."
-    exit 1
-fi
-
-# Refuse system disk by mount check
-ROOT_DISK=$(lsblk -no PKNAME "$(findmnt -no SOURCE /)" 2>/dev/null || echo "")
-if [ -n "$ROOT_DISK" ] && [ "$DEVICE" = "/dev/$ROOT_DISK" ]; then
-    echo -e "${RED}REFUSED: $DEVICE is your root filesystem disk!${NC}"
     exit 1
 fi
 
