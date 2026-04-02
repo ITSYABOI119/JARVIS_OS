@@ -826,51 +826,10 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
 static void *main_continued(void *arg UNUSED)
 {
 #ifdef __x86_64__
-    /* VGA text framebuffer at 0xB8000 — map it into our vspace.
-     * On x86 PC99, 0xB8000 is in the low 1MB which seL4 provides
-     * as device untypeds. We try identity-mapping it; if that fails
-     * (e.g. no untyped covers it), we skip VGA and rely on serial. */
-    void *vga_vaddr = vspace_map_pages(&vspace, NULL, NULL, seL4_AllRights, 1,
-                                        seL4_PageBits, 0);
-    /* Simpler approach: just use vspace_new_pages to get a page,
-     * then write to it — but we need the PHYSICAL address 0xB8000.
-     * Use simple_get_frame_cap for device memory. */
-    {
-        cspacepath_t frame_path;
-        seL4_CPtr frame_cap;
-        seL4_Word vga_paddr = 0xB8000;
-        /* Try to find a device untyped covering 0xB8000 */
-        int found = 0;
-        for (int i = 0; i < simple_get_untyped_count(&simple); i++) {
-            seL4_Word paddr, size_bits;
-            bool device;
-            seL4_CPtr cap = simple_get_nth_untyped(&simple, i, &size_bits, &paddr, &device);
-            if (device && paddr <= vga_paddr && (paddr + BIT(size_bits)) > vga_paddr) {
-                /* Found it — retype a 4KB frame from this untyped */
-                vka_cspace_alloc_path(&vka, &frame_path);
-                seL4_Word offset = vga_paddr - paddr;
-                int err = seL4_Untyped_Retype(cap, seL4_X86_4K, 0,
-                    frame_path.root, frame_path.capDepth, frame_path.capDepth,
-                    frame_path.capPtr, 1);
-                if (err == 0) {
-                    /* Map the frame at a virtual address */
-                    void *vga_mapped = vspace_map_pages(&vspace, &frame_path.capPtr,
-                        NULL, seL4_AllRights, 1, seL4_PageBits, 1);
-                    if (vga_mapped) {
-                        vga_set_buffer(vga_mapped);
-                        vga_init();
-                        vga_ready = 1;
-                        puts_serial("[JARVIS] VGA text mode initialized\n");
-                    }
-                }
-                found = 1;
-                break;
-            }
-        }
-        if (!found) {
-            puts_serial("[JARVIS] VGA: no device untyped covers 0xB8000 — serial only\n");
-        }
-    }
+    /* TODO: Map VGA framebuffer at 0xB8000 via device untyped.
+     * For now, VGA output is disabled — serial only.
+     * VGA mapping needs proper device frame handling (Phase 3b). */
+    puts_serial("[JARVIS] VGA: deferred — serial output only\n");
 #endif
     puts_serial("[JARVIS] Running on vspace-managed stack\n");
 
