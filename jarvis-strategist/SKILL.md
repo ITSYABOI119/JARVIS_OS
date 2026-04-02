@@ -3,6 +3,87 @@
 for new coding session say:
 Read CLAUDE.md and check git log. What's the current state?
 
+then get to explore for context say:
+  Before doing any work, deeply explore this entire codebase using parallel agents. I want you to understand every file, every API, every pattern. Dispatch    
+  agents to read and analyze everything — the more thorough the better.                                                                                        
+                                                                                                                                                               
+  REPO: ~/Desktop/JARVIS_OS                                                                                                                                    
+                                                                       
+  Launch these agents IN PARALLEL to explore the codebase:                                                                                                     
+   
+  AGENT 1: Project Architecture & Status                                                                                                                       
+  - Read CLAUDE.md (full file — this is the project bible)             
+  - Read phase3/docs/PHASE_3_IMPLEMENTATION_PLAN.md (full file)                                                                                                
+  - Read phase3/docs/SEL4_X86_ROOTSERVER_NOTES.md                                                                                                              
+  - Read phase3/docs/SEL4_NATIVE_LINUX_SETUP.md                                                                                                                
+  - Read phase3/docs/GPU_BENCHMARK_RTX2070.md                                                                                                                  
+  - Run: git log --oneline -30                                                                                                                                 
+  - Run: git diff --stat HEAD~5..HEAD                                                                                                                          
+  - Report: current phase, what's done, what's next, any blockers      
+                                                                                                                                                               
+  AGENT 2: Inference Engine (AI Core)                                                                                                                          
+  - Read ALL files in phase3/src/ai/:                                                                                                                          
+    - llama_quant.c AND llama_quant.h (quantized zero-copy inference — the key innovation)                                                                     
+    - llama_forward.c (F32 forward pass — 198 LOC)                                                                                                             
+    - llama_load.c (F32 model loading with weight tying + rope_freqs)                                                                                          
+    - llama_model.h (config, layer, model, state structs)                                                                                                      
+    - dequant.c AND dequant.h (Q4_0, Q8_0, F16, Q4_K, Q6_K — note the interleaving patterns)                                                                   
+    - gguf_parser.c AND gguf_parser.h (GGUF file/memory parsing)                                                                                               
+    - gguf_vocab.c AND gguf_vocab.h (raw binary vocab extraction)                                                                                              
+    - tensor_ops.c AND tensor_ops.h (matmul, rms_norm, softmax, silu)                                                                                          
+    - tokenizer.c AND tokenizer.h (BPE encode/decode with GPT-2 byte mapping)                                                                                  
+    - sampling.c AND sampling.h (greedy + top-k)                                                                                                               
+    - inference.c AND inference.h (high-level F32 inference API)                                                                                               
+  - Report: full API map, data flow from GGUF→tokens→logits→text, memory budget, which functions call which                                                    
+                                                                                                                                                               
+  AGENT 3: seL4 Rootserver, Process Isolation & Build System
+  - Read phase3/src/sel4/main_x86.c (Process A — rootserver with allocman bootstrap + process spawning)
+  - Read phase3/src/sel4/inference_server.c (Process B — IPC loop, model loading, generation)
+  - Read phase3/src/sel4/CMakeLists.txt (build config)
+  - Read phase3/src/ai/decision_cache.h AND cache_patterns.h
+  - Read phase3/src/ipc/shmem_ipc.h AND ipc_transport.h
+  - Read phase3/src/ai/shield.h (SHIELD safety module)
+  - Read phase3/src/ai/model_scaling.h (dynamic model scaling state machine)
+  - Read docs/superpowers/plans/2026-03-27-process-isolation.md (process isolation plan)
+  - Check: ~/sel4-x86/projects/jarvis-x86/apps/jarvis-inference/ (Process B build tree + CPIO)
+  - Check: ~/sel4-x86/projects/jarvis-x86/apps/sel4test-driver/CMakeLists.txt (CPIO + add_subdirectory)
+  - Check: ~/sel4-x86/projects/jarvis-x86/CMakeLists.txt (CNode=19)
+  - Check: ~/sel4-x86/projects/jarvis-x86/easy-settings.cmake (morecore=256MB)
+  - Report: boot flow, self-tests, process spawning status (what works, what's WIP), shared memory IPC status, build/run commands                                                
+                                                                                                                                                               
+  AGENT 4: x86 Drivers & IPC                                                                                                                                   
+  - Read ALL files in phase3/src/drivers/:                                                                                                                     
+    - uart_16550.c/h, pci.c/h, ahci.c/h, blk_dev_x86.c/h               
+    - nic_rtl8168.c/h, x86_timer.c/h, net_stack.c/h, net_cmd.c/h                                                                                               
+  - Read ALL files in phase3/src/ipc/:                                                                                                                         
+    - shmem_ipc.c/h, ring_buffer.c/h, dual_ring_buffer.c/h                                                                                                     
+    - ipc_handler.c/h, ipc_transport.h                                                                                                                         
+  - Report: which drivers are mock-tested vs real, IPC architecture, what's ready for real hardware vs what needs work                                         
+                                                                                                                                                               
+  AGENT 5: Test Infrastructure & CI                                                                                                                            
+  - Read .github/workflows/ci.yml (full file — all CI steps)                                                                                                   
+  - Read EVERY test file in phase3/src/ai/test_*.c (there are 14 of them)                                                                                      
+  - Read EVERY test file in phase3/src/drivers/test_*.c (there are 9)                                                                                          
+  - Read phase3/src/ipc/test_shmem_ipc.c                                                                                                                       
+  - Run: grep -c "PASS" on each test to count test functions                                                                                                   
+  - Report: complete test inventory, which tests need the model file (SKIP on CI), compile commands for each, any gaps in coverage                             
+                                                                                                                                                               
+  AGENT 6: Phase 1 & Phase 2 Legacy                                                                                                                            
+  - Read phase1/src/cache/decision_cache.c/h (portable, used in Phase 3)                                                                                       
+  - Read phase1/src/ipc/ring_buffer.c/h (portable, used in Phase 3)                                                                                            
+  - Read phase2/src/sel4/main_arm64.c (ARM64 rootserver — compare with x86)                                                                                    
+  - Read phase2/docs/PHASE_2_FINAL_REPORT.md                                                                                                                   
+  - Scan phase2/src/drivers/ for the 21 BCM2711 drivers                                                                                                        
+  - Report: what carried forward to Phase 3, what was rewritten, lessons learned                                                                               
+                                                                                                                                                               
+  After ALL agents complete, synthesize a unified summary:                                                                                                     
+  1. Architecture diagram (text-based) showing how all components connect                                                                                      
+  2. Complete file inventory with LOC and test coverage                                                                                                        
+  3. Known issues / TODO items found in code comments                                                                                                          
+  4. Recommended next tasks ranked by impact                                                                                                                   
+                                                                                                                                                               
+  Then say "Ready — what would you like to work on?" and wait for instructions.    
+
 name: jarvis-strategist
 description: "Strategic project guide for JARVIS AI-OS development. Use this skill whenever working on the JARVIS OS project in a guidance/planning capacity — generating implementation prompts, reviewing completed work, identifying next tasks, or checking project alignment. Trigger when the user says things like 'what's next', 'give me a prompt', 'review this output', 'what can we do', or pastes CC output for analysis. This skill turns Claude into a strategist that produces paste-ready prompts for a separate coding session, NOT a coder. Must trigger for any JARVIS-related planning, review, or prompt generation request."
 ---
@@ -41,7 +122,7 @@ When the user says "what's next", "give me a prompt", or "let's do X", produce a
 - **CI step YAML** to add to `.github/workflows/ci.yml`
 - **Commit message** ready to use
 - **CLAUDE.md updates** (new files in Quick Reference, updated test counts)
-- **Agent strategy** — if tasks are independent, tell CC to run parallel agents (one per task)
+- **Agent strategy** — size for best results: use as many agents as needed for quality (1 for trivial, 2-3 for standard, more for complex multi-component work). Always prefer parallel agents for independent tasks.
 
 Format prompts as fenced code blocks so the user can copy-paste cleanly.
 
@@ -63,8 +144,11 @@ Don't just agree with everything. If you see:
 - A security concern
 - Something that was done but doesn't match what the plan calls for
 - Synthetic/fake results where real verification is needed
+- CC not updating CLAUDE.md after completing work (enforce every commit with significant changes)
+- CC skipping CI steps for new test files (CLAUDE.md rule — every test_*.c needs a CI step)
+- CC committing .claude/settings.local.json (local config, never commit)
 
-...call it out directly and explain why it's a problem.
+...call it out directly and explain why it's a problem. Generate a follow-up prompt to fix the violation before moving on to new work.
 
 ## What You Do NOT Do
 
@@ -88,7 +172,7 @@ JARVIS AI-OS: AI-controlled operating system on seL4 microkernel.
 | Phase 0 | COMPLETE — Validation |
 | Phase 1 | COMPLETE — PoC on x86 QEMU |
 | Phase 2 | COMPLETE — Alpha on Pi 4 bare metal |
-| Phase 3 | IN PROGRESS — Beta on x86-64 (pre-work + early dev done) |
+| Phase 3 | IN PROGRESS — LLM inference on seL4 VERIFIED, awaiting spare PC |
 | Phase 4 | Future — Production v1.0 |
 
 ### Working Rules
@@ -107,7 +191,8 @@ Before giving a prompt to the user, verify it includes:
 - [ ] CI YAML block ready to paste
 - [ ] Commit message
 - [ ] Instructions for what to update in CLAUDE.md
-- [ ] Agent strategy (parallel vs sequential) if multiple tasks
+- [ ] Agent strategy — sized for best quality, parallel when independent
+- [ ] CLAUDE.MD RULES footer block (the 5-rule enforcement section)
 
 ## Session Start
 
@@ -116,3 +201,12 @@ Every session, begin by:
 2. Running `git log --oneline -20`
 3. Checking `phase3/docs/PHASE_3_IMPLEMENTATION_PLAN.md`
 4. Telling the user where things stand and what's next
+
+## Mid-Session (when user pastes CC output)
+
+When the user shares output from the coding CC:
+1. Analyze the output for correctness — did it do what the prompt asked?
+2. Check if CLAUDE.md rules were followed (CI steps, test counts, CLAUDE.md updates, no .claude/settings.local.json committed)
+3. Identify any bugs, missed steps, or rule violations
+4. Either confirm "looks good" or generate a follow-up fix prompt
+5. If the work is complete, identify the next task and offer to generate the prompt
