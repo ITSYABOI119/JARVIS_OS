@@ -16,7 +16,7 @@ Guidance for Claude Code when working with this repository.
 | **Phase 3** | **IN PROGRESS** | Months 24-36 | Beta on x86-64 bare metal (**LLM inference on seL4 VERIFIED**) |
 | Phase 4 | Future | Months 36+ | Production v1.0 |
 
-**Current:** Phase 3, Active Development (March 28, 2026). **MILESTONE: Process-isolated LLM inference on seL4.** Two seL4 processes communicate via shared memory IPC: Process A (rootserver + cache + SHIELD) spawns Process B (Llama 3.2 1B inference) from CPIO. Coherent text generation verified end-to-end through IPC. JARVIS Project PC awaiting RTX 3060 — all QEMU-possible work done.
+**Current:** Phase 3, Active Development (April 2, 2026). **MILESTONE: Process-isolated LLM inference on seL4.** Two seL4 processes communicate via shared memory IPC: Process A (rootserver + cache + SHIELD) spawns Process B (Llama 3.2 1B inference) from CPIO. Coherent text generation verified end-to-end through IPC. Two-PC setup operational: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/16GB/1TB Ubuntu) dedicated and wipeable for bare-metal seL4.
 
 ---
 
@@ -232,7 +232,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 
 ## Current Status (Phase 3 — Process-Isolated LLM Inference on seL4)
 
-**PROCESS ISOLATION MILESTONE** (March 28, 2026) — Two seL4 processes running: Process A (rootserver, cache, SHIELD) spawns Process B (Llama 3.2 1B inference) from CPIO archive. Process B loads 770MB model zero-copy from .rodata, extracts 128K BPE vocab, generates coherent text. End-to-end IPC verified: Process A sends "The seL4 microkernel is" → Process B generates → response via shared memory. CNode=22 (4M slots), morecore=128MB, 8GB QEMU. JARVIS Project PC awaiting RTX 3060 install, then wipe for bare-metal.
+**PROCESS ISOLATION MILESTONE** (March 28, 2026) — Two seL4 processes running: Process A (rootserver, cache, SHIELD) spawns Process B (Llama 3.2 1B inference) from CPIO archive. Process B loads 770MB model zero-copy from .rodata, extracts 128K BPE vocab, generates coherent text. End-to-end IPC verified: Process A sends "The seL4 microkernel is" → Process B generates → response via shared memory. CNode=22 (4M slots), morecore=128MB, 8GB QEMU. JARVIS Project PC ready for bare-metal wipe (CPU-only, no GPU compute).
 
 | Milestone | Status |
 |-----------|--------|
@@ -340,7 +340,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | **End-to-end IPC: Process A query → Process B inference → response** | **DONE** |
 | **CNode=22, morecore=128MB, allocator pools scaled for 230K frames** | **DONE** |
 
-**Next:** RTX 3060 purchase for JARVIS Project PC. All QEMU-achievable work complete. Ready for real hardware.
+**Next:** Boot seL4 bare-metal on JARVIS PC (Ryzen 7 2700X, 16GB, 1TB, Ubuntu). All QEMU-achievable work complete. Two-PC setup operational — JARVIS PC is dedicated and wipeable.
 
 ### Pre-Work Tasks (Before JARVIS Project PC)
 
@@ -395,12 +395,12 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 - Load GGUF model from NVMe (currently embedded in .rodata via objcopy)
 - 30-day stability test on x86
 
-### Phase 3 Weeks (After RTX 3060 Install + Wipe)
+### Phase 3 Weeks
 
 | Weeks | Task |
 |-------|------|
-| 1-6 | Phase 3a: JARVIS Project PC GPU setup + bare-metal boot |
-| 7-28 | Phase 3b: Pure bare-metal seL4 x86-64 (drivers + GGUF parser partially done) |
+| 1-6 | Phase 3a: GPU benchmarks + native Linux build env (COMPLETE) |
+| 7-28 | Phase 3b: Pure bare-metal seL4 x86-64 — JARVIS PC wipeable NOW |
 | 29-40 | Phase 3c: Hardening, fuzz testing, SHIELD |
 | 41-44 | Final report + git tag v0.3.0-beta |
 
@@ -623,11 +623,15 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Security:** 26/26 adversarial audit findings resolved (March 2026). SHIELD module: keyword + model-assisted risk scoring.
 - **Inference:** Llama 3.2 1B Q4_K_M on seL4 QEMU, coherent output, 50MB heap
 
-### Hardware Pivot Context
+### Hardware Setup
 
-Intel NUC ($1,200) → Raspberry Pi 4 ($75). seL4 ARM64 heritage, bare metal access, hardware owned.
-Trade-offs: slower UART IPC (7ms vs 54us), Llama 3.2 1B only, SD card (no NVMe).
-Doc: `phase2/docs/PHASE_2_HARDWARE_PIVOT.md`
+**Two-PC setup (April 2026):**
+- **Main PC:** Ryzen 5 5600, RTX 2070, 32GB, ASRock B550M-ITX/ac — daily driver
+- **JARVIS PC:** Ryzen 7 2700X, R9 280X (display only), 16GB DDR4, ASUS X470-F, 1TB, Ubuntu — dedicated, wipeable for bare-metal seL4
+- **Pi 4 8GB:** Phase 2 complete, ARM fallback
+- CPU-only AI inference on JARVIS PC (no GPU compute). GPU deferred to Phase 4.
+- X470-F Gaming NIC: Intel I211-AT — needs igb-family driver (nic_rtl8168.c targets B550M's RTL8111H)
+- Phase 2 hardware pivot doc: `phase2/docs/PHASE_2_HARDWARE_PIVOT.md`
 
 ### Technology Stack
 
@@ -638,5 +642,5 @@ Doc: `phase2/docs/PHASE_2_HARDWARE_PIVOT.md`
 - **Cross-compiler:** aarch64-linux-gnu-gcc 13.3.0 (ARM64), gcc 13.3.0 (x86-64)
 - **SIMD:** AVX2+FMA for tensor_matmul/rms_norm/qmatmul_vec (`-mavx2 -mfma`); `#ifdef __AVX2__` fallback to scalar
 - **Bootloader:** U-Boot 2026.01 (Pi 4), GRUB2/multiboot (x86 QEMU)
-- **Hardware:** Raspberry Pi 4 (BCM2711, 8GB), JARVIS Project PC (Ryzen 7 2700X, RTX 3060 pending, 16GB), Dev PC (Ryzen 5 5600 pending, RTX 2070, 32GB)
+- **Hardware:** Raspberry Pi 4 (BCM2711, 8GB), JARVIS PC (Ryzen 7 2700X, R9 280X display, 16GB, 1TB, ASUS X470-F, Ubuntu), Main PC (Ryzen 5 5600, RTX 2070, 32GB, ASRock B550M-ITX/ac)
 - **QEMU:** KVM-accelerated x86-64, 4GB RAM, CNode 19 (524K slots)

@@ -43,8 +43,7 @@ This document provides a detailed week-by-week implementation plan for Phase 3. 
 - Output: "a microkernel implementation of the L4 microkernel architecture. It is designed to be a lightweight alternative"
 - Logits verified against llama.cpp reference (top-5 match exactly)
 - KVM confirmed working on AMD Ryzen (-enable-kvm -cpu host, 4GB QEMU)
-**JARVIS Project PC operational.** RTX 3060 pending. All QEMU + optimization work continues now.
-**Bare-metal blocked on:** RTX 3060 install + new main PC build (to free this PC for wipe)
+**JARVIS Project PC ready for bare-metal.** CPU-only inference (no GPU compute). New main PC built — JARVIS PC is dedicated and wipeable.
 
 ### Phase 2 Baseline (What Carries Forward)
 
@@ -67,19 +66,18 @@ This document provides a detailed week-by-week implementation plan for Phase 3. 
 |----------|-------|--------|------|
 | Raspberry Pi 4 8GB | BCM2711, 8GB | Phase 2 complete | ARM testing / fallback |
 | Raspberry Pi 5 4GB | BCM2712, 4GB | Owned, unused | Available for experiments |
-| **JARVIS Project PC** | **Ryzen 7 2700X, 16GB DDR4, X470-F, 2TB NVMe** | **Operational (Ubuntu + KVM)** | **seL4 QEMU now, bare-metal after RTX 3060** |
-| New Main PC (planned) | Ryzen 5 5600, 32GB, B550M-ITX, RTX 2070 | Not yet built | Daily driver (replaces JARVIS PC for daily use) |
+| **JARVIS PC** | **Ryzen 7 2700X, R9 280X (display), 16GB DDR4, X470-F Gaming, 1TB NVMe** | **Ready for bare-metal wipe** | **seL4 bare-metal target** |
+| **Main PC** | **Ryzen 5 5600, RTX 2070, 32GB, ASRock B550M-ITX/ac** | **Operational (Windows)** | **Daily driver** |
 
 **GPU Status:**
-- Current: Radeon HD 7970 (GCN 1.0, display only, no compute)
-- Planned: **RTX 3060 12GB** (~$429 AUD, only remaining JARVIS purchase)
-- RTX 2070 moves to new main PC build
+- JARVIS PC: R9 280X (GCN 1.0, display only, no compute). GPU compute deferred to Phase 4.
+- Main PC: RTX 2070 (benchmarks done, not used for JARVIS)
 
 **Memory constraint:** 16GB RAM limits F32 model dequant to 1B (~6GB). Quantized path (qmodel) works for all sizes. 3B F32 testing requires careful memory management.
 
-**Disk:** 2TB NVMe — 198GB Ubuntu partition (55GB free), 1.7TB unused NTFS partition to reclaim.
+**Disk:** 1TB NVMe on JARVIS PC, Ubuntu installed.
 
-**Phase 3 milestones are no longer blocked on hardware assembly.** QEMU development and optimization work continues immediately. Bare-metal seL4 boot requires RTX 3060 + new main PC (so this machine can be wiped).
+**JARVIS PC is dedicated and wipeable. Bare-metal boot unblocked.** CPU-only inference (AVX2 on Zen+). NIC: Intel I211-AT (X470-F Gaming) — needs igb-family driver (nic_rtl8168.c targets B550M's RTL8111H).
 
 ### Code Portability Assessment
 
@@ -113,25 +111,14 @@ This document provides a detailed week-by-week implementation plan for Phase 3. 
 
 ### Phase 3a: GPU-Accelerated Host (Weeks 1-6)
 
-```
-┌──────────────────┐       UART        ┌──────────────────┐
-│  JARVIS Project PC  │◄─────────────────►│   Pi 4 (seL4)    │
-│   (Linux + CUDA) │   7ms RTT         │   (Unchanged)    │
-│                  │                   │                  │
-│   RTX 3060 AI    │                   │   Decision Cache  │
-│   75+ tok/s      │                   │   21 drivers      │
-└──────────────────┘                   └──────────────────┘
-     Dedicated, wipeable                    Proven stable
-```
-
-Same as Phase 2 architecture but with dedicated GPU host. Pi 4 code untouched.
+Phase 3a is COMPLETE (GPU benchmarks on RTX 2070, native Linux build env). Skipped — go straight to Phase 3b bare-metal.
 
 ### Phase 3b: Pure Bare-Metal x86 (Weeks 7-28) — TARGET
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │              JARVIS OS (JARVIS Project PC)                    │
-│            Ryzen 5 5600 + RTX 3060 12GB                 │
+│         Ryzen 7 2700X, 16GB DDR4, CPU-only              │
 │                                                          │
 │   seL4 Microkernel (Ring 0)                              │
 │   ├── Interrupt handling (<1μs)                          │
@@ -165,7 +152,7 @@ Same as Phase 2 architecture but with dedicated GPU host. Pi 4 code untouched.
 | AI runtime | Python (host PC) | Python + CUDA | **Native C (seL4 userspace)** |
 | IPC | UART 7ms | UART 7ms | **Shared memory <1μs** |
 | AI speed | 558ms (CPU) | ~13ms/tok (GPU) | **~50-100ms (CPU, 1B-3B)** |
-| GPU | None (on Pi 4) | RTX 3060 CUDA | None (Phase 4) |
+| GPU | None (on Pi 4) | RTX 2070 (benchmarks, main PC) | None (Phase 4) |
 | Linux | Required (host) | Required (host) | **None** |
 | Standalone | No | No | **Yes** |
 
@@ -468,7 +455,7 @@ Pre-Work Tasks (before JARVIS Project PC):
     ↓
   [Driver structs ready for implementation]
 
-────────────── RTX 3060 INSTALLED + BARE-METAL READY ──────────────
+────────────── BARE-METAL READY — JARVIS PC WIPEABLE ──────────────
     ↓
   Week 1: Phase 3a starts (GPU host + Pi 4 UART)
     ↓
@@ -510,32 +497,30 @@ While waiting for the JARVIS Project PC, the majority of Phase 3b implementation
 
 ### Revised Timeline (March 31, 2026)
 
-JARVIS Project PC is operational. Software development continues immediately. Hardware milestones depend on RTX 3060 purchase and new main PC build.
+JARVIS PC is dedicated and wipeable (April 2026). New main PC (5600/2070/32GB) handles daily use.
 
 | Phase | Status | What's Happening |
 |-------|--------|-----------------|
-| 3a (GPU + benchmarks) | **DONE** | GPU benchmarks completed on RTX 2070 before swap |
+| 3a (GPU + benchmarks) | **DONE** | GPU benchmarks completed on RTX 2070 |
 | 3b software | **DONE** | All QEMU work complete — inference, IPC, drivers, process isolation |
-| **3b optimization** | **NOW** | AVX2/SIMD, PCI 64-bit BAR, driver fixes (on JARVIS PC) |
-| 3b bare-metal boot | BLOCKED | Need RTX 3060 installed + new main PC built (to free this PC for wipe) |
-| 3b HW integration | BLOCKED | Real AHCI/NIC I/O after bare-metal boot |
-| 3b stability | BLOCKED | 30-day test after HW integration |
-| 3c hardening | BLOCKED | Security audit, fuzz testing after stability |
-| 3c finalization | BLOCKED | Final report, v0.3.0-beta tag |
+| **3b optimization** | **NOW** | AVX2/SIMD, PCI 64-bit BAR, driver fixes |
+| 3b bare-metal boot | **UNBLOCKED** | JARVIS PC wipeable — ready to boot seL4 |
+| 3b HW integration | NEXT | Real AHCI/NIC I/O after bare-metal boot |
+| 3b stability | PENDING | 30-day test after HW integration |
+| 3c hardening | PENDING | Security audit, fuzz testing after stability |
+| 3c finalization | PENDING | Final report, v0.3.0-beta tag |
 
-**Optimization work doable NOW (no hardware purchase needed):**
+**Optimization work (ongoing):**
 1. AVX2/FMA SIMD for tensor_ops (8-16x inference speedup)
-2. PCI 64-bit BAR support (needed for RTX 3060)
+2. PCI 64-bit BAR support
 3. Dead code cleanup (unused tensor_rope)
 4. Driver wiring (blk_dev → AHCI chain, NIC RX path)
+5. Intel I211-AT NIC driver (X470-F Gaming — replaces RTL8168 for JARVIS PC)
 
 **Estimated remaining timeline:**
-- Optimization work: ~2-3 weeks (ongoing now)
-- RTX 3060 purchase + install: when budget allows
-- New main PC build: when budget allows
-- Bare-metal boot + HW integration: ~4-6 weeks after PC is wipeable
+- Bare-metal boot + HW integration: ~4-6 weeks
 - Stability + hardening: ~8-10 weeks after that
-- **Total to v0.3.0-beta:** ~14-18 weeks after bare-metal is possible
+- **Total to v0.3.0-beta:** ~14-18 weeks
 
 ---
 
@@ -543,42 +528,42 @@ JARVIS Project PC is operational. Software development continues immediately. Ha
 
 ### Focus: Assemble PC, Validate Hardware, Boot seL4
 
-**Objective:** Install RTX 3060 in JARVIS Project PC, validate GPU with Linux benchmarks, then boot seL4 on real Ryzen hardware. Skip the Phase 2 UART/Pi 4 stability re-test (already proven: 30.6 days, 0 crashes). Go directly to bare-metal seL4.
+**Objective:** Boot seL4 on real Ryzen hardware (JARVIS PC: 2700X, 16GB, 1TB, X470-F Gaming). Skip GPU setup entirely — Phase 3 is CPU-only inference (AVX2 on Zen+). GPU compute deferred to Phase 4.
 
-**Rationale for compression:** The original 6-week Phase 3a assumed the Pi 4 would remain the seL4 platform while the JARVIS Project PC served as GPU host. Since Phase 3b software is already complete (inference engine, all drivers, self-test mode), there's no value in running the Pi 4 UART test harness against a different host PC. Instead, validate GPU performance (one afternoon) then go straight to seL4 bare metal.
+**Rationale for compression:** Phase 3a GPU host plan is obsolete — no GPU on JARVIS PC (R9 280X is display-only). GPU benchmarks already done on RTX 2070 (now in main PC). Phase 3b software is complete (inference engine, all drivers, self-test mode). Go directly to seL4 bare metal.
 
-> **Original Phase 3a plan (Weeks 1-6) preserved below for reference. These tasks are now compressed into 2 weeks.**
+> **Original Phase 3a plan (Weeks 1-6) preserved below for reference. GPU steps are now skipped — bare-metal boot is the first task.**
 
-**Objective (original):** Move AI inference to the JARVIS Project PC (dedicated, wipeable) with RTX 3060 GPU acceleration. Pi 4 continues running Phase 2 code unchanged. Zero code changes, zero risk.
+**Objective (original, obsolete):** Move AI inference to JARVIS Project PC with GPU acceleration. This is no longer the plan — JARVIS PC has no GPU compute. CPU-only inference instead.
 
 ---
 
-### Week 1: RTX 3060 Install + Disk Reclaim
+### Week 1: Bare-Metal Boot Prep (REVISED)
 
 **Tasks:**
-1. Assemble JARVIS Project PC hardware
-   - Install RTX 3060 12GB into JARVIS Project PC (Ryzen 7 2700X, X470-F, 16GB DDR4)
-   - Verify POST, BIOS settings (enable IOMMU, disable secure boot for later seL4 use)
-   - Note: Keep UEFI boot mode (not legacy BIOS) — seL4 x86-64 uses EFI
+1. Prepare JARVIS PC for bare-metal seL4
+   - JARVIS PC: Ryzen 7 2700X, R9 280X (display only), 16GB DDR4, X470-F Gaming, 1TB NVMe
+   - Ubuntu already installed — use it to build seL4 and prepare GRUB boot media
+   - BIOS settings: enable IOMMU, disable secure boot, keep UEFI boot mode
 
-2. Install Linux
-   - Ubuntu 22.04 LTS (well-tested NVIDIA driver support)
-   - Partition: 100GB Linux, rest unformatted (reserved for seL4 bare metal later)
-   - Install build essentials: `gcc`, `cmake`, `ninja-build`, `git`
+2. Build seL4 on JARVIS PC (Ubuntu)
+   - Install build essentials: `gcc`, `cmake`, `ninja-build`, `git`, `repo`
+   - Clone seL4 repos, build kernel for x86-64 PC99
+   - Verify QEMU boot on JARVIS PC first
 
-3. Install NVIDIA drivers + CUDA
-   - NVIDIA driver 535+ (proprietary, not nouveau)
-   - CUDA toolkit 12.x
-   - Verify: `nvidia-smi` shows RTX 3060, `nvcc --version` shows CUDA
+3. Prepare GRUB2 boot media
+   - Create USB boot stick with seL4 kernel + JARVIS rootserver
+   - Boot seL4 on real Ryzen 7 2700X hardware
+   - Connect serial console for debug output
 
 **Deliverables:**
-- JARVIS Project PC assembled and booting Linux
-- NVIDIA driver + CUDA working
-- `nvidia-smi` output documented
+- seL4 booting on real Ryzen hardware
+- Serial console working
+- Self-test mode 5/5 PASS on real hardware
 
-**Effort:** 6-8 hours
-**Dependencies:** JARVIS Project PC parts available
-**Acceptance:** `nvidia-smi` shows RTX 3060 12GB, CUDA 12.x installed
+**Effort:** 8-12 hours
+**Dependencies:** JARVIS PC available (READY)
+**Acceptance:** JARVIS rootserver 5/5 self-test on real x86 hardware
 
 ---
 
@@ -694,18 +679,17 @@ JARVIS Project PC is operational. Software development continues immediately. Ha
 
 ---
 
-### Compressed Phase 3a: Week 1 — Assembly + Linux + GPU Benchmarks
+### Compressed Phase 3a: Week 1 — seL4 Build Env on JARVIS PC (REVISED)
 
 **Tasks:**
-1. Install RTX 3060 in JARVIS Project PC (Ryzen 7 2700X, 16GB DDR4, X470-F, NVMe SSD)
-2. Install Ubuntu 22.04, NVIDIA drivers + CUDA, verify `nvidia-smi`
-3. Install llama.cpp with CUDA, benchmark: Llama 3.2 1B Q4, 3B Q4, 7B Q4
-4. Install seL4 build dependencies (gcc, cmake, ninja, repo)
-5. Clone seL4 repos, build kernel for x86-64 PC99, verify QEMU boot on JARVIS Project PC
+1. JARVIS PC already has Ubuntu — install seL4 build dependencies
+2. Clone seL4 repos, build kernel for x86-64 PC99, verify QEMU boot on JARVIS PC
+3. GPU benchmarks already done on RTX 2070 (main PC) — skip GPU setup entirely
+4. Prepare GRUB2 USB boot media for real hardware boot
 
-**Deliverables:** Hardware validated, GPU benchmark results, seL4 build env ready
-**Effort:** 8-12 hours
-**Acceptance:** `nvidia-smi` shows RTX 3060, llama-bench results captured, seL4 QEMU boots
+**Deliverables:** seL4 build env ready, QEMU boot verified on JARVIS PC
+**Effort:** 4-6 hours
+**Acceptance:** seL4 QEMU boots on JARVIS PC, GRUB boot media prepared
 
 ---
 
@@ -713,7 +697,7 @@ JARVIS Project PC is operational. Software development continues immediately. Ha
 
 **Tasks:**
 1. Prepare boot media (GRUB2 USB stick using `create_boot_usb.sh`)
-2. Boot seL4 on Ryzen 5 5600 — connect serial console
+2. Boot seL4 on Ryzen 7 2700X (JARVIS PC) — connect serial console
 3. Debug any IOAPIC/LAPIC/HPET hardware issues
 4. Run JARVIS rootserver with self-test mode on real hardware
 5. IPC benchmark: measure native seL4 IPC round-trip (~0.3-0.5μs expected)
@@ -724,7 +708,7 @@ JARVIS Project PC is operational. Software development continues immediately. Ha
 **Acceptance:** JARVIS rootserver 5/5 self-test on real x86 hardware
 **Risk:** AMD Ryzen PC99 compatibility. Mitigation: already tested in QEMU.
 
-**Compressed Phase 3a Checkpoint:** JARVIS Project PC operational, GPU benchmarked, seL4 booting on real hardware with self-test PASS.
+**Compressed Phase 3a Checkpoint:** JARVIS PC dedicated, seL4 booting on real Ryzen 7 2700X hardware with self-test PASS. CPU-only inference (no GPU).
 
 ---
 
@@ -919,13 +903,13 @@ JARVIS Project PC is operational. Software development continues immediately. Ha
 
 ### Week 17-18: Network Driver (Intel/Realtek NIC)
 
-> **STATUS:** ✅ SOFTWARE COMPLETE — RTL8168 NIC driver skeleton (6 tests). Real NIC TX/RX pending. NIC confirmed: Realtek RTL8111H on ASRock B550M-ITX/ac (PCI ID 10EC:8168 — matches driver).
+> **STATUS:** ✅ RTL8168 driver written (7 tests) — but JARVIS PC has Intel I211-AT (X470-F Gaming), NOT RTL8168. Need igb-family driver for bare-metal. RTL8168 driver targets B550M-ITX/ac (main PC, not running seL4).
 
 **Tasks:**
-1. Identify NIC on JARVIS Project PC
-   - PCI scan for Ethernet controller
-   - Likely: Intel I225-V (2.5GbE) or Realtek RTL8111/8125 (common on B550 boards)
-   - ASRock B550M-ITX/ac has Realtek RTL8111H (confirmed) — matches nic_rtl8168.c driver
+1. Identify NIC on JARVIS PC
+   - ASUS X470-F Gaming has Intel I211-AT GbE (igb family)
+   - Existing nic_rtl8168.c targets Realtek RTL8111H (B550M-ITX/ac, main PC) — won't work
+   - Need new Intel I211-AT / igb-family driver for bare-metal seL4 on JARVIS PC
 
 2. Implement NIC driver
    - File: `phase3/src/drivers/nic_x86.c`
@@ -1408,7 +1392,7 @@ JARVIS Project PC is operational. Software development continues immediately. Ha
 
 2. Write PHASE_4_KICKOFF.md (preliminary)
    - Phase 4 objectives:
-     - GPU acceleration via Vulkan compute (RTX 3060)
+     - GPU acceleration via Vulkan/CUDA compute (GPU TBD in Phase 4)
      - HDMI/display output
      - Multi-user support
      - External beta testing
@@ -1631,12 +1615,12 @@ Q4_K_M recommended for Phase 3b — best balance of quality and memory efficienc
 | 1 | AMD Ryzen PC99 seL4 boot fails | Low | High | Test on QEMU first (Week 7-8); debug IOAPIC/LAPIC; Intel NUC as last resort |
 | 2 | ggml POSIX stubs too complex | Medium | High | Start single-threaded; stub only what's called; evaluate ggml pure C subset |
 | 3 | AHCI driver complexity | Medium | Medium | Start with PIO mode; upgrade to DMA later; OSDev has reference code |
-| 4 | NIC chipset unknown until board inspected | Low | ✅ RESOLVED | ASRock B550M-ITX/ac has Realtek RTL8111H — matches nic_rtl8168.c |
+| 4 | NIC chipset mismatch | Low | ✅ RESOLVED | JARVIS PC (X470-F) has Intel I211-AT — need igb driver, not RTL8168 |
 | 5 | CPU inference too slow | Low | Medium | Cache handles 85%+; 1B at ~20 tok/s is usable; optimize later |
 | 6 | 16GB RAM insufficient | Low | Medium | 1B Q4 needs 0.7GB + seL4 <1GB; plenty of headroom; upgrade to 32GB (~$50) |
 | 7 | Stability regression on new platform | Medium | Medium | Pi 4 stays as fallback; staged migration |
 | 8 | seL4 x86 debugging difficult | Medium | Medium | Serial console from Day 1; QEMU for initial development |
-| 9 | RTX 3060 not yet purchased (blocks bare-metal) | Medium | Medium | QEMU + optimization work continues; bare-metal after GPU install |
+| 9 | Hardware blocker (PC availability) | Low | ✅ RESOLVED | JARVIS PC dedicated and wipeable, CPU-only inference |
 | 10 | Model file loading from NVMe | Low | Medium | AHCI driver needed first; start with RAM-loaded models during dev |
 
 ### Non-Technical Risks
@@ -1767,9 +1751,9 @@ Adapted from Phase 2 Appendix C.
 
 *Plan Date: March 18, 2026*
 *Phase 2 Completion: March 18, 2026*
-*Phase 3 Start: Pending JARVIS Project PC assembly*
+*Phase 3 Start: JARVIS PC ready for bare-metal (April 2026)*
 *Duration: 40-44 weeks (~10 months at 8-12 hrs/week)*
-*Hardware: JARVIS Project PC (Ryzen 7 2700X, RTX 3060 12GB, 16GB DDR4)*
+*Hardware: JARVIS PC (Ryzen 7 2700X, R9 280X display, 16GB DDR4, X470-F Gaming, 1TB NVMe)*
 *Target: Pure bare-metal seL4 x86-64 + native ggml AI inference*
 *Budget: $0-50 AUD additional*
 *Author: JARVIS Development Team (Solo Developer)*
