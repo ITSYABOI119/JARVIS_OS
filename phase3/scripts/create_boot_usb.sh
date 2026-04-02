@@ -39,7 +39,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # seL4 build output names (from DeclareRootserver(jarvis-x86))
 KERNEL_IMAGE="kernel-x86_64-pc99"
-ROOTSERVER_IMAGE="jarvis-x86-image-x86_64-pc99"
+ROOTSERVER_IMAGE="sel4test-driver-image-x86_64-pc99"
 
 usage() {
     echo "Usage: sudo $0 DEVICE --confirm [OPTIONS]"
@@ -393,7 +393,7 @@ echo -e "${GREEN}================================================${NC}"
 echo ""
 echo "USB layout:"
 echo "  /boot/kernel-x86_64-pc99              — seL4 kernel"
-echo "  /boot/jarvis-x86-image-x86_64-pc99   — JARVIS rootserver"
+echo "  /boot/sel4test-driver-image-x86_64-pc99   — JARVIS rootserver"
 echo "  /boot/grub/grub.cfg                   — GRUB config"
 if [ "$BOOT_MODE" = "uefi" ] || [ "$BOOT_MODE" = "both" ]; then
     echo "  /EFI/BOOT/BOOTX64.EFI                — UEFI bootloader"
