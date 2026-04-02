@@ -194,6 +194,56 @@ copy_file "$DRV_SRC/vga_text.h" "$DRV_DST/vga_text.h"
 copy_file "$JARVIS_DIR/phase3/src/sel4/inference_server.c" "$DEST/src/inference_server.c"
 echo ""
 
+# ── [5/5] Patch CMakeLists.txt ─────────────────────────────────────
+echo -e "${GREEN}[5/5] Patching CMakeLists.txt${NC}"
+
+CMAKE_FILE="$DEST/CMakeLists.txt"
+
+if [ -f "$CMAKE_FILE" ]; then
+    PATCHED=0
+
+    # Add src/drivers/vga_text.c to source list if missing
+    if ! grep -q "src/drivers/vga_text.c" "$CMAKE_FILE"; then
+        # Insert after the last src/ipc line in add_executable
+        sed -i '/src\/ipc\/.*\.c/{ $!{N; /src\/ipc\/.*\.c[^.]*$/{ s/$/\n    src\/drivers\/vga_text.c/; }} }' "$CMAKE_FILE" 2>/dev/null
+        # Fallback: if sed didn't match, try simpler pattern
+        if ! grep -q "src/drivers/vga_text.c" "$CMAKE_FILE"; then
+            sed -i '/^)$/{ x; /PATCHED_VGA/!{ x; /add_executable/,/^)$/{ /^)$/i\    src/drivers/vga_text.c
+            }; x; s/$/PATCHED_VGA/; x; }; x; }' "$CMAKE_FILE" 2>/dev/null
+        fi
+        # Final fallback: add before the closing paren of add_executable
+        if ! grep -q "src/drivers/vga_text.c" "$CMAKE_FILE"; then
+            sed -i '0,/^)/{s/^)/    src\/drivers\/vga_text.c\n)/}' "$CMAKE_FILE"
+        fi
+        if grep -q "src/drivers/vga_text.c" "$CMAKE_FILE"; then
+            echo -e "  ${GREEN}ADDED${NC}  src/drivers/vga_text.c to source list"
+            PATCHED=1
+        else
+            echo -e "  ${RED}FAILED${NC}  Could not add vga_text.c — edit CMakeLists.txt manually"
+        fi
+    else
+        echo -e "  ${CYAN}OK${NC}  src/drivers/vga_text.c already in source list"
+    fi
+
+    # Add src/drivers to include directories if missing
+    if ! grep -q '"src/drivers"' "$CMAKE_FILE"; then
+        sed -i 's|"src/ipc"|"src/ipc" "src/drivers"|' "$CMAKE_FILE"
+        if grep -q '"src/drivers"' "$CMAKE_FILE"; then
+            echo -e "  ${GREEN}ADDED${NC}  src/drivers to include directories"
+            PATCHED=1
+        else
+            echo -e "  ${RED}FAILED${NC}  Could not add include path — edit CMakeLists.txt manually"
+        fi
+    else
+        echo -e "  ${CYAN}OK${NC}  src/drivers already in include directories"
+    fi
+
+    [ "$PATCHED" -eq 0 ] && echo -e "  ${CYAN}OK${NC}  CMakeLists.txt already up to date"
+else
+    echo -e "  ${RED}WARN${NC}  CMakeLists.txt not found at $CMAKE_FILE"
+fi
+echo ""
+
 # ── Summary ─────────────────────────────────────────────────────────
 echo -e "${GREEN}────────────────────────────────────────────────${NC}"
 echo -e "${BOLD}Files synced:${NC} $COPY_COUNT"
