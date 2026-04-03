@@ -1013,14 +1013,62 @@ static void *main_continued(void *arg UNUSED)
                         puts_serial(" ("); put_dec(nvme_bar_pages * 4);
                         puts_serial("KB)\n");
 
-                        /* TODO: Allocate DMA buffers for admin/IO queues,
-                         * call nvme_init(), then use FAT32 to load model.
-                         * For now, just confirm BAR0 mapping works. */
-                        uint32_t vs = *(volatile uint32_t *)((uint8_t *)nvme_bar_vaddr + NVME_REG_VS);
-                        puts_serial("[JARVIS] NVMe version: ");
-                        put_dec((vs >> 16) & 0xFFFF); puts_serial(".");
-                        put_dec((vs >> 8) & 0xFF); puts_serial(".");
-                        put_dec(vs & 0xFF); puts_serial("\n");
+                        /* Allocate 5 DMA frames: admin SQ, admin CQ, IO SQ, IO CQ, identify buf.
+                         * Each is one 4KB page, physically contiguous. */
+                        #define NVME_DMA_FRAMES 5
+                        vka_object_t dma_objs[NVME_DMA_FRAMES];
+                        void *dma_vaddrs[NVME_DMA_FRAMES] = {0};
+                        uint64_t dma_paddrs[NVME_DMA_FRAMES] = {0};
+                        int dma_ok = 1;
+
+                        for (int d = 0; d < NVME_DMA_FRAMES; d++) {
+                            int derr = vka_alloc_frame(&vka, seL4_PageBits, &dma_objs[d]);
+                            if (derr) {
+                                puts_serial("[JARVIS] NVMe DMA frame alloc failed\n");
+                                dma_ok = 0;
+                                break;
+                            }
+                            /* Map uncacheable (vm_attributes = 0 on x86 disables caching) */
+                            dma_vaddrs[d] = vspace_map_pages(&vspace, &dma_objs[d].cptr, NULL,
+                                seL4_AllRights, 1, seL4_PageBits, 0);
+                            if (!dma_vaddrs[d]) {
+                                puts_serial("[JARVIS] NVMe DMA vspace map failed\n");
+                                dma_ok = 0;
+                                break;
+                            }
+                            /* Get physical address for DMA */
+                            seL4_X86_Page_GetAddress_t pa = seL4_X86_Page_GetAddress(dma_objs[d].cptr);
+                            dma_paddrs[d] = pa.paddr;
+                        }
+
+                        if (dma_ok) {
+                            puts_serial("[JARVIS] NVMe DMA: 5 frames allocated\n");
+                            /* dma[0]=admin_sq, dma[1]=admin_cq, dma[2]=io_sq, dma[3]=io_cq, dma[4]=identify */
+                            static nvme_controller_t nvme_ctrl;
+                            int nvme_err = nvme_init(&nvme_ctrl,
+                                (volatile uint8_t *)nvme_bar_vaddr, bar0_phys,
+                                dma_vaddrs[0], dma_paddrs[0],   /* admin SQ */
+                                dma_vaddrs[1], dma_paddrs[1],   /* admin CQ */
+                                dma_vaddrs[2], dma_paddrs[2],   /* IO SQ */
+                                dma_vaddrs[3], dma_paddrs[3],   /* IO CQ */
+                                dma_vaddrs[4], dma_paddrs[4]);  /* identify buf */
+
+                            if (nvme_err == 0) {
+                                puts_serial("[JARVIS] NVMe IDENTIFY: \"");
+                                puts_serial(nvme_ctrl.model);
+                                puts_serial("\" serial=\"");
+                                puts_serial(nvme_ctrl.serial);
+                                puts_serial("\" ");
+                                put_dec((uint32_t)(nvme_ctrl.ns_lba_count >> 20));
+                                puts_serial("M sectors (");
+                                put_dec(nvme_ctrl.ns_block_size);
+                                puts_serial("B/sector)\n");
+                            } else {
+                                puts_serial("[JARVIS] NVMe init failed: err=");
+                                put_dec((uint32_t)(-nvme_err));
+                                puts_serial("\n");
+                            }
+                        }
                     } else {
                         puts_serial("[JARVIS] NVMe BAR0 vspace map failed\n");
                     }

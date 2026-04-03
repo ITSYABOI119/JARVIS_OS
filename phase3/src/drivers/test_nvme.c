@@ -280,11 +280,13 @@ static int mock_full_init(void)
     /* CSTS starts at 0 (controller disabled).
      * The mock write32 handler auto-updates CSTS.RDY when CC.EN changes. */
 
+    static uint8_t identify_buf[4096] __attribute__((aligned(4096)));
     return nvme_init(&g_ctrl, (volatile uint8_t *)mock_bar, 0x80000000ULL,
                      admin_sq, (uint64_t)(uintptr_t)admin_sq,
                      admin_cq, (uint64_t)(uintptr_t)admin_cq,
                      io_sq, (uint64_t)(uintptr_t)io_sq,
-                     io_cq, (uint64_t)(uintptr_t)io_cq);
+                     io_cq, (uint64_t)(uintptr_t)io_cq,
+                     identify_buf, (uint64_t)(uintptr_t)identify_buf);
 }
 
 /* ========================================================================

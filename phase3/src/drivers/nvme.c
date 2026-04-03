@@ -144,13 +144,13 @@ int nvme_init(nvme_controller_t *ctrl,
               void *admin_sq_buf, uint64_t admin_sq_phys,
               void *admin_cq_buf, uint64_t admin_cq_phys,
               void *io_sq_buf, uint64_t io_sq_phys,
-              void *io_cq_buf, uint64_t io_cq_phys)
+              void *io_cq_buf, uint64_t io_cq_phys,
+              void *identify_buf, uint64_t identify_phys)
 {
     uint64_t cap;
     uint32_t cc, csts, aqa;
     int i, rc;
     nvme_sq_entry_t cmd;
-    uint8_t identify_buf[4096] __attribute__((aligned(4096)));
 
     memset(ctrl, 0, sizeof(*ctrl));
     ctrl->bar = mmio_base;
@@ -215,11 +215,11 @@ int nvme_init(nvme_controller_t *ctrl,
         return -3;
 
     /* Step 5: IDENTIFY controller (CNS=1) */
-    memset(identify_buf, 0, sizeof(identify_buf));
+    memset(identify_buf, 0, 4096);
     memset(&cmd, 0, sizeof(cmd));
     cmd.opcode = NVME_ADMIN_IDENTIFY;
     cmd.nsid   = 0;
-    cmd.prp1   = (uint64_t)(uintptr_t)identify_buf;
+    cmd.prp1   = identify_phys;
     cmd.prp2   = 0;
     cmd.cdw10  = NVME_IDENTIFY_CONTROLLER;
 
@@ -228,12 +228,13 @@ int nvme_init(nvme_controller_t *ctrl,
         return -4;
 
     /* Parse serial (bytes 4-23) and model (bytes 24-63), trim trailing spaces */
-    memcpy(ctrl->serial, &identify_buf[4], 20);
+    uint8_t *id = (uint8_t *)identify_buf;
+    memcpy(ctrl->serial, &id[4], 20);
     ctrl->serial[20] = '\0';
     for (i = 19; i >= 0 && ctrl->serial[i] == ' '; i--)
         ctrl->serial[i] = '\0';
 
-    memcpy(ctrl->model, &identify_buf[24], 40);
+    memcpy(ctrl->model, &id[24], 40);
     ctrl->model[40] = '\0';
     for (i = 39; i >= 0 && ctrl->model[i] == ' '; i--)
         ctrl->model[i] = '\0';
@@ -276,11 +277,11 @@ int nvme_init(nvme_controller_t *ctrl,
     ctrl->io.cid_counter = 0;
 
     /* Step 8: IDENTIFY namespace 1 (CNS=0) */
-    memset(identify_buf, 0, sizeof(identify_buf));
+    memset(identify_buf, 0, 4096);
     memset(&cmd, 0, sizeof(cmd));
     cmd.opcode = NVME_ADMIN_IDENTIFY;
     cmd.nsid   = 1;
-    cmd.prp1   = (uint64_t)(uintptr_t)identify_buf;
+    cmd.prp1   = identify_phys;
     cmd.prp2   = 0;
     cmd.cdw10  = NVME_IDENTIFY_NAMESPACE;
 
@@ -289,15 +290,16 @@ int nvme_init(nvme_controller_t *ctrl,
         return -7;
 
     /* Parse namespace size (bytes 8-15, uint64_t LE) */
-    memcpy(&ctrl->ns_lba_count, &identify_buf[8], sizeof(uint64_t));
+    id = (uint8_t *)identify_buf;
+    memcpy(&ctrl->ns_lba_count, &id[8], sizeof(uint64_t));
 
     /* Parse LBA format: FLBAS at byte 26 (bits 3:0 = format index) */
     {
-        uint8_t flbas = identify_buf[26] & 0x0F;
+        uint8_t flbas = id[26] & 0x0F;
         /* LBA format table starts at byte 128, each entry is 4 bytes.
          * Bits 23:16 of the entry = LBADS (log2 block size) */
         uint32_t lba_fmt;
-        memcpy(&lba_fmt, &identify_buf[128 + flbas * 4], sizeof(uint32_t));
+        memcpy(&lba_fmt, &id[128 + flbas * 4], sizeof(uint32_t));
         uint8_t lbads = (lba_fmt >> 16) & 0xFF;
         ctrl->ns_block_size = (lbads > 0) ? (1U << lbads) : 512;
     }

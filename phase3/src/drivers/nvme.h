@@ -122,12 +122,15 @@ typedef struct {
 
 /* ---- Public API ---- */
 
+/* identify_buf: 4KB page-aligned buffer for IDENTIFY commands.
+ * identify_phys: its physical address (for DMA). */
 int nvme_init(nvme_controller_t *ctrl,
               volatile uint8_t *mmio_base, uint64_t bar_phys,
               void *admin_sq_buf, uint64_t admin_sq_phys,
               void *admin_cq_buf, uint64_t admin_cq_phys,
               void *io_sq_buf, uint64_t io_sq_phys,
-              void *io_cq_buf, uint64_t io_cq_phys);
+              void *io_cq_buf, uint64_t io_cq_phys,
+              void *identify_buf, uint64_t identify_phys);
 
 int nvme_read_sectors(nvme_controller_t *ctrl,
                       uint64_t lba, uint32_t count,

@@ -133,13 +133,16 @@ int blk_dev_init(void)
                     __attribute__((aligned(4096)));
                 static uint8_t io_cq[NVME_IO_QUEUE_SIZE * 16]
                     __attribute__((aligned(4096)));
+                static uint8_t identify[4096]
+                    __attribute__((aligned(4096)));
 
                 int err = nvme_init(&g_nvme_ctrl,
                     (volatile uint8_t *)(uintptr_t)bar0, bar0,
                     admin_sq, (uint64_t)(uintptr_t)admin_sq,
                     admin_cq, (uint64_t)(uintptr_t)admin_cq,
                     io_sq, (uint64_t)(uintptr_t)io_sq,
-                    io_cq, (uint64_t)(uintptr_t)io_cq);
+                    io_cq, (uint64_t)(uintptr_t)io_cq,
+                    identify, (uint64_t)(uintptr_t)identify);
 
                 if (err == 0) {
                     g_use_nvme = 1;
@@ -218,14 +221,16 @@ int blk_dev_init_nvme(volatile uint8_t *bar0_mapped, uint64_t bar0_phys,
                        void *admin_sq, uint64_t admin_sq_phys,
                        void *admin_cq, uint64_t admin_cq_phys,
                        void *io_sq, uint64_t io_sq_phys,
-                       void *io_cq, uint64_t io_cq_phys)
+                       void *io_cq, uint64_t io_cq_phys,
+                       void *identify_buf, uint64_t identify_phys)
 {
     int err = nvme_init(&g_nvme_ctrl,
         bar0_mapped, bar0_phys,
         admin_sq, admin_sq_phys,
         admin_cq, admin_cq_phys,
         io_sq, io_sq_phys,
-        io_cq, io_cq_phys);
+        io_cq, io_cq_phys,
+        identify_buf, identify_phys);
 
     if (err != 0) return err;
 
