@@ -16,7 +16,7 @@ Guidance for Claude Code when working with this repository.
 | **Phase 3** | **IN PROGRESS** | Months 24-36 | Beta on x86-64 bare metal (**LLM inference on seL4 VERIFIED**) |
 | Phase 4 | Future | Months 36+ | Production v1.0 |
 
-**Current:** Phase 3, Active Development (April 3, 2026). **MILESTONE: Bare-metal boot on Ryzen 7 2700X.** seL4 JARVIS boots on real hardware with VGA output on R9 280X. Self-test 5/5 PASS, process isolation working, 183 untypeds. Two-PC setup: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/32GB/1TB NVMe) running bare-metal seL4.
+**Current:** Phase 3, Active Development (April 3, 2026). **MILESTONE: LLM inference on bare-metal seL4.** Llama 3.2 1B generates coherent text on Ryzen 7 2700X via process-isolated IPC. VGA output on R9 280X. Self-test 5/5 PASS, 183 untypeds, 31642MB RAM. Two-PC setup: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/32GB/1TB NVMe) running bare-metal seL4.
 
 ---
 
@@ -238,7 +238,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 
 ## Current Status (Phase 3 — Process-Isolated LLM Inference on seL4)
 
-**BARE-METAL BOOT MILESTONE** (April 3, 2026) — seL4 JARVIS boots on real Ryzen 7 2700X hardware (ASUS X470-F Gaming, 32GB DDR4, R9 280X). VGA text mode output working via mapped device frame at 0xB8000. 183 untypeds detected on real hardware (vs 107 in QEMU). Process isolation verified: Process A spawns Process B from CPIO, shared memory IPC operational. Self-test 5/5 PASS on bare metal. Boot via USB stick with GRUB multiboot.
+**BARE-METAL INFERENCE MILESTONE** (April 3, 2026) — **LLM inference running on bare-metal seL4 on Ryzen 7 2700X.** Llama 3.2 1B Q4_K_M generates coherent text ("a microkernel implementation of the L4 microkernel architecture...") via process-isolated IPC. Process A (rootserver + cache + SHIELD) sends query → Process B (inference engine, 770MB model in .rodata) generates response → displayed on VGA. 183 untypeds, 31642MB RAM detected. Boot via USB stick with GRUB multiboot. Self-test 5/5 PASS on real hardware.
 
 | Milestone | Status |
 |-----------|--------|
@@ -353,8 +353,10 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | Self-test 5/5 PASS on real hardware | DONE |
 | Process isolation on real hardware | DONE |
 | Bare-metal boot guide + BIOS checklist | DONE |
+| **Llama 3.2 1B inference on bare-metal Ryzen 2700X** | **DONE** |
+| **Coherent text generation via process-isolated IPC on real hardware** | **DONE** |
 
-**Next:** Load model on bare metal (GRUB module approach or NVMe driver). All bare-metal boot infrastructure working. VGA output confirmed on R9 280X.
+**Next:** NVMe driver for runtime model loading (currently embedded in .rodata via objcopy). Intel I211 NIC driver. Continuous IPC request loop. 30-day stability test.
 
 ### Pre-Work Tasks (Before JARVIS Project PC)
 
