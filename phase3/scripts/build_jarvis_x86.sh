@@ -189,6 +189,10 @@ DRV_DST="$DEST/src/drivers"
 
 copy_file "$DRV_SRC/vga_text.c" "$DRV_DST/vga_text.c"
 copy_file "$DRV_SRC/vga_text.h" "$DRV_DST/vga_text.h"
+copy_file "$DRV_SRC/nvme.c" "$DRV_DST/nvme.c"
+copy_file "$DRV_SRC/nvme.h" "$DRV_DST/nvme.h"
+copy_file "$DRV_SRC/fat32.c" "$DRV_DST/fat32.c"
+copy_file "$DRV_SRC/fat32.h" "$DRV_DST/fat32.h"
 
 # Inference server (Process B — lives in jarvis-inference app, NOT sel4test-driver)
 PROC_B_DIR="$SEL4_DIR/projects/jarvis-x86/apps/jarvis-inference/src"
