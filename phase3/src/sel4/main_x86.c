@@ -677,11 +677,12 @@ static int find_model_untypeds(uintptr_t *model_paddr_out,
     int nc = 0;
 
     for (int i = 0; i < ut_count && nc < 512; i++) {
-        size_t sz = 0;
+        size_t size_bits = 0;
         uintptr_t paddr = 0;
         bool device = false;
-        simple_get_nth_untyped(&simple, i, &sz, &paddr, &device);
-        if (!device && sz >= (1 << 16)) {
+        simple_get_nth_untyped(&simple, i, &size_bits, &paddr, &device);
+        size_t sz = (1UL << size_bits);
+        if (!device && size_bits >= 16) {  /* >= 64KB */
             cands[nc].paddr = paddr;
             cands[nc].size = sz;
             nc++;
@@ -753,13 +754,14 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
         uint64_t total_bytes = 0;
         int ram_large_count = 0;
         for (int i = 0; i < ut_count; i++) {
-            size_t sz = 0;
+            size_t size_bits = 0;
             uintptr_t paddr = 0;
             bool device = false;
-            simple_get_nth_untyped(&simple, i, &sz, &paddr, &device);
+            simple_get_nth_untyped(&simple, i, &size_bits, &paddr, &device);
+            size_t sz = (1UL << size_bits);
             if (!device) total_bytes += sz;
             /* Print only RAM untypeds >= 1MB to reduce clutter */
-            if (!device && sz >= (1 << 20)) {
+            if (!device && size_bits >= 20) {
                 puts_serial("  ut["); put_dec((uint32_t)i);
                 puts_serial("]: size="); put_dec((uint32_t)(sz >> 20));
                 puts_serial("MB paddr="); put_hex((uint32_t)(paddr >> 20));
