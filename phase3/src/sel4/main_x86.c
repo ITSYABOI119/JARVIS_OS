@@ -664,9 +664,15 @@ static int map_frame_direct(seL4_CPtr frame, seL4_CPtr vspace_root,
     return err ? -1 : 0;
 }
 
+/* Expected GGUF model size range (Llama 3.2 1B Q4_K_M ≈ 771MB) */
+#define MODEL_SIZE_MIN (700UL * 1024 * 1024)   /* 700MB */
+#define MODEL_SIZE_MAX (900UL * 1024 * 1024)   /* 900MB */
+#define MODEL_MAX_LARGE_PAGES 512              /* 512 * 2MB = 1024MB max */
+
 /* Find the GRUB-loaded model in bootinfo untypeds.
  * Returns 0 if found, -1 if not found.
- * Scans for contiguous RAM untypeds totaling >= 700MB. */
+ * Scans for contiguous RAM untypeds totaling 700-900MB (the GGUF model).
+ * Must be called BEFORE sel4utils_configure_process (which consumes untypeds). */
 static int find_model_untypeds(uintptr_t *model_paddr_out,
                                 size_t *model_size_out)
 {
@@ -689,7 +695,8 @@ static int find_model_untypeds(uintptr_t *model_paddr_out,
         }
     }
 
-    /* Find contiguous group >= 700MB */
+    /* Find contiguous group in the 700-900MB range (model-sized).
+     * This avoids grabbing all of RAM (which would be >> 900MB). */
     for (int start = 0; start < nc; start++) {
         uintptr_t region_start = cands[start].paddr;
         uintptr_t region_end = region_start + cands[start].size;
@@ -699,12 +706,14 @@ static int find_model_untypeds(uintptr_t *model_paddr_out,
             if (cands[j].paddr == region_end) {
                 region_end += cands[j].size;
                 total += cands[j].size;
+                /* Stop growing if we've exceeded max — don't grab all RAM */
+                if (total > MODEL_SIZE_MAX) break;
             } else {
                 break;
             }
         }
 
-        if (total >= 700UL * 1024 * 1024) {
+        if (total >= MODEL_SIZE_MIN && total <= MODEL_SIZE_MAX) {
             *model_paddr_out = region_start;
             *model_size_out = total;
             return 0;
@@ -725,7 +734,9 @@ static int find_model_untypeds(uintptr_t *model_paddr_out,
 
 /* ---- Spawn inference process (Process B) ---- */
 
-static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_notif_out)
+static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_notif_out,
+                                    int model_found, size_t model_size,
+                                    seL4_CPtr *model_caps, int model_n_caps)
 {
     int error;
 
@@ -854,73 +865,37 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
     puts_serial("[JARVIS] Shared memory mapped in Process B\n");
     void *remote_vaddr = (void *)SHMEM_VADDR_B;
 
-    /* ---- Map GRUB-loaded model into Process B ---- */
-    uintptr_t model_paddr = 0;
-    size_t model_size = 0;
-    size_t model_pages = 0;
-    int model_found = find_model_untypeds(&model_paddr, &model_size);
-
-    if (model_found == 0) {
-        puts_serial("[JARVIS] Model found: ");
-        put_dec((uint32_t)(model_size >> 20)); puts_serial("MB @ paddr ");
-        put_hex((uint32_t)(model_paddr >> 20)); puts_serial("M\n");
-
-        model_pages = model_size / 4096;
-        puts_serial("[JARVIS] Mapping "); put_dec((uint32_t)model_pages);
-        puts_serial(" model frames into Process B...\n");
-
-        seL4_CPtr pd_b_model = inference_process.pd.cptr;
-        int map_errors = 0;
-        for (size_t pg = 0; pg < model_pages; pg++) {
-            uintptr_t frame_paddr = model_paddr + pg * 4096;
-            vka_object_t frame;
-            int ferr = vka_alloc_frame_at(&vka, seL4_PageBits, frame_paddr, &frame);
-            if (ferr) {
-                if (map_errors < 3) {
-                    puts_serial("[JARVIS] frame_at failed pg=");
-                    put_dec((uint32_t)pg); puts_serial("\n");
-                }
-                map_errors++;
-                continue;
-            }
+    /* ---- Map pre-reserved model frames into Process B (2MB large pages) ---- */
+    if (model_found == 0 && model_n_caps > 0) {
+        size_t large_page_size = (1UL << seL4_LargePageBits);  /* 2MB */
+        int map_ok = 0, map_err = 0;
+        for (int i = 0; i < model_n_caps; i++) {
+            if (model_caps[i] == 0) { map_err++; continue; }
 
             /* Duplicate cap for Process B */
             cspacepath_t msrc, mdest;
-            vka_cspace_make_path(&vka, frame.cptr, &msrc);
-            ferr = vka_cspace_alloc_path(&vka, &mdest);
-            if (ferr) { map_errors++; continue; }
+            vka_cspace_make_path(&vka, model_caps[i], &msrc);
+            int ferr = vka_cspace_alloc_path(&vka, &mdest);
+            if (ferr) { map_err++; continue; }
             ferr = vka_cnode_copy(&mdest, &msrc, seL4_AllRights);
-            if (ferr) { map_errors++; continue; }
+            if (ferr) { map_err++; continue; }
 
-            ferr = map_frame_direct(mdest.capPtr, pd_b_model,
-                MODEL_VADDR_B + pg * 4096, seL4_AllRights);
+            ferr = map_frame_direct(mdest.capPtr, pd_b,
+                MODEL_VADDR_B + (size_t)i * large_page_size, seL4_AllRights);
             if (ferr) {
-                if (map_errors < 3) {
-                    puts_serial("[JARVIS] map_frame failed pg=");
-                    put_dec((uint32_t)pg); puts_serial("\n");
+                if (map_err < 3) {
+                    puts_serial("[JARVIS] model map_frame err at 2MB page ");
+                    put_dec((uint32_t)i); puts_serial("\n");
                 }
-                map_errors++;
-            }
-
-            /* Progress every 50000 pages (~195MB) */
-            if (pg > 0 && pg % 50000 == 0) {
-                puts_serial("  "); put_dec((uint32_t)(pg * 4 / 1024));
-                puts_serial("MB mapped\n");
+                map_err++;
+            } else {
+                map_ok++;
             }
         }
-
-        if (map_errors > 0) {
-            puts_serial("[JARVIS] Model mapping: ");
-            put_dec((uint32_t)map_errors); puts_serial(" errors / ");
-            put_dec((uint32_t)model_pages); puts_serial(" pages\n");
-        } else {
-            puts_serial("[JARVIS] Model mapped: ");
-            put_dec((uint32_t)(model_pages * 4 / 1024));
-            puts_serial("MB at Process B vaddr ");
-            put_hex((uint32_t)MODEL_VADDR_B); puts_serial("\n");
-        }
-    } else {
-        puts_serial("[JARVIS] No GRUB model module detected\n");
+        puts_serial("[JARVIS] Model mapped into Process B: ");
+        put_dec((uint32_t)map_ok); puts_serial("/");
+        put_dec((uint32_t)model_n_caps); puts_serial(" large pages (");
+        put_dec((uint32_t)(map_ok * 2)); puts_serial("MB)\n");
     }
 
     /* Copy notification caps to Process B's cspace */
@@ -987,10 +962,52 @@ static void *main_continued(void *arg UNUSED)
 #endif
     puts_serial("[JARVIS] Running on vspace-managed stack\n");
 
+    /* ---- Find and reserve model frames BEFORE Process B spawn ---- */
+    /* sel4utils_configure_process consumes untypeds (forward-only watermark).
+     * Model frames must be reserved first or they'll be lost. */
+    uintptr_t model_paddr = 0;
+    size_t model_size = 0;
+    int model_found = find_model_untypeds(&model_paddr, &model_size);
+    int model_n_caps = 0;
+    static seL4_CPtr model_caps[MODEL_MAX_LARGE_PAGES];
+
+    if (model_found == 0) {
+        size_t large_page_size = (1UL << seL4_LargePageBits);  /* 2MB */
+        model_n_caps = (int)((model_size + large_page_size - 1) / large_page_size);
+        if (model_n_caps > MODEL_MAX_LARGE_PAGES)
+            model_n_caps = MODEL_MAX_LARGE_PAGES;
+
+        puts_serial("[JARVIS] Model found: ");
+        put_dec((uint32_t)(model_size >> 20)); puts_serial("MB @ paddr ");
+        put_hex((uint32_t)(model_paddr >> 20)); puts_serial("M\n");
+        puts_serial("[JARVIS] Reserving "); put_dec((uint32_t)model_n_caps);
+        puts_serial(" x 2MB frames before spawn...\n");
+
+        int alloc_ok = 0;
+        for (int i = 0; i < model_n_caps; i++) {
+            vka_object_t frame;
+            uintptr_t pa = model_paddr + (size_t)i * large_page_size;
+            int err = vka_alloc_frame_at(&vka, seL4_LargePageBits, pa, &frame);
+            if (err) {
+                model_caps[i] = 0;
+            } else {
+                model_caps[i] = frame.cptr;
+                alloc_ok++;
+            }
+        }
+        puts_serial("[JARVIS] Reserved "); put_dec((uint32_t)alloc_ok);
+        puts_serial("/"); put_dec((uint32_t)model_n_caps);
+        puts_serial(" model frames\n");
+    } else {
+        puts_serial("[JARVIS] No GRUB model module detected\n");
+    }
+
     /* ---- Spawn inference process (Process B) ---- */
     seL4_CPtr req_notif = 0, resp_notif = 0;
     puts_serial("\n[JARVIS] Spawning inference process...\n");
-    if (spawn_inference_process(&req_notif, &resp_notif) != 0) {
+    if (spawn_inference_process(&req_notif, &resp_notif,
+                                 model_found, model_size,
+                                 model_caps, model_n_caps) != 0) {
         puts_serial("[JARVIS] Inference process spawn failed — running without inference\n");
         goto idle;
     }
