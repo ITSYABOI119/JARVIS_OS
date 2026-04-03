@@ -246,6 +246,19 @@ if [ -f "$CMAKE_FILE" ]; then
         echo -e "  ${CYAN}OK${NC}  src/drivers/pci.c already in source list"
     fi
 
+    # Add src/drivers/nvme.c to source list if missing
+    if ! grep -q "src/drivers/nvme.c" "$CMAKE_FILE"; then
+        sed -i '/src\/drivers\/pci.c/a\    src/drivers/nvme.c' "$CMAKE_FILE" 2>/dev/null
+        if grep -q "src/drivers/nvme.c" "$CMAKE_FILE"; then
+            echo -e "  ${GREEN}ADDED${NC}  src/drivers/nvme.c to source list"
+            PATCHED=1
+        else
+            echo -e "  ${RED}FAILED${NC}  Could not add nvme.c — edit CMakeLists.txt manually"
+        fi
+    else
+        echo -e "  ${CYAN}OK${NC}  src/drivers/nvme.c already in source list"
+    fi
+
     # Add JARVIS_SEL4 compile definition (needed for pci.c IOPort backend)
     if ! grep -q "JARVIS_SEL4" "$CMAKE_FILE"; then
         sed -i '/target_compile_options/a\target_compile_definitions(sel4test-driver PRIVATE JARVIS_SEL4)' "$CMAKE_FILE" 2>/dev/null
