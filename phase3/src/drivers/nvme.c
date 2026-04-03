@@ -165,7 +165,10 @@ int nvme_init(nvme_controller_t *ctrl,
     int i, rc;
     nvme_sq_entry_t cmd;
 
+    /* Save debug_fn (caller may have set it before init) */
+    void (*saved_debug)(uint32_t, uint32_t, uint8_t) = ctrl->debug_fn;
     memset(ctrl, 0, sizeof(*ctrl));
+    ctrl->debug_fn = saved_debug;
     ctrl->bar = mmio_base;
     ctrl->bar_phys = bar_phys;
 

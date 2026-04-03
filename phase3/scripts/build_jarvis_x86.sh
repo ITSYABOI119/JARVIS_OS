@@ -312,7 +312,12 @@ if [ ! -d "$BUILD_DIR" ]; then
     exit 1
 fi
 
+# Ensure IOMMU is disabled (NVMe DMA needs direct physical access)
 cd "$BUILD_DIR"
+if grep -q "KernelIOMMU:BOOL=ON" CMakeCache.txt 2>/dev/null; then
+    echo -e "${YELLOW}Disabling IOMMU (KernelIOMMU=OFF) for NVMe DMA...${NC}"
+    cmake -DKernelIOMMU=OFF . >/dev/null 2>&1
+fi
 ninja
 
 echo ""
