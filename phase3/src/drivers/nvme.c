@@ -125,6 +125,13 @@ static int nvme_submit_and_wait(nvme_controller_t *ctrl, nvme_queue_t *q,
         }
     }
 
+    /* Timeout — call debug callback if set */
+    if (ctrl->debug_fn) {
+        cqe = &q->cq[q->cq_head];
+        uint32_t csts_now = nvme_read32(ctrl->bar, NVME_REG_CSTS);
+        uint8_t sq0_op = q->sq[0].opcode;
+        ctrl->debug_fn(cqe->status, csts_now, sq0_op);
+    }
     return -0xFFFF;  /* Timeout */
 }
 

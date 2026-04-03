@@ -55,6 +55,14 @@ static seL4_CPtr g_pci_ioport_cap = 0;
 static void sel4_pci_outl(uint16_t port, uint32_t val) {
     seL4_X86_IOPort_Out32(g_pci_ioport_cap, port, val);
 }
+static void nvme_timeout_debug(uint32_t cq_raw, uint32_t csts_val, uint8_t sq_op) {
+    puts_serial("[NVMe DBG] timeout: cq_status=");
+    put_hex(cq_raw);
+    puts_serial(" csts="); put_hex(csts_val);
+    puts_serial(" sq0_op="); put_hex(sq_op);
+    puts_serial("\n");
+}
+
 static uint32_t sel4_pci_inl(uint16_t port) {
     seL4_X86_IOPort_In32_t reply = seL4_X86_IOPort_In32(g_pci_ioport_cap, port);
     return reply.result;
@@ -1051,6 +1059,8 @@ static void *main_continued(void *arg UNUSED)
                             }
                             /* dma[0]=admin_sq, dma[1]=admin_cq, dma[2]=io_sq, dma[3]=io_cq, dma[4]=identify */
                             static nvme_controller_t nvme_ctrl;
+                            nvme_ctrl.debug_fn = nvme_timeout_debug;
+
                             int nvme_err = nvme_init(&nvme_ctrl,
                                 (volatile uint8_t *)nvme_bar_vaddr, bar0_phys,
                                 dma_vaddrs[0], dma_paddrs[0],   /* admin SQ */

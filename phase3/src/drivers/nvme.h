@@ -120,6 +120,8 @@ typedef struct {
     bool              initialized;
     int               last_submit_err;  /* Last nvme_submit_and_wait return code */
     int               init_step;        /* Last init step completed (for debug) */
+    /* Debug callback: called on submit timeout with CQ entry + CSTS + SQ[0] opcode */
+    void            (*debug_fn)(uint32_t cq_status_raw, uint32_t csts, uint8_t sq0_opcode);
 } nvme_controller_t;
 
 /* ---- Public API ---- */
