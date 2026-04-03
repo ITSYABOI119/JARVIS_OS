@@ -988,6 +988,19 @@ static void *main_continued(void *arg UNUSED)
             puts_serial("\n");
 
             pci_enable_bus_master(nvme_pci);
+            /* Verify bus master + memory space enabled */
+            uint32_t pci_cmd_reg = pci_config_read(nvme_pci->bus, nvme_pci->device,
+                                                    nvme_pci->function, 0x04);
+            puts_serial("[JARVIS] NVMe PCI CMD: "); put_hex(pci_cmd_reg);
+            puts_serial(" (bus_master="); put_dec((pci_cmd_reg >> 2) & 1);
+            puts_serial(" mem_space="); put_dec((pci_cmd_reg >> 1) & 1);
+            puts_serial(")\n");
+            /* Enable memory space if not already set */
+            if (!(pci_cmd_reg & 0x02)) {
+                pci_config_write(nvme_pci->bus, nvme_pci->device,
+                                  nvme_pci->function, 0x04, pci_cmd_reg | 0x06);
+                puts_serial("[JARVIS] NVMe: enabled memory space + bus master\n");
+            }
             uint64_t bar0_phys = pci_get_bar_address(nvme_pci, 0);
             puts_serial("[JARVIS] NVMe BAR0: ");
             put_hex((uint32_t)(bar0_phys >> 32)); put_hex((uint32_t)bar0_phys);
