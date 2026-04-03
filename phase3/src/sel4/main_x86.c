@@ -664,9 +664,63 @@ static int map_frame_direct(seL4_CPtr frame, seL4_CPtr vspace_root,
     return err ? -1 : 0;
 }
 
+/* Find the GRUB-loaded model in bootinfo untypeds.
+ * Returns 0 if found, -1 if not found.
+ * Scans for contiguous RAM untypeds totaling >= 700MB. */
+static int find_model_untypeds(uintptr_t *model_paddr_out,
+                                size_t *model_size_out)
+{
+    int ut_count = (int)simple_get_untyped_count(&simple);
+
+    /* Collect RAM untypeds >= 64KB with paddr + size */
+    struct { uintptr_t paddr; size_t size; } cands[512];
+    int nc = 0;
+
+    for (int i = 0; i < ut_count && nc < 512; i++) {
+        size_t sz = 0;
+        uintptr_t paddr = 0;
+        bool device = false;
+        simple_get_nth_untyped(&simple, i, &sz, &paddr, &device);
+        if (!device && sz >= (1 << 16)) {
+            cands[nc].paddr = paddr;
+            cands[nc].size = sz;
+            nc++;
+        }
+    }
+
+    /* Find contiguous group >= 700MB */
+    for (int start = 0; start < nc; start++) {
+        uintptr_t region_start = cands[start].paddr;
+        uintptr_t region_end = region_start + cands[start].size;
+        size_t total = cands[start].size;
+
+        for (int j = start + 1; j < nc; j++) {
+            if (cands[j].paddr == region_end) {
+                region_end += cands[j].size;
+                total += cands[j].size;
+            } else {
+                break;
+            }
+        }
+
+        if (total >= 700UL * 1024 * 1024) {
+            *model_paddr_out = region_start;
+            *model_size_out = total;
+            return 0;
+        }
+    }
+
+    return -1;
+}
+
 /* Fixed virtual addresses for shared memory */
 #define SHMEM_VADDR_A  0x10000000UL  /* In Process A */
 #define SHMEM_VADDR_B  0x50000000UL  /* In Process B */
+
+/* Model loading via GRUB multiboot module.
+ * GRUB loads model.gguf into RAM. seL4 exposes it as untypeds.
+ * We map those frames into Process B's vspace at this address. */
+#define MODEL_VADDR_B   0x60000000UL  /* Virtual address in Process B for model */
 
 /* ---- Spawn inference process (Process B) ---- */
 
@@ -798,6 +852,75 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
     puts_serial("[JARVIS] Shared memory mapped in Process B\n");
     void *remote_vaddr = (void *)SHMEM_VADDR_B;
 
+    /* ---- Map GRUB-loaded model into Process B ---- */
+    uintptr_t model_paddr = 0;
+    size_t model_size = 0;
+    size_t model_pages = 0;
+    int model_found = find_model_untypeds(&model_paddr, &model_size);
+
+    if (model_found == 0) {
+        puts_serial("[JARVIS] Model found: ");
+        put_dec((uint32_t)(model_size >> 20)); puts_serial("MB @ paddr ");
+        put_hex((uint32_t)(model_paddr >> 20)); puts_serial("M\n");
+
+        model_pages = model_size / 4096;
+        puts_serial("[JARVIS] Mapping "); put_dec((uint32_t)model_pages);
+        puts_serial(" model frames into Process B...\n");
+
+        seL4_CPtr pd_b_model = inference_process.pd.cptr;
+        int map_errors = 0;
+        for (size_t pg = 0; pg < model_pages; pg++) {
+            uintptr_t frame_paddr = model_paddr + pg * 4096;
+            vka_object_t frame;
+            int ferr = vka_alloc_frame_at(&vka, seL4_PageBits, frame_paddr, &frame);
+            if (ferr) {
+                if (map_errors < 3) {
+                    puts_serial("[JARVIS] frame_at failed pg=");
+                    put_dec((uint32_t)pg); puts_serial("\n");
+                }
+                map_errors++;
+                continue;
+            }
+
+            /* Duplicate cap for Process B */
+            cspacepath_t msrc, mdest;
+            vka_cspace_make_path(&vka, frame.cptr, &msrc);
+            ferr = vka_cspace_alloc_path(&vka, &mdest);
+            if (ferr) { map_errors++; continue; }
+            ferr = vka_cnode_copy(&mdest, &msrc, seL4_AllRights);
+            if (ferr) { map_errors++; continue; }
+
+            ferr = map_frame_direct(mdest.capPtr, pd_b_model,
+                MODEL_VADDR_B + pg * 4096, seL4_AllRights);
+            if (ferr) {
+                if (map_errors < 3) {
+                    puts_serial("[JARVIS] map_frame failed pg=");
+                    put_dec((uint32_t)pg); puts_serial("\n");
+                }
+                map_errors++;
+            }
+
+            /* Progress every 50000 pages (~195MB) */
+            if (pg > 0 && pg % 50000 == 0) {
+                puts_serial("  "); put_dec((uint32_t)(pg * 4 / 1024));
+                puts_serial("MB mapped\n");
+            }
+        }
+
+        if (map_errors > 0) {
+            puts_serial("[JARVIS] Model mapping: ");
+            put_dec((uint32_t)map_errors); puts_serial(" errors / ");
+            put_dec((uint32_t)model_pages); puts_serial(" pages\n");
+        } else {
+            puts_serial("[JARVIS] Model mapped: ");
+            put_dec((uint32_t)(model_pages * 4 / 1024));
+            puts_serial("MB at Process B vaddr ");
+            put_hex((uint32_t)MODEL_VADDR_B); puts_serial("\n");
+        }
+    } else {
+        puts_serial("[JARVIS] No GRUB model module detected\n");
+    }
+
     /* Copy notification caps to Process B's cspace */
     seL4_CPtr remote_req_notif = sel4utils_copy_cap_to_process(
         &inference_process, &vka, req_notif_obj.cptr);
@@ -809,16 +932,18 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
         return -1;
     }
 
-    /* Build argv: req_notif, resp_notif, shmem_vaddr */
-    char arg0[32], arg1[32], arg2[32];
+    /* Build argv: req_notif, resp_notif, shmem_vaddr, model_vaddr, model_size */
+    char arg0[32], arg1[32], arg2[32], arg3[32], arg4[32];
     snprintf(arg0, sizeof(arg0), "%lu", (unsigned long)remote_req_notif);
     snprintf(arg1, sizeof(arg1), "%lu", (unsigned long)remote_resp_notif);
     snprintf(arg2, sizeof(arg2), "%lu", (unsigned long)remote_vaddr);
-    char *argv[] = { arg0, arg1, arg2 };
+    snprintf(arg3, sizeof(arg3), "%lu", (unsigned long)(model_found == 0 ? MODEL_VADDR_B : 0));
+    snprintf(arg4, sizeof(arg4), "%lu", (unsigned long)(model_found == 0 ? model_size : 0));
+    char *argv[] = { arg0, arg1, arg2, arg3, arg4 };
 
     /* Spawn Process B */
     error = sel4utils_spawn_process_v(&inference_process, &vka, &vspace,
-                                       3, argv, 1);
+                                       5, argv, 1);
     if (error) {
         puts_serial("[JARVIS] Failed to spawn inference process\n");
         return -1;
