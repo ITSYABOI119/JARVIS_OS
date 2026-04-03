@@ -197,6 +197,22 @@ jobs:
           -o /tmp/test_blk_dev
         /tmp/test_blk_dev
 
+    - name: "Phase 3: NVMe Driver (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -DJARVIS_TEST_MOCK \
+          -I phase3/src/drivers \
+          phase3/src/drivers/test_nvme.c phase3/src/drivers/nvme.c \
+          -o /tmp/test_nvme
+        /tmp/test_nvme
+
+    - name: "Phase 3: FAT32 Reader (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -DJARVIS_TEST_MOCK \
+          -I phase3/src/drivers \
+          phase3/src/drivers/test_fat32.c phase3/src/drivers/fat32.c \
+          -o /tmp/test_fat32
+        /tmp/test_fat32
+
     - name: "Phase 3: VGA Text Mode (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 -DJARVIS_TEST_MOCK \
