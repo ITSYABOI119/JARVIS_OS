@@ -734,9 +734,7 @@ static int find_model_untypeds(uintptr_t *model_paddr_out,
 
 /* ---- Spawn inference process (Process B) ---- */
 
-static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_notif_out,
-                                    int model_found, size_t model_size,
-                                    seL4_CPtr *model_caps, int model_n_caps)
+static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_notif_out)
 {
     int error;
 
@@ -865,39 +863,6 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
     puts_serial("[JARVIS] Shared memory mapped in Process B\n");
     void *remote_vaddr = (void *)SHMEM_VADDR_B;
 
-    /* ---- Map pre-reserved model frames into Process B (2MB large pages) ---- */
-    if (model_found == 0 && model_n_caps > 0) {
-        size_t large_page_size = (1UL << seL4_LargePageBits);  /* 2MB */
-        int map_ok = 0, map_err = 0;
-        for (int i = 0; i < model_n_caps; i++) {
-            if (model_caps[i] == 0) { map_err++; continue; }
-
-            /* Duplicate cap for Process B */
-            cspacepath_t msrc, mdest;
-            vka_cspace_make_path(&vka, model_caps[i], &msrc);
-            int ferr = vka_cspace_alloc_path(&vka, &mdest);
-            if (ferr) { map_err++; continue; }
-            ferr = vka_cnode_copy(&mdest, &msrc, seL4_AllRights);
-            if (ferr) { map_err++; continue; }
-
-            ferr = map_frame_direct(mdest.capPtr, pd_b,
-                MODEL_VADDR_B + (size_t)i * large_page_size, seL4_AllRights);
-            if (ferr) {
-                if (map_err < 3) {
-                    puts_serial("[JARVIS] model map_frame err at 2MB page ");
-                    put_dec((uint32_t)i); puts_serial("\n");
-                }
-                map_err++;
-            } else {
-                map_ok++;
-            }
-        }
-        puts_serial("[JARVIS] Model mapped into Process B: ");
-        put_dec((uint32_t)map_ok); puts_serial("/");
-        put_dec((uint32_t)model_n_caps); puts_serial(" large pages (");
-        put_dec((uint32_t)(map_ok * 2)); puts_serial("MB)\n");
-    }
-
     /* Copy notification caps to Process B's cspace */
     seL4_CPtr remote_req_notif = sel4utils_copy_cap_to_process(
         &inference_process, &vka, req_notif_obj.cptr);
@@ -909,18 +874,16 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
         return -1;
     }
 
-    /* Build argv: req_notif, resp_notif, shmem_vaddr, model_vaddr, model_size */
-    char arg0[32], arg1[32], arg2[32], arg3[32], arg4[32];
+    /* Build argv: req_notif, resp_notif, shmem_vaddr */
+    char arg0[32], arg1[32], arg2[32];
     snprintf(arg0, sizeof(arg0), "%lu", (unsigned long)remote_req_notif);
     snprintf(arg1, sizeof(arg1), "%lu", (unsigned long)remote_resp_notif);
     snprintf(arg2, sizeof(arg2), "%lu", (unsigned long)remote_vaddr);
-    snprintf(arg3, sizeof(arg3), "%lu", (unsigned long)(model_found == 0 ? MODEL_VADDR_B : 0));
-    snprintf(arg4, sizeof(arg4), "%lu", (unsigned long)(model_found == 0 ? model_size : 0));
-    char *argv[] = { arg0, arg1, arg2, arg3, arg4 };
+    char *argv[] = { arg0, arg1, arg2 };
 
     /* Spawn Process B */
     error = sel4utils_spawn_process_v(&inference_process, &vka, &vspace,
-                                       5, argv, 1);
+                                       3, argv, 1);
     if (error) {
         puts_serial("[JARVIS] Failed to spawn inference process\n");
         return -1;
@@ -962,52 +925,17 @@ static void *main_continued(void *arg UNUSED)
 #endif
     puts_serial("[JARVIS] Running on vspace-managed stack\n");
 
-    /* ---- Find and reserve model frames BEFORE Process B spawn ---- */
-    /* sel4utils_configure_process consumes untypeds (forward-only watermark).
-     * Model frames must be reserved first or they'll be lost. */
-    uintptr_t model_paddr = 0;
-    size_t model_size = 0;
-    int model_found = find_model_untypeds(&model_paddr, &model_size);
-    int model_n_caps = 0;
-    static seL4_CPtr model_caps[MODEL_MAX_LARGE_PAGES];
-
-    if (model_found == 0) {
-        size_t large_page_size = (1UL << seL4_LargePageBits);  /* 2MB */
-        model_n_caps = (int)((model_size + large_page_size - 1) / large_page_size);
-        if (model_n_caps > MODEL_MAX_LARGE_PAGES)
-            model_n_caps = MODEL_MAX_LARGE_PAGES;
-
-        puts_serial("[JARVIS] Model found: ");
-        put_dec((uint32_t)(model_size >> 20)); puts_serial("MB @ paddr ");
-        put_hex((uint32_t)(model_paddr >> 20)); puts_serial("M\n");
-        puts_serial("[JARVIS] Reserving "); put_dec((uint32_t)model_n_caps);
-        puts_serial(" x 2MB frames before spawn...\n");
-
-        int alloc_ok = 0;
-        for (int i = 0; i < model_n_caps; i++) {
-            vka_object_t frame;
-            uintptr_t pa = model_paddr + (size_t)i * large_page_size;
-            int err = vka_alloc_frame_at(&vka, seL4_LargePageBits, pa, &frame);
-            if (err) {
-                model_caps[i] = 0;
-            } else {
-                model_caps[i] = frame.cptr;
-                alloc_ok++;
-            }
-        }
-        puts_serial("[JARVIS] Reserved "); put_dec((uint32_t)alloc_ok);
-        puts_serial("/"); put_dec((uint32_t)model_n_caps);
-        puts_serial(" model frames\n");
-    } else {
-        puts_serial("[JARVIS] No GRUB model module detected\n");
-    }
+    /* ---- Model loading ----
+     * Priority: 1) embedded .rodata (JARVIS_HAS_MODEL)
+     *           2) NVMe FAT32 (future — blk_dev_init_nvme + fat32)
+     *           3) idle mode (no model)
+     * GRUB multiboot module approach was tried and abandoned —
+     * seL4 overwrites module memory during rootserver relocation. */
 
     /* ---- Spawn inference process (Process B) ---- */
     seL4_CPtr req_notif = 0, resp_notif = 0;
     puts_serial("\n[JARVIS] Spawning inference process...\n");
-    if (spawn_inference_process(&req_notif, &resp_notif,
-                                 model_found, model_size,
-                                 model_caps, model_n_caps) != 0) {
+    if (spawn_inference_process(&req_notif, &resp_notif) != 0) {
         puts_serial("[JARVIS] Inference process spawn failed — running without inference\n");
         goto idle;
     }
