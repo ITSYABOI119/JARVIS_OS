@@ -944,12 +944,12 @@ static void *main_continued(void *arg UNUSED)
     {
         /* seL4 runs rootserver in Ring 3 — direct outl/inl traps with GPF.
          * Get IOPort cap from simple interface and provide wrapper functions. */
-        /* simple_get_IOPort_cap(simple, start, end, root, dest) */
+        /* simple_get_IOPort_cap(simple, start, end, root, dest, depth) */
         seL4_CPtr ioport_cap = 0;
         cspacepath_t ioport_path;
         vka_cspace_alloc_path(&vka, &ioport_path);
         seL4_Error ioerr = simple_get_IOPort_cap(&simple, 0xCF8, 0xCFF,
-            ioport_path.root, ioport_path.capPtr);
+            ioport_path.root, ioport_path.capPtr, ioport_path.capDepth);
         if (ioerr != seL4_NoError) {
             puts_serial("[JARVIS] WARNING: could not get IOPort cap for PCI (err=");
             put_dec((uint32_t)ioerr);
