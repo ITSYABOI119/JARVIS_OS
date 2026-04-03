@@ -246,6 +246,19 @@ if [ -f "$CMAKE_FILE" ]; then
         echo -e "  ${CYAN}OK${NC}  src/drivers/pci.c already in source list"
     fi
 
+    # Add JARVIS_SEL4 compile definition (needed for pci.c IOPort backend)
+    if ! grep -q "JARVIS_SEL4" "$CMAKE_FILE"; then
+        sed -i '/target_compile_options/a\target_compile_definitions(sel4test-driver PRIVATE JARVIS_SEL4)' "$CMAKE_FILE" 2>/dev/null
+        if grep -q "JARVIS_SEL4" "$CMAKE_FILE"; then
+            echo -e "  ${GREEN}ADDED${NC}  JARVIS_SEL4 compile definition"
+            PATCHED=1
+        else
+            echo -e "  ${RED}FAILED${NC}  Could not add JARVIS_SEL4 — edit CMakeLists.txt manually"
+        fi
+    else
+        echo -e "  ${CYAN}OK${NC}  JARVIS_SEL4 already defined"
+    fi
+
     # Add src/drivers to include directories if missing
     if ! grep -q '"src/drivers"' "$CMAKE_FILE"; then
         sed -i 's|"src/ipc"|"src/ipc" "src/drivers"|' "$CMAKE_FILE"

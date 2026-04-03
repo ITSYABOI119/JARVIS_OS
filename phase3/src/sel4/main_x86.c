@@ -47,6 +47,18 @@
 #include "pci.h"
 #include "nvme.h"
 static int vga_ready = 0;  /* set after VGA frame mapped into vspace */
+
+/* seL4 IOPort wrappers for PCI config space (0xCF8/0xCFC).
+ * Cap acquired at runtime, stored here for the wrapper functions. */
+static seL4_CPtr g_pci_ioport_cap = 0;
+
+static void sel4_pci_outl(uint16_t port, uint32_t val) {
+    seL4_X86_IOPort_Out32(g_pci_ioport_cap, port, val);
+}
+static uint32_t sel4_pci_inl(uint16_t port) {
+    seL4_X86_IOPort_In32_t reply = seL4_X86_IOPort_In32(g_pci_ioport_cap, port);
+    return reply.result;
+}
 #endif
 
 /* ---- CPIO archive (contains Process B's ELF) ---- */
@@ -927,9 +939,19 @@ static void *main_continued(void *arg UNUSED)
 #endif
     puts_serial("[JARVIS] Running on vspace-managed stack\n");
 
-    /* ---- NVMe Detection ---- */
+    /* ---- PCI + NVMe Detection ---- */
 #ifdef __x86_64__
     {
+        /* seL4 runs rootserver in Ring 3 — direct outl/inl traps with GPF.
+         * Get IOPort cap from simple interface and provide wrapper functions. */
+        seL4_CPtr ioport_cap = simple_get_IOPort_cap(&simple, 0xCF8, 0xCFF);
+        if (!ioport_cap) {
+            puts_serial("[JARVIS] WARNING: could not get IOPort cap for PCI\n");
+        }
+        g_pci_ioport_cap = ioport_cap;
+        pci_set_ioport_ops(sel4_pci_outl, sel4_pci_inl);
+        puts_serial("[JARVIS] PCI IOPort cap acquired\n");
+
         pci_device_t pci_devs[32];
         int n_pci = pci_scan(pci_devs, 32);
         puts_serial("[JARVIS] PCI scan: "); put_dec((uint32_t)n_pci);

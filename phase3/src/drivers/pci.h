@@ -291,4 +291,18 @@ int pci_is_bar_mmio(pci_device_t *dev, int bar_index);
  */
 void pci_enable_bus_master(pci_device_t *dev);
 
+#ifdef JARVIS_SEL4
+/**
+ * pci_set_ioport_ops - Set I/O port access functions for seL4
+ *
+ * seL4 runs the rootserver in Ring 3 — direct outl/inl instructions
+ * cause a GPF. The rootserver must provide wrapper functions that use
+ * seL4_X86_IOPort_In32/Out32 with an IOPort capability.
+ *
+ * Must be called before any PCI scan/config access.
+ */
+void pci_set_ioport_ops(void (*out_fn)(uint16_t port, uint32_t val),
+                         uint32_t (*in_fn)(uint16_t port));
+#endif
+
 #endif /* JARVIS_PCI_H */

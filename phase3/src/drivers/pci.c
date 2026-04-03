@@ -14,10 +14,40 @@
 
 /* ========================================================================
  * I/O Port Access
+ *
+ * Three backends:
+ *   1. JARVIS_TEST_MOCK: extern functions (test harness provides)
+ *   2. JARVIS_SEL4: function pointers set via pci_set_ioport_ops()
+ *      (rootserver uses seL4_X86_IOPort_In32/Out32 with IOPort cap)
+ *   3. Default: inline asm (bare metal without OS, or Linux userspace with ioperm)
  * ======================================================================== */
 
-#ifndef JARVIS_TEST_MOCK
+#ifdef JARVIS_TEST_MOCK
+/* Test mock — defined externally */
+extern void outl(uint16_t port, uint32_t val);
+extern uint32_t inl(uint16_t port);
 
+#elif defined(JARVIS_SEL4)
+/* seL4: I/O port access via function pointers (set by rootserver) */
+static void (*g_outl)(uint16_t port, uint32_t val) = NULL;
+static uint32_t (*g_inl)(uint16_t port) = NULL;
+
+static void outl(uint16_t port, uint32_t val) {
+    if (g_outl) g_outl(port, val);
+}
+static uint32_t inl(uint16_t port) {
+    return g_inl ? g_inl(port) : 0xFFFFFFFF;
+}
+
+void pci_set_ioport_ops(void (*out_fn)(uint16_t, uint32_t),
+                         uint32_t (*in_fn)(uint16_t))
+{
+    g_outl = out_fn;
+    g_inl = in_fn;
+}
+
+#else
+/* Bare metal: direct I/O port instructions */
 static inline void outl(uint16_t port, uint32_t val)
 {
     __asm__ volatile("outl %0, %1" : : "a"(val), "Nd"(port));
@@ -29,11 +59,6 @@ static inline uint32_t inl(uint16_t port)
     __asm__ volatile("inl %1, %0" : "=a"(val) : "Nd"(port));
     return val;
 }
-
-#else
-/* Test mock — defined externally */
-extern void outl(uint16_t port, uint32_t val);
-extern uint32_t inl(uint16_t port);
 #endif
 
 /* ========================================================================
