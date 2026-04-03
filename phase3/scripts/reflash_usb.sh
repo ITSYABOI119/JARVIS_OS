@@ -5,9 +5,16 @@ set -euo pipefail
 DEV="${1:-/dev/sda}"
 BUILD="$HOME/sel4-x86/jbuild/images"
 JARVIS="$HOME/Desktop/JARVIS_OS"
+
+# Verify it's a block device (not a regular file from a bad dd)
+if [ ! -b "$DEV" ]; then
+    echo "ERROR: $DEV is not a block device. Unplug and re-plug the USB stick."
+    exit 1
+fi
+
 echo "Reflashing $DEV with JARVIS seL4..."
 umount ${DEV}* 2>/dev/null || true
-dd if=/dev/zero of=$DEV bs=1M count=1 2>/dev/null
+# No dd — just repartition directly. dd can corrupt /dev/sda into a regular file.
 parted -s $DEV mklabel msdos
 parted -s $DEV mkpart primary fat32 1MiB 100%
 parted -s $DEV set 1 boot on
