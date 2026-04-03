@@ -29,8 +29,8 @@ extern uint32_t inl(uint16_t port);
 
 #elif defined(JARVIS_SEL4)
 /* seL4: I/O port access via function pointers (set by rootserver) */
-static void (*g_outl)(uint16_t port, uint32_t val) = NULL;
-static uint32_t (*g_inl)(uint16_t port) = NULL;
+static void (*g_outl)(uint16_t port, uint32_t val) = 0;
+static uint32_t (*g_inl)(uint16_t port) = 0;
 
 static void outl(uint16_t port, uint32_t val) {
     if (g_outl) g_outl(port, val);
