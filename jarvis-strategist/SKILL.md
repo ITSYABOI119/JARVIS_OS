@@ -172,7 +172,7 @@ JARVIS AI-OS: AI-controlled operating system on seL4 microkernel.
 | Phase 0 | COMPLETE — Validation |
 | Phase 1 | COMPLETE — PoC on x86 QEMU |
 | Phase 2 | COMPLETE — Alpha on Pi 4 bare metal |
-| Phase 3 | IN PROGRESS — LLM inference on seL4 VERIFIED, awaiting spare PC |
+| Phase 3 | IN PROGRESS — **bare-metal boot on Ryzen 2700X ACHIEVED**, HW integration next |
 | Phase 4 | Future — Production v1.0 |
 
 ### Working Rules
@@ -182,6 +182,9 @@ These rules apply to the prompts you generate — the coding session must follow
 - Always update CLAUDE.md after completing work
 - Use parallel agents when tasks are independent
 - Aim for 100% test pass rate
+- **Always test in QEMU before flashing USB** — run `phase3/scripts/qemu_test.sh` after every build
+- **Build without embedded model for fast iteration** — use `-DJARVIS_EMBED_MODEL=""` for quick boot tests
+- **Verify GRUB menu entry works** — wrong image names cause silent boot failures
 
 ### Prompt Quality Checklist
 Before giving a prompt to the user, verify it includes:
