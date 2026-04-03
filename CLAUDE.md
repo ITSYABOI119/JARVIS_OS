@@ -228,6 +228,12 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 2. Implement, test, update status docs
 3. **COMMIT WEEKLY** with week number in commit message (MANDATORY)
 
+### Bare-Metal Development Rules
+
+- **Always test in QEMU before flashing USB** — run `phase3/scripts/qemu_test.sh` after every build. If it crashes in QEMU, don't waste time reflashing.
+- **Build without embedded model for fast iteration** — use `-DJARVIS_EMBED_MODEL=""` for quick boot tests. Model loading tested separately via GRUB module.
+- **Verify GRUB menu entry works** — wrong image names cause silent boot failures (keyboard dies, no output). Check grub.cfg image names match `ls ~/sel4-x86/jbuild/images/`.
+
 ---
 
 ## Current Status (Phase 3 — Process-Isolated LLM Inference on seL4)
