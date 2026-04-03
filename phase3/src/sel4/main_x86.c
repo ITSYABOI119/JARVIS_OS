@@ -1072,6 +1072,15 @@ static void *main_continued(void *arg UNUSED)
                             } else {
                                 puts_serial("[JARVIS] NVMe init failed: err=");
                                 put_dec((uint32_t)(-nvme_err));
+                                puts_serial(" step=");
+                                put_dec((uint32_t)nvme_ctrl.init_step);
+                                puts_serial(" submit_err=");
+                                /* Print as signed: if negative, show magnitude */
+                                int se = nvme_ctrl.last_submit_err;
+                                if (se < 0) { puts_serial("-"); put_hex((uint32_t)(-se)); }
+                                else { put_dec((uint32_t)se); }
+                                puts_serial(" dstrd=");
+                                put_dec(nvme_ctrl.dstrd);
                                 puts_serial("\n");
                             }
                         }

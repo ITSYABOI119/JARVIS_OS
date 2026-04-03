@@ -118,6 +118,8 @@ typedef struct {
     char              model[41];
     char              serial[21];
     bool              initialized;
+    int               last_submit_err;  /* Last nvme_submit_and_wait return code */
+    int               init_step;        /* Last init step completed (for debug) */
 } nvme_controller_t;
 
 /* ---- Public API ---- */

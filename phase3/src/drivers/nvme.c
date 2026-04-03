@@ -162,9 +162,12 @@ int nvme_init(nvme_controller_t *ctrl,
     ctrl->bar = mmio_base;
     ctrl->bar_phys = bar_phys;
 
+    ctrl->init_step = 0;
+
     /* Step 1: Read CAP, extract doorbell stride */
     cap = nvme_read64(ctrl->bar, NVME_REG_CAP);
     ctrl->dstrd = NVME_CAP_DSTRD(cap);
+    ctrl->init_step = 1;
 
     /* Step 2: Disable controller (CC.EN = 0), wait CSTS.RDY = 0 */
     cc = nvme_read32(ctrl->bar, NVME_REG_CC);
@@ -178,6 +181,7 @@ int nvme_init(nvme_controller_t *ctrl,
     }
     if (i >= NVME_TIMEOUT)
         return -1;
+    ctrl->init_step = 2;
 
     /* Step 3: Setup admin queues */
     memset(admin_sq_buf, 0, NVME_ADMIN_QUEUE_SIZE * sizeof(nvme_sq_entry_t));
@@ -219,6 +223,7 @@ int nvme_init(nvme_controller_t *ctrl,
     /* Check for fatal error */
     if (csts & NVME_CSTS_CFS)
         return -3;
+    ctrl->init_step = 4;
 
     /* Step 5: IDENTIFY controller (CNS=1) */
     memset(identify_buf, 0, 4096);
@@ -230,6 +235,7 @@ int nvme_init(nvme_controller_t *ctrl,
     cmd.cdw10  = NVME_IDENTIFY_CONTROLLER;
 
     rc = nvme_submit_and_wait(ctrl, &ctrl->admin, &cmd);
+    ctrl->last_submit_err = rc;
     if (rc != 0)
         return -4;
 
