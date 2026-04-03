@@ -66,18 +66,31 @@ This document provides a detailed week-by-week implementation plan for Phase 3. 
 |----------|-------|--------|------|
 | Raspberry Pi 4 8GB | BCM2711, 8GB | Phase 2 complete | ARM testing / fallback |
 | Raspberry Pi 5 4GB | BCM2712, 4GB | Owned, unused | Available for experiments |
-| **JARVIS PC** | **Ryzen 7 2700X, R9 280X (display), 16GB DDR4, X470-F Gaming, 1TB NVMe** | **Ready for bare-metal wipe** | **seL4 bare-metal target** |
+| **JARVIS PC** | **Ryzen 7 2700X, R9 280X (display), 32GB DDR4, X470-F Gaming, 1TB NVMe** | **BARE-METAL BOOT ACHIEVED** | **seL4 bare-metal target** |
 | **Main PC** | **Ryzen 5 5600, RTX 2070, 32GB, ASRock B550M-ITX/ac** | **Operational (Windows)** | **Daily driver** |
 
 **GPU Status:**
 - JARVIS PC: R9 280X (GCN 1.0, display only, no compute). GPU compute deferred to Phase 4.
 - Main PC: RTX 2070 (benchmarks done, not used for JARVIS)
 
-**Memory constraint:** 16GB RAM limits F32 model dequant to 1B (~6GB). Quantized path (qmodel) works for all sizes. 3B F32 testing requires careful memory management.
+**Memory:** 32GB DDR4 (swapped from 16GB). F32 model dequant up to 3B viable. Quantized path (qmodel) works for all sizes.
 
-**Disk:** 1TB NVMe on JARVIS PC, Ubuntu installed.
+**Disk:** 1TB NVMe (Lexar NM790, PCI 1d97:1602) on JARVIS PC.
 
-**JARVIS PC is dedicated and wipeable. Bare-metal boot unblocked.** CPU-only inference (AVX2 on Zen+). NIC: Intel I211-AT (X470-F Gaming) — needs igb-family driver (nic_rtl8168.c targets B550M's RTL8111H).
+**BARE-METAL BOOT ACHIEVED (April 3, 2026).** seL4 boots on real Ryzen 2700X, VGA output on R9 280X, self-test 5/5 PASS, 183 untypeds. CPU-only inference (AVX2 on Zen+). NIC: Intel I211-AT (PCI 8086:1539) — needs igb-family driver.
+
+### Verified PCI Devices (lspci, April 2026)
+
+| Device | BDF | PCI ID | Driver Status |
+|--------|-----|--------|---------------|
+| NVMe (boot drive) | 01:00.0 | 1d97:1602 | Lexar NM790 — needs NVMe driver (not AHCI) |
+| SATA | 02:00.1 | 1022:43c8 | AMD 400 Series — AHCI compatible (no drives) |
+| SATA | 0b:00.2 | 1022:7901 | AMD FCH AHCI — AHCI compatible (no drives) |
+| USB | 02:00.0 / 05:00.0 / 0a:00.3 | AMD + ASMedia | All xHCI — no legacy EHCI |
+| NIC | 07:00.0 | 8086:1539 | Intel I211 — needs igb driver |
+| VGA | 09:00.0 | 1002:6798 | R9 280X — VGA text mode working at 0xB8000 |
+
+Boot drive is NVMe — existing AHCI driver cannot access it. Model loading requires NVMe driver or GRUB multiboot module workaround.
 
 ### Code Portability Assessment
 
@@ -502,10 +515,10 @@ JARVIS PC is dedicated and wipeable (April 2026). New main PC (5600/2070/32GB) h
 | Phase | Status | What's Happening |
 |-------|--------|-----------------|
 | 3a (GPU + benchmarks) | **DONE** | GPU benchmarks completed on RTX 2070 |
-| 3b software | **DONE** | All QEMU work complete — inference, IPC, drivers, process isolation |
-| **3b optimization** | **NOW** | AVX2/SIMD, PCI 64-bit BAR, driver fixes |
-| 3b bare-metal boot | **UNBLOCKED** | JARVIS PC wipeable — ready to boot seL4 |
-| 3b HW integration | NEXT | Real AHCI/NIC I/O after bare-metal boot |
+| 3b software | **DONE** | All QEMU work complete |
+| 3b optimization | **DONE** | AVX2/SIMD, PCI 64-bit BAR, driver fixes |
+| **3b bare-metal boot** | **DONE** | seL4 on Ryzen 2700X, VGA output, self-test 5/5 PASS |
+| **3b HW integration** | **NEXT** | NVMe driver, I211 NIC, model loading |
 | 3b stability | PENDING | 30-day test after HW integration |
 | 3c hardening | PENDING | Security audit, fuzz testing after stability |
 | 3c finalization | PENDING | Final report, v0.3.0-beta tag |
@@ -750,7 +763,7 @@ JARVIS PC is dedicated and wipeable (April 2026). New main PC (5600/2070/32GB) h
 
 ### Week 9-10: Boot seL4 on JARVIS Project PC (Real Hardware)
 
-> **STATUS:** ⏳ PENDING HARDWARE — Boot on real Ryzen hardware. Covered by compressed Week 2 above.
+> **STATUS:** ✅ COMPLETE — seL4 boots on Ryzen 7 2700X bare metal. VGA output working. Self-test 5/5 PASS. 183 untypeds. Process isolation verified on real hardware.
 
 **Tasks:**
 1. Prepare boot media

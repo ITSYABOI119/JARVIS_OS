@@ -16,7 +16,7 @@ Guidance for Claude Code when working with this repository.
 | **Phase 3** | **IN PROGRESS** | Months 24-36 | Beta on x86-64 bare metal (**LLM inference on seL4 VERIFIED**) |
 | Phase 4 | Future | Months 36+ | Production v1.0 |
 
-**Current:** Phase 3, Active Development (April 2, 2026). **MILESTONE: Process-isolated LLM inference on seL4.** Two seL4 processes communicate via shared memory IPC: Process A (rootserver + cache + SHIELD) spawns Process B (Llama 3.2 1B inference) from CPIO. Coherent text generation verified end-to-end through IPC. Two-PC setup operational: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/16GB/1TB Ubuntu) dedicated and wipeable for bare-metal seL4.
+**Current:** Phase 3, Active Development (April 3, 2026). **MILESTONE: Bare-metal boot on Ryzen 7 2700X.** seL4 JARVIS boots on real hardware with VGA output on R9 280X. Self-test 5/5 PASS, process isolation working, 183 untypeds. Two-PC setup: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/32GB/1TB NVMe) running bare-metal seL4.
 
 ---
 
@@ -232,7 +232,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 
 ## Current Status (Phase 3 — Process-Isolated LLM Inference on seL4)
 
-**PROCESS ISOLATION MILESTONE** (March 28, 2026) — Two seL4 processes running: Process A (rootserver, cache, SHIELD) spawns Process B (Llama 3.2 1B inference) from CPIO archive. Process B loads 770MB model zero-copy from .rodata, extracts 128K BPE vocab, generates coherent text. End-to-end IPC verified: Process A sends "The seL4 microkernel is" → Process B generates → response via shared memory. CNode=22 (4M slots), morecore=128MB, 8GB QEMU. JARVIS Project PC ready for bare-metal wipe (CPU-only, no GPU compute).
+**BARE-METAL BOOT MILESTONE** (April 3, 2026) — seL4 JARVIS boots on real Ryzen 7 2700X hardware (ASUS X470-F Gaming, 32GB DDR4, R9 280X). VGA text mode output working via mapped device frame at 0xB8000. 183 untypeds detected on real hardware (vs 107 in QEMU). Process isolation verified: Process A spawns Process B from CPIO, shared memory IPC operational. Self-test 5/5 PASS on bare metal. Boot via USB stick with GRUB multiboot.
 
 | Milestone | Status |
 |-----------|--------|
@@ -339,12 +339,16 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | **Shared memory IPC between two seL4 processes (direct page mapping)** | **DONE** |
 | **End-to-end IPC: Process A query → Process B inference → response** | **DONE** |
 | **CNode=22, morecore=128MB, allocator pools scaled for 230K frames** | **DONE** |
-| VGA text mode output (80x25, 0xB8000) | DONE |
+| Hardware recon (lspci verified: NVMe, I211, R9 280X, xHCI) | DONE |
+| VGA text mode output (80x25, 0xB8000) via vka_alloc_frame_at | DONE |
 | GRUB2 boot config + USB creator script | DONE |
 | x86 source sync/build script | DONE |
+| Bare-metal boot on Ryzen 7 2700X | DONE |
+| Self-test 5/5 PASS on real hardware | DONE |
+| Process isolation on real hardware | DONE |
 | Bare-metal boot guide + BIOS checklist | DONE |
 
-**Next:** Boot seL4 bare-metal on JARVIS PC (Ryzen 7 2700X, 16GB, 1TB, Ubuntu). All QEMU-achievable work complete. Two-PC setup operational — JARVIS PC is dedicated and wipeable.
+**Next:** Load model on bare metal (GRUB module approach or NVMe driver). All bare-metal boot infrastructure working. VGA output confirmed on R9 280X.
 
 ### Pre-Work Tasks (Before JARVIS Project PC)
 
@@ -394,10 +398,10 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | **Total** | | | **80+ files** | **339 tests, ~20,000 LOC** |
 
 **What remains for Phase 3b on real hardware:**
-- Boot seL4 on actual Ryzen hardware (vs QEMU)
-- AHCI full read/write against real NVMe (mock-tested, real I/O pending)
-- NIC driver TX/RX against real NIC (skeleton done, real I/O pending)
-- Load GGUF model from NVMe (currently embedded in .rodata via objcopy)
+- NVMe driver for boot drive (Lexar NM790, PCI 1d97:1602 — AHCI driver cannot access)
+- Intel I211 NIC driver (PCI 8086:1539 — RTL8168 driver targets wrong chipset)
+- Load GGUF model from disk (needs NVMe driver, or load via GRUB multiboot module)
+- Continuous IPC request loop (currently single demo query)
 - 30-day stability test on x86
 
 ### Phase 3 Weeks
@@ -405,7 +409,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | Weeks | Task |
 |-------|------|
 | 1-6 | Phase 3a: GPU benchmarks + native Linux build env (COMPLETE) |
-| 7-28 | Phase 3b: Pure bare-metal seL4 x86-64 — JARVIS PC wipeable NOW |
+| 7-28 | Phase 3b: Pure bare-metal seL4 x86-64 — BARE-METAL BOOT ACHIEVED |
 | 29-40 | Phase 3c: Hardening, fuzz testing, SHIELD |
 | 41-44 | Final report + git tag v0.3.0-beta |
 
@@ -628,7 +632,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 
 - **Phase 1:** 39,106 LOC, 95 files, 338 test functions (COMPLETE)
 - **Phase 2:** ~27,000 LOC, 65 files, 108 tests (COMPLETE)
-- **Phase 3:** ~20,000 LOC, 80+ files, 339 tests (IN PROGRESS — **LLM inference on seL4 verified**)
+- **Phase 3:** ~20,000 LOC, 80+ files, 339 tests (IN PROGRESS — **bare-metal boot on Ryzen 2700X verified**)
 - **Total:** ~86,000+ LOC, 200+ files, 593+ tests
 - **Security:** 26/26 adversarial audit findings resolved (March 2026). SHIELD module: keyword + model-assisted risk scoring.
 - **Inference:** Llama 3.2 1B Q4_K_M on seL4 QEMU, coherent output, 50MB heap
@@ -637,7 +641,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 
 **Two-PC setup (April 2026):**
 - **Main PC:** Ryzen 5 5600, RTX 2070, 32GB, ASRock B550M-ITX/ac — daily driver
-- **JARVIS PC:** Ryzen 7 2700X, R9 280X (display only), 16GB DDR4, ASUS X470-F, 1TB, Ubuntu — dedicated, wipeable for bare-metal seL4
+- **JARVIS PC:** Ryzen 7 2700X, R9 280X (display only), 32GB DDR4 (swapped from 16GB), ASUS X470-F, 1TB NVMe, Ubuntu — dedicated, wipeable for bare-metal seL4
 - **Pi 4 8GB:** Phase 2 complete, ARM fallback
 - CPU-only AI inference on JARVIS PC (no GPU compute). GPU deferred to Phase 4.
 - X470-F Gaming NIC: Intel I211-AT — needs igb-family driver (nic_rtl8168.c targets B550M's RTL8111H)
@@ -652,5 +656,5 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Cross-compiler:** aarch64-linux-gnu-gcc 13.3.0 (ARM64), gcc 13.3.0 (x86-64)
 - **SIMD:** AVX2+FMA for tensor_matmul/rms_norm/qmatmul_vec (`-mavx2 -mfma`); `#ifdef __AVX2__` fallback to scalar
 - **Bootloader:** U-Boot 2026.01 (Pi 4), GRUB2/multiboot (x86 QEMU)
-- **Hardware:** Raspberry Pi 4 (BCM2711, 8GB), JARVIS PC (Ryzen 7 2700X, R9 280X display, 16GB, 1TB, ASUS X470-F, Ubuntu), Main PC (Ryzen 5 5600, RTX 2070, 32GB, ASRock B550M-ITX/ac)
+- **Hardware:** Raspberry Pi 4 (BCM2711, 8GB), JARVIS PC (Ryzen 7 2700X, R9 280X display, 32GB, 1TB NVMe, ASUS X470-F, Ubuntu), Main PC (Ryzen 5 5600, RTX 2070, 32GB, ASRock B550M-ITX/ac)
 - **QEMU:** KVM-accelerated x86-64, 4GB RAM, CNode 19 (524K slots)
