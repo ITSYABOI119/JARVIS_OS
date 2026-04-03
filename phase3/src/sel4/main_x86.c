@@ -44,6 +44,8 @@
 
 #ifdef __x86_64__
 #include "vga_text.h"
+#include "pci.h"
+#include "nvme.h"
 static int vga_ready = 0;  /* set after VGA frame mapped into vspace */
 #endif
 
@@ -924,6 +926,80 @@ static void *main_continued(void *arg UNUSED)
     }
 #endif
     puts_serial("[JARVIS] Running on vspace-managed stack\n");
+
+    /* ---- NVMe Detection ---- */
+#ifdef __x86_64__
+    {
+        pci_device_t pci_devs[32];
+        int n_pci = pci_scan(pci_devs, 32);
+        puts_serial("[JARVIS] PCI scan: "); put_dec((uint32_t)n_pci);
+        puts_serial(" devices\n");
+
+        pci_device_t *nvme_pci = pci_find_device(0x01, 0x08, pci_devs, n_pci);
+        if (nvme_pci) {
+            puts_serial("[JARVIS] NVMe found: ");
+            put_hex(nvme_pci->vendor_id); puts_serial(":");
+            put_hex(nvme_pci->device_id);
+            puts_serial(" @ bus "); put_dec(nvme_pci->bus);
+            puts_serial(" dev "); put_dec(nvme_pci->device);
+            puts_serial("\n");
+
+            pci_enable_bus_master(nvme_pci);
+            uint64_t bar0_phys = pci_get_bar_address(nvme_pci, 0);
+            puts_serial("[JARVIS] NVMe BAR0: ");
+            put_hex((uint32_t)(bar0_phys >> 32)); put_hex((uint32_t)bar0_phys);
+            puts_serial(" (64-bit="); put_dec(pci_is_bar_64bit(nvme_pci, 0));
+            puts_serial(")\n");
+
+            if (bar0_phys != 0) {
+                /* Map NVMe BAR0 as device frames (typically 16KB).
+                 * Map 4 pages (16KB) — enough for registers + doorbells. */
+                int nvme_bar_pages = 4;
+                void *nvme_bar_vaddr = NULL;
+                seL4_CPtr nvme_frame_caps[4];
+                int nvme_map_ok = 1;
+
+                for (int i = 0; i < nvme_bar_pages; i++) {
+                    vka_object_t frame;
+                    int err = vka_alloc_frame_at(&vka, seL4_PageBits,
+                        (uintptr_t)(bar0_phys + i * 4096), &frame);
+                    if (err) {
+                        puts_serial("[JARVIS] NVMe BAR0 frame alloc failed page ");
+                        put_dec((uint32_t)i); puts_serial(" err=");
+                        put_dec((uint32_t)err); puts_serial("\n");
+                        nvme_map_ok = 0;
+                        break;
+                    }
+                    nvme_frame_caps[i] = frame.cptr;
+                }
+
+                if (nvme_map_ok) {
+                    nvme_bar_vaddr = vspace_map_pages(&vspace, nvme_frame_caps, NULL,
+                        seL4_AllRights, nvme_bar_pages, seL4_PageBits, 0);
+                    if (nvme_bar_vaddr) {
+                        puts_serial("[JARVIS] NVMe BAR0 mapped at vaddr ");
+                        put_hex((uint32_t)(uintptr_t)nvme_bar_vaddr);
+                        puts_serial(" ("); put_dec(nvme_bar_pages * 4);
+                        puts_serial("KB)\n");
+
+                        /* TODO: Allocate DMA buffers for admin/IO queues,
+                         * call nvme_init(), then use FAT32 to load model.
+                         * For now, just confirm BAR0 mapping works. */
+                        uint32_t vs = *(volatile uint32_t *)((uint8_t *)nvme_bar_vaddr + NVME_REG_VS);
+                        puts_serial("[JARVIS] NVMe version: ");
+                        put_dec((vs >> 16) & 0xFFFF); puts_serial(".");
+                        put_dec((vs >> 8) & 0xFF); puts_serial(".");
+                        put_dec(vs & 0xFF); puts_serial("\n");
+                    } else {
+                        puts_serial("[JARVIS] NVMe BAR0 vspace map failed\n");
+                    }
+                }
+            }
+        } else {
+            puts_serial("[JARVIS] No NVMe controller found\n");
+        }
+    }
+#endif
 
     /* ---- Model loading ----
      * Priority: 1) embedded .rodata (JARVIS_HAS_MODEL)
