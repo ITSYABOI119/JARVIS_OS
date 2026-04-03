@@ -190,8 +190,10 @@ DRV_DST="$DEST/src/drivers"
 copy_file "$DRV_SRC/vga_text.c" "$DRV_DST/vga_text.c"
 copy_file "$DRV_SRC/vga_text.h" "$DRV_DST/vga_text.h"
 
-# Inference server (optional — only if it exists)
-copy_file "$JARVIS_DIR/phase3/src/sel4/inference_server.c" "$DEST/src/inference_server.c"
+# Inference server (Process B — lives in jarvis-inference app, NOT sel4test-driver)
+PROC_B_DIR="$SEL4_DIR/projects/jarvis-x86/apps/jarvis-inference/src"
+mkdir -p "$PROC_B_DIR" 2>/dev/null || true
+copy_file "$JARVIS_DIR/phase3/src/sel4/inference_server.c" "$PROC_B_DIR/main.c"
 echo ""
 
 # ── [5/5] Patch CMakeLists.txt ─────────────────────────────────────
