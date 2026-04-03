@@ -189,6 +189,8 @@ DRV_DST="$DEST/src/drivers"
 
 copy_file "$DRV_SRC/vga_text.c" "$DRV_DST/vga_text.c"
 copy_file "$DRV_SRC/vga_text.h" "$DRV_DST/vga_text.h"
+copy_file "$DRV_SRC/pci.c" "$DRV_DST/pci.c"
+copy_file "$DRV_SRC/pci.h" "$DRV_DST/pci.h"
 copy_file "$DRV_SRC/nvme.c" "$DRV_DST/nvme.c"
 copy_file "$DRV_SRC/nvme.h" "$DRV_DST/nvme.h"
 copy_file "$DRV_SRC/fat32.c" "$DRV_DST/fat32.c"
@@ -229,6 +231,19 @@ if [ -f "$CMAKE_FILE" ]; then
         fi
     else
         echo -e "  ${CYAN}OK${NC}  src/drivers/vga_text.c already in source list"
+    fi
+
+    # Add src/drivers/pci.c to source list if missing
+    if ! grep -q "src/drivers/pci.c" "$CMAKE_FILE"; then
+        sed -i '/src\/drivers\/vga_text.c/a\    src/drivers/pci.c' "$CMAKE_FILE" 2>/dev/null
+        if grep -q "src/drivers/pci.c" "$CMAKE_FILE"; then
+            echo -e "  ${GREEN}ADDED${NC}  src/drivers/pci.c to source list"
+            PATCHED=1
+        else
+            echo -e "  ${RED}FAILED${NC}  Could not add pci.c — edit CMakeLists.txt manually"
+        fi
+    else
+        echo -e "  ${CYAN}OK${NC}  src/drivers/pci.c already in source list"
     fi
 
     # Add src/drivers to include directories if missing
