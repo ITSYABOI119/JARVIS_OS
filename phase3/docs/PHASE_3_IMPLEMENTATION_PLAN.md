@@ -64,8 +64,8 @@ This document provides a detailed week-by-week implementation plan for Phase 3. 
 
 | Hardware | Specs | Status | Role |
 |----------|-------|--------|------|
-| Raspberry Pi 4 8GB | BCM2711, 8GB | Phase 2 complete | ARM testing / fallback |
-| Raspberry Pi 5 4GB | BCM2712, 4GB | Owned, unused | Available for experiments |
+| Raspberry Pi 4 8GB | BCM2711, 8GB | Phase 2 complete | Phase 2 ARM legacy (not active in Phase 3b) |
+| Raspberry Pi 5 4GB | BCM2712, 4GB | Owned, unused | Not used in Phase 3 |
 | **JARVIS PC** | **Ryzen 7 2700X, R9 280X (display), 32GB DDR4, X470-F Gaming, 1TB NVMe** | **BARE-METAL BOOT ACHIEVED** | **seL4 bare-metal target** |
 | **Main PC** | **Ryzen 5 5600, RTX 2070, 32GB, ASRock B550M-ITX/ac** | **Operational (Windows)** | **Daily driver** |
 
@@ -470,7 +470,7 @@ Pre-Work Tasks (before JARVIS Project PC):
 
 ────────────── BARE-METAL READY — JARVIS PC WIPEABLE ──────────────
     ↓
-  Week 1: Phase 3a starts (GPU host + Pi 4 UART)
+  Week 1: Phase 3a starts (bare-metal boot prep)
     ↓
   Week 7: Phase 3b starts — most unknowns already resolved
 ```
@@ -606,6 +606,11 @@ JARVIS PC is dedicated and wipeable (April 2026). New main PC (5600/2070/32GB) h
 
 ---
 
+> **OBSOLETE:** Original Phase 3a Weeks 3-6 plan used Pi 4 via UART as seL4 target while JARVIS PC served as GPU host. Phase 3b boots seL4 directly on x86 bare metal — Pi 4 UART testing is no longer needed. The sections below are preserved for historical reference only.
+
+<details>
+<summary>Week 3-6: Original Pi 4 UART Plan (OBSOLETE — click to expand)</summary>
+
 ### Week 3: Python Environment + UART Connection
 
 **Tasks:**
@@ -622,73 +627,26 @@ JARVIS PC is dedicated and wipeable (April 2026). New main PC (5600/2070/32GB) h
    - Run heartbeat test — verify RTT ~7ms
    - Run 100-query quick test — verify 100% success rate
 
-**Deliverables:**
-- Python environment working on JARVIS Project PC
-- UART IPC to Pi 4 verified
-
-**Effort:** 4-6 hours
-**Dependencies:** Week 1 complete, Pi 4 running
-**Acceptance:** 100-query test: 100% success, RTT ~7ms
-
----
-
 ### Week 4: Stability Testing (JARVIS Project PC Host)
 
 **Tasks:**
 1. Run 1-hour stability test
    - `python stability_harness.py --port /dev/ttyUSB0 --duration 60 --log-dir stability_logs_phase3a --verbose`
-   - Target: 99.7%+ pass rate (matching Phase 2)
 
 2. Run 3-day stability test
    - `python stability_harness.py --port /dev/ttyUSB0 --duration 4320 --log-dir stability_logs_phase3a --verbose`
-   - Monitor: pass rate, RTT, cache hit rate, hang events
-
-3. Benchmark GPU-accelerated cache miss path
-   - Measure: query → cache miss → GPU inference → response time
-   - Compare with Phase 2 CPU-only inference time
-
-**Deliverables:**
-- 1-hour test results
-- 3-day test started (completes in Week 5)
-
-**Effort:** 4-6 hours
-**Dependencies:** Week 3 complete
-**Acceptance:** 1-hour test: 99.7%+ pass, 0 failures
-
----
 
 ### Week 5-6: Phase 3a Validation + Documentation
 
 **Tasks:**
-1. Complete 3-day stability test (Week 5)
-   - Analyze results: pass rate, RTT trends, hang events
-   - Compare with Phase 2 3-day test results
+1. Complete 3-day stability test
+2. Document Phase 3a results
+3. Phase 3a exit validation
+4. Prepare Phase 3b environment
 
-2. Document Phase 3a results (Week 5)
-   - Create `phase3/weeks/week5/WEEK_5_STATUS.md`
-   - Benchmark comparison table: Phase 2 vs Phase 3a
-   - GPU inference latency measurements
+</details>
 
-3. Phase 3a exit validation (Week 6)
-   - Verify all Phase 3a exit criteria met
-   - Go/no-go decision for Phase 3b
-   - Create `phase3/docs/PHASE_3A_RESULTS.md`
-
-4. Prepare Phase 3b environment (Week 6)
-   - Install seL4 build dependencies on JARVIS Project PC (or main PC for cross-compilation)
-   - Clone seL4 repositories: kernel, seL4_tools, muslc, sel4runtime, sel4_libs
-   - Verify x86-64 PC99 platform builds (on QEMU first)
-
-**Deliverables:**
-- 3-day stability test PASSED
-- PHASE_3A_RESULTS.md written
-- Phase 3b build environment ready
-
-**Effort:** 10-14 hours (2 weeks)
-**Dependencies:** Week 4 complete
-**Acceptance:** 3-day stability 99.7%+, seL4 x86-64 builds for QEMU
-
-**Phase 3a Checkpoint (original):** JARVIS Project PC operational, GPU AI validated, UART IPC stable, seL4 build env ready
+**Phase 3a Checkpoint (revised):** JARVIS PC operational, seL4 bare-metal boot achieved, self-test 5/5 PASS on real hardware
 
 ---
 
@@ -1301,20 +1259,20 @@ JARVIS PC is dedicated and wipeable (April 2026). New main PC (5600/2070/32GB) h
 
 ---
 
-### Week 37-38: Pi 4 ARM64 Build Maintenance
+### Week 37-38: Phase 2 ARM64 Build Maintenance (Optional)
 
 **Tasks:**
-1. Verify Phase 2 code still builds
+1. Verify Phase 2 code still builds (if ARM fallback is needed)
    - Build Phase 2 kernel8.img in WSL
    - Run Phase 2 test suite: expect 108 PASS, 0 FAIL, 3 SKIP
    - Fix any regressions from shared code changes
 
-2. Multi-platform build system
+2. Multi-platform build system (optional)
    - Shared code compiles for both ARM64 and x86-64
    - `#ifdef` guards for platform-specific drivers
    - Common CMakeLists.txt with platform selection
 
-3. Document dual-platform build process
+3. Document dual-platform build process (if maintained)
    - ARM64 build: existing Phase 2 WSL build script
    - x86-64 build: new Phase 3 build script
    - Verify both produce working binaries
@@ -1630,8 +1588,8 @@ Q4_K_M recommended for Phase 3b — best balance of quality and memory efficienc
 | 3 | AHCI driver complexity | Medium | Medium | Start with PIO mode; upgrade to DMA later; OSDev has reference code |
 | 4 | NIC chipset mismatch | Low | ✅ RESOLVED | JARVIS PC (X470-F) has Intel I211-AT — need igb driver, not RTL8168 |
 | 5 | CPU inference too slow | Low | Medium | Cache handles 85%+; 1B at ~20 tok/s is usable; optimize later |
-| 6 | 16GB RAM insufficient | Low | Medium | 1B Q4 needs 0.7GB + seL4 <1GB; plenty of headroom; upgrade to 32GB (~$50) |
-| 7 | Stability regression on new platform | Medium | Medium | Pi 4 stays as fallback; staged migration |
+| 6 | 16GB RAM insufficient | Low | ✅ RESOLVED | Upgraded to 32GB DDR4 — plenty of headroom |
+| 7 | Stability regression on new platform | Medium | Medium | Phase 2 Pi 4 code preserved; x86 stability test pending |
 | 8 | seL4 x86 debugging difficult | Medium | Medium | Serial console from Day 1; QEMU for initial development |
 | 9 | Hardware blocker (PC availability) | Low | ✅ RESOLVED | JARVIS PC dedicated and wipeable, CPU-only inference |
 | 10 | Model file loading from NVMe | Low | Medium | AHCI driver needed first; start with RAM-loaded models during dev |
@@ -1642,7 +1600,7 @@ Q4_K_M recommended for Phase 3b — best balance of quality and memory efficienc
 |---|------|-------------|--------|------------|
 | 11 | Solo dev burnout | Medium | High | 8-12 hrs/week pace; Phase 3a provides quick wins |
 | 12 | Scope creep | Medium | Medium | Clear staged milestones; defer GPU to Phase 4 |
-| 13 | Hardware failure | Low | Medium | Pi 4 fallback; NVMe replaceable |
+| 13 | Hardware failure | Low | Medium | NVMe replaceable; Phase 2 Pi 4 code preserved as ARM fallback |
 
 ---
 
