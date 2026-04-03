@@ -10,6 +10,8 @@
  * argv[0] = request notification cap (Process A signals when request ready)
  * argv[1] = response notification cap (Process B signals when response ready)
  * argv[2] = shared memory vaddr (two shmem_ring_t pages, request then response)
+ * argv[3] = model vaddr (GRUB module mapped by Process A, 0 if none)
+ * argv[4] = model size in bytes (0 if no GRUB module)
  */
 
 #include <autoconf.h>
@@ -23,7 +25,6 @@
 
 #include "shmem_ipc.h"
 
-#ifdef JARVIS_HAS_MODEL
 #include "gguf_parser.h"
 #include "llama_model.h"
 #include "llama_quant.h"
@@ -31,6 +32,7 @@
 #include "tokenizer.h"
 #include "sampling.h"
 
+#ifdef JARVIS_HAS_MODEL
 extern const unsigned char _binary_model_gguf_start[];
 extern const unsigned char _binary_model_gguf_end[];
 #endif
@@ -54,7 +56,6 @@ static void put_dec(uint32_t val)
 
 /* ---- Process incoming IPC requests ---- */
 
-#ifdef JARVIS_HAS_MODEL
 static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
                           uint16_t seq, const char *query, uint16_t query_len,
                           qmodel_t *qm, llama_state_t *state, tokenizer_t *tok,
@@ -110,7 +111,6 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
     /* Signal Process A that response is ready */
     seL4_Signal(resp_notif);
 }
-#endif /* JARVIS_HAS_MODEL */
 
 /* ---- Main ---- */
 
@@ -147,21 +147,56 @@ int main(int argc, char **argv)
     }
     puts_serial("[Process B] IPC rings validated\n");
 
+    /* Parse model location (GRUB module mapped by Process A) */
+    uintptr_t model_vaddr = 0;
+    size_t model_size = 0;
+    if (argc >= 5) {
+        model_vaddr = (uintptr_t)atol(argv[3]);
+        model_size = (size_t)atol(argv[4]);
+    }
+
+    /* ---- Determine model source ---- */
+    const void *model_data = NULL;
+    size_t model_data_size = 0;
+
 #ifdef JARVIS_HAS_MODEL
-    /* Load model from embedded .rodata */
-    size_t model_size = (size_t)(_binary_model_gguf_end - _binary_model_gguf_start);
-    puts_serial("[Process B] Model: "); put_dec((uint32_t)(model_size / (1024*1024)));
-    puts_serial(" MB\n");
+    /* Path 1: Embedded model (QEMU builds with objcopy) */
+    model_data = _binary_model_gguf_start;
+    model_data_size = (size_t)(_binary_model_gguf_end - _binary_model_gguf_start);
+    puts_serial("[Process B] Model source: embedded .rodata (");
+    put_dec((uint32_t)(model_data_size >> 20)); puts_serial("MB)\n");
+#endif
+
+    if (!model_data && model_vaddr != 0 && model_size > 0) {
+        /* Path 2: GRUB multiboot module (mapped by Process A) */
+        model_data = (const void *)model_vaddr;
+        model_data_size = model_size;
+        puts_serial("[Process B] Model source: GRUB module at ");
+        put_dec((uint32_t)(model_vaddr >> 20)); puts_serial("M (");
+        put_dec((uint32_t)(model_size >> 20)); puts_serial("MB)\n");
+    }
+
+    if (!model_data) {
+        /* Path 3: No model — idle */
+        puts_serial("[Process B] No model available — idle mode\n");
+        shmem_ipc_send(response_ring, MSG_HEARTBEAT_ACK, 0, NULL, 0);
+        seL4_Signal(resp_notif);
+        goto idle;
+    }
+
+    /* ---- Common model loading (works for embedded and GRUB module) ---- */
+    puts_serial("[Process B] Loading model: ");
+    put_dec((uint32_t)(model_data_size >> 20)); puts_serial("MB\n");
 
     gguf_ctx_t gguf_ctx;
-    int err = gguf_open_memory(&gguf_ctx, _binary_model_gguf_start, model_size);
+    int err = gguf_open_memory(&gguf_ctx, model_data, model_data_size);
     if (err) {
         puts_serial("[Process B] GGUF parse failed\n");
         goto idle;
     }
 
     qmodel_t qm;
-    err = qmodel_load(&qm, &gguf_ctx, _binary_model_gguf_start);
+    err = qmodel_load(&qm, &gguf_ctx, model_data);
     if (err) {
         puts_serial("[Process B] Model load failed\n");
         gguf_close(&gguf_ctx);
@@ -173,7 +208,7 @@ int main(int argc, char **argv)
 
     /* Extract tokenizer */
     gguf_vocab_t vocab;
-    err = gguf_vocab_extract(_binary_model_gguf_start, model_size, &vocab);
+    err = gguf_vocab_extract(model_data, model_data_size, &vocab);
     if (err) {
         puts_serial("[Process B] Vocab extraction failed\n");
         qmodel_free(&qm);
@@ -256,13 +291,6 @@ int main(int argc, char **argv)
     gguf_vocab_free(&vocab);
     qmodel_free(&qm);
     gguf_close(&gguf_ctx);
-
-#else
-    puts_serial("[Process B] No model embedded — idle mode\n");
-    /* Still signal ready so Process A doesn't hang */
-    shmem_ipc_send(response_ring, MSG_HEARTBEAT_ACK, 0, NULL, 0);
-    seL4_Signal(resp_notif);
-#endif /* JARVIS_HAS_MODEL */
 
 idle:
     puts_serial("[Process B] Idle.\n");
