@@ -1043,6 +1043,12 @@ static void *main_continued(void *arg UNUSED)
 
                         if (dma_ok) {
                             puts_serial("[JARVIS] NVMe DMA: 5 frames allocated\n");
+                            for (int d = 0; d < NVME_DMA_FRAMES; d++) {
+                                puts_serial("  dma["); put_dec((uint32_t)d);
+                                puts_serial("] vaddr="); put_hex((uint32_t)(uintptr_t)dma_vaddrs[d]);
+                                puts_serial(" paddr="); put_hex((uint32_t)dma_paddrs[d]);
+                                puts_serial("\n");
+                            }
                             /* dma[0]=admin_sq, dma[1]=admin_cq, dma[2]=io_sq, dma[3]=io_cq, dma[4]=identify */
                             static nvme_controller_t nvme_ctrl;
                             int nvme_err = nvme_init(&nvme_ctrl,

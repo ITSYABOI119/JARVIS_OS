@@ -29,12 +29,18 @@ static inline void nvme_write32(volatile uint8_t *base, uint32_t off, uint32_t v
 
 static inline uint64_t nvme_read64(volatile uint8_t *base, uint32_t off)
 {
-    return *(volatile uint64_t *)(base + off);
+    /* NVMe spec: 64-bit registers must be read as two 32-bit reads.
+     * Many controllers don't support atomic 64-bit MMIO transactions. */
+    uint32_t lo = *(volatile uint32_t *)(base + off);
+    uint32_t hi = *(volatile uint32_t *)(base + off + 4);
+    return ((uint64_t)hi << 32) | lo;
 }
 
 static inline void nvme_write64(volatile uint8_t *base, uint32_t off, uint64_t val)
 {
-    *(volatile uint64_t *)(base + off) = val;
+    /* Write low 32 bits first, then high 32 bits (NVMe spec order) */
+    *(volatile uint32_t *)(base + off) = (uint32_t)(val & 0xFFFFFFFF);
+    *(volatile uint32_t *)(base + off + 4) = (uint32_t)(val >> 32);
 }
 #else
 /* Mock MMIO for testing -- defined in test file */
