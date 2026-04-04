@@ -105,6 +105,13 @@ static int nvme_submit_and_wait(nvme_controller_t *ctrl, nvme_queue_t *q,
     /* Ring SQ doorbell */
     nvme_ring_sq_doorbell(ctrl, q);
 
+    /* Read-back CSTS to flush the doorbell MMIO write.
+     * QEMU TCG mode (without KVM) won't process the NVMe command
+     * until the MMIO write completes. Without this read-back, the
+     * tight polling loop runs entirely in guest virtual time and
+     * QEMU's NVMe emulation never gets a chance to execute. */
+    (void)nvme_read32(ctrl->bar, NVME_REG_CSTS);
+
     /* Poll CQ for completion */
     for (i = 0; i < NVME_TIMEOUT; i++) {
         cqe = &q->cq[q->cq_head];
