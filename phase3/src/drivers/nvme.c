@@ -57,7 +57,7 @@ extern void     nvme_write64(volatile uint8_t *base, uint32_t off, uint64_t val)
 #ifdef JARVIS_TEST_MOCK
 #define NVME_TIMEOUT  100
 #else
-#define NVME_TIMEOUT  5000000
+#define NVME_TIMEOUT  50000000
 #endif
 
 /* ========================================================================
