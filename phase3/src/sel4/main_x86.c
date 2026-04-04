@@ -819,7 +819,10 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
     *req_notif_out = req_notif_obj.cptr;
     *resp_notif_out = resp_notif_obj.cptr;
 
-    /* Debug: print untyped info */
+    /* Debug: print untyped info (serial only — too many lines for VGA) */
+#ifdef __x86_64__
+    { int sv = vga_ready; vga_ready = 0;
+#endif
     int ut_count = (int)simple_get_untyped_count(&simple);
     puts_serial("[JARVIS] DEBUG: untyped_count = ");
     put_dec((uint32_t)ut_count);
@@ -849,6 +852,9 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
         put_dec((uint32_t)(total_bytes >> 20));
         puts_serial("MB RAM\n");
     }
+#ifdef __x86_64__
+    vga_ready = sv; }
+#endif
 
     /* Verify CPIO has the ELF */
     unsigned long cpio_len = _cpio_archive_end - _cpio_archive;
@@ -1420,7 +1426,10 @@ int main(void)
     put_dec((uint32_t)(n1 + n2));
     puts_serial(" patterns\n\n");
 
-    /* Demo queries */
+    /* Demo queries + SHIELD (serial only — too verbose for 25-line VGA) */
+#ifdef __x86_64__
+    int saved_vga = vga_ready; vga_ready = 0;
+#endif
     puts_serial("--- Cache Queries ---\n");
     do_query("what is the system status");
     do_query("check disk space");
@@ -1430,14 +1439,10 @@ int main(void)
     do_query("unknown query test");
     do_query("show network interfaces");
     do_query("open text editor");
-
-    /* SHIELD */
     puts_serial("\n--- SHIELD ---\n");
     shield_check("check health");
     shield_check("delete all data");
     shield_check("rm -rf /");
-
-    /* Stats */
     puts_serial("\n--- Stats ---\n");
     puts_serial("  Queries: "); put_dec(total_queries); puts_serial("\n");
     puts_serial("  Hits:    "); put_dec(cache_hits); puts_serial("\n");
@@ -1447,6 +1452,9 @@ int main(void)
         put_dec((cache_hits * 100) / total_queries);
         puts_serial("%\n");
     }
+#ifdef __x86_64__
+    vga_ready = saved_vga;
+#endif
 
     /* ---- Self-Test Mode ---- */
     puts_serial("\n=== JARVIS Self-Test Mode ===\n\n");
