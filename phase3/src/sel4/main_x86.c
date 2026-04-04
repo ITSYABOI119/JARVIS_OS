@@ -1188,7 +1188,14 @@ static void *main_continued(void *arg UNUSED)
                                     g_nvme_bounce_paddr = dma_paddrs[4];
 
                                     fat32_fs_t fs;
-                                    int fat_err = fat32_init(&fs, fat32_nvme_read, 0);
+                                    /* Try partition 4 (ESP) first, then fall back to whole-disk (QEMU).
+                                     * Lexar NM790 2TB: p4 starts at sector 3997272064 (FAT32 ESP). */
+                                    #define NVME_FAT32_PART_LBA 3997272064ULL
+                                    int fat_err = fat32_init(&fs, fat32_nvme_read, NVME_FAT32_PART_LBA);
+                                    if (fat_err != 0) {
+                                        /* Fall back to whole-disk FAT32 (QEMU test images) */
+                                        fat_err = fat32_init(&fs, fat32_nvme_read, 0);
+                                    }
                                     if (fat_err == 0) {
                                         puts_serial("[JARVIS] FAT32 init OK: ");
                                         put_dec(fs.sectors_per_cluster);
