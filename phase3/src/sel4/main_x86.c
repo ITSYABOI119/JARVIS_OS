@@ -46,6 +46,7 @@
 #include "vga_text.h"
 #include "pci.h"
 #include "nvme.h"
+#include "fat32.h"
 static int vga_ready = 0;  /* set after VGA frame mapped into vspace */
 
 /* seL4 IOPort wrappers for PCI config space (0xCF8/0xCFC).
@@ -58,6 +59,26 @@ static void sel4_pci_outl(uint16_t port, uint32_t val) {
 /* Forward declarations for NVMe debug callback */
 static void puts_serial(const char *s);
 static void put_hex(uint32_t val);
+
+/* NVMe bounce buffer for FAT32 reads.
+ * FAT32 callback gets an arbitrary buf pointer, but NVMe needs DMA paddr.
+ * Read into bounce buffer, memcpy to caller's buf. */
+static nvme_controller_t *g_nvme_ptr = NULL;
+static void *g_nvme_bounce_vaddr = NULL;
+static uint64_t g_nvme_bounce_paddr = 0;
+
+static int fat32_nvme_read(uint64_t lba, uint32_t count, void *buf)
+{
+    if (!g_nvme_ptr || !g_nvme_bounce_vaddr) return -1;
+    uint8_t *out = (uint8_t *)buf;
+    for (uint32_t i = 0; i < count; i++) {
+        int err = nvme_read_sectors(g_nvme_ptr, lba + i, 1,
+                                     g_nvme_bounce_vaddr, g_nvme_bounce_paddr);
+        if (err) return err;
+        memcpy(out + (size_t)i * 512, g_nvme_bounce_vaddr, 512);
+    }
+    return 0;
+}
 
 static void nvme_timeout_debug(uint32_t cq_raw, uint32_t csts_val, uint8_t sq_op) {
     puts_serial("[NVMe DBG] timeout: cq_status=");
@@ -1110,6 +1131,55 @@ static void *main_continued(void *arg UNUSED)
                                         puts_serial(h);
                                     }
                                     puts_serial("\n");
+                                    /* Wire up FAT32 on the NVMe drive.
+                                     * Use dma[4] as bounce buffer for sector reads. */
+                                    g_nvme_ptr = &nvme_ctrl;
+                                    g_nvme_bounce_vaddr = dma_vaddrs[4];
+                                    g_nvme_bounce_paddr = dma_paddrs[4];
+
+                                    fat32_fs_t fs;
+                                    int fat_err = fat32_init(&fs, fat32_nvme_read, 0);
+                                    if (fat_err == 0) {
+                                        puts_serial("[JARVIS] FAT32 init OK: ");
+                                        put_dec(fs.sectors_per_cluster);
+                                        puts_serial(" sec/cluster, ");
+                                        put_dec(fs.bytes_per_sector);
+                                        puts_serial(" B/sec\n");
+
+                                        uint32_t model_cluster = 0, model_size = 0;
+                                        int found = fat32_find_file(&fs, "MODEL   GUF",
+                                                                     &model_cluster, &model_size);
+                                        if (found == 0) {
+                                            puts_serial("[JARVIS] Model file: cluster=");
+                                            put_dec(model_cluster);
+                                            puts_serial(" size=");
+                                            put_dec(model_size >> 20);
+                                            puts_serial("MB\n");
+
+                                            /* Read first 4 bytes — check GGUF magic (0x46554747) */
+                                            uint8_t magic_buf[512];
+                                            uint64_t model_lba = fs.data_lba +
+                                                (uint64_t)(model_cluster - 2) * fs.sectors_per_cluster;
+                                            int mr = fat32_nvme_read(model_lba, 1, magic_buf);
+                                            if (mr == 0) {
+                                                uint32_t magic = 0;
+                                                memcpy(&magic, magic_buf, 4);
+                                                puts_serial("[JARVIS] GGUF magic: ");
+                                                put_hex(magic);
+                                                if (magic == 0x46554747) {
+                                                    puts_serial(" OK\n");
+                                                } else {
+                                                    puts_serial(" MISMATCH (expected 0x46554747)\n");
+                                                }
+                                            }
+                                        } else {
+                                            puts_serial("[JARVIS] Model file MODEL.GUF not found on FAT32\n");
+                                        }
+                                    } else {
+                                        puts_serial("[JARVIS] FAT32 init failed: err=");
+                                        put_dec((uint32_t)(-fat_err));
+                                        puts_serial("\n");
+                                    }
                                 } else {
                                     puts_serial("[JARVIS] NVMe read sector 0 failed: err=");
                                     put_dec((uint32_t)(-rd_err));
