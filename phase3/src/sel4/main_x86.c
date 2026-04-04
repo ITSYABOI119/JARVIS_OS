@@ -1096,6 +1096,25 @@ static void *main_continued(void *arg UNUSED)
                                 puts_serial("M sectors (");
                                 put_dec(nvme_ctrl.ns_block_size);
                                 puts_serial("B/sector)\n");
+
+                                /* Test read: read sector 0 into the identify buffer (reuse dma[4]) */
+                                memset(dma_vaddrs[4], 0, 4096);
+                                int rd_err = nvme_read_sectors(&nvme_ctrl, 0, 1,
+                                    dma_vaddrs[4], dma_paddrs[4]);
+                                if (rd_err == 0) {
+                                    puts_serial("[JARVIS] NVMe read sector 0: ");
+                                    uint8_t *data = (uint8_t *)dma_vaddrs[4];
+                                    const char hx[] = "0123456789abcdef";
+                                    for (int b = 0; b < 16; b++) {
+                                        char h[4] = { hx[data[b]>>4], hx[data[b]&0xf], ' ', '\0' };
+                                        puts_serial(h);
+                                    }
+                                    puts_serial("\n");
+                                } else {
+                                    puts_serial("[JARVIS] NVMe read sector 0 failed: err=");
+                                    put_dec((uint32_t)(-rd_err));
+                                    puts_serial("\n");
+                                }
                             } else {
                                 puts_serial("[JARVIS] NVMe init failed: err=");
                                 put_dec((uint32_t)(-nvme_err));
