@@ -359,8 +359,9 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | FAT32 read-only parser (BPB, root dir scan, cluster chain) | DONE |
 | NVMe IDENTIFY succeeds in QEMU ("QEMU NVMe Ctrl") | DONE |
 | NVMe sector read verified in QEMU | DONE |
+| NVMe → FAT32 → GGUF magic verified in QEMU | DONE |
 
-**Next:** NVMe FAT32 model loading (read model.gguf from NVMe partition). Intel I211 NIC driver. Continuous IPC request loop. 30-day stability test.
+**Next:** NVMe full model loading (read 770MB from FAT32 → frames → Process B). NVMe bare-metal test (Lexar NM790 may need HMB). Intel I211 NIC driver. Continuous IPC request loop. 30-day stability test.
 
 ### Pre-Work Tasks (Before JARVIS Project PC)
 
@@ -412,10 +413,10 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | **Total** | | | **80+ files** | **357 tests, ~20,000 LOC** |
 
 **What remains for Phase 3b on real hardware:**
-- NVMe FAT32 model loading (driver works, need to read model.gguf from partition → Process B)
-- NVMe on bare metal (QEMU verified — Lexar NM790 may need HMB setup)
-- Intel I211 NIC driver (PCI 8086:1539 — RTL8168 driver targets wrong chipset)
-- Continuous IPC request loop (currently single demo query)
+- NVMe full model loading (read 770MB from FAT32 → allocate frames → map into Process B)
+- NVMe on bare metal (Lexar NM790 may need HMB setup)
+- Intel I211 NIC driver (PCI 8086:1539)
+- Continuous IPC request loop
 - 30-day stability test on x86
 
 ### Phase 3 Weeks

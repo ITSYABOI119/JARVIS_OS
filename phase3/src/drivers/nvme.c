@@ -65,8 +65,6 @@ extern void     nvme_write64(volatile uint8_t *base, uint32_t off, uint64_t val)
  * ======================================================================== */
 
 static void nvme_ring_sq_doorbell(nvme_controller_t *ctrl, nvme_queue_t *q)
-    __attribute__((unused));
-static void nvme_ring_sq_doorbell(nvme_controller_t *ctrl, nvme_queue_t *q)
 {
     uint32_t off = NVME_REG_SQ0TDBL + (2 * q->qid) * (4 << ctrl->dstrd);
     nvme_write32(ctrl->bar, off, q->sq_tail);
@@ -105,30 +103,7 @@ static int nvme_submit_and_wait(nvme_controller_t *ctrl, nvme_queue_t *q,
     q->sq_tail = (q->sq_tail + 1) % q->size;
 
     /* Ring SQ doorbell */
-    {
-        uint32_t db_off = NVME_REG_SQ0TDBL + (2 * q->qid) * (4 << ctrl->dstrd);
-        nvme_write32(ctrl->bar, db_off, q->sq_tail);
-        /* Also dump: verify SQ entry made it to memory */
-        if (ctrl->debug_fn) {
-            /* Read back ASQ/ACQ from BAR to verify they match our phys addrs */
-            uint64_t asq_rb = nvme_read64(ctrl->bar, NVME_REG_ASQ);
-            uint64_t acq_rb = nvme_read64(ctrl->bar, NVME_REG_ACQ);
-            uint32_t csts_now = nvme_read32(ctrl->bar, NVME_REG_CSTS);
-            /* Encode diagnostic info into the callback:
-             * cq_status = db_off | (sq_tail << 16)
-             * csts = actual CSTS
-             * sq0_opcode = cmd opcode */
-            ctrl->debug_fn(
-                (db_off & 0xFFFF) | ((uint32_t)q->sq_tail << 16),
-                csts_now,
-                cmd->opcode);
-            /* Second call with ASQ low 32 bits and ACQ low 32 bits */
-            ctrl->debug_fn(
-                (uint32_t)(asq_rb & 0xFFFFFFFF),
-                (uint32_t)(acq_rb & 0xFFFFFFFF),
-                0xFF);  /* 0xFF = marker for ASQ/ACQ readback */
-        }
-    }
+    nvme_ring_sq_doorbell(ctrl, q);
 
     /* Poll CQ for completion */
     for (i = 0; i < NVME_TIMEOUT; i++) {

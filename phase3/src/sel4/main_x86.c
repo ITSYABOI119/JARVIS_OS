@@ -1097,7 +1097,7 @@ static void *main_continued(void *arg UNUSED)
                             }
                             /* dma[0]=admin_sq, dma[1]=admin_cq, dma[2]=io_sq, dma[3]=io_cq, dma[4]=identify */
                             static nvme_controller_t nvme_ctrl;
-                            nvme_ctrl.debug_fn = nvme_timeout_debug;
+                            /* nvme_ctrl.debug_fn = nvme_timeout_debug; — disabled, driver working */
 
                             int nvme_err = nvme_init(&nvme_ctrl,
                                 (volatile uint8_t *)nvme_bar_vaddr, bar0_phys,
