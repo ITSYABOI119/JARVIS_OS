@@ -33,8 +33,17 @@ echo "Booting JARVIS seL4 x86-64 with NVMe emulation..."
 echo "Exit: Ctrl-A then X"
 echo ""
 
+# Use KVM if available (100x faster inference)
+KVM_OPTS=""
+if [ -e /dev/kvm ]; then
+    KVM_OPTS="-enable-kvm -cpu host"
+    echo "KVM acceleration: enabled"
+else
+    echo "KVM acceleration: not available (inference will be slow)"
+fi
+
 qemu-system-x86_64 \
-    -cpu Nehalem,-vme,+pdpe1gb,-xsave,-xsaveopt,-xsavec,-fsgsbase,-invpcid,+syscall,+lm,enforce \
+    ${KVM_OPTS:--cpu Nehalem,-vme,+pdpe1gb,-xsave,-xsaveopt,-xsavec,-fsgsbase,-invpcid,+syscall,+lm,enforce} \
     -nographic -serial mon:stdio -m 8G \
     -kernel "$KERNEL" \
     -initrd "$ROOTSERVER" \
