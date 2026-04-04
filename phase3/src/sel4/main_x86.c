@@ -66,6 +66,7 @@ static void put_hex(uint32_t val);
 static nvme_controller_t *g_nvme_ptr = NULL;
 static void *g_nvme_bounce_vaddr = NULL;
 static uint64_t g_nvme_bounce_paddr = 0;
+static uint64_t g_nvme_read_count = 0;
 
 static int fat32_nvme_read(uint64_t lba, uint32_t count, void *buf)
 {
@@ -76,6 +77,13 @@ static int fat32_nvme_read(uint64_t lba, uint32_t count, void *buf)
                                      g_nvme_bounce_vaddr, g_nvme_bounce_paddr);
         if (err) return err;
         memcpy(out + (size_t)i * 512, g_nvme_bounce_vaddr, 512);
+        g_nvme_read_count++;
+        /* Progress every 100K sectors (~50MB) */
+        if (g_nvme_read_count % 100000 == 0) {
+            puts_serial("  ");
+            put_dec((uint32_t)(g_nvme_read_count * 512 / (1024 * 1024)));
+            puts_serial("MB read\n");
+        }
     }
     return 0;
 }
@@ -119,6 +127,13 @@ static shmem_ring_t shared_rings[2] __attribute__((aligned(4096)));
 static shmem_ring_t *shared_request_ring = &shared_rings[0];
 static shmem_ring_t *shared_response_ring = &shared_rings[1];
 static sel4utils_process_t inference_process;
+
+/* NVMe model loading state (file-scope for cross-function visibility) */
+#define MODEL_MAX_PAGES (200 * 1024)   /* 200K pages = 800MB max */
+static seL4_CPtr model_frame_caps[MODEL_MAX_PAGES];
+static int nvme_model_loaded = 0;
+static uint32_t nvme_model_size = 0;
+static uint32_t nvme_model_n_pages = 0;
 
 /* ---- Serial output via seL4 debug syscall ---- */
 
@@ -781,7 +796,9 @@ static int find_model_untypeds(uintptr_t *model_paddr_out,
 
 /* ---- Spawn inference process (Process B) ---- */
 
-static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_notif_out)
+static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_notif_out,
+                                    seL4_CPtr *model_caps, uint32_t model_n_pages,
+                                    uint32_t model_size)
 {
     int error;
 
@@ -910,6 +927,36 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
     puts_serial("[JARVIS] Shared memory mapped in Process B\n");
     void *remote_vaddr = (void *)SHMEM_VADDR_B;
 
+    /* Map model frames into Process B */
+    if (model_caps && model_n_pages > 0) {
+        puts_serial("[JARVIS] Mapping "); put_dec(model_n_pages);
+        puts_serial(" model frames into Process B...\n");
+        seL4_CPtr pd_b_model = inference_process.pd.cptr;
+        uint32_t mok = 0, merr = 0;
+        for (uint32_t p = 0; p < model_n_pages; p++) {
+            cspacepath_t msrc, mdst;
+            vka_cspace_make_path(&vka, model_caps[p], &msrc);
+            int e = vka_cspace_alloc_path(&vka, &mdst);
+            if (e) { merr++; continue; }
+            e = vka_cnode_copy(&mdst, &msrc, seL4_AllRights);
+            if (e) { merr++; continue; }
+            e = map_frame_direct(mdst.capPtr, pd_b_model,
+                MODEL_VADDR_B + (size_t)p * 4096, seL4_AllRights);
+            if (e) { merr++; continue; }
+            mok++;
+            if (p > 0 && p % 50000 == 0) {
+                put_dec(mok * 4 / 1024); puts_serial("MB mapped\n");
+            }
+        }
+        puts_serial("[JARVIS] Model: "); put_dec(mok);
+        puts_serial("/"); put_dec(model_n_pages);
+        puts_serial(" pages mapped");
+        if (merr > 0) {
+            puts_serial(" ("); put_dec(merr); puts_serial(" errors)");
+        }
+        puts_serial("\n");
+    }
+
     /* Copy notification caps to Process B's cspace */
     seL4_CPtr remote_req_notif = sel4utils_copy_cap_to_process(
         &inference_process, &vka, req_notif_obj.cptr);
@@ -921,16 +968,18 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
         return -1;
     }
 
-    /* Build argv: req_notif, resp_notif, shmem_vaddr */
-    char arg0[32], arg1[32], arg2[32];
+    /* Build argv: req_notif, resp_notif, shmem_vaddr, model_vaddr, model_size */
+    char arg0[32], arg1[32], arg2[32], arg3[32], arg4[32];
     snprintf(arg0, sizeof(arg0), "%lu", (unsigned long)remote_req_notif);
     snprintf(arg1, sizeof(arg1), "%lu", (unsigned long)remote_resp_notif);
     snprintf(arg2, sizeof(arg2), "%lu", (unsigned long)remote_vaddr);
-    char *argv[] = { arg0, arg1, arg2 };
+    snprintf(arg3, sizeof(arg3), "%lu", (unsigned long)(model_n_pages > 0 ? MODEL_VADDR_B : 0));
+    snprintf(arg4, sizeof(arg4), "%lu", (unsigned long)model_size);
+    char *argv[] = { arg0, arg1, arg2, arg3, arg4 };
 
     /* Spawn Process B */
     error = sel4utils_spawn_process_v(&inference_process, &vka, &vspace,
-                                       3, argv, 1);
+                                       5, argv, 1);
     if (error) {
         puts_serial("[JARVIS] Failed to spawn inference process\n");
         return -1;
@@ -1156,20 +1205,62 @@ static void *main_continued(void *arg UNUSED)
                                             put_dec(model_size >> 20);
                                             puts_serial("MB\n");
 
-                                            /* Read first 4 bytes — check GGUF magic (0x46554747) */
-                                            uint8_t magic_buf[512];
-                                            uint64_t model_lba = fs.data_lba +
-                                                (uint64_t)(model_cluster - 2) * fs.sectors_per_cluster;
-                                            int mr = fat32_nvme_read(model_lba, 1, magic_buf);
-                                            if (mr == 0) {
-                                                uint32_t magic = 0;
-                                                memcpy(&magic, magic_buf, 4);
-                                                puts_serial("[JARVIS] GGUF magic: ");
-                                                put_hex(magic);
-                                                if (magic == 0x46554747) {
-                                                    puts_serial(" OK\n");
+                                            /* Allocate frames for full model */
+                                            uint32_t n_pages = (model_size + 4095) / 4096;
+                                            puts_serial("[JARVIS] Allocating "); put_dec(n_pages);
+                                            puts_serial(" frames for model ("); put_dec(model_size >> 20);
+                                            puts_serial("MB)...\n");
+
+                                            if (n_pages > MODEL_MAX_PAGES) {
+                                                puts_serial("[JARVIS] Model too large\n");
+                                            } else {
+                                                int alloc_fail = 0;
+                                                for (uint32_t p = 0; p < n_pages; p++) {
+                                                    vka_object_t frm;
+                                                    int aerr = vka_alloc_frame(&vka, seL4_PageBits, &frm);
+                                                    if (aerr) {
+                                                        puts_serial("[JARVIS] Frame alloc failed at ");
+                                                        put_dec(p); puts_serial("\n");
+                                                        n_pages = p;
+                                                        alloc_fail = 1;
+                                                        break;
+                                                    }
+                                                    model_frame_caps[p] = frm.cptr;
+                                                    if (p > 0 && p % 50000 == 0) {
+                                                        put_dec(p * 4 / 1024); puts_serial("MB allocated\n");
+                                                    }
+                                                }
+                                                puts_serial("[JARVIS] Allocated "); put_dec(n_pages); puts_serial(" frames\n");
+
+                                                /* Map contiguously in rootserver */
+                                                void *model_local = vspace_map_pages(&vspace,
+                                                    model_frame_caps, NULL, seL4_AllRights,
+                                                    n_pages, seL4_PageBits, 1);
+                                                if (!model_local) {
+                                                    puts_serial("[JARVIS] Model vspace map failed\n");
                                                 } else {
-                                                    puts_serial(" MISMATCH (expected 0x46554747)\n");
+                                                    puts_serial("[JARVIS] Model mapped at vaddr ");
+                                                    put_hex((uint32_t)(uintptr_t)model_local); puts_serial("\n");
+
+                                                    /* Read model from FAT32 */
+                                                    g_nvme_read_count = 0;
+                                                    puts_serial("[JARVIS] Reading model from NVMe...\n");
+                                                    int rderr = fat32_read_file(&fs, model_cluster,
+                                                                                model_size, model_local);
+                                                    if (rderr == 0) {
+                                                        uint32_t magic = 0;
+                                                        memcpy(&magic, model_local, 4);
+                                                        puts_serial("[JARVIS] Model loaded: ");
+                                                        put_dec(model_size >> 20); puts_serial("MB GGUF=");
+                                                        put_hex(magic); puts_serial("\n");
+                                                        if (magic == 0x46554747) {
+                                                            nvme_model_loaded = 1;
+                                                            nvme_model_size = model_size;
+                                                            nvme_model_n_pages = n_pages;
+                                                        }
+                                                    } else {
+                                                        puts_serial("[JARVIS] Model read failed\n");
+                                                    }
                                                 }
                                             }
                                         } else {
@@ -1221,7 +1312,10 @@ static void *main_continued(void *arg UNUSED)
     /* ---- Spawn inference process (Process B) ---- */
     seL4_CPtr req_notif = 0, resp_notif = 0;
     puts_serial("\n[JARVIS] Spawning inference process...\n");
-    if (spawn_inference_process(&req_notif, &resp_notif) != 0) {
+    if (spawn_inference_process(&req_notif, &resp_notif,
+                                 nvme_model_loaded ? model_frame_caps : NULL,
+                                 nvme_model_loaded ? nvme_model_n_pages : 0,
+                                 nvme_model_loaded ? nvme_model_size : 0) != 0) {
         puts_serial("[JARVIS] Inference process spawn failed — running without inference\n");
         goto idle;
     }
