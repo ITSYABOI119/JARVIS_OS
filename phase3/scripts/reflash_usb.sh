@@ -26,9 +26,10 @@ cp $BUILD/kernel-x86_64-pc99 /mnt/usb/boot/
 cp $BUILD/sel4test-driver-image-x86_64-pc99 /mnt/usb/boot/
 cp $JARVIS/phase3/firmware/grub/grub.cfg /mnt/usb/boot/grub/
 
-# Copy model file if present
-MODEL="$JARVIS/phase3/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
-if [ -f "$MODEL" ]; then
+# Model is loaded from NVMe at runtime — don't copy to USB
+# (770MB on USB would slow boot for no reason)
+MODEL=""
+if [ -n "$MODEL" ] && [ -f "$MODEL" ]; then
     echo "Copying model ($(du -h "$MODEL" | cut -f1))..."
     cp "$MODEL" /mnt/usb/boot/model.gguf
 else
