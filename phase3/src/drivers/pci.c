@@ -151,17 +151,18 @@ int pci_scan(pci_device_t *devices, int max_devices)
 {
     int count = 0;
 
-    /* Scan bus 0 only (skip buses 1-255 for speed during early boot) */
-    for (uint8_t dev = 0; dev < PCI_MAX_DEVICE; dev++) {
+    /* Scan buses 0-15 (real hardware has devices behind PCI bridges) */
+    for (uint8_t bus = 0; bus < 16 && count < max_devices; bus++) {
+    for (uint8_t dev = 0; dev < PCI_MAX_DEVICE && count < max_devices; dev++) {
         /* Read vendor_id of function 0 */
-        uint32_t id_reg = pci_config_read(0, dev, 0, PCI_VENDOR_ID);
+        uint32_t id_reg = pci_config_read(bus, dev, 0, PCI_VENDOR_ID);
         uint16_t vendor = (uint16_t)(id_reg & 0xFFFF);
 
         if (vendor == 0xFFFF)
             continue;  /* No device present at this slot */
 
         /* Read header type to check multifunction bit */
-        uint32_t hdr_reg = pci_config_read(0, dev, 0, PCI_CACHE_LINE_SIZE);
+        uint32_t hdr_reg = pci_config_read(bus, dev, 0, PCI_CACHE_LINE_SIZE);
         uint8_t header_type = (uint8_t)((hdr_reg >> 16) & 0xFF);
         int multifunction = (header_type & PCI_HEADER_MULTIFUNCTION) != 0;
 
@@ -174,16 +175,17 @@ int pci_scan(pci_device_t *devices, int max_devices)
 
             /* For func > 0, re-check vendor_id */
             if (func > 0) {
-                id_reg = pci_config_read(0, dev, func, PCI_VENDOR_ID);
+                id_reg = pci_config_read(bus, dev, func, PCI_VENDOR_ID);
                 vendor = (uint16_t)(id_reg & 0xFFFF);
                 if (vendor == 0xFFFF)
                     continue;
             }
 
-            pci_read_device(0, dev, func, &devices[count]);
+            pci_read_device(bus, dev, func, &devices[count]);
             count++;
         }
     }
+    } /* end bus loop */
 
     return count;
 }
