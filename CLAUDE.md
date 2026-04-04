@@ -368,7 +368,9 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | **Coherent text: "a microkernel implementation of the L4 architecture..."** | **DONE** |
 | **Logits verified vs llama.cpp reference (top-5 match exactly)** | **DONE** |
 
-**Next:** Intel I211 NIC driver (PCI 8086:1539). Continuous IPC request loop. 30-day stability test.
+| Continuous IPC request loop (cache + inference pipeline) | DONE |
+
+**Next:** Intel I211 NIC driver (PCI 8086:1539). 30-day stability test.
 
 ### Pre-Work Tasks (Before JARVIS Project PC)
 

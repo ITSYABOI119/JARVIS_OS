@@ -1365,17 +1365,49 @@ static void *main_continued(void *arg UNUSED)
         }
     }
 
-    /* ---- Test: send a query to Process B ---- */
-    puts_serial("\n[JARVIS] Sending test query to Process B...\n");
-    {
-        const char *query = "The seL4 microkernel is";
-        puts_serial("[JARVIS] Query: \""); puts_serial(query); puts_serial("\"\n");
-        shmem_ipc_send(shared_request_ring, MSG_QUERY, 1,
+    /* ---- Continuous query dispatch loop ---- */
+    puts_serial("\n[JARVIS] Starting query loop\n\n");
+
+    static const char *test_queries[] = {
+        "The seL4 microkernel is",         /* cache miss -> inference */
+        "check disk space",                 /* cache hit */
+        "What is artificial intelligence",  /* cache miss -> inference */
+        "list running processes",           /* cache miss -> inference */
+        "check disk space",                 /* cache hit (repeat) */
+        "show network interfaces",          /* cache miss -> inference */
+        "show memory usage",                /* cache miss -> inference */
+        "check disk space",                 /* cache hit (3rd time) */
+        NULL
+    };
+
+    uint16_t seq = 1;
+    int q_total = 0, q_hits = 0, q_infer = 0;
+
+    for (int qi = 0; test_queries[qi] != NULL; qi++) {
+        const char *query = test_queries[qi];
+        q_total++;
+
+        puts_serial("[Q"); put_dec((uint32_t)q_total);
+        puts_serial("] \""); puts_serial(query); puts_serial("\" -> ");
+
+        /* Check decision cache first */
+        char normalized[128];
+        cache_normalize_query(query, normalized, sizeof(normalized));
+        char action[256];
+        trust_level_t trust;
+        if (cache_lookup(&g_cache, normalized, action, sizeof(action), &trust)) {
+            q_hits++;
+            puts_serial("CACHE: "); puts_serial(action); puts_serial("\n");
+            continue;
+        }
+
+        /* Cache miss — forward to Process B for inference */
+        q_infer++;
+        puts_serial("INFER...");
+
+        shmem_ipc_send(shared_request_ring, MSG_QUERY, seq++,
                        query, (uint16_t)strlen(query));
         seL4_Signal(req_notif);
-
-        /* Wait for response */
-        puts_serial("[JARVIS] Waiting for inference response...\n");
         seL4_Wait(resp_notif, NULL);
 
         uint8_t msg_type;
@@ -1383,16 +1415,23 @@ static void *main_continued(void *arg UNUSED)
         uint8_t payload[SHMEM_MAX_PAYLOAD];
         uint16_t msg_len;
 
-        if (shmem_ipc_recv(shared_response_ring, &msg_type, &msg_seq, payload, &msg_len) == 0) {
-            payload[msg_len] = '\0';
-            puts_serial("[JARVIS] Response (type="); put_dec(msg_type);
-            puts_serial(" len="); put_dec(msg_len); puts_serial("): \"");
-            puts_serial((const char *)payload);
+        if (shmem_ipc_recv(shared_response_ring, &msg_type, &msg_seq,
+                           payload, &msg_len) == 0) {
+            /* Truncate for VGA (60 chars) — full response on serial */
+            int tlen = msg_len > 60 ? 60 : (int)msg_len;
+            payload[tlen] = '\0';
+            puts_serial(" \""); puts_serial((const char *)payload);
+            if (msg_len > 60) puts_serial("...");
             puts_serial("\"\n");
         } else {
-            puts_serial("[JARVIS] No response received\n");
+            puts_serial(" (no response)\n");
         }
     }
+
+    puts_serial("\n[JARVIS] Query loop done: ");
+    put_dec((uint32_t)q_total); puts_serial(" queries, ");
+    put_dec((uint32_t)q_hits); puts_serial(" cache hits, ");
+    put_dec((uint32_t)q_infer); puts_serial(" inferences\n");
 
 idle:
     puts_serial("\n[JARVIS] System idle.\n");
