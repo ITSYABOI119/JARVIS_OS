@@ -355,8 +355,12 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | Bare-metal boot guide + BIOS checklist | DONE |
 | **Llama 3.2 1B inference on bare-metal Ryzen 2700X** | **DONE** |
 | **Coherent text generation via process-isolated IPC on real hardware** | **DONE** |
+| NVMe driver (PCI detect, BAR0 map, admin queue, IDENTIFY, I/O read) | DONE |
+| FAT32 read-only parser (BPB, root dir scan, cluster chain) | DONE |
+| NVMe IDENTIFY succeeds in QEMU ("QEMU NVMe Ctrl") | DONE |
+| NVMe sector read verified in QEMU | DONE |
 
-**Next:** NVMe driver for runtime model loading (currently embedded in .rodata via objcopy). Intel I211 NIC driver. Continuous IPC request loop. 30-day stability test.
+**Next:** NVMe FAT32 model loading (read model.gguf from NVMe partition). Intel I211 NIC driver. Continuous IPC request loop. 30-day stability test.
 
 ### Pre-Work Tasks (Before JARVIS Project PC)
 
@@ -403,12 +407,14 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | GPT-2 full byte mapping | — | DONE | tokenizer.c | 12 PASS |
 | Tiled matmul + unroll | — | DONE | tensor_ops.c, llama_quant.c | 14+10 PASS |
 | RDTSC timing (Stage 5) | — | DONE | main_x86.c | 5/5 stages PASS |
-| **Total** | | | **80+ files** | **339 tests, ~20,000 LOC** |
+| NVMe driver (polled I/O) | 15-16 | DONE | nvme.c/h | 10 PASS |
+| FAT32 read-only parser | 15-16 | DONE | fat32.c/h | 8 PASS |
+| **Total** | | | **80+ files** | **357 tests, ~20,000 LOC** |
 
 **What remains for Phase 3b on real hardware:**
-- NVMe driver for boot drive (Lexar NM790, PCI 1d97:1602 — AHCI driver cannot access)
+- NVMe FAT32 model loading (driver works, need to read model.gguf from partition → Process B)
+- NVMe on bare metal (QEMU verified — Lexar NM790 may need HMB setup)
 - Intel I211 NIC driver (PCI 8086:1539 — RTL8168 driver targets wrong chipset)
-- Load GGUF model from disk (needs NVMe driver, or load via GRUB multiboot module)
 - Continuous IPC request loop (currently single demo query)
 - 30-day stability test on x86
 
@@ -624,7 +630,11 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Native Test Results:** `phase3/docs/NATIVE_TEST_RESULTS.md`
 - **CI Workflow:** `.github/workflows/ci.yml`
 - **VGA Text Driver:** `phase3/src/drivers/vga_text.c/h`
+- **NVMe Driver:** `phase3/src/drivers/nvme.c/h`
+- **FAT32 Parser:** `phase3/src/drivers/fat32.c/h`
 - **x86 Build Script:** `phase3/scripts/build_jarvis_x86.sh`
+- **QEMU NVMe Test:** `phase3/scripts/qemu_test.sh` (pass model path as arg)
+- **NVMe Partition Setup:** `phase3/scripts/setup_nvme_partition.sh`
 - **Check CI:** `gh run list --limit 1` then `gh run view <id> --log-failed` if failed
 
 ### Rules
@@ -640,8 +650,8 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 
 - **Phase 1:** 39,106 LOC, 95 files, 338 test functions (COMPLETE)
 - **Phase 2:** ~27,000 LOC, 65 files, 108 tests (COMPLETE)
-- **Phase 3:** ~20,000 LOC, 80+ files, 339 tests (IN PROGRESS — **bare-metal boot on Ryzen 2700X verified**)
-- **Total:** ~86,000+ LOC, 200+ files, 593+ tests
+- **Phase 3:** ~20,000 LOC, 80+ files, 357 tests (IN PROGRESS — **bare-metal boot on Ryzen 2700X verified**)
+- **Total:** ~86,000+ LOC, 200+ files, 611+ tests
 - **Security:** 26/26 adversarial audit findings resolved (March 2026). SHIELD module: keyword + model-assisted risk scoring.
 - **Inference:** Llama 3.2 1B Q4_K_M on seL4 QEMU, coherent output, 50MB heap
 
