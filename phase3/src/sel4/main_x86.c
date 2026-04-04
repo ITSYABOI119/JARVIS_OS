@@ -131,7 +131,7 @@ static sel4utils_process_t inference_process;
 
 /* NVMe model loading state (file-scope for cross-function visibility) */
 #define MODEL_MAX_PAGES (200 * 1024)   /* 200K pages = 800MB max */
-static seL4_CPtr model_frame_caps[MODEL_MAX_PAGES];
+static seL4_CPtr *model_frame_caps = NULL;  /* dynamically allocated after vspace init */
 static int nvme_model_loaded = 0;
 static uint32_t nvme_model_size = 0;
 static uint32_t nvme_model_n_pages = 0;
@@ -1215,6 +1215,19 @@ static void *main_continued(void *arg UNUSED)
                                             if (n_pages > MODEL_MAX_PAGES) {
                                                 puts_serial("[JARVIS] Model too large\n");
                                             } else {
+                                                /* Allocate cap array dynamically (was static BSS — 1.6MB bloated ELF,
+                                                 * pushing DMA frames into rootserver's physical range) */
+                                                if (!model_frame_caps) {
+                                                    int cap_pages = (int)((n_pages * sizeof(seL4_CPtr) + 4095) / 4096);
+                                                    model_frame_caps = (seL4_CPtr *)vspace_new_pages(
+                                                        &vspace, seL4_AllRights, cap_pages, seL4_PageBits);
+                                                    if (!model_frame_caps) {
+                                                        puts_serial("[JARVIS] Failed to alloc cap array\n");
+                                                        n_pages = 0;
+                                                    } else {
+                                                        memset(model_frame_caps, 0, (size_t)cap_pages * 4096);
+                                                    }
+                                                }
                                                 int alloc_fail = 0;
                                                 for (uint32_t p = 0; p < n_pages; p++) {
                                                     vka_object_t frm;
