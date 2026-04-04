@@ -125,8 +125,9 @@ static int nvme_submit_and_wait(nvme_controller_t *ctrl, nvme_queue_t *q,
             if (q->cq_head == 0)
                 q->cq_phase ^= 1;
 
-            /* Ring CQ doorbell */
+            /* Ring CQ doorbell + flush (same CSTS readback as SQ doorbell) */
             nvme_ring_cq_doorbell(ctrl, q);
+            (void)nvme_read32(ctrl->bar, NVME_REG_CSTS);
 
             return (status == 0) ? 0 : -(int)status;
         }
