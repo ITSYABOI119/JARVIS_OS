@@ -112,11 +112,20 @@ static int nvme_submit_and_wait(nvme_controller_t *ctrl, nvme_queue_t *q,
      * QEMU's NVMe emulation never gets a chance to execute. */
     (void)nvme_read32(ctrl->bar, NVME_REG_CSTS);
 
-    /* Poll CQ for completion */
+    /* Poll CQ for completion.
+     * Use volatile read to prevent compiler from caching the CQ entry.
+     * Periodically read CSTS to give QEMU's NVMe emulation a chance
+     * to process deferred commands (MMIO kicks the event loop). */
     for (i = 0; i < NVME_TIMEOUT; i++) {
-        cqe = &q->cq[q->cq_head];
+        /* Volatile read — compiler must re-read from memory each iteration */
+        volatile nvme_cq_entry_t *vcqe =
+            (volatile nvme_cq_entry_t *)&q->cq[q->cq_head];
+        uint16_t raw_status = vcqe->status;
+
         /* Check phase bit (bit 0 of status word) */
-        if ((cqe->status & 1) == q->cq_phase) {
+        if ((raw_status & 1) == q->cq_phase) {
+            cqe = &q->cq[q->cq_head];
+            status = (raw_status >> 1) & 0x7FFF;
             /* Completion arrived -- extract status (bits 15:1) */
             status = (cqe->status >> 1) & 0x7FFF;
 
@@ -131,6 +140,12 @@ static int nvme_submit_and_wait(nvme_controller_t *ctrl, nvme_queue_t *q,
 
             return (status == 0) ? 0 : -(int)status;
         }
+
+        /* Kick QEMU's NVMe emulation every 1000 iterations —
+         * MMIO read forces a vmexit/trap that gives QEMU's
+         * event loop a chance to process deferred commands. */
+        if (i % 1000 == 999)
+            (void)nvme_read32(ctrl->bar, NVME_REG_CSTS);
     }
 
     /* Timeout — call debug callback if set */
