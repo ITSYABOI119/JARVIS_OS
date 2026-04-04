@@ -268,6 +268,8 @@ int nvme_init(nvme_controller_t *ctrl,
     for (i = 39; i >= 0 && ctrl->model[i] == ' '; i--)
         ctrl->model[i] = '\0';
 
+    ctrl->init_step = 5;
+
     /* Step 6: Create I/O Completion Queue (QID=1) */
     memset(&cmd, 0, sizeof(cmd));
     cmd.opcode = NVME_ADMIN_CREATE_IO_CQ;
@@ -276,8 +278,11 @@ int nvme_init(nvme_controller_t *ctrl,
     cmd.cdw11  = (1 << 0);  /* Physically contiguous, interrupts disabled */
 
     rc = nvme_submit_and_wait(ctrl, &ctrl->admin, &cmd);
+    ctrl->last_submit_err = rc;
     if (rc != 0)
         return -5;
+
+    ctrl->init_step = 6;
 
     /* Step 7: Create I/O Submission Queue (QID=1, linked to CQ 1) */
     memset(&cmd, 0, sizeof(cmd));
@@ -287,6 +292,7 @@ int nvme_init(nvme_controller_t *ctrl,
     cmd.cdw11  = (1 << 16) | (1 << 0);  /* CQID=1 | Physically contiguous */
 
     rc = nvme_submit_and_wait(ctrl, &ctrl->admin, &cmd);
+    ctrl->last_submit_err = rc;
     if (rc != 0)
         return -6;
 
@@ -305,6 +311,8 @@ int nvme_init(nvme_controller_t *ctrl,
     ctrl->io.cq_phase = 1;
     ctrl->io.cid_counter = 0;
 
+    ctrl->init_step = 7;
+
     /* Step 8: IDENTIFY namespace 1 (CNS=0) */
     memset(identify_buf, 0, 4096);
     memset(&cmd, 0, sizeof(cmd));
@@ -315,6 +323,7 @@ int nvme_init(nvme_controller_t *ctrl,
     cmd.cdw10  = NVME_IDENTIFY_NAMESPACE;
 
     rc = nvme_submit_and_wait(ctrl, &ctrl->admin, &cmd);
+    ctrl->last_submit_err = rc;
     if (rc != 0)
         return -7;
 
