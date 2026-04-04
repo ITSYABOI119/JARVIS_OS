@@ -56,9 +56,10 @@ static seL4_CPtr g_pci_ioport_cap = 0;
 static void sel4_pci_outl(uint16_t port, uint32_t val) {
     seL4_X86_IOPort_Out32(g_pci_ioport_cap, port, val);
 }
-/* Forward declarations for NVMe debug callback */
+/* Forward declarations for NVMe/FAT32 callbacks */
 static void puts_serial(const char *s);
 static void put_hex(uint32_t val);
+static void put_dec(uint32_t val);
 
 /* NVMe bounce buffer for FAT32 reads.
  * FAT32 callback gets an arbitrary buf pointer, but NVMe needs DMA paddr.
