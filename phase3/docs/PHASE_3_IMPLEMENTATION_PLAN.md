@@ -519,7 +519,8 @@ JARVIS PC is dedicated and wipeable (April 2026). New main PC (5600/2070/32GB) h
 | 3b optimization | **DONE** | AVX2/SIMD, PCI 64-bit BAR, driver fixes |
 | **3b bare-metal boot** | **DONE** | seL4 on Ryzen 2700X, VGA output, self-test 5/5 PASS |
 | **3b bare-metal inference** | **DONE** | Llama 3.2 1B coherent text via process-isolated IPC on real hardware |
-| **3b HW integration** | **NEXT** | NVMe driver (runtime model loading), I211 NIC |
+| **3b NVMe model loading** | **DONE** | 770MB from Lexar NM790 FAT32 → 197K frames → Process B → inference |
+| **3b HW integration** | **NEXT** | Intel I211 NIC driver |
 | 3b stability | PENDING | 30-day test after HW integration |
 | 3c hardening | PENDING | Security audit, fuzz testing after stability |
 | 3c finalization | PENDING | Final report, v0.3.0-beta tag |

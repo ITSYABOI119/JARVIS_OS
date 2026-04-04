@@ -16,7 +16,7 @@ Guidance for Claude Code when working with this repository.
 | **Phase 3** | **IN PROGRESS** | Months 24-36 | Beta on x86-64 bare metal (**LLM inference on seL4 VERIFIED**) |
 | Phase 4 | Future | Months 36+ | Production v1.0 |
 
-**Current:** Phase 3, Active Development (April 3, 2026). **MILESTONE: LLM inference on bare-metal seL4.** Llama 3.2 1B generates coherent text on Ryzen 7 2700X via process-isolated IPC. VGA output on R9 280X. Self-test 5/5 PASS, 183 untypeds, 31642MB RAM. Two-PC setup: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/32GB/1TB NVMe) running bare-metal seL4.
+**Current:** Phase 3, Active Development (April 4, 2026). **MILESTONE: NVMe runtime model loading on bare-metal seL4.** Llama 3.2 1B loaded from NVMe FAT32 partition (770MB, 197K frames) at runtime — no embedded model. 1.6MB USB boot image. NVMe driver (PCI bus 1, Lexar NM790), FAT32 parser, process-isolated inference all working on Ryzen 7 2700X. VGA output on R9 280X. Self-test 5/5 PASS, 181 untypeds, 31642MB RAM. Two-PC setup: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/32GB/1TB NVMe) running bare-metal seL4.
 
 ---
 
@@ -238,7 +238,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 
 ## Current Status (Phase 3 — Process-Isolated LLM Inference on seL4)
 
-**BARE-METAL INFERENCE MILESTONE** (April 3, 2026) — **LLM inference running on bare-metal seL4 on Ryzen 7 2700X.** Llama 3.2 1B Q4_K_M generates coherent text ("a microkernel implementation of the L4 microkernel architecture...") via process-isolated IPC. Process A (rootserver + cache + SHIELD) sends query → Process B (inference engine, 770MB model in .rodata) generates response → displayed on VGA. 183 untypeds, 31642MB RAM detected. Boot via USB stick with GRUB multiboot. Self-test 5/5 PASS on real hardware.
+**NVMe RUNTIME MODEL LOADING MILESTONE** (April 4, 2026) — **LLM inference with runtime NVMe model loading on bare-metal seL4 on Ryzen 7 2700X.** 1.6MB USB boot image loads 770MB Llama 3.2 1B Q4_K_M from NVMe FAT32 partition (Lexar NM790, PCI bus 1) at runtime. NVMe driver: PCI detection → BAR0 MMIO → admin queue → IDENTIFY → I/O queue → FAT32 read → 197K frames → Process B. Coherent text generation via process-isolated IPC. No embedded model binary. Self-test 5/5 PASS, 181 untypeds, 32410MB RAM.
 
 | Milestone | Status |
 |-----------|--------|
@@ -362,8 +362,13 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | NVMe → FAT32 → GGUF magic verified in QEMU | DONE |
 | **NVMe full model loading: 770MB from FAT32 → 197K frames → Process B** | **DONE** |
 | **Runtime inference from NVMe (no embedded model)** | **DONE** |
+| NVMe on bare metal (Lexar NM790 — no HMB needed) | DONE |
+| FAT32 partition LBA for bare metal — try ESP (p4) then whole-disk | DONE |
+| PCI multi-bus scan (buses 0-15) for NVMe on bus 1 | DONE |
+| **Coherent text: "a microkernel implementation of the L4 architecture..."** | **DONE** |
+| **Logits verified vs llama.cpp reference (top-5 match exactly)** | **DONE** |
 
-**Next:** NVMe on bare metal (Lexar NM790 may need HMB). Intel I211 NIC driver. Continuous IPC request loop. 30-day stability test.
+**Next:** Intel I211 NIC driver (PCI 8086:1539). Continuous IPC request loop. 30-day stability test.
 
 ### Pre-Work Tasks (Before JARVIS Project PC)
 
@@ -415,7 +420,6 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | **Total** | | | **80+ files** | **357 tests, ~20,000 LOC** |
 
 **What remains for Phase 3b on real hardware:**
-- NVMe on bare metal (Lexar NM790 may need HMB setup — QEMU verified)
 - Intel I211 NIC driver (PCI 8086:1539)
 - Continuous IPC request loop
 - 30-day stability test on x86
