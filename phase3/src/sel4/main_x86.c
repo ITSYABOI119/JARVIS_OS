@@ -185,6 +185,15 @@ static void put_dec(uint32_t val)
     }
 }
 
+static uint32_t xorshift32(uint32_t *state) {
+    uint32_t x = *state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    *state = x;
+    return x;
+}
+
 /* ---- Globals ---- */
 
 static decision_cache_t g_cache;
@@ -1365,102 +1374,194 @@ static void *main_continued(void *arg UNUSED)
         }
     }
 
-    /* ---- Continuous query dispatch loop ---- */
-    puts_serial("\n[JARVIS] Starting query loop\n\n");
+    /* ---- Continuous IPC workload for stability testing ---- */
+    puts_serial("\n[JARVIS] Starting continuous workload\n\n");
 
-    static const char *test_queries[] = {
-        "The seL4 microkernel is",         /* cache miss -> inference */
-        "check disk space",                 /* cache hit */
-        "What is artificial intelligence",  /* cache miss -> inference */
-        "list running processes",           /* cache miss -> inference */
-        "check disk space",                 /* cache hit (repeat) */
-        "show network interfaces",          /* cache miss -> inference */
-        "show memory usage",                /* cache miss -> inference */
-        "check disk space",                 /* cache hit (3rd time) */
+    /* 40 queries guaranteed to HIT decision cache (from cache_patterns.c) */
+    static const char *cache_queries[] = {
+        "help", "status", "version", "info", "hello", "hi",
+        "time", "date", "uptime", "ls", "pwd", "ls -l", "ls -a",
+        "ps", "top", "free", "df", "cpu", "ifconfig", "netstat",
+        "cat readme", "echo hello", "ping google.com", "ping 8.8.8.8",
+        "check disk space", "show me the time", "list files",
+        "show me cpu usage", "show network", "show uptime",
+        "list directory", "show me processes", "show running",
+        "disk info", "task list", "system uptime", "cpu usage",
+        "storage capacity", "show disks", "network config",
         NULL
     };
+    #define N_CACHE_QUERIES 40
+
+    /* 15 open-ended prompts -> cache miss -> inference */
+    static const char *inference_queries[] = {
+        "The seL4 microkernel is",
+        "What is artificial intelligence",
+        "Explain how operating systems manage memory",
+        "Describe the benefits of formal verification",
+        "What are the key principles of microkernel design",
+        "How does virtual memory work in modern CPUs",
+        "What is the role of a scheduler in an OS",
+        "Explain the difference between threads and processes",
+        "What is capability-based security",
+        "How do device drivers communicate with hardware",
+        "Describe the TCP three-way handshake",
+        "What is a page fault and how is it handled",
+        "Explain the concept of interrupt handling",
+        "What are the advantages of RISC-V architecture",
+        "How does NVMe differ from SATA for storage",
+        NULL
+    };
+    #define N_INFERENCE_QUERIES 15
+
+    /* 8 hostile queries for SHIELD checks */
+    static const char *shield_queries[] = {
+        "delete all system files",
+        "rm -rf /",
+        "drop table users",
+        "format the hard drive",
+        "sudo rm -rf --no-preserve-root /",
+        "delete everything",
+        "kill all processes",
+        "dd if=/dev/zero of=/dev/sda",
+        NULL
+    };
+    #define N_SHIELD_QUERIES 8
 
     uint16_t seq = 1;
-    int q_total = 0, q_hits = 0, q_infer = 0;
+    uint32_t q_total = 0, q_hits = 0, q_infer = 0, q_heartbeat = 0;
+    uint32_t q_shield = 0, q_errors = 0;
+    uint32_t rng_state = 42;
 
-    for (int qi = 0; test_queries[qi] != NULL; qi++) {
-        const char *query = test_queries[qi];
+    while (1) {
         q_total++;
+        uint32_t r = xorshift32(&rng_state);
+        int slot = (int)(r % 20);
 
-        puts_serial("[Q"); put_dec((uint32_t)q_total);
-        puts_serial("] \""); puts_serial(query); puts_serial("\" -> ");
+        if (slot < 14) {
+            /* --- Cache query (70%) --- */
+            const char *query = cache_queries[r % N_CACHE_QUERIES];
 
-        /* Check decision cache first */
-        char normalized[128];
-        cache_normalize_query(query, normalized, sizeof(normalized));
-        char action[256];
-        trust_level_t trust;
-        if (cache_lookup(&g_cache, normalized, action, sizeof(action), &trust)) {
-            q_hits++;
-            puts_serial("CACHE: "); puts_serial(action); puts_serial("\n");
-            continue;
-        }
+            char normalized[128];
+            cache_normalize_query(query, normalized, sizeof(normalized));
+            char action[256];
+            trust_level_t trust;
+            if (cache_lookup(&g_cache, normalized, action, sizeof(action), &trust)) {
+                q_hits++;
+            } else {
+                puts_serial("[WARN] expected cache hit: \"");
+                puts_serial(query); puts_serial("\"\n");
+                q_errors++;
+            }
 
-        /* Cache miss — forward to Process B for inference */
-        q_infer++;
-        puts_serial("INFER...");
+        } else if (slot < 17) {
+            /* --- Inference (15%) --- */
+            const char *query = inference_queries[r % N_INFERENCE_QUERIES];
+            q_infer++;
 
-        shmem_ipc_send(shared_request_ring, MSG_QUERY, seq++,
-                       query, (uint16_t)strlen(query));
-        seL4_Signal(req_notif);
-        seL4_Wait(resp_notif, NULL);
+            shmem_ipc_send(shared_request_ring, MSG_QUERY, seq++,
+                           query, (uint16_t)strlen(query));
+            seL4_Signal(req_notif);
+            seL4_Wait(resp_notif, NULL);
 
-        /* Drain ALL response messages for this query.
-         * inference_server splits responses >240 bytes into multiple chunks.
-         * Reading only one message causes subsequent queries to get stale data. */
-        char full_response[512];
-        int resp_offset = 0;
+            /* Drain all response messages */
+            char full_response[512];
+            int resp_offset = 0;
+            uint8_t msg_type;
+            uint16_t msg_seq;
+            uint8_t payload[SHMEM_MAX_PAYLOAD];
+            uint16_t msg_len;
 
-        uint8_t msg_type;
-        uint16_t msg_seq;
-        uint8_t payload[SHMEM_MAX_PAYLOAD];
-        uint16_t msg_len;
+            while (shmem_ipc_recv(shared_response_ring, &msg_type, &msg_seq,
+                                   payload, &msg_len) == 0) {
+                if (msg_type != MSG_RESPONSE) {
+                    puts_serial("[WARN] non-response in drain: type=");
+                    put_dec((uint32_t)msg_type);
+                    puts_serial(" seq="); put_dec((uint32_t)msg_seq);
+                    puts_serial("\n");
+                    break;
+                }
+                int copy = (int)msg_len;
+                if (resp_offset + copy > (int)sizeof(full_response) - 1)
+                    copy = (int)sizeof(full_response) - 1 - resp_offset;
+                if (copy > 0) {
+                    memcpy(full_response + resp_offset, payload, (size_t)copy);
+                    resp_offset += copy;
+                }
+            }
 
-        while (shmem_ipc_recv(shared_response_ring, &msg_type, &msg_seq,
+            if (resp_offset == 0) {
+                q_errors++;
+                puts_serial("[ERR] empty inference response\n");
+            }
+
+        } else if (slot < 19) {
+            /* --- Heartbeat (10%) --- */
+            q_heartbeat++;
+            shmem_ipc_send(shared_request_ring, MSG_HEARTBEAT, seq++, NULL, 0);
+            seL4_Signal(req_notif);
+            seL4_Wait(resp_notif, NULL);
+
+            uint8_t msg_type;
+            uint16_t msg_seq;
+            uint8_t payload[SHMEM_MAX_PAYLOAD];
+            uint16_t msg_len;
+            if (shmem_ipc_recv(shared_response_ring, &msg_type, &msg_seq,
                                payload, &msg_len) == 0) {
-            if (msg_type != MSG_RESPONSE) {
-                puts_serial("[WARN] non-response in drain: type=");
-                put_dec((uint32_t)msg_type);
-                puts_serial(" seq="); put_dec((uint32_t)msg_seq);
-                puts_serial("\n");
-                break;
+                if (msg_type != MSG_HEARTBEAT_ACK) {
+                    puts_serial("[WARN] heartbeat got type=");
+                    put_dec((uint32_t)msg_type); puts_serial("\n");
+                    q_errors++;
+                }
+            } else {
+                puts_serial("[ERR] no heartbeat ACK\n");
+                q_errors++;
             }
-            int copy = (int)msg_len;
-            if (resp_offset + copy > (int)sizeof(full_response) - 1)
-                copy = (int)sizeof(full_response) - 1 - resp_offset;
-            if (copy > 0) {
-                memcpy(full_response + resp_offset, payload, (size_t)copy);
-                resp_offset += copy;
-            }
-        }
-        full_response[resp_offset] = '\0';
 
-        /* Display (truncate for VGA) */
-        if (resp_offset > 0) {
-            int tlen = resp_offset > 60 ? 60 : resp_offset;
-            char display[64];
-            memcpy(display, full_response, (size_t)tlen);
-            display[tlen] = '\0';
-            puts_serial(" \""); puts_serial(display);
-            if (resp_offset > 60) puts_serial("...");
-            puts_serial("\"\n");
         } else {
-            puts_serial(" (no response)\n");
+            /* --- SHIELD (5%) --- */
+            q_shield++;
+            const char *query = shield_queries[r % N_SHIELD_QUERIES];
+
+            shmem_ipc_send(shared_request_ring, MSG_SHIELD_CHECK, seq++,
+                           query, (uint16_t)strlen(query));
+            seL4_Signal(req_notif);
+            seL4_Wait(resp_notif, NULL);
+
+            uint8_t msg_type;
+            uint16_t msg_seq;
+            uint8_t payload[SHMEM_MAX_PAYLOAD];
+            uint16_t msg_len;
+            if (shmem_ipc_recv(shared_response_ring, &msg_type, &msg_seq,
+                               payload, &msg_len) == 0) {
+                if (msg_type != MSG_SHIELD_RESULT) {
+                    puts_serial("[WARN] shield got type=");
+                    put_dec((uint32_t)msg_type); puts_serial("\n");
+                    q_errors++;
+                }
+            } else {
+                puts_serial("[ERR] no shield response\n");
+                q_errors++;
+            }
         }
+
+        /* Stats every 100 queries */
+        if (q_total % 100 == 0) {
+            puts_serial("[STATS] q="); put_dec(q_total);
+            puts_serial(" hits="); put_dec(q_hits);
+            puts_serial(" infer="); put_dec(q_infer);
+            puts_serial(" hb="); put_dec(q_heartbeat);
+            puts_serial(" shield="); put_dec(q_shield);
+            puts_serial(" err="); put_dec(q_errors);
+            puts_serial("\n");
+        }
+
+        seL4_Yield();
     }
 
-    puts_serial("\n[JARVIS] Query loop done: ");
-    put_dec((uint32_t)q_total); puts_serial(" queries, ");
-    put_dec((uint32_t)q_hits); puts_serial(" cache hits, ");
-    put_dec((uint32_t)q_infer); puts_serial(" inferences\n");
+    /* This point never reached — workload loop is infinite */
 
 idle:
-    puts_serial("\n[JARVIS] System idle.\n");
+    puts_serial("\n[JARVIS] System idle (no inference).\n");
     while (1) { seL4_Yield(); }
     return NULL;
 }
