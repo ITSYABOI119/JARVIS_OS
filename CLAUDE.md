@@ -368,11 +368,11 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | **Coherent text: "a microkernel implementation of the L4 architecture..."** | **DONE** |
 | **Logits verified vs llama.cpp reference (top-5 match exactly)** | **DONE** |
 
-| Continuous IPC request loop (cache + inference pipeline) | DONE |
+| Continuous IPC workload loop (63 queries, xorshift PRNG, stats, error tracking) | DONE |
 | Intel I211 NIC driver (PCI 8086:1539, TX+RX polled) | DONE |
 | IPC response drain fix (multi-message responses) | DONE |
 
-**Next:** 30-day stability test. IPC loop hardening.
+**Next:** 30-day stability test on x86. Phase 3c hardening.
 
 ### Pre-Work Tasks (Before JARVIS Project PC)
 
@@ -425,8 +425,6 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | **Total** | | | **80+ files** | **368 tests, ~20,000 LOC** |
 
 **What remains for Phase 3b on real hardware:**
-- Intel I211 NIC driver (PCI 8086:1539)
-- Continuous IPC request loop
 - 30-day stability test on x86
 
 ### Phase 3 Weeks
