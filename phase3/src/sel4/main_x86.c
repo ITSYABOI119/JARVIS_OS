@@ -1410,18 +1410,44 @@ static void *main_continued(void *arg UNUSED)
         seL4_Signal(req_notif);
         seL4_Wait(resp_notif, NULL);
 
+        /* Drain ALL response messages for this query.
+         * inference_server splits responses >240 bytes into multiple chunks.
+         * Reading only one message causes subsequent queries to get stale data. */
+        char full_response[512];
+        int resp_offset = 0;
+
         uint8_t msg_type;
         uint16_t msg_seq;
         uint8_t payload[SHMEM_MAX_PAYLOAD];
         uint16_t msg_len;
 
-        if (shmem_ipc_recv(shared_response_ring, &msg_type, &msg_seq,
-                           payload, &msg_len) == 0) {
-            /* Truncate for VGA (60 chars) — full response on serial */
-            int tlen = msg_len > 60 ? 60 : (int)msg_len;
-            payload[tlen] = '\0';
-            puts_serial(" \""); puts_serial((const char *)payload);
-            if (msg_len > 60) puts_serial("...");
+        while (shmem_ipc_recv(shared_response_ring, &msg_type, &msg_seq,
+                               payload, &msg_len) == 0) {
+            if (msg_type != MSG_RESPONSE) {
+                puts_serial("[WARN] non-response in drain: type=");
+                put_dec((uint32_t)msg_type);
+                puts_serial(" seq="); put_dec((uint32_t)msg_seq);
+                puts_serial("\n");
+                break;
+            }
+            int copy = (int)msg_len;
+            if (resp_offset + copy > (int)sizeof(full_response) - 1)
+                copy = (int)sizeof(full_response) - 1 - resp_offset;
+            if (copy > 0) {
+                memcpy(full_response + resp_offset, payload, (size_t)copy);
+                resp_offset += copy;
+            }
+        }
+        full_response[resp_offset] = '\0';
+
+        /* Display (truncate for VGA) */
+        if (resp_offset > 0) {
+            int tlen = resp_offset > 60 ? 60 : resp_offset;
+            char display[64];
+            memcpy(display, full_response, (size_t)tlen);
+            display[tlen] = '\0';
+            puts_serial(" \""); puts_serial(display);
+            if (resp_offset > 60) puts_serial("...");
             puts_serial("\"\n");
         } else {
             puts_serial(" (no response)\n");
