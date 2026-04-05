@@ -172,7 +172,7 @@ JARVIS AI-OS: AI-controlled operating system on seL4 microkernel.
 | Phase 0 | COMPLETE — Validation |
 | Phase 1 | COMPLETE — PoC on x86 QEMU |
 | Phase 2 | COMPLETE — Alpha on Pi 4 bare metal |
-| Phase 3 | IN PROGRESS — **bare-metal boot on Ryzen 2700X ACHIEVED**, HW integration next |
+| Phase 3 | IN PROGRESS — **NVMe runtime model loading on bare-metal Ryzen 2700X**, NIC + stability next |
 | Phase 4 | Future — Production v1.0 |
 
 ### Working Rules
@@ -196,6 +196,40 @@ Before giving a prompt to the user, verify it includes:
 - [ ] Instructions for what to update in CLAUDE.md
 - [ ] Agent strategy — sized for best quality, parallel when independent
 - [ ] CLAUDE.MD RULES footer block (the 5-rule enforcement section)
+
+## Common Commands (for reference)
+
+### Building & Testing on JARVIS PC (SSH from main PC)
+```bash
+ssh jarvis
+cd ~/Desktop/JARVIS_OS && git stash && git pull && chmod +x phase3/scripts/*.sh
+./phase3/scripts/build_jarvis_x86.sh                    # sync + build
+bash phase3/scripts/qemu_test.sh                        # basic QEMU test
+bash phase3/scripts/qemu_test_nvme.sh                   # QEMU with NVMe + model
+sudo HOME=/home/jarvis bash phase3/scripts/reflash_usb.sh  # flash USB for bare metal
+sudo reboot                                              # boot from USB
+```
+
+### Build config
+```bash
+# With embedded model (772MB image, slow USB boot):
+cd ~/sel4-x86/jbuild && cmake -G Ninja -DJARVIS_EMBED_MODEL=/path/to/model.gguf -C ../projects/jarvis-x86/settings.cmake ../projects/jarvis-x86
+
+# Without embedded model (1.6MB image, loads from NVMe):
+cd ~/sel4-x86/jbuild && cmake -G Ninja -DJARVIS_EMBED_MODEL="" -C ../projects/jarvis-x86/settings.cmake ../projects/jarvis-x86
+```
+
+### KVM (must enable SVM in BIOS first)
+```bash
+sudo modprobe kvm_amd    # load KVM module
+# Scripts auto-detect /dev/kvm and use -enable-kvm -cpu host
+```
+
+### Key file locations on JARVIS PC
+- seL4 build tree: `~/sel4-x86/`
+- JARVIS repo: `~/Desktop/JARVIS_OS/`
+- Model file: `~/Desktop/JARVIS_OS/phase3/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf`
+- Model on NVMe: `/dev/nvme0n1p4` (ESP partition, mounted as FAT32, file: `MODEL.GUF`)
 
 ## Session Start
 
