@@ -369,8 +369,10 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | **Logits verified vs llama.cpp reference (top-5 match exactly)** | **DONE** |
 
 | Continuous IPC request loop (cache + inference pipeline) | DONE |
+| Intel I211 NIC driver (PCI 8086:1539, TX+RX polled) | DONE |
+| IPC response drain fix (multi-message responses) | DONE |
 
-**Next:** Intel I211 NIC driver (PCI 8086:1539). 30-day stability test.
+**Next:** 30-day stability test. IPC loop hardening.
 
 ### Pre-Work Tasks (Before JARVIS Project PC)
 
@@ -419,7 +421,8 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | RDTSC timing (Stage 5) | — | DONE | main_x86.c | 5/5 stages PASS |
 | NVMe driver (polled I/O) | 15-16 | DONE | nvme.c/h | 10 PASS |
 | FAT32 read-only parser | 15-16 | DONE | fat32.c/h | 8 PASS |
-| **Total** | | | **80+ files** | **357 tests, ~20,000 LOC** |
+| NIC Intel I211 (TX + RX polled) | 17-18 | DONE | nic_i211.c/h | 11 PASS |
+| **Total** | | | **80+ files** | **368 tests, ~20,000 LOC** |
 
 **What remains for Phase 3b on real hardware:**
 - Intel I211 NIC driver (PCI 8086:1539)
@@ -618,6 +621,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Block Device (x86):** `phase3/src/drivers/blk_dev_x86.c/h`
 - **x86 Timer:** `phase3/src/drivers/x86_timer.c/h`
 - **NIC RTL8168:** `phase3/src/drivers/nic_rtl8168.c/h`
+- **NIC Intel I211:** `phase3/src/drivers/nic_i211.c/h`
 - **Tensor Ops:** `phase3/src/ai/tensor_ops.c/h`
 - **Dequantization:** `phase3/src/ai/dequant.c/h`
 - **BPE Tokenizer:** `phase3/src/ai/tokenizer.c/h`
@@ -658,8 +662,8 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 
 - **Phase 1:** 39,106 LOC, 95 files, 338 test functions (COMPLETE)
 - **Phase 2:** ~27,000 LOC, 65 files, 108 tests (COMPLETE)
-- **Phase 3:** ~20,000 LOC, 80+ files, 357 tests (IN PROGRESS — **bare-metal boot on Ryzen 2700X verified**)
-- **Total:** ~86,000+ LOC, 200+ files, 611+ tests
+- **Phase 3:** ~20,000 LOC, 80+ files, 368 tests (IN PROGRESS — **bare-metal boot on Ryzen 2700X verified**)
+- **Total:** ~86,000+ LOC, 200+ files, 622+ tests
 - **Security:** 26/26 adversarial audit findings resolved (March 2026). SHIELD module: keyword + model-assisted risk scoring.
 - **Inference:** Llama 3.2 1B Q4_K_M on seL4 QEMU, coherent output, 50MB heap
 
