@@ -180,6 +180,15 @@ jobs:
           -o /tmp/test_nic
         /tmp/test_nic
 
+    - name: "Phase 3: NIC Intel I211 (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -DJARVIS_TEST_MOCK \
+          -I phase3/src/drivers \
+          phase3/src/drivers/test_nic_i211.c phase3/src/drivers/nic_i211.c \
+          phase3/src/drivers/pci.c \
+          -o /tmp/test_nic_i211
+        /tmp/test_nic_i211
+
     - name: "Phase 3: x86 Timer (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 -DJARVIS_TEST_MOCK \
