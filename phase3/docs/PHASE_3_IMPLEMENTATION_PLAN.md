@@ -32,18 +32,55 @@ This document provides a detailed week-by-week implementation plan for Phase 3. 
 
 ---
 
-## CURRENT STATUS (March 25, 2026)
+## CURRENT STATUS (April 6, 2026)
 
-**Phase 2 COMPLETE** — GO recommendation for Phase 3
-**Pre-Work:** ✅ COMPLETE — all 8 interim tasks done
-**Phase 3a:** ✅ COMPLETE — GPU benchmarks, native Linux build env, test validation (on main PC)
-**Phase 3b Inference:** ✅ **MILESTONE** — Llama 3.2 1B generating coherent text on seL4 QEMU
-- Quantized zero-copy inference: 50MB heap (vs 5.7GB for F32 dequant)
-- 4/4 stages PASS: GGUF parse → quantized load → tokenizer (128K vocab) → generation
-- Output: "a microkernel implementation of the L4 microkernel architecture. It is designed to be a lightweight alternative"
-- Logits verified against llama.cpp reference (top-5 match exactly)
-- KVM confirmed working on AMD Ryzen (-enable-kvm -cpu host, 4GB QEMU)
-**JARVIS Project PC ready for bare-metal.** CPU-only inference (no GPU compute). New main PC built — JARVIS PC is dedicated and wipeable.
+### What's Done
+
+| Milestone | Date | Notes |
+|-----------|------|-------|
+| Phase 3a: GPU benchmarks + native Linux build | Mar 2026 | RTX 2070 benchmarks, seL4 native build env |
+| Pre-work: 8/8 tasks complete | Mar 2026 | Saved 8-12 weeks of Phase 3b |
+| seL4 x86-64 QEMU (123/123 tests) | Mar 2026 | Build env documented |
+| Inference engine (C-only, quantized) | Mar 25, 2026 | 4/4 stages PASS, coherent text |
+| Process isolation (A+B via CPIO) | Mar 28, 2026 | Shared memory IPC, SEC-014 |
+| Bare-metal boot on Ryzen 2700X | Apr 3, 2026 | VGA output, self-test 5/5 PASS |
+| Bare-metal LLM inference | Apr 3, 2026 | Coherent text via process-isolated IPC |
+| NVMe runtime model loading | Apr 4, 2026 | 770MB from Lexar NM790 FAT32, 1.6MB USB image |
+| Intel I211 NIC driver | Apr 5, 2026 | PCI 8086:1539, 11 mock tests, CI green |
+| IPC response drain fix | Apr 5, 2026 | Multi-message responses no longer cause shift |
+| Continuous IPC workload | Apr 5, 2026 | 63 queries, xorshift PRNG, stats/100 |
+| SHMEM ring overflow fix | Apr 6, 2026 | 16→15 slots, _Static_assert, was crashing at slot 15 |
+| Debug config (compile-time flags) | Apr 6, 2026 | jarvis_debug.h: IPC/PB/ring/stats toggles |
+| QEMU workload verified | Apr 6, 2026 | q=100: 71 hits, 13 infer, 11 hb, 5 shield, 0 errors |
+
+### What's Left
+
+| Task | Priority | Effort | Notes |
+|------|----------|--------|-------|
+| Bare-metal workload verification | HIGH | 1 session | Flash USB, run workload, verify stats |
+| 30-day stability test | HIGH | 30 days | Continuous workload on bare metal |
+| Phase 3c: Fuzz testing | MEDIUM | 2-3 weeks | NVMe, PCI, FAT32, IPC packet fuzzing |
+| Phase 3c: Security audit | MEDIUM | 2 weeks | Review all x86 driver code |
+| Phase 3c: Enhanced SHIELD | LOW | 2 weeks | Model-assisted risk scoring |
+| Dynamic model scaling wiring | LOW | 2 weeks | State machine exists, not connected |
+| Final report + v0.3.0-beta tag | LAST | 1 week | After all above |
+
+### Test Summary
+
+| Phase | Tests | Status |
+|-------|-------|--------|
+| Phase 1 | 338 | COMPLETE |
+| Phase 2 | 108 | COMPLETE |
+| Phase 3 | 368 | ALL PASSING (CI green) |
+| **Total** | **814** | |
+
+### Hardware
+
+| Machine | Role | Status |
+|---------|------|--------|
+| **JARVIS PC** | Bare-metal seL4 target | Ryzen 7 2700X, 32GB, 1TB NVMe, R9 280X (display), ASUS X470-F |
+| **Main PC** | Development | Ryzen 5 5600, 32GB, RTX 2070, ASRock B550M-ITX/ac |
+| Pi 4 8GB | Phase 2 (retired) | 30-day stability proven |
 
 ### Phase 2 Baseline (What Carries Forward)
 
@@ -498,44 +535,26 @@ While waiting for the JARVIS Project PC, the majority of Phase 3b implementation
 | Shared memory IPC | 23-24 | ✅ DONE | shmem_ipc.c/h | 10 PASS |
 | Custom x86 rootserver | 9-12 | ✅ DONE (QEMU) | main_x86.c | 5/5 self-test PASS |
 
-**Total Phase 3 code:** 69 files, 18,476 LOC, 247 tests (all passing), 29 CI steps, 5/5 seL4 QEMU self-tests
+**Total Phase 3 code:** 80+ files, ~20,000 LOC, 368 tests (all passing), 35+ CI steps
 
-**What remains for Phase 3b on real hardware:**
-- Boot seL4 on actual Ryzen hardware (vs QEMU)
-- AHCI full read/write against real NVMe (mock-tested, real I/O pending)
-- NIC driver TX/RX against real NIC (skeleton done, real I/O pending)
-- Load real GGUF model from NVMe and run inference end-to-end
-- Extract tokenizer vocab from GGUF metadata (currently manual init)
-- 30-day stability test on x86
+**Phase 3b: COMPLETE** — All hardware integration milestones achieved. Bare-metal boot, NVMe model loading, I211 NIC driver, continuous workload loop, IPC fixes. Ready for Phase 3c hardening.
 
-### Revised Timeline (March 31, 2026)
+### Phase 3 Timeline
 
-JARVIS PC is dedicated and wipeable (April 2026). New main PC (5600/2070/32GB) handles daily use.
+| Phase | Status | Completed |
+|-------|--------|-----------|
+| 3a GPU + benchmarks | **DONE** | Mar 2026 |
+| 3b software (QEMU) | **DONE** | Mar 2026 |
+| 3b optimization (AVX2, SIMD) | **DONE** | Mar 31, 2026 |
+| 3b bare-metal boot | **DONE** | Apr 3, 2026 |
+| 3b bare-metal inference | **DONE** | Apr 3, 2026 |
+| 3b NVMe model loading | **DONE** | Apr 4, 2026 |
+| 3b I211 NIC + IPC fixes | **DONE** | Apr 5-6, 2026 |
+| 3b continuous workload | **DONE** | Apr 6, 2026 (QEMU verified, err=0) |
+| **3c hardening** | **NEXT** | Fuzz testing, security audit, SHIELD |
+| 3c finalization | PENDING | Final report, v0.3.0-beta |
 
-| Phase | Status | What's Happening |
-|-------|--------|-----------------|
-| 3a (GPU + benchmarks) | **DONE** | GPU benchmarks completed on RTX 2070 |
-| 3b software | **DONE** | All QEMU work complete |
-| 3b optimization | **DONE** | AVX2/SIMD, PCI 64-bit BAR, driver fixes |
-| **3b bare-metal boot** | **DONE** | seL4 on Ryzen 2700X, VGA output, self-test 5/5 PASS |
-| **3b bare-metal inference** | **DONE** | Llama 3.2 1B coherent text via process-isolated IPC on real hardware |
-| **3b NVMe model loading** | **DONE** | 770MB from Lexar NM790 FAT32 → 197K frames → Process B → inference |
-| **3b HW integration** | **NEXT** | Intel I211 NIC driver |
-| 3b stability | PENDING | 30-day test after HW integration |
-| 3c hardening | PENDING | Security audit, fuzz testing after stability |
-| 3c finalization | PENDING | Final report, v0.3.0-beta tag |
-
-**Optimization work (ongoing):**
-1. AVX2/FMA SIMD for tensor_ops (8-16x inference speedup)
-2. PCI 64-bit BAR support
-3. Dead code cleanup (unused tensor_rope)
-4. Driver wiring (blk_dev → AHCI chain, NIC RX path)
-5. Intel I211-AT NIC driver (X470-F Gaming — replaces RTL8168 for JARVIS PC)
-
-**Estimated remaining timeline:**
-- Bare-metal boot + HW integration: ~4-6 weeks
-- Stability + hardening: ~8-10 weeks after that
-- **Total to v0.3.0-beta:** ~14-18 weeks
+**Estimated remaining to v0.3.0-beta:** ~8-12 weeks (hardening + finalization)
 
 ---
 
@@ -1050,6 +1069,8 @@ JARVIS PC is dedicated and wipeable (April 2026). New main PC (5600/2070/32GB) h
 ---
 
 ## Month 5-6: Integration + Stability (Weeks 25-28)
+
+> **STATUS:** ✅ COMPLETE — Continuous IPC workload verified in QEMU (Apr 6, 2026). NVMe model loading, I211 NIC, IPC drain fix, ring overflow fix all done. 30-day stability test ready to start.
 
 ### Focus: End-to-End Validation, 30-Day Stability Test
 
