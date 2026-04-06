@@ -71,6 +71,10 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
     memcpy(query_buf, query, (size_t)qlen);
     query_buf[qlen] = '\0';
 
+    puts_serial("[PB] handle_query: \"");
+    puts_serial(query_buf);
+    puts_serial("\"\n");
+
     int n_prompt = 1 + tokenizer_encode(tok, query_buf, prompt_ids + 1, 63);
 
     /* Reset state for new generation */
@@ -79,17 +83,21 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
                       qm->config.n_kv_heads * qm->config.head_dim * sizeof(float);
     memset(state->key_cache, 0, kv_bytes);
     memset(state->value_cache, 0, kv_bytes);
+    puts_serial("[PB] KV reset done\n");
 
     /* Generate */
+    puts_serial("[PB] generating...\n");
     int output_ids[64];
     int n_gen = qmodel_generate(qm, state, prompt_ids, n_prompt,
                                  output_ids, 50, tok->eos_id,
                                  0.0f, 1, 42);
+    puts_serial("[PB] generated "); put_dec((uint32_t)n_gen); puts_serial(" tokens\n");
 
     /* Decode to text */
     char text_out[512];
     int text_len = tokenizer_decode(tok, output_ids, n_gen, text_out, sizeof(text_out));
     if (text_len < 0) text_len = 0;
+    puts_serial("[PB] decoded "); put_dec((uint32_t)text_len); puts_serial(" bytes\n");
 
     /* Send response — split into multiple messages if >240 bytes */
     int offset = 0;
@@ -110,6 +118,7 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
 
     /* Signal Process A that response is ready */
     seL4_Signal(resp_notif);
+    puts_serial("[PB] response sent\n");
 }
 
 /* ---- Main ---- */
