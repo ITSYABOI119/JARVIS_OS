@@ -350,12 +350,17 @@ int nvme_init(nvme_controller_t *ctrl,
     /* Parse LBA format: FLBAS at byte 26 (bits 3:0 = format index) */
     {
         uint8_t flbas = id[26] & 0x0F;
-        /* LBA format table starts at byte 128, each entry is 4 bytes.
-         * Bits 23:16 of the entry = LBADS (log2 block size) */
+        /* SEC-030: FLBAS index 0-15 maps to LBA format table at bytes 128-191.
+         * Each entry is 4 bytes. Max offset: 128 + 15*4 = 188 < 4096. Safe. */
         uint32_t lba_fmt;
         memcpy(&lba_fmt, &id[128 + flbas * 4], sizeof(uint32_t));
         uint8_t lbads = (lba_fmt >> 16) & 0xFF;
-        ctrl->ns_block_size = (lbads > 0) ? (1U << lbads) : 512;
+        /* Clamp block size to sane range (9=512 to 12=4096) to prevent
+         * insane shifts from crafted IDENTIFY data */
+        if (lbads < 9 || lbads > 12)
+            ctrl->ns_block_size = 512;
+        else
+            ctrl->ns_block_size = (1U << lbads);
     }
 
     ctrl->ns_id = 1;
@@ -392,6 +397,10 @@ int nvme_read_sectors(nvme_controller_t *ctrl,
     if (!ctrl || !ctrl->initialized || !buf)
         return -1;
     if (count == 0)
+        return -1;
+
+    /* SEC-031: Validate block_size before arithmetic to prevent div-by-zero */
+    if (ctrl->ns_block_size == 0)
         return -1;
 
     /* Limit: max 8KB (2 pages) per command */

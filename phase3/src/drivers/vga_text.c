@@ -46,7 +46,13 @@ void vga_putc(char c) {
     } else if (c == '\r') {
         vga_col = 0;
     } else if (c == '\t') {
+        /* SEC-032: Tab can push col to 80+, triggering OOB write below.
+         * Clamp immediately: next lines handle col >= VGA_WIDTH. */
         vga_col = (vga_col + 8) & ~7;
+        if (vga_col >= VGA_WIDTH) {
+            vga_col = 0;
+            vga_row++;
+        }
     } else {
         vga_buffer[vga_row * VGA_WIDTH + vga_col] =
             (uint16_t)c | ((uint16_t)vga_color << 8);

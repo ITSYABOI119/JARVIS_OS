@@ -59,6 +59,12 @@ static int fat32_next_cluster(fat32_fs_t *fs, uint32_t cluster, uint32_t *next)
     uint32_t entry_offset = fat_offset % fs->bytes_per_sector;
 
     uint8_t sector_buf[512];
+
+    /* SEC-029: entry_offset + 4 must fit in the 512-byte stack buffer.
+     * For bytes_per_sector > 512 the modulus could exceed sizeof(sector_buf). */
+    if (entry_offset + 4 > sizeof(sector_buf))
+        return -1;
+
     int err = fs->read(fs->fat_lba + fat_sector, 1, sector_buf);
     if (err)
         return err;
@@ -107,6 +113,17 @@ int fat32_init(fat32_fs_t *fs, fat32_read_fn read, uint64_t part_lba)
     fs->fat_size_sectors    = read_le32(bpb + BPB_FAT32_FAT_SIZE);
     fs->root_cluster        = read_le32(bpb + BPB_FAT32_ROOT_CLUSTER);
 
+    /* SEC-028: Validate BPB fields from untrusted disk to prevent div-by-zero
+     * and integer overflow in cluster_to_lba / fat32_next_cluster */
+    if (fs->bytes_per_sector == 0 || fs->sectors_per_cluster == 0 ||
+        fs->num_fats == 0 || fs->fat_size_sectors == 0 ||
+        fs->root_cluster < 2)
+        return -1;
+    /* Only valid FAT32 sector sizes: 512, 1024, 2048, 4096 */
+    if (fs->bytes_per_sector != 512 && fs->bytes_per_sector != 1024 &&
+        fs->bytes_per_sector != 2048 && fs->bytes_per_sector != 4096)
+        return -1;
+
     fs->fat_lba  = part_lba + fs->reserved_sectors;
     fs->data_lba = fs->fat_lba + (uint64_t)fs->num_fats * fs->fat_size_sectors;
 
@@ -119,7 +136,10 @@ int fat32_find_file(fat32_fs_t *fs, const char *name_8_3,
     uint32_t cluster = fs->root_cluster;
     uint32_t cluster_bytes = fs->sectors_per_cluster * fs->bytes_per_sector;
 
-    while (cluster >= 2 && cluster < FAT32_EOC_MIN) {
+    /* SEC-027: Bound cluster chain walk to prevent infinite loop on circular FAT */
+    uint32_t max_clusters = 1000000;  /* 1M clusters * 32KB = 32GB max dir */
+
+    while (cluster >= 2 && cluster < FAT32_EOC_MIN && max_clusters-- > 0) {
         uint64_t lba = cluster_to_lba(fs, cluster);
 
         /* Read one cluster at a time (max 32KB typical) */
@@ -171,7 +191,10 @@ int fat32_read_file(fat32_fs_t *fs, uint32_t first_cluster,
     uint8_t *out = (uint8_t *)buf;
     uint32_t remaining = file_size;
 
-    while (remaining > 0 && cluster >= 2 && cluster < FAT32_EOC_MIN) {
+    /* SEC-027: Bound cluster chain walk to prevent infinite loop on circular FAT */
+    uint32_t max_clusters = 1000000;  /* 1M clusters * 32KB = 32GB max file */
+
+    while (remaining > 0 && cluster >= 2 && cluster < FAT32_EOC_MIN && max_clusters-- > 0) {
         uint64_t lba = cluster_to_lba(fs, cluster);
         uint32_t to_read = remaining < cluster_bytes ? remaining : cluster_bytes;
         uint32_t sectors = (to_read + fs->bytes_per_sector - 1) / fs->bytes_per_sector;

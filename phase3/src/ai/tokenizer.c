@@ -71,7 +71,10 @@ int tokenizer_find(const tokenizer_t *t, const char *token_str)
         return -1;
     }
     uint64_t h = fnv1a_hash(token_str) % (uint64_t)t->ht_capacity;
-    while (t->ht_table[h] != -1) {
+    /* SEC-036: Bound probe to ht_capacity iterations to guarantee termination
+     * even if the table is full (shouldn't happen with 2x sizing, but defense-in-depth). */
+    int probes = t->ht_capacity;
+    while (t->ht_table[h] != -1 && probes-- > 0) {
         if (strcmp(t->tokens[t->ht_table[h]], token_str) == 0)
             return t->ht_table[h];
         h = (h + 1) % (uint64_t)t->ht_capacity;

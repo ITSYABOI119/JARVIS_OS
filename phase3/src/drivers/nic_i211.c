@@ -319,7 +319,10 @@ int i211_nic_recv(i211_nic_t *nic, void *buf, uint32_t max_len)
     /* Extract frame length from descriptor */
     frame_len = desc->length;
 
-    /* Clamp to output buffer size */
+    /* SEC-033: Clamp to BOTH output buffer size AND DMA buffer size.
+     * A malicious/buggy NIC could report length > I211_RX_BUF_SIZE. */
+    if (frame_len > I211_RX_BUF_SIZE)
+        frame_len = I211_RX_BUF_SIZE;
     if (frame_len > max_len)
         frame_len = max_len;
 
