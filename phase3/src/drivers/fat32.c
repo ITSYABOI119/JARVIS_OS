@@ -54,6 +54,11 @@ static uint64_t cluster_to_lba(fat32_fs_t *fs, uint32_t cluster)
 /* ---- Look up the next cluster in the FAT ---- */
 static int fat32_next_cluster(fat32_fs_t *fs, uint32_t cluster, uint32_t *next)
 {
+    /* SEC-035: Guard against cluster * 4 overflow for huge cluster numbers */
+    if (cluster > 0x0FFFFFFF) {
+        *next = FAT32_EOC_MIN;
+        return 0;
+    }
     uint32_t fat_offset  = cluster * 4;
     uint32_t fat_sector  = fat_offset / fs->bytes_per_sector;
     uint32_t entry_offset = fat_offset % fs->bytes_per_sector;

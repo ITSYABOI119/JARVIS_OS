@@ -96,7 +96,9 @@ static int nvme_submit_and_wait(nvme_controller_t *ctrl, nvme_queue_t *q,
     uint16_t status;
 
     /* Assign command ID */
-    cmd->cid = q->cid_counter++;
+    /* SEC-034: Skip CID 0 on wrap — some controllers treat CID 0 as invalid */
+    q->cid_counter = (q->cid_counter % 65535) + 1;
+    cmd->cid = q->cid_counter;
 
     /* Copy command to SQ slot and advance tail */
     memcpy(&q->sq[q->sq_tail], cmd, sizeof(*cmd));

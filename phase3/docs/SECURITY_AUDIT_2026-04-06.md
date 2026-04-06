@@ -51,10 +51,10 @@
 | SEC-031 | **MEDIUM** | CWE-369 | nvme.c:398 | nvme_read_sectors div-by-zero if ns_block_size == 0 | NVMe storage | YES |
 | SEC-032 | **LOW** | CWE-787 | vga_text.c:49 | VGA tab handler can set col > VGA_WIDTH before check | VGA output | YES |
 | SEC-033 | **HIGH** | CWE-125 | nic_i211.c:320-324 | I211 RX descriptor length not clamped to DMA buffer size | Network | YES |
-| SEC-034 | **LOW** | CWE-190 | nvme.c:99 | NVMe CID counter uint16_t wraps at 65536 (benign but non-spec) | NVMe storage | No (accepted) |
-| SEC-035 | **LOW** | CWE-190 | fat32.c:57 | fat32_next_cluster: cluster*4 overflows for cluster > 1B | NVMe storage | No (accepted) |
+| SEC-034 | **LOW** | CWE-190 | nvme.c:99 | NVMe CID counter uint16_t wraps at 65536 (benign but non-spec) | NVMe storage | YES — skip CID 0 on wrap |
+| SEC-035 | **LOW** | CWE-190 | fat32.c:57 | fat32_next_cluster: cluster*4 overflows for cluster > 1B | NVMe storage | YES — bounds check before multiply |
 | SEC-036 | **MEDIUM** | CWE-835 | tokenizer.c:73-79 | tokenizer_find hash probe has no iteration bound | GGUF model | YES |
-| SEC-037 | **LOW** | CWE-190 | main_x86.c:1432 | q_total uint32_t wraps at ~4.3B queries (benign for 30-day test) | Internal | No (accepted) |
+| SEC-037 | **LOW** | CWE-190 | main_x86.c:1432 | q_total uint32_t wraps at ~4.3B queries (benign for 30-day test) | Internal | YES — upgraded to uint64_t |
 | SEC-038 | **INFO** | CWE-327 | shmem_ipc.c:15-25 | CRC-32 is integrity-only, not authentication | IPC peer | No (by design) |
 | SEC-039 | **INFO** | CWE-693 | inference_server.c:317-320 | SHIELD_CHECK always returns ALLOW (stub) | IPC peer | No (future work) |
 | SEC-040 | **INFO** | CWE-404 | gguf_vocab.c:108 | skip_value on very large GGUF string array is O(n) | GGUF model | No (accepted) |

@@ -1429,8 +1429,9 @@ static void *main_continued(void *arg UNUSED)
     #define N_SHIELD_QUERIES 8
 
     uint16_t seq = 1;
-    uint32_t q_total = 0, q_hits = 0, q_infer = 0, q_heartbeat = 0;
-    uint32_t q_shield = 0, q_errors = 0;
+    /* SEC-037: uint64_t for 30-day stability test (~2.6B queries at 1000/sec) */
+    uint64_t q_total = 0, q_hits = 0, q_infer = 0, q_heartbeat = 0;
+    uint64_t q_shield = 0, q_errors = 0;
     uint32_t rng_state = 42;
 
     while (1) {
