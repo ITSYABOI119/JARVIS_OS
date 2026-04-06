@@ -1437,6 +1437,11 @@ static void *main_continued(void *arg UNUSED)
         uint32_t r = xorshift32(&rng_state);
         int slot = (int)(r % 20);
 
+        /* DEBUG: trace every query */
+        puts_serial("[DBG] q="); put_dec(q_total);
+        puts_serial(" slot="); put_dec((uint32_t)slot);
+        puts_serial("\n");
+
         if (slot < 14) {
             /* --- Cache query (70%) --- */
             const char *query = cache_queries[r % N_CACHE_QUERIES];
@@ -1458,10 +1463,14 @@ static void *main_continued(void *arg UNUSED)
             const char *query = inference_queries[r % N_INFERENCE_QUERIES];
             q_infer++;
 
+            puts_serial("[DBG] INFER: sending...\n");
             shmem_ipc_send(shared_request_ring, MSG_QUERY, seq++,
                            query, (uint16_t)strlen(query));
+            puts_serial("[DBG] INFER: signaling...\n");
             seL4_Signal(req_notif);
+            puts_serial("[DBG] INFER: waiting...\n");
             seL4_Wait(resp_notif, NULL);
+            puts_serial("[DBG] INFER: woke up\n");
 
             /* Drain all response messages */
             char full_response[512];
@@ -1497,9 +1506,13 @@ static void *main_continued(void *arg UNUSED)
         } else if (slot < 19) {
             /* --- Heartbeat (10%) --- */
             q_heartbeat++;
+            puts_serial("[DBG] HB: sending...\n");
             shmem_ipc_send(shared_request_ring, MSG_HEARTBEAT, seq++, NULL, 0);
+            puts_serial("[DBG] HB: signaling...\n");
             seL4_Signal(req_notif);
+            puts_serial("[DBG] HB: waiting...\n");
             seL4_Wait(resp_notif, NULL);
+            puts_serial("[DBG] HB: woke up\n");
 
             uint8_t msg_type;
             uint16_t msg_seq;
@@ -1522,10 +1535,14 @@ static void *main_continued(void *arg UNUSED)
             q_shield++;
             const char *query = shield_queries[r % N_SHIELD_QUERIES];
 
+            puts_serial("[DBG] SHIELD: sending...\n");
             shmem_ipc_send(shared_request_ring, MSG_SHIELD_CHECK, seq++,
                            query, (uint16_t)strlen(query));
+            puts_serial("[DBG] SHIELD: signaling...\n");
             seL4_Signal(req_notif);
+            puts_serial("[DBG] SHIELD: waiting...\n");
             seL4_Wait(resp_notif, NULL);
+            puts_serial("[DBG] SHIELD: woke up\n");
 
             uint8_t msg_type;
             uint16_t msg_seq;
