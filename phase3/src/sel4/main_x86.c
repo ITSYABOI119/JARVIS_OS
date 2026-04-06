@@ -47,6 +47,7 @@
 #include "pci.h"
 #include "nvme.h"
 #include "fat32.h"
+#include "jarvis_debug.h"
 static int vga_ready = 0;  /* set after VGA frame mapped into vspace */
 
 /* seL4 IOPort wrappers for PCI config space (0xCF8/0xCFC).
@@ -1438,9 +1439,11 @@ static void *main_continued(void *arg UNUSED)
         int slot = (int)(r % 20);
 
         /* DEBUG: trace every query */
+#if JARVIS_DBG_IPC
         puts_serial("[DBG] q="); put_dec(q_total);
         puts_serial(" slot="); put_dec((uint32_t)slot);
         puts_serial("\n");
+#endif
 
         if (slot < 14) {
             /* --- Cache query (70%) --- */
@@ -1453,8 +1456,10 @@ static void *main_continued(void *arg UNUSED)
             if (cache_lookup(&g_cache, normalized, action, sizeof(action), &trust)) {
                 q_hits++;
             } else {
+#if JARVIS_DBG_IPC
                 puts_serial("[WARN] expected cache hit: \"");
                 puts_serial(query); puts_serial("\"\n");
+#endif
                 q_errors++;
             }
 
@@ -1463,14 +1468,22 @@ static void *main_continued(void *arg UNUSED)
             const char *query = inference_queries[r % N_INFERENCE_QUERIES];
             q_infer++;
 
+#if JARVIS_DBG_IPC
             puts_serial("[DBG] INFER: sending...\n");
+#endif
             shmem_ipc_send(shared_request_ring, MSG_QUERY, seq++,
                            query, (uint16_t)strlen(query));
+#if JARVIS_DBG_IPC
             puts_serial("[DBG] INFER: signaling...\n");
+#endif
             seL4_Signal(req_notif);
+#if JARVIS_DBG_IPC
             puts_serial("[DBG] INFER: waiting...\n");
+#endif
             seL4_Wait(resp_notif, NULL);
+#if JARVIS_DBG_IPC
             puts_serial("[DBG] INFER: woke up\n");
+#endif
 
             /* Drain all response messages */
             char full_response[512];
@@ -1483,10 +1496,12 @@ static void *main_continued(void *arg UNUSED)
             while (shmem_ipc_recv(shared_response_ring, &msg_type, &msg_seq,
                                    payload, &msg_len) == 0) {
                 if (msg_type != MSG_RESPONSE) {
+#if JARVIS_DBG_IPC
                     puts_serial("[WARN] non-response in drain: type=");
                     put_dec((uint32_t)msg_type);
                     puts_serial(" seq="); put_dec((uint32_t)msg_seq);
                     puts_serial("\n");
+#endif
                     break;
                 }
                 int copy = (int)msg_len;
@@ -1498,21 +1513,46 @@ static void *main_continued(void *arg UNUSED)
                 }
             }
 
+#if JARVIS_DBG_INFER_SUMMARY
+            if (resp_offset > 0) {
+                int tlen = resp_offset > 60 ? 60 : resp_offset;
+                char display[64];
+                memcpy(display, full_response, (size_t)tlen);
+                display[tlen] = '\0';
+                puts_serial("[INFER] \"");
+                puts_serial(query);
+                puts_serial("\" -> \"");
+                puts_serial(display);
+                if (resp_offset > 60) puts_serial("...");
+                puts_serial("\"\n");
+            }
+#endif
+
             if (resp_offset == 0) {
                 q_errors++;
+#if JARVIS_DBG_IPC
                 puts_serial("[ERR] empty inference response\n");
+#endif
             }
 
         } else if (slot < 19) {
             /* --- Heartbeat (10%) --- */
             q_heartbeat++;
+#if JARVIS_DBG_IPC
             puts_serial("[DBG] HB: sending...\n");
+#endif
             shmem_ipc_send(shared_request_ring, MSG_HEARTBEAT, seq++, NULL, 0);
+#if JARVIS_DBG_IPC
             puts_serial("[DBG] HB: signaling...\n");
+#endif
             seL4_Signal(req_notif);
+#if JARVIS_DBG_IPC
             puts_serial("[DBG] HB: waiting...\n");
+#endif
             seL4_Wait(resp_notif, NULL);
+#if JARVIS_DBG_IPC
             puts_serial("[DBG] HB: woke up\n");
+#endif
 
             uint8_t msg_type;
             uint16_t msg_seq;
@@ -1521,12 +1561,16 @@ static void *main_continued(void *arg UNUSED)
             if (shmem_ipc_recv(shared_response_ring, &msg_type, &msg_seq,
                                payload, &msg_len) == 0) {
                 if (msg_type != MSG_HEARTBEAT_ACK) {
+#if JARVIS_DBG_IPC
                     puts_serial("[WARN] heartbeat got type=");
                     put_dec((uint32_t)msg_type); puts_serial("\n");
+#endif
                     q_errors++;
                 }
             } else {
+#if JARVIS_DBG_IPC
                 puts_serial("[ERR] no heartbeat ACK\n");
+#endif
                 q_errors++;
             }
 
@@ -1535,14 +1579,22 @@ static void *main_continued(void *arg UNUSED)
             q_shield++;
             const char *query = shield_queries[r % N_SHIELD_QUERIES];
 
+#if JARVIS_DBG_IPC
             puts_serial("[DBG] SHIELD: sending...\n");
+#endif
             shmem_ipc_send(shared_request_ring, MSG_SHIELD_CHECK, seq++,
                            query, (uint16_t)strlen(query));
+#if JARVIS_DBG_IPC
             puts_serial("[DBG] SHIELD: signaling...\n");
+#endif
             seL4_Signal(req_notif);
+#if JARVIS_DBG_IPC
             puts_serial("[DBG] SHIELD: waiting...\n");
+#endif
             seL4_Wait(resp_notif, NULL);
+#if JARVIS_DBG_IPC
             puts_serial("[DBG] SHIELD: woke up\n");
+#endif
 
             uint8_t msg_type;
             uint16_t msg_seq;
@@ -1551,17 +1603,22 @@ static void *main_continued(void *arg UNUSED)
             if (shmem_ipc_recv(shared_response_ring, &msg_type, &msg_seq,
                                payload, &msg_len) == 0) {
                 if (msg_type != MSG_SHIELD_RESULT) {
+#if JARVIS_DBG_IPC
                     puts_serial("[WARN] shield got type=");
                     put_dec((uint32_t)msg_type); puts_serial("\n");
+#endif
                     q_errors++;
                 }
             } else {
+#if JARVIS_DBG_IPC
                 puts_serial("[ERR] no shield response\n");
+#endif
                 q_errors++;
             }
         }
 
         /* Stats every 100 queries */
+#if JARVIS_DBG_STATS
         if (q_total % 100 == 0) {
             puts_serial("[STATS] q="); put_dec(q_total);
             puts_serial(" hits="); put_dec(q_hits);
@@ -1571,6 +1628,7 @@ static void *main_continued(void *arg UNUSED)
             puts_serial(" err="); put_dec(q_errors);
             puts_serial("\n");
         }
+#endif
 
         seL4_Yield();
     }
