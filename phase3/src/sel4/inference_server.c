@@ -102,11 +102,15 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
     /* Send response — split into multiple messages if >240 bytes */
     int offset = 0;
     uint16_t msg_seq = seq;
+    puts_serial("[PB] send loop start\n");
     while (offset < text_len) {
         int chunk = text_len - offset;
         if (chunk > SHMEM_MAX_PAYLOAD) chunk = SHMEM_MAX_PAYLOAD;
-        shmem_ipc_send(response_ring, MSG_RESPONSE, msg_seq,
+        puts_serial("[PB] chunk @"); put_dec((uint32_t)offset);
+        puts_serial(" len="); put_dec((uint32_t)chunk); puts_serial("\n");
+        int rc = shmem_ipc_send(response_ring, MSG_RESPONSE, msg_seq,
                        text_out + offset, (uint16_t)chunk);
+        puts_serial("[PB] send rc="); put_dec((uint32_t)rc); puts_serial("\n");
         offset += chunk;
         msg_seq++;
     }
@@ -116,7 +120,7 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
         shmem_ipc_send(response_ring, MSG_RESPONSE, seq, "", 0);
     }
 
-    /* Signal Process A that response is ready */
+    puts_serial("[PB] signaling Process A\n");
     seL4_Signal(resp_notif);
     puts_serial("[PB] response sent\n");
 }
