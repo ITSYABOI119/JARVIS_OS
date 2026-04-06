@@ -381,3 +381,15 @@ jobs:
           phase3/src/ai/gguf_vocab.c \
           -lm -o /tmp/test_generation
         /tmp/test_generation
+
+    - name: "Phase 3c: Fuzz Testing Harness (C, ASAN)"
+      run: |
+        gcc -Wall -Werror -O1 -std=c11 -fsanitize=address,undefined \
+          -DJARVIS_TEST_MOCK -D_POSIX_C_SOURCE=200809L \
+          -I phase3/src/drivers -I phase3/src/ipc -I phase3/src/ai \
+          phase3/src/drivers/fuzz_harness.c \
+          phase3/src/drivers/net_stack.c \
+          phase3/src/ipc/shmem_ipc.c \
+          phase3/src/ai/gguf_parser.c \
+          -lm -o /tmp/fuzz_harness
+        /tmp/fuzz_harness

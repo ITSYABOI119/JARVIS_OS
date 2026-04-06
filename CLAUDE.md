@@ -373,6 +373,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | IPC response drain fix (multi-message responses) | DONE |
 | Debug config (compile-time IPC/PB/ring/stats flags) | DONE |
 | SHMEM ring overflow fix (16→15 slots, _Static_assert) | DONE |
+| Fuzz testing harness (net_stack, shmem_ipc, gguf_parser, 300K iterations) | DONE |
 
 **Next:** 30-day stability test on x86. Phase 3c hardening.
 
@@ -424,7 +425,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | NVMe driver (polled I/O) | 15-16 | DONE | nvme.c/h | 10 PASS |
 | FAT32 read-only parser | 15-16 | DONE | fat32.c/h | 8 PASS |
 | NIC Intel I211 (TX + RX polled) | 17-18 | DONE | nic_i211.c/h | 11 PASS |
-| **Total** | | | **80+ files** | **368 tests, ~20,000 LOC** |
+| **Total** | | | **80+ files** | **371 tests, ~20,000 LOC** |
 
 **What remains for Phase 3b on real hardware:**
 - 30-day stability test on x86
@@ -643,8 +644,15 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **CI Workflow:** `.github/workflows/ci.yml`
 - **VGA Text Driver:** `phase3/src/drivers/vga_text.c/h`
 - **Debug Config:** `phase3/src/sel4/jarvis_debug.h`
+  - `JARVIS_DBG_IPC` — Per-query IPC tracing in Process A (`[DBG] q=N slot=N`)
+  - `JARVIS_DBG_PB` — Process B inference tracing (`[PB] handle_query, generating, decoded`)
+  - `JARVIS_DBG_RING` — Ring health checks before send (`[PB] ring @... magic=... w= r=`)
+  - `JARVIS_DBG_STATS` — Periodic stats every 100 queries (default: ON)
+  - `JARVIS_DBG_INFER_SUMMARY` — Per-inference summary line (default: ON)
+  - Defaults for stability test: STATS + INFER_SUMMARY on, everything else off
 - **NVMe Driver:** `phase3/src/drivers/nvme.c/h`
 - **FAT32 Parser:** `phase3/src/drivers/fat32.c/h`
+- **Fuzz Harness:** `phase3/src/drivers/fuzz_harness.c`
 - **x86 Build Script:** `phase3/scripts/build_jarvis_x86.sh`
 - **QEMU NVMe Test:** `phase3/scripts/qemu_test.sh` (pass model path as arg)
 - **NVMe Partition Setup:** `phase3/scripts/setup_nvme_partition.sh`
@@ -663,8 +671,8 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 
 - **Phase 1:** 39,106 LOC, 95 files, 338 test functions (COMPLETE)
 - **Phase 2:** ~27,000 LOC, 65 files, 108 tests (COMPLETE)
-- **Phase 3:** ~20,000 LOC, 80+ files, 368 tests (IN PROGRESS — **bare-metal boot on Ryzen 2700X verified**)
-- **Total:** ~86,000+ LOC, 200+ files, 622+ tests
+- **Phase 3:** ~20,000 LOC, 80+ files, 371 tests (IN PROGRESS — **bare-metal boot on Ryzen 2700X verified**)
+- **Total:** ~86,000+ LOC, 200+ files, 625+ tests
 - **Security:** 26/26 adversarial audit findings resolved (March 2026). SHIELD module: keyword + model-assisted risk scoring.
 - **Inference:** Llama 3.2 1B Q4_K_M on seL4 QEMU, coherent output, 50MB heap
 
