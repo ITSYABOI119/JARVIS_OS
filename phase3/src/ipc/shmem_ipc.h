@@ -15,10 +15,10 @@
 
 #define SHMEM_MAGIC        0xDEADBEEF
 #define SHMEM_VERSION      1
-#define SHMEM_RING_SLOTS   16
+#define SHMEM_RING_SLOTS   15   /* Must fit in 4KB page: 64 + 15*256 = 3904 < 4096 */
 #define SHMEM_SLOT_SIZE    256
 #define SHMEM_MAX_PAYLOAD  240
-#define SHMEM_PAGE_SIZE    4096  /* One page: 64B header + 16 * 256B slots */
+#define SHMEM_PAGE_SIZE    4096
 
 /* Message types (same as Phase 2 UART protocol) */
 #define MSG_QUERY          0x01
@@ -61,6 +61,9 @@ typedef struct {
     shmem_ring_header_t header;
     shmem_msg_t slots[SHMEM_RING_SLOTS];
 } shmem_ring_t;
+
+_Static_assert(sizeof(shmem_ring_t) <= 4096,
+    "shmem_ring_t must fit in a single 4KB page");
 
 /* Error codes */
 #define SHMEM_ERR_CRC      (-2)  /* CRC-32 mismatch on recv (SEC-020) */

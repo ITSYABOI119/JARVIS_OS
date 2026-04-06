@@ -87,10 +87,10 @@ static void test_recv_single(void)
     PASS(name);
 }
 
-/* ---------- Test 4: Fill ring (16 messages), 17th returns -1 ---------- */
+/* ---------- Test 4: Fill ring (SHMEM_RING_SLOTS messages), next returns -1 ---------- */
 static void test_fill_ring(void)
 {
-    const char *name = "Test 4: Fill ring (16 messages)";
+    const char *name = "Test 4: Fill ring (SHMEM_RING_SLOTS messages)";
     shmem_ring_t ring;
     shmem_ipc_init(&ring);
 
@@ -100,9 +100,9 @@ static void test_fill_ring(void)
         }
     }
 
-    /* 17th should fail */
+    /* Next should fail (ring full) */
     if (shmem_ipc_send(&ring, MSG_HEARTBEAT, 99, "x", 1) != -1) {
-        FAIL(name, "17th send should return -1"); return;
+        FAIL(name, "send to full ring should return -1"); return;
     }
 
     if (shmem_ipc_pending(&ring) != SHMEM_RING_SLOTS) {
@@ -157,12 +157,12 @@ static void test_wraparound(void)
         }
     }
 
-    /* Indices should both be 16 now */
-    if (ring.header.write_idx != 16 || ring.header.read_idx != 16) {
-        FAIL(name, "indices not 16 after first pass"); return;
+    /* Indices should both be SHMEM_RING_SLOTS now */
+    if (ring.header.write_idx != SHMEM_RING_SLOTS || ring.header.read_idx != SHMEM_RING_SLOTS) {
+        FAIL(name, "indices not SHMEM_RING_SLOTS after first pass"); return;
     }
 
-    /* Second pass: fill and drain another 16 (wraps slot index) */
+    /* Second pass: fill and drain another SHMEM_RING_SLOTS (wraps slot index) */
     for (int i = 0; i < SHMEM_RING_SLOTS; i++) {
         uint8_t val = (uint8_t)(i + 100);
         if (shmem_ipc_send(&ring, MSG_COMMAND_RESULT, (uint16_t)(i + 100), &val, 1) != 0) {
