@@ -371,6 +371,8 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | Continuous IPC workload loop (63 queries, xorshift PRNG, stats, error tracking) | DONE |
 | Intel I211 NIC driver (PCI 8086:1539, TX+RX polled) | DONE |
 | IPC response drain fix (multi-message responses) | DONE |
+| Debug config (compile-time IPC/PB/ring/stats flags) | DONE |
+| SHMEM ring overflow fix (16→15 slots, _Static_assert) | DONE |
 
 **Next:** 30-day stability test on x86. Phase 3c hardening.
 
@@ -640,6 +642,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Native Test Results:** `phase3/docs/NATIVE_TEST_RESULTS.md`
 - **CI Workflow:** `.github/workflows/ci.yml`
 - **VGA Text Driver:** `phase3/src/drivers/vga_text.c/h`
+- **Debug Config:** `phase3/src/sel4/jarvis_debug.h`
 - **NVMe Driver:** `phase3/src/drivers/nvme.c/h`
 - **FAT32 Parser:** `phase3/src/drivers/fat32.c/h`
 - **x86 Build Script:** `phase3/scripts/build_jarvis_x86.sh`
