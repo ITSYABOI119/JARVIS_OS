@@ -120,6 +120,7 @@ copy_file() {
 # ── [1/4] Rootserver ────────────────────────────────────────────────
 echo -e "${GREEN}[1/4] Rootserver${NC}"
 copy_file "$JARVIS_DIR/phase3/src/sel4/main_x86.c" "$DEST/src/main.c"
+copy_file "$JARVIS_DIR/phase3/src/sel4/jarvis_debug.h" "$DEST/src/jarvis_debug.h"
 echo ""
 
 # ── [2/4] AI modules ───────────────────────────────────────────────
@@ -200,6 +201,7 @@ copy_file "$DRV_SRC/fat32.h" "$DRV_DST/fat32.h"
 PROC_B_DIR="$SEL4_DIR/projects/jarvis-x86/apps/jarvis-inference/src"
 mkdir -p "$PROC_B_DIR" 2>/dev/null || true
 copy_file "$JARVIS_DIR/phase3/src/sel4/inference_server.c" "$PROC_B_DIR/main.c"
+copy_file "$JARVIS_DIR/phase3/src/sel4/jarvis_debug.h" "$PROC_B_DIR/jarvis_debug.h"
 echo ""
 
 # ── [5/5] Patch CMakeLists.txt ─────────────────────────────────────

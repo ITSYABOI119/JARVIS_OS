@@ -24,6 +24,7 @@
 #include <sel4runtime.h>
 
 #include "shmem_ipc.h"
+#include "jarvis_debug.h"
 
 #include "gguf_parser.h"
 #include "llama_model.h"
@@ -71,9 +72,11 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
     memcpy(query_buf, query, (size_t)qlen);
     query_buf[qlen] = '\0';
 
+#if JARVIS_DBG_PB
     puts_serial("[PB] handle_query: \"");
     puts_serial(query_buf);
     puts_serial("\"\n");
+#endif
 
     int n_prompt = 1 + tokenizer_encode(tok, query_buf, prompt_ids + 1, 63);
 
@@ -83,40 +86,58 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
                       qm->config.n_kv_heads * qm->config.head_dim * sizeof(float);
     memset(state->key_cache, 0, kv_bytes);
     memset(state->value_cache, 0, kv_bytes);
+#if JARVIS_DBG_PB
     puts_serial("[PB] KV reset done\n");
+#endif
 
     /* Generate */
+#if JARVIS_DBG_PB
     puts_serial("[PB] generating...\n");
+#endif
     int output_ids[64];
     int n_gen = qmodel_generate(qm, state, prompt_ids, n_prompt,
                                  output_ids, 50, tok->eos_id,
                                  0.0f, 1, 42);
+#if JARVIS_DBG_PB
     puts_serial("[PB] generated "); put_dec((uint32_t)n_gen); puts_serial(" tokens\n");
+#endif
 
     /* Decode to text */
     char text_out[512];
     int text_len = tokenizer_decode(tok, output_ids, n_gen, text_out, sizeof(text_out));
     if (text_len < 0) text_len = 0;
+#if JARVIS_DBG_PB
     puts_serial("[PB] decoded "); put_dec((uint32_t)text_len); puts_serial(" bytes\n");
+#endif
 
     /* Send response — split into multiple messages if >240 bytes */
     int offset = 0;
     uint16_t msg_seq = seq;
+#if JARVIS_DBG_PB
     puts_serial("[PB] send loop start\n");
+#endif
+#if JARVIS_DBG_RING
     /* Ring health check */
     puts_serial("[PB] ring @"); put_dec((uint32_t)(uintptr_t)response_ring);
     puts_serial(" magic="); put_dec(response_ring->header.magic);
     puts_serial(" w="); put_dec(response_ring->header.write_idx);
     puts_serial(" r="); put_dec(response_ring->header.read_idx);
     puts_serial("\n");
+#endif
     while (offset < text_len) {
         int chunk = text_len - offset;
         if (chunk > SHMEM_MAX_PAYLOAD) chunk = SHMEM_MAX_PAYLOAD;
+#if JARVIS_DBG_RING
         puts_serial("[PB] chunk @"); put_dec((uint32_t)offset);
         puts_serial(" len="); put_dec((uint32_t)chunk); puts_serial("\n");
+#endif
         int rc = shmem_ipc_send(response_ring, MSG_RESPONSE, msg_seq,
                        text_out + offset, (uint16_t)chunk);
+#if JARVIS_DBG_RING
         puts_serial("[PB] send rc="); put_dec((uint32_t)rc); puts_serial("\n");
+#else
+        (void)rc;
+#endif
         offset += chunk;
         msg_seq++;
     }
@@ -126,9 +147,13 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
         shmem_ipc_send(response_ring, MSG_RESPONSE, seq, "", 0);
     }
 
+#if JARVIS_DBG_PB
     puts_serial("[PB] signaling Process A\n");
+#endif
     seL4_Signal(resp_notif);
+#if JARVIS_DBG_PB
     puts_serial("[PB] response sent\n");
+#endif
 }
 
 /* ---- Main ---- */
