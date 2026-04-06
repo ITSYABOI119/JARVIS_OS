@@ -104,8 +104,8 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
     uint16_t msg_seq = seq;
     puts_serial("[PB] send loop start\n");
     /* Ring health check */
-    puts_serial("[PB] ring @0x"); put_hex((uint32_t)(uintptr_t)response_ring);
-    puts_serial(" magic=0x"); put_hex(response_ring->header.magic);
+    puts_serial("[PB] ring @"); put_dec((uint32_t)(uintptr_t)response_ring);
+    puts_serial(" magic="); put_dec(response_ring->header.magic);
     puts_serial(" w="); put_dec(response_ring->header.write_idx);
     puts_serial(" r="); put_dec(response_ring->header.read_idx);
     puts_serial("\n");
