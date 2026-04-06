@@ -65,6 +65,10 @@ int shmem_ipc_send(shmem_ring_t *ring, uint8_t type, uint16_t seq,
     if (len > 0 && !payload)
         return -1;
 
+    /* Validate ring size to prevent divide-by-zero or OOB access */
+    if (ring->header.size == 0 || ring->header.size > SHMEM_RING_SLOTS)
+        return -1;
+
     uint32_t wr = __atomic_load_n(&ring->header.write_idx, __ATOMIC_RELAXED);
     uint32_t rd = __atomic_load_n(&ring->header.read_idx, __ATOMIC_ACQUIRE);
 
@@ -99,6 +103,10 @@ int shmem_ipc_recv(shmem_ring_t *ring, uint8_t *type, uint16_t *seq,
                     void *payload, uint16_t *len)
 {
     if (!ring || !type || !seq || !len)
+        return -1;
+
+    /* Validate ring size to prevent divide-by-zero or OOB access */
+    if (ring->header.size == 0 || ring->header.size > SHMEM_RING_SLOTS)
         return -1;
 
     uint32_t rd = __atomic_load_n(&ring->header.read_idx, __ATOMIC_RELAXED);
