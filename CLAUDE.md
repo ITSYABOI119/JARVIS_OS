@@ -374,8 +374,10 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | Debug config (compile-time IPC/PB/ring/stats flags) | DONE |
 | SHMEM ring overflow fix (16→15 slots, _Static_assert) | DONE |
 | Fuzz testing harness (net_stack, shmem_ipc, gguf_parser, 300K iterations) | DONE |
+| Phase 3c security audit: 14 findings (4 HIGH, 3 MED, 4 LOW, 3 INFO) | DONE |
+| All 8 HIGH/MED findings fixed (fat32, nvme, nic_i211, vga, tokenizer) | DONE |
 
-**Next:** 30-day stability test on x86. Phase 3c hardening.
+**Next:** 30-day stability test on x86.
 
 ### Pre-Work Tasks (Before JARVIS Project PC)
 
@@ -653,6 +655,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **NVMe Driver:** `phase3/src/drivers/nvme.c/h`
 - **FAT32 Parser:** `phase3/src/drivers/fat32.c/h`
 - **Fuzz Harness:** `phase3/src/drivers/fuzz_harness.c`
+- **Security Audit (Apr 2026):** `phase3/docs/SECURITY_AUDIT_2026-04-06.md`
 - **x86 Build Script:** `phase3/scripts/build_jarvis_x86.sh`
 - **QEMU NVMe Test:** `phase3/scripts/qemu_test.sh` (pass model path as arg)
 - **NVMe Partition Setup:** `phase3/scripts/setup_nvme_partition.sh`
