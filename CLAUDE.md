@@ -376,6 +376,8 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | Fuzz testing harness (net_stack, shmem_ipc, gguf_parser, 300K iterations) | DONE |
 | Phase 3c security audit: 14 findings (4 HIGH, 3 MED, 4 LOW, 3 INFO) | DONE |
 | All 8 HIGH/MED findings fixed (fat32, nvme, nic_i211, vga, tokenizer) | DONE |
+| Phase 3c audit gap fill: 11 new findings (1 HIGH, 2 MED, 4 LOW, 4 INFO) — pci, ahci, uart_16550, posix_stubs | DONE |
+| All 4 HIGH/MED gap-fill findings fixed (pci BAR5, ahci buf_len overflow, uart timeout, posix clock_gettime honest failure) | DONE |
 
 **Next:** 30-day stability test on x86.
 

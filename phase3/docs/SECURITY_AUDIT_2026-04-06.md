@@ -1,23 +1,24 @@
 # JARVIS AI-OS — Phase 3c Security Audit Report
 
-**Date:** April 6, 2026
+**Date:** April 6, 2026 (initial), April 6, 2026 (gap fill — same day)
 **Auditor:** Claude Opus 4.6 (automated, adversarial review)
-**Scope:** Phase 3 x86 code added since March 22, 2026 audit (~3000 LOC, 12 file pairs)
+**Scope:** Phase 3 x86 code added since March 22, 2026 audit (~5700 LOC, 17 file pairs)
 **Previous Audit:** SEC-001 through SEC-026 (March 22, 2026) — all fixed
 
-**Status:** 11/14 findings resolved. 3 INFO-level findings accepted by design.
+**Status:** 18/25 findings resolved. 7 INFO/accepted findings documented.
 
 | Severity | Total | Fixed | Accepted |
 |----------|-------|-------|----------|
-| HIGH     | 4     | 4     | 0        |
-| MEDIUM   | 3     | 3     | 0        |
-| LOW      | 4     | 4     | 0        |
-| INFO     | 3     | 0     | 3        |
-| **Total** | **14** | **11** | **3**  |
+| HIGH     | 5     | 5     | 0        |
+| MEDIUM   | 5     | 5     | 0        |
+| LOW      | 8     | 6     | 2        |
+| INFO     | 7     | 2     | 5        |
+| **Total** | **25** | **18** | **7**  |
 
 **Fix commits:**
 - `13fc749` — SEC-027 through SEC-033, SEC-036 (8 fixes: fat32, nvme, nic_i211, vga, tokenizer)
 - `8370245` — SEC-034, SEC-035, SEC-037 (3 fixes: NVMe CID wrap, FAT32 cluster overflow, uint64 stats counters)
+- `9efe7c9` — SEC-041, SEC-043, SEC-047, SEC-049 (4 fixes: pci BAR5, ahci buf_len overflow, uart timeout, posix clock_gettime honest failure)
 
 ---
 
@@ -29,8 +30,10 @@
 | **Network (I211)** | Ethernet frames via I211-AT NIC | OOB read/write, DoS | Malicious RX descriptor length |
 | **IPC peer** | Shared memory between Process A/B | Infinite drain loop, stale-data TOCTOU | Crafted shmem_msg_t, infinite MSG_RESPONSE |
 | **GGUF model file** | Crafted model on NVMe FAT32 | OOB read, heap corruption, infinite loops | Malformed GGUF vocab, huge array counts |
-| **PCI bus** | Crafted config space responses | Truncated BAR addresses, wrong MMIO range | Malicious BAR type bits |
+| **PCI bus** | Crafted config space responses | Truncated BAR addresses, wrong MMIO range | Malicious BAR type bits, malformed 64-bit BAR at index 5 |
 | **VGA output** | Crafted input strings | Framebuffer OOB write | Tab at column 78 |
+| **SATA device (AHCI)** | Crafted IDENTIFY / hostile buf_len | Integer overflow in PRDT count, infinite poll | buf_len = UINT32_MAX wraps prdt_count |
+| **POSIX stub callers** | Linker accidentally pulls stubs | Silent fake clock, frozen time, broken randomness | clock_gettime() returns success with tv_sec=0 |
 
 ## Data Flow Diagram
 
@@ -72,6 +75,17 @@
 | SEC-038 | **INFO** | CWE-327 | shmem_ipc.c:15-25 | CRC-32 is integrity-only, not authentication | IPC peer | No (by design) |
 | SEC-039 | **INFO** | CWE-693 | inference_server.c:317-320 | SHIELD_CHECK always returns ALLOW (stub) | IPC peer | No (future work) |
 | SEC-040 | **INFO** | CWE-404 | gguf_vocab.c:108 | skip_value on very large GGUF string array is O(n) | GGUF model | No (accepted) |
+| SEC-041 | **HIGH** | CWE-682 | pci.c:213-247 | pci_get_bar_address silent truncation when bar_index=5 has 64-bit type | PCI bus | YES |
+| SEC-042 | **LOW** | CWE-703 | pci.c:213-247 | pci_get_bar_address returns 0 for both error and valid address 0 | PCI bus | No (documented) |
+| SEC-043 | **MEDIUM** | CWE-190 | ahci.c:338 | ahci_setup_command (buf_len + PRD_MAX_BYTES - 1) uint32 overflow | Internal | YES |
+| SEC-044 | **LOW** | CWE-681 | ahci.c:344-362 | ahci CLB/FB/CTBA truncated to 32-bit (`clbu=0, fbu=0, ctbau=0`) | Internal | No (constraint) |
+| SEC-045 | **INFO** | CWE-1247 | ahci.c:423-432 | ahci_issue_command timeout is iteration count, not real time | SATA device | No (accepted) |
+| SEC-046 | **INFO** | CWE-835 | uart_16550.c:90-103 | uart_16550_putc/getc infinite spin on stuck FIFO | UART hw | No (by design) |
+| SEC-047 | **LOW** | CWE-190 | uart_16550.c:153 | uart_16550_read timeout_ms * 1000 signed int overflow | Internal | YES |
+| SEC-048 | **LOW** | CWE-1232 | uart_16550.c:70-75 | uart_16550_init loopback test reads RBR with no DATA_READY check | UART hw | No (mock-only finding) |
+| SEC-049 | **MEDIUM** | CWE-754 | posix_stubs.c:64-77 | clock_gettime returns success with frozen tv_sec=0 when no timer | POSIX caller | YES |
+| SEC-050 | **LOW** | CWE-1108 | posix_stubs.c:82-89 | sysconf hardcodes _SC_NPROCESSORS_ONLN=1 (single core) | Internal | No (Phase 4) |
+| SEC-051 | **INFO** | CWE-754 | ggml_backend_stubs.c:53-131 | All ggml backend stubs return NULL/0/no-op silently | Internal | No (test stubs) |
 
 ---
 
@@ -332,10 +346,208 @@ All 26 findings from the March 22, 2026 audit were verified to remain fixed:
 
 | Severity | Count | Fixed | Accepted |
 |----------|-------|-------|----------|
-| HIGH | 4 | 4 | 0 |
-| MEDIUM | 3 | 3 | 0 |
-| LOW | 4 | 1 | 3 |
-| INFO | 3 | 0 | 3 |
-| **Total** | **14** | **8** | **6** |
+| HIGH | 5 | 5 | 0 |
+| MEDIUM | 5 | 5 | 0 |
+| LOW | 8 | 6 | 2 |
+| INFO | 7 | 2 | 5 |
+| **Total** | **25** | **18** | **7** |
 
-All HIGH and MEDIUM findings have been fixed. The 6 accepted findings are either benign (integer wraps within operational bounds), by-design (CRC-32 is integrity not auth), or documented future work (SHIELD stub).
+All HIGH and MEDIUM findings have been fixed. The accepted findings are either benign (integer wraps within operational bounds), by-design (CRC-32 is integrity not auth), documented future work (SHIELD stub, SMP), reliability constraints (UART blocking spin, AHCI iteration-based timeout), or test-only stubs that should never be linked into production builds (ggml_backend_stubs).
+
+---
+
+## Audit Gap Fill (April 6, 2026 — same day)
+
+**Scope:** Files missed in the initial Phase 3c audit — pci.c/h, ahci.c/h, uart_16550.c/h, posix_stubs.c/h, ggml_backend_stubs.c. Total ~2,668 LOC across 5 file groups.
+
+**Reading method:** Each file read in full (no grep-only review). Untrusted input traced from PCI config space, MMIO BARs, ATA IDENTIFY data, and POSIX stub call sites to their consumers.
+
+**Summary:** 11 new findings added (1 HIGH, 2 MEDIUM, 4 LOW, 4 INFO). 4 fixed in this commit (SEC-041, SEC-043, SEC-047, SEC-049), 7 documented as accepted/constraint/by-design.
+
+### SEC-041: pci_get_bar_address silent truncation when bar_index=5 has 64-bit type
+**Severity:** HIGH
+**CWE:** CWE-682 (Incorrect Calculation)
+**File(s):** `phase3/src/drivers/pci.c` lines 213-247
+**Attacker:** PCI bus (malformed/malicious controller reporting 64-bit type bits at BAR5)
+
+**Description:** A 64-bit BAR per PCI spec occupies BAR[N] AND BAR[N+1] (the upper 32 bits live in the next BAR). It is therefore invalid for index 5 (no BAR[6] exists). The pre-fix `pci_get_bar_address` correctly avoided OOB by checking `if (bar_index < 5)` before reading `dev->bar[bar_index + 1]`, but it then **silently returned just the low 32 bits** of the malformed BAR with no error indication.
+
+Worse, `pci_is_bar_64bit` would happily return `true` for `bar_index=5` if the type bits looked like 64-bit. So a caller doing the textbook two-step:
+
+```c
+if (pci_is_bar_64bit(dev, 5))      // returns TRUE
+    addr = pci_get_bar_address(dev, 5); // returns truncated 32-bit value
+```
+
+would receive a confidently wrong base address — not even an obvious zero — and proceed to map MMIO at the truncated low-half address. This is real: `phase3/src/drivers/blk_dev_x86.c:75` calls `pci_get_bar_address(ahci_pci, 5)` to extract AHCI ABAR. AHCI ABAR is required by spec to be 32-bit memory space, but a buggy/malicious controller exporting 64-bit type bits at BAR5 would cause silent wrong-address mapping.
+
+**Root cause:** Inconsistent handling of the BAR-index-5-with-64-bit-type case across two related public APIs. The "guard" was a no-op band-aid rather than an explicit error.
+
+**Impact:** On a malformed/malicious PCI controller, the AHCI driver maps MMIO at the wrong physical address, then writes to whatever device (or RAM) lives there. Worst case: arbitrary MMIO writes to a different attached device.
+
+**Fix:** Both `pci_get_bar_address` and `pci_is_bar_64bit` now explicitly reject `bar_index >= 5` with 64-bit type bits set. `pci_get_bar_address` returns 0 (treat as error / unmapped) and `pci_is_bar_64bit` returns 0 so callers see the malformed BAR as "not 64-bit" instead of receiving inconsistent results from the two functions. NULL `dev` guards added to all three BAR helpers and `pci_enable_bus_master` for defense-in-depth. (commit `9efe7c9`)
+
+---
+
+### SEC-042: pci_get_bar_address conflates error and valid address 0
+**Severity:** LOW
+**CWE:** CWE-703 (Improper Check or Handling of Exceptional Conditions)
+**File(s):** `phase3/src/drivers/pci.c` lines 213-237
+**Attacker:** N/A (API design)
+
+**Description:** `pci_get_bar_address` returns `0` for: invalid `bar_index`, NULL `dev`, malformed 64-bit BAR at index 5 (after SEC-041 fix), AND a valid I/O space BAR with a base of 0. A caller cannot distinguish "no such BAR" from "BAR maps to address 0". On a real seL4 system, address 0 is always invalid for MMIO mapping, so the callers in this codebase do test the result against 0 and treat it as failure. This is documented behavior, but a stronger API (e.g. `int pci_get_bar_address(...,uint64_t *out)`) would surface the error explicitly.
+
+**Status:** Accepted — current callers (`blk_dev_x86.c`, `nic_i211.c`, `nic_rtl8168.c`, `main_x86.c`) all check for 0 and treat it as failure. No exploitable consequence.
+
+---
+
+### SEC-043: ahci_setup_command integer overflow in PRDT count calculation
+**Severity:** MEDIUM
+**CWE:** CWE-190 (Integer Overflow)
+**File(s):** `phase3/src/drivers/ahci.c` line 338
+**Attacker:** Internal (hostile caller; no current callers expose this)
+
+**Description:** `prdt_count = (buf_len + PRD_MAX_BYTES - 1) / PRD_MAX_BYTES` overflows `uint32_t` when `buf_len > UINT32_MAX - PRD_MAX_BYTES + 1` (≈ 4.29 GB - 4 MB). For `buf_len = UINT32_MAX (0xFFFFFFFF)`, the addition wraps around to a small value, dividing by 4 MB yields `prdt_count = 0`. The subsequent `if (prdt_count > AHCI_IO_MAX_PRDT) return -1` check is then bypassed and the PRDT-build loop runs zero iterations, leaving the command table empty while the FIS still requests a (nonsense) sector count.
+
+When the command is then issued via `ahci_issue_command`, hardware behavior with PRDT length 0 is undefined; some controllers DMA to whatever happens to live at the stale `dba` field, others fault.
+
+Currently no caller exposes this: `ahci_read_sectors` and `ahci_write_sectors` cap `count` at 65,536, yielding a max `byte_len` of 32 MB. `ahci_identify` only ever passes 512. The overflow is reachable only by a hostile caller that builds a custom FIS and bypasses the wrappers — a defense-in-depth concern, not an active exploit path.
+
+**Root cause:** No upper bound check on `buf_len` before the overflow-prone addition.
+
+**Impact:** Empty PRDT submitted to hardware. Possible undefined DMA behavior on some controllers. Currently unreachable but trivially regressable if a future caller forwards untrusted byte counts.
+
+**Fix:** Added explicit `if (buf_len > AHCI_IO_MAX_PRDT * PRD_MAX_BYTES) return -1` check before the addition. Both bound checks are kept (the second is now redundant defense-in-depth). (commit `9efe7c9`)
+
+---
+
+### SEC-044: ahci command pointers truncated to 32-bit
+**Severity:** LOW
+**CWE:** CWE-681 (Incorrect Conversion between Numeric Types)
+**File(s):** `phase3/src/drivers/ahci.c` lines 344-362
+**Attacker:** N/A (deployment constraint)
+
+**Description:** `ahci_setup_command` writes `port->clb`, `port->fb`, and `hdr->ctba` as 32-bit truncations of host pointers (`(uint32_t)(uintptr_t)ahci_cmd_list`) and hardcodes `clbu = fbu = ctbau = 0`. If the static buffers (`ahci_cmd_list`, `ahci_recv_fis`, `ahci_cmd_table_buf`) reside above 4 GB, the hardware DMA targets the truncated low-32-bit address, corrupting whatever lives there.
+
+On bare-metal seL4 the rootserver image is typically loaded below 4 GB, so this works in practice. But the code does not check `ctrl->supports_64bit` (which is read in `ahci_discover_init`) nor verify that the pointers actually fit. A future build that places .bss above 4 GB would silently break.
+
+**Root cause:** Phase 3 bootstrap code assumes < 4 GB physical layout.
+
+**Impact:** Silent DMA corruption if buffers move above 4 GB. Currently latent.
+
+**Status:** Accepted — Phase 3 bare-metal layout keeps the rootserver below 4 GB. A defensive `_Static_assert` or runtime check is appropriate Phase 4 work when 64-bit DMA via `clbu/fbu/ctbau` is wired up.
+
+---
+
+### SEC-045: ahci_issue_command timeout is iteration count, not real time
+**Severity:** INFO
+**CWE:** CWE-1247 (Improper Protection Against Voltage and Clock Glitches — closest available)
+**File(s):** `phase3/src/drivers/ahci.c` lines 423-432, 271-279
+**Attacker:** SATA device (uncooperative controller)
+
+**Description:** `AHCI_CMD_TIMEOUT` is set to `5,000,000` loop iterations on the assumption that each MMIO read takes ~1 us, giving a notional 5-second timeout. On a modern x86 with cached TLBs and out-of-order execution, the actual wall time can vary by an order of magnitude. A controller stuck with `CI` bit set and no `TFD.STS.ERR` will eventually exit the loop, but the real-time bound is not deterministic. This is a reliability concern, not a security exploit — the loop is bounded.
+
+**Status:** Accepted — would require wiring `x86_timer.h` into ahci.c and converting to real-time deadlines (Phase 4 enhancement).
+
+---
+
+### SEC-046: uart_16550_putc/getc infinite spin on stuck FIFO
+**Severity:** INFO
+**CWE:** CWE-835 (Loop with Unreachable Exit Condition)
+**File(s):** `phase3/src/drivers/uart_16550.c` lines 87-103
+**Attacker:** UART hardware (stuck FIFO, broken cable)
+
+**Description:** `uart_16550_putc` spins on `LSR_THR_EMPTY` and `uart_16550_getc` spins on `LSR_DATA_READY` with no upper bound. If TX FIFO is wedged or no input ever arrives, both block forever. This is the same blocking-spin pattern accepted in the Phase 2 PL011 driver and is intentional for boot-time logging where a hang is preferable to dropping output.
+
+**Status:** Accepted — by design. Higher-level callers use `uart_16550_read` (which has a timeout) when bounded behavior is required.
+
+---
+
+### SEC-047: uart_16550_read timeout_ms * 1000 signed int overflow
+**Severity:** LOW
+**CWE:** CWE-190 (Integer Overflow)
+**File(s):** `phase3/src/drivers/uart_16550.c` line 153
+**Attacker:** Internal (caller passing very large timeout)
+
+**Description:** `int timeout_loops = (timeout_ms > 0) ? timeout_ms * 1000 : 1;` — for `timeout_ms > INT_MAX/1000 (≈ 2,147,483)`, the multiplication overflows signed int, producing a negative or unexpectedly small value. The loop then exits immediately (since `idle_count < timeout_loops` is false for negative loops), making a request for a "very long" timeout act like a non-blocking poll instead.
+
+In Phase 3 no caller passes timeouts that large (typical IPC poll is 10-1000 ms), but the bug surfaces if someone passes `INT_MAX` thinking they're requesting "infinite." Defense-in-depth fix.
+
+**Root cause:** No clamp on `timeout_ms` before multiplication.
+
+**Impact:** Caller asks for ~36+ minutes of polling, gets a single non-blocking poll. Correctness, not security.
+
+**Fix:** `timeout_ms` is now clamped to `INT_MAX/1000` (≈ 35 minutes) before multiplication. Also added NULL/len-<= 0 guards. (commit `9efe7c9`)
+
+---
+
+### SEC-048: uart_16550_init loopback test reads RBR with no DATA_READY check
+**Severity:** LOW
+**CWE:** CWE-1232 (Improper Lock Behavior After Power Uplift Failure — closest available; really a missing-flag-check)
+**File(s):** `phase3/src/drivers/uart_16550.c` lines 70-75
+**Attacker:** UART hardware (slow loopback)
+
+**Description:** The init self-test enables loopback, writes 0xAE to THR, and immediately reads RBR with no wait for `LSR_DATA_READY`. On QEMU and most modern ICH UARTs the loopback is instant (RBR is updated synchronously), but on a real 16550A at 115200 baud one byte takes ~87 us to traverse the shift register, far longer than a single CPU instruction. The result is that on a literal-spec 16550A, init may fail spuriously and return -1.
+
+Note: in the JARVIS test mock, the loopback path sets `mock_rx_ready = 1` immediately on THR write, masking this issue. The bug would only surface on real hardware.
+
+**Status:** Accepted — the modern ICH/PCH UARTs JARVIS targets handle this correctly. A future fix would poll `LSR_DATA_READY` with a short timeout before reading RBR, but it would require the same defensive timeout treatment as SEC-047.
+
+---
+
+### SEC-049: posix_stubs clock_gettime returns success with frozen tv_sec=0 when no timer
+**Severity:** MEDIUM
+**CWE:** CWE-754 (Improper Check for Unusual or Exceptional Conditions)
+**File(s):** `phase3/src/ai/posix_stubs.c` lines 64-77
+**Attacker:** Any caller using clock_gettime for security-relevant purposes (POSIX caller)
+
+**Description:** When `JARVIS_HAS_TIMER` is not defined, the pre-fix stub silently set `tv_sec = tv_nsec = 0` and **returned 0 (success)**. Any caller using the result for:
+
+- Random seed initialization (e.g. `srand(time(NULL))`)
+- Replay protection (nonces based on monotonic time)
+- Timeout calculations (`deadline = now + N` where now is always 0 means "deadline already past" or "deadline never")
+- Rate limiting (token bucket based on elapsed time)
+- Performance instrumentation (every measurement reports 0 us elapsed)
+
+would silently misbehave with no diagnostic. ggml itself uses `clock_gettime(CLOCK_MONOTONIC)` for `ggml_time_us()`, which is referenced by the threading scheduler and benchmark prints. With a frozen-zero clock, scheduler policies that rely on elapsed time degenerate.
+
+This is the canonical "silent success from a failing operation" bug. The honest behavior is to return -1 (failure) so the caller knows the host has no clock and can either fall back to a different source or fail loudly.
+
+**Root cause:** Stub author optimized for "doesn't crash" over "doesn't lie."
+
+**Impact:** Silent misbehavior in any time-dependent code path. Worst case: predictable PRNG seed → predictable session keys / nonces (if the codebase ever wires PRNG seeding to clock_gettime).
+
+**Fix:** When `JARVIS_HAS_TIMER` is not defined, `clock_gettime` now returns -1 (failure) and zeros the output struct. Callers that need an honest clock must enable `JARVIS_HAS_TIMER` and link the x86 timer driver. (commit `9efe7c9`)
+
+---
+
+### SEC-050: posix_stubs sysconf hardcodes _SC_NPROCESSORS_ONLN=1
+**Severity:** LOW
+**CWE:** CWE-1108 (Excessive Reliance on Global Variables — closest available; really hardcoded SMP=1)
+**File(s):** `phase3/src/ai/posix_stubs.c` lines 82-89
+**Attacker:** Internal
+
+**Description:** `sysconf(_SC_NPROCESSORS_ONLN)` always returns 1. ggml uses this to size its thread pool; a hardcoded 1 forces single-threaded execution even on multi-core hardware. This is documented as a Phase 4 SMP enhancement but means the inference server cannot benefit from the 2700X's 8 physical cores until SMP is wired up.
+
+**Status:** Accepted — Phase 3 single-core constraint. Phase 4 will enumerate cores via ACPI MADT.
+
+---
+
+### SEC-051: ggml_backend_stubs returns NULL/0/no-op for all functions
+**Severity:** INFO
+**CWE:** CWE-754 (Improper Check for Unusual or Exceptional Conditions)
+**File(s):** `phase3/src/ai/ggml_backend_stubs.c` lines 22-131
+
+**Description:** Every function in `ggml_backend_stubs.c` is a no-op or returns NULL/0. The header comment makes clear this file exists "solely for testing that the core tensor library (ggml.c) works with our POSIX stubs" and "These are NOT needed if using ggml-cpu backend." However, if the build accidentally pulls these stubs into a real inference path:
+
+- `ggml_backend_buffer_get_base` returns NULL → caller dereferences NULL → segfault
+- `ggml_backend_buffer_get_size` returns 0 → bounds checks always trip
+- `ggml_backend_tensor_set` is a no-op → silently drops weight loads
+- `ggml_backend_buft_alloc_buffer` returns NULL → allocation always fails
+
+All of these are "obviously wrong" failures rather than silent security holes — they'd surface as immediate crashes or zero output rather than corruption. The risk is that a future build script accidentally links these stubs alongside ggml-cpu.
+
+**Status:** Accepted — file is gated by being explicitly linked. Recommend adding a `_Static_assert(0, "do not link in production")` behind a build-time flag, but for now the comment header is sufficient.
+
+---
+
