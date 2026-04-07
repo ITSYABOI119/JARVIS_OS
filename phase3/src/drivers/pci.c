@@ -212,7 +212,7 @@ pci_device_t *pci_find_device(uint8_t class_code, uint8_t subclass,
 
 uint64_t pci_get_bar_address(pci_device_t *dev, int bar_index)
 {
-    if (bar_index < 0 || bar_index > 5)
+    if (!dev || bar_index < 0 || bar_index > 5)
         return 0;
 
     uint32_t bar = dev->bar[bar_index];
@@ -227,10 +227,14 @@ uint64_t pci_get_bar_address(pci_device_t *dev, int bar_index)
 
     /* Check if 64-bit BAR (type bits 2:1 = 10b = 0x04) */
     if ((bar & PCI_BAR_MEM_TYPE_MASK) == PCI_BAR_MEM_TYPE_64) {
-        if (bar_index < 5) {
-            uint64_t high = (uint64_t)dev->bar[bar_index + 1];
-            addr |= (high << 32);
-        }
+        /* SEC-041: A 64-bit BAR requires BAR[N] AND BAR[N+1].  Per PCI spec
+         * a 64-bit BAR cannot be at index 5 (no BAR[6] exists).  A device
+         * reporting 64-bit type at index 5 is malformed/malicious — refuse
+         * to map it instead of silently returning a truncated low 32 bits. */
+        if (bar_index >= 5)
+            return 0;
+        uint64_t high = (uint64_t)dev->bar[bar_index + 1];
+        addr |= (high << 32);
     }
 
     return addr;
@@ -238,17 +242,22 @@ uint64_t pci_get_bar_address(pci_device_t *dev, int bar_index)
 
 int pci_is_bar_64bit(pci_device_t *dev, int bar_index)
 {
-    if (bar_index < 0 || bar_index > 5)
+    if (!dev || bar_index < 0 || bar_index > 5)
         return 0;
     uint32_t bar = dev->bar[bar_index];
     if (bar & PCI_BAR_IO_SPACE)
+        return 0;
+    /* SEC-041: A 64-bit BAR cannot exist at index 5 (no BAR[6] to hold the
+     * upper 32 bits).  Reject the malformed/malicious case so callers don't
+     * see a true result here while pci_get_bar_address returns 0. */
+    if (bar_index >= 5)
         return 0;
     return (bar & PCI_BAR_MEM_TYPE_MASK) == PCI_BAR_MEM_TYPE_64;
 }
 
 int pci_is_bar_mmio(pci_device_t *dev, int bar_index)
 {
-    if (bar_index < 0 || bar_index > 5)
+    if (!dev || bar_index < 0 || bar_index > 5)
         return 0;
 
     /* Bit 0: 0 = memory space (MMIO), 1 = I/O space */
@@ -261,6 +270,9 @@ int pci_is_bar_mmio(pci_device_t *dev, int bar_index)
 
 void pci_enable_bus_master(pci_device_t *dev)
 {
+    if (!dev)
+        return;
+
     /* Read current command register (32-bit read at offset 0x04) */
     uint32_t cmd = pci_config_read(dev->bus, dev->device, dev->function,
                                     PCI_COMMAND);

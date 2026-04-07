@@ -60,7 +60,15 @@
 
 /* clock_gettime: On seL4 x86-64, map to HPET or TSC timer driver.
  * When JARVIS_HAS_TIMER is defined, uses the real x86 timer.
- * Otherwise returns 0 (stub mode). */
+ *
+ * SEC-049: When JARVIS_HAS_TIMER is NOT defined we used to silently set
+ * tv_sec = tv_nsec = 0 and return success.  That is dangerous: any caller
+ * using the result for randomness, replay protection, rate limiting, or
+ * monotonic timeout calculations would silently misbehave with a frozen
+ * "epoch" clock.  The honest stub now reports failure (return -1) so the
+ * caller knows the host has no clock; the few callers that just want a
+ * monotonic counter for benchmark printing can fall back to their own
+ * sources.  When JARVIS_HAS_TIMER is defined the real timer is used. */
 int clock_gettime(int clk_id, struct timespec *tp)
 {
     (void)clk_id;
@@ -69,11 +77,13 @@ int clock_gettime(int clk_id, struct timespec *tp)
     uint64_t us = timer_ticks_to_us(timer_read_ticks());
     tp->tv_sec  = (long)(us / 1000000ULL);
     tp->tv_nsec = (long)((us % 1000000ULL) * 1000);
+    return 0;
 #else
+    /* No real timer available — refuse to return a fake value. */
     tp->tv_sec = 0;
     tp->tv_nsec = 0;
+    return -1;
 #endif
-    return 0;
 }
 
 /* sysconf: System configuration values.

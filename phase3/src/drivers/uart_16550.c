@@ -149,8 +149,21 @@ int uart_16550_read(uint16_t port, void *buf, int len, int timeout_ms)
      * Each iteration of the idle loop is ~1us on modern x86,
      * so 1000 iterations per ms is a reasonable approximation.
      * For timeout_ms == 0, do a single non-blocking poll.
+     *
+     * SEC-047: Clamp timeout_ms before multiplying by 1000 to avoid
+     * signed int overflow on hostile/buggy callers.  INT_MAX/1000 ~=
+     * 2,147,483 ms ~= 35 minutes — beyond any sane UART read timeout.
      */
-    int timeout_loops = (timeout_ms > 0) ? timeout_ms * 1000 : 1;
+    if (!buf || len <= 0)
+        return 0;
+
+    int timeout_loops;
+    if (timeout_ms <= 0)
+        timeout_loops = 1;
+    else if (timeout_ms > 2147483 /* INT_MAX / 1000 */)
+        timeout_loops = 2147483 * 1000;
+    else
+        timeout_loops = timeout_ms * 1000;
     int idle_count = 0;
 
     while (count < len && idle_count < timeout_loops) {

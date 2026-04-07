@@ -331,13 +331,21 @@ int ahci_setup_command(hba_port_t *port, int slot,
     if (!port || !fis || slot < 0 || slot >= AHCI_CMD_SLOTS)
         return -1;
 
-    /* Calculate PRDT entries needed */
+    /* Calculate PRDT entries needed.
+     * SEC-043: Reject buf_len > AHCI_IO_MAX_PRDT * PRD_MAX_BYTES BEFORE
+     * the (buf_len + PRD_MAX_BYTES - 1) addition to prevent uint32_t
+     * overflow.  Without this guard, a hostile buf_len near UINT32_MAX
+     * wraps the addition and produces prdt_count = 0, bypassing the
+     * upper-bound check below and leaving the command table empty while
+     * the FIS still requests a giant transfer. */
     if (buf_len == 0) {
         prdt_count = 0;
     } else {
+        if (buf_len > (uint32_t)AHCI_IO_MAX_PRDT * PRD_MAX_BYTES)
+            return -1;  /* Transfer too large for our static table */
         prdt_count = (buf_len + PRD_MAX_BYTES - 1) / PRD_MAX_BYTES;
         if (prdt_count > AHCI_IO_MAX_PRDT)
-            return -1;  /* Transfer too large for our static table */
+            return -1;  /* Defense in depth */
     }
 
     /* Point port at our static command list and FIS area */
