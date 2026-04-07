@@ -5,6 +5,20 @@
 **Scope:** Phase 3 x86 code added since March 22, 2026 audit (~3000 LOC, 12 file pairs)
 **Previous Audit:** SEC-001 through SEC-026 (March 22, 2026) — all fixed
 
+**Status:** 11/14 findings resolved. 3 INFO-level findings accepted by design.
+
+| Severity | Total | Fixed | Accepted |
+|----------|-------|-------|----------|
+| HIGH     | 4     | 4     | 0        |
+| MEDIUM   | 3     | 3     | 0        |
+| LOW      | 4     | 4     | 0        |
+| INFO     | 3     | 0     | 3        |
+| **Total** | **14** | **11** | **3**  |
+
+**Fix commits:**
+- `13fc749` — SEC-027 through SEC-033, SEC-036 (8 fixes: fat32, nvme, nic_i211, vga, tokenizer)
+- `8370245` — SEC-034, SEC-035, SEC-037 (3 fixes: NVMe CID wrap, FAT32 cluster overflow, uint64 stats counters)
+
 ---
 
 ## Threat Model
@@ -75,7 +89,7 @@
 
 **Impact:** Denial of service. The seL4 rootserver hangs during boot, requiring a hard reset.
 
-**Fix:** Added `max_clusters` counter (1,000,000) to both functions. After 1M clusters (32GB at 32KB/cluster), the loop terminates with an error.
+**Fix:** Added `max_clusters` counter (1,000,000) to both functions. After 1M clusters (32GB at 32KB/cluster), the loop terminates with an error. (commit `13fc749`)
 
 ---
 
@@ -91,7 +105,7 @@
 
 **Impact:** Div-by-zero crash, integer underflow causing wildcard LBA reads, or integer overflow corrupting cluster math.
 
-**Fix:** Added validation: bytes_per_sector must be 512/1024/2048/4096, sectors_per_cluster != 0, num_fats != 0, fat_size_sectors != 0, root_cluster >= 2.
+**Fix:** Added validation: bytes_per_sector must be 512/1024/2048/4096, sectors_per_cluster != 0, num_fats != 0, fat_size_sectors != 0, root_cluster >= 2. (commit `13fc749`)
 
 ---
 
@@ -107,7 +121,7 @@
 
 **Impact:** Stack buffer OOB read. On bare-metal seL4, this reads garbage from the stack; on a system with stack canaries, it could crash.
 
-**Fix:** Added bounds check: if `entry_offset + 4 > sizeof(sector_buf)`, return error. Note: with SEC-028's validation that bytes_per_sector is 512/1024/2048/4096, this only triggers when bytes_per_sector > 512. A future improvement could use a larger buffer or read multiple sectors.
+**Fix:** Added bounds check: if `entry_offset + 4 > sizeof(sector_buf)`, return error. Note: with SEC-028's validation that bytes_per_sector is 512/1024/2048/4096, this only triggers when bytes_per_sector > 512. A future improvement could use a larger buffer or read multiple sectors. (commit `13fc749`)
 
 ---
 
@@ -123,7 +137,7 @@
 
 **Impact:** Denial of service (all sector reads fail) or incorrect block size math.
 
-**Fix:** Clamped LBADS to valid range 9-12; values outside this range default to 512.
+**Fix:** Clamped LBADS to valid range 9-12; values outside this range default to 512. (commit `13fc749`)
 
 ---
 
@@ -139,7 +153,7 @@
 
 **Impact:** Crash via hardware division exception on bare-metal.
 
-**Fix:** Added `ns_block_size == 0` check at start of `nvme_read_sectors`.
+**Fix:** Added `ns_block_size == 0` check at start of `nvme_read_sectors`. (commit `13fc749`)
 
 ---
 
@@ -155,7 +169,7 @@
 
 **Impact:** No actual OOB write with current code flow, but fragile if refactored. Defense-in-depth fix applied.
 
-**Fix:** Added explicit bounds check after tab col update.
+**Fix:** Added explicit bounds check after tab col update. (commit `13fc749`)
 
 ---
 
@@ -171,7 +185,7 @@
 
 **Impact:** Out-of-bounds read from DMA buffer. On bare-metal seL4, this reads adjacent memory (potentially other DMA buffers or kernel data).
 
-**Fix:** Added clamp `if (frame_len > I211_RX_BUF_SIZE) frame_len = I211_RX_BUF_SIZE` before the existing `max_len` clamp.
+**Fix:** Added clamp `if (frame_len > I211_RX_BUF_SIZE) frame_len = I211_RX_BUF_SIZE` before the existing `max_len` clamp. (commit `13fc749`)
 
 ---
 
@@ -181,9 +195,9 @@
 **File(s):** `phase3/src/drivers/nvme.c` line 99
 **Attacker:** Long-running operation
 
-**Description:** `cmd->cid = q->cid_counter++` uses a `uint16_t` that wraps at 65536. NVMe spec allows CID reuse as long as no two outstanding commands share a CID. Since the driver uses synchronous polled I/O (only one command outstanding at a time), wrap is benign.
+**Description:** `cmd->cid = q->cid_counter++` uses a `uint16_t` that wraps at 65536. NVMe spec allows CID reuse as long as no two outstanding commands share a CID. Since the driver uses synchronous polled I/O (only one command outstanding at a time), wrap is benign. However, some controllers treat CID 0 as invalid, so skipping 0 on wrap is safer.
 
-**Status:** Accepted — no fix needed. Synchronous I/O guarantees no CID collision.
+**Fix:** Changed CID increment to `q->cid_counter = (q->cid_counter % 65535) + 1`, which cycles through 1..65535 and never hits 0. (commit `8370245`)
 
 ---
 
@@ -193,9 +207,9 @@
 **File(s):** `phase3/src/drivers/fat32.c` line 57
 **Attacker:** NVMe storage (crafted FAT with cluster numbers > 1 billion)
 
-**Description:** `uint32_t fat_offset = cluster * 4` overflows if `cluster > 0x3FFFFFFF` (~1.07 billion). FAT32 uses 28-bit cluster numbers (max ~268 million), so valid FAT32 images cannot trigger this. However, a crafted FAT entry could contain any 28-bit value (up to 0x0FFFFFFF), which multiplied by 4 gives max 0x3FFFFFFC — no overflow.
+**Description:** `uint32_t fat_offset = cluster * 4` overflows if `cluster > 0x3FFFFFFF` (~1.07 billion). FAT32 uses 28-bit cluster numbers (max ~268 million), so valid FAT32 images cannot trigger this. However, defense-in-depth: a bounds check before the multiplication eliminates the entire class of overflow regardless of caller assumptions.
 
-**Status:** Accepted — the FAT32_ENTRY_MASK (0x0FFFFFFF) naturally limits cluster values to a safe range.
+**Fix:** Added explicit guard: `if (cluster > 0x0FFFFFFF) { *next = FAT32_EOC_MIN; return 0; }` before the multiplication. (commit `8370245`)
 
 ---
 
@@ -213,7 +227,7 @@ More critically, if `ht_capacity` were somehow corrupted to be much smaller than
 
 **Impact:** Potential infinite loop or extreme latency during tokenization.
 
-**Fix:** Added `probes` counter bounded to `ht_capacity` iterations.
+**Fix:** Added `probes` counter bounded to `ht_capacity` iterations. (commit `13fc749`)
 
 ---
 
@@ -223,9 +237,9 @@ More critically, if `ht_capacity` were somehow corrupted to be much smaller than
 **File(s):** `phase3/src/sel4/main_x86.c` line 1432
 **Attacker:** Internal (long-running stability test)
 
-**Description:** `q_total` is `uint32_t`, wrapping at 4,294,967,296. At the observed query rate (~10 queries/sec with inference), the 30-day stability test would generate ~26M queries — well within range. Even at 1000 queries/sec, wrap occurs at ~50 days.
+**Description:** `q_total` is `uint32_t`, wrapping at 4,294,967,296. At the observed query rate (~10 queries/sec with inference), the 30-day stability test would generate ~26M queries — well within range. Even at 1000 queries/sec, wrap occurs at ~50 days. For multi-year uptime scenarios, this becomes a real limit.
 
-**Status:** Accepted — within operational bounds. The wrap itself is benign (stats display wraps, no functional impact).
+**Fix:** Upgraded `q_total`, `q_hits`, `q_infer`, `q_heartbeat`, `q_shield`, `q_errors` from `uint32_t` to `uint64_t`. Eliminates any practical wrap concern (584 years at 1B queries/sec). (commit `8370245`)
 
 ---
 
