@@ -288,7 +288,367 @@ If any of the above is not true, the bench-off does not include Gemma 4 in the c
 
 ---
 
-**Stop point reached for Section 7. The feature/gemma4-arch branch is NOT yet created — that's a future task per the user's instructions.**
+## Section 8 — Compatibility Verification (Phase 1 picks vs JARVIS engine, primary-source)
+
+**Purpose:** Phase 1 (§3) picked Qwen3 4B Instruct (2507) for ACTIVE and Llama 3.1 8B Instruct for CRITICAL based on benchmark/architecture summaries. Section 8 verifies those claims **against actual primary sources** (`config.json` files and bytes-from-the-GGUF metadata + tensor info), not against secondary blog posts. The Phase 1 doc was treated as a hypothesis, not a fact.
+
+### How verification was done
+
+| Source | Method | Confidence |
+|---|---|---|
+| `config.json` for Llama 3.2 1B / 3B / Llama 3.1 8B | `WebFetch` from `unsloth/<model>` HF mirror (the canonical `meta-llama/...` repos returned 401 — gated) | **High** — JSON dumped verbatim |
+| `config.json` for Qwen3 4B Instruct 2507 / Qwen3 8B | `WebFetch` from official `Qwen/...` HF repo (not gated) | **High** — JSON dumped verbatim |
+| GGUF metadata keys (Qwen3 4B + Llama 3.1 8B) | `curl -L -r 0-8388607` byte-range download of the actual `.gguf` files from HF, then `grep -ao` over the binary for ASCII key strings | **High** — bytes from the same GGUF files JARVIS would load |
+| GGUF tensor names (Qwen3 4B + Llama 3.1 8B) | Same byte-range method, grepping for `blk.N.*` patterns and standalone tensor names | **High** — bytes verified |
+| JARVIS engine expectations | Direct read of `phase3/src/ai/llama_load.c`, `llama_quant.c`, `llama_model.h`, `gguf_parser.c`, `llama_forward.c`, `gguf_vocab.c` | **High** — actual source |
+
+### What JARVIS engine expects (extracted from source)
+
+These are the facts the verification is measured against. Cited line numbers refer to the files at commit `bc23d0c`.
+
+**Metadata key prefix:** `llama_load.c::llama_load_config()` (lines 34–107) hardcodes `llama.*` lookups via `gguf_get_kv_u32` / `gguf_get_kv_f32`. Specifically:
+- `llama.embedding_length` (line 44) — required
+- `llama.block_count` (line 50) — required
+- `llama.attention.head_count` (line 56) — required
+- `llama.attention.head_count_kv` (line 62) — optional, defaults to head_count
+- `llama.feed_forward_length` (line 72) — required
+- `llama.vocab_size` (line 78) — falls back to `token_embd.weight` shape if absent (line 82)
+- `llama.context_length` (line 91) — defaults to `LLAMA_MAX_SEQ_LEN`
+- `llama.rope.freq_base` (line 101) — defaults to 500000.0
+
+**`general.architecture` is NOT read.** The engine assumes "llama" implicitly.
+
+**`head_dim` derivation:** `llama_load.c:69` sets `config->head_dim = config->dim / config->n_heads`. There is no GGUF metadata fallback. If `n_heads * head_dim ≠ hidden_size`, this derivation produces the wrong value and the rest of the engine breaks.
+
+**Tensor name expectations:** Both `llama_load.c` (lines 277–351) and `llama_quant.c::qmodel_load()` (lines 206–277) hardcode the standard `ggml`/`llama.cpp` tensor names: `token_embd.weight`, `output_norm.weight`, `output.weight` (with weight-tying fallback), and per-layer `blk.N.{attn_norm,attn_q,attn_k,attn_v,attn_output,ffn_norm,ffn_gate,ffn_up,ffn_down}.weight`. **Nothing else is loaded.**
+
+**RoPE:** Standard rotary embedding with base `rope_theta` (`llama_quant.c` lines 348–373; `llama_forward.c` lines 68–93). Optional `rope_freqs.weight` tensor is loaded if present and matches `head_dim/2` elements (`llama_quant.c` lines 227–235; `llama_load.c` lines 299–309), and used as a per-dimension divisor on the RoPE frequency. **This is exactly what `llama.cpp` writes when it sees `rope_scaling.rope_type = "llama3"` in the source `config.json`.** There is no separate "llama3 rope_type" code path — the precomputed-freqs tensor IS the support.
+
+**Forward pass shape assumptions:** `qmodel_forward()` (lines 342–344) and `llama_forward()` (lines 61–63) call:
+```c
+qmatmul_vec(&layer->wq, state->xb, state->q,  dim,    dim);
+```
+This assumes Q (and Wo) have shape `[dim × dim]`. For Llama-style models where `n_heads × head_dim = dim`, this is correct. For models with **decoupled `head_dim`** (`n_heads × head_dim ≠ dim`), Wq has shape `[(n_heads × head_dim) × dim]` and this call would either fault or write wrong-sized output.
+
+**Per-layer Q/K norm support:** **None.** The forward pass goes directly from QKV projection (`qmatmul_vec`) into RoPE without any Q-norm or K-norm step.
+
+**Quantization formats supported:** From `dequant.c` and `gguf_parser.c::ggml_type_size()`: F32, F16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q8_1, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, Q8_K (sizes known). Per the user's hard constraint, only F32/F16/Q4_0/Q8_0/Q4_K/Q6_K are *allowed*; the others have block sizes but no `dequant_row` implementation in `dequant.c` (per agent 2's earlier read of that file). **Q4_K_M is fine.**
+
+**Tokenizer expectations:** `gguf_vocab.c` reads `tokenizer.ggml.bos_token_id`, `tokenizer.ggml.eos_token_id`, `tokenizer.ggml.tokens` (string array), and optionally `tokenizer.ggml.token_type` (int32 array). It does NOT read `tokenizer.ggml.merges` — meaning the engine relies on the `tokens` array being pre-sorted by merge priority (which matches GPT-2/Llama BPE convention). It does not read tokenizer model name or pre-tokenizer.
+
+---
+
+### 8.1 Qwen3 4B Instruct (2507)
+
+#### 8.1.1 config.json verified values
+
+Source: `https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507/raw/main/config.json` (fetched, not gated). Full JSON dumped to me verbatim.
+
+| Field | Actual value | JARVIS expects | Match? |
+|---|---|---|---|
+| `model_type` | `qwen3` | (not read; engine assumes `llama`) | ❌ **arch mismatch** |
+| `architectures` | `["Qwen3ForCausalLM"]` | `["LlamaForCausalLM"]` | ❌ |
+| `hidden_size` | **2560** | derived as `n_heads × head_dim` (square assumption) | ❌ |
+| `num_hidden_layers` | 36 | any | ✅ |
+| `num_attention_heads` | 32 | any | ✅ |
+| `num_key_value_heads` | 8 | any (GQA supported) | ✅ |
+| `head_dim` | **128 (explicit)** | derived as `hidden_size / n_heads` = 2560 / 32 = **80** | ❌ **decoupled head_dim** |
+| `intermediate_size` | 9728 | any | ✅ |
+| `vocab_size` | 151,936 | any | ✅ |
+| `max_position_embeddings` | 262,144 | capped at `LLAMA_MAX_SEQ_LEN` = 512 | ✅ (engine clamps) |
+| `rope_theta` | **5,000,000** | reads `llama.rope.freq_base`; defaults to 500K | ⚠️ Engine reads from `llama.*` key, won't find `qwen3.*` |
+| `rope_scaling` | `null` | n/a (standard RoPE) | ✅ no scaling needed |
+| `hidden_act` | `silu` | implicit (SwiGLU hardcoded) | ✅ |
+| `rms_norm_eps` | 1e-06 | hardcoded `RMS_EPS = 1e-5` | ⚠️ slightly different epsilon — minor numerical drift, not a correctness blocker |
+| `tie_word_embeddings` | **true** | handled (output.weight fallback to token_embd) | ✅ |
+| `attention_bias` | false | implicit (no bias loading) | ✅ |
+| `use_sliding_window` | false | n/a | ✅ |
+
+**Key shape calculation (verified):** `n_heads × head_dim = 32 × 128 = 4096` ≠ `hidden_size = 2560`. Therefore Wq is `[4096 × 2560]`, not `[2560 × 2560]`. Wo is `[2560 × 4096]`. **JARVIS shape assumption fails.**
+
+#### 8.1.2 GGUF metadata keys
+
+Verified by `curl -L -r 0-8388607` byte-range download of `https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf` and `grep -ao` over the 8 MB header. Keys observed (sorted):
+
+```
+general.architecture
+general.basename
+general.finetune
+general.name
+general.size_label
+general.type
+qwen3.attention.head_count
+qwen3.attention.head_count_kv
+qwen3.attention.key_length        ← explicit head_dim (Qwen3 specific)
+qwen3.attention.layer_norm_rms_epsilon
+qwen3.attention.value_length      ← explicit V projection dim (Qwen3 specific)
+qwen3.block_count
+qwen3.context_length
+qwen3.embedding_length
+qwen3.feed_forward_length
+qwen3.rope.freq_base
+tokenizer.ggml.model
+tokenizer.ggml.pre
+tokenizer.ggml.tokens
+```
+
+**JARVIS reads:** `llama.embedding_length`, `llama.block_count`, `llama.attention.head_count`, `llama.attention.head_count_kv`, `llama.feed_forward_length`, `llama.vocab_size`, `llama.context_length`, `llama.rope.freq_base`.
+
+**Match:** ❌ **No overlap.** Every required key has a `qwen3.*` prefix in the actual GGUF; JARVIS would call `gguf_get_kv_u32(ctx, "llama.embedding_length", ...)` and get `false`, then return `-1` from `llama_load_config()` and fail to load the model immediately.
+
+**Bonus finding:** Qwen3 GGUF carries `qwen3.attention.key_length` (= 128) explicitly. If JARVIS reads this it gets the right `head_dim` without deriving it. **No `qwen3.vocab_size` key was observed** — JARVIS's existing fallback of reading `token_embd.weight` shape (`llama_load.c:81-87`) would still work for vocab_size.
+
+#### 8.1.3 Tensor names
+
+From the same 8 MB byte-range download, grepping for tensor name patterns:
+
+```
+blk.0.attn_k.weight
+blk.0.attn_k_norm.weight        ← NEW: per-head K RMSNorm
+blk.0.attn_norm.weight
+blk.0.attn_output.weight
+blk.0.attn_q.weight
+blk.0.attn_q_norm.weight        ← NEW: per-head Q RMSNorm
+blk.0.attn_v.weight
+blk.0.ffn_down.weight
+blk.0.ffn_gate.weight
+blk.0.ffn_norm.weight
+blk.0.ffn_up.weight
+... (same pattern repeats for blk.35)
+output.weight
+output_norm.weight
+token_embd.weight
+```
+
+**The base names match JARVIS expectations** (`token_embd`, `output_norm`, `output`, `blk.N.attn_*`, `blk.N.ffn_*`). **But Qwen3 carries two extra tensors per layer that JARVIS does not load and the forward pass does not apply:** `blk.N.attn_q_norm.weight` and `blk.N.attn_k_norm.weight`. These are **per-head RMSNorm of the Q and K projections** *before* RoPE — a Qwen3 architectural feature inherited from QK-Norm research and used by Qwen2 onwards.
+
+**No `rope_freqs.weight` tensor was observed** — consistent with the config showing `rope_scaling: null`. Standard RoPE only.
+
+**Match:** ⚠️ **Partial.** Base tensors load fine; the Q/K-norm step is missing from the forward pass and would silently produce numerically wrong outputs (no crash, but generation would be garbage).
+
+#### 8.1.4 RoPE configuration
+
+- `rope_theta`: **5,000,000** (vs Llama's 500,000 — 10× larger base)
+- `rope_scaling`: `null` (no llama3-style scaling, no YaRN)
+- JARVIS support: standard RoPE with configurable `rope_theta`, no `rope_freqs.weight` needed
+
+**Match:** ✅ **Compatible** — but only after JARVIS reads `qwen3.rope.freq_base` instead of `llama.rope.freq_base`. The engine math works, the metadata key path doesn't.
+
+#### 8.1.5 Final verdict
+
+❌ **Qwen3 4B Instruct (2507) is NOT drop-in compatible.** Three independent blockers:
+
+1. **Metadata key prefix:** `qwen3.*` vs JARVIS's hardcoded `llama.*` — load fails immediately.
+2. **Decoupled `head_dim`:** `n_heads × head_dim = 4096 ≠ hidden_size = 2560`. JARVIS's shape derivation and `qmatmul_vec` calls assume square. The wq/wk/wv/wo matrices have a non-square layout.
+3. **Per-head Q/K RMSNorm:** Qwen3 inserts a per-head RMSNorm on Q and K *before* RoPE. JARVIS's forward pass goes straight from projection to RoPE. Without the norm step, generation produces wrong logits.
+
+**Estimated adapter cost: ~150-220 LOC.** Detailed in §9.
+
+---
+
+### 8.2 Llama 3.1 8B Instruct
+
+#### 8.2.1 config.json verified values
+
+Source: `https://huggingface.co/unsloth/Meta-Llama-3.1-8B-Instruct/raw/main/config.json` (community mirror; the canonical `meta-llama/...` repo returned 401 — gated). Note: Unsloth mirror has `"unsloth_fixed": true` flag but other fields are byte-identical to the upstream Meta values per the Meta tech report.
+
+| Field | Actual value | JARVIS expects | Match? |
+|---|---|---|---|
+| `model_type` | `llama` | implicitly `llama` | ✅ |
+| `architectures` | `["LlamaForCausalLM"]` | same | ✅ |
+| `hidden_size` | 4096 | any | ✅ |
+| `num_hidden_layers` | 32 | any | ✅ |
+| `num_attention_heads` | 32 | any | ✅ |
+| `num_key_value_heads` | 8 | GQA supported | ✅ |
+| `head_dim` | 128 (explicit) | derived as 4096/32 = **128** ✓ | ✅ **square** |
+| `intermediate_size` | 14,336 | any | ✅ |
+| `vocab_size` | 128,256 | any | ✅ |
+| `max_position_embeddings` | 131,072 | capped at 512 | ✅ (engine clamps) |
+| `rope_theta` | 500,000.0 | reads `llama.rope.freq_base`; default 500K | ✅ |
+| `rope_scaling` | **`{rope_type: "llama3", factor: 8.0, low_freq_factor: 1.0, high_freq_factor: 4.0, original_max_position_embeddings: 8192}`** | engine has no rope_type code path | ⚠️ **handled indirectly via `rope_freqs.weight` tensor** — see §8.2.3 |
+| `hidden_act` | `silu` | implicit | ✅ |
+| `rms_norm_eps` | 1e-05 | hardcoded `RMS_EPS = 1e-5` | ✅ **exact match** |
+| `tie_word_embeddings` | **false** | output.weight loaded explicitly | ✅ |
+| `attention_bias` | false | implicit | ✅ |
+| `mlp_bias` | false | implicit | ✅ |
+
+**Key shape calculation:** `n_heads × head_dim = 32 × 128 = 4096 = hidden_size`. **Square. JARVIS shape assumption holds.**
+
+#### 8.2.2 GGUF metadata keys
+
+Verified by `curl -L -r 0-8388607` byte-range download of `https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf` and `grep -ao` over the 8 MB header. Keys observed (sorted):
+
+```
+general.architecture
+general.basename
+general.file_type
+general.finetune
+general.languages
+general.license
+general.name
+general.size_label
+general.tags
+general.type
+llama.attention.head_count
+llama.attention.head_count_kv
+llama.attention.layer_norm_rms_epsilon
+llama.block_count
+llama.context_length
+llama.embedding_length
+llama.feed_forward_length
+llama.rope.dimension_count
+llama.rope.freq_base
+llama.vocab_size
+tokenizer.ggml.model
+tokenizer.ggml.pre
+tokenizer.ggml.tokens
+```
+
+**JARVIS reads:** `llama.embedding_length`, `llama.block_count`, `llama.attention.head_count`, `llama.attention.head_count_kv`, `llama.feed_forward_length`, `llama.vocab_size`, `llama.context_length`, `llama.rope.freq_base`.
+
+**Match:** ✅ **Every required key is present, with the exact `llama.*` prefix JARVIS already reads.** The GGUF also carries `llama.rope.dimension_count` (the explicit head_dim equivalent for Llama models) and `llama.attention.layer_norm_rms_epsilon`, both of which JARVIS does NOT currently read but does NOT need to either — the values match the engine's hardcoded/derived defaults.
+
+#### 8.2.3 Tensor names
+
+From the same byte-range download, grepping for tensor name patterns:
+
+```
+blk.0.attn_k.weight
+blk.0.attn_norm.weight
+blk.0.attn_output.weight
+blk.0.attn_q.weight
+blk.0.attn_v.weight
+blk.0.ffn_down.weight
+blk.0.ffn_gate.weight
+blk.0.ffn_norm.weight
+blk.0.ffn_up.weight
+... (same pattern for blk.31)
+output.weight
+output_norm.weight
+rope_freqs.weight        ← present
+token_embd.weight
+```
+
+**Match:** ✅ **Every tensor name matches what `qmodel_load()` and `llama_load_weights()` look for, and nothing extra.** Critically, **`rope_freqs.weight` is present** — this is the precomputed frequency divisor table that `llama.cpp`'s `convert_hf_to_gguf.py` writes when it sees `rope_scaling.rope_type = "llama3"` in the source `config.json`. JARVIS already loads this tensor (`llama_quant.c:227-235`) and applies it as a per-dimension divisor in the RoPE inner loop (`llama_quant.c:351`, `llama_forward.c:71`). **This is the existing path that already lets Llama 3.2 1B work on JARVIS today.**
+
+#### 8.2.4 RoPE configuration
+
+- `rope_theta`: 500,000 (matches JARVIS's default)
+- `rope_scaling`: `{rope_type: "llama3", factor: 8.0, low_freq_factor: 1.0, high_freq_factor: 4.0, original_max_position_embeddings: 8192}`
+- GGUF baking: `rope_freqs.weight` tensor (head_dim/2 = 64 F32 floats) is precomputed and embedded in the GGUF
+- JARVIS support: reads `rope_freqs.weight` if present and uses it as a frequency divisor (already verified working with Llama 3.2 1B which has the same `rope_type: llama3`)
+
+**Match:** ✅ **Compatible via the existing precomputed-freqs path.** No engine work needed.
+
+#### 8.2.5 Final verdict
+
+✅ **Llama 3.1 8B Instruct is fully drop-in compatible with the current JARVIS engine.** Three independent confirmations:
+
+1. **Metadata key prefix matches** (`llama.*` in GGUF, `llama.*` in JARVIS).
+2. **Square shape** (`32 × 128 = 4096`) — JARVIS's shape derivation produces the correct values.
+3. **`rope_freqs.weight` tensor present** in the GGUF — JARVIS's existing llama3-RoPE-via-precomputed-freqs path handles it, exactly the same way it handles Llama 3.2 1B today.
+4. **No extra tensors** (no Q/K-norm, no PLE, no shared KV cache pointers) that the forward pass would need to consume.
+
+**Adapter cost: 0 LOC.** **Risk: minimal** — same model family as the production IDLE pick, with the same engine code paths exercised.
+
+---
+
+## Section 9 — Adapter Work Estimate
+
+Only Qwen3 4B needs work. Llama 3.1 8B is drop-in (§8.2).
+
+### 9.1 Qwen3 4B Instruct (2507) adapter
+
+> **Confidence: medium.** I have high confidence in *what* needs to change (the failures are deterministic and primary-source-verified), but the LOC numbers are educated estimates. Treat as ±40% bands. I have not actually written any of the code; I have only walked the existing files and identified the call sites.
+
+| Feature | Est LOC | Files | New tests | Risk | Notes |
+|---|---|---|---|---|---|
+| Read `general.architecture` and dispatch metadata key prefix (`llama.*` vs `qwen3.*`) | ~40 | `gguf_parser.c` (helper) + `llama_load.c::llama_load_config()` | 2 | Low | Cleanest approach: add a `gguf_get_arch_kv_u32(ctx, "embedding_length", ...)` helper that prepends the value from `general.architecture`. Touches every existing `gguf_get_kv_u32` call in `llama_load_config`. |
+| Read explicit `head_dim` from metadata (`qwen3.attention.key_length` or `llama.rope.dimension_count`) instead of deriving from `dim/n_heads` | ~15 | `llama_load.c::llama_load_config()` line 69 | 1 | Low | Keep derivation as fallback if the metadata key is absent. |
+| Decoupled `head_dim` shape support: change Wq/Wk/Wv/Wo allocation and matmul output dims from `dim` to `n_heads × head_dim` (Q,Wo) and `n_kv_heads × head_dim` (K,V) | ~35 | `llama_load.c` (lines 162–183 alloc, 321–333 element-count check), `llama_quant.c::qmodel_forward()` (lines 342–344, 412), `llama_forward.c` (lines 61–63, 132), `llama_model.h` (state buffer sizes for `state->q` are already `n_heads*head_dim` so OK; Wo input dim becomes `n_heads*head_dim`) | 3 | **Medium** | The square assumption is baked into multiple call sites. Each must change consistently. KV cache layout (`kv_dim = n_kv_heads * head_dim`) is already correct. |
+| Per-head Q-RMSNorm and K-RMSNorm: load `blk.N.attn_q_norm.weight` (head_dim floats) and `blk.N.attn_k_norm.weight` (head_dim floats) per layer, apply as per-head RMSNorm between QKV projection and RoPE | ~60 | `qmodel_t` and `qlayer_t` in `llama_quant.h` (new fields), `llama_quant.c::qmodel_load()` (load loop), `llama_quant.c::qmodel_forward()` (insert norm step before RoPE), parallel changes in `llama_load.c` and `llama_forward.c` for the F32 path (or skip F32 path entirely since it's not the production path) | 4 | **Medium** | The Q-norm and K-norm weights are per-head-dim (not per-hidden-dim), so the norm is applied independently to each head's slice of the Q/K vector. New tensor_ops helper would be cleanest: `tensor_per_head_rms_norm(q, q_norm, n_heads, head_dim, eps)`. |
+| GGUF metadata keys for the new fields (`qwen3.attention.layer_norm_rms_epsilon` for the per-head norm epsilon) | ~10 | `llama_load.c::llama_load_config()` | 1 | Low | Could fall back to the global `RMS_EPS = 1e-5`, but Qwen3 actually uses 1e-6 — different from JARVIS's hardcoded value, would slightly drift logits. Cleaner to read it. |
+| Adjust `RMS_EPS` to be config-driven, not a `#define` | ~10 | `llama_quant.c`, `llama_forward.c`, `llama_model.h` (new field on `llama_config_t`) | 0 | Low | Touches the existing call sites. No semantic change if existing models keep 1e-5. |
+| Integration + debugging buffer | ~50 | — | — | — | First-pass-after-implementation always reveals gaps (tensor shape mismatches, off-by-one in the QK-norm loop). Reserve. |
+| **Total** | **~150-220 LOC** | **5-7 files** | **~11 new tests** | **Medium overall** | ±40% confidence band |
+
+**Comparison to §7.3 Gemma 4 estimate:** Gemma 4 was estimated at 900-1000 LOC. Qwen3 4B is roughly **20%** of that effort — meaningful but bounded. Notable: the per-head Q/K norm work and the decoupled-head_dim work are both **also useful for Qwen3 8B and any future Qwen3-arch model**, so the investment is not single-use.
+
+**Subtle gotcha I have not verified:** Does `qwen3.attention.value_length` ever differ from `qwen3.attention.key_length`? In the Qwen3 4B case both are 128, so V uses the same head_dim. But the Qwen team chose to expose the V dimension as a separate metadata key, which suggests they might one day make V smaller than K (an attention compression trick). Worth a one-time guard: `if (key_length != value_length) { fprintf(stderr, "unsupported: K and V head dims differ\n"); return -1; }`. ~5 LOC, included in the integration buffer above.
+
+### 9.2 Llama 3.1 8B Instruct adapter
+
+**0 LOC.** No engine changes needed. §8.2 confirms drop-in.
+
+### 9.3 Llama 3.2 3B Instruct adapter (fallback ACTIVE pick)
+
+I also fetched `unsloth/Llama-3.2-3B-Instruct/config.json` as a sanity check on the fallback. Same pattern as Llama 3.1 8B:
+- `model_type: llama`
+- `hidden_size: 3072`, `num_attention_heads: 24`, `head_dim: 128`, `num_hidden_layers: 28`, `num_key_value_heads: 8`
+- Square: `24 × 128 = 3072` ✓
+- `rope_scaling: {rope_type: "llama3", factor: 32.0, ...}` — handled via the same `rope_freqs.weight` precomputed-freqs mechanism
+- `tie_word_embeddings: true` (handled via JARVIS's existing fallback at `llama_quant.c:212-225`)
+- Same `llama.*` metadata keys (haven't byte-verified the GGUF, but the model_type and HF community mirror agree)
+
+**Adapter cost: 0 LOC.** **Risk: minimal** — same family as IDLE/CRITICAL.
+
+---
+
+## Section 10 — Lock-In or Replace Decision
+
+Given the verification results in §8 and the adapter estimates in §9:
+
+| Tier | Phase 1 pick (§3) | Verified status | **Final decision** | Reason |
+|---|---|---|---|---|
+| IDLE | Llama 3.2 1B Instruct (Q4_K_M, 0.81 GB) | ✅ Already running (locked) | **Llama 3.2 1B Instruct — LOCKED** | Proven in production. |
+| ACTIVE | Qwen3 4B Instruct 2507 (Q4_K_M, 2.5 GB) | ❌ Three primary-source blockers (§8.1.5); ~150-220 LOC adapter (§9.1) | **REPLACED → Llama 3.2 3B Instruct (Q4_K_M, 2.02 GB)** | Drop-in (§9.3). Trades ~5-10 points of MMLU-Pro for zero adapter risk and lineage continuity with IDLE. |
+| CRITICAL | Llama 3.1 8B Instruct (Q4_K_M, 4.92 GB) | ✅ Drop-in compatible — primary-source verified (§8.2.5) | **Llama 3.1 8B Instruct — LOCKED** | Same family as IDLE; engine code paths already exercised. |
+| EMERGENCY | rules-only | n/a | **rules-only — LOCKED** | No model. |
+
+### Why ACTIVE was replaced
+
+The Phase 1 doc claimed Qwen3 4B was "vanilla — explicit head_dim=128 in config.json, GQA (32 Q / 8 KV), 36 layers, RoPE, RMSNorm, SwiGLU. **No engine modifications required.**" That claim was wrong on three counts, all of which are visible only when you read the actual `config.json` and the actual GGUF bytes:
+
+1. **The config has `hidden_size: 2560` and `head_dim: 128`** — `2560 / 32 = 80`, not 128. The two are decoupled. JARVIS's `head_dim = dim / n_heads` derivation produces the wrong value, and downstream the Wq/Wk/Wv/Wo matmuls assume square shapes.
+2. **The GGUF uses `qwen3.*` metadata keys**, not `llama.*`. JARVIS's `llama_load_config()` would call `gguf_get_kv_u32(ctx, "llama.embedding_length", ...)`, get `false`, and immediately return -1.
+3. **The GGUF carries `blk.N.attn_q_norm.weight` and `blk.N.attn_k_norm.weight`** — per-head RMSNorm of Q and K *before* RoPE. JARVIS's forward pass has no such step. Loading the model without applying these norms produces garbage logits (silent quality failure, not a crash).
+
+The Phase 1 doc was relying on the Qwen3 transformers `configuration_qwen3.py` source code, which describes the *transformers library* class — not the actual GGUF structure or the architectural ablations. **Lesson: always verify GGUF compatibility against the GGUF, not the upstream PyTorch class.**
+
+### Why CRITICAL was kept
+
+Llama 3.1 8B passed all four primary-source checks:
+- Metadata keys: byte-verified `llama.*` prefix in the GGUF, exact match with what JARVIS reads.
+- Shape: `32 × 128 = 4096 = hidden_size`. Square. Existing derivation works.
+- RoPE: `rope_freqs.weight` tensor confirmed present in the GGUF, identical mechanism to Llama 3.2 1B (which JARVIS already runs in production).
+- Tensors: byte-verified the standard `token_embd / output_norm / output / blk.N.{attn,ffn}_*` set with no extras.
+
+The Phase 1 concern about llama3-style RoPE scaling turned out to be a non-issue: `convert_hf_to_gguf.py` precomputes the scaling into a `rope_freqs.weight` tensor, and JARVIS already loads and applies that tensor (lines 227-235 and 351 of `llama_quant.c`). This is the same path that lets Llama 3.2 1B work today.
+
+### What this means for the bench-off harness
+
+The bench-off harness (next step in the §7.5 master-branch path) needs to load and run **two model files**:
+- `Llama-3.2-1B-Instruct-Q4_K_M.gguf` (already on the JARVIS PC's NVMe)
+- `Llama-3.2-3B-Instruct-Q4_K_M.gguf` (to be downloaded — 2.02 GB)
+- `Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf` (to be downloaded — 4.92 GB)
+
+All three are in the same Llama family, all three use the same JARVIS engine paths, and all three should load with literally zero engine changes. The bench-off can proceed against these three immediately. Qwen3 4B becomes a *future* contender, not a *now* contender — it lives on the same `feature/qwen3-arch` branch concept as `feature/gemma4-arch` (§7), and re-enters the bench-off only after the §9.1 adapter work completes and passes verification.
+
+### Should the user invest in the Qwen3 adapter anyway?
+
+**Maybe — but separately, on its own branch, after the bench-off ships.** The case for it:
+
+- **Two-for-one:** Qwen3 4B and Qwen3 8B share the architecture. Doing Qwen3 4B unlocks Qwen3 8B as well. Qwen3 8B is *probably* a higher-quality CRITICAL option than Llama 3.1 8B given the 2025-2026 model improvements, though the §1 caveat about unverified Qwen3 8B per-benchmark numbers still stands.
+- **The "general.architecture" framework is reusable.** Adding the dispatch helper for `qwen3.*` metadata keys is the same plumbing Gemma 4 will need for `gemma4.*` keys. Doing it once for Qwen3 makes the Gemma 4 work cheaper.
+- **Per-head Q/K norm is a generally-useful op.** Several modern models (DeepSeek V3, OLMo 3) use it. Implementing `tensor_per_head_rms_norm()` once compounds.
+
+The case against it now:
+
+- **The bench-off is not blocked.** Three Llama-family models are sufficient to validate the dynamic scaling state machine and the 30-day stability test.
+- **Adapter risk overlaps the same security audit surface that just closed.** Adding ~200 LOC of new attention-path code reopens the audit window before the existing baseline has shipped.
+- **Validation is harder.** Without a known-good Qwen3 reference output (e.g., from `llama.cpp`), the only way to verify the adapter is correct is to run a logit-comparison harness like the one used for the original Llama 3.2 1B bring-up. That's another two-day workstream on top of the implementation.
+
+**My recommendation:** lock in the Llama 3.x trio for the immediate bench-off. Open a `feature/qwen3-arch` branch in parallel (separate from `feature/gemma4-arch`) for the Qwen3 adapter, but do it *after* the 30-day stability test on the locked-in tiers passes. Track it as a deferred workstream the same way §7 tracks Gemma 4.
 
 ---
 
@@ -357,3 +717,15 @@ If any of the above is not true, the bench-off does not include Gemma 4 in the c
 - [Gemma 4 and what makes an open model succeed (Interconnects)](https://www.interconnects.ai/p/gemma-4-and-what-makes-an-open-model) — strategic context
 - [Gemma 4 model overview (ai.google.dev)](https://ai.google.dev/gemma/docs/core) — official model overview
 - [Gemma 4 31B and 26B A4B: Architecture and Memory Consumption (kaitchup)](https://kaitchup.substack.com/p/gemma-4-31b-and-26b-a4b-architecture) — sizing/memory analysis
+
+### §8–10 Compatibility verification primary sources
+- [Qwen/Qwen3-4B-Instruct-2507/config.json](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507/raw/main/config.json) — official (not gated); `hidden_size=2560`, `head_dim=128`, `model_type=qwen3`
+- [Qwen/Qwen3-8B/config.json](https://huggingface.co/Qwen/Qwen3-8B/raw/main/config.json) — official; `hidden_size=4096`, `head_dim=128` (square), `model_type=qwen3`
+- [unsloth/Meta-Llama-3.1-8B-Instruct/config.json](https://huggingface.co/unsloth/Meta-Llama-3.1-8B-Instruct/raw/main/config.json) — community mirror (meta-llama returned 401); `rope_scaling={rope_type:"llama3",...}`
+- [unsloth/Llama-3.2-3B-Instruct/config.json](https://huggingface.co/unsloth/Llama-3.2-3B-Instruct/raw/main/config.json) — community mirror; `hidden_size=3072`, `head_dim=128`, square
+- [unsloth/Llama-3.2-1B-Instruct/config.json](https://huggingface.co/unsloth/Llama-3.2-1B-Instruct/raw/main/config.json) — community mirror; verifies IDLE model also has `rope_type:llama3` (factor=32)
+- **GGUF byte-range downloads** (primary-source binary metadata, method: `curl -L -r 0-8388607`):
+  - `Qwen/Qwen3-4B-GGUF/Qwen3-4B-Q4_K_M.gguf` — keys confirmed: `qwen3.*` prefix, `attn_q_norm`/`attn_k_norm` tensors
+  - `bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf` — keys confirmed: `llama.*` prefix, `rope_freqs.weight` tensor present
+- [GGUF File Format — llama.cpp](https://www.mintlify.com/ggml-org/llama.cpp/concepts/gguf-format) — `general.architecture` as arch-prefix source
+- [Model Loading and Architecture (DeepWiki)](https://deepwiki.com/ggml-org/llama.cpp/3.2-model-loading-and-management) — arch→key-prefix dispatch in llama.cpp
