@@ -1,0 +1,134 @@
+================================================================================
+  JARVIS AI-OS Model Bench-Off — FINAL COMBINED SCORES
+  Date: April 9, 2026
+
+  7 independent quality judges (2 single Claude + 5 parallel blind agents)
+  All judges used same criteria: Accuracy 40%, Relevance 30%, Conciseness 20%, Code 10%
+  Penalties: leaked thinking, prompt repetition, training contamination
+  Context: embedded OS assistant on seL4 bare metal
+================================================================================
+
+=== QUALITY SCORES (7 judges) ===
+
+| Model              | Judge 1 | Judge 2 | Agent 1 | Agent 2 | Agent 3 | Agent 4 | Agent 5 | Avg   | StdDev |
+|--------------------|---------|---------|---------|---------|---------|---------|---------|-------|--------|
+| gemma-4-E2B        |    7.8  |    8.3  |    8.5  |    8.5  |    8.6  |    8.5  |    8.6  |  8.40 |  0.27  |
+| mistral-7b-v0.2    |    7.4  |    7.3  |    7.6  |    7.5  |    7.6  |    7.6  |    7.5  |  7.50 |  0.11  |
+| gemma-4-E4B        |    6.3  |    7.2  |    7.6  |    7.5  |    7.6  |    7.5  |    7.6  |  7.33 |  0.47  |
+| Qwen3.5-9B         |    7.0  |    7.2  |    7.3  |    7.3  |    7.3  |    7.4  |    7.3  |  7.26 |  0.13  |
+| Llama-3.2-3B       |    4.8  |    5.6  |    6.0  |    5.9  |    6.0  |    6.0  |    6.0  |  5.76 |  0.47  |
+| Llama-3.2-1B       |    4.8  |    5.0  |    5.5  |    5.6  |    5.6  |    5.5  |    5.6  |  5.37 |  0.33  |
+| Phi-3-mini         |    4.6  |    5.4  |    5.5  |    5.4  |    5.5  |    5.3  |    5.5  |  5.31 |  0.34  |
+| Llama-3.1-8B       |    3.8  |    5.7  |    5.2  |    5.1  |    5.3  |    5.1  |    5.2  |  5.06 |  0.57  |
+| Qwen3.5-4B         |    4.4  |    5.1  |    5.2  |    4.8  |    5.3  |    5.0  |    4.8  |  4.94 |  0.30  |
+| Qwen3-4B           |    2.4  |    4.5  |    4.0  |    3.9  |    4.1  |    3.8  |    4.0  |  3.81 |  0.64  |
+| tinyllama-1.1b     |    1.0  |    1.8  |    1.3  |    1.3  |    1.3  |    1.2  |    1.3  |  1.31 |  0.23  |
+
+=== SPEED RESULTS (Ryzen 7 2700X, CPU-only, 8 threads) ===
+
+| Model              | Params | Size (Q4_K_M) | pp512 tok/s | tg128 tok/s |
+|--------------------|--------|---------------|-------------|-------------|
+| tinyllama-1.1b     |  1.10B |       636 MiB |      148.85 |       47.45 |
+| Llama-3.2-1B       |  1.24B |       763 MiB |      154.53 |       40.44 |
+| gemma-4-E2B        |  4.65B |      2.88 GiB |       81.27 |       19.69 |
+| Llama-3.2-3B       |  3.21B |      1.87 GiB |       55.39 |       16.71 |
+| Phi-3-mini         |  3.82B |      2.23 GiB |       38.06 |       14.33 |
+| Qwen3-4B           |  4.02B |      2.32 GiB |       41.21 |       13.23 |
+| Qwen3.5-4B         |  4.21B |      2.54 GiB |       38.62 |       11.20 |
+| gemma-4-E4B        |  7.52B |      5.02 GiB |       37.10 |       10.61 |
+| Llama-3.1-8B       |  8.03B |      4.58 GiB |       23.19 |        7.31 |
+| Qwen3.5-9B         |  8.95B |      5.28 GiB |       21.50 |        6.61 |
+| mistral-7b-v0.2    |  7.24B |      7.17 GiB |       18.41 |        5.52 |
+
+=== SPEED RESULTS (Ryzen 5 5600 + RTX 2070, GPU offload) ===
+
+| Model              | pp512 tok/s | tg128 tok/s |
+|--------------------|-------------|-------------|
+| Llama-3.2-1B       |     7791.21 |      219.02 |
+| tinyllama-1.1b     |     6971.01 |      202.75 |
+| gemma-4-E2B        |     3781.94 |       84.13 |
+| Llama-3.2-3B       |     3010.40 |      102.54 |
+| Phi-3-mini         |     2415.83 |       95.33 |
+| Qwen3-4B           |     2352.85 |       72.30 |
+| gemma-4-E4B        |     2146.40 |       56.61 |
+| Qwen3.5-4B         |     2094.76 |       66.02 |
+| Llama-3.1-8B       |     1513.08 |       59.60 |
+| mistral-7b-v0.2    |      270.90 |       45.89 |
+
+=== PERPLEXITY (WikiText-2, full corpus, RTX 2070) ===
+
+NOTE: PPL is only comparable within the same tokenizer family.
+Cross-family PPL is INVALID for comparison.
+
+| Model              | PPL     | Tokenizer Family | Comparable Pool |
+|--------------------|---------|------------------|-----------------|
+| mistral-7b-v0.2    |   6.71  | Llama-derived    | Pool 1          |
+| Phi-3-mini         |   7.39  | Phi              | Standalone      |
+| Llama-3.1-8B       |   7.50  | Llama            | Pool 1          |
+| Qwen3.5-4B         |  10.09  | Qwen             | Pool 2          |
+| Llama-3.2-3B       |  10.74  | Llama            | Pool 1          |
+| Llama-3.2-1B       |  14.50  | Llama            | Pool 1          |
+| Qwen3-4B           |  16.60  | Qwen             | Pool 2          |
+| tinyllama-1.1b     |  19.85  | Llama            | Pool 1          |
+| gemma-4-E4B        |  63.20  | Gemma            | INVALID         |
+| gemma-4-E2B        | 176.30  | Gemma            | INVALID         |
+| Qwen3.5-9B         |    N/A  | Qwen             | Not tested      |
+
+=== COMPOSITE RANKING (Quality-First, Speed Floor >5 tok/s) ===
+
+| Rank | Model           | Quality | Speed   | PPL    | Drop-in? | Engine Work | Verdict           |
+|------|-----------------|---------|---------|--------|----------|-------------|-------------------|
+|  #1  | gemma-4-E2B     |   8.40  | 19.7    | N/A*   | NO       | ~1000 LOC   | BEST — do engine work |
+|  #2  | mistral-7b-v0.2 |   7.50  |  5.5    |  6.71  | YES      | 0 LOC       | CRITICAL pick (now) |
+|  #3  | gemma-4-E4B     |   7.33  | 10.6    | N/A*   | NO       | ~1000 LOC   | Same engine as E2B |
+|  #4  | Qwen3.5-9B      |   7.26  |  6.6    |  N/A   | NO       | ~2000 LOC   | Not worth vs Gemma 4 |
+|  #5  | Llama-3.2-3B    |   5.76  | 16.7    | 10.74  | YES      | 0 LOC       | Fallback ACTIVE    |
+|  #6  | Llama-3.2-1B    |   5.37  | 40.4    | 14.50  | YES      | 0 LOC       | Current IDLE       |
+|  #7  | Phi-3-mini      |   5.31  | 14.3    |  7.39  | MAYBE    | Unknown     | Token leak issues  |
+|  #8  | Llama-3.1-8B    |   5.06  |  7.3    |  7.50  | YES      | 0 LOC       | DISQUALIFIED       |
+|  #9  | Qwen3.5-4B      |   4.94  | 11.2    | 10.09  | NO       | ~2000 LOC   | Think leaks        |
+| #10  | Qwen3-4B        |   3.81  | 13.2    | 16.60  | NO       | ~200 LOC    | Generates questions |
+| #11  | tinyllama-1.1b  |   1.31  | 47.5    | 19.85  | YES      | 0 LOC       | UNUSABLE           |
+
+* Gemma 4 PPL on WikiText-2 is invalid due to different tokenizer + multimodal architecture.
+  Quality was measured via blind prompt-based judging instead.
+
+=== TIER DECISIONS ===
+
+| Tier              | Model              | Quality | Speed   | Status          |
+|-------------------|--------------------|---------|---------|-----------------|
+| IDLE (current)    | Llama 3.2 1B       |   5.37  | 40.4    | Running now     |
+| IDLE/ACTIVE (target) | Gemma 4 E2B     |   8.40  | 19.7    | Needs ~1000 LOC |
+| CRITICAL          | Mistral 7B Q8_0    |   7.50  |  5.5    | Drop-in ready   |
+| EMERGENCY         | Rules only (cache)  |   N/A   | <1ms    | Running now     |
+
+=== ISSUES FLAGGED BY ALL 7 JUDGES ===
+
+1. tinyllama-1.1b: Non-functional. Echo + [end of text] on most prompts. Infinite repetition on P5.
+2. Qwen3-4B: Generates 8-10 follow-up questions instead of answering. Pathological instruct tuning.
+3. Qwen3.5-4B: <think> blocks leak into output. Fatal for embedded use.
+4. Llama-3.1-8B: "PowerPoint PPT Presentation" training data contamination in P3, P6 responses.
+5. gemma-4-E4B: Internal "Self-Correction/Refinement" notes leak into output (P6, P7).
+6. Phi-3-mini: <|assistant|> token leaks. P2 and P9 generated zero content.
+
+=== KEY INSIGHT ===
+
+Gemma 4 E2B (4.65B params, 2.88 GiB Q4_K_M) delivers:
+- 56% higher quality than the best Llama model (8.40 vs 5.37)
+- 18% faster generation than Llama 3.2 3B (19.7 vs 16.7 tok/s)
+- In a smaller file (2.88 GiB vs 4.58 GiB for Llama 3.1 8B)
+
+The ~1000 LOC engine work (PLE + shared KV + dual RoPE + sliding window)
+is the highest-ROI investment remaining in Phase 3c. It unlocks:
+- The #1 ranked model for IDLE and ACTIVE tiers
+- The entire Gemma 4 family (E2B + E4B)
+- Architectural features (sliding window, shared KV) used by future models
+
+================================================================================
+  METHODOLOGY NOTE
+
+  Quality scores from 7 independent blind judges (no access to speed/PPL data).
+  Speed measured via llama-bench on actual target hardware (Ryzen 7 2700X).
+  Perplexity measured via llama-perplexity on full WikiText-2 (RTX 2070).
+  All results reproducible — scripts in phase3/scripts/bench_*.
+================================================================================

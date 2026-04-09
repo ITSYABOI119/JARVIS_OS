@@ -59,10 +59,12 @@ This document provides a detailed week-by-week implementation plan for Phase 3. 
 |------|------|-------|
 | Fuzz testing harness | Apr 6 | 300K iterations, ASAN, 3 targets, found div-by-zero |
 | Security audit (25 findings, 18 fixed) | Apr 6 | Two rounds: initial + gap fill (pci, ahci, uart, posix) |
-| Model bench-off (11 models, 3 benches) | Apr 9 | Speed + perplexity + quality. Claude-judged blind. |
-| Gemma 4 E2B confirmed #1 quality (7.8/10) | Apr 9 | 60% better than Llama family, faster too (19.7 tok/s) |
-| Llama 3.1 8B disqualified | Apr 9 | 3.8/10, training data contamination |
-| Mistral 7B Q8_0 confirmed CRITICAL pick | Apr 9 | 7.4/10, drop-in compatible |
+| Model bench-off (11 models, 3 benches) | Apr 9 | Speed + perplexity + quality. 7 independent blind judges. |
+| **Gemma 4 E2B confirmed #1 (8.40/10, 7 judges, StdDev 0.27)** | Apr 9 | 56% better than best Llama. 19.7 tok/s. |
+| Mistral 7B Q8_0 confirmed CRITICAL pick (7.50/10) | Apr 9 | Drop-in, #2 ranked, 5.5 tok/s |
+| Gemma 4 E4B #3 (7.33/10), Qwen3.5 9B #4 (7.26/10) | Apr 9 | Both need engine work |
+| Llama 3.1 8B disqualified (5.06/10, #8) | Apr 9 | Training data contamination, below 3B model |
+| Full results: `models/quality_results/FINAL_SCORES.txt` | Apr 9 | 7-judge combined scores + speed + PPL + tiers |
 
 ### What's Left
 

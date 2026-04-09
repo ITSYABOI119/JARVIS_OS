@@ -676,6 +676,8 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Bench Results:** `models/bench_results.txt` (JARVIS PC speed), `models/bench_results_mainpc.txt` (5600 CPU), `models/bench_results_mainpc_gpu.txt` (5600 + RTX 2070)
 - **Perplexity Results:** `models/perplexity_results.txt`
 - **Quality Results:** `models/quality_results/ALL_RESPONSES.txt` (11 models × 10 prompts, Claude-judged)
+- **Judge Consensus:** `models/quality_results/JUDGE_CONSENSUS.txt` (5-agent blind consensus)
+- **Final Scores:** `models/quality_results/FINAL_SCORES.txt` (7-judge combined: quality + speed + PPL + tier decisions)
 - **x86 Build Script:** `phase3/scripts/build_jarvis_x86.sh`
 - **QEMU NVMe Test:** `phase3/scripts/qemu_test.sh` (pass model path as arg)
 - **NVMe Partition Setup:** `phase3/scripts/setup_nvme_partition.sh`
