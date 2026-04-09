@@ -1,0 +1,134 @@
+﻿=== tinyllama-1.1b-chat-v1.0.Q4_K_M ===
+Date: 04/09/2026 21:16:19
+
+--- Prompt 1: "The seL4 microkernel is" ---
+Device 0: NVIDIA GeForce RTX 2070, compute capability 7.5, VMM: yes, VRAM: 8191 MiB
+
+
+	repeat_last_n = 64, repeat_penalty = 1.000, frequency_penalty = 0.000, presence_penalty = 0.000
+	dry_multiplier = 0.000, dry_base = 1.750, dry_allowed_length = 2, dry_penalty_last_n = -1
+	top_k = 40, top_p = 0.950, min_p = 0.050, xtc_probability = 0.000, xtc_threshold = 0.100, typical_p = 1.000, top_n_sigma = -1.000, 
+temp = 0.000
+	mirostat = 0, mirostat_lr = 0.100, mirostat_ent = 5.000, adaptive_target = -1.000, adaptive_decay = 0.900
+
+ The seL4 microkernel is a lightweight, high-performance, and highly scalable kernel for embedded systems. It is designed to be highly portable, with support for multiple architectures and operating systems. The seL4 kernel is based on the LLVM compiler infrastructure, which provides a powerful set of tools for optimizing code and reducing runtime overhead. seL4 also includes a set of libraries and tools for building and testing applications, as well as a set of APIs for interacting with the kernel. se
+
+--- Prompt 2: "Explain how virtual memory works in three sentences." ---
+Device 0: NVIDIA GeForce RTX 2070, compute capability 7.5, VMM: yes, VRAM: 8191 MiB
+
+
+	repeat_last_n = 64, repeat_penalty = 1.000, frequency_penalty = 0.000, presence_penalty = 0.000
+	dry_multiplier = 0.000, dry_base = 1.750, dry_allowed_length = 2, dry_penalty_last_n = -1
+	top_k = 40, top_p = 0.950, min_p = 0.050, xtc_probability = 0.000, xtc_threshold = 0.100, typical_p = 1.000, top_n_sigma = -1.000, 
+temp = 0.000
+	mirostat = 0, mirostat_lr = 0.100, mirostat_ent = 5.000, adaptive_target = -1.000, adaptive_decay = 0.900
+
+ Explain how virtual memory works in three sentences. [end of text]
+
+--- Prompt 3: "What is the difference between a process and a thread?" ---
+Device 0: NVIDIA GeForce RTX 2070, compute capability 7.5, VMM: yes, VRAM: 8191 MiB
+
+
+	repeat_last_n = 64, repeat_penalty = 1.000, frequency_penalty = 0.000, presence_penalty = 0.000
+	dry_multiplier = 0.000, dry_base = 1.750, dry_allowed_length = 2, dry_penalty_last_n = -1
+	top_k = 40, top_p = 0.950, min_p = 0.050, xtc_probability = 0.000, xtc_threshold = 0.100, typical_p = 1.000, top_n_sigma = -1.000, 
+temp = 0.000
+	mirostat = 0, mirostat_lr = 0.100, mirostat_ent = 5.000, adaptive_target = -1.000, adaptive_decay = 0.900
+
+ What is the difference between a process and a thread? [end of text]
+
+--- Prompt 4: "Write a C function that reverses a string in place." ---
+Device 0: NVIDIA GeForce RTX 2070, compute capability 7.5, VMM: yes, VRAM: 8191 MiB
+
+
+	repeat_last_n = 64, repeat_penalty = 1.000, frequency_penalty = 0.000, presence_penalty = 0.000
+	dry_multiplier = 0.000, dry_base = 1.750, dry_allowed_length = 2, dry_penalty_last_n = -1
+	top_k = 40, top_p = 0.950, min_p = 0.050, xtc_probability = 0.000, xtc_threshold = 0.100, typical_p = 1.000, top_n_sigma = -1.000, 
+temp = 0.000
+	mirostat = 0, mirostat_lr = 0.100, mirostat_ent = 5.000, adaptive_target = -1.000, adaptive_decay = 0.900
+
+ Write a C function that reverses a string in place. The function should take in a string as an argument and return the reversed string. The function should not modify the original string. The function should be written in C and should follow best coding practices. The function should be named `reverse_string` and should take in a pointer to a string as an argument. The function should return a pointer to the reversed string. The function should be well-documented with comments explaining its purpose and implementation. The function should be tested with various input strings
+
+--- Prompt 5: "The capital of Australia is" ---
+Device 0: NVIDIA GeForce RTX 2070, compute capability 7.5, VMM: yes, VRAM: 8191 MiB
+
+
+	repeat_last_n = 64, repeat_penalty = 1.000, frequency_penalty = 0.000, presence_penalty = 0.000
+	dry_multiplier = 0.000, dry_base = 1.750, dry_allowed_length = 2, dry_penalty_last_n = -1
+	top_k = 40, top_p = 0.950, min_p = 0.050, xtc_probability = 0.000, xtc_threshold = 0.100, typical_p = 1.000, top_n_sigma = -1.000, 
+temp = 0.000
+	mirostat = 0, mirostat_lr = 0.100, mirostat_ent = 5.000, adaptive_target = -1.000, adaptive_decay = 0.900
+
+ The capital of Australia is Canberra.
+The capital of Australia is Canberra.
+The capital of Australia is Canberra.
+The capital of Australia is Canberra.
+The capital of Australia is Canberra.
+The capital of Australia is Canberra.
+The capital of Australia is Canberra.
+The capital of Australia is Canberra.
+The capital of Australia is Canberra.
+The capital of Australia is Canberra.
+The capital of Australia is
+
+--- Prompt 6: "What are the key benefits of formally verified software?" ---
+Device 0: NVIDIA GeForce RTX 2070, compute capability 7.5, VMM: yes, VRAM: 8191 MiB
+
+
+	repeat_last_n = 64, repeat_penalty = 1.000, frequency_penalty = 0.000, presence_penalty = 0.000
+	dry_multiplier = 0.000, dry_base = 1.750, dry_allowed_length = 2, dry_penalty_last_n = -1
+	top_k = 40, top_p = 0.950, min_p = 0.050, xtc_probability = 0.000, xtc_threshold = 0.100, typical_p = 1.000, top_n_sigma = -1.000, 
+temp = 0.000
+	mirostat = 0, mirostat_lr = 0.100, mirostat_ent = 5.000, adaptive_target = -1.000, adaptive_decay = 0.900
+
+ What are the key benefits of formally verified software? [end of text]
+
+--- Prompt 7: "Describe the TCP three-way handshake step by step." ---
+Device 0: NVIDIA GeForce RTX 2070, compute capability 7.5, VMM: yes, VRAM: 8191 MiB
+
+
+	repeat_last_n = 64, repeat_penalty = 1.000, frequency_penalty = 0.000, presence_penalty = 0.000
+	dry_multiplier = 0.000, dry_base = 1.750, dry_allowed_length = 2, dry_penalty_last_n = -1
+	top_k = 40, top_p = 0.950, min_p = 0.050, xtc_probability = 0.000, xtc_threshold = 0.100, typical_p = 1.000, top_n_sigma = -1.000, 
+temp = 0.000
+	mirostat = 0, mirostat_lr = 0.100, mirostat_ent = 5.000, adaptive_target = -1.000, adaptive_decay = 0.900
+
+ Describe the TCP three-way handshake step by step. [end of text]
+
+--- Prompt 8: "What happens when you type a URL into a browser?" ---
+Device 0: NVIDIA GeForce RTX 2070, compute capability 7.5, VMM: yes, VRAM: 8191 MiB
+
+
+	repeat_last_n = 64, repeat_penalty = 1.000, frequency_penalty = 0.000, presence_penalty = 0.000
+	dry_multiplier = 0.000, dry_base = 1.750, dry_allowed_length = 2, dry_penalty_last_n = -1
+	top_k = 40, top_p = 0.950, min_p = 0.050, xtc_probability = 0.000, xtc_threshold = 0.100, typical_p = 1.000, top_n_sigma = -1.000, 
+temp = 0.000
+	mirostat = 0, mirostat_lr = 0.100, mirostat_ent = 5.000, adaptive_target = -1.000, adaptive_decay = 0.900
+
+ What happens when you type a URL into a browser? [end of text]
+
+--- Prompt 9: "Compare RISC and CISC architectures in two sentences." ---
+Device 0: NVIDIA GeForce RTX 2070, compute capability 7.5, VMM: yes, VRAM: 8191 MiB
+
+
+	repeat_last_n = 64, repeat_penalty = 1.000, frequency_penalty = 0.000, presence_penalty = 0.000
+	dry_multiplier = 0.000, dry_base = 1.750, dry_allowed_length = 2, dry_penalty_last_n = -1
+	top_k = 40, top_p = 0.950, min_p = 0.050, xtc_probability = 0.000, xtc_threshold = 0.100, typical_p = 1.000, top_n_sigma = -1.000, 
+temp = 0.000
+	mirostat = 0, mirostat_lr = 0.100, mirostat_ent = 5.000, adaptive_target = -1.000, adaptive_decay = 0.900
+
+ Compare RISC and CISC architectures in two sentences. [end of text]
+
+--- Prompt 10: "Write a bash one-liner to find all .c files larger than 1MB." ---
+Device 0: NVIDIA GeForce RTX 2070, compute capability 7.5, VMM: yes, VRAM: 8191 MiB
+
+
+	repeat_last_n = 64, repeat_penalty = 1.000, frequency_penalty = 0.000, presence_penalty = 0.000
+	dry_multiplier = 0.000, dry_base = 1.750, dry_allowed_length = 2, dry_penalty_last_n = -1
+	top_k = 40, top_p = 0.950, min_p = 0.050, xtc_probability = 0.000, xtc_threshold = 0.100, typical_p = 1.000, top_n_sigma = -1.000, 
+temp = 0.000
+	mirostat = 0, mirostat_lr = 0.100, mirostat_ent = 5.000, adaptive_target = -1.000, adaptive_decay = 0.900
+
+ Write a bash one-liner to find all .c files larger than 1MB. The script should output the filenames to the console. The script should also handle errors such as the file not existing or being too large. The script should be well-documented with comments explaining each step. [end of text]
+
+=== End tinyllama-1.1b-chat-v1.0.Q4_K_M ===

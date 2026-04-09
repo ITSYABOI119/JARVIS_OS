@@ -53,16 +53,26 @@ This document provides a detailed week-by-week implementation plan for Phase 3. 
 | Debug config (compile-time flags) | Apr 6, 2026 | jarvis_debug.h: IPC/PB/ring/stats toggles |
 | QEMU workload verified | Apr 6, 2026 | q=100: 71 hits, 13 infer, 11 hb, 5 shield, 0 errors |
 
+### What's Done (Phase 3c)
+
+| Task | Date | Notes |
+|------|------|-------|
+| Fuzz testing harness | Apr 6 | 300K iterations, ASAN, 3 targets, found div-by-zero |
+| Security audit (25 findings, 18 fixed) | Apr 6 | Two rounds: initial + gap fill (pci, ahci, uart, posix) |
+| Model bench-off (11 models, 3 benches) | Apr 9 | Speed + perplexity + quality. Claude-judged blind. |
+| Gemma 4 E2B confirmed #1 quality (7.8/10) | Apr 9 | 60% better than Llama family, faster too (19.7 tok/s) |
+| Llama 3.1 8B disqualified | Apr 9 | 3.8/10, training data contamination |
+| Mistral 7B Q8_0 confirmed CRITICAL pick | Apr 9 | 7.4/10, drop-in compatible |
+
 ### What's Left
 
 | Task | Priority | Effort | Notes |
 |------|----------|--------|-------|
-| Bare-metal workload verification | HIGH | 1 session | Flash USB, run workload, verify stats |
-| 30-day stability test | HIGH | 30 days | Continuous workload on bare metal |
-| Phase 3c: Fuzz testing | MEDIUM | 2-3 weeks | NVMe, PCI, FAT32, IPC packet fuzzing |
-| Phase 3c: Security audit | MEDIUM | 2 weeks | Review all x86 driver code |
-| Phase 3c: Enhanced SHIELD | LOW | 2 weeks | Model-assisted risk scoring |
-| Dynamic model scaling wiring | LOW | 2 weeks | State machine exists, not connected |
+| **Gemma 4 engine work** | **HIGH** | ~1000 LOC | PLE + shared KV + dual RoPE + sliding window — unlocks #1 model |
+| TurboQuant evaluation (our branch vs TQ+) | MEDIUM | 2-3 sessions | Rebase TQ branch, compare with TurboQuant+ |
+| Asymmetric K/V (Q8-K + TQ-V) | MEDIUM | ~460 LOC | After TQ evaluation |
+| Wire dynamic model scaling | MEDIUM | 2-3 sessions | Hot-swap from NVMe, state machine |
+| Enhanced SHIELD | LOW | 2 weeks | Model-assisted risk scoring |
 | Final report + v0.3.0-beta tag | LAST | 1 week | After all above |
 
 ### Test Summary
@@ -551,10 +561,15 @@ While waiting for the JARVIS Project PC, the majority of Phase 3b implementation
 | 3b NVMe model loading | **DONE** | Apr 4, 2026 |
 | 3b I211 NIC + IPC fixes | **DONE** | Apr 5-6, 2026 |
 | 3b continuous workload | **DONE** | Apr 6, 2026 (QEMU verified, err=0) |
-| **3c hardening** | **NEXT** | Fuzz testing, security audit, SHIELD |
+| 3c fuzz testing | **DONE** | Apr 6, 2026 (300K iterations, ASAN, 0 crashes) |
+| 3c security audit | **DONE** | Apr 6, 2026 (25 findings, 18 fixed) |
+| 3c model bench-off | **DONE** | Apr 9, 2026 (11 models, speed+PPL+quality) |
+| **3c Gemma 4 engine work** | **NEXT** | ~1000 LOC to unlock #1 model (7.8/10) |
+| 3c TurboQuant evaluation | PENDING | Rebase + compare with TurboQuant+ |
+| 3c dynamic scaling | PENDING | Wire model hot-swap + state machine |
 | 3c finalization | PENDING | Final report, v0.3.0-beta |
 
-**Estimated remaining to v0.3.0-beta:** ~8-12 weeks (hardening + finalization)
+**Estimated remaining to v0.3.0-beta:** ~4-8 weeks (Gemma 4 engine + TQ + scaling + report)
 
 ---
 
@@ -1215,7 +1230,7 @@ While waiting for the JARVIS Project PC, the majority of Phase 3b implementation
 
 ### Week 33: Model Bench-Off — Dual-Track Baseline
 
-> **STATUS:** IN PROGRESS (April 9, 2026). Models selected. 1B + TinyLlama + Phi-3 already on disk. 3B + 8B downloading. Gemma 4 + Qwen3 + Qwen3.5 to download for llama.cpp track.
+> **STATUS:** ✅ COMPLETE (April 9, 2026). 11 models benched across speed (llama-bench), perplexity (WikiText-2), and quality (10 prompts, Claude-judged blind). Gemma 4 E2B won quality (#1, 7.8/10). Llama 3.1 8B disqualified (training contamination, 3.8/10). Mistral 7B Q8_0 is drop-in CRITICAL pick (#2, 7.4/10).
 
 **Two tracks, same hardware (Ryzen 7 2700X, 32GB, AVX2):**
 
@@ -1253,19 +1268,44 @@ While waiting for the JARVIS Project PC, the majority of Phase 3b implementation
    - Memory usage per model
 5. Document all results in `phase3/docs/MODEL_BENCH_OFF_2026-04-07.md`
 
-**Decision criteria from Track 2:**
-- If Gemma 4 E4B beats Llama 3.2 3B by >10% on quality → engine work justified
-- If Qwen3.5 4B beats everything by >20% → SSM work justified (high bar due to 2000 LOC)
-- If the Llama family wins or ties → no engine work needed, ship what we have
+**Decision criteria from Track 2 — RESULTS:**
+- ✅ Gemma 4 E2B beats Llama 3.2 3B by **63%** on quality (7.8 vs 4.8) → **engine work justified**
+- ❌ Qwen3.5 9B at 7.0 quality, but needs 2000 LOC SSM — not justified when Gemma 4 E2B (7.8) needs only 1000 LOC
+- ❌ Llama family did NOT win — Llama 3.1 8B scored worst (3.8/10, training contamination)
+
+**Bench-off results summary (Claude-judged, blind):**
+
+| Rank | Model | Quality | Speed (2700X) | Drop-in? |
+|------|-------|---------|---------------|----------|
+| #1 | Gemma 4 E2B | 7.8 | 19.7 tok/s | ❌ ~1000 LOC |
+| #2 | Mistral 7B Q8_0 | 7.4 | 5.5 tok/s | ✅ |
+| #3 | Qwen3.5 9B | 7.0 | 6.6 tok/s | ❌ ~2000 LOC |
+| #4 | Gemma 4 E4B | 6.3 | 10.6 tok/s | ❌ ~1000 LOC |
+| #5 | Llama 3.2 1B | 4.8 | 40.4 tok/s | ✅ |
+| #5 | Llama 3.2 3B | 4.8 | 16.7 tok/s | ✅ |
+| #7 | Phi-3 Mini | 4.6 | 14.3 tok/s | ⚠️ |
+| #8 | Qwen3.5 4B | 4.4 | 11.2 tok/s | ❌ |
+| #9 | Llama 3.1 8B | 3.8 | 7.3 tok/s | ✅ (DISQUALIFIED) |
+| #10 | Qwen3 4B | 2.4 | 13.2 tok/s | ❌ |
+| #11 | TinyLlama 1.1B | 1.0 | 47.5 tok/s | ✅ (UNUSABLE) |
+
+**Revised tier decisions:**
+
+| Tier | Model | Quality | Speed | Engine Work |
+|------|-------|---------|-------|-------------|
+| **IDLE** | Llama 3.2 1B (current, fallback) | 4.8 | 40.4 | 0 LOC |
+| **IDLE/ACTIVE (target)** | Gemma 4 E2B | 7.8 | 19.7 | ~1000 LOC |
+| **CRITICAL** | Mistral 7B Q8_0 | 7.4 | 5.5 | 0 LOC |
+| **EMERGENCY** | Rules only | — | <1ms | 0 LOC |
 
 **Deliverables:**
-- Dual-track bench-off results (JARVIS + llama.cpp)
-- Data-driven decision on whether Gemma 4 / Qwen3 / Qwen3.5 engine work is worth it
-- Tier assignments validated by real numbers on real hardware
+- ✅ 11-model dual-track bench-off (speed + perplexity + quality)
+- ✅ Data-driven decision: Gemma 4 engine work justified, Llama 3.1 8B dropped
+- ✅ Tier assignments validated by real numbers + blind quality judging
 
-**Effort:** 2-3 sessions
-**Dependencies:** Week 31-32 complete (security audit done)
-**Acceptance:** All models tested, results documented, engine-work decisions made with data
+**Effort:** 2-3 sessions → Actual: 1 session
+**Dependencies:** Week 31-32 complete
+**Acceptance:** ✅ All models tested, results documented, decisions made with data
 
 ---
 

@@ -61,11 +61,14 @@ foreach ($m in $Models) {
 
     try {
         $Result = & $LlamaPerplexity -m $m.FullName -f $WikiText -ngl 99 -t 6 2>&1
-        # Get the last 5 lines which contain the final PPL
-        $Tail = $Result | Select-Object -Last 5
-        $Tail | ForEach-Object {
-            Write-Host $_
-            $Output += $_
+        # Extract the Final PPL line
+        $PPLLine = ($Result | Where-Object { $_ -match "Final estimate: PPL" }) | Select-Object -Last 1
+        if ($PPLLine) {
+            Write-Host "  >>> $PPLLine"
+            $Output += "  >>> $PPLLine"
+        } else {
+            Write-Host "  >>> PPL line not found in output"
+            $Output += "  >>> PPL line not found in output"
         }
     } catch {
         $Err = "  FAILED: $Name"

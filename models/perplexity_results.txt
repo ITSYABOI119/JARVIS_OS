@@ -1,0 +1,50 @@
+﻿=== JARVIS AI-OS Perplexity Bench (Full WikiText-2) ===
+Date: 04/09/2026 20:09:26
+Hostname: DESKTOPJ
+CPU: AMD Ryzen 5 5600 6-Core Processor              
+GPU: NVIDIA GeForce RTX 2070
+RAM: 16GB
+Corpus: wiki.test.raw (1.2MB) â€” FULL, no chunk limit
+Config: -ngl 99 (GPU offload), -t 6
+
+=== [1/10] gemma-4-E2B-it-Q4_K_M.gguf ===
+  >>> perplexity: 0.96 seconds per pass - ETA Final estimate: PPL = 176.3022 +/- 2.46592
+  Time: 3.7 min
+
+=== [2/10] google_gemma-4-E4B-it-Q4_K_M.gguf ===
+  >>> perplexity: 1.47 seconds per pass - ETA Final estimate: PPL = 63.2018 +/- 0.79165
+  Time: 5.5 min
+
+=== [3/10] Llama-3.2-1B-Instruct-Q4_K_M.gguf ===
+  >>> perplexity: 0.43 seconds per pass - ETA Final estimate: PPL = 14.5013 +/- 0.10800
+  Time: 1 min
+
+=== [4/10] Llama-3.2-3B-Instruct-Q4_K_M.gguf ===
+  >>> perplexity: 0.86 seconds per pass - ETA Final estimate: PPL = 10.7446 +/- 0.07731
+  Time: 1.9 min
+
+=== [5/10] Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf ===
+  >>> perplexity: 1.60 seconds per pass - ETA Final estimate: PPL = 7.4993 +/- 0.04796
+  Time: 3.7 min
+
+=== [6/10] mistral-7b-instruct-v0.2.Q8_0.gguf ===
+  >>> perplexity: 7.13 seconds per pass - ETA Final estimate: PPL = 6.7087 +/- 0.04372
+  Time: 19.3 min
+
+=== [7/10] Phi-3-mini-4k-instruct-q4.gguf ===
+  >>> perplexity: 0.86 seconds per pass - ETA Final estimate: PPL = 7.3928 +/- 0.05010
+  Time: 2.4 min
+
+=== [8/10] Qwen3.5-4B-Q4_K_M.gguf ===
+  >>> perplexity: 1.46 seconds per pass - ETA Final estimate: PPL = 10.0860 +/- 0.07242
+  Time: 3.4 min
+
+=== [9/10] Qwen3-4B-Q4_K_M.gguf ===
+  >>> perplexity: 1.10 seconds per pass - ETA Final estimate: PPL = 16.6040 +/- 0.15979
+  Time: 2.5 min
+
+=== [10/10] tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf ===
+  >>> perplexity: 0.34 seconds per pass - ETA Final estimate: PPL = 19.8473 +/- 0.16186
+  Time: 0.8 min
+
+=== Perplexity Bench Complete ===

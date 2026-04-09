@@ -380,10 +380,16 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | All 4 HIGH/MED gap-fill findings fixed (pci BAR5, ahci buf_len overflow, uart timeout, posix clock_gettime honest failure) | DONE |
 | Model bench-off: open discovery (20 models surveyed) | DONE |
 | Model bench-off: compatibility verification (GGUF byte-verified) | DONE |
-| **Dynamic scaling tiers locked: Llama 3.2 1B (IDLE) / 3.2 3B (ACTIVE) / 3.1 8B (CRITICAL)** | **DONE** |
+| Model bench-off: speed bench (11 models, Ryzen 2700X + Ryzen 5600 + RTX 2070) | DONE |
+| Model bench-off: perplexity bench (WikiText-2 full corpus, 10 models, RTX 2070) | DONE |
+| Model bench-off: quality bench (10 prompts, 11 models, Claude-judged blind) | DONE |
+| **Dynamic scaling tiers locked: Llama 3.2 1B (IDLE) / 3.2 3B (ACTIVE) / 3.1 8B (CRITICAL)** | **REVISED** |
+| **Bench-off winner: Gemma 4 E2B (7.8/10 quality, 19.7 tok/s) — needs ~1000 LOC engine work** | **DECISION** |
+| **CRITICAL: Mistral 7B Q8_0 (7.4/10, 5.5 tok/s) — drop-in, ships now** | **DECISION** |
+| **Llama 3.1 8B disqualified** — 3.8/10, training data contamination in responses | **DROPPED** |
 | Deferred: Gemma 4 (§7, ~1000 LOC), Qwen3 (§9, ~200 LOC), Qwen3.5 (§7b, ~2000 LOC SSM) | Tracked |
 
-**Next:** Download 3B + 8B models, build bench-off harness, wire dynamic scaling.
+**Next:** Gemma 4 engine work (~1000 LOC) to unlock #1 ranked model. Wire dynamic scaling.
 
 ### Pre-Work Tasks (Before JARVIS Project PC)
 
@@ -668,6 +674,8 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
   - `phase3/scripts/bench_speed_windows.ps1` — Windows speed bench (CPU + GPU modes)
   - `phase3/scripts/bench_perplexity_windows.ps1` — Windows perplexity bench (GPU, full WikiText-2)
 - **Bench Results:** `models/bench_results.txt` (JARVIS PC speed), `models/bench_results_mainpc.txt` (5600 CPU), `models/bench_results_mainpc_gpu.txt` (5600 + RTX 2070)
+- **Perplexity Results:** `models/perplexity_results.txt`
+- **Quality Results:** `models/quality_results/ALL_RESPONSES.txt` (11 models × 10 prompts, Claude-judged)
 - **x86 Build Script:** `phase3/scripts/build_jarvis_x86.sh`
 - **QEMU NVMe Test:** `phase3/scripts/qemu_test.sh` (pass model path as arg)
 - **NVMe Partition Setup:** `phase3/scripts/setup_nvme_partition.sh`

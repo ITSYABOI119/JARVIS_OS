@@ -1,0 +1,98 @@
+﻿=== JARVIS AI-OS Speed Bench ===
+Date: 04/09/2026 18:47:32
+Hostname: DESKTOPJ
+CPU: AMD Ryzen 5 5600 6-Core Processor              
+RAM: 16GB
+Threads: 6 (physical cores)
+
+[1/10] gemma-4-E2B-it-Q4_K_M.gguf
+---
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+| gemma4 E2B Q4_K - Medium       |   2.88 GiB |     4.65 B | CPU        |       6 |           pp512 |        110.60 ┬▒ 0.00 |
+| gemma4 E2B Q4_K - Medium       |   2.88 GiB |     4.65 B | CPU        |       6 |           tg128 |         22.94 ┬▒ 0.00 |
+
+build: 5e9c63546 (8728)
+
+[2/10] google_gemma-4-E4B-it-Q4_K_M.gguf
+---
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+| gemma4 E4B Q4_K - Medium       |   5.02 GiB |     7.52 B | CPU        |       6 |           pp512 |         48.91 ┬▒ 0.00 |
+| gemma4 E4B Q4_K - Medium       |   5.02 GiB |     7.52 B | CPU        |       6 |           tg128 |         11.83 ┬▒ 0.00 |
+
+build: 5e9c63546 (8728)
+
+[3/10] Llama-3.2-1B-Instruct-Q4_K_M.gguf
+---
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+| llama 1B Q4_K - Medium         | 762.81 MiB |     1.24 B | CPU        |       6 |           pp512 |        225.19 ┬▒ 0.00 |
+| llama 1B Q4_K - Medium         | 762.81 MiB |     1.24 B | CPU        |       6 |           tg128 |         43.61 ┬▒ 0.00 |
+
+build: 5e9c63546 (8728)
+
+[4/10] Llama-3.2-3B-Instruct-Q4_K_M.gguf
+---
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+| llama 3B Q4_K - Medium         |   1.87 GiB |     3.21 B | CPU        |       6 |           pp512 |         77.06 ┬▒ 0.00 |
+| llama 3B Q4_K - Medium         |   1.87 GiB |     3.21 B | CPU        |       6 |           tg128 |         16.77 ┬▒ 0.00 |
+
+build: 5e9c63546 (8728)
+
+[5/10] Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf
+---
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+| llama 8B Q4_K - Medium         |   4.58 GiB |     8.03 B | CPU        |       6 |           pp512 |         34.43 ┬▒ 0.00 |
+| llama 8B Q4_K - Medium         |   4.58 GiB |     8.03 B | CPU        |       6 |           tg128 |          8.04 ┬▒ 0.00 |
+
+build: 5e9c63546 (8728)
+
+[6/10] mistral-7b-instruct-v0.2.Q8_0.gguf
+---
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+| llama 7B Q8_0                  |   7.17 GiB |     7.24 B | CPU        |       6 |           pp512 |         20.75 ┬▒ 0.00 |
+| llama 7B Q8_0                  |   7.17 GiB |     7.24 B | CPU        |       6 |           tg128 |          5.35 ┬▒ 0.00 |
+
+build: 5e9c63546 (8728)
+
+[7/10] Phi-3-mini-4k-instruct-q4.gguf
+---
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+| phi3 3B Q4_K - Medium          |   2.23 GiB |     3.82 B | CPU        |       6 |           pp512 |         44.55 ┬▒ 0.00 |
+| phi3 3B Q4_K - Medium          |   2.23 GiB |     3.82 B | CPU        |       6 |           tg128 |         15.91 ┬▒ 0.00 |
+
+build: 5e9c63546 (8728)
+
+[8/10] Qwen3.5-4B-Q4_K_M.gguf
+---
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+| qwen35 4B Q4_K - Medium        |   2.54 GiB |     4.21 B | CPU        |       6 |           pp512 |         47.74 ┬▒ 0.00 |
+| qwen35 4B Q4_K - Medium        |   2.54 GiB |     4.21 B | CPU        |       6 |           tg128 |         12.29 ┬▒ 0.00 |
+
+build: 5e9c63546 (8728)
+
+[9/10] Qwen3-4B-Q4_K_M.gguf
+---
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+| qwen3 4B Q4_K - Medium         |   2.32 GiB |     4.02 B | CPU        |       6 |           pp512 |         62.06 ┬▒ 0.00 |
+| qwen3 4B Q4_K - Medium         |   2.32 GiB |     4.02 B | CPU        |       6 |           tg128 |         14.59 ┬▒ 0.00 |
+
+build: 5e9c63546 (8728)
+
+[10/10] tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
+---
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+| llama 1B Q4_K - Medium         | 636.18 MiB |     1.10 B | CPU        |       6 |           pp512 |        220.56 ┬▒ 0.00 |
+| llama 1B Q4_K - Medium         | 636.18 MiB |     1.10 B | CPU        |       6 |           tg128 |         57.60 ┬▒ 0.00 |
+
+build: 5e9c63546 (8728)
+
+=== Speed Bench Complete ===
