@@ -16,7 +16,7 @@ Guidance for Claude Code when working with this repository.
 | **Phase 3** | **IN PROGRESS** | Months 24-36 | Beta on x86-64 bare metal (**LLM inference on seL4 VERIFIED**) |
 | Phase 4 | Future | Months 36+ | Production v1.0 |
 
-**Current:** Phase 3, Active Development (April 4, 2026). **MILESTONE: NVMe runtime model loading on bare-metal seL4.** Llama 3.2 1B loaded from NVMe FAT32 partition (770MB, 197K frames) at runtime — no embedded model. 1.6MB USB boot image. NVMe driver (PCI bus 1, Lexar NM790), FAT32 parser, process-isolated inference all working on Ryzen 7 2700X. VGA output on R9 280X. Self-test 5/5 PASS, 181 untypeds, 31642MB RAM. Two-PC setup: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/32GB/1TB NVMe) running bare-metal seL4.
+**Current:** Phase 3c, Active Development (April 9, 2026). **MILESTONE: 11-model bench-off complete. Gemma 4 E2B confirmed #1 (8.40/10, 7 judges).** Phase 3b complete (bare-metal boot, NVMe model loading, IPC workload, I211 NIC). Phase 3c hardening done (fuzz testing, security audit 25 findings). Model bench-off done (speed + perplexity + quality across 11 models on 3 hardware configs). Next: Gemma 4 engine work (~1000 LOC) to unlock #1 ranked model. Mistral 7B Q8_0 is drop-in CRITICAL pick. Llama 3.2 1B running as IDLE fallback. Two-PC setup: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/32GB/1TB NVMe) running bare-metal seL4.
 
 ---
 
@@ -384,9 +384,9 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | Model bench-off: perplexity bench (WikiText-2 full corpus, 10 models, RTX 2070) | DONE |
 | Model bench-off: quality bench (10 prompts, 11 models, Claude-judged blind) | DONE |
 | **Dynamic scaling tiers locked: Llama 3.2 1B (IDLE) / 3.2 3B (ACTIVE) / 3.1 8B (CRITICAL)** | **REVISED** |
-| **Bench-off winner: Gemma 4 E2B (7.8/10 quality, 19.7 tok/s) — needs ~1000 LOC engine work** | **DECISION** |
-| **CRITICAL: Mistral 7B Q8_0 (7.4/10, 5.5 tok/s) — drop-in, ships now** | **DECISION** |
-| **Llama 3.1 8B disqualified** — 3.8/10, training data contamination in responses | **DROPPED** |
+| **Bench-off winner: Gemma 4 E2B (8.40/10 avg, 7 judges, 19.7 tok/s) — needs ~1000 LOC engine work** | **DECISION** |
+| **CRITICAL: Mistral 7B Q8_0 (7.50/10, 5.5 tok/s) — drop-in, ships now** | **DECISION** |
+| **Llama 3.1 8B disqualified** — 5.06/10 (#8 of 11), training data contamination | **DROPPED** |
 | Deferred: Gemma 4 (§7, ~1000 LOC), Qwen3 (§9, ~200 LOC), Qwen3.5 (§7b, ~2000 LOC SSM) | Tracked |
 
 **Next:** Gemma 4 engine work (~1000 LOC) to unlock #1 ranked model. Wire dynamic scaling.
