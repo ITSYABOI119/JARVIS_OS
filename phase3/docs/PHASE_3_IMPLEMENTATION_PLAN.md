@@ -1150,31 +1150,31 @@ While waiting for the JARVIS Project PC, the majority of Phase 3b implementation
 
 ### Week 29-30: Stability Monitoring + Fuzz Testing Setup
 
+> **STATUS:** ✅ FUZZ TESTING COMPLETE (Apr 6, 2026). 30-day stability test skipped — already proven on Pi 4 (30.6 days, same IPC/cache code). Fuzz harness: 300K iterations, 0 crashes, ASAN clean. Found and fixed div-by-zero in shmem_ipc.c.
+
 **Tasks:**
-1. Monitor 30-day stability test (Day 8-14)
-   - Daily log review: error rate, RTT trends, memory
-   - Weekly summary report
-   - Fix any bugs discovered (rebuild, redeploy, restart test if needed)
+1. ~~Monitor 30-day stability test (Day 8-14)~~ — SKIPPED (proven on Pi 4)
 
-2. Build fuzz testing harness
+2. ✅ Build fuzz testing harness
    - File: `phase3/src/drivers/fuzz_harness.c`
-   - Targets: network packet parsing (IP, ARP, ICMP), IPC message parsing
-   - Method: generate random/malformed inputs, verify no crashes
-   - Use: AFL-style mutation or manual malformed packet generator
+   - Targets: net_stack (100K), shmem_ipc (100K), gguf_parser (100K)
+   - Method: xorshift64 PRNG, self-contained, AddressSanitizer
+   - Bug found: div-by-zero when ring->header.size corrupted to 0
 
-3. Run initial fuzz tests
-   - 10,000+ malformed packets through net_stack
-   - 10,000+ malformed IPC messages through ipc_handler
-   - Verify: no crashes, no buffer overflows, no undefined behavior
+3. ✅ Run initial fuzz tests
+   - 100,000 malformed packets through net_stack — 0 crashes
+   - 100,000 malformed IPC messages — 0 crashes, 2,025 CRC rejects
+   - 100,000 malformed GGUF buffers — 0 crashes
+   - All with `-fsanitize=address,undefined`
 
 **Deliverables:**
-- Stability test Day 14+ (no critical issues)
-- Fuzz harness operational
-- Initial fuzz results documented
+- ~~Stability test Day 14+~~ — SKIPPED
+- ✅ Fuzz harness operational (CI step added)
+- ✅ Initial fuzz results: 300K iterations, 0 crashes
 
-**Effort:** 12-16 hours (2 weeks)
+**Effort:** 12-16 hours (2 weeks) → Actual: ~2 hours (1 session)
 **Dependencies:** Week 27-28 complete
-**Acceptance:** Stability >99.5%, 0 fuzz crashes
+**Acceptance:** ~~Stability >99.5%~~, ✅ 0 fuzz crashes
 
 ---
 
@@ -1213,76 +1213,156 @@ While waiting for the JARVIS Project PC, the majority of Phase 3b implementation
 
 ---
 
-### Week 33-34: Dynamic Model Scaling
+### Week 33: Model Bench-Off — Baseline (F32 KV)
+
+> **STATUS:** IN PROGRESS (April 9, 2026). Models selected. 1B + TinyLlama + Phi-3 already on disk. 3B + 8B downloading.
 
 **Tasks:**
-1. Implement 4-state model scaling
-   - File: `phase3/src/ai/model_scaling.c`
-   - States: IDLE → ACTIVE → CRITICAL → EMERGENCY
-   - IDLE: 1B model loaded (fastest, ~20-50 tok/s)
-   - ACTIVE: 3B model loaded (~8-15 tok/s)
-   - CRITICAL: 3.8B model + validation (~5-12 tok/s, double-check responses)
-   - EMERGENCY: rules-only, no AI inference (<1ms)
-   - Transitions: based on SHIELD risk score (0-1.0)
+1. Download and verify 5 bench-off models on JARVIS PC NVMe
+   - Llama 3.2 1B Q4_K_M (0.8GB) — IDLE tier, already on disk
+   - TinyLlama 1.1B Q4_K_M (0.6GB) — IDLE comparison, already on disk
+   - Phi-3 Mini 4k Q4 (2.3GB) — ACTIVE comparison, already on disk (may have arch issues)
+   - Llama 3.2 3B Q4_K_M (~2GB) — ACTIVE tier, downloading
+   - Llama 3.1 8B Q4_K_M (~5GB) — CRITICAL tier, downloading
 
-2. Implement model hot-swap
-   - Unload current model, load new model from NVMe
-   - Swap time: 1-3 seconds (load ~700MB-2.5GB from NVMe to RAM)
-   - Decision cache handles queries during swap (85%+ coverage)
+2. Test each model in QEMU (verify load + coherent generation)
 
-3. Test model scaling
-   - 4+ tests: state transitions, model load/unload, response quality per state
+3. Build bench-off harness or run manual tests
+   - Fixed prompt set (15-20 prompts: factual, reasoning, code, OS-domain)
+   - Measure: tok/s, peak memory, response quality
+   - All models at F32 KV cache (no compression) — this is the baseline
+
+4. Document results in `phase3/docs/MODEL_BENCH_OFF_2026-04-07.md` as new section
+
+**Deliverables:**
+- 5-model baseline with tok/s and quality metrics
+- Confirmed drop-in compatibility for each model
+- Tier assignments validated by real numbers
+
+**Effort:** 1-2 sessions
+**Dependencies:** Week 31-32 complete (security audit done)
+**Acceptance:** All 5 models load and generate coherent text; tok/s measured
+
+---
+
+### Week 34: TurboQuant Evaluation — Our Branch vs TurboQuant+
+
+**Tasks:**
+1. Deep-dive exploration of TurboQuant+ (https://github.com/TheTom/turboquant_plus)
+   - Read their C/GGML integration code (if available)
+   - Understand PolarQuant + Walsh-Hadamard rotation (O(d log d) vs our O(d²) Haar)
+   - Understand boundary-layer protection (first/last 2 layers at higher precision)
+   - Understand sparse V dequantization
+   - Compare turbo3/turbo4 presets against our branch's compression configs
+
+2. Rebase our TQ branch (`experiment/turboquant-benchmark`) onto current master
+   - Resolve driver regressions documented in TURBOQUANT_EVALUATION.md §6
+   - Preserve all AVX2 SIMD, PCI 64-bit BAR, NIC RX, AHCI real-init work from master
+   - Run existing TQ test suite against rebased code
+
+3. Decision: adopt TurboQuant+ approach or improve our branch?
+   - If TQ+ has working C code: study as reference, implement asymmetric K/V in our engine
+   - If TQ+ is still Python-only: use their findings (§12, §13) to guide our own implementation
+   - Document decision rationale
+
+**Deliverables:**
+- TurboQuant+ technical assessment (what's real, what's vaporware)
+- Our TQ branch rebased on current master (or decision to start fresh)
+- Implementation plan for asymmetric K/V (§12) with boundary-layer protection
+
+**Effort:** 2-3 sessions
+**Dependencies:** Week 33 baseline complete (need F32 comparator)
+**Acceptance:** Clear decision on TQ approach with supporting evidence
+
+---
+
+### Week 35: TurboQuant Implementation — Asymmetric K/V
+
+**Tasks:**
+1. Implement asymmetric K/V compression (§12 of TURBOQUANT_EVALUATION.md)
+   - Q8_0 for K cache (preserve precision for dot products)
+   - TurboQuant 3-4 bit for V cache (softmax-averaged, tolerates compression)
+   - Boundary-layer protection (first/last 2 layers uncompressed)
+   - ~460 LOC estimated (§12.4)
+
+2. Test against 3B and 8B models (d=128, TQ-viable)
+   - Three configurations: F32 KV (baseline), symmetric TQ, asymmetric Q8-K + TQ-V
+   - Same prompt set as Week 33 baseline
+   - Measure: quality match %, KV memory savings, tok/s impact
+
+3. If asymmetric recovers d=64 quality: re-test with 1B (would unlock TQ for IDLE tier)
+
+**Deliverables:**
+- Asymmetric K/V working on d=128 models
+- Three-way comparison (F32 vs symmetric vs asymmetric)
+- Decision: which TQ config ships in the dynamic scaling system
+
+**Effort:** 2-3 sessions
+**Dependencies:** Week 34 TQ evaluation complete
+**Acceptance:** Asymmetric TQ on 3B achieves >80% generation match with >4x KV compression
+
+---
+
+### Week 36: Wire Dynamic Model Scaling
+
+**Tasks:**
+1. Connect `model_scaling.c` state machine to real model hot-swap from NVMe
+   - IDLE (1B) → ACTIVE (3B) → CRITICAL (8B) → EMERGENCY (rules-only)
+   - Swap mechanism: Process A signals Process B to unload, reload new model from NVMe
+   - Decision cache handles queries during swap (~30 seconds for 3B, ~60 seconds for 8B)
+   - Transitions driven by query rate, error rate, and SHIELD risk score
+
+2. Optionally integrate TQ compression into ACTIVE/CRITICAL tiers
+   - If Week 35 TQ results are positive: enable TQ for 3B and 8B KV cache
+   - If negative: ship with F32 KV, TQ deferred to Phase 4
+
+3. Test model scaling end-to-end
+   - State transitions, model load/unload timing
+   - Continuous workload survives tier changes without errors
    - Stress test: rapid state changes under load
 
 **Deliverables:**
-- 4-state model scaling operational
-- Model swap time measured and documented
+- 4-state dynamic scaling operational on bare metal
+- Model swap times measured
+- Optional TQ compression integrated
 
-**Effort:** 12-16 hours (2 weeks)
-**Dependencies:** Week 21-22 complete (AI inference working)
+**Effort:** 2-3 sessions
+**Dependencies:** Week 33 baseline + Week 35 TQ results (if pursuing TQ)
 **Acceptance:** All 4 states functional, smooth transitions, no crashes during swap
 
 ---
 
-### Week 35-36: Enhanced SHIELD Safety Framework
+### Week 37-38: Enhanced SHIELD + Final Polish
 
 **Tasks:**
-1. Implement full SHIELD components (from ARCHITECTURE_ENHANCEMENTS.md)
-   - **S**taged execution: sandbox new/risky operations before committing
-   - **H**euristic impact analysis: estimate impact of AI decisions
-   - **I**nterrupt capability: cancel dangerous operations mid-execution
-   - **E**nsemble validation: secondary model validates CRITICAL decisions
-   - **L**earning from failures: log failed/blocked actions for pattern recognition
-   - **D**eterministic rollback: undo operations that fail validation
-
-2. Integrate with model scaling
+1. Enhanced SHIELD (model-assisted risk scoring)
    - SHIELD risk score drives model state transitions
-   - Risk > 0.7 → upgrade to CRITICAL (larger model + validator)
+   - Risk > 0.7 → upgrade to CRITICAL (8B)
    - System threat → EMERGENCY (rules only)
 
-3. Test suite
-   - 8+ tests: staged execution, impact analysis, interrupt, ensemble, learning, rollback
+2. Final stability verification on bare metal with all tiers
+
+3. Code cleanup, dead code removal, documentation updates
 
 **Deliverables:**
-- Full 6-component SHIELD operational
-- Integrated with model scaling
-- 8+ tests passing
+- SHIELD integrated with model scaling
+- System stable across all tiers
 
-**Effort:** 12-16 hours (2 weeks)
-**Dependencies:** Week 33-34 complete
-**Acceptance:** All 6 SHIELD components functional, hostile queries blocked, 0% false positives
+**Effort:** 1-2 sessions
+**Dependencies:** Week 36 complete
+**Acceptance:** SHIELD-driven tier transitions working, hostile queries trigger CRITICAL/EMERGENCY
 
-**Week 36 Checkpoint:** 30-day stability test completing (or complete), security audit done, model scaling + SHIELD operational.
-
----
-
-## Month 8-10: Polish + Finalization (Weeks 37-44)
-
-### Focus: Multi-Platform Maintenance, Documentation, Final Report
+**Week 38 Checkpoint:** All Phase 3c work complete. Dynamic scaling operational. Ready for final report.
 
 ---
 
-### Week 37-38: Phase 2 ARM64 Build Maintenance (Optional)
+## Month 9-10: Finalization (Weeks 39-44)
+
+### Focus: Final Report, Documentation, v0.3.0-beta Tag
+
+---
+
+### Week 39-40: Final Validation + Phase 2 ARM64 Maintenance (Optional)
 
 **Tasks:**
 1. Verify Phase 2 code still builds (if ARM fallback is needed)
