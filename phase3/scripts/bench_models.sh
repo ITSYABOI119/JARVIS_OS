@@ -90,8 +90,8 @@ run_perplexity() {
     header "Perplexity (WikiText-2)"
 
     echo "Corpus: $WIKITEXT ($(du -h "$WIKITEXT" | cut -f1))"
-    echo "Config: -ngl 0 (CPU only), -t 8"
-    echo "Estimated time: ~5-10 min per model, ~1-2 hours total"
+    echo "Config: -ngl 0 (CPU only), -t 8, --chunks 100 (~51K tokens, ±0.1 PPL accuracy)"
+    echo "Estimated time: ~10-20 min per model, ~2-3 hours total"
     echo ""
 
     {
@@ -106,7 +106,7 @@ run_perplexity() {
             echo "[$N/$COUNT] $NAME"
             echo "---"
             START=$(date +%s)
-            "$LLAMA_PERPLEXITY" -m "$model" -f "$WIKITEXT" -ngl 0 -t 8 2>&1 | tail -3 || echo "  FAILED: $NAME"
+            "$LLAMA_PERPLEXITY" -m "$model" -f "$WIKITEXT" -ngl 0 -t 8 --chunks 100 2>&1 | tail -5 || echo "  FAILED: $NAME"
             END=$(date +%s)
             echo "  Time: $((END - START))s"
             echo ""
