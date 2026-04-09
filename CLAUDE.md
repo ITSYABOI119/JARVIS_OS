@@ -378,8 +378,12 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | All 8 HIGH/MED findings fixed (fat32, nvme, nic_i211, vga, tokenizer) | DONE |
 | Phase 3c audit gap fill: 11 new findings (1 HIGH, 2 MED, 4 LOW, 4 INFO) — pci, ahci, uart_16550, posix_stubs | DONE |
 | All 4 HIGH/MED gap-fill findings fixed (pci BAR5, ahci buf_len overflow, uart timeout, posix clock_gettime honest failure) | DONE |
+| Model bench-off: open discovery (20 models surveyed) | DONE |
+| Model bench-off: compatibility verification (GGUF byte-verified) | DONE |
+| **Dynamic scaling tiers locked: Llama 3.2 1B (IDLE) / 3.2 3B (ACTIVE) / 3.1 8B (CRITICAL)** | **DONE** |
+| Deferred: Gemma 4 (§7, ~1000 LOC), Qwen3 (§9, ~200 LOC), Qwen3.5 (§7b, ~2000 LOC SSM) | Tracked |
 
-**Next:** 30-day stability test on x86.
+**Next:** Download 3B + 8B models, build bench-off harness, wire dynamic scaling.
 
 ### Pre-Work Tasks (Before JARVIS Project PC)
 
@@ -658,6 +662,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **FAT32 Parser:** `phase3/src/drivers/fat32.c/h`
 - **Fuzz Harness:** `phase3/src/drivers/fuzz_harness.c`
 - **Security Audit (Apr 2026):** `phase3/docs/SECURITY_AUDIT_2026-04-06.md`
+- **Model Bench-Off:** `phase3/docs/MODEL_BENCH_OFF_2026-04-07.md` — tiers, compatibility, deferred contenders (Gemma 4 §7, Qwen3.5 §7b, Qwen3 §9)
 - **x86 Build Script:** `phase3/scripts/build_jarvis_x86.sh`
 - **QEMU NVMe Test:** `phase3/scripts/qemu_test.sh` (pass model path as arg)
 - **NVMe Partition Setup:** `phase3/scripts/setup_nvme_partition.sh`
