@@ -663,6 +663,11 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Fuzz Harness:** `phase3/src/drivers/fuzz_harness.c`
 - **Security Audit (Apr 2026):** `phase3/docs/SECURITY_AUDIT_2026-04-06.md`
 - **Model Bench-Off:** `phase3/docs/MODEL_BENCH_OFF_2026-04-07.md` — tiers, compatibility, deferred contenders (Gemma 4 §7, Qwen3.5 §7b, Qwen3 §9)
+- **Bench Scripts:**
+  - `phase3/scripts/bench_models.sh` — unified bench (speed/perplexity/quality) for JARVIS PC
+  - `phase3/scripts/bench_speed_windows.ps1` — Windows speed bench (CPU + GPU modes)
+  - `phase3/scripts/bench_perplexity_windows.ps1` — Windows perplexity bench (GPU, full WikiText-2)
+- **Bench Results:** `models/bench_results.txt` (JARVIS PC speed), `models/bench_results_mainpc.txt` (5600 CPU), `models/bench_results_mainpc_gpu.txt` (5600 + RTX 2070)
 - **x86 Build Script:** `phase3/scripts/build_jarvis_x86.sh`
 - **QEMU NVMe Test:** `phase3/scripts/qemu_test.sh` (pass model path as arg)
 - **NVMe Partition Setup:** `phase3/scripts/setup_nvme_partition.sh`
