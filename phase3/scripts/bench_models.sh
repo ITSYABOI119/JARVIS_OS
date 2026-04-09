@@ -3,7 +3,7 @@
 # Runs llama-bench on all models in ~/Desktop/JARVIS_OS/models/
 # Usage: bash phase3/scripts/bench_models.sh
 
-set -euo pipefail
+set -uo pipefail  # no -e: continue past failed models
 
 MODELS_DIR="$HOME/Desktop/JARVIS_OS/models"
 LLAMA_BENCH="$HOME/llama.cpp/build/bin/llama-bench"
@@ -52,7 +52,7 @@ echo ""
         NAME=$(basename "$model")
         echo "[$N/$COUNT] $NAME"
         echo "---"
-        "$LLAMA_BENCH" -m "$model" -ngl 0 -r 1 -p 512 -n 128 -t 8 2>&1
+        "$LLAMA_BENCH" -m "$model" -ngl 0 -r 1 -p 512 -n 128 -t 8 2>&1 || echo "  FAILED to load/run $(basename "$model")"
         echo ""
     done
 
