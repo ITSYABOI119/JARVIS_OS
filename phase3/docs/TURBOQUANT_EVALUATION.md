@@ -348,5 +348,84 @@ Asymmetric K/V belongs in that bench-off as a **third configuration** alongside 
 
 ---
 
+## 13. TurboQuant+ — External Reference Implementation to Study
+
+**Added:** April 7, 2026
+**Repo:** https://github.com/TheTom/turboquant_plus
+**Author:** Tom Turney (TheTom)
+**License:** Apache 2.0
+**Status:** Active research, rapidly iterating (daily commits as of April 2026)
+
+### 13.1 What It Is
+
+TurboQuant+ is an independent research implementation of TurboQuant (ICLR 2026) plus follow-on improvements, targeting local LLM inference via llama.cpp and MLX. It is **not** a direct fork of the paper's reference code — it's a from-scratch NumPy prototype with planned C/GGML integration.
+
+### 13.2 Why It's Directly Relevant to §12
+
+The TurboQuant+ README explicitly claims three follow-on findings that overlap with — and extend — the asymmetric K/V hypothesis in §12 of this doc:
+
+1. **"V compression is free"** — 2-bit V compression produces zero quality degradation *when K precision is maintained*. This is empirical validation of §12's theoretical claim that V tolerates aggressive compression because of softmax averaging.
+
+2. **"Quality degradation originates from K compression"** — asymmetric configurations (higher-precision K, compressed V) rescue models where symmetric compression fails. This is exactly §12.3's alternative interpretation of the d=64 failure on this branch.
+
+3. **"Boundary layers show disproportionate sensitivity"** — protecting the first and last 2 layers at higher precision recovers 37-91% of the quality gap between compressed and uncompressed baselines. **This is a finding §12 did not anticipate** and should be incorporated into any asymmetric implementation work.
+
+### 13.3 Additional Techniques Beyond §12
+
+Techniques TurboQuant+ has implemented or planned that we had not considered:
+
+| Technique | What it does | JARVIS relevance |
+|-----------|--------------|------------------|
+| **PolarQuant + Walsh-Hadamard rotation** | Replaces the Haar rotation matrix from the TurboQuant paper with a structured Walsh-Hadamard transform. O(d log d) instead of O(d²) per vector. | High — faster forward pass on CPU. Directly addresses the TurboQuant paper's acknowledged performance concern on CPU targets. |
+| **Sparse V dequantization** | +22.8% decode speed at 32K context per the README | Medium — context length on JARVIS is 512-2048 today, savings scale with length |
+| **Layer-adaptive compression** | Boundary layers (first/last 2) stay at higher precision | High — cheap win, ~4 layers out of 16-32 stay uncompressed |
+| **Outlier channel strategy for non-integer bit widths** | 2.5-bit = 32 channels @ 3-bit + 96 channels @ 2-bit; similar for 3.5-bit | Medium — finer-grained compression control |
+| **turbo3 / turbo4 config presets** | turbo3: +1.06% PPL vs q8_0; turbo4: +0.23% PPL vs q8_0 | High — gives empirical targets for what "good" looks like |
+
+### 13.4 Claimed Benchmark Results
+
+Per the README (independently verify before trusting):
+
+- **Compression ratios:** 3.8-6.4x using PolarQuant + Walsh-Hadamard rotation (vs the paper's 7-9x with Haar rotation and full-bit per-coordinate quant)
+- **Quality (turbo4):** +0.23% perplexity increase vs q8_0 baseline
+- **Quality (turbo3):** +1.06% perplexity increase vs q8_0 baseline
+- **Speed (Apple Silicon):** Prefill matches q8_0 parity; decode ~0.9x at long context
+- **Large models:** Command-R+ 104B at 128K context, PPL 4.024 on M5 Max
+
+**Caveat 1:** No Ryzen / AVX2 / Zen+ numbers reported. All speed claims are Apple Silicon (Metal) or NVIDIA/AMD GPU. JARVIS's Ryzen 7 2700X CPU-only inference path is not represented in these benchmarks.
+
+**Caveat 2:** The PLAN.md in the repo states "All tasks incomplete — this is a planning document with no implementation yet." This conflicts with the README's benchmark claims, suggesting the project is mid-iteration: some parts benchmarked, some parts still planned. Read both the README and PLAN.md before trusting any single claim.
+
+### 13.5 Integration Target
+
+Phase 5.2 of the TurboQuant+ PLAN.md explicitly targets **"llama.cpp C Implementation"** with **GGML backend** integration, PR-ready status planned. **This is the closest external reference to JARVIS's own C-only inference engine.** If TurboQuant+ reaches PR-ready status in llama.cpp before JARVIS does its own asymmetric K/V work, the GGML backend code is the most useful reference to study.
+
+### 13.6 How to Use This Reference
+
+**Do NOT:**
+- Vendor TurboQuant+ code directly into JARVIS — the Apache 2.0 license is compatible, but the project is actively iterating and is not a stable API
+- Trust the README benchmarks without independent verification — the project is mid-iteration per the PLAN.md conflict above
+- Skip reading the actual paper (ICLR 2026) in favor of this reference — this is an interpretation of the paper, not the paper itself
+
+**Do:**
+- Read the README and PLAN.md before any asymmetric K/V implementation work on JARVIS
+- Study the llama.cpp GGML backend integration (Phase 5.2) as a C reference implementation — this is the closest analog to JARVIS's engine
+- Incorporate the layer-adaptive / boundary-layer-protection finding into §12.4's implementation scope (likely +50-80 LOC for layer-group config + forward-pass branching)
+- Compare turbo3 / turbo4 PPL targets (+1.06% / +0.23%) against JARVIS's own measurements when the asymmetric work is benched — these give calibrated quality expectations
+- Revisit this reference periodically — the project is updating daily as of April 2026
+
+### 13.7 Action Items
+
+When the asymmetric K/V work in §12 begins:
+
+1. Re-check https://github.com/TheTom/turboquant_plus for the latest state — commits are landing daily
+2. Read any C / GGML integration code that has landed by then
+3. Incorporate boundary-layer protection into the JARVIS implementation (not in §12's original scope)
+4. Add sparse V dequantization as a secondary optimization if the basic asymmetric path works
+5. Consider PolarQuant + Walsh-Hadamard rotation as a replacement for the current Haar rotation on this branch — the O(d log d) speedup is meaningful on CPU
+
+---
+
 *Branch: experiment/turboquant-benchmark | 31 commits | ~10K lines | April 2026*
 *Section 12 added April 7, 2026 — asymmetric K/V hypothesis from Phase 3c planning discussion*
+*Section 13 added April 7, 2026 — TurboQuant+ external reference (TheTom/turboquant_plus)*
