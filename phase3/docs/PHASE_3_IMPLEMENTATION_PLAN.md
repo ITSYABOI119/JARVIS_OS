@@ -1213,35 +1213,59 @@ While waiting for the JARVIS Project PC, the majority of Phase 3b implementation
 
 ---
 
-### Week 33: Model Bench-Off — Baseline (F32 KV)
+### Week 33: Model Bench-Off — Dual-Track Baseline
 
-> **STATUS:** IN PROGRESS (April 9, 2026). Models selected. 1B + TinyLlama + Phi-3 already on disk. 3B + 8B downloading.
+> **STATUS:** IN PROGRESS (April 9, 2026). Models selected. 1B + TinyLlama + Phi-3 already on disk. 3B + 8B downloading. Gemma 4 + Qwen3 + Qwen3.5 to download for llama.cpp track.
+
+**Two tracks, same hardware (Ryzen 7 2700X, 32GB, AVX2):**
+
+**Track 1: JARVIS engine (our C inference)** — measures what JARVIS delivers today
+- Llama 3.2 1B Q4_K_M (0.8GB) — IDLE tier, already on disk
+- TinyLlama 1.1B Q4_K_M (0.6GB) — IDLE comparison, already on disk
+- Phi-3 Mini 4k Q4 (2.3GB) — ACTIVE comparison, already on disk (may have arch issues)
+- Llama 3.2 3B Q4_K_M (~2GB) — ACTIVE tier, downloading
+- Llama 3.1 8B Q4_K_M (~5GB) — CRITICAL tier, downloading
+
+**Track 2: llama.cpp reference** — measures what's POSSIBLE if we did engine work
+- Same 5 models as Track 1 (cross-validates JARVIS vs llama.cpp tok/s)
+- Gemma 4 E2B Q4_K_M — deferred contender (§7), needs ~1000 LOC engine work
+- Gemma 4 E4B Q4_K_M — deferred contender (§7)
+- Qwen3 4B Q4_K_M — deferred contender (§9), needs ~200 LOC adapter
+- Qwen3.5 2B or 4B Q4_K_M — deferred contender (§7b), needs ~2000 LOC SSM work
+
+**Setup:**
+1. Install llama.cpp on JARVIS PC (CPU-only build, no CUDA):
+   ```bash
+   git clone https://github.com/ggerganov/llama.cpp
+   cd llama.cpp && cmake -B build -DGGML_CUDA=OFF && cmake --build build -j$(nproc)
+   ```
+2. Download all models to `~/Desktop/JARVIS_OS/models/`
+3. Run `llama-bench` for tok/s (prompt processing + generation)
+4. Run `llama-cli` with fixed prompt set for quality comparison
 
 **Tasks:**
-1. Download and verify 5 bench-off models on JARVIS PC NVMe
-   - Llama 3.2 1B Q4_K_M (0.8GB) — IDLE tier, already on disk
-   - TinyLlama 1.1B Q4_K_M (0.6GB) — IDLE comparison, already on disk
-   - Phi-3 Mini 4k Q4 (2.3GB) — ACTIVE comparison, already on disk (may have arch issues)
-   - Llama 3.2 3B Q4_K_M (~2GB) — ACTIVE tier, downloading
-   - Llama 3.1 8B Q4_K_M (~5GB) — CRITICAL tier, downloading
+1. Download and verify all models (Track 1 + Track 2)
+2. Run Track 2 (llama.cpp) first — fast, no engine changes needed, gives full comparison data
+3. Run Track 1 (JARVIS engine) — load each compatible model via QEMU or bare metal
+4. Compare results:
+   - JARVIS tok/s vs llama.cpp tok/s (how much are we leaving on the table?)
+   - Gemma 4 / Qwen3 / Qwen3.5 quality vs Llama family (is the engine work worth it?)
+   - Memory usage per model
+5. Document all results in `phase3/docs/MODEL_BENCH_OFF_2026-04-07.md`
 
-2. Test each model in QEMU (verify load + coherent generation)
-
-3. Build bench-off harness or run manual tests
-   - Fixed prompt set (15-20 prompts: factual, reasoning, code, OS-domain)
-   - Measure: tok/s, peak memory, response quality
-   - All models at F32 KV cache (no compression) — this is the baseline
-
-4. Document results in `phase3/docs/MODEL_BENCH_OFF_2026-04-07.md` as new section
+**Decision criteria from Track 2:**
+- If Gemma 4 E4B beats Llama 3.2 3B by >10% on quality → engine work justified
+- If Qwen3.5 4B beats everything by >20% → SSM work justified (high bar due to 2000 LOC)
+- If the Llama family wins or ties → no engine work needed, ship what we have
 
 **Deliverables:**
-- 5-model baseline with tok/s and quality metrics
-- Confirmed drop-in compatibility for each model
-- Tier assignments validated by real numbers
+- Dual-track bench-off results (JARVIS + llama.cpp)
+- Data-driven decision on whether Gemma 4 / Qwen3 / Qwen3.5 engine work is worth it
+- Tier assignments validated by real numbers on real hardware
 
-**Effort:** 1-2 sessions
+**Effort:** 2-3 sessions
 **Dependencies:** Week 31-32 complete (security audit done)
-**Acceptance:** All 5 models load and generate coherent text; tok/s measured
+**Acceptance:** All models tested, results documented, engine-work decisions made with data
 
 ---
 
