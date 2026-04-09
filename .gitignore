@@ -34,7 +34,7 @@ dist/
 *.gguf
 *.bin
 *.safetensors
-models/
+# models/ dir tracked — .gguf files ignored by the pattern above
 
 # IDE
 .vscode/
