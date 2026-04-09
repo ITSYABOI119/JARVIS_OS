@@ -1,0 +1,43 @@
+=== JARVIS AI-OS Model Bench-Off ===
+Date: Thu Apr  9 06:06:07 PM AEST 2026
+Hardware: AMD Ryzen 7 2700X Eight-Core Processor
+RAM: 31Gi
+
+[1/10] gemma-4-E2B-it-Q4_K_M.gguf
+---
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+| gemma4 E2B Q4_K - Medium       |   2.88 GiB |     4.65 B | CPU        |       8 |           pp512 |         80.97 ± 0.00 |
+| gemma4 E2B Q4_K - Medium       |   2.88 GiB |     4.65 B | CPU        |       8 |           tg128 |         19.69 ± 0.00 |
+
+build: 5e9c63546 (8728)
+
+[2/10] google_gemma-4-E4B-it-Q4_K_M.gguf
+---
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+| gemma4 E4B Q4_K - Medium       |   5.02 GiB |     7.52 B | CPU        |       8 |           pp512 |         36.91 ± 0.00 |
+| gemma4 E4B Q4_K - Medium       |   5.02 GiB |     7.52 B | CPU        |       8 |           tg128 |         10.66 ± 0.00 |
+
+build: 5e9c63546 (8728)
+
+[3/10] Llama-3.2-1B-Instruct-Q4_K_M.gguf
+---
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+| llama 1B Q4_K - Medium         | 762.81 MiB |     1.24 B | CPU        |       8 |           pp512 |        158.09 ± 0.00 |
+| llama 1B Q4_K - Medium         | 762.81 MiB |     1.24 B | CPU        |       8 |           tg128 |         40.44 ± 0.00 |
+
+build: 5e9c63546 (8728)
+
+[4/10] Llama-3.2-3B-Instruct-Q4_K_M.gguf
+---
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+| llama 3B Q4_K - Medium         |   1.87 GiB |     3.21 B | CPU        |       8 |           pp512 |         54.93 ± 0.00 |
+| llama 3B Q4_K - Medium         |   1.87 GiB |     3.21 B | CPU        |       8 |           tg128 |         16.72 ± 0.00 |
+
+build: 5e9c63546 (8728)
+
+[5/10] Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf
+---
