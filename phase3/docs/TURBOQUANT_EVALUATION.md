@@ -268,4 +268,85 @@ This makes TurboQuant a Phase 3c optimization target (hardening phase), not a Ph
 
 ---
 
+## 12. Asymmetric K/V Compression — Untested Variant to Evaluate
+
+**Added:** April 7, 2026 (during Phase 3c bench-off planning)
+**Status:** Hypothesis — not yet implemented or measured on this branch
+
+### 12.1 The Claim
+
+Symmetric TurboQuant (both K and V compressed via rotation + Lloyd-Max) may be suboptimal compared to an asymmetric approach: **Q8_0 for K cache, TurboQuant for V cache only.**
+
+### 12.2 Theoretical Justification
+
+1. **K is harder to compress than V.** The KIVI (2024) and KVQuant (2024) papers both documented that K cache has outlier channels in Llama-family architectures — a small number of coordinates carry disproportionate signal magnitude. Per-entry quantization (including rotated quantization) degrades these outlier channels faster than non-outlier ones, and the degradation is not softmax-averaged away.
+
+2. **V is softmax-averaged; K is not.** V cache entries are weighted-summed across positions by the softmax attention weights. Per-entry quantization error on V averages out across the sum — this is the theoretical reason why V tolerates aggressive quantization in the TurboQuant paper. K has no such averaging: every Q·K dot product directly consumes K's per-coordinate values, and the dot product amplifies per-coordinate error multiplicatively.
+
+3. **Q8_0 preserves K precision.** Q8_0 (int8 with fp16 scale per 32-value block) gives ~8 bits per coordinate on K. TurboQuant at 3-4 bits per coordinate is likely degrading K more than the compression savings justify. Q8_0 keeps K precise where it matters (the dot product) while TurboQuant's heavier compression is applied only where it's robust (V after softmax averaging).
+
+4. **Average bitwidth math.** Symmetric TQ at 3 bits = 3 bits/value across K and V. Asymmetric at Q8-K + 3-bit-TQ-V = (8 + 3) / 2 = 5.5 bits/value average. Higher bitwidth overall, but allocated where it matters. The relevant question is not "minimum bits" but "minimum bits *without quality loss*."
+
+### 12.3 Why This Might Explain the d=64 Failure
+
+The bit-width sweep on this branch showed 1B (d=64) failing at all configs including 4b/4b. The paper only validates d=128+. Our interpretation (§4 above) was that per-coordinate error at d=64 dominates signal amplitude.
+
+**Alternative interpretation:** the d=64 failure may be specifically driven by K cache degradation. If asymmetric Q8-K + TQ-V at d=64 still fails, then the per-coordinate SNR theory is confirmed. If it succeeds, then the original symmetric approach was losing quality on K specifically and the whole TQ branch may be salvageable at 1B.
+
+This is a **testable hypothesis** that would change the d=64 story and potentially unblock TurboQuant for the IDLE tier (Llama 3.2 1B).
+
+### 12.4 Implementation Scope
+
+Relatively small compared to the existing TQ infrastructure:
+
+| Change | Est LOC | Files |
+|--------|---------|-------|
+| Add `qmodel_tq_kv_asym_state_t` alongside existing `qmodel_tq_state_t` | ~80 | `qmodel_tq_forward.h` (or wherever TQ state lives on this branch) |
+| K cache stored as Q8_0 blocks (reuse existing `dequant.c` Q8_0 path) | ~60 | new forward variant file |
+| V cache stored as TQ compressed (reuse existing `tq_compress_value` / `tq_decompress_value`) | ~40 | same |
+| Forward pass branches on asymmetric vs symmetric mode | ~100 | new forward variant |
+| Configuration flag (IPC message or compile-time) to select mode | ~30 | `shmem_ipc.h` (new MSG_SET_KV_MODE or extend MSG_SET_TQ_MODE) |
+| Unit tests (state alloc/free, roundtrip, attention correlation vs F32) | ~150 | new test file |
+| **Total** | **~460 LOC** | **3-4 files** |
+
+**Confidence:** ±30% on LOC. This is much smaller than the core TQ work (3,500 LOC already on the branch) because it reuses both the existing Q8_0 dequant path (on master) and the existing TQ value compression (on this branch).
+
+### 12.5 Evaluation Plan
+
+Do this **after rebasing on master** (per §10) so the benchmark uses the latest driver fixes and AVX2 paths. Run three configurations on the same prompt set:
+
+1. **Baseline:** F32 K/V cache (current master default)
+2. **Symmetric TQ:** Existing branch implementation at best-performing config (likely 4b/3b at d=128 per §4)
+3. **Asymmetric Q8-K + TQ-V:** The variant proposed in §12.4
+
+Metrics per config:
+- Generation quality: multi-step match % against F32 baseline (same method as existing `test_turboquant_gen.c`)
+- KV cache memory: MB per layer at fixed seq_len (128, 512, 2048)
+- Forward pass latency: cycles per token
+- Attention correlation: softmax output correlation vs F32 (same as existing attention correlation test)
+
+**Decision criteria:**
+- If asymmetric beats symmetric on quality at the same average bitwidth → use asymmetric, retire symmetric
+- If asymmetric recovers d=64 quality → re-evaluate TurboQuant for IDLE tier (1B)
+- If both fail at d=64 and tie at d=128 → use whichever is simpler (symmetric)
+
+### 12.6 References to Verify
+
+Before implementing, confirm the K-outlier claim against primary sources:
+- **KIVI: A Tuning-Free Asymmetric 2bit Quantization for KV Cache** (Liu et al., 2024) — the canonical asymmetric K/V paper
+- **KVQuant: Towards 10 Million Context Length LLM Inference with KV Cache Quantization** (Hooper et al., 2024) — independent confirmation of K being harder than V
+- **SmoothQuant** (Xiao et al., 2022) — original documentation of K outlier channels in transformer attention
+- **LLM.int8()** (Dettmers et al., 2022) — outlier channel treatment in weight quantization, related mechanism
+
+If these papers confirm the claim, implement; if they don't, reconsider.
+
+### 12.7 Relationship to Phase 3c Bench-Off
+
+The Phase 3c model bench-off (`phase3/docs/MODEL_BENCH_OFF_2026-04-07.md` on master) is picking models for the dynamic scaling state machine. TurboQuant is a KV-compression technique that operates **per model** — whichever model wins the ACTIVE slot will have the TurboQuant variants benched against its KV cache.
+
+Asymmetric K/V belongs in that bench-off as a **third configuration** alongside F32 and symmetric TQ. It does not change model selection, but it may change the memory/quality tradeoff curve for the chosen model.
+
+---
+
 *Branch: experiment/turboquant-benchmark | 31 commits | ~10K lines | April 2026*
+*Section 12 added April 7, 2026 — asymmetric K/V hypothesis from Phase 3c planning discussion*
