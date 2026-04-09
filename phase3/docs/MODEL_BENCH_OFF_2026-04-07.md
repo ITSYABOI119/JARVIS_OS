@@ -288,6 +288,67 @@ If any of the above is not true, the bench-off does not include Gemma 4 in the c
 
 ---
 
+## Section 7b — Qwen3.5: Deferred Contender (SSM/DeltaNet — Larger Scope Than Gemma 4)
+
+**Added:** April 9, 2026
+**Status:** Fundamentally incompatible with current JARVIS engine. Requires a new SSM/linear-attention kernel — not an adapter, a new forward pass architecture. Tracked alongside Gemma 4 (§7) as a future workstream, but with significantly higher scope.
+
+### 7b.1 What It Is
+
+Qwen3.5 (released 2026) is a **Gated DeltaNet hybrid** — a Mamba2-derived architecture where 3 out of every 4 layers use **DeltaNet linear attention** (an SSM variant), not standard QKV self-attention. Only 1 in 4 layers does real transformer attention. Available in 0.8B / 2B / 4B / 9B / MoE sizes.
+
+This is NOT a transformer with extra features (like Gemma 4). It's a fundamentally different compute model for 75% of its layers.
+
+### 7b.2 Why It's Incompatible
+
+JARVIS's entire forward pass (`llama_forward.c`, `llama_quant.c::qmodel_forward()`) assumes every layer is:
+1. RMSNorm → QKV projection → RoPE → GQA attention → output projection → residual
+2. RMSNorm → SwiGLU FFN → residual
+
+Qwen3.5's DeltaNet layers replace step 1 with:
+1. Linear recurrence with gated delta rule — no QKV, no RoPE, no softmax attention, no KV cache for that layer
+
+This means:
+- **No KV cache for 75% of layers** — DeltaNet uses a recurrent state, not a position-indexed cache
+- **New ops needed:** delta rule gate, linear recurrence scan, state compression
+- **TurboQuant irrelevant for DeltaNet layers** — TQ compresses KV cache, but DeltaNet has none
+- **Mixed forward pass:** every 4th layer is standard attention, the other 3 are DeltaNet. The loop needs per-layer dispatch.
+
+### 7b.3 Engineering Scope Estimate
+
+| Feature | Est LOC | Notes |
+|---------|---------|-------|
+| DeltaNet linear attention kernel (gate + recurrence + state) | ~400-600 | Core SSM math — no precedent in JARVIS codebase |
+| Per-layer type dispatch (attention vs DeltaNet) | ~100 | Config-driven `layer_type[]` array |
+| DeltaNet state management (replaces KV cache for those layers) | ~200 | New state struct, alloc/free |
+| GGUF metadata + tensor loading for DeltaNet weights | ~150 | New tensor names, new config keys |
+| Mixed KV cache (only attention layers have KV) | ~100 | Sparse KV cache allocation |
+| Tests | ~400 | DeltaNet unit tests, mixed forward pass, generation quality |
+| Integration + debugging | ~300 | First-run debugging on a novel architecture |
+| **Total** | **~1700-2000+ LOC** | **~2x Gemma 4 scope** |
+
+**Confidence: LOW.** I have not read a DeltaNet reference implementation. The LOC estimate is a rough sizing based on the conceptual complexity — the actual implementation could be significantly larger if the gated delta rule has edge cases.
+
+### 7b.4 Comparison to Other Deferred Contenders
+
+| Contender | Scope | What it adds | Priority |
+|-----------|-------|-------------|----------|
+| **Qwen3** (§9.1) | ~150-220 LOC | Decoupled head_dim + Q/K norm + `qwen3.*` keys | Medium — unlocks Qwen3 4B + 8B |
+| **Gemma 4** (§7) | ~900-1000 LOC | PLE + shared KV + dual RoPE + sliding window | Medium — unlocks Gemma 4 E2B/E4B |
+| **Qwen3.5** (this section) | ~1700-2000+ LOC | SSM/DeltaNet hybrid forward pass | Low — novel architecture, highest risk |
+
+### 7b.5 When to Revisit
+
+Revisit Qwen3.5 when:
+1. JARVIS has shipped v0.3.0-beta with the Llama 3.x trio
+2. The Qwen3 adapter (§9.1) is done and merged — proving the `general.architecture` dispatch framework works
+3. A DeltaNet/Mamba2 reference implementation exists in C (not just Python) — ideally in llama.cpp
+4. Qwen3.5 benchmarks show clear quality wins over Llama 3.x at the same size tier
+
+Until then: tracked, not forgotten, not blocking.
+
+---
+
 ## Section 8 — Compatibility Verification (Phase 1 picks vs JARVIS engine, primary-source)
 
 **Purpose:** Phase 1 (§3) picked Qwen3 4B Instruct (2507) for ACTIVE and Llama 3.1 8B Instruct for CRITICAL based on benchmark/architecture summaries. Section 8 verifies those claims **against actual primary sources** (`config.json` files and bytes-from-the-GGUF metadata + tensor info), not against secondary blog posts. The Phase 1 doc was treated as a hypothesis, not a fact.
