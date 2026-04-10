@@ -33,6 +33,16 @@ typedef struct __attribute__((packed)) {
 } q4_k_block_t;
 _Static_assert(sizeof(q4_k_block_t) == 144, "Q4_K block must be 144 bytes");
 
+/* Q5_K: 256 values per block, 176 bytes */
+typedef struct __attribute__((packed)) {
+    uint16_t d;          /* super-block scale (f16) */
+    uint16_t dmin;       /* super-block minimum (f16) */
+    uint8_t  scales[12]; /* scales and mins for 8 sub-blocks (packed 6-bit, same as Q4_K) */
+    uint8_t  qh[32];    /* high bits: 1 bit per value (256 bits = 32 bytes) */
+    uint8_t  qs[128];   /* low 4-bit quantized values (256 values, 2 per byte) */
+} q5_k_block_t;
+_Static_assert(sizeof(q5_k_block_t) == 176, "Q5_K block must be 176 bytes");
+
 /* Q6_K: 256 values per block, 210 bytes */
 typedef struct __attribute__((packed)) {
     uint8_t  ql[128];    /* lower 4 bits of quantized values */

@@ -125,6 +125,59 @@ static void dequant_q4_k(const void *src, float *dst, int n_blocks)
     }
 }
 
+/* ---- Q5_K dequantization (256 values per block, 176 bytes) ----
+ *
+ * Same scale/min packing as Q4_K, but values are 5-bit (not 4-bit).
+ * Low 4 bits from qs[] (nibbles), high 1 bit from qh[] (bit mask).
+ * Value range: 0-31 (vs 0-15 for Q4_K).
+ *
+ * qh layout: 32 bytes = 256 bits. For each group of 64 values,
+ * 2 bits of qh are used per byte (shifted by u1/u2 which advance <<2).
+ * Group j (0-3): u1=1<<(2j), u2=1<<(2j+1) select the high bit.
+ */
+static void dequant_q5_k(const void *src, float *dst, int n_blocks)
+{
+    const q5_k_block_t *blocks = (const q5_k_block_t *)src;
+    for (int b = 0; b < n_blocks; b++) {
+        const q5_k_block_t *blk = &blocks[b];
+        float d    = f16_to_f32(blk->d);
+        float dmin = f16_to_f32(blk->dmin);
+        const uint8_t *q  = blk->qs;
+        const uint8_t *qh = blk->qh;
+
+        /* Unpack 6-bit scales and mins from 12 packed bytes (same as Q4_K) */
+        uint8_t sc[8], mn[8];
+        for (int i = 0; i < 4; i++) {
+            sc[i]     = blk->scales[i] & 63;
+            sc[i + 4] = (blk->scales[i + 8] & 0xF) | ((blk->scales[i] >> 6) << 4);
+            mn[i]     = blk->scales[i + 4] & 63;
+            mn[i + 4] = (blk->scales[i + 8] >> 4) | ((blk->scales[i + 4] >> 6) << 4);
+        }
+
+        float *y = dst + b * 256;
+
+        /* 4 groups of 64 values, each split into two sub-blocks of 32 */
+        uint8_t u1 = 1, u2 = 2;
+        for (int j = 0; j < 4; j++) {
+            float d1 = d * sc[2 * j];
+            float d2 = d * sc[2 * j + 1];
+            float m1 = dmin * mn[2 * j];
+            float m2 = dmin * mn[2 * j + 1];
+            for (int l = 0; l < 32; l++) {
+                uint8_t lo1 = q[32 * j + l] & 0xF;
+                uint8_t hi1 = (qh[l] & u1) ? 16 : 0;
+                y[64 * j + l]      = d1 * (lo1 + hi1) - m1;
+
+                uint8_t lo2 = q[32 * j + l] >> 4;
+                uint8_t hi2 = (qh[l] & u2) ? 16 : 0;
+                y[64 * j + l + 32] = d2 * (lo2 + hi2) - m2;
+            }
+            u1 <<= 2;
+            u2 <<= 2;
+        }
+    }
+}
+
 /* ---- Q6_K dequantization (256 values per block, 210 bytes) ----
  *
  * Matches ggml's dequantize_row_q6_K exactly. The ql/qh/scales layout
@@ -177,6 +230,7 @@ size_t dequant_type_block_bytes(ggml_type_t type)
     case GGML_TYPE_Q4_0: return sizeof(q4_0_block_t);  /* 18 */
     case GGML_TYPE_Q8_0: return sizeof(q8_0_block_t);  /* 34 */
     case GGML_TYPE_Q4_K: return sizeof(q4_k_block_t);  /* 144 */
+    case GGML_TYPE_Q5_K: return sizeof(q5_k_block_t);  /* 176 */
     case GGML_TYPE_Q6_K: return sizeof(q6_k_block_t);  /* 210 */
     case GGML_TYPE_F16:  return 2;
     case GGML_TYPE_F32:  return 4;
@@ -190,6 +244,7 @@ int dequant_type_block_size(ggml_type_t type)
     case GGML_TYPE_Q4_0: return 32;
     case GGML_TYPE_Q8_0: return 32;
     case GGML_TYPE_Q4_K: return 256;
+    case GGML_TYPE_Q5_K: return 256;
     case GGML_TYPE_Q6_K: return 256;
     case GGML_TYPE_F16:  return 1;
     case GGML_TYPE_F32:  return 1;
@@ -211,6 +266,7 @@ const char *dequant_type_name(ggml_type_t type)
     case GGML_TYPE_Q4_0: return "Q4_0";
     case GGML_TYPE_Q8_0: return "Q8_0";
     case GGML_TYPE_Q4_K: return "Q4_K";
+    case GGML_TYPE_Q5_K: return "Q5_K";
     case GGML_TYPE_Q6_K: return "Q6_K";
     case GGML_TYPE_F16:  return "F16";
     case GGML_TYPE_F32:  return "F32";
@@ -241,6 +297,9 @@ int dequant_row(const void *src, float *dst, int n_values, ggml_type_t type)
         return 0;
     case GGML_TYPE_Q4_K:
         dequant_q4_k(src, dst, n_blocks);
+        return 0;
+    case GGML_TYPE_Q5_K:
+        dequant_q5_k(src, dst, n_blocks);
         return 0;
     case GGML_TYPE_Q6_K:
         dequant_q6_k(src, dst, n_blocks);

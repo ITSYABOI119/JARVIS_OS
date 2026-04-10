@@ -863,7 +863,10 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
         int l_ffn_dim = (c->layer_ffn_dim) ? c->layer_ffn_dim[L] : hidden_dim;
         qmatmul_vec(&layer->w_gate, state->xb, state->hb,  l_ffn_dim, dim);
         qmatmul_vec(&layer->w_up,   state->xb, state->hb2, l_ffn_dim, dim);
-        tensor_silu(state->hb, state->hb, l_ffn_dim);
+        if (c->use_gelu)
+            tensor_gelu(state->hb, state->hb, l_ffn_dim);  /* GeGLU (Gemma) */
+        else
+            tensor_silu(state->hb, state->hb, l_ffn_dim);  /* SwiGLU (Llama) */
         tensor_mul(state->hb, state->hb2, state->hb, l_ffn_dim);
 
         /* n. Down projection -> xb (quantized matmul) */

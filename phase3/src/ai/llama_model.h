@@ -30,6 +30,7 @@ typedef struct {
 
     /* --- Gemma 4 extensions (all default to 0/false/NULL for Llama models) --- */
     bool  embed_scale;        /* true = multiply embedding by sqrt(dim) (all Gemma variants) */
+    bool  use_gelu;           /* true = GeGLU activation (Gemma), false = SwiGLU (Llama) */
     float rms_norm_eps;       /* 0.0 = use default 1e-5 */
     float logit_softcap;      /* 0.0 = no softcapping */
     float rope_theta_swa;     /* 0.0 = no SWA layers */
