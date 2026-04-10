@@ -44,14 +44,14 @@
  * one at a time to find which feature breaks generation.
  * ============================================================ */
 /* === DEBUGGING: Set to 1 to disable, 0 to enable ===
- * Start ALL=1 (vanilla path). If output improves, enable one at a time.
- * Current: ALL DISABLED for first bare-metal test */
-#define G4_DISABLE_PLE          1  /* skip PLE residual add */
-#define G4_DISABLE_SANDWICH     1  /* skip post_attn_norm, post_ffw_norm */
-#define G4_DISABLE_SCALE        1  /* skip layer_output_scale */
-#define G4_DISABLE_QK_NORM      1  /* skip per-head Q/K RMSNorm */
-#define G4_DISABLE_DUAL_ROPE    1  /* use single rope_theta for all layers */
-#define G4_DISABLE_SOFTCAP      1  /* skip logit softcapping */
+ * All features RE-ENABLED after finding root cause: missing embed_scale.
+ * Keep flags for future debugging if needed. */
+#define G4_DISABLE_PLE          0  /* skip PLE residual add */
+#define G4_DISABLE_SANDWICH     0  /* skip post_attn_norm, post_ffw_norm */
+#define G4_DISABLE_SCALE        0  /* skip layer_output_scale */
+#define G4_DISABLE_QK_NORM      0  /* skip per-head Q/K RMSNorm */
+#define G4_DISABLE_DUAL_ROPE    0  /* use single rope_theta for all layers */
+#define G4_DISABLE_SOFTCAP      0  /* skip logit softcapping */
 
 /* ============================================================
  * Internal helpers
@@ -516,6 +516,13 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
 
     /* 1. EMBEDDING: dequantize one row of token_embed into x */
     qembed_lookup(&qm->token_embed, token, state->x, dim);
+
+    /* Gemma embedding scaling: multiply by sqrt(dim) after lookup */
+    if (c->embed_scale) {
+        float scale = sqrtf((float)dim);
+        for (int i = 0; i < dim; i++)
+            state->x[i] *= scale;
+    }
 
     /* PLE: compute per-layer embedding (once per token, reused by all layers)
      * Stack arrays sized for max ple_dim=256 and max dim=4096. */
