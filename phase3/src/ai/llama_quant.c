@@ -244,6 +244,35 @@ int qmodel_load(qmodel_t *qm, const gguf_ctx_t *ctx, const void *gguf_base)
         }
     }
 
+    /* PLE global tensors (optional — Gemma 4 only, skip if not present) */
+    if (c->ple_dim > 0) {
+        const gguf_tensor_info_t *t;
+
+        t = gguf_find_tensor(ctx, "per_layer_token_embd.weight");
+        if (t) {
+            qm->ple_embed.data       = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
+            qm->ple_embed.type       = t->type;
+            qm->ple_embed.n_elements = t->n_elements;
+            qm->ple_embed.n_bytes    = t->n_bytes;
+        }
+
+        t = gguf_find_tensor(ctx, "per_layer_model_proj.weight");
+        if (t) {
+            qm->ple_proj.data       = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
+            qm->ple_proj.type       = t->type;
+            qm->ple_proj.n_elements = t->n_elements;
+            qm->ple_proj.n_bytes    = t->n_bytes;
+        }
+
+        t = gguf_find_tensor(ctx, "per_layer_proj_norm.weight");
+        if (t) {
+            qm->ple_norm.data       = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
+            qm->ple_norm.type       = t->type;
+            qm->ple_norm.n_elements = t->n_elements;
+            qm->ple_norm.n_bytes    = t->n_bytes;
+        }
+    }
+
     /* Resolve per-layer tensors */
     char name[128];
     for (int i = 0; i < c->n_layers; i++) {
@@ -318,6 +347,42 @@ int qmodel_load(qmodel_t *qm, const gguf_ctx_t *ctx, const void *gguf_base)
                 L->layer_output_scale.n_bytes    = t->n_bytes;
             }
         }
+
+        /* PLE per-layer tensors (optional — Gemma 4) */
+        if (c->ple_dim > 0) {
+            snprintf(name, sizeof(name), "blk.%d.inp_gate.weight", i);
+            {
+                const gguf_tensor_info_t *t = gguf_find_tensor(ctx, name);
+                if (t) {
+                    L->ple_gate.data       = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
+                    L->ple_gate.type       = t->type;
+                    L->ple_gate.n_elements = t->n_elements;
+                    L->ple_gate.n_bytes    = t->n_bytes;
+                }
+            }
+
+            snprintf(name, sizeof(name), "blk.%d.proj.weight", i);
+            {
+                const gguf_tensor_info_t *t = gguf_find_tensor(ctx, name);
+                if (t) {
+                    L->ple_proj.data       = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
+                    L->ple_proj.type       = t->type;
+                    L->ple_proj.n_elements = t->n_elements;
+                    L->ple_proj.n_bytes    = t->n_bytes;
+                }
+            }
+
+            snprintf(name, sizeof(name), "blk.%d.post_norm.weight", i);
+            {
+                const gguf_tensor_info_t *t = gguf_find_tensor(ctx, name);
+                if (t) {
+                    L->post_norm.data       = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
+                    L->post_norm.type       = t->type;
+                    L->post_norm.n_elements = t->n_elements;
+                    L->post_norm.n_bytes    = t->n_bytes;
+                }
+            }
+        }
     }
 
     qm->loaded = true;
@@ -365,9 +430,61 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
     /* 1. EMBEDDING: dequantize one row of token_embed into x */
     qembed_lookup(&qm->token_embed, token, state->x, dim);
 
+    /* PLE: compute per-layer embedding (once per token, reused by all layers)
+     * Stack arrays sized for max ple_dim=256 and max dim=4096. */
+    float ple_normed[256]; /* ple_dim (max 256 for Gemma 4 E2B) */
+    int has_ple = (c->ple_dim > 0 && qm->ple_embed.data != NULL);
+    if (has_ple) {
+        /* Lookup PLE embedding for this token */
+        float ple_raw[256];
+        qembed_lookup(&qm->ple_embed, token, ple_raw, c->ple_dim);
+
+        /* RMSNorm the PLE embedding */
+        float norm_eps = c->rms_norm_eps > 0.0f ? c->rms_norm_eps : RMS_EPS;
+        if (qm->ple_norm.data) {
+            if (qm->ple_norm.type == GGML_TYPE_F32) {
+                tensor_rms_norm(ple_raw, (const float *)qm->ple_norm.data,
+                                ple_normed, c->ple_dim, norm_eps);
+            } else {
+                float norm_w[256];
+                dequant_row(qm->ple_norm.data, norm_w, c->ple_dim,
+                            (ggml_type_t)qm->ple_norm.type);
+                tensor_rms_norm(ple_raw, norm_w, ple_normed, c->ple_dim, norm_eps);
+            }
+        } else {
+            memcpy(ple_normed, ple_raw, (size_t)c->ple_dim * sizeof(float));
+        }
+    }
+
     /* 2. TRANSFORMER LAYERS */
     for (int L = 0; L < c->n_layers; L++) {
         const qlayer_t *layer = &qm->layers[L];
+
+        /* PLE: gated residual add — x += GELU(gate) * proj(ple_normed)
+         * Applied at start of each layer, before attention. */
+        if (has_ple && layer->ple_proj.data && layer->ple_gate.data) {
+            /* Project PLE from ple_dim to dim: ple_out = proj @ ple_normed */
+            float ple_out[4096]; /* dim (max 4096) */
+            qmatmul_vec(&layer->ple_proj, ple_normed, ple_out, dim, c->ple_dim);
+
+            /* Dequant gate weights */
+            float gate[4096]; /* dim (max 4096) */
+            if (layer->ple_gate.type == GGML_TYPE_F32) {
+                memcpy(gate, layer->ple_gate.data, (size_t)dim * sizeof(float));
+            } else {
+                dequant_row(layer->ple_gate.data, gate, dim,
+                            (ggml_type_t)layer->ple_gate.type);
+            }
+
+            /* Apply GELU to gate, multiply with ple_out, add to x */
+            for (int d = 0; d < dim; d++) {
+                float g = gate[d];
+                /* GELU: x * 0.5 * (1 + tanh(sqrt(2/pi) * (x + 0.044715*x^3))) */
+                float g3 = g * g * g;
+                g = 0.5f * g * (1.0f + tanhf(0.7978845608f * (g + 0.044715f * g3)));
+                state->x[d] += g * ple_out[d];
+            }
+        }
 
         /* --- Attention --- */
 
