@@ -889,17 +889,20 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
         /* o. Residual connection */
         residual_add(state->x, state->xb, dim);
 
-        /* Layer output scaling (Gemma 4) */
+        /* Layer output scaling (Gemma 4) — scalar broadcast.
+         * layer_output_scale is a single float {1}, NOT a [dim] vector.
+         * Multiply all elements of x by this one value. */
         if (!G4_DISABLE_SCALE && layer->layer_output_scale.data) {
+            float s;
             if (layer->layer_output_scale.type == GGML_TYPE_F32) {
-                const float *scale = (const float *)layer->layer_output_scale.data;
-                tensor_mul(state->x, scale, state->x, dim);
+                s = *(const float *)layer->layer_output_scale.data;
             } else {
-                float scale_buf[4096];
-                dequant_row(layer->layer_output_scale.data, scale_buf, dim,
+                float tmp;
+                dequant_row(layer->layer_output_scale.data, &tmp, 1,
                             (ggml_type_t)layer->layer_output_scale.type);
-                tensor_mul(state->x, scale_buf, state->x, dim);
+                s = tmp;
             }
+            tensor_scale(state->x, s, state->x, dim);
         }
     }
 
