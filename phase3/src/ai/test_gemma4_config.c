@@ -217,7 +217,7 @@ TEST(test_arch_dispatch_gemma4)
     ASSERT(config.n_heads == 8, "n_heads should be 8");
     ASSERT(config.n_kv_heads == 1, "n_kv_heads should be 1");
     ASSERT(config.head_dim == 512, "head_dim should be 512 (explicit, not 1536/8)");
-    ASSERT(config.hidden_dim == 0, "hidden_dim should be 0 (array, Task 2)");
+    ASSERT(config.hidden_dim == 12288, "hidden_dim should be 12288 (set by per-layer FFN)");
     ASSERT(config.vocab_size == 262144, "vocab_size should be 262144 (from tensor)");
     ASSERT(fabsf(config.rope_theta - 1000000.0f) < 1.0f, "rope_theta should be 1000000");
 
@@ -230,10 +230,13 @@ TEST(test_arch_dispatch_gemma4)
     ASSERT(config.head_dim_swa == 256, "head_dim_swa should be 256");
     ASSERT(config.shared_kv_layers == 20, "shared_kv_layers should be 20");
 
-    /* Per-layer arrays should be NULL (not loaded in this task) */
-    ASSERT(config.layer_ffn_dim == NULL, "layer_ffn_dim should be NULL");
-    ASSERT(config.layer_is_swa == NULL, "layer_is_swa should be NULL");
-    ASSERT(config.kv_share_map == NULL, "kv_share_map should be NULL");
+    /* Per-layer arrays should be populated for Gemma 4 */
+    ASSERT(config.layer_ffn_dim != NULL, "layer_ffn_dim should be allocated");
+    ASSERT(config.layer_is_swa != NULL, "layer_is_swa should be allocated");
+    ASSERT(config.kv_share_map != NULL, "kv_share_map should be allocated");
+
+    /* hidden_dim should now be set to max FFN dim (12288) */
+    ASSERT(config.hidden_dim == 12288, "hidden_dim should be 12288 (max per-layer FFN)");
 
     llama_free_config(&config);
     gguf_close(&ctx);
@@ -498,6 +501,176 @@ TEST(test_max_seq_len_capping)
     builder_free(&b);
 }
 
+/* ---- Helper: build Gemma 4 GGUF and load config (reused by per-layer tests) ---- */
+
+static int build_gemma4_and_load(llama_config_t *config, gguf_ctx_t *ctx,
+                                  gguf_builder_t *b)
+{
+    builder_init(b);
+
+    uint64_t n_kv = 14;
+    uint64_t n_tensors = 1;
+
+    builder_header(b, n_tensors, n_kv);
+
+    builder_kv_string(b, "general.architecture", "gemma4");
+    builder_kv_u32(b, "gemma4.embedding_length", 1536);
+    builder_kv_u32(b, "gemma4.block_count", 35);
+    builder_kv_u32(b, "gemma4.attention.head_count", 8);
+    builder_kv_u32(b, "gemma4.attention.head_count_kv", 1);
+    builder_kv_u32(b, "gemma4.attention.key_length", 512);
+    builder_kv_f32(b, "gemma4.rope.freq_base", 1000000.0f);
+    builder_kv_f32(b, "gemma4.attention.layer_norm_rms_epsilon", 1e-6f);
+    builder_kv_f32(b, "gemma4.final_logit_softcapping", 30.0f);
+    builder_kv_u32(b, "gemma4.embedding_length_per_layer_input", 256);
+    builder_kv_u32(b, "gemma4.attention.sliding_window", 512);
+    builder_kv_f32(b, "gemma4.rope.freq_base_swa", 10000.0f);
+    builder_kv_u32(b, "gemma4.attention.key_length_swa", 256);
+    builder_kv_u32(b, "gemma4.attention.shared_kv_layers", 20);
+
+    builder_tensor_info(b, "token_embd.weight", 1536, 262144);
+
+    int err = gguf_open_memory(ctx, b->buf, b->len);
+    if (err != GGUF_OK) return -1;
+
+    err = llama_load_config(config, ctx);
+    return err;
+}
+
+/* ---- Test 8: per-layer SWA pattern ---- */
+TEST(test_per_layer_swa_pattern)
+{
+    gguf_builder_t b;
+    gguf_ctx_t ctx;
+    llama_config_t config;
+
+    int err = build_gemma4_and_load(&config, &ctx, &b);
+    ASSERT(err == 0, "llama_load_config should succeed for gemma4");
+    ASSERT(config.layer_is_swa != NULL, "layer_is_swa should be allocated");
+
+    /* Verify SWA pattern: layers 0-3 SWA, layer 4 global, 5-8 SWA, layer 9 global, etc. */
+    ASSERT(config.layer_is_swa[0] == true,  "layer 0 should be SWA");
+    ASSERT(config.layer_is_swa[1] == true,  "layer 1 should be SWA");
+    ASSERT(config.layer_is_swa[3] == true,  "layer 3 should be SWA");
+    ASSERT(config.layer_is_swa[4] == false, "layer 4 should be global");
+    ASSERT(config.layer_is_swa[9] == false, "layer 9 should be global");
+    ASSERT(config.layer_is_swa[14] == false, "layer 14 should be global");
+    ASSERT(config.layer_is_swa[19] == false, "layer 19 should be global");
+    ASSERT(config.layer_is_swa[24] == false, "layer 24 should be global");
+    ASSERT(config.layer_is_swa[29] == false, "layer 29 should be global");
+    ASSERT(config.layer_is_swa[34] == false, "layer 34 should be global");
+
+    /* Count: 28 SWA + 7 global = 35 */
+    int swa_count = 0;
+    for (int i = 0; i < 35; i++)
+        if (config.layer_is_swa[i]) swa_count++;
+    ASSERT(swa_count == 28, "should have 28 SWA layers");
+
+    llama_free_config(&config);
+    gguf_close(&ctx);
+    builder_free(&b);
+}
+
+/* ---- Test 9: KV share map ---- */
+TEST(test_kv_share_map)
+{
+    gguf_builder_t b;
+    gguf_ctx_t ctx;
+    llama_config_t config;
+
+    int err = build_gemma4_and_load(&config, &ctx, &b);
+    ASSERT(err == 0, "llama_load_config should succeed for gemma4");
+    ASSERT(config.kv_share_map != NULL, "kv_share_map should be allocated");
+
+    /* First 15 layers (n_layers - shared_kv_layers = 35-20 = 15) compute own KV */
+    for (int i = 0; i < 15; i++) {
+        ASSERT(config.kv_share_map[i] == -1, "layers 0-14 should compute own KV");
+    }
+
+    /* Layers 15-34 share from earlier layers */
+    for (int i = 15; i < 35; i++) {
+        ASSERT(config.kv_share_map[i] >= 0, "layers 15-34 should share KV");
+        ASSERT(config.kv_share_map[i] < 15, "shared layer index should be < n_unique");
+    }
+
+    /* Verify modular mapping: kv_share_map[i] = i % 15 */
+    ASSERT(config.kv_share_map[15] == 0, "layer 15 should share from layer 0");
+    ASSERT(config.kv_share_map[16] == 1, "layer 16 should share from layer 1");
+    ASSERT(config.kv_share_map[29] == 14, "layer 29 should share from layer 14");
+    ASSERT(config.kv_share_map[30] == 0, "layer 30 should share from layer 0");
+    ASSERT(config.kv_share_map[34] == 4, "layer 34 should share from layer 4");
+
+    llama_free_config(&config);
+    gguf_close(&ctx);
+    builder_free(&b);
+}
+
+/* ---- Test 10: per-layer FFN dim ---- */
+TEST(test_per_layer_ffn_dim)
+{
+    gguf_builder_t b;
+    gguf_ctx_t ctx;
+    llama_config_t config;
+
+    int err = build_gemma4_and_load(&config, &ctx, &b);
+    ASSERT(err == 0, "llama_load_config should succeed for gemma4");
+    ASSERT(config.layer_ffn_dim != NULL, "layer_ffn_dim should be allocated");
+
+    /* First 15 layers: smaller FFN (6144) */
+    ASSERT(config.layer_ffn_dim[0] == 6144, "layer 0 FFN should be 6144");
+    ASSERT(config.layer_ffn_dim[14] == 6144, "layer 14 FFN should be 6144");
+
+    /* Layers 15-34: larger FFN (12288) */
+    ASSERT(config.layer_ffn_dim[15] == 12288, "layer 15 FFN should be 12288");
+    ASSERT(config.layer_ffn_dim[34] == 12288, "layer 34 FFN should be 12288");
+
+    /* hidden_dim should be set to max (12288) for buffer allocation */
+    ASSERT(config.hidden_dim == 12288, "hidden_dim should be 12288 (max per-layer FFN)");
+
+    llama_free_config(&config);
+    gguf_close(&ctx);
+    builder_free(&b);
+}
+
+/* ---- Test 11: Llama model has no per-layer arrays ---- */
+TEST(test_llama_no_per_layer_arrays)
+{
+    gguf_builder_t b;
+    builder_init(&b);
+
+    uint64_t n_kv = 8;
+    builder_header(&b, 0, n_kv);
+
+    builder_kv_string(&b, "general.architecture", "llama");
+    builder_kv_u32(&b, "llama.embedding_length", 2048);
+    builder_kv_u32(&b, "llama.block_count", 16);
+    builder_kv_u32(&b, "llama.attention.head_count", 32);
+    builder_kv_u32(&b, "llama.attention.head_count_kv", 8);
+    builder_kv_u32(&b, "llama.feed_forward_length", 8192);
+    builder_kv_u32(&b, "llama.vocab_size", 128256);
+    builder_kv_f32(&b, "llama.rope.freq_base", 500000.0f);
+
+    gguf_ctx_t ctx;
+    int err = gguf_open_memory(&ctx, b.buf, b.len);
+    ASSERT(err == GGUF_OK, "gguf_open_memory should succeed");
+
+    llama_config_t config;
+    err = llama_load_config(&config, &ctx);
+    ASSERT(err == 0, "llama_load_config should succeed");
+
+    /* No SWA, no shared KV, no per-layer FFN for Llama */
+    ASSERT(config.layer_is_swa == NULL, "layer_is_swa should be NULL for llama");
+    ASSERT(config.kv_share_map == NULL, "kv_share_map should be NULL for llama");
+    ASSERT(config.layer_ffn_dim == NULL, "layer_ffn_dim should be NULL for llama");
+
+    /* hidden_dim should remain at its scalar value */
+    ASSERT(config.hidden_dim == 8192, "hidden_dim should be 8192 for llama");
+
+    llama_free_config(&config);
+    gguf_close(&ctx);
+    builder_free(&b);
+}
+
 /* ---- Main ---- */
 
 int main(void)
@@ -513,6 +686,10 @@ int main(void)
     prev_fail = fail_count; RUN(test_free_config_safety);
     prev_fail = fail_count; RUN(test_explicit_vs_derived_head_dim);
     prev_fail = fail_count; RUN(test_max_seq_len_capping);
+    prev_fail = fail_count; RUN(test_per_layer_swa_pattern);
+    prev_fail = fail_count; RUN(test_kv_share_map);
+    prev_fail = fail_count; RUN(test_per_layer_ffn_dim);
+    prev_fail = fail_count; RUN(test_llama_no_per_layer_arrays);
 
     printf("\n--- Results: %d PASS, %d FAIL ---\n", pass_count, fail_count);
     return fail_count > 0 ? 1 : 0;

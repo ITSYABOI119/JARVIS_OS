@@ -151,6 +151,60 @@ int llama_load_config(llama_config_t *config, const gguf_ctx_t *ctx)
     if (gguf_get_kv_u32(ctx, key, &u32_val))
         config->shared_kv_layers = (int)u32_val;
 
+    /* --- Build per-layer arrays --- */
+    int nl = config->n_layers;
+    /* nl range already validated above, but be safe */
+    if (nl <= 0 || nl > LLAMA_MAX_LAYERS) return -1;
+
+    /* SWA layer pattern: mark which layers use sliding-window vs global attention.
+     * TODO: Read actual pattern from gemma4.attention.sliding_window_pattern
+     *       GGUF array once the parser supports array element extraction.
+     * Default pattern: every 5th layer (index % 5 == 4) is global, rest are SWA.
+     * Gemma 4 E2B: layers 4,9,14,19,24,29,34 are global; 28 SWA + 7 global = 35. */
+    if (config->swa_window > 0) {
+        config->layer_is_swa = (bool *)calloc((size_t)nl, sizeof(bool));
+        if (!config->layer_is_swa) return -1;
+        for (int i = 0; i < nl; i++)
+            config->layer_is_swa[i] = ((i % 5) != 4);
+    }
+
+    /* KV share map: first n_unique layers compute own KV, rest share.
+     * TODO: Verify exact sharing pattern against llama.cpp (attention-type
+     *       matching may differ from simple modular index). */
+    if (config->shared_kv_layers > 0) {
+        config->kv_share_map = (int *)malloc((size_t)nl * sizeof(int));
+        if (!config->kv_share_map) return -1;
+        int n_unique = nl - config->shared_kv_layers;
+        if (n_unique <= 0) n_unique = 1; /* safety */
+        for (int i = 0; i < nl; i++) {
+            if (i < n_unique)
+                config->kv_share_map[i] = -1;   /* compute own KV */
+            else
+                config->kv_share_map[i] = i % n_unique; /* share from earlier layer */
+        }
+    }
+
+    /* Per-layer FFN dim: for models with variable FFN sizes per layer.
+     * TODO: Read actual values from gemma4.feed_forward_length GGUF array
+     *       once the parser supports array element extraction.
+     * Heuristic: first n_unique layers use smaller FFN (6144),
+     *            remaining layers use larger FFN (12288).
+     * Also set hidden_dim to the max for buffer allocation purposes. */
+    if (config->hidden_dim == 0 && config->shared_kv_layers > 0) {
+        config->layer_ffn_dim = (int *)malloc((size_t)nl * sizeof(int));
+        if (!config->layer_ffn_dim) return -1;
+        int n_unique = nl - config->shared_kv_layers;
+        if (n_unique <= 0) n_unique = 1;
+        for (int i = 0; i < nl; i++) {
+            if (i < n_unique)
+                config->layer_ffn_dim[i] = 6144;   /* smaller FFN for early layers */
+            else
+                config->layer_ffn_dim[i] = 12288;  /* larger FFN for later layers */
+        }
+        /* Set hidden_dim to max for buffer allocation */
+        config->hidden_dim = 12288;
+    }
+
     return 0;
 }
 
