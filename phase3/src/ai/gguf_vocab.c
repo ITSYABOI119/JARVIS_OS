@@ -15,7 +15,17 @@
 #include "gguf_vocab.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include <stdint.h>
+
+/* ---- FNV-1a hash (same as tokenizer.c) ---- */
+
+static uint64_t fnv1a_hash(const char *str)
+{
+    uint64_t h = 14695981039346656037ULL;
+    while (*str) { h ^= (uint8_t)*str++; h *= 1099511628211ULL; }
+    return h;
+}
 
 /* ---- Safe binary reader ---- */
 
@@ -149,10 +159,12 @@ int gguf_vocab_extract(const void *gguf_data, size_t data_len, gguf_vocab_t *voc
     char   **tokens_arr    = NULL;
     int32_t *token_types   = NULL;
     float   *real_scores   = NULL;
+    char   **merges_arr    = NULL;
     uint64_t tokens_count  = 0;
     uint64_t types_count   = 0;
     uint64_t scores_count  = 0;
-    int found_tokens = 0, found_types = 0, found_scores = 0;
+    uint64_t merges_count  = 0;
+    int found_tokens = 0, found_types = 0, found_scores = 0, found_merges = 0;
     (void)found_types;  /* set during KV walk but no longer used for scoring */
 
     for (uint64_t kv_i = 0; kv_i < n_kv; kv_i++) {
@@ -250,6 +262,28 @@ int gguf_vocab_extract(const void *gguf_data, size_t data_len, gguf_vocab_t *voc
             continue;
         }
 
+        if (vtype == GGUF_TYPE_ARRAY && strcmp(key, "tokenizer.ggml.merges") == 0) {
+            /* Read BPE merge rules — string array */
+            uint32_t elem_type;
+            if (buf_read_u32(&r, &elem_type)) goto fail;
+            if (buf_read_u64(&r, &merges_count)) goto fail;
+            if (elem_type != GGUF_TYPE_STRING) {
+                for (uint64_t i = 0; i < merges_count; i++)
+                    if (skip_value(&r, elem_type, 0)) goto fail;
+                continue;
+            }
+            if (merges_count > 2000000) goto fail;
+
+            merges_arr = (char **)calloc((size_t)merges_count, sizeof(char *));
+            if (!merges_arr) goto fail;
+            for (uint64_t i = 0; i < merges_count; i++) {
+                merges_arr[i] = buf_read_gguf_string_alloc(&r);
+                if (!merges_arr[i]) goto fail;
+            }
+            found_merges = 1;
+            continue;
+        }
+
         /* Skip value we don't care about */
         if (skip_value(&r, vtype, 0)) goto fail;
     }
@@ -262,17 +296,77 @@ int gguf_vocab_extract(const void *gguf_data, size_t data_len, gguf_vocab_t *voc
     vocab->tokens = tokens_arr;
     tokens_arr = NULL; /* transfer ownership */
 
-    /* Use real scores from GGUF if available (essential for SentencePiece/Gemma),
-     * fall back to index-based scores for backward compat (GPT-2 BPE / Llama). */
+    /* Assign scores. Priority: merges > GGUF scores > index fallback */
     vocab->scores = (float *)calloc((size_t)tokens_count, sizeof(float));
     if (!vocab->scores) goto fail;
 
-    if (found_scores && scores_count == tokens_count && real_scores) {
-        /* Real scores from tokenizer.ggml.scores — correct BPE merge priority */
+    if (found_merges && merges_arr && merges_count > 0) {
+        /* Merge-rank scoring: for each merge "A B", concatenate to "AB",
+         * look up in tokens, assign score = -(float)merge_index.
+         * Earlier merges get higher (less negative) scores = merged first. */
+        vocab->has_merges = 1;
+
+        /* Build temporary hash table for fast token→index lookup */
+        int ht_cap = 1;
+        while (ht_cap < (int)tokens_count * 2) ht_cap <<= 1;
+        int *ht = (int *)malloc(sizeof(int) * (size_t)ht_cap);
+        if (!ht) goto fail;
+        memset(ht, 0xFF, sizeof(int) * (size_t)ht_cap);  /* fill with -1 */
+        for (int i = 0; i < (int)tokens_count; i++) {
+            uint64_t h = fnv1a_hash(vocab->tokens[i]) % (uint64_t)ht_cap;
+            while (ht[h % (uint64_t)ht_cap] != -1)
+                h = (h + 1) % (uint64_t)ht_cap;
+            ht[h] = i;
+        }
+
+        /* Start with very low default score for all tokens */
+        for (uint64_t i = 0; i < tokens_count; i++)
+            vocab->scores[i] = -1e9f;
+
+        /* For each merge "A B", concat → "AB", look up, assign rank score */
+        char merge_buf[256];
+        int merges_matched = 0;
+        for (uint64_t mi = 0; mi < merges_count; mi++) {
+            const char *m = merges_arr[mi];
+            const char *sep = strchr(m, ' ');
+            if (!sep) continue;
+
+            size_t a_len = (size_t)(sep - m);
+            size_t b_len = strlen(sep + 1);
+            if (a_len + b_len >= sizeof(merge_buf)) continue;
+
+            memcpy(merge_buf, m, a_len);
+            memcpy(merge_buf + a_len, sep + 1, b_len);
+            merge_buf[a_len + b_len] = '\0';
+
+            /* Look up merged token in hash table */
+            uint64_t h = fnv1a_hash(merge_buf) % (uint64_t)ht_cap;
+            int probes = ht_cap;
+            while (ht[h] != -1 && probes-- > 0) {
+                if (strcmp(vocab->tokens[ht[h]], merge_buf) == 0) {
+                    vocab->scores[ht[h]] = -(float)mi;
+                    merges_matched++;
+                    break;
+                }
+                h = (h + 1) % (uint64_t)ht_cap;
+            }
+        }
+
+        free(ht);
+        printf("[vocab] merges: %llu total, %d matched to tokens\n",
+               (unsigned long long)merges_count, merges_matched);
+
+        /* Free merge strings */
+        for (uint64_t i = 0; i < merges_count; i++)
+            free(merges_arr[i]);
+        free(merges_arr);
+        merges_arr = NULL;
+
+    } else if (found_scores && scores_count == tokens_count && real_scores) {
+        /* Real scores from tokenizer.ggml.scores */
         memcpy(vocab->scores, real_scores, (size_t)tokens_count * sizeof(float));
     } else {
-        /* Fallback: use negative index as merge priority (lower index = higher priority).
-         * Works for GPT-2 BPE (Llama) where merge order matches token index order. */
+        /* Fallback: index-based (works for GPT-2 BPE / Llama) */
         for (uint64_t i = 0; i < tokens_count; i++)
             vocab->scores[i] = -(float)i;
     }
@@ -290,6 +384,11 @@ fail:
     }
     free(token_types);
     free(real_scores);
+    if (merges_arr) {
+        for (uint64_t i = 0; i < merges_count; i++)
+            free(merges_arr[i]);
+        free(merges_arr);
+    }
     if (vocab->tokens) {
         for (int i = 0; i < vocab->vocab_size; i++)
             free(vocab->tokens[i]);

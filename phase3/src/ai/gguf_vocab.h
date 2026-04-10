@@ -20,10 +20,11 @@
 /* Extracted vocabulary from GGUF metadata */
 typedef struct {
     char  **tokens;      /* Array of vocab_size token strings (malloc'd) */
-    float  *scores;      /* Array of vocab_size scores (malloc'd, derived from token_type) */
+    float  *scores;      /* Array of vocab_size scores (malloc'd) */
     int     vocab_size;
     int     bos_id;
     int     eos_id;
+    int     has_merges;  /* true if tokenizer.ggml.merges was found and used for scoring */
 } gguf_vocab_t;
 
 /**
