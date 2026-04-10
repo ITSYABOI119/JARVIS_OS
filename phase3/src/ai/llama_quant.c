@@ -43,16 +43,13 @@
  * Set to 1 to disable a feature. Start with all 1, then enable
  * one at a time to find which feature breaks generation.
  * ============================================================ */
-/* === DEBUGGING: Set to 1 to disable, 0 to enable ===
- * All features RE-ENABLED after finding root cause: missing embed_scale.
- * Keep flags for future debugging if needed. */
-/* ALL DISABLED again — testing embed_scale fix in vanilla path */
-#define G4_DISABLE_PLE          1  /* skip PLE residual add */
-#define G4_DISABLE_SANDWICH     1  /* skip post_attn_norm, post_ffw_norm */
-#define G4_DISABLE_SCALE        1  /* skip layer_output_scale */
-#define G4_DISABLE_QK_NORM      1  /* skip per-head Q/K RMSNorm */
-#define G4_DISABLE_DUAL_ROPE    1  /* use single rope_theta for all layers */
-#define G4_DISABLE_SOFTCAP      1  /* skip logit softcapping */
+/* All features ENABLED — config, dims, and tokenizer verified. */
+#define G4_DISABLE_PLE          0  /* skip PLE residual add */
+#define G4_DISABLE_SANDWICH     0  /* skip post_attn_norm, post_ffw_norm */
+#define G4_DISABLE_SCALE        0  /* skip layer_output_scale */
+#define G4_DISABLE_QK_NORM      0  /* skip per-head Q/K RMSNorm */
+#define G4_DISABLE_DUAL_ROPE    0  /* use single rope_theta for all layers */
+#define G4_DISABLE_SOFTCAP      0  /* skip logit softcapping */
 
 /* ============================================================
  * Internal helpers
