@@ -413,12 +413,16 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
     int dim        = c->dim;
     int n_heads    = c->n_heads;
     int n_kv_heads = c->n_kv_heads;
-    int head_dim   = c->head_dim;
     int hidden_dim = c->hidden_dim;
-    int kv_dim     = n_kv_heads * head_dim;
     int pos        = state->pos;
     int max_seq    = state->max_seq_len;
     int heads_per_kv = n_heads / n_kv_heads;
+
+    /* Pre-compute max dims for KV cache addressing.
+     * For Llama: head_dim_swa is 0, max_head_dim == head_dim (unchanged). */
+    int max_head_dim = c->head_dim;
+    if (c->head_dim_swa > max_head_dim) max_head_dim = c->head_dim_swa;
+    int max_kv_dim = n_kv_heads * max_head_dim;
 
     /* Bounds check token ID (critical on bare-metal seL4 — no memory protection) */
     if (token < 0 || token >= c->vocab_size) {
@@ -488,6 +492,14 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
 
         /* --- Attention --- */
 
+        /* Per-layer attention dimensions:
+         * SWA layers use head_dim_swa; global layers use head_dim.
+         * For Llama: layer_is_swa is NULL, is_swa is always 0 -> all layers use head_dim. */
+        int is_swa = (c->layer_is_swa && c->layer_is_swa[L]);
+        int l_head_dim = (is_swa && c->head_dim_swa > 0) ? c->head_dim_swa : c->head_dim;
+        int l_kv_dim   = n_kv_heads * l_head_dim;
+        int l_q_dim    = n_heads * l_head_dim;
+
         /* a. RMS norm -> xb
          *    Norm weights are F32 in the GGUF — cast data pointer directly.
          *    For non-F32 norm weights (unlikely), dequant into xb2 as scratch. */
@@ -500,78 +512,91 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
             tensor_rms_norm(state->x, state->xb2, state->xb, dim, RMS_EPS);
         }
 
-        /* b-d. Q/K/V projections (quantized matrix-vector multiply) */
-        qmatmul_vec(&layer->wq, state->xb, state->q,  dim,    dim);
-        qmatmul_vec(&layer->wk, state->xb, state->k,  kv_dim, dim);
-        qmatmul_vec(&layer->wv, state->xb, state->v,  kv_dim, dim);
+        /* b-d. Q/K/V projections with PER-LAYER output dims.
+         *    Q: [l_q_dim x dim],  K/V: [l_kv_dim x dim]
+         *    For Llama: l_q_dim == dim, l_kv_dim == kv_dim (unchanged). */
+        qmatmul_vec(&layer->wq, state->xb, state->q,  l_q_dim,  dim);
+        qmatmul_vec(&layer->wk, state->xb, state->k,  l_kv_dim, dim);
+        qmatmul_vec(&layer->wv, state->xb, state->v,  l_kv_dim, dim);
 
-        /* e. RoPE on Q and K
-         * Use qm->rope_freqs if available (custom freqs for extended context) */
+        /* e. RoPE on Q and K — uses l_head_dim (256 for SWA, 512 for global).
+         * Use qm->rope_freqs if available (custom freqs for extended context).
+         * Task 6 will add dual theta (rope_theta_swa for SWA layers). */
         for (int h = 0; h < n_heads; h++) {
-            for (int i = 0; i < head_dim / 2; i++) {
-                float freq = 1.0f / powf(c->rope_theta, (float)(2 * i) / (float)head_dim);
+            for (int i = 0; i < l_head_dim / 2; i++) {
+                float freq = 1.0f / powf(c->rope_theta, (float)(2 * i) / (float)l_head_dim);
                 if (qm->rope_freqs) freq /= qm->rope_freqs[i];
                 float angle = (float)pos * freq;
                 float cos_a = cosf(angle);
                 float sin_a = sinf(angle);
-                int idx = h * head_dim + 2 * i;
+                int idx = h * l_head_dim + 2 * i;
                 float r0 = state->q[idx], r1 = state->q[idx + 1];
                 state->q[idx]     = r0 * cos_a - r1 * sin_a;
                 state->q[idx + 1] = r0 * sin_a + r1 * cos_a;
             }
         }
         for (int h = 0; h < n_kv_heads; h++) {
-            for (int i = 0; i < head_dim / 2; i++) {
-                float freq = 1.0f / powf(c->rope_theta, (float)(2 * i) / (float)head_dim);
+            for (int i = 0; i < l_head_dim / 2; i++) {
+                float freq = 1.0f / powf(c->rope_theta, (float)(2 * i) / (float)l_head_dim);
                 if (qm->rope_freqs) freq /= qm->rope_freqs[i];
                 float angle = (float)pos * freq;
                 float cos_a = cosf(angle);
                 float sin_a = sinf(angle);
-                int idx = h * head_dim + 2 * i;
+                int idx = h * l_head_dim + 2 * i;
                 float r0 = state->k[idx], r1 = state->k[idx + 1];
                 state->k[idx]     = r0 * cos_a - r1 * sin_a;
                 state->k[idx + 1] = r0 * sin_a + r1 * cos_a;
             }
         }
 
-        /* f. Store K,V into cache at current position */
-        int layer_offset = L * max_seq * kv_dim;
+        /* f. Store K,V into cache at current position.
+         *    Cache stride uses max_kv_dim for uniform addressing.
+         *    SWA layers (smaller l_kv_dim) only fill a prefix of each slot. */
+        int layer_offset = L * max_seq * max_kv_dim;
         float *key_layer = state->key_cache + layer_offset;
         float *val_layer = state->value_cache + layer_offset;
-        memcpy(key_layer + pos * kv_dim, state->k, (size_t)kv_dim * sizeof(float));
-        memcpy(val_layer + pos * kv_dim, state->v, (size_t)kv_dim * sizeof(float));
+        memcpy(key_layer + pos * max_kv_dim, state->k, (size_t)l_kv_dim * sizeof(float));
+        memcpy(val_layer + pos * max_kv_dim, state->v, (size_t)l_kv_dim * sizeof(float));
 
-        /* g. Grouped Query Attention */
+        /* g. Grouped Query Attention with SWA masking.
+         *    SWA layers only attend to the last swa_window positions.
+         *    Global layers attend to all positions [0..pos] (att_start=0). */
+        int att_start = 0;
+        if (is_swa && c->swa_window > 0)
+            att_start = (pos >= c->swa_window) ? (pos - c->swa_window + 1) : 0;
+
         for (int h = 0; h < n_heads; h++) {
             int kv_h = h / heads_per_kv;
-            float *q_head = state->q + h * head_dim;
+            float *q_head = state->q + h * l_head_dim;
             float *att_h  = state->att + h * max_seq;
 
-            /* Score: Q . K^T / sqrt(head_dim) for positions 0..pos */
-            for (int t = 0; t <= pos; t++) {
-                float *k_t = key_layer + t * kv_dim + kv_h * head_dim;
+            /* Score: Q . K^T / sqrt(l_head_dim) for positions [att_start..pos] */
+            for (int t = att_start; t <= pos; t++) {
+                float *k_t = key_layer + t * max_kv_dim + kv_h * l_head_dim;
                 float score = 0.0f;
-                for (int d = 0; d < head_dim; d++)
+                for (int d = 0; d < l_head_dim; d++)
                     score += q_head[d] * k_t[d];
-                att_h[t] = score / sqrtf((float)head_dim);
+                att_h[t] = score / sqrtf((float)l_head_dim);
             }
 
-            /* Softmax over [0..pos] */
-            tensor_softmax(att_h, att_h, pos + 1);
+            /* Softmax over [att_start..pos] */
+            tensor_softmax(att_h + att_start, att_h + att_start, pos + 1 - att_start);
 
-            /* Weighted sum of V -> xb */
-            float *out_h = state->xb + h * head_dim;
-            memset(out_h, 0, (size_t)head_dim * sizeof(float));
-            for (int t = 0; t <= pos; t++) {
-                float *v_t = val_layer + t * kv_dim + kv_h * head_dim;
+            /* Weighted sum of V -> xb (using l_head_dim per head) */
+            float *out_h = state->xb + h * l_head_dim;
+            memset(out_h, 0, (size_t)l_head_dim * sizeof(float));
+            for (int t = att_start; t <= pos; t++) {
+                float *v_t = val_layer + t * max_kv_dim + kv_h * l_head_dim;
                 float w = att_h[t];
-                for (int d = 0; d < head_dim; d++)
+                for (int d = 0; d < l_head_dim; d++)
                     out_h[d] += w * v_t[d];
             }
         }
 
-        /* h. Output projection -> xb2 (quantized matmul) */
-        qmatmul_vec(&layer->wo, state->xb, state->xb2, dim, dim);
+        /* h. Output projection -> xb2 (quantized matmul)
+         *    Wo maps [n_heads * l_head_dim] -> [dim].
+         *    For Llama: n_heads * head_dim == dim, so this is [dim, dim] (unchanged). */
+        qmatmul_vec(&layer->wo, state->xb, state->xb2, dim, l_q_dim);
 
         /* Post-attention RMSNorm (Gemma 4 sandwich norm) */
         if (layer->post_attn_norm.data) {
@@ -602,14 +627,17 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
             tensor_rms_norm(state->x, state->xb2, state->xb, dim, RMS_EPS);
         }
 
-        /* k-m. SwiGLU: silu(gate(xb)) * up(xb) */
-        qmatmul_vec(&layer->w_gate, state->xb, state->hb,  hidden_dim, dim);
-        qmatmul_vec(&layer->w_up,   state->xb, state->hb2, hidden_dim, dim);
-        tensor_silu(state->hb, state->hb, hidden_dim);
-        tensor_mul(state->hb, state->hb2, state->hb, hidden_dim);
+        /* k-m. SwiGLU: silu(gate(xb)) * up(xb)
+         *    Per-layer FFN hidden dim for variable-FFN models (Gemma 4).
+         *    For Llama: layer_ffn_dim is NULL -> l_ffn_dim == hidden_dim (unchanged). */
+        int l_ffn_dim = (c->layer_ffn_dim) ? c->layer_ffn_dim[L] : hidden_dim;
+        qmatmul_vec(&layer->w_gate, state->xb, state->hb,  l_ffn_dim, dim);
+        qmatmul_vec(&layer->w_up,   state->xb, state->hb2, l_ffn_dim, dim);
+        tensor_silu(state->hb, state->hb, l_ffn_dim);
+        tensor_mul(state->hb, state->hb2, state->hb, l_ffn_dim);
 
         /* n. Down projection -> xb (quantized matmul) */
-        qmatmul_vec(&layer->w_down, state->hb, state->xb, dim, hidden_dim);
+        qmatmul_vec(&layer->w_down, state->hb, state->xb, dim, l_ffn_dim);
 
         /* Post-FFN RMSNorm (Gemma 4 sandwich norm) */
         if (layer->post_ffw_norm.data) {

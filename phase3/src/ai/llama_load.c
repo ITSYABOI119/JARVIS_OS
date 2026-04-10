@@ -559,24 +559,40 @@ int llama_alloc_state(llama_state_t *state, const llama_config_t *config)
     int vocab_size = config->vocab_size;
     int max_seq    = config->max_seq_len;
 
+    /* For Gemma 4: SWA and global layers have different head_dim.
+     * Allocate buffers using the MAX head_dim to fit either layer type.
+     * For Llama: head_dim_swa is 0, so max_head_dim == head_dim (no change). */
+    int max_head_dim = head_dim;
+    if (config->head_dim_swa > 0 && config->head_dim_swa > max_head_dim)
+        max_head_dim = config->head_dim_swa;
+
     state->max_seq_len = max_seq;
     state->pos = 0;
 
+    /* xb/xb2 must fit the largest attention output: n_heads * max_head_dim.
+     * For Gemma 4: 8*512=4096 > dim=1536, so xb must be larger than dim.
+     * For Llama: n_heads*head_dim == dim, so xb_size == dim (unchanged). */
+    int xb_size = dim;
+    if (n_heads * max_head_dim > xb_size)
+        xb_size = n_heads * max_head_dim;
+
     /* Activation buffers */
     state->x      = (float *)calloc((size_t)dim, sizeof(float));
-    state->xb     = (float *)calloc((size_t)dim, sizeof(float));
-    state->xb2    = (float *)calloc((size_t)dim, sizeof(float));
-    state->q      = (float *)calloc((size_t)n_heads * (size_t)head_dim, sizeof(float));
-    state->k      = (float *)calloc((size_t)n_kv_heads * (size_t)head_dim, sizeof(float));
-    state->v      = (float *)calloc((size_t)n_kv_heads * (size_t)head_dim, sizeof(float));
+    state->xb     = (float *)calloc((size_t)xb_size, sizeof(float));
+    state->xb2    = (float *)calloc((size_t)xb_size, sizeof(float));
+    state->q      = (float *)calloc((size_t)n_heads * (size_t)max_head_dim, sizeof(float));
+    state->k      = (float *)calloc((size_t)n_kv_heads * (size_t)max_head_dim, sizeof(float));
+    state->v      = (float *)calloc((size_t)n_kv_heads * (size_t)max_head_dim, sizeof(float));
     state->att    = (float *)calloc((size_t)n_heads * (size_t)max_seq, sizeof(float));
     state->hb     = (float *)calloc((size_t)hidden_dim, sizeof(float));
     state->hb2    = (float *)calloc((size_t)hidden_dim, sizeof(float));
     state->logits = (float *)calloc((size_t)vocab_size, sizeof(float));
 
-    /* KV cache: n_layers * max_seq_len * n_kv_heads * head_dim */
+    /* KV cache: use max kv_dim per layer for uniform cache stride.
+     * SWA layers (smaller kv_dim) only use a prefix of each slot. */
+    int max_kv_dim = n_kv_heads * max_head_dim;
     size_t kv_size = (size_t)config->n_layers * (size_t)max_seq *
-                     (size_t)n_kv_heads * (size_t)head_dim;
+                     (size_t)max_kv_dim;
     state->key_cache   = (float *)calloc(kv_size, sizeof(float));
     state->value_cache = (float *)calloc(kv_size, sizeof(float));
 

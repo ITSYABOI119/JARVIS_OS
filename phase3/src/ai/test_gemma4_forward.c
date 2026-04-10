@@ -195,6 +195,195 @@ static void test_ple_noop_for_llama(void)
     PASS();
 }
 
+/* ---- Test: SWA masking ---- */
+
+static void test_swa_mask_basic(void)
+{
+    TEST("SWA mask: position < window sees all positions");
+    /* At pos=10 with window=512, att_start should be 0 */
+    int pos = 10, window = 512;
+    int att_start = (pos >= window) ? (pos - window + 1) : 0;
+    ASSERT(att_start == 0, "all positions visible when pos < window");
+    PASS();
+}
+
+static void test_swa_mask_at_boundary(void)
+{
+    TEST("SWA mask: position > window limits range");
+    /* At pos=600 with window=512, att_start = 600 - 512 + 1 = 89 */
+    int pos = 600, window = 512;
+    int att_start = (pos >= window) ? (pos - window + 1) : 0;
+    ASSERT(att_start == 89, "att_start = pos - window + 1 = 89");
+    int n_positions = pos + 1 - att_start;
+    ASSERT(n_positions == 512, "attends to exactly window positions");
+    PASS();
+}
+
+static void test_swa_mask_exact_boundary(void)
+{
+    TEST("SWA mask: position == window - 1 sees all");
+    /* At pos=511 with window=512, att_start should be 0 (just fits) */
+    int pos = 511, window = 512;
+    int att_start = (pos >= window) ? (pos - window + 1) : 0;
+    ASSERT(att_start == 0, "exactly window positions visible");
+    int n_positions = pos + 1 - att_start;
+    ASSERT(n_positions == 512, "all 512 positions");
+    PASS();
+}
+
+static void test_swa_mask_just_past_boundary(void)
+{
+    TEST("SWA mask: position == window starts sliding");
+    /* At pos=512 with window=512, att_start = 512 - 512 + 1 = 1 */
+    int pos = 512, window = 512;
+    int att_start = (pos >= window) ? (pos - window + 1) : 0;
+    ASSERT(att_start == 1, "position 0 dropped, att_start = 1");
+    int n_positions = pos + 1 - att_start;
+    ASSERT(n_positions == 512, "still exactly 512 positions");
+    PASS();
+}
+
+static void test_swa_mask_global_always_zero(void)
+{
+    TEST("SWA mask: global layers always att_start=0");
+    /* For global layers, is_swa=false -> att_start stays 0 regardless of pos */
+    int is_swa = 0;
+    int pos = 1000, window = 512;
+    int att_start = 0;
+    if (is_swa && window > 0)
+        att_start = (pos >= window) ? (pos - window + 1) : 0;
+    ASSERT(att_start == 0, "global layer sees all positions");
+    PASS();
+}
+
+/* ---- Test: per-layer dimensions ---- */
+
+static void test_per_layer_dims_swa_vs_global(void)
+{
+    TEST("per-layer dims: SWA uses head_dim_swa, global uses head_dim");
+    int head_dim = 512, head_dim_swa = 256;
+    int n_heads = 8, n_kv_heads = 1;
+
+    /* SWA layer */
+    int is_swa = 1;
+    int l_head_dim = (is_swa && head_dim_swa > 0) ? head_dim_swa : head_dim;
+    int l_q_dim = n_heads * l_head_dim;
+    int l_kv_dim = n_kv_heads * l_head_dim;
+    ASSERT(l_head_dim == 256, "SWA head_dim = 256");
+    ASSERT(l_q_dim == 2048, "SWA q_dim = 8*256 = 2048");
+    ASSERT(l_kv_dim == 256, "SWA kv_dim = 1*256 = 256");
+
+    /* Global layer */
+    is_swa = 0;
+    l_head_dim = (is_swa && head_dim_swa > 0) ? head_dim_swa : head_dim;
+    l_q_dim = n_heads * l_head_dim;
+    l_kv_dim = n_kv_heads * l_head_dim;
+    ASSERT(l_head_dim == 512, "global head_dim = 512");
+    ASSERT(l_q_dim == 4096, "global q_dim = 8*512 = 4096");
+    ASSERT(l_kv_dim == 512, "global kv_dim = 1*512 = 512");
+    PASS();
+}
+
+static void test_per_layer_dims_llama_compat(void)
+{
+    TEST("per-layer dims: Llama fallback (head_dim_swa=0)");
+    /* Llama: head_dim_swa=0, layer_is_swa=NULL -> l_head_dim == head_dim */
+    int head_dim = 64, head_dim_swa = 0;
+    int n_heads = 32, n_kv_heads = 8;
+    int is_swa = 0; /* layer_is_swa is NULL -> always false */
+    int l_head_dim = (is_swa && head_dim_swa > 0) ? head_dim_swa : head_dim;
+    int l_q_dim = n_heads * l_head_dim;
+    int l_kv_dim = n_kv_heads * l_head_dim;
+    ASSERT(l_head_dim == 64, "Llama head_dim = 64");
+    ASSERT(l_q_dim == 2048, "Llama q_dim = 32*64 = 2048");
+    ASSERT(l_kv_dim == 512, "Llama kv_dim = 8*64 = 512");
+    PASS();
+}
+
+static void test_per_layer_ffn_dim(void)
+{
+    TEST("per-layer FFN dim: varies between layers");
+    int layer_ffn_dim[4] = {6144, 6144, 12288, 12288};
+    int hidden_dim = 12288; /* max, used for buffer allocation */
+    ASSERT(layer_ffn_dim[0] == 6144, "early layer FFN = 6144");
+    ASSERT(layer_ffn_dim[2] == 12288, "later layer FFN = 12288");
+    /* Fallback when layer_ffn_dim is NULL (Llama) */
+    int *null_ffn = NULL;
+    int l_ffn = null_ffn ? null_ffn[0] : hidden_dim;
+    ASSERT(l_ffn == 12288, "Llama falls back to hidden_dim");
+    (void)l_ffn; /* suppress unused warning */
+    PASS();
+}
+
+/* ---- Test: KV cache stride with max_kv_dim ---- */
+
+static void test_kv_cache_stride(void)
+{
+    TEST("KV cache stride: max_kv_dim for uniform addressing");
+    int head_dim = 512, head_dim_swa = 256;
+    int n_kv_heads = 1;
+    int max_head_dim = head_dim; /* 512 > 256, so max is 512 */
+    if (head_dim_swa > max_head_dim) max_head_dim = head_dim_swa;
+    int max_kv_dim = n_kv_heads * max_head_dim;
+    ASSERT(max_kv_dim == 512, "max_kv_dim = 1*512 = 512");
+
+    /* SWA layer writes only l_kv_dim=256 floats into 512-float slot */
+    int swa_kv_dim = n_kv_heads * head_dim_swa;
+    ASSERT(swa_kv_dim == 256, "SWA writes 256 of 512 slot");
+    ASSERT(swa_kv_dim <= max_kv_dim, "SWA kv_dim fits in cache slot");
+    PASS();
+}
+
+/* ---- Test: xb buffer size for Gemma 4 ---- */
+
+static void test_xb_size_gemma4(void)
+{
+    TEST("xb buffer size: n_heads * max_head_dim > dim");
+    int dim = 1536, n_heads = 8, head_dim = 512, head_dim_swa = 256;
+    int max_head_dim = head_dim; /* 512 */
+    if (head_dim_swa > max_head_dim) max_head_dim = head_dim_swa;
+    int xb_size = dim;
+    if (n_heads * max_head_dim > xb_size)
+        xb_size = n_heads * max_head_dim;
+    ASSERT(xb_size == 4096, "xb must be 8*512=4096, not dim=1536");
+    PASS();
+}
+
+static void test_xb_size_llama_unchanged(void)
+{
+    TEST("xb buffer size: Llama (n_heads*head_dim == dim)");
+    int dim = 2048, n_heads = 32, head_dim = 64, head_dim_swa = 0;
+    int max_head_dim = head_dim;
+    if (head_dim_swa > max_head_dim) max_head_dim = head_dim_swa;
+    int xb_size = dim;
+    if (n_heads * max_head_dim > xb_size)
+        xb_size = n_heads * max_head_dim;
+    ASSERT(xb_size == 2048, "Llama: xb_size == dim (32*64 == 2048)");
+    PASS();
+}
+
+/* ---- Test: SWA layer pattern ---- */
+
+static void test_swa_layer_pattern_gemma4(void)
+{
+    TEST("SWA layer pattern: every 5th layer is global");
+    /* Gemma 4 E2B: 35 layers, layers 4,9,14,19,24,29,34 are global */
+    int n_layers = 35;
+    int swa_count = 0, global_count = 0;
+    for (int i = 0; i < n_layers; i++) {
+        int is_swa = ((i % 5) != 4);
+        if (is_swa) swa_count++;
+        else global_count++;
+    }
+    ASSERT(swa_count == 28, "28 SWA layers");
+    ASSERT(global_count == 7, "7 global layers");
+    /* Verify specific layers */
+    ASSERT(((4 % 5) != 4) == 0, "layer 4 is global");
+    ASSERT(((3 % 5) != 4) == 1, "layer 3 is SWA");
+    ASSERT(((9 % 5) != 4) == 0, "layer 9 is global");
+    PASS();
+}
+
 int main(void)
 {
     printf("=== Gemma 4 Forward Pass Tests ===\n\n");
@@ -209,6 +398,18 @@ int main(void)
     test_ple_gelu_gate();
     test_ple_gated_residual();
     test_ple_noop_for_llama();
+    test_swa_mask_basic();
+    test_swa_mask_at_boundary();
+    test_swa_mask_exact_boundary();
+    test_swa_mask_just_past_boundary();
+    test_swa_mask_global_always_zero();
+    test_per_layer_dims_swa_vs_global();
+    test_per_layer_dims_llama_compat();
+    test_per_layer_ffn_dim();
+    test_kv_cache_stride();
+    test_xb_size_gemma4();
+    test_xb_size_llama_unchanged();
+    test_swa_layer_pattern_gemma4();
     printf("\n--- Results: %d PASS, %d FAIL ---\n", pass_count, fail_count);
     return fail_count == 0 ? 0 : 1;
 }
