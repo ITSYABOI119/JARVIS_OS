@@ -530,6 +530,34 @@ int qmodel_load(qmodel_t *qm, const gguf_ctx_t *ctx, const void *gguf_base)
         }
     }
 
+    /* Tensor type summary — detect any unsupported quant types */
+    printf("[qmodel] Tensor types (layer 0):\n");
+    {
+        qlayer_t *L0 = &qm->layers[0];
+        printf("  wq=%s wk=%s wv=%s wo=%s\n",
+               dequant_type_name((ggml_type_t)L0->wq.type),
+               dequant_type_name((ggml_type_t)L0->wk.type),
+               dequant_type_name((ggml_type_t)L0->wv.type),
+               dequant_type_name((ggml_type_t)L0->wo.type));
+        printf("  gate=%s up=%s down=%s norm=%s\n",
+               dequant_type_name((ggml_type_t)L0->w_gate.type),
+               dequant_type_name((ggml_type_t)L0->w_up.type),
+               dequant_type_name((ggml_type_t)L0->w_down.type),
+               dequant_type_name((ggml_type_t)L0->attn_norm.type));
+        if (L0->q_norm.data)
+            printf("  q_norm=%s k_norm=%s\n",
+                   dequant_type_name((ggml_type_t)L0->q_norm.type),
+                   dequant_type_name((ggml_type_t)L0->k_norm.type));
+        if (L0->post_attn_norm.data)
+            printf("  post_attn=%s post_ffw=%s scale=%s\n",
+                   dequant_type_name((ggml_type_t)L0->post_attn_norm.type),
+                   dequant_type_name((ggml_type_t)L0->post_ffw_norm.type),
+                   dequant_type_name((ggml_type_t)L0->layer_output_scale.type));
+    }
+    printf("  embed=%s output=%s\n",
+           dequant_type_name((ggml_type_t)qm->token_embed.type),
+           dequant_type_name((ggml_type_t)qm->output_weight.type));
+
     qm->loaded = true;
     return 0;
 
@@ -706,31 +734,50 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
             }
 
             /* e. RoPE on Q AND K — uses l_head_dim (256 for SWA, 512 for global).
-             * Dual theta: SWA layers use rope_theta_swa, global use rope_theta. */
-            for (int h = 0; h < n_heads; h++) {
-                for (int i = 0; i < l_head_dim / 2; i++) {
-                    float freq = 1.0f / powf(l_rope_theta, (float)(2 * i) / (float)l_head_dim);
-                    if (qm->rope_freqs && !is_swa) freq /= qm->rope_freqs[i];
-                    float angle = (float)pos * freq;
-                    float cos_a = cosf(angle);
-                    float sin_a = sinf(angle);
-                    int idx = h * l_head_dim + 2 * i;
-                    float r0 = state->q[idx], r1 = state->q[idx + 1];
-                    state->q[idx]     = r0 * cos_a - r1 * sin_a;
-                    state->q[idx + 1] = r0 * sin_a + r1 * cos_a;
+             * Dual theta: SWA layers use rope_theta_swa, global use rope_theta.
+             * NEOX (Gemma): pair d[i] with d[i + half] (split first/second half).
+             * Standard (Llama): pair d[2i] with d[2i+1] (interleaved). */
+            {
+                int half = l_head_dim / 2;
+                for (int h = 0; h < n_heads; h++) {
+                    for (int i = 0; i < half; i++) {
+                        float freq = 1.0f / powf(l_rope_theta, (float)(2 * i) / (float)l_head_dim);
+                        if (qm->rope_freqs && !is_swa) freq /= qm->rope_freqs[i];
+                        float angle = (float)pos * freq;
+                        float cos_a = cosf(angle);
+                        float sin_a = sinf(angle);
+                        int idx0, idx1;
+                        if (c->rope_neox) {
+                            idx0 = h * l_head_dim + i;          /* first half */
+                            idx1 = h * l_head_dim + i + half;   /* second half */
+                        } else {
+                            idx0 = h * l_head_dim + 2 * i;      /* interleaved */
+                            idx1 = h * l_head_dim + 2 * i + 1;
+                        }
+                        float r0 = state->q[idx0], r1 = state->q[idx1];
+                        state->q[idx0] = r0 * cos_a - r1 * sin_a;
+                        state->q[idx1] = r0 * sin_a + r1 * cos_a;
+                    }
                 }
-            }
-            for (int h = 0; h < n_kv_heads; h++) {
-                for (int i = 0; i < l_head_dim / 2; i++) {
-                    float freq = 1.0f / powf(l_rope_theta, (float)(2 * i) / (float)l_head_dim);
-                    if (qm->rope_freqs && !is_swa) freq /= qm->rope_freqs[i];
-                    float angle = (float)pos * freq;
-                    float cos_a = cosf(angle);
-                    float sin_a = sinf(angle);
-                    int idx = h * l_head_dim + 2 * i;
-                    float r0 = state->k[idx], r1 = state->k[idx + 1];
-                    state->k[idx]     = r0 * cos_a - r1 * sin_a;
-                    state->k[idx + 1] = r0 * sin_a + r1 * cos_a;
+                for (int h = 0; h < n_kv_heads; h++) {
+                    for (int i = 0; i < half; i++) {
+                        float freq = 1.0f / powf(l_rope_theta, (float)(2 * i) / (float)l_head_dim);
+                        if (qm->rope_freqs && !is_swa) freq /= qm->rope_freqs[i];
+                        float angle = (float)pos * freq;
+                        float cos_a = cosf(angle);
+                        float sin_a = sinf(angle);
+                        int idx0, idx1;
+                        if (c->rope_neox) {
+                            idx0 = h * l_head_dim + i;
+                            idx1 = h * l_head_dim + i + half;
+                        } else {
+                            idx0 = h * l_head_dim + 2 * i;
+                            idx1 = h * l_head_dim + 2 * i + 1;
+                        }
+                        float r0 = state->k[idx0], r1 = state->k[idx1];
+                        state->k[idx0] = r0 * cos_a - r1 * sin_a;
+                        state->k[idx1] = r0 * sin_a + r1 * cos_a;
+                    }
                 }
             }
 
@@ -761,17 +808,27 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
             }
 
             /* RoPE on Q only (K already has RoPE from source layer) */
-            for (int h = 0; h < n_heads; h++) {
-                for (int i = 0; i < l_head_dim / 2; i++) {
-                    float freq = 1.0f / powf(l_rope_theta, (float)(2 * i) / (float)l_head_dim);
-                    if (qm->rope_freqs && !is_swa) freq /= qm->rope_freqs[i];
-                    float angle = (float)pos * freq;
-                    float cos_a = cosf(angle);
-                    float sin_a = sinf(angle);
-                    int idx = h * l_head_dim + 2 * i;
-                    float r0 = state->q[idx], r1 = state->q[idx + 1];
-                    state->q[idx]     = r0 * cos_a - r1 * sin_a;
-                    state->q[idx + 1] = r0 * sin_a + r1 * cos_a;
+            {
+                int half = l_head_dim / 2;
+                for (int h = 0; h < n_heads; h++) {
+                    for (int i = 0; i < half; i++) {
+                        float freq = 1.0f / powf(l_rope_theta, (float)(2 * i) / (float)l_head_dim);
+                        if (qm->rope_freqs && !is_swa) freq /= qm->rope_freqs[i];
+                        float angle = (float)pos * freq;
+                        float cos_a = cosf(angle);
+                        float sin_a = sinf(angle);
+                        int idx0, idx1;
+                        if (c->rope_neox) {
+                            idx0 = h * l_head_dim + i;
+                            idx1 = h * l_head_dim + i + half;
+                        } else {
+                            idx0 = h * l_head_dim + 2 * i;
+                            idx1 = h * l_head_dim + 2 * i + 1;
+                        }
+                        float r0 = state->q[idx0], r1 = state->q[idx1];
+                        state->q[idx0] = r0 * cos_a - r1 * sin_a;
+                        state->q[idx1] = r0 * sin_a + r1 * cos_a;
+                    }
                 }
             }
             /* No K/V store — reuse source layer's cache */
@@ -925,11 +982,26 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
     if (!G4_DISABLE_SOFTCAP && c->logit_softcap > 0.0f)
         logit_softcap(state->logits, c->vocab_size, c->logit_softcap);
 
-    /* DEBUG: print first-token logits for numerical validation */
+    /* DEBUG: print first-token logits + top-5 after full prompt */
     if (state->pos == 0) {
         printf("[FWD] pos0 logits[0..4]: %.4f %.4f %.4f %.4f %.4f\n",
                state->logits[0], state->logits[1], state->logits[2],
                state->logits[3], state->logits[4]);
+    }
+    /* Top-5 tokens after processing the last prompt token */
+    if (state->pos < 20) {
+        int top[5] = {0, 0, 0, 0, 0};
+        for (int i = 1; i < c->vocab_size; i++)
+            for (int j = 0; j < 5; j++)
+                if (state->logits[i] > state->logits[top[j]]) {
+                    for (int k = 4; k > j; k--) top[k] = top[k-1];
+                    top[j] = i;
+                    break;
+                }
+        printf("[TOP5@%d] ", state->pos);
+        for (int j = 0; j < 5; j++)
+            printf("%d(%.1f) ", top[j], state->logits[top[j]]);
+        printf("\n");
     }
 
     /* 5. Increment position */

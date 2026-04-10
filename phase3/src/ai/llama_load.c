@@ -44,9 +44,11 @@ int llama_load_config(llama_config_t *config, const gguf_ctx_t *ctx)
            (unsigned long long)ctx->n_tensors);
     if (!arch) arch = "llama";  /* backward compat */
 
-    /* Gemma variants: scale embeddings by sqrt(dim), use GeGLU (not SwiGLU) */
-    config->embed_scale = (strncmp(arch, "gemma", 5) == 0);
-    config->use_gelu    = (strncmp(arch, "gemma", 5) == 0);
+    /* Gemma variants: scale embeddings, GeGLU activation, NEOX-style RoPE */
+    int is_gemma = (strncmp(arch, "gemma", 5) == 0);
+    config->embed_scale = is_gemma;
+    config->use_gelu    = is_gemma;
+    config->rope_neox   = is_gemma;  /* split first/second half, not interleaved pairs */
 
     char key[256];
     uint32_t u32_val;
