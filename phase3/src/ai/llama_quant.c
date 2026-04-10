@@ -39,6 +39,21 @@
 #define RMS_EPS 1e-5f
 
 /* ============================================================
+ * Gemma 4 feature-disable flags for debugging
+ * Set to 1 to disable a feature. Start with all 1, then enable
+ * one at a time to find which feature breaks generation.
+ * ============================================================ */
+/* === DEBUGGING: Set to 1 to disable, 0 to enable ===
+ * Start ALL=1 (vanilla path). If output improves, enable one at a time.
+ * Current: ALL DISABLED for first bare-metal test */
+#define G4_DISABLE_PLE          1  /* skip PLE residual add */
+#define G4_DISABLE_SANDWICH     1  /* skip post_attn_norm, post_ffw_norm */
+#define G4_DISABLE_SCALE        1  /* skip layer_output_scale */
+#define G4_DISABLE_QK_NORM      1  /* skip per-head Q/K RMSNorm */
+#define G4_DISABLE_DUAL_ROPE    1  /* use single rope_theta for all layers */
+#define G4_DISABLE_SOFTCAP      1  /* skip logit softcapping */
+
+/* ============================================================
  * Internal helpers
  * ============================================================ */
 
@@ -505,7 +520,7 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
     /* PLE: compute per-layer embedding (once per token, reused by all layers)
      * Stack arrays sized for max ple_dim=256 and max dim=4096. */
     float ple_normed[256]; /* ple_dim (max 256 for Gemma 4 E2B) */
-    int has_ple = (c->ple_dim > 0 && qm->ple_embed.data != NULL);
+    int has_ple = (!G4_DISABLE_PLE && c->ple_dim > 0 && qm->ple_embed.data != NULL);
     if (has_ple) {
         /* Lookup PLE embedding for this token */
         float ple_raw[256];
@@ -592,7 +607,7 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
         }
 
         float norm_eps = c->rms_norm_eps > 0.0f ? c->rms_norm_eps : RMS_EPS;
-        float l_rope_theta = (is_swa && c->rope_theta_swa > 0.0f)
+        float l_rope_theta = (!G4_DISABLE_DUAL_ROPE && is_swa && c->rope_theta_swa > 0.0f)
                              ? c->rope_theta_swa : c->rope_theta;
 
         if (has_own_kv) {
@@ -606,7 +621,7 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
             /* Per-head Q/K RMSNorm (Gemma 4, Qwen3) — applied BEFORE RoPE.
              * Normalizes each head independently: head[j] = head[j] / RMS(head) * weight[j].
              * For Llama: q_norm.data/k_norm.data are NULL -> skipped. */
-            if (layer->q_norm.data) {
+            if (!G4_DISABLE_QK_NORM && layer->q_norm.data) {
                 float qn[512]; /* l_head_dim, max 512 */
                 if (layer->q_norm.type == GGML_TYPE_F32)
                     memcpy(qn, layer->q_norm.data, (size_t)l_head_dim * sizeof(float));
@@ -615,7 +630,7 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
                                 (ggml_type_t)layer->q_norm.type);
                 per_head_rms_norm(state->q, qn, n_heads, l_head_dim, norm_eps);
             }
-            if (layer->k_norm.data) {
+            if (!G4_DISABLE_QK_NORM && layer->k_norm.data) {
                 float kn[512]; /* l_head_dim, max 512 */
                 if (layer->k_norm.type == GGML_TYPE_F32)
                     memcpy(kn, layer->k_norm.data, (size_t)l_head_dim * sizeof(float));
@@ -670,7 +685,7 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
             qmatmul_vec(&layer->wq, state->xb, state->q, l_q_dim, dim);
 
             /* Q norm only (K was already normed when source layer computed it) */
-            if (layer->q_norm.data) {
+            if (!G4_DISABLE_QK_NORM && layer->q_norm.data) {
                 float qn[512];
                 if (layer->q_norm.type == GGML_TYPE_F32)
                     memcpy(qn, layer->q_norm.data, (size_t)l_head_dim * sizeof(float));
@@ -749,7 +764,7 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
         qmatmul_vec(&layer->wo, state->xb, state->xb2, dim, l_q_dim);
 
         /* Post-attention RMSNorm (Gemma 4 sandwich norm) */
-        if (layer->post_attn_norm.data) {
+        if (!G4_DISABLE_SANDWICH && layer->post_attn_norm.data) {
             float norm_eps = c->rms_norm_eps > 0.0f ? c->rms_norm_eps : RMS_EPS;
             if (layer->post_attn_norm.type == GGML_TYPE_F32) {
                 const float *norm = (const float *)layer->post_attn_norm.data;
@@ -790,7 +805,7 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
         qmatmul_vec(&layer->w_down, state->hb, state->xb, dim, l_ffn_dim);
 
         /* Post-FFN RMSNorm (Gemma 4 sandwich norm) */
-        if (layer->post_ffw_norm.data) {
+        if (!G4_DISABLE_SANDWICH && layer->post_ffw_norm.data) {
             float norm_eps = c->rms_norm_eps > 0.0f ? c->rms_norm_eps : RMS_EPS;
             if (layer->post_ffw_norm.type == GGML_TYPE_F32) {
                 const float *norm = (const float *)layer->post_ffw_norm.data;
@@ -807,7 +822,7 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
         residual_add(state->x, state->xb, dim);
 
         /* Layer output scaling (Gemma 4) */
-        if (layer->layer_output_scale.data) {
+        if (!G4_DISABLE_SCALE && layer->layer_output_scale.data) {
             if (layer->layer_output_scale.type == GGML_TYPE_F32) {
                 const float *scale = (const float *)layer->layer_output_scale.data;
                 tensor_mul(state->x, scale, state->x, dim);
@@ -836,7 +851,7 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
                 c->vocab_size, dim);
 
     /* 4b. Logit softcapping (Gemma 4) */
-    if (c->logit_softcap > 0.0f)
+    if (!G4_DISABLE_SOFTCAP && c->logit_softcap > 0.0f)
         logit_softcap(state->logits, c->vocab_size, c->logit_softcap);
 
     /* 5. Increment position */
