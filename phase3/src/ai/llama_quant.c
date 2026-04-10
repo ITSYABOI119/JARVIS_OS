@@ -320,39 +320,26 @@ int qmodel_load(qmodel_t *qm, const gguf_ctx_t *ctx, const void *gguf_base)
         err = resolve_qtensor(&L->wq, ctx, gguf_base, name);
         if (err) goto fail;
 
-        /* K/V weights: required for layers that compute their own KV,
-         * optional for shared-KV layers (they reuse another layer's cache).
-         * In Gemma 4 E2B, shared layers have NO wk/wv tensors in the GGUF. */
+        /* K/V weights: always optional — shared-KV layers may lack wk/wv tensors.
+         * Presence/absence is used below to derive the KV share map from ground truth. */
+        snprintf(name, sizeof(name), "blk.%d.attn_k.weight", i);
         {
-            int is_shared = (c->kv_share_map && c->kv_share_map[i] >= 0);
-            snprintf(name, sizeof(name), "blk.%d.attn_k.weight", i);
-            if (is_shared) {
-                const gguf_tensor_info_t *t = gguf_find_tensor(ctx, name);
-                if (t) {
-                    L->wk.data       = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
-                    L->wk.type       = t->type;
-                    L->wk.n_elements = t->n_elements;
-                    L->wk.n_bytes    = t->n_bytes;
-                }
-                /* else: wk stays zeroed (NULL data) — this layer shares KV */
-            } else {
-                err = resolve_qtensor(&L->wk, ctx, gguf_base, name);
-                if (err) goto fail;
+            const gguf_tensor_info_t *t = gguf_find_tensor(ctx, name);
+            if (t) {
+                L->wk.data       = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
+                L->wk.type       = t->type;
+                L->wk.n_elements = t->n_elements;
+                L->wk.n_bytes    = t->n_bytes;
             }
-
-            snprintf(name, sizeof(name), "blk.%d.attn_v.weight", i);
-            if (is_shared) {
-                const gguf_tensor_info_t *t = gguf_find_tensor(ctx, name);
-                if (t) {
-                    L->wv.data       = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
-                    L->wv.type       = t->type;
-                    L->wv.n_elements = t->n_elements;
-                    L->wv.n_bytes    = t->n_bytes;
-                }
-                /* else: wv stays zeroed (NULL data) — this layer shares KV */
-            } else {
-                err = resolve_qtensor(&L->wv, ctx, gguf_base, name);
-                if (err) goto fail;
+        }
+        snprintf(name, sizeof(name), "blk.%d.attn_v.weight", i);
+        {
+            const gguf_tensor_info_t *t = gguf_find_tensor(ctx, name);
+            if (t) {
+                L->wv.data       = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
+                L->wv.type       = t->type;
+                L->wv.n_elements = t->n_elements;
+                L->wv.n_bytes    = t->n_bytes;
             }
         }
 
@@ -466,6 +453,83 @@ int qmodel_load(qmodel_t *qm, const gguf_ctx_t *ctx, const void *gguf_base)
                     L->post_norm.n_bytes    = t->n_bytes;
                 }
             }
+        }
+    }
+
+    /* --- Derive per-layer arrays from actual tensor shapes ---
+     * Replaces heuristics in llama_load_config() with ground truth.
+     * Only runs for models with per-layer variation (swa_window > 0).
+     * Uses qm->config (non-const) since we're updating derived fields. */
+    {
+        llama_config_t *cfg = &qm->config;  /* non-const for derivation */
+        if (cfg->swa_window > 0 || cfg->shared_kv_layers > 0) {
+            /* Free any heuristic arrays from llama_load_config, replace with derived */
+            free(cfg->layer_is_swa);
+            free(cfg->layer_ffn_dim);
+            free(cfg->kv_share_map);
+            cfg->layer_is_swa = (bool *)calloc((size_t)cfg->n_layers, sizeof(bool));
+            cfg->layer_ffn_dim = (int *)calloc((size_t)cfg->n_layers, sizeof(int));
+            cfg->kv_share_map = (int *)malloc((size_t)cfg->n_layers * sizeof(int));
+            if (!cfg->layer_is_swa || !cfg->layer_ffn_dim || !cfg->kv_share_map)
+                goto fail;
+
+            int max_ffn = 0;
+            for (int i = 0; i < cfg->n_layers; i++) {
+                qlayer_t *L = &qm->layers[i];
+
+                /* FFN dim from gate weight shape: w_gate is [ffn_dim x dim] */
+                if (L->w_gate.n_elements > 0 && cfg->dim > 0)
+                    cfg->layer_ffn_dim[i] = (int)(L->w_gate.n_elements / (uint64_t)cfg->dim);
+                else
+                    cfg->layer_ffn_dim[i] = cfg->hidden_dim;
+                if (cfg->layer_ffn_dim[i] > max_ffn)
+                    max_ffn = cfg->layer_ffn_dim[i];
+
+                /* SWA flag from wq shape: wq is [n_heads * head_dim x dim]
+                 * If derived head_dim matches head_dim_swa, it's an SWA layer. */
+                if (L->wq.n_elements > 0 && cfg->dim > 0 && cfg->n_heads > 0) {
+                    int actual_q_out = (int)(L->wq.n_elements / (uint64_t)cfg->dim);
+                    int actual_head_dim = actual_q_out / cfg->n_heads;
+                    cfg->layer_is_swa[i] = (cfg->head_dim_swa > 0 &&
+                                             actual_head_dim == cfg->head_dim_swa);
+                }
+
+                /* Shared KV from wk tensor presence */
+                if (L->wk.data == NULL) {
+                    /* Find most recent previous layer with same attention type + own KV */
+                    bool my_swa = cfg->layer_is_swa[i];
+                    int source = -1;
+                    for (int j = i - 1; j >= 0; j--) {
+                        if (cfg->layer_is_swa[j] == my_swa && cfg->kv_share_map[j] < 0) {
+                            source = j;
+                            break;
+                        }
+                    }
+                    cfg->kv_share_map[i] = (source >= 0) ? source : 0;
+                } else {
+                    cfg->kv_share_map[i] = -1;  /* own KV */
+                }
+            }
+
+            /* Update hidden_dim if derived max exceeds heuristic */
+            if (max_ffn > cfg->hidden_dim) {
+                printf("[WARN] derived max_ffn=%d > hidden_dim=%d\n", max_ffn, cfg->hidden_dim);
+                cfg->hidden_dim = max_ffn;
+            }
+
+            /* Print derived values for debugging */
+            printf("[qmodel] Derived per-layer dims from tensor shapes:\n");
+            for (int i = 0; i < cfg->n_layers; i++) {
+                if (i < 3 || i == cfg->n_layers - 1 ||
+                    (i > 0 && cfg->kv_share_map[i] >= 0 && cfg->kv_share_map[i-1] < 0)) {
+                    printf("  layer %2d: swa=%d ffn=%5d kv_share=%d",
+                           i, cfg->layer_is_swa[i], cfg->layer_ffn_dim[i], cfg->kv_share_map[i]);
+                    if (cfg->kv_share_map[i] >= 0)
+                        printf(" (from L%d)", cfg->kv_share_map[i]);
+                    printf("\n");
+                }
+            }
+            printf("  ... (%d layers total, hidden_dim=%d)\n", cfg->n_layers, cfg->hidden_dim);
         }
     }
 
@@ -861,6 +925,13 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
     /* 4b. Logit softcapping (Gemma 4) */
     if (!G4_DISABLE_SOFTCAP && c->logit_softcap > 0.0f)
         logit_softcap(state->logits, c->vocab_size, c->logit_softcap);
+
+    /* DEBUG: print first-token logits for numerical validation */
+    if (state->pos == 0) {
+        printf("[FWD] pos0 logits[0..4]: %.4f %.4f %.4f %.4f %.4f\n",
+               state->logits[0], state->logits[1], state->logits[2],
+               state->logits[3], state->logits[4]);
+    }
 
     /* 5. Increment position */
     state->pos++;

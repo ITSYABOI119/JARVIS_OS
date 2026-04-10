@@ -80,6 +80,12 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
 
     int n_prompt = 1 + tokenizer_encode(tok, query_buf, prompt_ids + 1, 63);
 
+    /* DEBUG: print token IDs for comparison against llama.cpp reference */
+    printf("[PB] tokens (%d):", n_prompt);
+    for (int i = 0; i < n_prompt && i < 20; i++)
+        printf(" %d", prompt_ids[i]);
+    printf("\n");
+
     /* Reset state for new generation */
     state->pos = 0;
     size_t kv_bytes = (size_t)qm->config.n_layers * state->max_seq_len *
