@@ -44,6 +44,8 @@ typedef struct {
     qtensor_t w_up;          /* Q4_K or Q6_K — [hidden_dim x dim] */
     qtensor_t w_down;        /* Q4_K or Q6_K — [dim x hidden_dim] */
     /* --- Gemma 4 extensions (data=NULL for Llama models) --- */
+    qtensor_t q_norm;             /* per-head Q RMSNorm before RoPE (Gemma 4, Qwen3) */
+    qtensor_t k_norm;             /* per-head K RMSNorm before RoPE (Gemma 4, Qwen3) */
     qtensor_t post_attn_norm;     /* post-attention RMSNorm (sandwich norm) */
     qtensor_t post_ffw_norm;      /* post-FFN RMSNorm (sandwich norm) */
     qtensor_t layer_output_scale; /* per-layer output scaling */

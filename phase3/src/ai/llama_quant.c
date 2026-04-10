@@ -184,6 +184,24 @@ static void logit_softcap(float *logits, int n, float cap)
         logits[i] = cap * tanhf(logits[i] * inv_cap);
 }
 
+/* ---- Per-head RMSNorm (Gemma 4, Qwen3) ----
+ * Normalizes each head independently using RMSNorm:
+ *   head[j] = head[j] / RMS(head) * weight[j]
+ * Applied to Q and K projections BEFORE RoPE rotation. */
+static void per_head_rms_norm(float *x, const float *weight, int n_heads,
+                              int head_dim, float eps)
+{
+    for (int h = 0; h < n_heads; h++) {
+        float *head = x + h * head_dim;
+        float ss = 0.0f;
+        for (int j = 0; j < head_dim; j++)
+            ss += head[j] * head[j];
+        ss = 1.0f / sqrtf(ss / (float)head_dim + eps);
+        for (int j = 0; j < head_dim; j++)
+            head[j] = head[j] * ss * weight[j];
+    }
+}
+
 /* ============================================================
  * Public API
  * ============================================================ */
@@ -313,6 +331,28 @@ int qmodel_load(qmodel_t *qm, const gguf_ctx_t *ctx, const void *gguf_base)
         snprintf(name, sizeof(name), "blk.%d.ffn_down.weight", i);
         err = resolve_qtensor(&L->w_down, ctx, gguf_base, name);
         if (err) goto fail;
+
+        /* Per-head Q/K RMSNorm tensors (optional — Gemma 4, Qwen3) */
+        snprintf(name, sizeof(name), "blk.%d.attn_q_norm.weight", i);
+        {
+            const gguf_tensor_info_t *t = gguf_find_tensor(ctx, name);
+            if (t) {
+                L->q_norm.data       = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
+                L->q_norm.type       = t->type;
+                L->q_norm.n_elements = t->n_elements;
+                L->q_norm.n_bytes    = t->n_bytes;
+            }
+        }
+        snprintf(name, sizeof(name), "blk.%d.attn_k_norm.weight", i);
+        {
+            const gguf_tensor_info_t *t = gguf_find_tensor(ctx, name);
+            if (t) {
+                L->k_norm.data       = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
+                L->k_norm.type       = t->type;
+                L->k_norm.n_elements = t->n_elements;
+                L->k_norm.n_bytes    = t->n_bytes;
+            }
+        }
 
         /* Sandwich norm tensors (optional — Gemma 4) */
         snprintf(name, sizeof(name), "blk.%d.post_attention_norm.weight", i);
@@ -519,13 +559,41 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
         qmatmul_vec(&layer->wk, state->xb, state->k,  l_kv_dim, dim);
         qmatmul_vec(&layer->wv, state->xb, state->v,  l_kv_dim, dim);
 
+        /* Per-head Q/K RMSNorm (Gemma 4, Qwen3) — applied BEFORE RoPE.
+         * Normalizes each head independently: head[j] = head[j] / RMS(head) * weight[j].
+         * For Llama: q_norm.data/k_norm.data are NULL -> skipped. */
+        {
+            float norm_eps = c->rms_norm_eps > 0.0f ? c->rms_norm_eps : RMS_EPS;
+            if (layer->q_norm.data) {
+                float qn[512]; /* l_head_dim, max 512 */
+                if (layer->q_norm.type == GGML_TYPE_F32)
+                    memcpy(qn, layer->q_norm.data, (size_t)l_head_dim * sizeof(float));
+                else
+                    dequant_row(layer->q_norm.data, qn, l_head_dim,
+                                (ggml_type_t)layer->q_norm.type);
+                per_head_rms_norm(state->q, qn, n_heads, l_head_dim, norm_eps);
+            }
+            if (layer->k_norm.data) {
+                float kn[512]; /* l_head_dim, max 512 */
+                if (layer->k_norm.type == GGML_TYPE_F32)
+                    memcpy(kn, layer->k_norm.data, (size_t)l_head_dim * sizeof(float));
+                else
+                    dequant_row(layer->k_norm.data, kn, l_head_dim,
+                                (ggml_type_t)layer->k_norm.type);
+                per_head_rms_norm(state->k, kn, n_kv_heads, l_head_dim, norm_eps);
+            }
+        }
+
         /* e. RoPE on Q and K — uses l_head_dim (256 for SWA, 512 for global).
-         * Use qm->rope_freqs if available (custom freqs for extended context).
-         * Task 6 will add dual theta (rope_theta_swa for SWA layers). */
+         * Dual theta: SWA layers use rope_theta_swa (10000), global use rope_theta (1000000).
+         * For Llama: rope_theta_swa is 0 -> all layers use rope_theta (unchanged).
+         * rope_freqs divisor only applied for non-SWA layers (extended context scaling). */
+        float l_rope_theta = (is_swa && c->rope_theta_swa > 0.0f)
+                             ? c->rope_theta_swa : c->rope_theta;
         for (int h = 0; h < n_heads; h++) {
             for (int i = 0; i < l_head_dim / 2; i++) {
-                float freq = 1.0f / powf(c->rope_theta, (float)(2 * i) / (float)l_head_dim);
-                if (qm->rope_freqs) freq /= qm->rope_freqs[i];
+                float freq = 1.0f / powf(l_rope_theta, (float)(2 * i) / (float)l_head_dim);
+                if (qm->rope_freqs && !is_swa) freq /= qm->rope_freqs[i];
                 float angle = (float)pos * freq;
                 float cos_a = cosf(angle);
                 float sin_a = sinf(angle);
@@ -537,8 +605,8 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
         }
         for (int h = 0; h < n_kv_heads; h++) {
             for (int i = 0; i < l_head_dim / 2; i++) {
-                float freq = 1.0f / powf(c->rope_theta, (float)(2 * i) / (float)l_head_dim);
-                if (qm->rope_freqs) freq /= qm->rope_freqs[i];
+                float freq = 1.0f / powf(l_rope_theta, (float)(2 * i) / (float)l_head_dim);
+                if (qm->rope_freqs && !is_swa) freq /= qm->rope_freqs[i];
                 float angle = (float)pos * freq;
                 float cos_a = cosf(angle);
                 float sin_a = sinf(angle);
