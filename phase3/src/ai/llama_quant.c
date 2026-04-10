@@ -304,13 +304,41 @@ int qmodel_load(qmodel_t *qm, const gguf_ctx_t *ctx, const void *gguf_base)
         err = resolve_qtensor(&L->wq, ctx, gguf_base, name);
         if (err) goto fail;
 
-        snprintf(name, sizeof(name), "blk.%d.attn_k.weight", i);
-        err = resolve_qtensor(&L->wk, ctx, gguf_base, name);
-        if (err) goto fail;
+        /* K/V weights: required for layers that compute their own KV,
+         * optional for shared-KV layers (they reuse another layer's cache).
+         * In Gemma 4 E2B, shared layers have NO wk/wv tensors in the GGUF. */
+        {
+            int is_shared = (c->kv_share_map && c->kv_share_map[i] >= 0);
+            snprintf(name, sizeof(name), "blk.%d.attn_k.weight", i);
+            if (is_shared) {
+                const gguf_tensor_info_t *t = gguf_find_tensor(ctx, name);
+                if (t) {
+                    L->wk.data       = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
+                    L->wk.type       = t->type;
+                    L->wk.n_elements = t->n_elements;
+                    L->wk.n_bytes    = t->n_bytes;
+                }
+                /* else: wk stays zeroed (NULL data) — this layer shares KV */
+            } else {
+                err = resolve_qtensor(&L->wk, ctx, gguf_base, name);
+                if (err) goto fail;
+            }
 
-        snprintf(name, sizeof(name), "blk.%d.attn_v.weight", i);
-        err = resolve_qtensor(&L->wv, ctx, gguf_base, name);
-        if (err) goto fail;
+            snprintf(name, sizeof(name), "blk.%d.attn_v.weight", i);
+            if (is_shared) {
+                const gguf_tensor_info_t *t = gguf_find_tensor(ctx, name);
+                if (t) {
+                    L->wv.data       = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
+                    L->wv.type       = t->type;
+                    L->wv.n_elements = t->n_elements;
+                    L->wv.n_bytes    = t->n_bytes;
+                }
+                /* else: wv stays zeroed (NULL data) — this layer shares KV */
+            } else {
+                err = resolve_qtensor(&L->wv, ctx, gguf_base, name);
+                if (err) goto fail;
+            }
+        }
 
         snprintf(name, sizeof(name), "blk.%d.attn_output.weight", i);
         err = resolve_qtensor(&L->wo, ctx, gguf_base, name);
@@ -552,18 +580,32 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
             tensor_rms_norm(state->x, state->xb2, state->xb, dim, RMS_EPS);
         }
 
-        /* b-d. Q/K/V projections with PER-LAYER output dims.
-         *    Q: [l_q_dim x dim],  K/V: [l_kv_dim x dim]
-         *    For Llama: l_q_dim == dim, l_kv_dim == kv_dim (unchanged). */
-        qmatmul_vec(&layer->wq, state->xb, state->q,  l_q_dim,  dim);
-        qmatmul_vec(&layer->wk, state->xb, state->k,  l_kv_dim, dim);
-        qmatmul_vec(&layer->wv, state->xb, state->v,  l_kv_dim, dim);
+        /* Determine KV source layer.
+         * Shared KV: layers with kv_share_map[L] >= 0 skip K/V projection
+         * entirely and reuse K/V from the source layer's cache.
+         * For Llama: kv_share_map is NULL -> every layer computes own KV. */
+        int kv_src = L;       /* default: own KV */
+        int has_own_kv = 1;
+        if (c->kv_share_map && c->kv_share_map[L] >= 0) {
+            kv_src = c->kv_share_map[L];
+            has_own_kv = 0;
+        }
 
-        /* Per-head Q/K RMSNorm (Gemma 4, Qwen3) — applied BEFORE RoPE.
-         * Normalizes each head independently: head[j] = head[j] / RMS(head) * weight[j].
-         * For Llama: q_norm.data/k_norm.data are NULL -> skipped. */
-        {
-            float norm_eps = c->rms_norm_eps > 0.0f ? c->rms_norm_eps : RMS_EPS;
+        float norm_eps = c->rms_norm_eps > 0.0f ? c->rms_norm_eps : RMS_EPS;
+        float l_rope_theta = (is_swa && c->rope_theta_swa > 0.0f)
+                             ? c->rope_theta_swa : c->rope_theta;
+
+        if (has_own_kv) {
+            /* b-d. Normal: Q/K/V projections with PER-LAYER output dims.
+             *    Q: [l_q_dim x dim],  K/V: [l_kv_dim x dim]
+             *    For Llama: l_q_dim == dim, l_kv_dim == kv_dim (unchanged). */
+            qmatmul_vec(&layer->wq, state->xb, state->q,  l_q_dim,  dim);
+            qmatmul_vec(&layer->wk, state->xb, state->k,  l_kv_dim, dim);
+            qmatmul_vec(&layer->wv, state->xb, state->v,  l_kv_dim, dim);
+
+            /* Per-head Q/K RMSNorm (Gemma 4, Qwen3) — applied BEFORE RoPE.
+             * Normalizes each head independently: head[j] = head[j] / RMS(head) * weight[j].
+             * For Llama: q_norm.data/k_norm.data are NULL -> skipped. */
             if (layer->q_norm.data) {
                 float qn[512]; /* l_head_dim, max 512 */
                 if (layer->q_norm.type == GGML_TYPE_F32)
@@ -582,53 +624,93 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
                                 (ggml_type_t)layer->k_norm.type);
                 per_head_rms_norm(state->k, kn, n_kv_heads, l_head_dim, norm_eps);
             }
-        }
 
-        /* e. RoPE on Q and K — uses l_head_dim (256 for SWA, 512 for global).
-         * Dual theta: SWA layers use rope_theta_swa (10000), global use rope_theta (1000000).
-         * For Llama: rope_theta_swa is 0 -> all layers use rope_theta (unchanged).
-         * rope_freqs divisor only applied for non-SWA layers (extended context scaling). */
-        float l_rope_theta = (is_swa && c->rope_theta_swa > 0.0f)
-                             ? c->rope_theta_swa : c->rope_theta;
-        for (int h = 0; h < n_heads; h++) {
-            for (int i = 0; i < l_head_dim / 2; i++) {
-                float freq = 1.0f / powf(l_rope_theta, (float)(2 * i) / (float)l_head_dim);
-                if (qm->rope_freqs && !is_swa) freq /= qm->rope_freqs[i];
-                float angle = (float)pos * freq;
-                float cos_a = cosf(angle);
-                float sin_a = sinf(angle);
-                int idx = h * l_head_dim + 2 * i;
-                float r0 = state->q[idx], r1 = state->q[idx + 1];
-                state->q[idx]     = r0 * cos_a - r1 * sin_a;
-                state->q[idx + 1] = r0 * sin_a + r1 * cos_a;
+            /* e. RoPE on Q AND K — uses l_head_dim (256 for SWA, 512 for global).
+             * Dual theta: SWA layers use rope_theta_swa, global use rope_theta. */
+            for (int h = 0; h < n_heads; h++) {
+                for (int i = 0; i < l_head_dim / 2; i++) {
+                    float freq = 1.0f / powf(l_rope_theta, (float)(2 * i) / (float)l_head_dim);
+                    if (qm->rope_freqs && !is_swa) freq /= qm->rope_freqs[i];
+                    float angle = (float)pos * freq;
+                    float cos_a = cosf(angle);
+                    float sin_a = sinf(angle);
+                    int idx = h * l_head_dim + 2 * i;
+                    float r0 = state->q[idx], r1 = state->q[idx + 1];
+                    state->q[idx]     = r0 * cos_a - r1 * sin_a;
+                    state->q[idx + 1] = r0 * sin_a + r1 * cos_a;
+                }
             }
-        }
-        for (int h = 0; h < n_kv_heads; h++) {
-            for (int i = 0; i < l_head_dim / 2; i++) {
-                float freq = 1.0f / powf(l_rope_theta, (float)(2 * i) / (float)l_head_dim);
-                if (qm->rope_freqs && !is_swa) freq /= qm->rope_freqs[i];
-                float angle = (float)pos * freq;
-                float cos_a = cosf(angle);
-                float sin_a = sinf(angle);
-                int idx = h * l_head_dim + 2 * i;
-                float r0 = state->k[idx], r1 = state->k[idx + 1];
-                state->k[idx]     = r0 * cos_a - r1 * sin_a;
-                state->k[idx + 1] = r0 * sin_a + r1 * cos_a;
+            for (int h = 0; h < n_kv_heads; h++) {
+                for (int i = 0; i < l_head_dim / 2; i++) {
+                    float freq = 1.0f / powf(l_rope_theta, (float)(2 * i) / (float)l_head_dim);
+                    if (qm->rope_freqs && !is_swa) freq /= qm->rope_freqs[i];
+                    float angle = (float)pos * freq;
+                    float cos_a = cosf(angle);
+                    float sin_a = sinf(angle);
+                    int idx = h * l_head_dim + 2 * i;
+                    float r0 = state->k[idx], r1 = state->k[idx + 1];
+                    state->k[idx]     = r0 * cos_a - r1 * sin_a;
+                    state->k[idx + 1] = r0 * sin_a + r1 * cos_a;
+                }
             }
+
+            /* f. Store K,V into cache at current position.
+             *    Cache stride uses max_kv_dim for uniform addressing.
+             *    SWA layers (smaller l_kv_dim) only fill a prefix of each slot. */
+            {
+                int layer_offset = L * max_seq * max_kv_dim;
+                float *kl = state->key_cache + layer_offset;
+                float *vl = state->value_cache + layer_offset;
+                memcpy(kl + pos * max_kv_dim, state->k, (size_t)l_kv_dim * sizeof(float));
+                memcpy(vl + pos * max_kv_dim, state->v, (size_t)l_kv_dim * sizeof(float));
+            }
+        } else {
+            /* Shared KV: compute ONLY Q (K/V come from source layer's cache).
+             * K was already normed + RoPE'd when the source layer computed it. */
+            qmatmul_vec(&layer->wq, state->xb, state->q, l_q_dim, dim);
+
+            /* Q norm only (K was already normed when source layer computed it) */
+            if (layer->q_norm.data) {
+                float qn[512];
+                if (layer->q_norm.type == GGML_TYPE_F32)
+                    memcpy(qn, layer->q_norm.data, (size_t)l_head_dim * sizeof(float));
+                else
+                    dequant_row(layer->q_norm.data, qn, l_head_dim,
+                                (ggml_type_t)layer->q_norm.type);
+                per_head_rms_norm(state->q, qn, n_heads, l_head_dim, norm_eps);
+            }
+
+            /* RoPE on Q only (K already has RoPE from source layer) */
+            for (int h = 0; h < n_heads; h++) {
+                for (int i = 0; i < l_head_dim / 2; i++) {
+                    float freq = 1.0f / powf(l_rope_theta, (float)(2 * i) / (float)l_head_dim);
+                    if (qm->rope_freqs && !is_swa) freq /= qm->rope_freqs[i];
+                    float angle = (float)pos * freq;
+                    float cos_a = cosf(angle);
+                    float sin_a = sinf(angle);
+                    int idx = h * l_head_dim + 2 * i;
+                    float r0 = state->q[idx], r1 = state->q[idx + 1];
+                    state->q[idx]     = r0 * cos_a - r1 * sin_a;
+                    state->q[idx + 1] = r0 * sin_a + r1 * cos_a;
+                }
+            }
+            /* No K/V store — reuse source layer's cache */
         }
 
-        /* f. Store K,V into cache at current position.
-         *    Cache stride uses max_kv_dim for uniform addressing.
-         *    SWA layers (smaller l_kv_dim) only fill a prefix of each slot. */
-        int layer_offset = L * max_seq * max_kv_dim;
-        float *key_layer = state->key_cache + layer_offset;
-        float *val_layer = state->value_cache + layer_offset;
-        memcpy(key_layer + pos * max_kv_dim, state->k, (size_t)l_kv_dim * sizeof(float));
-        memcpy(val_layer + pos * max_kv_dim, state->v, (size_t)l_kv_dim * sizeof(float));
-
-        /* g. Grouped Query Attention with SWA masking.
+        /* g. Grouped Query Attention — read KV from source layer's cache.
+         *    For own-KV layers: kv_src == L (reads own cache, just stored above).
+         *    For shared layers: kv_src is the source layer index.
          *    SWA layers only attend to the last swa_window positions.
-         *    Global layers attend to all positions [0..pos] (att_start=0). */
+         *    Global layers attend to all positions [0..pos] (att_start=0).
+         *
+         * NOTE: The kv_share_map from Task 2 uses i % n_unique, which naturally
+         * preserves SWA/global type matching in Gemma 4 E2B because the SWA pattern
+         * repeats with the same period. Q and K therefore have the same head_dim.
+         * TODO: Add explicit attention-type matching verification for other models. */
+        int kv_layer_offset = kv_src * max_seq * max_kv_dim;
+        float *key_layer = state->key_cache + kv_layer_offset;
+        float *val_layer = state->value_cache + kv_layer_offset;
+
         int att_start = 0;
         if (is_swa && c->swa_window > 0)
             att_start = (pos >= c->swa_window) ? (pos - c->swa_window + 1) : 0;

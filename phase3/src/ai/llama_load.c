@@ -589,7 +589,14 @@ int llama_alloc_state(llama_state_t *state, const llama_config_t *config)
     state->logits = (float *)calloc((size_t)vocab_size, sizeof(float));
 
     /* KV cache: use max kv_dim per layer for uniform cache stride.
-     * SWA layers (smaller kv_dim) only use a prefix of each slot. */
+     * SWA layers (smaller kv_dim) only use a prefix of each slot.
+     *
+     * TODO: With shared KV (Gemma 4), only n_unique_kv layers need cache slots
+     * (n_layers - shared_kv_layers). Shared layers reuse the source layer's
+     * slot via kv_share_map indexing, so their allocated slots go unused.
+     * Shrinking to n_unique_kv slots would save ~57% KV memory for Gemma 4 E2B,
+     * but requires remapping kv_share_map indices to compacted slot indices.
+     * Keeping full allocation for now — correctness first. */
     int max_kv_dim = n_kv_heads * max_head_dim;
     size_t kv_size = (size_t)config->n_layers * (size_t)max_seq *
                      (size_t)max_kv_dim;

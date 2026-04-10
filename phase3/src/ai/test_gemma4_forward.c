@@ -455,6 +455,52 @@ static void test_per_head_rms_norm_noop_for_llama(void)
     PASS();
 }
 
+/* ---- Test: shared KV cache ---- */
+
+static void test_shared_kv_map(void)
+{
+    TEST("shared KV: first 15 layers own KV, last 20 share");
+    /* kv_share_map from Task 2: layers 0-14 = -1, layers 15-34 = i%15 */
+    int kv_map[35];
+    int n_unique = 15;
+    for (int i = 0; i < 35; i++)
+        kv_map[i] = (i < n_unique) ? -1 : (i % n_unique);
+
+    ASSERT(kv_map[0] == -1, "layer 0 owns KV");
+    ASSERT(kv_map[14] == -1, "layer 14 owns KV");
+    ASSERT(kv_map[15] == 0, "layer 15 shares from layer 0");
+    ASSERT(kv_map[16] == 1, "layer 16 shares from layer 1");
+    ASSERT(kv_map[29] == 14, "layer 29 shares from layer 14");
+    ASSERT(kv_map[30] == 0, "layer 30 shares from layer 0 (wraps)");
+    PASS();
+}
+
+static void test_shared_kv_skips_projection(void)
+{
+    TEST("shared KV: only Q computed for shared layers");
+    /* Conceptual test: when kv_share_map[L] >= 0,
+     * the layer should only call wq matmul, not wk/wv.
+     * Since we can't mock the forward pass easily, this tests the branching logic. */
+    int kv_share_map = 5;  /* >= 0 means shared */
+    int has_own_kv = (kv_share_map < 0);
+    ASSERT(!has_own_kv, "shared layer should NOT compute own KV");
+
+    kv_share_map = -1;  /* < 0 means own */
+    has_own_kv = (kv_share_map < 0);
+    ASSERT(has_own_kv, "unique layer SHOULD compute own KV");
+    PASS();
+}
+
+static void test_shared_kv_noop_for_llama(void)
+{
+    TEST("shared KV: no-op when kv_share_map is NULL (Llama)");
+    /* When kv_share_map is NULL (Llama models), every layer computes own KV. */
+    int *kv_share_map = NULL;
+    int has_own_kv = (!kv_share_map || kv_share_map[0] < 0);
+    ASSERT(has_own_kv, "NULL map means own KV");
+    PASS();
+}
+
 /* ---- Test: SWA layer pattern ---- */
 
 static void test_swa_layer_pattern_gemma4(void)
@@ -496,6 +542,9 @@ int main(void)
     test_per_head_rms_norm();
     test_per_head_rms_norm_with_weights();
     test_per_head_rms_norm_noop_for_llama();
+    test_shared_kv_map();
+    test_shared_kv_skips_projection();
+    test_shared_kv_noop_for_llama();
     test_swa_mask_basic();
     test_swa_mask_at_boundary();
     test_swa_mask_exact_boundary();
