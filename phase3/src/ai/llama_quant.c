@@ -284,6 +284,40 @@ int qmodel_load(qmodel_t *qm, const gguf_ctx_t *ctx, const void *gguf_base)
         snprintf(name, sizeof(name), "blk.%d.ffn_down.weight", i);
         err = resolve_qtensor(&L->w_down, ctx, gguf_base, name);
         if (err) goto fail;
+
+        /* Sandwich norm tensors (optional — Gemma 4) */
+        snprintf(name, sizeof(name), "blk.%d.post_attention_norm.weight", i);
+        {
+            const gguf_tensor_info_t *t = gguf_find_tensor(ctx, name);
+            if (t) {
+                L->post_attn_norm.data       = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
+                L->post_attn_norm.type       = t->type;
+                L->post_attn_norm.n_elements = t->n_elements;
+                L->post_attn_norm.n_bytes    = t->n_bytes;
+            }
+        }
+
+        snprintf(name, sizeof(name), "blk.%d.post_ffw_norm.weight", i);
+        {
+            const gguf_tensor_info_t *t = gguf_find_tensor(ctx, name);
+            if (t) {
+                L->post_ffw_norm.data       = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
+                L->post_ffw_norm.type       = t->type;
+                L->post_ffw_norm.n_elements = t->n_elements;
+                L->post_ffw_norm.n_bytes    = t->n_bytes;
+            }
+        }
+
+        snprintf(name, sizeof(name), "blk.%d.layer_output_scale.weight", i);
+        {
+            const gguf_tensor_info_t *t = gguf_find_tensor(ctx, name);
+            if (t) {
+                L->layer_output_scale.data       = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
+                L->layer_output_scale.type       = t->type;
+                L->layer_output_scale.n_elements = t->n_elements;
+                L->layer_output_scale.n_bytes    = t->n_bytes;
+            }
+        }
     }
 
     qm->loaded = true;
@@ -422,6 +456,20 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
         /* h. Output projection -> xb2 (quantized matmul) */
         qmatmul_vec(&layer->wo, state->xb, state->xb2, dim, dim);
 
+        /* Post-attention RMSNorm (Gemma 4 sandwich norm) */
+        if (layer->post_attn_norm.data) {
+            float norm_eps = c->rms_norm_eps > 0.0f ? c->rms_norm_eps : RMS_EPS;
+            if (layer->post_attn_norm.type == GGML_TYPE_F32) {
+                const float *norm = (const float *)layer->post_attn_norm.data;
+                tensor_rms_norm(state->xb2, norm, state->xb2, dim, norm_eps);
+            } else {
+                float norm_buf[4096];
+                dequant_row(layer->post_attn_norm.data, norm_buf, dim,
+                            (ggml_type_t)layer->post_attn_norm.type);
+                tensor_rms_norm(state->xb2, norm_buf, state->xb2, dim, norm_eps);
+            }
+        }
+
         /* i. Residual connection */
         residual_add(state->x, state->xb2, dim);
 
@@ -446,8 +494,35 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
         /* n. Down projection -> xb (quantized matmul) */
         qmatmul_vec(&layer->w_down, state->hb, state->xb, dim, hidden_dim);
 
+        /* Post-FFN RMSNorm (Gemma 4 sandwich norm) */
+        if (layer->post_ffw_norm.data) {
+            float norm_eps = c->rms_norm_eps > 0.0f ? c->rms_norm_eps : RMS_EPS;
+            if (layer->post_ffw_norm.type == GGML_TYPE_F32) {
+                const float *norm = (const float *)layer->post_ffw_norm.data;
+                tensor_rms_norm(state->xb, norm, state->xb, dim, norm_eps);
+            } else {
+                float norm_buf[4096];
+                dequant_row(layer->post_ffw_norm.data, norm_buf, dim,
+                            (ggml_type_t)layer->post_ffw_norm.type);
+                tensor_rms_norm(state->xb, norm_buf, state->xb, dim, norm_eps);
+            }
+        }
+
         /* o. Residual connection */
         residual_add(state->x, state->xb, dim);
+
+        /* Layer output scaling (Gemma 4) */
+        if (layer->layer_output_scale.data) {
+            if (layer->layer_output_scale.type == GGML_TYPE_F32) {
+                const float *scale = (const float *)layer->layer_output_scale.data;
+                tensor_mul(state->x, scale, state->x, dim);
+            } else {
+                float scale_buf[4096];
+                dequant_row(layer->layer_output_scale.data, scale_buf, dim,
+                            (ggml_type_t)layer->layer_output_scale.type);
+                tensor_mul(state->x, scale_buf, state->x, dim);
+            }
+        }
     }
 
     /* 3. Final RMS norm (in-place via xb then copy back) */

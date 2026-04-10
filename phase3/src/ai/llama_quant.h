@@ -43,6 +43,10 @@ typedef struct {
     qtensor_t w_gate;        /* Q4_K or Q6_K — [hidden_dim x dim] */
     qtensor_t w_up;          /* Q4_K or Q6_K — [hidden_dim x dim] */
     qtensor_t w_down;        /* Q4_K or Q6_K — [dim x hidden_dim] */
+    /* --- Gemma 4 extensions (data=NULL for Llama models) --- */
+    qtensor_t post_attn_norm;     /* post-attention RMSNorm (sandwich norm) */
+    qtensor_t post_ffw_norm;      /* post-FFN RMSNorm (sandwich norm) */
+    qtensor_t layer_output_scale; /* per-layer output scaling */
 } qlayer_t;
 
 /* ---- Full quantized model (only layers array is malloc'd) ---- */
