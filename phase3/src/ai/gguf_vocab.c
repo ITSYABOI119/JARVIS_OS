@@ -148,9 +148,12 @@ int gguf_vocab_extract(const void *gguf_data, size_t data_len, gguf_vocab_t *voc
     /* Walk KV pairs */
     char   **tokens_arr    = NULL;
     int32_t *token_types   = NULL;
+    float   *real_scores   = NULL;
     uint64_t tokens_count  = 0;
     uint64_t types_count   = 0;
-    int found_tokens = 0, found_types = 0;
+    uint64_t scores_count  = 0;
+    int found_tokens = 0, found_types = 0, found_scores = 0;
+    (void)found_types;  /* set during KV walk but no longer used for scoring */
 
     for (uint64_t kv_i = 0; kv_i < n_kv; kv_i++) {
         /* Read key */
@@ -224,6 +227,29 @@ int gguf_vocab_extract(const void *gguf_data, size_t data_len, gguf_vocab_t *voc
             continue;
         }
 
+        if (vtype == GGUF_TYPE_ARRAY && strcmp(key, "tokenizer.ggml.scores") == 0) {
+            /* Read float32 score array — BPE merge priorities */
+            uint32_t elem_type;
+            if (buf_read_u32(&r, &elem_type)) goto fail;
+            if (buf_read_u64(&r, &scores_count)) goto fail;
+            if (elem_type != GGUF_TYPE_FLOAT32) {
+                for (uint64_t i = 0; i < scores_count; i++) {
+                    if (skip_value(&r, elem_type, 0)) goto fail;
+                }
+                continue;
+            }
+            if (scores_count > 1000000) goto fail;
+
+            real_scores = (float *)malloc((size_t)scores_count * sizeof(float));
+            if (!real_scores) goto fail;
+
+            for (uint64_t i = 0; i < scores_count; i++) {
+                if (buf_read(&r, &real_scores[i], 4)) goto fail;
+            }
+            found_scores = 1;
+            continue;
+        }
+
         /* Skip value we don't care about */
         if (skip_value(&r, vtype, 0)) goto fail;
     }
@@ -236,24 +262,23 @@ int gguf_vocab_extract(const void *gguf_data, size_t data_len, gguf_vocab_t *voc
     vocab->tokens = tokens_arr;
     tokens_arr = NULL; /* transfer ownership */
 
-    /* Convert token_type to float scores (type 1=normal gets 0.0, type 3=unused gets -1.0, etc.) */
+    /* Use real scores from GGUF if available (essential for SentencePiece/Gemma),
+     * fall back to index-based scores for backward compat (GPT-2 BPE / Llama). */
     vocab->scores = (float *)calloc((size_t)tokens_count, sizeof(float));
     if (!vocab->scores) goto fail;
 
-    if (found_types && types_count == tokens_count) {
-        for (uint64_t i = 0; i < tokens_count; i++) {
-            /* token_type: 1=normal, 2=unknown, 3=control, 4=user_defined, 5=unused, 6=byte */
-            /* Use negative index as merge priority (lower index = higher priority) */
-            vocab->scores[i] = -(float)i;
-        }
+    if (found_scores && scores_count == tokens_count && real_scores) {
+        /* Real scores from tokenizer.ggml.scores — correct BPE merge priority */
+        memcpy(vocab->scores, real_scores, (size_t)tokens_count * sizeof(float));
     } else {
-        /* No token_type data — use index-based scores */
-        for (uint64_t i = 0; i < tokens_count; i++) {
+        /* Fallback: use negative index as merge priority (lower index = higher priority).
+         * Works for GPT-2 BPE (Llama) where merge order matches token index order. */
+        for (uint64_t i = 0; i < tokens_count; i++)
             vocab->scores[i] = -(float)i;
-        }
     }
 
     free(token_types);
+    free(real_scores);
     return 0;
 
 fail:
@@ -264,6 +289,7 @@ fail:
         free(tokens_arr);
     }
     free(token_types);
+    free(real_scores);
     if (vocab->tokens) {
         for (int i = 0; i < vocab->vocab_size; i++)
             free(vocab->tokens[i]);
