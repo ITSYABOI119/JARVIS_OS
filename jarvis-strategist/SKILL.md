@@ -39,26 +39,27 @@ then get to explore for context say:
   AGENT 3: seL4 Rootserver, Process Isolation & Build System
   - Read phase3/src/sel4/main_x86.c (Process A — rootserver with allocman bootstrap + process spawning)
   - Read phase3/src/sel4/inference_server.c (Process B — IPC loop, model loading, generation)
+  - Read phase3/src/sel4/jarvis_debug.h (compile-time debug flags)
   - Read phase3/src/sel4/CMakeLists.txt (build config)
   - Read phase3/src/ai/decision_cache.h AND cache_patterns.h
   - Read phase3/src/ipc/shmem_ipc.h AND ipc_transport.h
   - Read phase3/src/ai/shield.h (SHIELD safety module)
   - Read phase3/src/ai/model_scaling.h (dynamic model scaling state machine)
-  - Read docs/superpowers/plans/2026-03-27-process-isolation.md (process isolation plan)
   - Check: ~/sel4-x86/projects/jarvis-x86/apps/jarvis-inference/ (Process B build tree + CPIO)
   - Check: ~/sel4-x86/projects/jarvis-x86/apps/sel4test-driver/CMakeLists.txt (CPIO + add_subdirectory)
-  - Check: ~/sel4-x86/projects/jarvis-x86/CMakeLists.txt (CNode=19)
-  - Check: ~/sel4-x86/projects/jarvis-x86/easy-settings.cmake (morecore=256MB)
-  - Report: boot flow, self-tests, process spawning status (what works, what's WIP), shared memory IPC status, build/run commands                                                
+  - Report: boot flow, self-tests, process spawning status, shared memory IPC status, build/run commands                                                
                                                                                                                                                                
   AGENT 4: x86 Drivers & IPC                                                                                                                                   
   - Read ALL files in phase3/src/drivers/:                                                                                                                     
     - uart_16550.c/h, pci.c/h, ahci.c/h, blk_dev_x86.c/h               
-    - nic_rtl8168.c/h, x86_timer.c/h, net_stack.c/h, net_cmd.c/h                                                                                               
+    - nic_rtl8168.c/h, nic_i211.c/h, x86_timer.c/h
+    - net_stack.c/h, net_cmd.c/h
+    - nvme.c/h, fat32.c/h, vga_text.c/h
+    - fuzz_harness.c
   - Read ALL files in phase3/src/ipc/:                                                                                                                         
     - shmem_ipc.c/h, ring_buffer.c/h, dual_ring_buffer.c/h                                                                                                     
     - ipc_handler.c/h, ipc_transport.h                                                                                                                         
-  - Report: which drivers are mock-tested vs real, IPC architecture, what's ready for real hardware vs what needs work                                         
+  - Report: which drivers are mock-tested vs real, IPC architecture, what's ready for real hardware                                         
                                                                                                                                                                
   AGENT 5: Test Infrastructure & CI                                                                                                                            
   - Read .github/workflows/ci.yml (full file — all CI steps)                                                                                                   
@@ -68,13 +69,17 @@ then get to explore for context say:
   - Run: grep -c "PASS" on each test to count test functions                                                                                                   
   - Report: complete test inventory, which tests need the model file (SKIP on CI), compile commands for each, any gaps in coverage                             
                                                                                                                                                                
-  AGENT 6: Phase 1 & Phase 2 Legacy                                                                                                                            
+  AGENT 6: Phase 1 & Phase 2 Legacy + Security + Bench-Off
   - Read phase1/src/cache/decision_cache.c/h (portable, used in Phase 3)                                                                                       
   - Read phase1/src/ipc/ring_buffer.c/h (portable, used in Phase 3)                                                                                            
   - Read phase2/src/sel4/main_arm64.c (ARM64 rootserver — compare with x86)                                                                                    
-  - Read phase2/docs/PHASE_2_FINAL_REPORT.md                                                                                                                   
-  - Scan phase2/src/drivers/ for the 21 BCM2711 drivers                                                                                                        
-  - Report: what carried forward to Phase 3, what was rewritten, lessons learned                                                                               
+  - Read phase2/docs/PHASE_2_FINAL_REPORT.md
+  - Read phase3/docs/SECURITY_AUDIT_2026-03-22.md (first audit, 26 findings)
+  - Read phase3/docs/SECURITY_AUDIT_2026-04-06.md (second audit, 25 findings)
+  - Read phase3/docs/MODEL_BENCH_OFF_2026-04-07.md (model survey, compatibility, tiers)
+  - Read models/quality_results/FINAL_SCORES.txt (7-judge combined: quality + speed + PPL)
+  - Read docs/superpowers/plans/2026-04-09-gemma4-engine.md (Gemma 4 engine work plan)
+  - Report: what carried forward, security posture, bench-off results, current engine work status                                                                               
                                                                                                                                                                
   After ALL agents complete, synthesize a unified summary:                                                                                                     
   1. Architecture diagram (text-based) showing how all components connect                                                                                      
@@ -172,7 +177,7 @@ JARVIS AI-OS: AI-controlled operating system on seL4 microkernel.
 | Phase 0 | COMPLETE — Validation |
 | Phase 1 | COMPLETE — PoC on x86 QEMU |
 | Phase 2 | COMPLETE — Alpha on Pi 4 bare metal |
-| Phase 3 | IN PROGRESS — **NVMe runtime model loading on bare-metal Ryzen 2700X**, NIC + stability next |
+| Phase 3 | IN PROGRESS — **11-model bench-off complete. Gemma 4 E2B #1 (8.40/10). Engine work next (~1000 LOC).** |
 | Phase 4 | Future — Production v1.0 |
 
 ### Working Rules
