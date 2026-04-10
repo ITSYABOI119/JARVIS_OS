@@ -3,13 +3,32 @@
  *
  * Tests individual Gemma 4 forward pass features in isolation
  * using mock/synthetic data (no real model file needed).
+ *
+ * Also includes:
+ *   - Llama regression test: all Gemma 4 config fields are 0/NULL
+ *   - Gemma 4 E2B integration smoke test (SKIP on CI)
+ *
+ * Compile:
+ *   gcc -Wall -Werror -O2 -std=c11 -D_POSIX_C_SOURCE=200809L \
+ *     -I phase3/src/ai \
+ *     phase3/src/ai/test_gemma4_forward.c \
+ *     phase3/src/ai/tensor_ops.c \
+ *     phase3/src/ai/llama_load.c \
+ *     phase3/src/ai/gguf_parser.c \
+ *     phase3/src/ai/dequant.c \
+ *     -lm -o /tmp/test_gemma4_forward
+ *   /tmp/test_gemma4_forward
  */
+
+#define _POSIX_C_SOURCE 200809L
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include "tensor_ops.h"
+#include "llama_model.h"
+#include "gguf_parser.h"
 
 static int pass_count = 0, fail_count = 0;
 #define TEST(name) printf("  %-50s ", name)
@@ -523,6 +542,170 @@ static void test_swa_layer_pattern_gemma4(void)
     PASS();
 }
 
+/* ---- GGUF In-Memory Builder (self-contained for this translation unit) ---- */
+
+static void gguf_put(uint8_t *buf, size_t *pos, const void *data, size_t n)
+{
+    memcpy(buf + *pos, data, n);
+    *pos += n;
+}
+
+static void gguf_put_u32(uint8_t *buf, size_t *pos, uint32_t v)
+{
+    gguf_put(buf, pos, &v, 4);
+}
+
+static void gguf_put_u64(uint8_t *buf, size_t *pos, uint64_t v)
+{
+    gguf_put(buf, pos, &v, 8);
+}
+
+static void gguf_put_f32(uint8_t *buf, size_t *pos, float v)
+{
+    gguf_put(buf, pos, &v, 4);
+}
+
+static void gguf_put_str(uint8_t *buf, size_t *pos, const char *s)
+{
+    uint64_t len = (uint64_t)strlen(s);
+    gguf_put_u64(buf, pos, len);
+    gguf_put(buf, pos, s, (size_t)len);
+}
+
+static void gguf_put_kv_string(uint8_t *buf, size_t *pos,
+                               const char *key, const char *val)
+{
+    gguf_put_str(buf, pos, key);
+    gguf_put_u32(buf, pos, GGUF_TYPE_STRING);
+    gguf_put_str(buf, pos, val);
+}
+
+static void gguf_put_kv_u32(uint8_t *buf, size_t *pos,
+                            const char *key, uint32_t val)
+{
+    gguf_put_str(buf, pos, key);
+    gguf_put_u32(buf, pos, GGUF_TYPE_UINT32);
+    gguf_put_u32(buf, pos, val);
+}
+
+static void gguf_put_kv_f32(uint8_t *buf, size_t *pos,
+                            const char *key, float val)
+{
+    gguf_put_str(buf, pos, key);
+    gguf_put_u32(buf, pos, GGUF_TYPE_FLOAT32);
+    gguf_put_f32(buf, pos, val);
+}
+
+/* Write a tensor info entry (for vocab_size fallback) */
+static void gguf_put_tensor_info(uint8_t *buf, size_t *pos,
+                                 const char *name, uint64_t dim0, uint64_t dim1)
+{
+    gguf_put_str(buf, pos, name);
+    gguf_put_u32(buf, pos, 2);             /* n_dims = 2 */
+    gguf_put_u64(buf, pos, dim0);          /* dims[0] */
+    gguf_put_u64(buf, pos, dim1);          /* dims[1] */
+    gguf_put_u32(buf, pos, GGML_TYPE_F32); /* type = F32 */
+    gguf_put_u64(buf, pos, 0);             /* offset = 0 */
+}
+
+/* ---- Test: Llama regression — all Gemma 4 config extensions are 0/NULL ---- */
+
+static void test_llama_config_all_extensions_zero(void)
+{
+    TEST("Llama regression: Gemma 4 fields 0/NULL");
+
+    /* Build a minimal GGUF with llama.* keys */
+    uint8_t buf[4096];
+    size_t len = 0;
+
+    /* Header: magic + version + n_tensors=1 + n_kv=8 */
+    gguf_put_u32(buf, &len, GGUF_MAGIC);
+    gguf_put_u32(buf, &len, 3);          /* version */
+    gguf_put_u64(buf, &len, 1);          /* n_tensors (need token_embd) */
+    gguf_put_u64(buf, &len, 8);          /* n_kv */
+
+    /* KV pairs */
+    gguf_put_kv_string(buf, &len, "general.architecture", "llama");
+    gguf_put_kv_u32(buf, &len, "llama.embedding_length", 2048);
+    gguf_put_kv_u32(buf, &len, "llama.block_count", 16);
+    gguf_put_kv_u32(buf, &len, "llama.attention.head_count", 32);
+    gguf_put_kv_u32(buf, &len, "llama.attention.head_count_kv", 8);
+    gguf_put_kv_u32(buf, &len, "llama.feed_forward_length", 8192);
+    gguf_put_kv_u32(buf, &len, "llama.vocab_size", 128256);
+    gguf_put_kv_f32(buf, &len, "llama.rope.freq_base", 500000.0f);
+
+    /* Tensor info: token_embd.weight for vocab_size fallback */
+    gguf_put_tensor_info(buf, &len, "token_embd.weight", 2048, 32000);
+
+    /* Parse */
+    gguf_ctx_t ctx;
+    ASSERT(gguf_open_memory(&ctx, buf, len) == 0, "open");
+
+    llama_config_t config;
+    ASSERT(llama_load_config(&config, &ctx) == 0, "load");
+
+    /* Core fields should be correct */
+    ASSERT(config.dim == 2048, "dim");
+    ASSERT(config.n_layers == 16, "n_layers");
+    ASSERT(config.n_heads == 32, "n_heads");
+    ASSERT(config.head_dim == 64, "head_dim = 2048/32 = 64 (derived)");
+
+    /* ALL Gemma 4 extension fields should be zero/NULL */
+    ASSERT(config.rms_norm_eps == 0.0f, "rms_norm_eps = 0");
+    ASSERT(config.logit_softcap == 0.0f, "logit_softcap = 0");
+    ASSERT(config.rope_theta_swa == 0.0f, "rope_theta_swa = 0");
+    ASSERT(config.ple_dim == 0, "ple_dim = 0");
+    ASSERT(config.swa_window == 0, "swa_window = 0");
+    ASSERT(config.shared_kv_layers == 0, "shared_kv_layers = 0");
+    ASSERT(config.head_dim_swa == 0, "head_dim_swa = 0");
+    ASSERT(config.layer_ffn_dim == NULL, "layer_ffn_dim = NULL");
+    ASSERT(config.layer_is_swa == NULL, "layer_is_swa = NULL");
+    ASSERT(config.kv_share_map == NULL, "kv_share_map = NULL");
+
+    gguf_close(&ctx);
+    llama_free_config(&config);
+    PASS();
+}
+
+/* ---- Test: Gemma 4 E2B integration smoke (SKIP on CI) ---- */
+
+static void test_gemma4_e2b_smoke(void)
+{
+    TEST("Gemma 4 E2B: load + verify config (SKIP ok)");
+    const char *path = getenv("GEMMA4_E2B_GGUF");
+    if (!path) {
+        printf("SKIP (set GEMMA4_E2B_GGUF env var)\n");
+        pass_count++;  /* count as pass, not fail */
+        return;
+    }
+
+    gguf_ctx_t ctx;
+    int err = gguf_open(&ctx, path);
+    ASSERT(err == 0, "gguf_open");
+
+    llama_config_t config;
+    err = llama_load_config(&config, &ctx);
+    ASSERT(err == 0, "llama_load_config");
+
+    /* Verify Gemma 4 E2B config values */
+    ASSERT(config.dim == 1536, "dim = 1536");
+    ASSERT(config.n_layers == 35, "n_layers = 35");
+    ASSERT(config.n_heads == 8, "n_heads = 8");
+    ASSERT(config.n_kv_heads == 1, "n_kv_heads = 1");
+    ASSERT(config.head_dim == 512, "head_dim = 512 (explicit)");
+    ASSERT(config.ple_dim == 256, "ple_dim = 256");
+    ASSERT(config.swa_window == 512, "swa_window = 512");
+    ASSERT(config.shared_kv_layers == 20, "shared_kv_layers = 20");
+    ASSERT(config.logit_softcap > 29.0f, "logit_softcap ~ 30");
+    ASSERT(config.rope_theta > 999000.0f, "rope_theta ~ 1000000");
+    ASSERT(config.rope_theta_swa > 9000.0f, "rope_theta_swa ~ 10000");
+    ASSERT(config.head_dim_swa == 256, "head_dim_swa = 256");
+
+    gguf_close(&ctx);
+    llama_free_config(&config);
+    PASS();
+}
+
 int main(void)
 {
     printf("=== Gemma 4 Forward Pass Tests ===\n\n");
@@ -557,6 +740,8 @@ int main(void)
     test_xb_size_gemma4();
     test_xb_size_llama_unchanged();
     test_swa_layer_pattern_gemma4();
+    test_llama_config_all_extensions_zero();
+    test_gemma4_e2b_smoke();
     printf("\n--- Results: %d PASS, %d FAIL ---\n", pass_count, fail_count);
     return fail_count == 0 ? 0 : 1;
 }

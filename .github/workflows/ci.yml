@@ -399,6 +399,9 @@ jobs:
           -I phase3/src/ai \
           phase3/src/ai/test_gemma4_forward.c \
           phase3/src/ai/tensor_ops.c \
+          phase3/src/ai/llama_load.c \
+          phase3/src/ai/gguf_parser.c \
+          phase3/src/ai/dequant.c \
           -lm -o /tmp/test_gemma4_forward
         /tmp/test_gemma4_forward
 
