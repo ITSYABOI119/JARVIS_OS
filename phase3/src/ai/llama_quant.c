@@ -292,6 +292,7 @@ void qmodel_free(qmodel_t *qm)
 
     /* Only the layers array was malloc'd — weight data lives in .rodata */
     free(qm->layers);
+    llama_free_config(&qm->config);
     memset(qm, 0, sizeof(*qm));
 }
 

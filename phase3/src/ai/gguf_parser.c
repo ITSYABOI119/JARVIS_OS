@@ -470,11 +470,7 @@ int gguf_read_tensor_data(gguf_ctx_t *ctx, const gguf_tensor_info_t *tensor, voi
 
 static const gguf_kv_t *find_kv(const gguf_ctx_t *ctx, const char *key)
 {
-    for (uint64_t i = 0; i < ctx->n_kv; i++) {
-        if (strcmp(ctx->kv[i].key, key) == 0)
-            return &ctx->kv[i];
-    }
-    return NULL;
+    return gguf_find_kv(ctx, key);
 }
 
 const gguf_kv_t *gguf_find_kv(const gguf_ctx_t *ctx, const char *key)

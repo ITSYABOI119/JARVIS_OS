@@ -57,6 +57,8 @@ int llama_load_config(llama_config_t *config, const gguf_ctx_t *ctx)
         config->n_layers = (int)u32_val;
     else
         return -1;
+    if (config->n_layers <= 0 || config->n_layers > LLAMA_MAX_LAYERS)
+        return -1;
 
     /* Required: attention head count */
     snprintf(key, sizeof(key), "%s.attention.head_count", arch);
@@ -482,6 +484,7 @@ void llama_free_model(llama_model_t *model)
     free(model->output_weight);
     free(model->rope_freqs);
 
+    llama_free_config(&model->config);
     memset(model, 0, sizeof(*model));
 }
 
