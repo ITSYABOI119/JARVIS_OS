@@ -15,6 +15,8 @@
 #include <stddef.h>
 #include "gguf_parser.h"
 
+#define LLAMA_MAX_LAYERS 128
+
 typedef struct {
     int dim;
     int n_layers;
@@ -25,6 +27,20 @@ typedef struct {
     int vocab_size;
     int max_seq_len;
     float rope_theta;
+
+    /* --- Gemma 4 extensions (all default to 0/NULL for Llama models) --- */
+    float rms_norm_eps;       /* 0.0 = use default 1e-5 */
+    float logit_softcap;      /* 0.0 = no softcapping */
+    float rope_theta_swa;     /* 0.0 = no SWA layers */
+    int   ple_dim;            /* 0   = no PLE */
+    int   swa_window;         /* 0   = no sliding window */
+    int   shared_kv_layers;   /* 0   = all layers compute own KV */
+    int   head_dim_swa;       /* 0   = no SWA-specific head dim */
+
+    /* Per-layer config (malloc'd, NULL for uniform/Llama models) */
+    int  *layer_ffn_dim;      /* [n_layers] — per-layer FFN hidden dim */
+    bool *layer_is_swa;       /* [n_layers] — true = sliding window attention */
+    int  *kv_share_map;       /* [n_layers] — -1 = own KV, >=0 = index of source layer */
 } llama_config_t;
 
 typedef struct {
@@ -71,6 +87,7 @@ typedef struct {
 
 /* Loading API */
 int  llama_load_config(llama_config_t *config, const gguf_ctx_t *ctx);
+void llama_free_config(llama_config_t *config);
 int  llama_alloc_model(llama_model_t *model);
 int  llama_load_weights(llama_model_t *model, gguf_ctx_t *ctx);
 int  llama_load_model(llama_model_t *model, const char *gguf_path);

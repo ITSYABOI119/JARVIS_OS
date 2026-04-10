@@ -29,81 +29,140 @@
 #include <string.h>
 #include <stdio.h>
 
-/* ---- Config Loading ---- */
+/* ---- Config Loading (arch-aware: reads general.architecture, dispatches {arch}.* keys) ---- */
 
 int llama_load_config(llama_config_t *config, const gguf_ctx_t *ctx)
 {
     if (!config || !ctx) return -1;
-
     memset(config, 0, sizeof(*config));
 
+    /* Determine architecture prefix */
+    const char *arch = gguf_get_kv_string(ctx, "general.architecture");
+    if (!arch) arch = "llama";  /* backward compat */
+
+    char key[256];
     uint32_t u32_val;
     float f32_val;
 
-    /* Read embedding dimension */
-    if (gguf_get_kv_u32(ctx, "llama.embedding_length", &u32_val))
+    /* Required: embedding dimension */
+    snprintf(key, sizeof(key), "%s.embedding_length", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val))
         config->dim = (int)u32_val;
     else
-        return -1;  /* dim is required */
+        return -1;
 
-    /* Read number of layers */
-    if (gguf_get_kv_u32(ctx, "llama.block_count", &u32_val))
+    /* Required: block count */
+    snprintf(key, sizeof(key), "%s.block_count", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val))
         config->n_layers = (int)u32_val;
     else
-        return -1;  /* n_layers is required */
+        return -1;
 
-    /* Read attention head count */
-    if (gguf_get_kv_u32(ctx, "llama.attention.head_count", &u32_val))
+    /* Required: attention head count */
+    snprintf(key, sizeof(key), "%s.attention.head_count", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val))
         config->n_heads = (int)u32_val;
     else
-        return -1;  /* n_heads is required */
+        return -1;
 
-    /* Read KV head count (GQA) - default to n_heads if not present */
-    if (gguf_get_kv_u32(ctx, "llama.attention.head_count_kv", &u32_val))
+    /* Optional: KV head count (GQA) — defaults to n_heads */
+    snprintf(key, sizeof(key), "%s.attention.head_count_kv", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val))
         config->n_kv_heads = (int)u32_val;
     else
         config->n_kv_heads = config->n_heads;
 
-    /* Compute head dimension */
-    if (config->n_heads <= 0) return -1;
-    config->head_dim = config->dim / config->n_heads;
-
-    /* Read FFN hidden dimension */
-    if (gguf_get_kv_u32(ctx, "llama.feed_forward_length", &u32_val))
-        config->hidden_dim = (int)u32_val;
+    /* Explicit head_dim if available (Gemma 4, Qwen3), else derive */
+    snprintf(key, sizeof(key), "%s.attention.key_length", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val))
+        config->head_dim = (int)u32_val;
+    else if (config->n_heads > 0)
+        config->head_dim = config->dim / config->n_heads;
     else
-        return -1;  /* hidden_dim is required */
+        return -1;
 
-    /* Vocab size: try metadata first, fall back to token_embd tensor dims */
-    if (gguf_get_kv_u32(ctx, "llama.vocab_size", &u32_val)) {
-        config->vocab_size = (int)u32_val;
-    } else {
-        /* Extract from token_embd.weight tensor shape */
-        const gguf_tensor_info_t *embd = gguf_find_tensor(ctx, "token_embd.weight");
-        if (embd && embd->n_dims == 2) {
-            config->vocab_size = (int)embd->dims[1];
-        } else {
-            return -1;  /* Cannot determine vocab_size */
-        }
+    /* Required: FFN hidden dimension (scalar — per-layer arrays handled in Task 2) */
+    snprintf(key, sizeof(key), "%s.feed_forward_length", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val))
+        config->hidden_dim = (int)u32_val;
+    else {
+        /* feed_forward_length may be an array for Gemma 4 — gguf_get_kv_u32 returns false.
+         * For Gemma 4, default to 0 and let per-layer loading (Task 2) fill it in.
+         * For Llama models, hidden_dim is required. */
+        if (strcmp(arch, "gemma4") != 0)
+            return -1;
+        /* Gemma 4: feed_forward_length is per-layer array, loaded in Task 2 */
     }
 
-    /* Context length / max sequence length */
-    if (gguf_get_kv_u32(ctx, "llama.context_length", &u32_val))
+    /* Vocab size: try metadata, fall back to token_embd tensor shape */
+    snprintf(key, sizeof(key), "%s.vocab_size", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val)) {
+        config->vocab_size = (int)u32_val;
+    } else {
+        const gguf_tensor_info_t *embd = gguf_find_tensor(ctx, "token_embd.weight");
+        if (embd && embd->n_dims == 2)
+            config->vocab_size = (int)embd->dims[1];
+        else
+            return -1;
+    }
+
+    /* Context length */
+    snprintf(key, sizeof(key), "%s.context_length", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val))
         config->max_seq_len = (int)u32_val;
     else
         config->max_seq_len = LLAMA_MAX_SEQ_LEN;
-
-    /* Cap at LLAMA_MAX_SEQ_LEN for memory safety */
     if (config->max_seq_len > LLAMA_MAX_SEQ_LEN)
         config->max_seq_len = LLAMA_MAX_SEQ_LEN;
 
-    /* RoPE theta - default 500000.0 if not specified */
-    if (gguf_get_kv_f32(ctx, "llama.rope.freq_base", &f32_val))
+    /* RoPE theta */
+    snprintf(key, sizeof(key), "%s.rope.freq_base", arch);
+    if (gguf_get_kv_f32(ctx, key, &f32_val))
         config->rope_theta = f32_val;
     else
         config->rope_theta = 500000.0f;
 
+    /* --- Gemma 4 / extended fields (all optional, default 0) --- */
+
+    snprintf(key, sizeof(key), "%s.attention.layer_norm_rms_epsilon", arch);
+    gguf_get_kv_f32(ctx, key, &config->rms_norm_eps);
+
+    snprintf(key, sizeof(key), "%s.final_logit_softcapping", arch);
+    gguf_get_kv_f32(ctx, key, &config->logit_softcap);
+
+    snprintf(key, sizeof(key), "%s.rope.freq_base_swa", arch);
+    gguf_get_kv_f32(ctx, key, &config->rope_theta_swa);
+
+    snprintf(key, sizeof(key), "%s.embedding_length_per_layer_input", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val))
+        config->ple_dim = (int)u32_val;
+
+    snprintf(key, sizeof(key), "%s.attention.sliding_window", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val))
+        config->swa_window = (int)u32_val;
+
+    snprintf(key, sizeof(key), "%s.attention.key_length_swa", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val))
+        config->head_dim_swa = (int)u32_val;
+
+    snprintf(key, sizeof(key), "%s.attention.shared_kv_layers", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val))
+        config->shared_kv_layers = (int)u32_val;
+
     return 0;
+}
+
+/* ---- Config Cleanup ---- */
+
+void llama_free_config(llama_config_t *config)
+{
+    if (!config) return;
+    free(config->layer_ffn_dim);
+    free(config->layer_is_swa);
+    free(config->kv_share_map);
+    config->layer_ffn_dim = NULL;
+    config->layer_is_swa = NULL;
+    config->kv_share_map = NULL;
 }
 
 /* ---- Model Allocation ---- */

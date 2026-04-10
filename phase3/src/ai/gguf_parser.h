@@ -208,6 +208,12 @@ const gguf_tensor_info_t *gguf_find_tensor(const gguf_ctx_t *ctx, const char *na
 int gguf_read_tensor_data(gguf_ctx_t *ctx, const gguf_tensor_info_t *tensor, void *buf);
 
 /**
+ * Find a metadata KV pair by key.
+ * Returns pointer to the KV entry, or NULL if not found.
+ */
+const gguf_kv_t *gguf_find_kv(const gguf_ctx_t *ctx, const char *key);
+
+/**
  * Find a metadata string value by key.
  * Returns pointer to string value, or NULL if not found / wrong type.
  */

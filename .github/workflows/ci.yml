@@ -382,6 +382,17 @@ jobs:
           -lm -o /tmp/test_generation
         /tmp/test_generation
 
+    - name: "Phase 3: Gemma 4 Config (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -D_POSIX_C_SOURCE=200809L \
+          -I phase3/src/ai \
+          phase3/src/ai/test_gemma4_config.c \
+          phase3/src/ai/llama_load.c \
+          phase3/src/ai/gguf_parser.c \
+          phase3/src/ai/dequant.c \
+          -lm -o /tmp/test_gemma4_config
+        /tmp/test_gemma4_config
+
     - name: "Phase 3c: Fuzz Testing Harness (C, ASAN)"
       run: |
         gcc -Wall -Werror -O1 -std=c11 -fsanitize=address,undefined \
