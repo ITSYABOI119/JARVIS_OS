@@ -33,11 +33,15 @@
 
 int llama_load_config(llama_config_t *config, const gguf_ctx_t *ctx)
 {
-    if (!config || !ctx) return -1;
+    if (!config || !ctx) { printf("[config] FAIL: null arg\n"); return -1; }
     memset(config, 0, sizeof(*config));
 
     /* Determine architecture prefix */
     const char *arch = gguf_get_kv_string(ctx, "general.architecture");
+    printf("[config] arch='%s' n_kv=%llu n_tensors=%llu\n",
+           arch ? arch : "(null)",
+           (unsigned long long)ctx->n_kv,
+           (unsigned long long)ctx->n_tensors);
     if (!arch) arch = "llama";  /* backward compat */
 
     char key[256];
@@ -49,23 +53,26 @@ int llama_load_config(llama_config_t *config, const gguf_ctx_t *ctx)
     if (gguf_get_kv_u32(ctx, key, &u32_val))
         config->dim = (int)u32_val;
     else
-        return -1;
+        { printf("[config] FAIL: %s not found\n", key); return -1; }
+    printf("[config] dim=%d\n", config->dim);
 
     /* Required: block count */
     snprintf(key, sizeof(key), "%s.block_count", arch);
     if (gguf_get_kv_u32(ctx, key, &u32_val))
         config->n_layers = (int)u32_val;
     else
-        return -1;
+        { printf("[config] FAIL: %s not found\n", key); return -1; }
     if (config->n_layers <= 0 || config->n_layers > LLAMA_MAX_LAYERS)
-        return -1;
+        { printf("[config] FAIL: n_layers=%d out of range\n", config->n_layers); return -1; }
+
+    printf("[config] n_layers=%d\n", config->n_layers);
 
     /* Required: attention head count */
     snprintf(key, sizeof(key), "%s.attention.head_count", arch);
     if (gguf_get_kv_u32(ctx, key, &u32_val))
         config->n_heads = (int)u32_val;
     else
-        return -1;
+        { printf("[config] FAIL: %s not found\n", key); return -1; }
 
     /* Optional: KV head count (GQA) — defaults to n_heads */
     snprintf(key, sizeof(key), "%s.attention.head_count_kv", arch);
@@ -74,6 +81,8 @@ int llama_load_config(llama_config_t *config, const gguf_ctx_t *ctx)
     else
         config->n_kv_heads = config->n_heads;
 
+    printf("[config] n_heads=%d n_kv_heads=%d\n", config->n_heads, config->n_kv_heads);
+
     /* Explicit head_dim if available (Gemma 4, Qwen3), else derive */
     snprintf(key, sizeof(key), "%s.attention.key_length", arch);
     if (gguf_get_kv_u32(ctx, key, &u32_val))
@@ -81,7 +90,9 @@ int llama_load_config(llama_config_t *config, const gguf_ctx_t *ctx)
     else if (config->n_heads > 0)
         config->head_dim = config->dim / config->n_heads;
     else
-        return -1;
+        { printf("[config] FAIL: head_dim derivation (n_heads=0)\n"); return -1; }
+
+    printf("[config] head_dim=%d\n", config->head_dim);
 
     /* Required: FFN hidden dimension (scalar — per-layer arrays handled in Task 2) */
     snprintf(key, sizeof(key), "%s.feed_forward_length", arch);
@@ -92,8 +103,8 @@ int llama_load_config(llama_config_t *config, const gguf_ctx_t *ctx)
          * For Gemma 4, default to 0 and let per-layer loading (Task 2) fill it in.
          * For Llama models, hidden_dim is required. */
         if (strcmp(arch, "gemma4") != 0)
-            return -1;
-        /* Gemma 4: feed_forward_length is per-layer array, loaded in Task 2 */
+            { printf("[config] FAIL: %s not found (arch=%s)\n", key, arch); return -1; }
+        printf("[config] feed_forward_length is array (gemma4), hidden_dim=0 for now\n");
     }
 
     /* Vocab size: try metadata, fall back to token_embd tensor shape */
@@ -105,8 +116,9 @@ int llama_load_config(llama_config_t *config, const gguf_ctx_t *ctx)
         if (embd && embd->n_dims == 2)
             config->vocab_size = (int)embd->dims[1];
         else
-            return -1;
+            { printf("[config] FAIL: vocab_size not found (no key, no tensor)\n"); return -1; }
     }
+    printf("[config] vocab_size=%d hidden_dim=%d\n", config->vocab_size, config->hidden_dim);
 
     /* Context length */
     snprintf(key, sizeof(key), "%s.context_length", arch);
@@ -150,6 +162,11 @@ int llama_load_config(llama_config_t *config, const gguf_ctx_t *ctx)
     snprintf(key, sizeof(key), "%s.attention.shared_kv_layers", arch);
     if (gguf_get_kv_u32(ctx, key, &u32_val))
         config->shared_kv_layers = (int)u32_val;
+
+    printf("[config] extensions: ple=%d swa=%d swa_hd=%d shared_kv=%d softcap=%.1f eps=%g theta_swa=%.0f\n",
+           config->ple_dim, config->swa_window, config->head_dim_swa,
+           config->shared_kv_layers, config->logit_softcap,
+           config->rms_norm_eps, config->rope_theta_swa);
 
     /* --- Build per-layer arrays --- */
     int nl = config->n_layers;
@@ -205,6 +222,9 @@ int llama_load_config(llama_config_t *config, const gguf_ctx_t *ctx)
         config->hidden_dim = 12288;
     }
 
+    printf("[config] OK: dim=%d layers=%d heads=%d/%d hd=%d/%d ffn=%d vocab=%d\n",
+           config->dim, config->n_layers, config->n_heads, config->n_kv_heads,
+           config->head_dim, config->head_dim_swa, config->hidden_dim, config->vocab_size);
     return 0;
 }
 
