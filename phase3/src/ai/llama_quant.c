@@ -623,14 +623,10 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
             float ple_out[4096]; /* dim (max 4096) */
             qmatmul_vec(&layer->ple_proj, ple_normed, ple_out, dim, c->ple_dim);
 
-            /* Dequant gate weights */
+            /* Gate: inp_gate @ ple_normed — matmul, not raw weight read!
+             * inp_gate is [dim x ple_dim], same shape as ple_proj. */
             float gate[4096]; /* dim (max 4096) */
-            if (layer->ple_gate.type == GGML_TYPE_F32) {
-                memcpy(gate, layer->ple_gate.data, (size_t)dim * sizeof(float));
-            } else {
-                dequant_row(layer->ple_gate.data, gate, dim,
-                            (ggml_type_t)layer->ple_gate.type);
-            }
+            qmatmul_vec(&layer->ple_gate, ple_normed, gate, dim, c->ple_dim);
 
             /* Apply GELU to gate, multiply with ple_out, add to x */
             for (int d = 0; d < dim; d++) {
