@@ -174,6 +174,16 @@ static void residual_add(float *x, const float *y, int n)
         x[i] += y[i];
 }
 
+/* ---- Logit softcapping (Gemma 4) ----
+ * Applies cap * tanh(x / cap) to prevent extreme logit values. */
+static void logit_softcap(float *logits, int n, float cap)
+{
+    if (cap <= 0.0f) return;
+    float inv_cap = 1.0f / cap;
+    for (int i = 0; i < n; i++)
+        logits[i] = cap * tanhf(logits[i] * inv_cap);
+}
+
 /* ============================================================
  * Public API
  * ============================================================ */
@@ -454,6 +464,10 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
     /* 4. Output projection -> logits (quantized matmul) */
     qmatmul_vec(&qm->output_weight, state->x, state->logits,
                 c->vocab_size, dim);
+
+    /* 4b. Logit softcapping (Gemma 4) */
+    if (c->logit_softcap > 0.0f)
+        logit_softcap(state->logits, c->vocab_size, c->logit_softcap);
 
     /* 5. Increment position */
     state->pos++;
