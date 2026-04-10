@@ -141,6 +141,7 @@ int gguf_vocab_extract(const void *gguf_data, size_t data_len, gguf_vocab_t *voc
     memset(vocab, 0, sizeof(*vocab));
     vocab->bos_id = -1;
     vocab->eos_id = -1;
+    vocab->add_space_prefix = 1;  /* default: true (overridden by GGUF key if present) */
 
     buf_reader_t r = { .data = (const uint8_t *)gguf_data, .len = data_len, .pos = 0 };
 
@@ -187,6 +188,13 @@ int gguf_vocab_extract(const void *gguf_data, size_t data_len, gguf_vocab_t *voc
             uint32_t val;
             if (buf_read_u32(&r, &val)) goto fail;
             vocab->eos_id = (int)val;
+            continue;
+        }
+
+        if (vtype == GGUF_TYPE_BOOL && strcmp(key, "tokenizer.ggml.add_space_prefix") == 0) {
+            uint8_t val;
+            if (buf_read(&r, &val, 1)) goto fail;
+            vocab->add_space_prefix = val ? 1 : 0;
             continue;
         }
 
@@ -422,8 +430,11 @@ int gguf_vocab_init_tokenizer(const gguf_vocab_t *vocab, tokenizer_t *tok)
     if (!vocab || !tok || vocab->vocab_size <= 0 || !vocab->tokens)
         return -1;
 
-    return tokenizer_init(tok, (const char **)vocab->tokens, vocab->scores,
-                          vocab->vocab_size, vocab->bos_id, vocab->eos_id);
+    int rc = tokenizer_init(tok, (const char **)vocab->tokens, vocab->scores,
+                            vocab->vocab_size, vocab->bos_id, vocab->eos_id);
+    if (rc == 0)
+        tok->add_space_prefix = vocab->add_space_prefix;
+    return rc;
 }
 
 /* Legacy stub API — preserved for CMakeLists.txt compatibility */

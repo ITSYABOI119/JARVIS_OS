@@ -32,6 +32,7 @@ int tokenizer_init(tokenizer_t *t, const char **tokens, const float *scores,
     t->scores = NULL;
     t->ht_table = NULL;
     t->ht_capacity = 0;
+    t->add_space_prefix = 1;  /* default: prepend ▁ (overridden by GGUF flag) */
 
     t->tokens = (char **)malloc(sizeof(char *) * (size_t)vocab_size);
     t->scores = (float *)malloc(sizeof(float) * (size_t)vocab_size);
@@ -95,17 +96,20 @@ int tokenizer_encode(const tokenizer_t *t, const char *text,
     if (text_len == 0 || max_tokens <= 0) return 0;
 
     /* SentencePiece pre-processing: replace spaces with ▁ (U+2581, 3 bytes UTF-8).
-     * Also prepend ▁ to the beginning (SentencePiece convention).
-     * Only if ▁ exists in the vocab (skip for GPT-2 models). */
+     * Prepend ▁ only if add_space_prefix is true (default for most SP models,
+     * but Gemma 4 sets add_space_prefix=false).
+     * Only activate if ▁ exists in the vocab (skip for GPT-2 models). */
     char *sp_text = NULL;
     int has_sp = (tokenizer_find(t, "\xe2\x96\x81") >= 0);
     if (has_sp) {
         sp_text = (char *)malloc((size_t)text_len * 3 + 4);
         if (!sp_text) return -1;
         int wp = 0;
-        sp_text[wp++] = (char)0xE2;
-        sp_text[wp++] = (char)0x96;
-        sp_text[wp++] = (char)0x81;
+        if (t->add_space_prefix) {
+            sp_text[wp++] = (char)0xE2;
+            sp_text[wp++] = (char)0x96;
+            sp_text[wp++] = (char)0x81;
+        }
         for (int i = 0; i < text_len; i++) {
             if (text[i] == ' ') {
                 sp_text[wp++] = (char)0xE2;

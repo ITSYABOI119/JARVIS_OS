@@ -24,7 +24,8 @@ typedef struct {
     int     vocab_size;
     int     bos_id;
     int     eos_id;
-    int     has_merges;  /* true if tokenizer.ggml.merges was found and used for scoring */
+    int     has_merges;       /* true if tokenizer.ggml.merges was found and used for scoring */
+    int     add_space_prefix; /* 1 = prepend ▁ (default), 0 = don't (Gemma 4) */
 } gguf_vocab_t;
 
 /**

@@ -15,8 +15,14 @@ if [ ! -f "$KERNEL" ] || [ ! -f "$ROOTSERVER" ]; then
 fi
 
 # Create FAT32 disk image with model
-echo "Creating FAT32 disk image with model..."
-dd if=/dev/zero of="$DISK_IMG" bs=1M count=1024 2>/dev/null
+# Size the image to fit the model (round up to nearest GB + 128MB for FAT32 overhead)
+MODEL_SIZE_MB=1024
+if [ -f "$MODEL" ]; then
+    MODEL_SIZE_MB=$(( $(stat -c%s "$MODEL") / 1048576 + 128 ))
+    [ "$MODEL_SIZE_MB" -lt 1024 ] && MODEL_SIZE_MB=1024
+fi
+echo "Creating FAT32 disk image (${MODEL_SIZE_MB}MB)..."
+dd if=/dev/zero of="$DISK_IMG" bs=1M count="$MODEL_SIZE_MB" 2>/dev/null
 mkfs.fat -F 32 -n JARVIS_DATA "$DISK_IMG" >/dev/null
 MOUNT_DIR=$(mktemp -d)
 sudo mount "$DISK_IMG" "$MOUNT_DIR"
