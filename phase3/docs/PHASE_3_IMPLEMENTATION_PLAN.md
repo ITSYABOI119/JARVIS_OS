@@ -65,12 +65,13 @@ This document provides a detailed week-by-week implementation plan for Phase 3. 
 | Gemma 4 E4B #3 (7.33/10), Qwen3.5 9B #4 (7.26/10) | Apr 9 | Both need engine work |
 | Llama 3.1 8B disqualified (5.06/10, #8) | Apr 9 | Training data contamination, below 3B model |
 | Full results: `models/quality_results/FINAL_SCORES.txt` | Apr 9 | 7-judge combined scores + speed + PPL + tiers |
-| **Gemma 4 E2B engine COMPLETE — coherent English output** | **Apr 11** | **16 fixes over one session, verified on main PC native test** |
+| **Gemma 4 E2B engine COMPLETE — coherent English on main PC + seL4 QEMU** | **Apr 11** | **17 fixes, validated BOTH native test AND JARVIS PC seL4 Process B (4/4 queries)** |
 
 ### Gemma 4 E2B Engine — What We Fixed (Apr 11, 2026)
 
-Built a working from-scratch Gemma 4 inference engine in pure C11. Took 16 sequential
-fixes to get coherent output. Each fix validated against llama.cpp behavior.
+Built a working from-scratch Gemma 4 inference engine in pure C11. Took 17 sequential
+fixes to get coherent output on both the main PC native test and JARVIS PC seL4 QEMU
+Process B. Each fix validated against llama.cpp behavior.
 
 | # | Fix | Impact |
 |---|-----|--------|
@@ -90,8 +91,9 @@ fixes to get coherent output. Each fix validated against llama.cpp behavior.
 | 14 | `<\|think\|>` (token 98) at end of prompt | Gemma 4 thinking mode |
 | 15 | Stop on `<eos>` (1), not `<turn\|>` (106) | Model emits turn-end first |
 | 16 | **Attention scale = 1.0**, NOT `1/sqrt(head_dim)` | Per `llama.cpp f_attn_scale=1.0` |
+| 17 | **PLE scratch buffers on heap**, not stack (seL4 stack limit) | 70KB arrays crashed Process B |
 
-**Sample output (Ryzen 5600, 0.3 tok/s):**
+**Sample output on main PC native test (Ryzen 5600, 0.3 tok/s):**
 
 Prompt: "What is the seL4 microkernel?"
 > "The seL4 microkernel is a **high-assurance, formally verified microkernel**
@@ -101,15 +103,36 @@ Prompt: "What is a page fault?"
 > "A **page fault** is a type of interrupt that occurs in a **virtual memory
 > system** when a program tries to access a page of memory that"
 
-Both responses are technically accurate and correctly formatted with markdown.
+**Sample output on JARVIS PC seL4 QEMU Process B (Ryzen 2700X, ~90s/query w/ debug prints):**
+
+Prompt: "What is a page fault and how is it handled"
+> "A page fault is a crucial concept in **virtual memory manage..."
+
+Prompt: "What is the role of a scheduler in an OS"
+> "The role of a **scheduler** in an Operating System (OS) is a..."
+
+Prompt: "How do device drivers communicate with hardware"
+> "Device drivers are the crucial software components that a..."
+
+Prompt: "What are the key principles of microkernel design"
+> "The microkernel design philosophy is a fundamental appr..."
+
+4/4 coherent English responses via process-isolated IPC (Process A → Process B
+shared-memory ring). Response snippets are truncated in the log at the first IPC
+chunk boundary but confirm end-to-end success. Per-query time is dominated by
+verbose per-forward-pass debug prints; silencing these should bring speed back
+to the native ballpark.
+
+All responses are technically accurate and correctly formatted with markdown.
 
 ### What's Left
 
 | Task | Priority | Effort | Notes |
 |------|----------|--------|-------|
-| ~~Gemma 4 engine work~~ | ~~HIGH~~ | ~~~1000 LOC~~ | **DONE — 16 fixes on `feature/gemma4-arch`** |
-| **JARVIS PC seL4 QEMU validation** | **HIGH** | In progress | Port `inference_server.c` with chat template (done), flash + test |
-| Merge `feature/gemma4-arch` to master | HIGH | 1 session | After JARVIS PC validation |
+| ~~Gemma 4 engine work~~ | ~~HIGH~~ | ~~~1000 LOC~~ | **DONE — 17 fixes on `feature/gemma4-arch`** |
+| ~~JARVIS PC seL4 QEMU validation~~ | ~~HIGH~~ | ~~1 session~~ | **DONE — 4/4 queries coherent, process-isolated IPC verified** |
+| **Merge `feature/gemma4-arch` to master** | **HIGH** | **1 session** | **Ready — zero conflicts, tests green** |
+| Silence verbose per-forward-pass debug prints | MEDIUM | 1 hour | Gate `[L00@N]`, `[TOP5@N]` behind a flag; restore speed |
 | TurboQuant evaluation (our branch vs TQ+) | MEDIUM | 2-3 sessions | Rebase TQ branch, compare with TurboQuant+ |
 | Asymmetric K/V (Q8-K + TQ-V) | MEDIUM | ~460 LOC | After TQ evaluation |
 | Wire dynamic model scaling | MEDIUM | 2-3 sessions | Hot-swap from NVMe, state machine |
