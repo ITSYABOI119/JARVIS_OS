@@ -65,15 +65,55 @@ This document provides a detailed week-by-week implementation plan for Phase 3. 
 | Gemma 4 E4B #3 (7.33/10), Qwen3.5 9B #4 (7.26/10) | Apr 9 | Both need engine work |
 | Llama 3.1 8B disqualified (5.06/10, #8) | Apr 9 | Training data contamination, below 3B model |
 | Full results: `models/quality_results/FINAL_SCORES.txt` | Apr 9 | 7-judge combined scores + speed + PPL + tiers |
+| **Gemma 4 E2B engine COMPLETE — coherent English output** | **Apr 11** | **16 fixes over one session, verified on main PC native test** |
+
+### Gemma 4 E2B Engine — What We Fixed (Apr 11, 2026)
+
+Built a working from-scratch Gemma 4 inference engine in pure C11. Took 16 sequential
+fixes to get coherent output. Each fix validated against llama.cpp behavior.
+
+| # | Fix | Impact |
+|---|-----|--------|
+| 1 | Tokenizer `merges` from GGUF (not fake scores) | BPE priority correct |
+| 2 | SentencePiece `▁` space encoding (cond on `add_space_prefix`) | Real token IDs |
+| 3 | **Q5_K dequantization** | SHOWSTOPPER — was zeroing attn_v/ffn_down in Q4_K_M |
+| 4 | **GeGLU activation** (GELU-gated, not SwiGLU) | Wrong FFN output before |
+| 5 | **NEOX RoPE** (pair `[i, i+half]`, not `[2i, 2i+1]`) | Scrambled positions before |
+| 6 | **Embedding scale** (multiply by `sqrt(dim)=sqrt(1536)`) | Correct input magnitude |
+| 7 | **layer_output_scale is scalar {1}** (not vector {dim}) | Was reading past tensor |
+| 8 | `rms_norm_eps` from config (1e-6), not hardcoded 1e-5 | Correct normalization |
+| 9 | **V raw RMSNorm** per-head (no learned weights) | Gemma-specific |
+| 10 | **PLE complete rewrite**: per-layer slices, end-of-layer, post_norm | Was fundamentally wrong |
+| 11 | **PLE context component**: BF16 `per_layer_model_proj`, combine `(ctx+id)/sqrt(2)` | Missing half the signal |
+| 12 | **KV share map**: use `shared_kv_layers=20` from config, NOT tensor presence | Layers 15-34 reuse 13/14 |
+| 13 | Chat template with direct token IDs (105, 106, 107, 2364, 4368) | Model is instruct-tuned |
+| 14 | `<\|think\|>` (token 98) at end of prompt | Gemma 4 thinking mode |
+| 15 | Stop on `<eos>` (1), not `<turn\|>` (106) | Model emits turn-end first |
+| 16 | **Attention scale = 1.0**, NOT `1/sqrt(head_dim)` | Per `llama.cpp f_attn_scale=1.0` |
+
+**Sample output (Ryzen 5600, 0.3 tok/s):**
+
+Prompt: "What is the seL4 microkernel?"
+> "The seL4 microkernel is a **high-assurance, formally verified microkernel**
+> designed to be a foundation for building highly secure and reliable operating"
+
+Prompt: "What is a page fault?"
+> "A **page fault** is a type of interrupt that occurs in a **virtual memory
+> system** when a program tries to access a page of memory that"
+
+Both responses are technically accurate and correctly formatted with markdown.
 
 ### What's Left
 
 | Task | Priority | Effort | Notes |
 |------|----------|--------|-------|
-| **Gemma 4 engine work** | **HIGH** | ~1000 LOC | PLE + shared KV + dual RoPE + sliding window — unlocks #1 model |
+| ~~Gemma 4 engine work~~ | ~~HIGH~~ | ~~~1000 LOC~~ | **DONE — 16 fixes on `feature/gemma4-arch`** |
+| **JARVIS PC seL4 QEMU validation** | **HIGH** | In progress | Port `inference_server.c` with chat template (done), flash + test |
+| Merge `feature/gemma4-arch` to master | HIGH | 1 session | After JARVIS PC validation |
 | TurboQuant evaluation (our branch vs TQ+) | MEDIUM | 2-3 sessions | Rebase TQ branch, compare with TurboQuant+ |
 | Asymmetric K/V (Q8-K + TQ-V) | MEDIUM | ~460 LOC | After TQ evaluation |
 | Wire dynamic model scaling | MEDIUM | 2-3 sessions | Hot-swap from NVMe, state machine |
+| Perf: pthread matmul + AVX2 fused dequant-dot | MEDIUM | ~2 weeks | Target 5-20 tok/s CPU (from 0.3) |
 | Enhanced SHIELD | LOW | 2 weeks | Model-assisted risk scoring |
 | Final report + v0.3.0-beta tag | LAST | 1 week | After all above |
 
@@ -1308,6 +1348,99 @@ While waiting for the JARVIS Project PC, the majority of Phase 3b implementation
 **Effort:** 2-3 sessions → Actual: 1 session
 **Dependencies:** Week 31-32 complete
 **Acceptance:** ✅ All models tested, results documented, decisions made with data
+
+---
+
+### Week 33b: Gemma 4 E2B Engine Work — COMPLETE
+
+> **STATUS:** ✅ COMPLETE (April 11, 2026). Built a from-scratch Gemma 4 inference engine in pure C11. Coherent English output verified on main PC native test. 16 sequential fixes over one marathon debugging session. Branch: `feature/gemma4-arch`.
+
+**Goal:** Unlock the #1 bench-off winner (Gemma 4 E2B, 8.40/10, 7-judge consensus).
+
+**The fixes (in order, each validated against llama.cpp source + output):**
+
+1. **Tokenizer `merges`** — read `tokenizer.ggml.merges` from GGUF, assign `-(float)rank` as scores. Previous code used fake `-(float)i` per token index, producing wrong BPE merge order.
+
+2. **SentencePiece `▁` encoding** — replace spaces with ▁ (U+2581), conditional on `add_space_prefix` metadata. Gemma 4 has `add_space_prefix=false` so no leading ▁.
+
+3. **Q5_K dequantization** — SHOWSTOPPER. Q4_K_M quantization uses Q5_K for `attn_v` and `ffn_down`. Missing support caused those tensors to be silently zeroed, killing attention values and FFN outputs at every layer.
+
+4. **GeGLU activation** — Gemma uses GELU-gated linear unit (`gelu_pytorch_tanh`), not SwiGLU. Added `use_gelu` config flag, set for all Gemma variants.
+
+5. **NEOX-style RoPE** — pairs are `(d[i], d[i+half])` not `(d[2i], d[2i+1])`. Gemma uses `LLAMA_ROPE_TYPE_NEOX`. Added `rope_neox` config flag.
+
+6. **Embedding scale** — multiply token embedding by `sqrt(n_embd)` (= sqrt(1536) ≈ 39.2) after lookup. Standard Gemma convention since Gemma 1.
+
+7. **`layer_output_scale` is scalar `{1}`** — not `{dim}`. Was using `tensor_mul(x, scale, dim)` which read scale[0] correctly but then scale[1..1535] as garbage memory past the 1-element tensor. Fixed with `tensor_scale(x, s, x, dim)` (broadcast).
+
+8. **`rms_norm_eps` = 1e-6 from config** — not hardcoded `RMS_EPS=1e-5`. Applied to `attn_norm`, `ffn_norm`, `output_norm`, and all sandwich norms.
+
+9. **V raw RMSNorm per-head** — Q and K get learned RMSNorm via `attn_q_norm`/`attn_k_norm`, but V gets raw RMS normalization (no learned weights) before cache storage.
+
+10. **PLE complete rewrite** — Per-Layer Embeddings was fundamentally wrong:
+    - Lookup: `per_layer_token_embd` has 8960 values per token (35 layers × 256), stored as one Q5_K block per layer. Byte offset: `(token * n_layers + L) * block_bytes`.
+    - Previous code used wrong offset formula, reading 256 bytes at `token * 176` (garbage).
+    - Placement: PLE now at END of layer (after FFN residual), not START.
+    - Gate direction: `inp_gate` is `[1536 → 256]` mapping residual stream to gate. Previous code had it backward.
+    - `post_norm` per-layer RMSNorm applied after PLE projection.
+
+11. **PLE context component** — Added second PLE pathway per Gemma 4 spec:
+    - `context = per_layer_model_proj @ inpL` (1536 → 8960), tensor is BF16
+    - Added BF16 dequant (type 30: upper 16 bits of F32)
+    - Scale by `1/sqrt(n_embd)` then reshape to `[n_layer, ple_dim]`
+    - Apply `per_layer_proj_norm` to each 256-dim slice
+    - Combine: `(token_identity + context) / sqrt(2)`
+
+12. **KV share map from config, NOT tensor presence** — Layers 15-34 have `wk/wv` tensors in the GGUF but llama.cpp IGNORES them and reuses K/V from earlier layers:
+    - SWA layers in 15-34 → reuse layer 13 (last SWA with own K/V)
+    - Global layers (19, 24, 29, 34) → reuse layer 14 (last global with own K/V)
+    - Derived from `config->shared_kv_layers = 20` and per-layer SWA type.
+
+13. **Chat template with direct token IDs** — Gemma 4 IT is instruction-tuned, needs template wrapping. Control tokens in vocab:
+    - `<|turn>` = 105, `<turn|>` = 106, `\n` = 107
+    - `user` = 2364, `model` = 4368, `<|think|>` = 98
+    - Template: `<bos><|turn>user\n{query}<turn|>\n<|turn>model\n<|think|>`
+
+14. **`<|think|>` token** (98) appended to prompt — activates Gemma 4 thinking mode.
+
+15. **Stop on `<eos>` (1)** — NOT `<turn|>` (106, which is `tok.eos_id`). Model emits `<turn|>` as first token after the chat template prompt (end of assistant turn marker), so using it as stop token terminated generation immediately.
+
+16. **Attention scale = 1.0**, NOT `1/sqrt(head_dim)` — llama.cpp prints `f_attn_scale = 1.0e+00` for this model. Q/K RMSNorm with learned weights handles magnitude control; additional `1/sqrt(256)=0.0625` scaling crushed scores 16x into near-uniform softmax. Llama still uses standard `1/sqrt(head_dim)`.
+
+**Verification output (Ryzen 5600, 0.3 tok/s, native WSL):**
+
+```
+Prompt: "What is the seL4 microkernel?"
+Output: "The seL4 microkernel is a **high-assurance, formally verified
+         microkernel** designed to be a foundation for building highly
+         secure and reliable operating"
+
+Prompt: "What is a page fault?"
+Output: "A **page fault** is a type of interrupt that occurs in a
+         **virtual memory system** when a program tries to access a
+         page of memory that"
+```
+
+Both responses are technically accurate and correctly markdown-formatted.
+
+**Architecture features active:**
+- ✅ PLE (token identity + context-aware projection + combine)
+- ✅ Sandwich norms (post_attn_norm, post_ffw_norm before residual)
+- ✅ Layer output scale (scalar broadcast, ~0.02 per layer)
+- ✅ Per-head Q/K RMSNorm + V raw RMSNorm
+- ✅ Dual RoPE (theta=10000 for SWA, 1000000 for global)
+- ✅ Logit softcap (cap=30.0)
+- ✅ Shared KV (20 layers reuse from layers 13/14)
+- ✅ Per-layer variable FFN dim (6144 early, 12288 late)
+- ✅ Per-layer variable head_dim (256 SWA, 512 global)
+- ✅ SWA window (512 tokens) with correct masking
+
+**Reference:** `src/models/gemma4-iswa.cpp` in llama.cpp (fetched for line-by-line comparison during debugging).
+
+**Effort:** Estimated 2-3 sessions → Actual: 1 marathon session, 16 fixes
+**Dependencies:** Week 33 bench-off complete
+**Acceptance:** ✅ Coherent English output matching llama.cpp behavior
+**Next:** Port chat template wrapping into `inference_server.c` (Process B on seL4) and validate on JARVIS PC bare-metal.
 
 ---
 

@@ -16,7 +16,7 @@ Guidance for Claude Code when working with this repository.
 | **Phase 3** | **IN PROGRESS** | Months 24-36 | Beta on x86-64 bare metal (**LLM inference on seL4 VERIFIED**) |
 | Phase 4 | Future | Months 36+ | Production v1.0 |
 
-**Current:** Phase 3c, Active Development (April 9, 2026). **MILESTONE: 11-model bench-off complete. Gemma 4 E2B confirmed #1 (8.40/10, 7 judges).** Phase 3b complete (bare-metal boot, NVMe model loading, IPC workload, I211 NIC). Phase 3c hardening done (fuzz testing, security audit 25 findings). Model bench-off done (speed + perplexity + quality across 11 models on 3 hardware configs). Next: Gemma 4 engine work (~1000 LOC) to unlock #1 ranked model. Mistral 7B Q8_0 is drop-in CRITICAL pick. Llama 3.2 1B running as IDLE fallback. Two-PC setup: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/32GB/1TB NVMe) running bare-metal seL4.
+**Current:** Phase 3c, Active Development (April 11, 2026). **MILESTONE: Gemma 4 E2B engine COMPLETE — coherent English output on main PC native test.** 16 sequential fixes over one marathon session on `feature/gemma4-arch` branch. Phase 3b complete (bare-metal boot, NVMe model loading, IPC workload, I211 NIC). Phase 3c hardening done (fuzz testing, security audit 25 findings). Model bench-off done (speed + perplexity + quality across 11 models on 3 hardware configs). Next: validate on JARVIS PC seL4 QEMU, merge to master, then TurboQuant + dynamic scaling. Two-PC setup: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/32GB/1TB NVMe) running bare-metal seL4.
 
 ---
 
