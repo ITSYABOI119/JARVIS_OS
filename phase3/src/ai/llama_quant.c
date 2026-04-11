@@ -36,6 +36,13 @@
 #include <immintrin.h>
 #endif
 
+/* Per-forward-pass debug tracing — gates [L00@N], [FWD], [TOP5@N] diagnostics.
+ * Default is OFF (silent) for performance; pass -DJARVIS_DBG_FORWARD=1 on the
+ * compiler command line to re-enable. Also documented in jarvis_debug.h. */
+#ifndef JARVIS_DBG_FORWARD
+#define JARVIS_DBG_FORWARD 0
+#endif
+
 #define RMS_EPS 1e-5f
 
 /* ============================================================
@@ -1139,6 +1146,7 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
                 state->x[d] += ple_out[d];
         }
 
+#if JARVIS_DBG_FORWARD
         /* DEBUG: per-layer x norm trace (first 2 tokens, key layers) */
         if (state->pos < 2 && (L < 3 || L == 17 || L == 34)) {
             float norm2 = 0;
@@ -1147,6 +1155,7 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
                    L, state->pos, sqrtf(norm2),
                    state->x[0], state->x[1], state->x[2]);
         }
+#endif
 
         /* Layer output scaling (Gemma 4) — scalar broadcast.
          * layer_output_scale is a single float {1}, NOT a [dim] vector.
@@ -1187,6 +1196,7 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
     if (!G4_DISABLE_SOFTCAP && c->logit_softcap > 0.0f)
         logit_softcap(state->logits, c->vocab_size, c->logit_softcap);
 
+#if JARVIS_DBG_FORWARD
     /* DEBUG: print first-token logits + top-5 after full prompt */
     if (state->pos == 0) {
         printf("[FWD] pos0 logits[0..4]: %.4f %.4f %.4f %.4f %.4f\n",
@@ -1208,6 +1218,7 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
             printf("%d(%.1f) ", top[j], state->logits[top[j]]);
         printf("\n");
     }
+#endif
 
     /* 5. Increment position */
     state->pos++;
