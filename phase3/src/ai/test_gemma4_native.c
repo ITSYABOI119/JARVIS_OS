@@ -167,12 +167,28 @@ int main(int argc, char **argv)
     }
     printf("\n");
 
-    /* 7. Generate from raw text — match llama.cpp's -no-cnv behavior */
-    printf("=== Generation Test (raw completion) ===\n\n");
+    /* 7. Generate using Gemma 4 chat template with DIRECT token IDs.
+     * Template: <bos><|turn>user\n{text}<turn|>\n<|turn>model\n
+     * Control tokens: <|turn>=105, <turn|>=106, \n=107, user=2364, model=4368 */
+    printf("=== Generation Test (chat template, direct IDs) ===\n\n");
     int prompt_ids[128];
-    prompt_ids[0] = tok.bos_id;
-    int n_prompt = 1 + tokenizer_encode(&tok, "The seL4 microkernel is",
-                                         prompt_ids + 1, 127);
+    int n_prompt = 0;
+    prompt_ids[n_prompt++] = tok.bos_id;   /* <bos> = 2 */
+    prompt_ids[n_prompt++] = 105;          /* <|turn> */
+    prompt_ids[n_prompt++] = 2364;         /* user */
+    prompt_ids[n_prompt++] = 107;          /* \n */
+    /* encode user text */
+    n_prompt += tokenizer_encode(&tok, "What is the seL4 microkernel?",
+                                  prompt_ids + n_prompt, 127 - n_prompt - 5);
+    prompt_ids[n_prompt++] = 106;          /* <turn|> */
+    prompt_ids[n_prompt++] = 107;          /* \n */
+    prompt_ids[n_prompt++] = 105;          /* <|turn> */
+    prompt_ids[n_prompt++] = 4368;         /* model */
+    prompt_ids[n_prompt++] = 107;          /* \n */
+
+    printf("Prompt tokens (%d):", n_prompt);
+    for (int i = 0; i < n_prompt; i++) printf(" %d", prompt_ids[i]);
+    printf("\n");
 
     printf("Generating 30 tokens (greedy, temp=0)...\n");
     clock_t t0 = clock();
@@ -205,10 +221,18 @@ int main(int argc, char **argv)
     memset(state.value_cache, 0, kv_bytes);
 
     int p2[128];
-    p2[0] = tok.bos_id;
-    const char *chat_prompt2 =
-        "<|turn>user\nWhat is a page fault?<turn|>\n<|turn>model\n";
-    int n2 = 1 + tokenizer_encode(&tok, chat_prompt2, p2 + 1, 127);
+    int n2 = 0;
+    p2[n2++] = tok.bos_id;
+    p2[n2++] = 105;          /* <|turn> */
+    p2[n2++] = 2364;         /* user */
+    p2[n2++] = 107;          /* \n */
+    n2 += tokenizer_encode(&tok, "What is a page fault?",
+                           p2 + n2, 127 - n2 - 5);
+    p2[n2++] = 106;          /* <turn|> */
+    p2[n2++] = 107;          /* \n */
+    p2[n2++] = 105;          /* <|turn> */
+    p2[n2++] = 4368;         /* model */
+    p2[n2++] = 107;          /* \n */
     t0 = clock();
     n_gen = qmodel_generate(&qm, &state, p2, n2, out_ids, 30,
                              tok.eos_id, 0.0f, 1, 42);
