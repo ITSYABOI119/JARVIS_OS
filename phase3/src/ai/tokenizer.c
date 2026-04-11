@@ -95,26 +95,45 @@ int tokenizer_encode(const tokenizer_t *t, const char *text,
     int text_len = (int)strlen(text);
     if (text_len == 0 || max_tokens <= 0) return 0;
 
-    /* SentencePiece pre-processing: replace spaces with ▁ (U+2581, 3 bytes UTF-8).
-     * Prepend ▁ only if add_space_prefix is true (default for most SP models,
-     * but Gemma 4 sets add_space_prefix=false).
-     * Only activate if ▁ exists in the vocab (skip for GPT-2 models). */
+    /* Space-marker pre-processing: substitute literal spaces with the vocab's
+     * word-boundary marker so that BPE merges can build " word" tokens.
+     *
+     *   SentencePiece (LLaMA 1/2, Gemma, Mistral): marker = ▁  (U+2581, 3 bytes)
+     *   GPT-2 BPE    (Llama 3, Qwen, Falcon):      marker = Ġ  (U+0120, 2 bytes)
+     *
+     * Leading-marker prepend:
+     *   SentencePiece: honor add_space_prefix (default 1, Gemma 4 sets 0)
+     *   GPT-2 BPE:     never prepend (the first word is "The", not " The")
+     *
+     * If neither marker is in the vocab, skip substitution entirely — the
+     * caller's text is tokenized character-by-character as-is. */
     char *sp_text = NULL;
-    int has_sp = (tokenizer_find(t, "\xe2\x96\x81") >= 0);
-    if (has_sp) {
+    const char *sp_marker = NULL;
+    int sp_len = 0;
+    int sp_prepend = 0;
+    if (tokenizer_find(t, "\xe2\x96\x81") >= 0) {
+        /* SentencePiece ▁ — honor add_space_prefix for leading marker */
+        sp_marker = "\xe2\x96\x81";
+        sp_len = 3;
+        sp_prepend = t->add_space_prefix;
+    } else if (tokenizer_find(t, "\xc4\xa0") >= 0) {
+        /* GPT-2 BPE Ġ — never prepend leading marker */
+        sp_marker = "\xc4\xa0";
+        sp_len = 2;
+        sp_prepend = 0;
+    }
+    if (sp_marker) {
         sp_text = (char *)malloc((size_t)text_len * 3 + 4);
         if (!sp_text) return -1;
         int wp = 0;
-        if (t->add_space_prefix) {
-            sp_text[wp++] = (char)0xE2;
-            sp_text[wp++] = (char)0x96;
-            sp_text[wp++] = (char)0x81;
+        if (sp_prepend) {
+            memcpy(sp_text + wp, sp_marker, (size_t)sp_len);
+            wp += sp_len;
         }
         for (int i = 0; i < text_len; i++) {
             if (text[i] == ' ') {
-                sp_text[wp++] = (char)0xE2;
-                sp_text[wp++] = (char)0x96;
-                sp_text[wp++] = (char)0x81;
+                memcpy(sp_text + wp, sp_marker, (size_t)sp_len);
+                wp += sp_len;
             } else {
                 sp_text[wp++] = text[i];
             }
