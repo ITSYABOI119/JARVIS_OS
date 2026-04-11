@@ -167,13 +167,11 @@ int main(int argc, char **argv)
     }
     printf("\n");
 
-    /* 7. Generate using Gemma 4 chat template format. */
-    printf("=== Generation Test (chat template) ===\n\n");
+    /* 7. Generate from raw text — match llama.cpp's -no-cnv behavior */
+    printf("=== Generation Test (raw completion) ===\n\n");
     int prompt_ids[128];
     prompt_ids[0] = tok.bos_id;
-    const char *chat_prompt =
-        "<|turn>user\nWhat is the seL4 microkernel?<turn|>\n<|turn>model\n";
-    int n_prompt = 1 + tokenizer_encode(&tok, chat_prompt,
+    int n_prompt = 1 + tokenizer_encode(&tok, "The seL4 microkernel is",
                                          prompt_ids + 1, 127);
 
     printf("Generating 30 tokens (greedy, temp=0)...\n");

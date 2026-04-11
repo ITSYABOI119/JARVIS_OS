@@ -492,20 +492,28 @@ int qmodel_load(qmodel_t *qm, const gguf_ctx_t *ctx, const void *gguf_base)
                                              actual_head_dim == cfg->head_dim_swa);
                 }
 
-                /* Shared KV from wk tensor presence */
-                if (L->wk.data == NULL) {
-                    /* Find most recent previous layer with same attention type + own KV */
+                /* Shared KV: use config's shared_kv_layers value (NOT tensor presence).
+                 * The GGUF has wk/wv tensors for ALL layers but llama.cpp IGNORES them
+                 * for shared layers. llama.cpp's actual behavior:
+                 *   - Layers 0..(n_layers-shared_kv_layers-1): own K/V
+                 *   - Layers (n_layers-shared_kv_layers)..(n_layers-1): reuse from
+                 *     the most recent same-SWA-type layer with own K/V.
+                 */
+                int n_unique_kv = cfg->n_layers - cfg->shared_kv_layers;
+                if (n_unique_kv <= 0) n_unique_kv = cfg->n_layers;
+                if (i < n_unique_kv) {
+                    cfg->kv_share_map[i] = -1;  /* own KV */
+                } else {
+                    /* Find most recent layer in [0, n_unique_kv) with same SWA type */
                     bool my_swa = cfg->layer_is_swa[i];
                     int source = -1;
-                    for (int j = i - 1; j >= 0; j--) {
-                        if (cfg->layer_is_swa[j] == my_swa && cfg->kv_share_map[j] < 0) {
+                    for (int j = n_unique_kv - 1; j >= 0; j--) {
+                        if (cfg->layer_is_swa[j] == my_swa) {
                             source = j;
                             break;
                         }
                     }
                     cfg->kv_share_map[i] = (source >= 0) ? source : 0;
-                } else {
-                    cfg->kv_share_map[i] = -1;  /* own KV */
                 }
             }
 
@@ -515,19 +523,16 @@ int qmodel_load(qmodel_t *qm, const gguf_ctx_t *ctx, const void *gguf_base)
                 cfg->hidden_dim = max_ffn;
             }
 
-            /* Print derived values for debugging */
+            /* Print derived values for debugging — show ALL layers to verify KV sharing */
             printf("[qmodel] Derived per-layer dims from tensor shapes:\n");
             for (int i = 0; i < cfg->n_layers; i++) {
-                if (i < 3 || i == cfg->n_layers - 1 ||
-                    (i > 0 && cfg->kv_share_map[i] >= 0 && cfg->kv_share_map[i-1] < 0)) {
-                    printf("  layer %2d: swa=%d ffn=%5d kv_share=%d",
-                           i, cfg->layer_is_swa[i], cfg->layer_ffn_dim[i], cfg->kv_share_map[i]);
-                    if (cfg->kv_share_map[i] >= 0)
-                        printf(" (from L%d)", cfg->kv_share_map[i]);
-                    printf("\n");
-                }
+                printf("  layer %2d: swa=%d ffn=%5d kv_share=%d",
+                       i, cfg->layer_is_swa[i], cfg->layer_ffn_dim[i], cfg->kv_share_map[i]);
+                if (cfg->kv_share_map[i] >= 0)
+                    printf(" (from L%d)", cfg->kv_share_map[i]);
+                printf("\n");
             }
-            printf("  ... (%d layers total, hidden_dim=%d)\n", cfg->n_layers, cfg->hidden_dim);
+            printf("  hidden_dim=%d\n", cfg->hidden_dim);
         }
     }
 
