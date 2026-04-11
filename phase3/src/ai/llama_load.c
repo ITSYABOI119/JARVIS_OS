@@ -629,11 +629,23 @@ int llama_alloc_state(llama_state_t *state, const llama_config_t *config)
     state->key_cache   = (float *)calloc(kv_size, sizeof(float));
     state->value_cache = (float *)calloc(kv_size, sizeof(float));
 
+    /* PLE scratch buffers (Gemma 4 only, but always allocate if ple_dim > 0).
+     * These are ~72KB together for Gemma 4 E2B — too big for seL4 process stack. */
+    if (config->ple_dim > 0) {
+        size_t ple_total = (size_t)config->n_layers * (size_t)config->ple_dim;
+        state->ple_all     = (float *)calloc(ple_total, sizeof(float));
+        state->ple_context = (float *)calloc(ple_total, sizeof(float));
+    } else {
+        state->ple_all     = NULL;
+        state->ple_context = NULL;
+    }
+
     /* Verify all allocations succeeded */
     if (!state->x || !state->xb || !state->xb2 ||
         !state->q || !state->k || !state->v ||
         !state->att || !state->hb || !state->hb2 ||
-        !state->logits || !state->key_cache || !state->value_cache) {
+        !state->logits || !state->key_cache || !state->value_cache ||
+        (config->ple_dim > 0 && (!state->ple_all || !state->ple_context))) {
         llama_free_state(state);
         return -1;
     }
@@ -659,6 +671,8 @@ void llama_free_state(llama_state_t *state)
     free(state->logits);
     free(state->key_cache);
     free(state->value_cache);
+    free(state->ple_all);
+    free(state->ple_context);
 
     memset(state, 0, sizeof(*state));
 }

@@ -704,9 +704,11 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
      * After lookup, apply per_layer_proj_norm (shared across layers) and
      * scale by sqrt(ple_dim) per the Gemma 4 PLE recipe.
      */
-    int has_ple = (!G4_DISABLE_PLE && c->ple_dim > 0 && qm->ple_embed.data != NULL);
-    float ple_all[8960];  /* max 35 * 256 = 8960 for Gemma 4 E2B */
-    if (has_ple && c->n_layers * c->ple_dim <= 8960) {
+    int has_ple = (!G4_DISABLE_PLE && c->ple_dim > 0 && qm->ple_embed.data != NULL
+                    && state->ple_all != NULL);
+    /* Use heap-allocated state buffers (too big for seL4 stack: 35*256*4 = 35KB each) */
+    float *ple_all = state->ple_all;
+    if (has_ple) {
         ggml_type_t ple_type = (ggml_type_t)qm->ple_embed.type;
         int block_size = dequant_type_block_size(ple_type);
         size_t block_bytes = dequant_type_block_bytes(ple_type);
@@ -732,11 +734,9 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
              * Then combine: ple_all[L] = (identity[L] + context[L]) / sqrt(2)
              */
             if (qm->ple_proj.data && qm->ple_proj.n_elements ==
-                (uint64_t)dim * c->n_layers * c->ple_dim) {
-                /* Dequant the full 8960-element context vector.
-                 * per_layer_model_proj has shape (dim, n_layers*ple_dim).
-                 * Matmul: context[m] = sum_k W[k, m] * x[k] for m in [0, 8960) */
-                float context[8960];
+                (uint64_t)dim * c->n_layers * c->ple_dim && state->ple_context) {
+                /* Heap-allocated context buffer (was stack: 35KB crashed seL4) */
+                float *context = state->ple_context;
                 int ctx_out_dim = c->n_layers * c->ple_dim;
                 ggml_type_t ptype = (ggml_type_t)qm->ple_proj.type;
 
@@ -763,7 +763,7 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
                     }
                 } else {
                     /* Unsupported type — zero out context (fall back to identity-only) */
-                    memset(context, 0, sizeof(context));
+                    memset(context, 0, (size_t)ctx_out_dim * sizeof(float));
                 }
 
                 /* Scale context by 1/sqrt(dim) */
@@ -789,8 +789,6 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
         } else {
             has_ple = 0;  /* disable if block layout doesn't match */
         }
-    } else if (has_ple) {
-        has_ple = 0;  /* buffer too small — disable rather than overflow */
     }
 
     /* 2. TRANSFORMER LAYERS */

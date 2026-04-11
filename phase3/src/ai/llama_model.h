@@ -84,6 +84,9 @@ typedef struct {
     float *logits;
     float *key_cache;
     float *value_cache;
+    /* Gemma 4 PLE scratch buffers (heap — too large for seL4 Process B stack) */
+    float *ple_all;        /* [n_layers * ple_dim] — per-token PLE inputs */
+    float *ple_context;    /* [n_layers * ple_dim] — context-aware projection */
     int pos;
     int max_seq_len;
 } llama_state_t;

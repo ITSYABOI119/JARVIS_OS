@@ -14,7 +14,7 @@
 #define JARVIS_DBG_IPC     0
 
 /* Process B inference tracing ([PB] handle_query, generating, decoded) */
-#define JARVIS_DBG_PB      0
+#define JARVIS_DBG_PB      1
 
 /* Ring health checks before send ([PB] ring @... magic=... w= r=) */
 #define JARVIS_DBG_RING    0
