@@ -140,12 +140,41 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* 7. Generate from "The seL4 microkernel is" */
-    printf("=== Generation Test ===\n\n");
-    int prompt_ids[64];
+    /* === Print low-ID tokens to find control tokens === */
+    printf("=== Low-ID tokens (control tokens) ===\n");
+    for (int i = 0; i < 150; i++) {
+        if (tok.tokens[i]) {
+            /* Print only if it looks like a control token (contains < or |) or is short */
+            const char *t = tok.tokens[i];
+            int has_ctrl = (strchr(t, '<') || strchr(t, '|') || strchr(t, '>')) ? 1 : 0;
+            if (has_ctrl || strlen(t) <= 4) {
+                printf("  [%3d] \"%s\"\n", i, t);
+            }
+        }
+    }
+    printf("\n");
+
+    /* Search for specific control token names */
+    const char *control_names[] = {
+        "<|turn>", "<turn|>", "<start_of_turn>", "<end_of_turn>",
+        "<bos>", "<eos>", "<pad>", "user", "model",
+        "<|turn>user", "<|turn>model", NULL
+    };
+    printf("=== Control token lookup ===\n");
+    for (int i = 0; control_names[i]; i++) {
+        int id = tokenizer_find(&tok, control_names[i]);
+        printf("  tokenizer_find(\"%s\") = %d\n", control_names[i], id);
+    }
+    printf("\n");
+
+    /* 7. Generate using Gemma 4 chat template format. */
+    printf("=== Generation Test (chat template) ===\n\n");
+    int prompt_ids[128];
     prompt_ids[0] = tok.bos_id;
-    int n_prompt = 1 + tokenizer_encode(&tok, "The seL4 microkernel is",
-                                         prompt_ids + 1, 63);
+    const char *chat_prompt =
+        "<|turn>user\nWhat is the seL4 microkernel?<turn|>\n<|turn>model\n";
+    int n_prompt = 1 + tokenizer_encode(&tok, chat_prompt,
+                                         prompt_ids + 1, 127);
 
     printf("Generating 30 tokens (greedy, temp=0)...\n");
     clock_t t0 = clock();
@@ -177,10 +206,11 @@ int main(int argc, char **argv)
     memset(state.key_cache, 0, kv_bytes);
     memset(state.value_cache, 0, kv_bytes);
 
-    int p2[64];
+    int p2[128];
     p2[0] = tok.bos_id;
-    int n2 = 1 + tokenizer_encode(&tok, "What is a page fault and how is it handled",
-                                    p2 + 1, 63);
+    const char *chat_prompt2 =
+        "<|turn>user\nWhat is a page fault?<turn|>\n<|turn>model\n";
+    int n2 = 1 + tokenizer_encode(&tok, chat_prompt2, p2 + 1, 127);
     t0 = clock();
     n_gen = qmodel_generate(&qm, &state, p2, n2, out_ids, 30,
                              tok.eos_id, 0.0f, 1, 42);
@@ -188,7 +218,7 @@ int main(int argc, char **argv)
     elapsed = (double)(t1 - t0) / CLOCKS_PER_SEC;
 
     tlen = tokenizer_decode(&tok, out_ids, n_gen, text, sizeof(text));
-    printf("Prompt: \"What is a page fault and how is it handled\"\n");
+    printf("Prompt: (chat template) \"What is a page fault?\"\n");
     printf("Output: \"%s\"\n", text);
     printf("Tokens: %d in %.1fs (%.1f tok/s)\n", n_gen, elapsed,
            elapsed > 0 ? n_gen / elapsed : 0);

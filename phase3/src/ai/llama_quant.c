@@ -43,7 +43,8 @@
  * Set to 1 to disable a feature. Start with all 1, then enable
  * one at a time to find which feature breaks generation.
  * ============================================================ */
-/* All features enabled for diagnostic run */
+/* All Gemma 4 features enabled — confirmed ESSENTIAL by norm explosion test.
+ * Without layer_output_scale (0.0178), |x| grows from 100 -> 4.5M across 35 layers. */
 #define G4_DISABLE_PLE          0
 #define G4_DISABLE_SANDWICH     0
 #define G4_DISABLE_SCALE        0
@@ -593,6 +594,19 @@ int qmodel_load(qmodel_t *qm, const gguf_ctx_t *ctx, const void *gguf_base)
 
         /* Norm epsilon */
         printf("[AUDIT] rms_norm_eps=%g (research says 1e-6)\n", qm->config.rms_norm_eps);
+
+        /* Shared KV map — verify sharing is NOT active (all layers should have own KV) */
+        if (qm->config.kv_share_map) {
+            int n_shared = 0, n_own = 0;
+            for (int i = 0; i < qm->config.n_layers; i++) {
+                if (qm->config.kv_share_map[i] >= 0) n_shared++;
+                else n_own++;
+            }
+            printf("[AUDIT] kv_share_map: %d own, %d shared (config says shared_kv=%d)\n",
+                   n_own, n_shared, qm->config.shared_kv_layers);
+        } else {
+            printf("[AUDIT] kv_share_map is NULL (all layers compute own KV)\n");
+        }
 
         /* Q/K norm sizes — must match per-layer head_dim */
         if (qm->layers[0].q_norm.data)
