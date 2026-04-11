@@ -614,64 +614,57 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
             state->x[i] *= scale;
     }
 
-    /* PLE: compute per-layer embedding (once per token, reused by all layers)
-     * Stack arrays sized for max ple_dim=256 and max dim=4096. */
-    float ple_normed[256]; /* ple_dim (max 256 for Gemma 4 E2B) */
+    /* PLE: compute per-layer embedding slices for this token.
+     * per_layer_token_embd has shape (n_layers * ple_dim, vocab_size) — each token
+     * has n_layers * ple_dim values (e.g. 35 * 256 = 8960 for Gemma 4 E2B).
+     * Each layer's slice is ONE Q5_K block of 256 values.
+     *
+     * Byte offset for token T, layer L:
+     *   (T * n_layers + L) * block_bytes
+     *
+     * After lookup, apply per_layer_proj_norm (shared across layers) and
+     * scale by sqrt(ple_dim) per the Gemma 4 PLE recipe.
+     */
     int has_ple = (!G4_DISABLE_PLE && c->ple_dim > 0 && qm->ple_embed.data != NULL);
-    if (has_ple) {
-        /* Lookup PLE embedding for this token */
-        float ple_raw[256];
-        qembed_lookup(&qm->ple_embed, token, ple_raw, c->ple_dim);
+    float ple_all[8960];  /* max 35 * 256 = 8960 for Gemma 4 E2B */
+    if (has_ple && c->n_layers * c->ple_dim <= 8960) {
+        ggml_type_t ple_type = (ggml_type_t)qm->ple_embed.type;
+        int block_size = dequant_type_block_size(ple_type);
+        size_t block_bytes = dequant_type_block_bytes(ple_type);
 
-        /* RMSNorm the PLE embedding */
-        float norm_eps = c->rms_norm_eps > 0.0f ? c->rms_norm_eps : RMS_EPS;
-        if (qm->ple_norm.data) {
-            if (qm->ple_norm.type == GGML_TYPE_F32) {
-                tensor_rms_norm(ple_raw, (const float *)qm->ple_norm.data,
-                                ple_normed, c->ple_dim, norm_eps);
-            } else {
-                float norm_w[256];
-                dequant_row(qm->ple_norm.data, norm_w, c->ple_dim,
-                            (ggml_type_t)qm->ple_norm.type);
-                tensor_rms_norm(ple_raw, norm_w, ple_normed, c->ple_dim, norm_eps);
+        if (block_size == c->ple_dim && block_bytes > 0) {
+            /* Each layer's slice is exactly one block */
+            const uint8_t *base = (const uint8_t *)qm->ple_embed.data;
+            for (int L = 0; L < c->n_layers; L++) {
+                size_t off = ((size_t)token * c->n_layers + L) * block_bytes;
+                dequant_row(base + off, &ple_all[L * c->ple_dim],
+                            c->ple_dim, ple_type);
             }
+
+            /* Apply per_layer_proj_norm (shared weight, same for all layers) */
+            float norm_eps_ple = c->rms_norm_eps > 0.0f ? c->rms_norm_eps : RMS_EPS;
+            if (qm->ple_norm.data && qm->ple_norm.type == GGML_TYPE_F32) {
+                const float *norm_w = (const float *)qm->ple_norm.data;
+                for (int L = 0; L < c->n_layers; L++) {
+                    float *slice = &ple_all[L * c->ple_dim];
+                    tensor_rms_norm(slice, norm_w, slice, c->ple_dim, norm_eps_ple);
+                }
+            }
+
+            /* Scale by sqrt(ple_dim) — Gemma 4 token-identity component scaling */
+            float ple_scale = sqrtf((float)c->ple_dim);
+            for (int i = 0; i < c->n_layers * c->ple_dim; i++)
+                ple_all[i] *= ple_scale;
         } else {
-            memcpy(ple_normed, ple_raw, (size_t)c->ple_dim * sizeof(float));
+            has_ple = 0;  /* disable if block layout doesn't match */
         }
+    } else if (has_ple) {
+        has_ple = 0;  /* buffer too small — disable rather than overflow */
     }
 
     /* 2. TRANSFORMER LAYERS */
     for (int L = 0; L < c->n_layers; L++) {
         const qlayer_t *layer = &qm->layers[L];
-
-        /* PLE (Gemma 4): gated residual add.
-         * Tensor shapes (from GGUF):
-         *   inp_gate: [1536 → 256]  (maps residual stream x to gate)
-         *   proj:     [256 → 1536]  (maps gated 256-dim back to residual)
-         *
-         * Formula: x += proj @ (GELU(inp_gate @ x) * ple_normed)
-         */
-        if (has_ple && layer->ple_proj.data && layer->ple_gate.data) {
-            /* Gate from residual stream: gate_out = inp_gate @ x  (1536 → 256) */
-            float gate[256];  /* ple_dim, max 256 */
-            qmatmul_vec(&layer->ple_gate, state->x, gate, c->ple_dim, dim);
-
-            /* Apply GELU and element-wise multiply with ple_normed */
-            for (int d = 0; d < c->ple_dim; d++) {
-                float g = gate[d];
-                float g3 = g * g * g;
-                g = 0.5f * g * (1.0f + tanhf(0.7978845608f * (g + 0.044715f * g3)));
-                gate[d] = g * ple_normed[d];
-            }
-
-            /* Project back to dim: proj_out = proj @ gate  (256 → 1536) */
-            float proj_out[4096];  /* dim, max 4096 */
-            qmatmul_vec(&layer->ple_proj, gate, proj_out, dim, c->ple_dim);
-
-            /* Residual add */
-            for (int d = 0; d < dim; d++)
-                state->x[d] += proj_out[d];
-        }
 
         /* --- Attention --- */
 
@@ -738,6 +731,20 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
                     dequant_row(layer->k_norm.data, kn, l_head_dim,
                                 (ggml_type_t)layer->k_norm.type);
                 per_head_rms_norm(state->k, kn, n_kv_heads, l_head_dim, norm_eps);
+            }
+
+            /* V raw RMSNorm (Gemma 4): normalize V per-head WITHOUT learned weights.
+             * Each head's V is divided by its RMS; no weight multiply. */
+            if (!G4_DISABLE_QK_NORM && c->head_dim_swa > 0) {  /* Gemma 4 only */
+                for (int h = 0; h < n_kv_heads; h++) {
+                    float *v_head = state->v + h * l_head_dim;
+                    float sum_sq = 0;
+                    for (int d = 0; d < l_head_dim; d++)
+                        sum_sq += v_head[d] * v_head[d];
+                    float rms = sqrtf(sum_sq / l_head_dim + norm_eps);
+                    for (int d = 0; d < l_head_dim; d++)
+                        v_head[d] /= rms;
+                }
             }
 
             /* e. RoPE on Q AND K — uses l_head_dim (256 for SWA, 512 for global).
@@ -864,13 +871,22 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
             float *q_head = state->q + h * l_head_dim;
             float *att_h  = state->att + h * max_seq;
 
-            /* Score: Q . K^T / sqrt(l_head_dim) for positions [att_start..pos] */
+            /* Score: Q . K^T / sqrt(attn_scalar).
+             * Gemma 4 uses a FIXED attention scalar (query_pre_attn_scalar=256)
+             * for both SWA and global layers, not the variable head_dim.
+             * For Llama: use head_dim as usual. */
+            float attn_scale_d = (float)l_head_dim;
+            if (c->head_dim_swa > 0) {
+                /* Gemma 4: fixed 1/sqrt(256) for all layers */
+                attn_scale_d = (float)c->head_dim_swa;
+            }
+            float attn_denom = sqrtf(attn_scale_d);
             for (int t = att_start; t <= pos; t++) {
                 float *k_t = key_layer + t * max_kv_dim + kv_h * l_head_dim;
                 float score = 0.0f;
                 for (int d = 0; d < l_head_dim; d++)
                     score += q_head[d] * k_t[d];
-                att_h[t] = score / sqrtf((float)l_head_dim);
+                att_h[t] = score / attn_denom;
             }
 
             /* Softmax over [att_start..pos] */
@@ -952,6 +968,46 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
 
         /* o. Residual connection */
         residual_add(state->x, state->xb, dim);
+
+        /* --- PLE: Per-Layer Embedding injection (Gemma 4) ---
+         * Applied AFTER the attention+FFN sandwich, BEFORE layer_output_scale.
+         * Formula:
+         *   gate  = GELU(inp_gate @ x)          # 1536 -> 256
+         *   mixed = gate * ple_slice[L]         # elementwise 256
+         *   proj  = ple_proj @ mixed            # 256 -> 1536
+         *   proj  = RMSNorm(proj, post_norm)    # per-layer 1536-dim norm
+         *   x    += proj                        # residual
+         */
+        if (has_ple && layer->ple_gate.data && layer->ple_proj.data) {
+            const float *ple_slice = &ple_all[L * c->ple_dim];
+
+            /* gate = inp_gate @ x (1536 -> 256) */
+            float gate[256];
+            qmatmul_vec(&layer->ple_gate, state->x, gate, c->ple_dim, dim);
+
+            /* GELU and multiply with ple_slice */
+            for (int d = 0; d < c->ple_dim; d++) {
+                float g = gate[d];
+                float g3 = g * g * g;
+                g = 0.5f * g * (1.0f + tanhf(0.7978845608f * (g + 0.044715f * g3)));
+                gate[d] = g * ple_slice[d];
+            }
+
+            /* proj = ple_proj @ gate (256 -> 1536) */
+            float ple_out[4096];
+            qmatmul_vec(&layer->ple_proj, gate, ple_out, dim, c->ple_dim);
+
+            /* Apply per-layer post_norm (if present) */
+            if (layer->post_norm.data && layer->post_norm.type == GGML_TYPE_F32) {
+                float norm_eps_post = c->rms_norm_eps > 0.0f ? c->rms_norm_eps : RMS_EPS;
+                const float *pn = (const float *)layer->post_norm.data;
+                tensor_rms_norm(ple_out, pn, ple_out, dim, norm_eps_post);
+            }
+
+            /* Residual add */
+            for (int d = 0; d < dim; d++)
+                state->x[d] += ple_out[d];
+        }
 
         /* DEBUG: per-layer x norm trace (first 2 tokens, key layers) */
         if (state->pos < 2 && (L < 3 || L == 17 || L == 34)) {
