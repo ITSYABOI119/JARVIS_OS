@@ -558,6 +558,66 @@ int qmodel_load(qmodel_t *qm, const gguf_ctx_t *ctx, const void *gguf_base)
            dequant_type_name((ggml_type_t)qm->token_embed.type),
            dequant_type_name((ggml_type_t)qm->output_weight.type));
 
+    /* === AUDIT DIAGNOSTICS ===
+     * Verify research checklist items against actual loaded tensors. */
+    {
+        printf("\n=== AUDIT ===\n");
+
+        /* Item 2: PLE gate direction (inp_gate tensor shape) */
+        if (qm->layers[0].ple_gate.data) {
+            uint64_t n = qm->layers[0].ple_gate.n_elements;
+            printf("[AUDIT] inp_gate.n_elements=%llu (expected dim*ple_dim=%d)\n",
+                   (unsigned long long)n, qm->config.dim * qm->config.ple_dim);
+            printf("[AUDIT] inp_gate.type=%s (F32 expected)\n",
+                   dequant_type_name((ggml_type_t)qm->layers[0].ple_gate.type));
+        }
+
+        /* Item 3: PLE context-aware component (global per_layer_model_proj) */
+        if (qm->ple_proj.data) {
+            printf("[AUDIT] per_layer_model_proj LOADED: n_elements=%llu type=%s\n",
+                   (unsigned long long)qm->ple_proj.n_elements,
+                   dequant_type_name((ggml_type_t)qm->ple_proj.type));
+            printf("[AUDIT]   (but NOT USED in forward pass — missing context component)\n");
+        } else {
+            printf("[AUDIT] per_layer_model_proj NOT loaded\n");
+        }
+
+        /* Item 5: RoPE style */
+        printf("[AUDIT] rope_neox=%d (Gemma should be 1)\n", qm->config.rope_neox);
+
+        /* Item 6: query_pre_attn_scalar */
+        printf("[AUDIT] attn_scale=sqrt(%d)=%.2f (research says 256 -> 16.0)\n",
+               qm->config.head_dim_swa > 0 ? qm->config.head_dim_swa : qm->config.head_dim,
+               sqrtf((float)(qm->config.head_dim_swa > 0 ?
+                             qm->config.head_dim_swa : qm->config.head_dim)));
+
+        /* Norm epsilon */
+        printf("[AUDIT] rms_norm_eps=%g (research says 1e-6)\n", qm->config.rms_norm_eps);
+
+        /* Q/K norm sizes — must match per-layer head_dim */
+        if (qm->layers[0].q_norm.data)
+            printf("[AUDIT] L0 q_norm.n_elements=%llu (SWA head_dim=%d)\n",
+                   (unsigned long long)qm->layers[0].q_norm.n_elements,
+                   qm->config.head_dim_swa);
+        if (qm->config.n_layers >= 35 && qm->layers[34].q_norm.data)
+            printf("[AUDIT] L34 q_norm.n_elements=%llu (global head_dim=%d)\n",
+                   (unsigned long long)qm->layers[34].q_norm.n_elements,
+                   qm->config.head_dim);
+
+        /* Layer output scale values */
+        if (qm->layers[0].layer_output_scale.data &&
+            qm->layers[0].layer_output_scale.type == GGML_TYPE_F32) {
+            float s0 = *(const float *)qm->layers[0].layer_output_scale.data;
+            float s34 = 0.0f;
+            if (qm->layers[qm->config.n_layers - 1].layer_output_scale.data)
+                s34 = *(const float *)qm->layers[qm->config.n_layers - 1].layer_output_scale.data;
+            printf("[AUDIT] layer_output_scale L0=%.4f L%d=%.4f\n",
+                   s0, qm->config.n_layers - 1, s34);
+        }
+
+        printf("=== END AUDIT ===\n\n");
+    }
+
     qm->loaded = true;
     return 0;
 
@@ -633,28 +693,80 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
         size_t block_bytes = dequant_type_block_bytes(ple_type);
 
         if (block_size == c->ple_dim && block_bytes > 0) {
-            /* Each layer's slice is exactly one block */
+            /* === Token-identity component ===
+             * Look up per-layer slice from per_layer_token_embd and scale by sqrt(ple_dim).
+             * Research says: NO RMSNorm on token-identity component. */
             const uint8_t *base = (const uint8_t *)qm->ple_embed.data;
             for (int L = 0; L < c->n_layers; L++) {
                 size_t off = ((size_t)token * c->n_layers + L) * block_bytes;
                 dequant_row(base + off, &ple_all[L * c->ple_dim],
                             c->ple_dim, ple_type);
             }
-
-            /* Apply per_layer_proj_norm (shared weight, same for all layers) */
-            float norm_eps_ple = c->rms_norm_eps > 0.0f ? c->rms_norm_eps : RMS_EPS;
-            if (qm->ple_norm.data && qm->ple_norm.type == GGML_TYPE_F32) {
-                const float *norm_w = (const float *)qm->ple_norm.data;
-                for (int L = 0; L < c->n_layers; L++) {
-                    float *slice = &ple_all[L * c->ple_dim];
-                    tensor_rms_norm(slice, norm_w, slice, c->ple_dim, norm_eps_ple);
-                }
-            }
-
-            /* Scale by sqrt(ple_dim) — Gemma 4 token-identity component scaling */
             float ple_scale = sqrtf((float)c->ple_dim);
             for (int i = 0; i < c->n_layers * c->ple_dim; i++)
                 ple_all[i] *= ple_scale;
+
+            /* === Context-aware component ===
+             * Project current embedding (state->x, after embed_scale) through
+             * per_layer_model_proj (1536 -> 8960), scale by 1/sqrt(dim),
+             * reshape to [n_layers, ple_dim], apply per_layer_proj_norm.
+             * Then combine: ple_all[L] = (identity[L] + context[L]) / sqrt(2)
+             */
+            if (qm->ple_proj.data && qm->ple_proj.n_elements ==
+                (uint64_t)dim * c->n_layers * c->ple_dim) {
+                /* Dequant the full 8960-element context vector.
+                 * per_layer_model_proj has shape (dim, n_layers*ple_dim).
+                 * Matmul: context[m] = sum_k W[k, m] * x[k] for m in [0, 8960) */
+                float context[8960];
+                int ctx_out_dim = c->n_layers * c->ple_dim;
+                ggml_type_t ptype = (ggml_type_t)qm->ple_proj.type;
+
+                if (ptype == GGML_TYPE_F32) {
+                    const float *W = (const float *)qm->ple_proj.data;
+                    for (int m = 0; m < ctx_out_dim; m++) {
+                        const float *row = W + (size_t)m * dim;
+                        float dot = 0.0f;
+                        for (int k = 0; k < dim; k++)
+                            dot += row[k] * state->x[k];
+                        context[m] = dot;
+                    }
+                } else if (ptype == GGML_TYPE_BF16) {
+                    const uint16_t *W = (const uint16_t *)qm->ple_proj.data;
+                    for (int m = 0; m < ctx_out_dim; m++) {
+                        const uint16_t *row = W + (size_t)m * dim;
+                        float dot = 0.0f;
+                        for (int k = 0; k < dim; k++) {
+                            union { uint32_t u; float f; } un;
+                            un.u = ((uint32_t)row[k]) << 16;
+                            dot += un.f * state->x[k];
+                        }
+                        context[m] = dot;
+                    }
+                } else {
+                    /* Unsupported type — zero out context (fall back to identity-only) */
+                    memset(context, 0, sizeof(context));
+                }
+
+                /* Scale context by 1/sqrt(dim) */
+                float ctx_scale = 1.0f / sqrtf((float)dim);
+                for (int i = 0; i < ctx_out_dim; i++)
+                    context[i] *= ctx_scale;
+
+                /* Apply per_layer_proj_norm (256-dim RMSNorm) to each layer's slice */
+                float norm_eps_ple = c->rms_norm_eps > 0.0f ? c->rms_norm_eps : RMS_EPS;
+                if (qm->ple_norm.data && qm->ple_norm.type == GGML_TYPE_F32) {
+                    const float *norm_w = (const float *)qm->ple_norm.data;
+                    for (int L = 0; L < c->n_layers; L++) {
+                        float *slice = &context[L * c->ple_dim];
+                        tensor_rms_norm(slice, norm_w, slice, c->ple_dim, norm_eps_ple);
+                    }
+                }
+
+                /* Combine: ple_all[i] = (ple_all[i] + context[i]) / sqrt(2) */
+                float combine_scale = 1.0f / sqrtf(2.0f);
+                for (int i = 0; i < ctx_out_dim; i++)
+                    ple_all[i] = (ple_all[i] + context[i]) * combine_scale;
+            }
         } else {
             has_ple = 0;  /* disable if block layout doesn't match */
         }

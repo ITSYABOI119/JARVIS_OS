@@ -80,6 +80,7 @@ typedef enum {
     GGML_TYPE_I64     = 27,
     GGML_TYPE_F64     = 28,
     GGML_TYPE_IQ1_M   = 29,
+    GGML_TYPE_BF16    = 30,  /* bfloat16 — 2 bytes, upper 16 bits of F32 */
     GGML_TYPE_COUNT,
 } ggml_type_t;
 

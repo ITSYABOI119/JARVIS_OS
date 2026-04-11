@@ -84,6 +84,18 @@ static void dequant_f16(const void *src, float *dst, int n_values)
         dst[i] = f16_to_f32(f16[i]);
 }
 
+/* ---- BF16 dequantization ----
+ * bfloat16 = upper 16 bits of F32. Left-shift by 16 to reconstruct F32. */
+static void dequant_bf16(const void *src, float *dst, int n_values)
+{
+    const uint16_t *bf = (const uint16_t *)src;
+    for (int i = 0; i < n_values; i++) {
+        union { uint32_t u; float f; } un;
+        un.u = ((uint32_t)bf[i]) << 16;
+        dst[i] = un.f;
+    }
+}
+
 /* ---- Q4_K dequantization (256 values per block, 144 bytes) ----
  *
  * Matches ggml's dequantize_row_q4_K exactly. 128 qs bytes encode
@@ -233,6 +245,7 @@ size_t dequant_type_block_bytes(ggml_type_t type)
     case GGML_TYPE_Q5_K: return sizeof(q5_k_block_t);  /* 176 */
     case GGML_TYPE_Q6_K: return sizeof(q6_k_block_t);  /* 210 */
     case GGML_TYPE_F16:  return 2;
+    case GGML_TYPE_BF16: return 2;
     case GGML_TYPE_F32:  return 4;
     default:             return 0;
     }
@@ -247,6 +260,7 @@ int dequant_type_block_size(ggml_type_t type)
     case GGML_TYPE_Q5_K: return 256;
     case GGML_TYPE_Q6_K: return 256;
     case GGML_TYPE_F16:  return 1;
+    case GGML_TYPE_BF16: return 1;
     case GGML_TYPE_F32:  return 1;
     default:             return 0;
     }
@@ -269,6 +283,7 @@ const char *dequant_type_name(ggml_type_t type)
     case GGML_TYPE_Q5_K: return "Q5_K";
     case GGML_TYPE_Q6_K: return "Q6_K";
     case GGML_TYPE_F16:  return "F16";
+    case GGML_TYPE_BF16: return "BF16";
     case GGML_TYPE_F32:  return "F32";
     default:             return "UNKNOWN";
     }
@@ -306,6 +321,9 @@ int dequant_row(const void *src, float *dst, int n_values, ggml_type_t type)
         return 0;
     case GGML_TYPE_F16:
         dequant_f16(src, dst, n_values);
+        return 0;
+    case GGML_TYPE_BF16:
+        dequant_bf16(src, dst, n_values);
         return 0;
     case GGML_TYPE_F32:
         dequant_f32(src, dst, n_values);

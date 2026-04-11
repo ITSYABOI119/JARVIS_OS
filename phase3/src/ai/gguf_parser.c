@@ -125,6 +125,7 @@ static uint64_t ggml_type_size(uint32_t type)
     switch (type) {
         case GGML_TYPE_F32:     return 4;
         case GGML_TYPE_F16:     return 2;
+        case GGML_TYPE_BF16:    return 2;
         case GGML_TYPE_Q4_0:    return 18;  /* block of 32 values = 2 + 16 bytes */
         case GGML_TYPE_Q4_1:    return 20;  /* block of 32 values = 4 + 16 bytes */
         case GGML_TYPE_Q5_0:    return 22;  /* block of 32 */
@@ -152,6 +153,7 @@ static uint64_t ggml_type_block_size(uint32_t type)
     switch (type) {
         case GGML_TYPE_F32:
         case GGML_TYPE_F16:
+        case GGML_TYPE_BF16:
         case GGML_TYPE_I8:
         case GGML_TYPE_I16:
         case GGML_TYPE_I32:
