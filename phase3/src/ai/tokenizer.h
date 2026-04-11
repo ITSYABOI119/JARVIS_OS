@@ -13,6 +13,7 @@ typedef struct {
     int      eos_id;
     int     *ht_table;    /* Hash table: token index or -1 (empty) */
     int      ht_capacity; /* Power of 2, >= 2 * vocab_size */
+    int      add_space_prefix; /* 1 = prepend ▁ to input (default), 0 = don't (Gemma 4) */
 } tokenizer_t;
 
 int  tokenizer_init(tokenizer_t *t, const char **tokens, const float *scores,

@@ -199,9 +199,18 @@ copy_file "$DRV_SRC/fat32.h" "$DRV_DST/fat32.h"
 
 # Inference server (Process B — lives in jarvis-inference app, NOT sel4test-driver)
 PROC_B_DIR="$SEL4_DIR/projects/jarvis-x86/apps/jarvis-inference/src"
-mkdir -p "$PROC_B_DIR" 2>/dev/null || true
+mkdir -p "$PROC_B_DIR/ai" 2>/dev/null || true
 copy_file "$JARVIS_DIR/phase3/src/sel4/inference_server.c" "$PROC_B_DIR/main.c"
 copy_file "$JARVIS_DIR/phase3/src/sel4/jarvis_debug.h" "$PROC_B_DIR/jarvis_debug.h"
+
+# Process B needs its own copy of AI modules (separate compilation unit)
+for f in "${AI_FILES[@]}"; do
+    copy_file "$AI_SRC/$f" "$PROC_B_DIR/ai/$f"
+done
+
+# Process B also needs IPC headers
+copy_file "$IPC3_SRC/shmem_ipc.h" "$PROC_B_DIR/ai/shmem_ipc.h"
+copy_file "$IPC3_SRC/shmem_ipc.c" "$PROC_B_DIR/ai/shmem_ipc.c"
 echo ""
 
 # ── [5/5] Patch CMakeLists.txt ─────────────────────────────────────

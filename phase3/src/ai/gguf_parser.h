@@ -80,6 +80,7 @@ typedef enum {
     GGML_TYPE_I64     = 27,
     GGML_TYPE_F64     = 28,
     GGML_TYPE_IQ1_M   = 29,
+    GGML_TYPE_BF16    = 30,  /* bfloat16 — 2 bytes, upper 16 bits of F32 */
     GGML_TYPE_COUNT,
 } ggml_type_t;
 
@@ -206,6 +207,12 @@ const gguf_tensor_info_t *gguf_find_tensor(const gguf_ctx_t *ctx, const char *na
  * Returns GGUF_OK on success.
  */
 int gguf_read_tensor_data(gguf_ctx_t *ctx, const gguf_tensor_info_t *tensor, void *buf);
+
+/**
+ * Find a metadata KV pair by key.
+ * Returns pointer to the KV entry, or NULL if not found.
+ */
+const gguf_kv_t *gguf_find_kv(const gguf_ctx_t *ctx, const char *key);
 
 /**
  * Find a metadata string value by key.

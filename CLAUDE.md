@@ -16,7 +16,7 @@ Guidance for Claude Code when working with this repository.
 | **Phase 3** | **IN PROGRESS** | Months 24-36 | Beta on x86-64 bare metal (**LLM inference on seL4 VERIFIED**) |
 | Phase 4 | Future | Months 36+ | Production v1.0 |
 
-**Current:** Phase 3c, Active Development (April 9, 2026). **MILESTONE: 11-model bench-off complete. Gemma 4 E2B confirmed #1 (8.40/10, 7 judges).** Phase 3b complete (bare-metal boot, NVMe model loading, IPC workload, I211 NIC). Phase 3c hardening done (fuzz testing, security audit 25 findings). Model bench-off done (speed + perplexity + quality across 11 models on 3 hardware configs). Next: Gemma 4 engine work (~1000 LOC) to unlock #1 ranked model. Mistral 7B Q8_0 is drop-in CRITICAL pick. Llama 3.2 1B running as IDLE fallback. Two-PC setup: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/32GB/1TB NVMe) running bare-metal seL4.
+**Current:** Phase 3c, Active Development (April 11, 2026). **MILESTONE: Gemma 4 E2B engine COMPLETE — coherent English output validated on BOTH main PC native test AND JARVIS PC seL4 QEMU Process B (4/4 queries, process-isolated IPC).** 17 sequential fixes over one marathon session on `feature/gemma4-arch` branch (last fix: heap-allocate PLE scratch buffers for seL4 stack limits). Phase 3b complete (bare-metal boot, NVMe model loading, IPC workload, I211 NIC). Phase 3c hardening done (fuzz testing, security audit 25 findings). Model bench-off done (speed + perplexity + quality across 11 models on 3 hardware configs). Next: merge `feature/gemma4-arch` to master, then TurboQuant + dynamic scaling. Two-PC setup: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/32GB/1TB NVMe) running bare-metal seL4.
 
 ---
 
@@ -388,8 +388,11 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | **CRITICAL: Mistral 7B Q8_0 (7.50/10, 5.5 tok/s) — drop-in, ships now** | **DECISION** |
 | **Llama 3.1 8B disqualified** — 5.06/10 (#8 of 11), training data contamination | **DROPPED** |
 | Deferred: Gemma 4 (§7, ~1000 LOC), Qwen3 (§9, ~200 LOC), Qwen3.5 (§7b, ~2000 LOC SSM) | Tracked |
+| **Gemma 4 E2B engine: ~4,400 LOC across 27 files — 17 fixes on `feature/gemma4-arch`** | **DONE** |
+| **Gemma 4 E2B validated: main PC native test — coherent English** | **DONE** |
+| **Gemma 4 E2B validated: JARVIS PC seL4 QEMU Process B (4/4 queries coherent)** | **DONE** |
 
-**Next:** Gemma 4 engine work (~1000 LOC) to unlock #1 ranked model. Wire dynamic scaling.
+**Next:** Merge `feature/gemma4-arch` to master, then silence verbose debug prints, then wire dynamic scaling.
 
 ### Pre-Work Tasks (Before JARVIS Project PC)
 

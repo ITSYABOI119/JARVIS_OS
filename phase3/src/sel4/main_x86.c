@@ -131,7 +131,7 @@ static shmem_ring_t *shared_response_ring = &shared_rings[1];
 static sel4utils_process_t inference_process;
 
 /* NVMe model loading state (file-scope for cross-function visibility) */
-#define MODEL_MAX_PAGES (200 * 1024)   /* 200K pages = 800MB max */
+#define MODEL_MAX_PAGES (800 * 1024)   /* 800K pages = 3200MB max — fits Gemma 4 E2B (2962MB) */
 static seL4_CPtr *model_frame_caps = NULL;  /* dynamically allocated after vspace init */
 static int nvme_model_loaded = 0;
 static uint32_t nvme_model_size = 0;

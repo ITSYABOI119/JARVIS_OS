@@ -32,6 +32,7 @@ int tokenizer_init(tokenizer_t *t, const char **tokens, const float *scores,
     t->scores = NULL;
     t->ht_table = NULL;
     t->ht_capacity = 0;
+    t->add_space_prefix = 1;  /* default: prepend ▁ (overridden by GGUF flag) */
 
     t->tokens = (char **)malloc(sizeof(char *) * (size_t)vocab_size);
     t->scores = (float *)malloc(sizeof(float) * (size_t)vocab_size);
@@ -94,18 +95,66 @@ int tokenizer_encode(const tokenizer_t *t, const char *text,
     int text_len = (int)strlen(text);
     if (text_len == 0 || max_tokens <= 0) return 0;
 
-    /* Initialize: one symbol per character */
-    bpe_sym_t *syms = (bpe_sym_t *)malloc(sizeof(bpe_sym_t) * (size_t)text_len);
-    if (!syms) return -1;
+    /* SentencePiece pre-processing: replace spaces with ▁ (U+2581, 3 bytes UTF-8).
+     * Prepend ▁ only if add_space_prefix is true (default for most SP models,
+     * but Gemma 4 sets add_space_prefix=false).
+     * Only activate if ▁ exists in the vocab (skip for GPT-2 models). */
+    char *sp_text = NULL;
+    int has_sp = (tokenizer_find(t, "\xe2\x96\x81") >= 0);
+    if (has_sp) {
+        sp_text = (char *)malloc((size_t)text_len * 3 + 4);
+        if (!sp_text) return -1;
+        int wp = 0;
+        if (t->add_space_prefix) {
+            sp_text[wp++] = (char)0xE2;
+            sp_text[wp++] = (char)0x96;
+            sp_text[wp++] = (char)0x81;
+        }
+        for (int i = 0; i < text_len; i++) {
+            if (text[i] == ' ') {
+                sp_text[wp++] = (char)0xE2;
+                sp_text[wp++] = (char)0x96;
+                sp_text[wp++] = (char)0x81;
+            } else {
+                sp_text[wp++] = text[i];
+            }
+        }
+        sp_text[wp] = '\0';
+        text = sp_text;
+        text_len = wp;
+    }
 
-    for (int i = 0; i < text_len; i++) {
-        syms[i].prev = i - 1;
-        syms[i].next = (i + 1 < text_len) ? i + 1 : -1;
-        syms[i].start = i;
-        syms[i].len = 1;
-        /* Find single-char token */
-        char ch[2] = { text[i], '\0' };
-        syms[i].token_id = tokenizer_find(t, ch);
+    /* Initialize: one symbol per UTF-8 character (not per byte).
+     * For ASCII: 1 byte. For ▁ (0xE2 0x96 0x81): 3 bytes. */
+    int max_syms = text_len;
+    bpe_sym_t *syms = (bpe_sym_t *)malloc(sizeof(bpe_sym_t) * (size_t)max_syms);
+    if (!syms) { free(sp_text); return -1; }
+
+    int n_syms = 0;
+    {
+        int pos = 0;
+        while (pos < text_len && n_syms < max_syms) {
+            unsigned char c = (unsigned char)text[pos];
+            int char_len = 1;
+            if (c >= 0xF0) char_len = 4;
+            else if (c >= 0xE0) char_len = 3;
+            else if (c >= 0xC0) char_len = 2;
+            if (pos + char_len > text_len) char_len = 1;
+
+            syms[n_syms].prev = n_syms - 1;
+            syms[n_syms].next = -1;
+            syms[n_syms].start = pos;
+            syms[n_syms].len = char_len;
+
+            char ch[8];
+            memcpy(ch, text + pos, (size_t)char_len);
+            ch[char_len] = '\0';
+            syms[n_syms].token_id = tokenizer_find(t, ch);
+
+            if (n_syms > 0) syms[n_syms - 1].next = n_syms;
+            n_syms++;
+            pos += char_len;
+        }
     }
 
     /* BPE merge loop: repeatedly merge the highest-scoring adjacent pair */
@@ -116,7 +165,7 @@ int tokenizer_encode(const tokenizer_t *t, const char *text,
         int best_id = -1;
 
         /* Find best adjacent pair to merge */
-        for (int i = 0; i < text_len; i++) {
+        for (int i = 0; i < n_syms; i++) {
             if (syms[i].len == 0) continue;  /* Deleted */
             int j = syms[i].next;
             if (j < 0) continue;
@@ -150,7 +199,7 @@ int tokenizer_encode(const tokenizer_t *t, const char *text,
     /* Collect output: walk linked list from first active symbol */
     int out_count = 0;
     int head = -1;
-    for (int i = 0; i < text_len; i++) {
+    for (int i = 0; i < n_syms; i++) {
         if (syms[i].len > 0) { head = i; break; }
     }
     for (int i = head; i >= 0 && out_count < max_tokens; i = syms[i].next) {
@@ -158,6 +207,7 @@ int tokenizer_encode(const tokenizer_t *t, const char *text,
     }
 
     free(syms);
+    free(sp_text);
     return out_count;
 }
 
@@ -179,6 +229,31 @@ int tokenizer_decode(const tokenizer_t *t, const int *token_ids, int n_tokens,
         pos += tok_len;
     }
     out_text[pos] = '\0';
+
+    /* SentencePiece reverse mapping: ▁ (U+2581, 0xE2 0x96 0x81) → space.
+     * Applied before GPT-2 mapping (which is harmless for SentencePiece). */
+    {
+        int r2 = 0, w2 = 0;
+        while (r2 < pos) {
+            unsigned char c = (unsigned char)out_text[r2];
+            if (c == 0xE2 && r2 + 2 < pos &&
+                (unsigned char)out_text[r2+1] == 0x96 &&
+                (unsigned char)out_text[r2+2] == 0x81) {
+                out_text[w2++] = ' ';
+                r2 += 3;
+            } else {
+                out_text[w2++] = out_text[r2++];
+            }
+        }
+        out_text[w2] = '\0';
+        pos = w2;
+    }
+
+    /* Strip leading space (SentencePiece prepends ▁ which becomes leading space) */
+    if (pos > 0 && out_text[0] == ' ') {
+        memmove(out_text, out_text + 1, (size_t)pos);
+        pos--;
+    }
 
     /* GPT-2 BPE reverse mapping: 2-byte UTF-8 -> original byte.
      * All 256 byte values are mapped to printable Unicode characters.

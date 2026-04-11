@@ -43,6 +43,16 @@ typedef struct {
     qtensor_t w_gate;        /* Q4_K or Q6_K — [hidden_dim x dim] */
     qtensor_t w_up;          /* Q4_K or Q6_K — [hidden_dim x dim] */
     qtensor_t w_down;        /* Q4_K or Q6_K — [dim x hidden_dim] */
+    /* --- Gemma 4 extensions (data=NULL for Llama models) --- */
+    qtensor_t q_norm;             /* per-head Q RMSNorm before RoPE (Gemma 4, Qwen3) */
+    qtensor_t k_norm;             /* per-head K RMSNorm before RoPE (Gemma 4, Qwen3) */
+    qtensor_t post_attn_norm;     /* post-attention RMSNorm (sandwich norm) */
+    qtensor_t post_ffw_norm;      /* post-FFN RMSNorm (sandwich norm) */
+    qtensor_t layer_output_scale; /* per-layer output scaling */
+    /* --- PLE per-layer tensors (Gemma 4, data=NULL for Llama) --- */
+    qtensor_t ple_gate;           /* blk.N.inp_gate.weight [dim] — GELU gated */
+    qtensor_t ple_proj;           /* blk.N.proj.weight [dim x ple_dim] */
+    qtensor_t post_norm;          /* blk.N.post_norm.weight — post-PLE norm */
 } qlayer_t;
 
 /* ---- Full quantized model (only layers array is malloc'd) ---- */
@@ -55,6 +65,10 @@ typedef struct {
     const float *rope_freqs;   /* Custom RoPE frequencies (pointer into .rodata), or NULL */
     qlayer_t *layers;          /* Array of n_layers (malloc'd, but each qlayer_t just holds pointers) */
     bool      loaded;
+    /* --- PLE global tensors (Gemma 4, data=NULL for Llama) --- */
+    qtensor_t ple_embed;       /* per_layer_token_embd.weight [vocab x ple_dim] */
+    qtensor_t ple_proj;        /* per_layer_model_proj.weight [dim x ple_dim] */
+    qtensor_t ple_norm;        /* per_layer_proj_norm.weight [ple_dim] */
 } qmodel_t;
 
 /* ---- API ---- */

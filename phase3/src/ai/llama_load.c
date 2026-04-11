@@ -29,81 +29,222 @@
 #include <string.h>
 #include <stdio.h>
 
-/* ---- Config Loading ---- */
+/* ---- Config Loading (arch-aware: reads general.architecture, dispatches {arch}.* keys) ---- */
 
 int llama_load_config(llama_config_t *config, const gguf_ctx_t *ctx)
 {
-    if (!config || !ctx) return -1;
-
+    if (!config || !ctx) { printf("[config] FAIL: null arg\n"); return -1; }
     memset(config, 0, sizeof(*config));
 
+    /* Determine architecture prefix */
+    const char *arch = gguf_get_kv_string(ctx, "general.architecture");
+    printf("[config] arch='%s' n_kv=%llu n_tensors=%llu\n",
+           arch ? arch : "(null)",
+           (unsigned long long)ctx->n_kv,
+           (unsigned long long)ctx->n_tensors);
+    if (!arch) arch = "llama";  /* backward compat */
+
+    /* Gemma variants: scale embeddings, GeGLU activation, NEOX-style RoPE */
+    int is_gemma = (strncmp(arch, "gemma", 5) == 0);
+    config->embed_scale = is_gemma;
+    config->use_gelu    = is_gemma;
+    config->rope_neox   = is_gemma;
+
+    char key[256];
     uint32_t u32_val;
     float f32_val;
 
-    /* Read embedding dimension */
-    if (gguf_get_kv_u32(ctx, "llama.embedding_length", &u32_val))
+    /* Required: embedding dimension */
+    snprintf(key, sizeof(key), "%s.embedding_length", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val))
         config->dim = (int)u32_val;
     else
-        return -1;  /* dim is required */
+        { printf("[config] FAIL: %s not found\n", key); return -1; }
+    printf("[config] dim=%d\n", config->dim);
 
-    /* Read number of layers */
-    if (gguf_get_kv_u32(ctx, "llama.block_count", &u32_val))
+    /* Required: block count */
+    snprintf(key, sizeof(key), "%s.block_count", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val))
         config->n_layers = (int)u32_val;
     else
-        return -1;  /* n_layers is required */
+        { printf("[config] FAIL: %s not found\n", key); return -1; }
+    if (config->n_layers <= 0 || config->n_layers > LLAMA_MAX_LAYERS)
+        { printf("[config] FAIL: n_layers=%d out of range\n", config->n_layers); return -1; }
 
-    /* Read attention head count */
-    if (gguf_get_kv_u32(ctx, "llama.attention.head_count", &u32_val))
+    printf("[config] n_layers=%d\n", config->n_layers);
+
+    /* Required: attention head count */
+    snprintf(key, sizeof(key), "%s.attention.head_count", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val))
         config->n_heads = (int)u32_val;
     else
-        return -1;  /* n_heads is required */
+        { printf("[config] FAIL: %s not found\n", key); return -1; }
 
-    /* Read KV head count (GQA) - default to n_heads if not present */
-    if (gguf_get_kv_u32(ctx, "llama.attention.head_count_kv", &u32_val))
+    /* Optional: KV head count (GQA) — defaults to n_heads */
+    snprintf(key, sizeof(key), "%s.attention.head_count_kv", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val))
         config->n_kv_heads = (int)u32_val;
     else
         config->n_kv_heads = config->n_heads;
 
-    /* Compute head dimension */
-    if (config->n_heads <= 0) return -1;
-    config->head_dim = config->dim / config->n_heads;
+    printf("[config] n_heads=%d n_kv_heads=%d\n", config->n_heads, config->n_kv_heads);
 
-    /* Read FFN hidden dimension */
-    if (gguf_get_kv_u32(ctx, "llama.feed_forward_length", &u32_val))
-        config->hidden_dim = (int)u32_val;
+    /* Explicit head_dim if available (Gemma 4, Qwen3), else derive */
+    snprintf(key, sizeof(key), "%s.attention.key_length", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val))
+        config->head_dim = (int)u32_val;
+    else if (config->n_heads > 0)
+        config->head_dim = config->dim / config->n_heads;
     else
-        return -1;  /* hidden_dim is required */
+        { printf("[config] FAIL: head_dim derivation (n_heads=0)\n"); return -1; }
 
-    /* Vocab size: try metadata first, fall back to token_embd tensor dims */
-    if (gguf_get_kv_u32(ctx, "llama.vocab_size", &u32_val)) {
-        config->vocab_size = (int)u32_val;
-    } else {
-        /* Extract from token_embd.weight tensor shape */
-        const gguf_tensor_info_t *embd = gguf_find_tensor(ctx, "token_embd.weight");
-        if (embd && embd->n_dims == 2) {
-            config->vocab_size = (int)embd->dims[1];
-        } else {
-            return -1;  /* Cannot determine vocab_size */
-        }
+    printf("[config] head_dim=%d\n", config->head_dim);
+
+    /* Required: FFN hidden dimension (scalar — per-layer arrays handled in Task 2) */
+    snprintf(key, sizeof(key), "%s.feed_forward_length", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val))
+        config->hidden_dim = (int)u32_val;
+    else {
+        /* feed_forward_length may be an array for Gemma 4 — gguf_get_kv_u32 returns false.
+         * For Gemma 4, default to 0 and let per-layer loading (Task 2) fill it in.
+         * For Llama models, hidden_dim is required. */
+        if (strcmp(arch, "gemma4") != 0)
+            { printf("[config] FAIL: %s not found (arch=%s)\n", key, arch); return -1; }
+        printf("[config] feed_forward_length is array (gemma4), hidden_dim=0 for now\n");
     }
 
-    /* Context length / max sequence length */
-    if (gguf_get_kv_u32(ctx, "llama.context_length", &u32_val))
+    /* Vocab size: try metadata, fall back to token_embd tensor shape */
+    snprintf(key, sizeof(key), "%s.vocab_size", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val)) {
+        config->vocab_size = (int)u32_val;
+    } else {
+        const gguf_tensor_info_t *embd = gguf_find_tensor(ctx, "token_embd.weight");
+        if (embd && embd->n_dims == 2)
+            config->vocab_size = (int)embd->dims[1];
+        else
+            { printf("[config] FAIL: vocab_size not found (no key, no tensor)\n"); return -1; }
+    }
+    printf("[config] vocab_size=%d hidden_dim=%d\n", config->vocab_size, config->hidden_dim);
+
+    /* Context length */
+    snprintf(key, sizeof(key), "%s.context_length", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val))
         config->max_seq_len = (int)u32_val;
     else
         config->max_seq_len = LLAMA_MAX_SEQ_LEN;
-
-    /* Cap at LLAMA_MAX_SEQ_LEN for memory safety */
     if (config->max_seq_len > LLAMA_MAX_SEQ_LEN)
         config->max_seq_len = LLAMA_MAX_SEQ_LEN;
 
-    /* RoPE theta - default 500000.0 if not specified */
-    if (gguf_get_kv_f32(ctx, "llama.rope.freq_base", &f32_val))
+    /* RoPE theta */
+    snprintf(key, sizeof(key), "%s.rope.freq_base", arch);
+    if (gguf_get_kv_f32(ctx, key, &f32_val))
         config->rope_theta = f32_val;
     else
         config->rope_theta = 500000.0f;
 
+    /* --- Gemma 4 / extended fields (all optional, default 0) --- */
+
+    snprintf(key, sizeof(key), "%s.attention.layer_norm_rms_epsilon", arch);
+    gguf_get_kv_f32(ctx, key, &config->rms_norm_eps);
+
+    snprintf(key, sizeof(key), "%s.final_logit_softcapping", arch);
+    gguf_get_kv_f32(ctx, key, &config->logit_softcap);
+
+    snprintf(key, sizeof(key), "%s.rope.freq_base_swa", arch);
+    gguf_get_kv_f32(ctx, key, &config->rope_theta_swa);
+
+    snprintf(key, sizeof(key), "%s.embedding_length_per_layer_input", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val))
+        config->ple_dim = (int)u32_val;
+
+    snprintf(key, sizeof(key), "%s.attention.sliding_window", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val))
+        config->swa_window = (int)u32_val;
+
+    snprintf(key, sizeof(key), "%s.attention.key_length_swa", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val))
+        config->head_dim_swa = (int)u32_val;
+
+    snprintf(key, sizeof(key), "%s.attention.shared_kv_layers", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val))
+        config->shared_kv_layers = (int)u32_val;
+
+    printf("[config] extensions: ple=%d swa=%d swa_hd=%d shared_kv=%d softcap=%.1f eps=%g theta_swa=%.0f\n",
+           config->ple_dim, config->swa_window, config->head_dim_swa,
+           config->shared_kv_layers, config->logit_softcap,
+           config->rms_norm_eps, config->rope_theta_swa);
+
+    /* --- Build per-layer arrays --- */
+    int nl = config->n_layers;
+    /* nl range already validated above, but be safe */
+    if (nl <= 0 || nl > LLAMA_MAX_LAYERS) return -1;
+
+    /* SWA layer pattern: mark which layers use sliding-window vs global attention.
+     * TODO: Read actual pattern from gemma4.attention.sliding_window_pattern
+     *       GGUF array once the parser supports array element extraction.
+     * Default pattern: every 5th layer (index % 5 == 4) is global, rest are SWA.
+     * Gemma 4 E2B: layers 4,9,14,19,24,29,34 are global; 28 SWA + 7 global = 35. */
+    if (config->swa_window > 0) {
+        config->layer_is_swa = (bool *)calloc((size_t)nl, sizeof(bool));
+        if (!config->layer_is_swa) return -1;
+        for (int i = 0; i < nl; i++)
+            config->layer_is_swa[i] = ((i % 5) != 4);
+    }
+
+    /* KV share map: first n_unique layers compute own KV, rest share.
+     * TODO: Verify exact sharing pattern against llama.cpp (attention-type
+     *       matching may differ from simple modular index). */
+    if (config->shared_kv_layers > 0) {
+        config->kv_share_map = (int *)malloc((size_t)nl * sizeof(int));
+        if (!config->kv_share_map) return -1;
+        int n_unique = nl - config->shared_kv_layers;
+        if (n_unique <= 0) n_unique = 1; /* safety */
+        for (int i = 0; i < nl; i++) {
+            if (i < n_unique)
+                config->kv_share_map[i] = -1;   /* compute own KV */
+            else
+                config->kv_share_map[i] = i % n_unique; /* share from earlier layer */
+        }
+    }
+
+    /* Per-layer FFN dim: for models with variable FFN sizes per layer.
+     * TODO: Read actual values from gemma4.feed_forward_length GGUF array
+     *       once the parser supports array element extraction.
+     * Heuristic: first n_unique layers use smaller FFN (6144),
+     *            remaining layers use larger FFN (12288).
+     * Also set hidden_dim to the max for buffer allocation purposes. */
+    if (config->hidden_dim == 0 && config->shared_kv_layers > 0) {
+        config->layer_ffn_dim = (int *)malloc((size_t)nl * sizeof(int));
+        if (!config->layer_ffn_dim) return -1;
+        int n_unique = nl - config->shared_kv_layers;
+        if (n_unique <= 0) n_unique = 1;
+        for (int i = 0; i < nl; i++) {
+            if (i < n_unique)
+                config->layer_ffn_dim[i] = 6144;   /* smaller FFN for early layers */
+            else
+                config->layer_ffn_dim[i] = 12288;  /* larger FFN for later layers */
+        }
+        /* Set hidden_dim to max for buffer allocation */
+        config->hidden_dim = 12288;
+    }
+
+    printf("[config] OK: dim=%d layers=%d heads=%d/%d hd=%d/%d ffn=%d vocab=%d\n",
+           config->dim, config->n_layers, config->n_heads, config->n_kv_heads,
+           config->head_dim, config->head_dim_swa, config->hidden_dim, config->vocab_size);
     return 0;
+}
+
+/* ---- Config Cleanup ---- */
+
+void llama_free_config(llama_config_t *config)
+{
+    if (!config) return;
+    free(config->layer_ffn_dim);
+    free(config->layer_is_swa);
+    free(config->kv_share_map);
+    config->layer_ffn_dim = NULL;
+    config->layer_is_swa = NULL;
+    config->kv_share_map = NULL;
 }
 
 /* ---- Model Allocation ---- */
@@ -423,6 +564,7 @@ void llama_free_model(llama_model_t *model)
     free(model->output_weight);
     free(model->rope_freqs);
 
+    llama_free_config(&model->config);
     memset(model, 0, sizeof(*model));
 }
 
@@ -443,32 +585,67 @@ int llama_alloc_state(llama_state_t *state, const llama_config_t *config)
     int vocab_size = config->vocab_size;
     int max_seq    = config->max_seq_len;
 
+    /* For Gemma 4: SWA and global layers have different head_dim.
+     * Allocate buffers using the MAX head_dim to fit either layer type.
+     * For Llama: head_dim_swa is 0, so max_head_dim == head_dim (no change). */
+    int max_head_dim = head_dim;
+    if (config->head_dim_swa > 0 && config->head_dim_swa > max_head_dim)
+        max_head_dim = config->head_dim_swa;
+
     state->max_seq_len = max_seq;
     state->pos = 0;
 
+    /* xb/xb2 must fit the largest attention output: n_heads * max_head_dim.
+     * For Gemma 4: 8*512=4096 > dim=1536, so xb must be larger than dim.
+     * For Llama: n_heads*head_dim == dim, so xb_size == dim (unchanged). */
+    int xb_size = dim;
+    if (n_heads * max_head_dim > xb_size)
+        xb_size = n_heads * max_head_dim;
+
     /* Activation buffers */
     state->x      = (float *)calloc((size_t)dim, sizeof(float));
-    state->xb     = (float *)calloc((size_t)dim, sizeof(float));
-    state->xb2    = (float *)calloc((size_t)dim, sizeof(float));
-    state->q      = (float *)calloc((size_t)n_heads * (size_t)head_dim, sizeof(float));
-    state->k      = (float *)calloc((size_t)n_kv_heads * (size_t)head_dim, sizeof(float));
-    state->v      = (float *)calloc((size_t)n_kv_heads * (size_t)head_dim, sizeof(float));
+    state->xb     = (float *)calloc((size_t)xb_size, sizeof(float));
+    state->xb2    = (float *)calloc((size_t)xb_size, sizeof(float));
+    state->q      = (float *)calloc((size_t)n_heads * (size_t)max_head_dim, sizeof(float));
+    state->k      = (float *)calloc((size_t)n_kv_heads * (size_t)max_head_dim, sizeof(float));
+    state->v      = (float *)calloc((size_t)n_kv_heads * (size_t)max_head_dim, sizeof(float));
     state->att    = (float *)calloc((size_t)n_heads * (size_t)max_seq, sizeof(float));
     state->hb     = (float *)calloc((size_t)hidden_dim, sizeof(float));
     state->hb2    = (float *)calloc((size_t)hidden_dim, sizeof(float));
     state->logits = (float *)calloc((size_t)vocab_size, sizeof(float));
 
-    /* KV cache: n_layers * max_seq_len * n_kv_heads * head_dim */
+    /* KV cache: use max kv_dim per layer for uniform cache stride.
+     * SWA layers (smaller kv_dim) only use a prefix of each slot.
+     *
+     * TODO: With shared KV (Gemma 4), only n_unique_kv layers need cache slots
+     * (n_layers - shared_kv_layers). Shared layers reuse the source layer's
+     * slot via kv_share_map indexing, so their allocated slots go unused.
+     * Shrinking to n_unique_kv slots would save ~57% KV memory for Gemma 4 E2B,
+     * but requires remapping kv_share_map indices to compacted slot indices.
+     * Keeping full allocation for now — correctness first. */
+    int max_kv_dim = n_kv_heads * max_head_dim;
     size_t kv_size = (size_t)config->n_layers * (size_t)max_seq *
-                     (size_t)n_kv_heads * (size_t)head_dim;
+                     (size_t)max_kv_dim;
     state->key_cache   = (float *)calloc(kv_size, sizeof(float));
     state->value_cache = (float *)calloc(kv_size, sizeof(float));
+
+    /* PLE scratch buffers (Gemma 4 only, but always allocate if ple_dim > 0).
+     * These are ~72KB together for Gemma 4 E2B — too big for seL4 process stack. */
+    if (config->ple_dim > 0) {
+        size_t ple_total = (size_t)config->n_layers * (size_t)config->ple_dim;
+        state->ple_all     = (float *)calloc(ple_total, sizeof(float));
+        state->ple_context = (float *)calloc(ple_total, sizeof(float));
+    } else {
+        state->ple_all     = NULL;
+        state->ple_context = NULL;
+    }
 
     /* Verify all allocations succeeded */
     if (!state->x || !state->xb || !state->xb2 ||
         !state->q || !state->k || !state->v ||
         !state->att || !state->hb || !state->hb2 ||
-        !state->logits || !state->key_cache || !state->value_cache) {
+        !state->logits || !state->key_cache || !state->value_cache ||
+        (config->ple_dim > 0 && (!state->ple_all || !state->ple_context))) {
         llama_free_state(state);
         return -1;
     }
@@ -494,6 +671,8 @@ void llama_free_state(llama_state_t *state)
     free(state->logits);
     free(state->key_cache);
     free(state->value_cache);
+    free(state->ple_all);
+    free(state->ple_context);
 
     memset(state, 0, sizeof(*state));
 }
