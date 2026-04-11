@@ -583,7 +583,8 @@ int qmodel_load(qmodel_t *qm, const gguf_ctx_t *ctx, const void *gguf_base)
             printf("[AUDIT] per_layer_model_proj LOADED: n_elements=%llu type=%s\n",
                    (unsigned long long)qm->ple_proj.n_elements,
                    dequant_type_name((ggml_type_t)qm->ple_proj.type));
-            printf("[AUDIT]   (but NOT USED in forward pass — missing context component)\n");
+            printf("[AUDIT]   used as context component: BF16 matmul, combine "
+                   "(identity + context) / sqrt(2)\n");
         } else {
             printf("[AUDIT] per_layer_model_proj NOT loaded\n");
         }
@@ -591,11 +592,12 @@ int qmodel_load(qmodel_t *qm, const gguf_ctx_t *ctx, const void *gguf_base)
         /* Item 5: RoPE style */
         printf("[AUDIT] rope_neox=%d (Gemma should be 1)\n", qm->config.rope_neox);
 
-        /* Item 6: query_pre_attn_scalar */
-        printf("[AUDIT] attn_scale=sqrt(%d)=%.2f (research says 256 -> 16.0)\n",
-               qm->config.head_dim_swa > 0 ? qm->config.head_dim_swa : qm->config.head_dim,
-               sqrtf((float)(qm->config.head_dim_swa > 0 ?
-                             qm->config.head_dim_swa : qm->config.head_dim)));
+        /* Item 6: query_pre_attn_scalar — Gemma 4 uses 1.0 per llama.cpp
+         * f_attn_scale; Q/K RMSNorm handles magnitude, no extra sqrt scaling. */
+        printf("[AUDIT] attn_scale=1.0 for Gemma 4 (Q/K RMSNorm in use); "
+               "Llama uses 1/sqrt(%d)\n",
+               qm->config.head_dim_swa > 0 ? qm->config.head_dim_swa
+                                           : qm->config.head_dim);
 
         /* Norm epsilon */
         printf("[AUDIT] rms_norm_eps=%g (research says 1e-6)\n", qm->config.rms_norm_eps);
