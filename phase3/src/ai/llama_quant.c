@@ -1004,22 +1004,19 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
             float *q_head = state->q + h * l_head_dim;
             float *att_h  = state->att + h * max_seq;
 
-            /* Score: Q . K^T / sqrt(attn_scalar).
-             * Gemma 4 uses a FIXED attention scalar (query_pre_attn_scalar=256)
-             * for both SWA and global layers, not the variable head_dim.
-             * For Llama: use head_dim as usual. */
-            float attn_scale_d = (float)l_head_dim;
-            if (c->head_dim_swa > 0) {
-                /* Gemma 4: fixed 1/sqrt(256) for all layers */
-                attn_scale_d = (float)c->head_dim_swa;
-            }
-            float attn_denom = sqrtf(attn_scale_d);
+            /* Score: Q . K^T * attn_scale.
+             * Gemma 4: f_attention_scale = 1.0 (per llama.cpp).
+             * Q/K RMSNorm handles magnitude control — no additional sqrt scaling.
+             * For Llama: use standard 1/sqrt(head_dim). */
+            float attn_scale = (c->head_dim_swa > 0)
+                ? 1.0f  /* Gemma 4: no sqrt scaling */
+                : 1.0f / sqrtf((float)l_head_dim);  /* Llama: standard */
             for (int t = att_start; t <= pos; t++) {
                 float *k_t = key_layer + t * max_kv_dim + kv_h * l_head_dim;
                 float score = 0.0f;
                 for (int d = 0; d < l_head_dim; d++)
                     score += q_head[d] * k_t[d];
-                att_h[t] = score / attn_denom;
+                att_h[t] = score * attn_scale;
             }
 
             /* Softmax over [att_start..pos] */
