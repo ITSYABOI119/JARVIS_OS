@@ -677,15 +677,17 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
         int l_q_dim    = n_heads * l_head_dim;
 
         /* a. RMS norm -> xb
+         *    Use config's rms_norm_eps (1e-6 for Gemma 4, 1e-5 for Llama).
          *    Norm weights are F32 in the GGUF — cast data pointer directly.
          *    For non-F32 norm weights (unlikely), dequant into xb2 as scratch. */
+        float layer_norm_eps = c->rms_norm_eps > 0.0f ? c->rms_norm_eps : RMS_EPS;
         if (layer->attn_norm.type == GGML_TYPE_F32) {
             const float *norm = (const float *)layer->attn_norm.data;
-            tensor_rms_norm(state->x, norm, state->xb, dim, RMS_EPS);
+            tensor_rms_norm(state->x, norm, state->xb, dim, layer_norm_eps);
         } else {
             dequant_row(layer->attn_norm.data, state->xb2, dim,
                         (ggml_type_t)layer->attn_norm.type);
-            tensor_rms_norm(state->x, state->xb2, state->xb, dim, RMS_EPS);
+            tensor_rms_norm(state->x, state->xb2, state->xb, dim, layer_norm_eps);
         }
 
         /* Determine KV source layer.
@@ -927,14 +929,14 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
 
         /* --- Feed-Forward Network (SwiGLU) --- */
 
-        /* j. RMS norm -> xb */
+        /* j. RMS norm -> xb (use config eps) */
         if (layer->ffn_norm.type == GGML_TYPE_F32) {
             const float *norm = (const float *)layer->ffn_norm.data;
-            tensor_rms_norm(state->x, norm, state->xb, dim, RMS_EPS);
+            tensor_rms_norm(state->x, norm, state->xb, dim, layer_norm_eps);
         } else {
             dequant_row(layer->ffn_norm.data, state->xb2, dim,
                         (ggml_type_t)layer->ffn_norm.type);
-            tensor_rms_norm(state->x, state->xb2, state->xb, dim, RMS_EPS);
+            tensor_rms_norm(state->x, state->xb2, state->xb, dim, layer_norm_eps);
         }
 
         /* k-m. SwiGLU: silu(gate(xb)) * up(xb)
@@ -1035,14 +1037,17 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
         }
     }
 
-    /* 3. Final RMS norm (in-place via xb then copy back) */
-    if (qm->output_norm.type == GGML_TYPE_F32) {
-        const float *norm = (const float *)qm->output_norm.data;
-        tensor_rms_norm(state->x, norm, state->xb, dim, RMS_EPS);
-    } else {
-        dequant_row(qm->output_norm.data, state->xb2, dim,
-                    (ggml_type_t)qm->output_norm.type);
-        tensor_rms_norm(state->x, state->xb2, state->xb, dim, RMS_EPS);
+    /* 3. Final RMS norm (in-place via xb then copy back) — use config eps */
+    {
+        float final_eps = c->rms_norm_eps > 0.0f ? c->rms_norm_eps : RMS_EPS;
+        if (qm->output_norm.type == GGML_TYPE_F32) {
+            const float *norm = (const float *)qm->output_norm.data;
+            tensor_rms_norm(state->x, norm, state->xb, dim, final_eps);
+        } else {
+            dequant_row(qm->output_norm.data, state->xb2, dim,
+                        (ggml_type_t)qm->output_norm.type);
+            tensor_rms_norm(state->x, state->xb2, state->xb, dim, final_eps);
+        }
     }
     memcpy(state->x, state->xb, (size_t)dim * sizeof(float));
 
