@@ -62,9 +62,16 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
                           qmodel_t *qm, llama_state_t *state, tokenizer_t *tok,
                           int bos_id)
 {
-    /* Tokenize: BOS + query */
-    int prompt_ids[64];
-    prompt_ids[0] = bos_id;
+    /* Build Gemma 4 chat template prompt with direct control token IDs:
+     *   <bos> <|turn> user \n {query} <turn|> \n <|turn> model \n <|think|>
+     * Tokens: bos=2, <|turn>=105, user=2364, \n=107, <turn|>=106, model=4368, <|think|>=98
+     * Stop on <eos>=1, NOT eos_id=106 (that's <turn|> which model emits first). */
+    int prompt_ids[128];
+    int n_prompt = 0;
+    prompt_ids[n_prompt++] = bos_id;        /* <bos> */
+    prompt_ids[n_prompt++] = 105;           /* <|turn> */
+    prompt_ids[n_prompt++] = 2364;          /* user */
+    prompt_ids[n_prompt++] = 107;           /* \n */
 
     /* Null-terminate the query */
     char query_buf[241];
@@ -78,7 +85,17 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
     puts_serial("\"\n");
 #endif
 
-    int n_prompt = 1 + tokenizer_encode(tok, query_buf, prompt_ids + 1, 63);
+    /* Encode user text */
+    n_prompt += tokenizer_encode(tok, query_buf, prompt_ids + n_prompt,
+                                  128 - n_prompt - 6);
+
+    /* Close user turn + open model turn + think */
+    prompt_ids[n_prompt++] = 106;           /* <turn|> */
+    prompt_ids[n_prompt++] = 107;           /* \n */
+    prompt_ids[n_prompt++] = 105;           /* <|turn> */
+    prompt_ids[n_prompt++] = 4368;          /* model */
+    prompt_ids[n_prompt++] = 107;           /* \n */
+    prompt_ids[n_prompt++] = 98;            /* <|think|> */
 
     /* DEBUG: print token IDs for comparison against llama.cpp reference */
     printf("[PB] tokens (%d):", n_prompt);
@@ -96,13 +113,13 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
     puts_serial("[PB] KV reset done\n");
 #endif
 
-    /* Generate */
+    /* Generate — stop on <eos>=1, not <turn|>=106 */
 #if JARVIS_DBG_PB
     puts_serial("[PB] generating...\n");
 #endif
     int output_ids[64];
     int n_gen = qmodel_generate(qm, state, prompt_ids, n_prompt,
-                                 output_ids, 50, tok->eos_id,
+                                 output_ids, 50, 1 /* <eos> */,
                                  0.0f, 1, 42);
 #if JARVIS_DBG_PB
     puts_serial("[PB] generated "); put_dec((uint32_t)n_gen); puts_serial(" tokens\n");
