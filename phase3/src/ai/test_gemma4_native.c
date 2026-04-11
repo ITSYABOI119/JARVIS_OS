@@ -168,9 +168,10 @@ int main(int argc, char **argv)
     printf("\n");
 
     /* 7. Generate using Gemma 4 chat template with DIRECT token IDs.
-     * Template: <bos><|turn>user\n{text}<turn|>\n<|turn>model\n
-     * Control tokens: <|turn>=105, <turn|>=106, \n=107, user=2364, model=4368 */
-    printf("=== Generation Test (chat template, direct IDs) ===\n\n");
+     * Template: <bos><|turn>user\n{text}<turn|>\n<|turn>model\n<|think|>
+     * Control tokens: <|turn>=105, <turn|>=106, \n=107, user=2364, model=4368, <|think|>=98
+     * Note: Gemma 4 has a thinking mode that activates with <|think|>. */
+    printf("=== Generation Test (chat template + think, direct IDs) ===\n\n");
     int prompt_ids[128];
     int n_prompt = 0;
     prompt_ids[n_prompt++] = tok.bos_id;   /* <bos> = 2 */
@@ -179,12 +180,13 @@ int main(int argc, char **argv)
     prompt_ids[n_prompt++] = 107;          /* \n */
     /* encode user text */
     n_prompt += tokenizer_encode(&tok, "What is the seL4 microkernel?",
-                                  prompt_ids + n_prompt, 127 - n_prompt - 5);
+                                  prompt_ids + n_prompt, 127 - n_prompt - 6);
     prompt_ids[n_prompt++] = 106;          /* <turn|> */
     prompt_ids[n_prompt++] = 107;          /* \n */
     prompt_ids[n_prompt++] = 105;          /* <|turn> */
     prompt_ids[n_prompt++] = 4368;         /* model */
     prompt_ids[n_prompt++] = 107;          /* \n */
+    prompt_ids[n_prompt++] = 98;           /* <|think|> — enter thinking mode */
 
     printf("Prompt tokens (%d):", n_prompt);
     for (int i = 0; i < n_prompt; i++) printf(" %d", prompt_ids[i]);
@@ -194,8 +196,10 @@ int main(int argc, char **argv)
     clock_t t0 = clock();
 
     int out_ids[64];
+    /* Use 1 (<eos>) as stop token, NOT 106 (<turn|>) which model emits
+     * as first token after chat template prompt. */
     int n_gen = qmodel_generate(&qm, &state, prompt_ids, n_prompt,
-                                 out_ids, 30, tok.eos_id, 0.0f, 1, 42);
+                                 out_ids, 30, 1 /* <eos> */, 0.0f, 1, 42);
 
     clock_t t1 = clock();
     double elapsed = (double)(t1 - t0) / CLOCKS_PER_SEC;
@@ -227,15 +231,16 @@ int main(int argc, char **argv)
     p2[n2++] = 2364;         /* user */
     p2[n2++] = 107;          /* \n */
     n2 += tokenizer_encode(&tok, "What is a page fault?",
-                           p2 + n2, 127 - n2 - 5);
+                           p2 + n2, 127 - n2 - 6);
     p2[n2++] = 106;          /* <turn|> */
     p2[n2++] = 107;          /* \n */
     p2[n2++] = 105;          /* <|turn> */
     p2[n2++] = 4368;         /* model */
     p2[n2++] = 107;          /* \n */
+    p2[n2++] = 98;           /* <|think|> */
     t0 = clock();
     n_gen = qmodel_generate(&qm, &state, p2, n2, out_ids, 30,
-                             tok.eos_id, 0.0f, 1, 42);
+                             1 /* <eos> */, 0.0f, 1, 42);
     t1 = clock();
     elapsed = (double)(t1 - t0) / CLOCKS_PER_SEC;
 
