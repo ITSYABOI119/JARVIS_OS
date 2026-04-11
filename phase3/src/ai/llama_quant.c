@@ -43,13 +43,13 @@
  * Set to 1 to disable a feature. Start with all 1, then enable
  * one at a time to find which feature breaks generation.
  * ============================================================ */
-/* All features ENABLED — config, dims, and tokenizer verified. */
-#define G4_DISABLE_PLE          0  /* skip PLE residual add */
-#define G4_DISABLE_SANDWICH     0  /* skip post_attn_norm, post_ffw_norm */
-#define G4_DISABLE_SCALE        0  /* skip layer_output_scale */
-#define G4_DISABLE_QK_NORM      0  /* skip per-head Q/K RMSNorm */
-#define G4_DISABLE_DUAL_ROPE    0  /* use single rope_theta for all layers */
-#define G4_DISABLE_SOFTCAP      0  /* skip logit softcapping */
+/* All features enabled for diagnostic run */
+#define G4_DISABLE_PLE          0
+#define G4_DISABLE_SANDWICH     0
+#define G4_DISABLE_SCALE        0
+#define G4_DISABLE_QK_NORM      0
+#define G4_DISABLE_DUAL_ROPE    0
+#define G4_DISABLE_SOFTCAP      0
 
 /* ============================================================
  * Internal helpers
@@ -644,26 +644,33 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
     for (int L = 0; L < c->n_layers; L++) {
         const qlayer_t *layer = &qm->layers[L];
 
-        /* PLE: gated residual add — x += GELU(gate) * proj(ple_normed)
-         * Applied at start of each layer, before attention. */
+        /* PLE (Gemma 4): gated residual add.
+         * Tensor shapes (from GGUF):
+         *   inp_gate: [1536 → 256]  (maps residual stream x to gate)
+         *   proj:     [256 → 1536]  (maps gated 256-dim back to residual)
+         *
+         * Formula: x += proj @ (GELU(inp_gate @ x) * ple_normed)
+         */
         if (has_ple && layer->ple_proj.data && layer->ple_gate.data) {
-            /* Project PLE from ple_dim to dim: ple_out = proj @ ple_normed */
-            float ple_out[4096]; /* dim (max 4096) */
-            qmatmul_vec(&layer->ple_proj, ple_normed, ple_out, dim, c->ple_dim);
+            /* Gate from residual stream: gate_out = inp_gate @ x  (1536 → 256) */
+            float gate[256];  /* ple_dim, max 256 */
+            qmatmul_vec(&layer->ple_gate, state->x, gate, c->ple_dim, dim);
 
-            /* Gate: inp_gate @ ple_normed — matmul, not raw weight read!
-             * inp_gate is [dim x ple_dim], same shape as ple_proj. */
-            float gate[4096]; /* dim (max 4096) */
-            qmatmul_vec(&layer->ple_gate, ple_normed, gate, dim, c->ple_dim);
-
-            /* Apply GELU to gate, multiply with ple_out, add to x */
-            for (int d = 0; d < dim; d++) {
+            /* Apply GELU and element-wise multiply with ple_normed */
+            for (int d = 0; d < c->ple_dim; d++) {
                 float g = gate[d];
-                /* GELU: x * 0.5 * (1 + tanh(sqrt(2/pi) * (x + 0.044715*x^3))) */
                 float g3 = g * g * g;
                 g = 0.5f * g * (1.0f + tanhf(0.7978845608f * (g + 0.044715f * g3)));
-                state->x[d] += g * ple_out[d];
+                gate[d] = g * ple_normed[d];
             }
+
+            /* Project back to dim: proj_out = proj @ gate  (256 → 1536) */
+            float proj_out[4096];  /* dim, max 4096 */
+            qmatmul_vec(&layer->ple_proj, gate, proj_out, dim, c->ple_dim);
+
+            /* Residual add */
+            for (int d = 0; d < dim; d++)
+                state->x[d] += proj_out[d];
         }
 
         /* --- Attention --- */
@@ -945,6 +952,15 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
 
         /* o. Residual connection */
         residual_add(state->x, state->xb, dim);
+
+        /* DEBUG: per-layer x norm trace (first 2 tokens, key layers) */
+        if (state->pos < 2 && (L < 3 || L == 17 || L == 34)) {
+            float norm2 = 0;
+            for (int d = 0; d < dim; d++) norm2 += state->x[d] * state->x[d];
+            printf("[L%02d@%d] |x|=%.1f x[0..2]=%.4f %.4f %.4f\n",
+                   L, state->pos, sqrtf(norm2),
+                   state->x[0], state->x[1], state->x[2]);
+        }
 
         /* Layer output scaling (Gemma 4) — scalar broadcast.
          * layer_output_scale is a single float {1}, NOT a [dim] vector.
