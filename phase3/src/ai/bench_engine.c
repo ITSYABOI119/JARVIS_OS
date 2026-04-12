@@ -83,9 +83,11 @@ static long peak_rss_kb(void)
 
 static const char *bench_prompt = "The seL4 microkernel is";
 
-/* Build prompt token sequence. Returns total token count. */
+/* Build prompt token sequence. Returns total token count.
+ * Detects architecture from arch string and wraps with appropriate
+ * chat template for instruct-tuned models. */
 static int build_prompt(const tokenizer_t *tok, const llama_config_t *cfg,
-                        const char *text, int *ids, int max_ids)
+                        const char *arch, const char *text, int *ids, int max_ids)
 {
     int n = 0;
 
@@ -105,6 +107,44 @@ static int build_prompt(const tokenizer_t *tok, const llama_config_t *cfg,
         ids[n++] = GEMMA_MODEL;
         ids[n++] = GEMMA_NEWLINE;
         ids[n++] = GEMMA_THINK;
+    } else if (arch && strcmp(arch, "phi3") == 0) {
+        /* Phi-3: <|user|>\n{text}<|end|>\n<|assistant|>\n */
+        int user_tok = tokenizer_find(tok, "<|user|>");
+        int end_tok  = tokenizer_find(tok, "<|end|>");
+        int asst_tok = tokenizer_find(tok, "<|assistant|>");
+        if (user_tok >= 0 && end_tok >= 0 && asst_tok >= 0) {
+            ids[n++] = tok->bos_id;
+            ids[n++] = user_tok;
+            n += tokenizer_encode(tok, "\n", ids + n, max_ids - n - 6);
+            n += tokenizer_encode(tok, text, ids + n, max_ids - n - 6);
+            ids[n++] = end_tok;
+            n += tokenizer_encode(tok, "\n", ids + n, max_ids - n - 3);
+            ids[n++] = asst_tok;
+            n += tokenizer_encode(tok, "\n", ids + n, max_ids - n - 1);
+            printf("  [phi3 chat template: %d tokens]\n", n);
+        } else {
+            printf("  [phi3 special tokens not found, using raw prompt]\n");
+            ids[n++] = tok->bos_id;
+            n += tokenizer_encode(tok, text, ids + n, max_ids - n);
+        }
+    } else if (arch && (strcmp(arch, "qwen3") == 0 || strcmp(arch, "qwen35") == 0)) {
+        /* Qwen: <|im_start|>user\n{text}<|im_end|>\n<|im_start|>assistant\n */
+        int im_start = tokenizer_find(tok, "<|im_start|>");
+        int im_end   = tokenizer_find(tok, "<|im_end|>");
+        if (im_start >= 0 && im_end >= 0) {
+            ids[n++] = im_start;
+            n += tokenizer_encode(tok, "user\n", ids + n, max_ids - n - 6);
+            n += tokenizer_encode(tok, text, ids + n, max_ids - n - 6);
+            ids[n++] = im_end;
+            n += tokenizer_encode(tok, "\n", ids + n, max_ids - n - 3);
+            ids[n++] = im_start;
+            n += tokenizer_encode(tok, "assistant\n", ids + n, max_ids - n - 1);
+            printf("  [qwen chat template: %d tokens]\n", n);
+        } else {
+            printf("  [qwen special tokens not found, using raw prompt]\n");
+            ids[n++] = tok->bos_id;
+            n += tokenizer_encode(tok, text, ids + n, max_ids - n);
+        }
     } else {
         /* Llama / generic: BOS + encoded text */
         ids[n++] = tok->bos_id;
@@ -263,7 +303,7 @@ int main(int argc, char **argv)
 
     /* ---- Build prompt ---- */
     int prompt_ids[256];
-    int n_prompt = build_prompt(&tok, &qm.config, bench_prompt, prompt_ids, 256);
+    int n_prompt = build_prompt(&tok, &qm.config, arch_str, bench_prompt, prompt_ids, 256);
 
     printf("--- \"%s\" ---\n", bench_prompt);
     fflush(stdout);
