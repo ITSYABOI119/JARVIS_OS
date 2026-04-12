@@ -166,19 +166,22 @@ int main(int argc, char **argv)
     /* Parse CLI */
     const char *model_path = NULL;
     int max_tokens = 128;
+    int debug = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--tokens") == 0 && i + 1 < argc) {
             max_tokens = atoi(argv[++i]);
             if (max_tokens < 1) max_tokens = 1;
             if (max_tokens > 512) max_tokens = 512;
+        } else if (strcmp(argv[i], "--debug") == 0 || strcmp(argv[i], "-d") == 0) {
+            debug = 1;
         } else if (argv[i][0] != '-') {
             model_path = argv[i];
         }
     }
 
     if (!model_path) {
-        fprintf(stderr, "Usage: bench_engine <model.gguf> [--tokens N]\n");
+        fprintf(stderr, "Usage: bench_engine <model.gguf> [--tokens N] [--debug]\n");
         return 1;
     }
 
@@ -319,10 +322,11 @@ int main(int argc, char **argv)
     memset(state.key_cache, 0, kv_bytes);
     memset(state.value_cache, 0, kv_bytes);
 
-    /* DEBUG: print prompt tokens */
-    printf("  Prompt IDs (%d):", n_prompt);
-    for (int i = 0; i < n_prompt; i++) printf(" %d", prompt_ids[i]);
-    printf("\n"); fflush(stdout);
+    if (debug) {
+        printf("  Prompt IDs (%d):", n_prompt);
+        for (int i = 0; i < n_prompt; i++) printf(" %d", prompt_ids[i]);
+        printf("\n"); fflush(stdout);
+    }
 
     /* ---- Prefill (timed) ---- */
     printf("  Prefill (%d tokens)...", n_prompt); fflush(stdout);
@@ -333,17 +337,10 @@ int main(int argc, char **argv)
     double pp_tps = (prefill_ms > 0.0) ? n_prompt * 1000.0 / prefill_ms : 0.0;
     printf(" %.1f tok/s\n", pp_tps); fflush(stdout);
 
-    /* DEBUG: direct logits check right after prefill loop */
-    printf("  [POST-PREFILL] logits[0..4]: %.4f %.4f %.4f %.4f %.4f\n",
-           state.logits[0], state.logits[1], state.logits[2],
-           state.logits[3], state.logits[4]);
-    printf("  [POST-PREFILL] logits[100..104]: %.4f %.4f %.4f %.4f %.4f\n",
-           state.logits[100], state.logits[101], state.logits[102],
-           state.logits[103], state.logits[104]);
-    fflush(stdout);
-
-    /* DEBUG: top-5 logits after prefill */
-    {
+    if (debug) {
+        printf("  [POST-PREFILL] logits[0..4]: %.4f %.4f %.4f %.4f %.4f\n",
+               state.logits[0], state.logits[1], state.logits[2],
+               state.logits[3], state.logits[4]);
         int top[5] = {0,0,0,0,0};
         for (int i = 1; i < qm.config.vocab_size; i++)
             for (int j = 0; j < 5; j++)
@@ -351,7 +348,7 @@ int main(int argc, char **argv)
                     for (int k = 4; k > j; k--) top[k] = top[k-1];
                     top[j] = i; break;
                 }
-        printf("  [TOP5 after prefill] ");
+        printf("  [TOP5] ");
         for (int j = 0; j < 5; j++) printf("%d(%.1f) ", top[j], state.logits[top[j]]);
         printf("\n  eos_token=%d\n", eos_token);
         fflush(stdout);
@@ -364,7 +361,7 @@ int main(int argc, char **argv)
     t0 = time_ms();
     for (int g = 0; g < max_tokens; g++) {
         int next = sample_greedy(state.logits, qm.config.vocab_size);
-        printf("[tok=%d] ", next); fflush(stdout);
+        if (debug) { printf("[tok=%d] ", next); fflush(stdout); }
         n_gen++;
         if (next == eos_token) break;
 

@@ -1059,7 +1059,11 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
             /* ============ DELTANET RECURRENT LAYER ============
              * Gated DeltaNet: conv1d → L2 norm → discretize → delta-rule recurrence → output gate
              * Uses SSM state (fixed size) instead of KV cache (growing). */
-#define DELTANET_DEBUG 1
+/* DeltaNet per-layer debug tracing. Default OFF for clean output.
+ * Re-enable with -DDELTANET_DEBUG=1 on compiler command line. */
+#ifndef DELTANET_DEBUG
+#define DELTANET_DEBUG 0
+#endif
 
             int num_k_heads = c->ssm_n_group;
             int num_v_heads = c->ssm_dt_rank;
