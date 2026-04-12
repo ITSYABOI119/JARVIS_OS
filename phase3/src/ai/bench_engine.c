@@ -91,6 +91,10 @@ static int build_prompt(const tokenizer_t *tok, const llama_config_t *cfg,
 {
     int n = 0;
 
+    /* Universal newline token — tokenizer_encode can't encode \n for GPT-2 BPE
+     * models (byte 0x0A isn't in the merge table). Look up directly instead. */
+    int nl_tok = tokenizer_find(tok, "\n");
+
     if (cfg->embed_scale) {
         /* Gemma architecture: chat template wrapping */
         ids[n++] = tok->bos_id;
@@ -115,12 +119,12 @@ static int build_prompt(const tokenizer_t *tok, const llama_config_t *cfg,
         if (user_tok >= 0 && end_tok >= 0 && asst_tok >= 0) {
             ids[n++] = tok->bos_id;
             ids[n++] = user_tok;
-            n += tokenizer_encode(tok, "\n", ids + n, max_ids - n - 6);
+            if (nl_tok >= 0) ids[n++] = nl_tok;
             n += tokenizer_encode(tok, text, ids + n, max_ids - n - 6);
             ids[n++] = end_tok;
-            n += tokenizer_encode(tok, "\n", ids + n, max_ids - n - 3);
+            if (nl_tok >= 0) ids[n++] = nl_tok;
             ids[n++] = asst_tok;
-            n += tokenizer_encode(tok, "\n", ids + n, max_ids - n - 1);
+            if (nl_tok >= 0) ids[n++] = nl_tok;
             printf("  [phi3 chat template: %d tokens]\n", n);
         } else {
             printf("  [phi3 special tokens not found, using raw prompt]\n");
@@ -128,23 +132,19 @@ static int build_prompt(const tokenizer_t *tok, const llama_config_t *cfg,
             n += tokenizer_encode(tok, text, ids + n, max_ids - n);
         }
     } else if (arch && (strcmp(arch, "qwen3") == 0 || strcmp(arch, "qwen35") == 0)) {
-        /* Qwen: <|im_start|>user\n{text}<|im_end|>\n<|im_start|>assistant\n
-         * Use direct newline token ID — tokenizer_encode can't encode \n for
-         * GPT-2 BPE (byte 0x0A maps to token 198 but encode returns -1). */
+        /* Qwen: <|im_start|>user\n{text}<|im_end|>\n<|im_start|>assistant\n */
         int im_start = tokenizer_find(tok, "<|im_start|>");
         int im_end   = tokenizer_find(tok, "<|im_end|>");
-        int nl_tok = tokenizer_find(tok, "\n");
-        if (nl_tok < 0) nl_tok = 198; /* GPT-2 BPE newline fallback */
         if (im_start >= 0 && im_end >= 0) {
             ids[n++] = im_start;
             n += tokenizer_encode(tok, "user", ids + n, max_ids - n - 10);
-            ids[n++] = nl_tok;
+            if (nl_tok >= 0) ids[n++] = nl_tok;
             n += tokenizer_encode(tok, text, ids + n, max_ids - n - 6);
             ids[n++] = im_end;
-            ids[n++] = nl_tok;
+            if (nl_tok >= 0) ids[n++] = nl_tok;
             ids[n++] = im_start;
             n += tokenizer_encode(tok, "assistant", ids + n, max_ids - n - 2);
-            ids[n++] = nl_tok;
+            if (nl_tok >= 0) ids[n++] = nl_tok;
             printf("  [qwen chat template: %d tokens]\n", n);
         } else {
             printf("  [qwen special tokens not found, using raw prompt]\n");
