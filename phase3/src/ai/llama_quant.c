@@ -914,17 +914,18 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
     if (c->head_dim_swa > max_head_dim) max_head_dim = c->head_dim_swa;
     int max_kv_dim = n_kv_heads * max_head_dim;
 
-    /* Bounds check token ID (critical on bare-metal seL4 — no memory protection) */
+    /* Bounds check token ID.
+     * For invalid tokens: use zero embedding but still run the full forward pass.
+     * This is critical for SSM/DeltaNet models — the recurrence S = gate*S + k⊗delta
+     * MUST execute at every position to maintain the temporal chain. Skipping a position
+     * would break conv1d sliding window and SSM state decay. With zero embedding,
+     * the recurrence becomes S = gate*S + 0 (proper decay, no new information). */
     if (token < 0 || token >= c->vocab_size) {
-        /* Skip invalid tokens but DON'T zero logits — preserve previous token's
-         * logits so generation can continue. This handles tokenizer failures
-         * (e.g., -1 for unknown chars) gracefully during prefill. */
-        state->pos++;
-        return;
+        memset(state->x, 0, (size_t)dim * sizeof(float));
+    } else {
+        /* 1. EMBEDDING: dequantize one row of token_embed into x */
+        qembed_lookup(&qm->token_embed, token, state->x, dim);
     }
-
-    /* 1. EMBEDDING: dequantize one row of token_embed into x */
-    qembed_lookup(&qm->token_embed, token, state->x, dim);
 
     /* Gemma embedding scaling: multiply by sqrt(dim) after lookup */
     if (c->embed_scale) {
