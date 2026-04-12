@@ -128,17 +128,23 @@ static int build_prompt(const tokenizer_t *tok, const llama_config_t *cfg,
             n += tokenizer_encode(tok, text, ids + n, max_ids - n);
         }
     } else if (arch && (strcmp(arch, "qwen3") == 0 || strcmp(arch, "qwen35") == 0)) {
-        /* Qwen: <|im_start|>user\n{text}<|im_end|>\n<|im_start|>assistant\n */
+        /* Qwen: <|im_start|>user\n{text}<|im_end|>\n<|im_start|>assistant\n
+         * Use direct newline token ID — tokenizer_encode can't encode \n for
+         * GPT-2 BPE (byte 0x0A maps to token 198 but encode returns -1). */
         int im_start = tokenizer_find(tok, "<|im_start|>");
         int im_end   = tokenizer_find(tok, "<|im_end|>");
+        int nl_tok = tokenizer_find(tok, "\n");
+        if (nl_tok < 0) nl_tok = 198; /* GPT-2 BPE newline fallback */
         if (im_start >= 0 && im_end >= 0) {
             ids[n++] = im_start;
-            n += tokenizer_encode(tok, "user\n", ids + n, max_ids - n - 6);
+            n += tokenizer_encode(tok, "user", ids + n, max_ids - n - 10);
+            ids[n++] = nl_tok;
             n += tokenizer_encode(tok, text, ids + n, max_ids - n - 6);
             ids[n++] = im_end;
-            n += tokenizer_encode(tok, "\n", ids + n, max_ids - n - 3);
+            ids[n++] = nl_tok;
             ids[n++] = im_start;
-            n += tokenizer_encode(tok, "assistant\n", ids + n, max_ids - n - 1);
+            n += tokenizer_encode(tok, "assistant", ids + n, max_ids - n - 2);
+            ids[n++] = nl_tok;
             printf("  [qwen chat template: %d tokens]\n", n);
         } else {
             printf("  [qwen special tokens not found, using raw prompt]\n");
@@ -313,6 +319,11 @@ int main(int argc, char **argv)
     memset(state.key_cache, 0, kv_bytes);
     memset(state.value_cache, 0, kv_bytes);
 
+    /* DEBUG: print prompt tokens */
+    printf("  Prompt IDs (%d):", n_prompt);
+    for (int i = 0; i < n_prompt; i++) printf(" %d", prompt_ids[i]);
+    printf("\n"); fflush(stdout);
+
     /* ---- Prefill (timed) ---- */
     printf("  Prefill (%d tokens)...", n_prompt); fflush(stdout);
     double t0 = time_ms();
@@ -322,6 +333,30 @@ int main(int argc, char **argv)
     double pp_tps = (prefill_ms > 0.0) ? n_prompt * 1000.0 / prefill_ms : 0.0;
     printf(" %.1f tok/s\n", pp_tps); fflush(stdout);
 
+    /* DEBUG: direct logits check right after prefill loop */
+    printf("  [POST-PREFILL] logits[0..4]: %.4f %.4f %.4f %.4f %.4f\n",
+           state.logits[0], state.logits[1], state.logits[2],
+           state.logits[3], state.logits[4]);
+    printf("  [POST-PREFILL] logits[100..104]: %.4f %.4f %.4f %.4f %.4f\n",
+           state.logits[100], state.logits[101], state.logits[102],
+           state.logits[103], state.logits[104]);
+    fflush(stdout);
+
+    /* DEBUG: top-5 logits after prefill */
+    {
+        int top[5] = {0,0,0,0,0};
+        for (int i = 1; i < qm.config.vocab_size; i++)
+            for (int j = 0; j < 5; j++)
+                if (state.logits[i] > state.logits[top[j]]) {
+                    for (int k = 4; k > j; k--) top[k] = top[k-1];
+                    top[j] = i; break;
+                }
+        printf("  [TOP5 after prefill] ");
+        for (int j = 0; j < 5; j++) printf("%d(%.1f) ", top[j], state.logits[top[j]]);
+        printf("\n  eos_token=%d\n", eos_token);
+        fflush(stdout);
+    }
+
     /* ---- Generation (timed) — stream each token ---- */
     int n_gen = 0;
     printf("  > ");
@@ -329,6 +364,7 @@ int main(int argc, char **argv)
     t0 = time_ms();
     for (int g = 0; g < max_tokens; g++) {
         int next = sample_greedy(state.logits, qm.config.vocab_size);
+        printf("[tok=%d] ", next); fflush(stdout);
         n_gen++;
         if (next == eos_token) break;
 

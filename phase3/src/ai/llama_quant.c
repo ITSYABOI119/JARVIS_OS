@@ -916,7 +916,9 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
 
     /* Bounds check token ID (critical on bare-metal seL4 — no memory protection) */
     if (token < 0 || token >= c->vocab_size) {
-        memset(state->logits, 0, (size_t)c->vocab_size * sizeof(float));
+        /* Skip invalid tokens but DON'T zero logits — preserve previous token's
+         * logits so generation can continue. This handles tokenizer failures
+         * (e.g., -1 for unknown chars) gracefully during prefill. */
         state->pos++;
         return;
     }
@@ -1056,6 +1058,7 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
             /* ============ DELTANET RECURRENT LAYER ============
              * Gated DeltaNet: conv1d → L2 norm → discretize → delta-rule recurrence → output gate
              * Uses SSM state (fixed size) instead of KV cache (growing). */
+#define DELTANET_DEBUG 1
 
             int num_k_heads = c->ssm_n_group;
             int num_v_heads = c->ssm_dt_rank;
@@ -1082,6 +1085,20 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
             qmatmul_vec(&layer->wk, state->xb, qkv + q_dim, k_dim, dim); /* K */
             qmatmul_vec(&layer->wv, state->xb, qkv + q_dim + k_dim, v_dim, dim); /* V */
 
+#if DELTANET_DEBUG
+            if (L == 0 && state->pos == 0) {
+                printf("[DN L0@0] pre-conv Q[0..3]: %.4f %.4f %.4f %.4f\n",
+                       qkv[0], qkv[1], qkv[2], qkv[3]);
+                printf("[DN L0@0] pre-conv K[0..3]: %.4f %.4f %.4f %.4f\n",
+                       qkv[q_dim], qkv[q_dim+1], qkv[q_dim+2], qkv[q_dim+3]);
+                printf("[DN L0@0] pre-conv V[0..3]: %.4f %.4f %.4f %.4f\n",
+                       qkv[q_dim+k_dim], qkv[q_dim+k_dim+1], qkv[q_dim+k_dim+2], qkv[q_dim+k_dim+3]);
+                float qnorm = 0;
+                for (int i = 0; i < qkv_channels; i++) qnorm += qkv[i] * qkv[i];
+                printf("[DN L0@0] pre-conv |QKV|=%.2f\n", sqrtf(qnorm));
+            }
+#endif
+
             /* c. Z output gate: attn_out_gate @ xb → [v_dim] */
             float *z_buf = qkv + qkv_channels;  /* after QKV in scratch */
             qmatmul_vec(&layer->attn_out_gate, state->xb, z_buf, v_dim, dim);
@@ -1090,6 +1107,17 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
             float alpha_raw[64], beta_raw[64]; /* max num_v_heads */
             qmatmul_vec(&layer->ssm_alpha, state->xb, alpha_raw, num_v_heads, dim);
             qmatmul_vec(&layer->ssm_beta, state->xb, beta_raw, num_v_heads, dim);
+
+#if DELTANET_DEBUG
+            if (L == 0 && state->pos == 0) {
+                printf("[DN L0@0] alpha[0..3]: %.4f %.4f %.4f %.4f\n",
+                       alpha_raw[0], alpha_raw[1], alpha_raw[2], alpha_raw[3]);
+                printf("[DN L0@0] beta[0..3]: %.4f %.4f %.4f %.4f\n",
+                       beta_raw[0], beta_raw[1], beta_raw[2], beta_raw[3]);
+                printf("[DN L0@0] z[0..3]: %.4f %.4f %.4f %.4f\n",
+                       z_buf[0], z_buf[1], z_buf[2], z_buf[3]);
+            }
+#endif
 
             /* e. Conv1d with state */
             /* Find this layer's conv state index (count DeltaNet layers before L) */
@@ -1112,6 +1140,19 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
             }
 
             deltanet_conv1d(qkv, cs, conv_k, c->ssm_d_conv, qkv_channels);
+
+#if DELTANET_DEBUG
+            if (L == 0 && state->pos == 0) {
+                printf("[DN L0@0] post-conv Q[0..3]: %.4f %.4f %.4f %.4f\n",
+                       qkv[0], qkv[1], qkv[2], qkv[3]);
+                printf("[DN L0@0] post-conv K[0..3]: %.4f %.4f %.4f %.4f\n",
+                       qkv[q_dim], qkv[q_dim+1], qkv[q_dim+2], qkv[q_dim+3]);
+                printf("[DN L0@0] post-conv V[0..3]: %.4f %.4f %.4f %.4f\n",
+                       qkv[q_dim+k_dim], qkv[q_dim+k_dim+1], qkv[q_dim+k_dim+2], qkv[q_dim+k_dim+3]);
+                printf("[DN L0@0] conv_k[0..3]: %.6f %.6f %.6f %.6f\n",
+                       conv_k[0], conv_k[1], conv_k[2], conv_k[3]);
+            }
+#endif
 
             /* f. Dequant ssm_a and dt_bias */
             float a_buf[64], dt_buf[64]; /* max num_v_heads */
@@ -1146,6 +1187,20 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
                              num_k_heads, num_v_heads,
                              head_k_dim_ssm, head_v_dim_ssm);
 
+
+#if DELTANET_DEBUG
+            if (L == 0 && state->pos == 0) {
+                float onorm = 0;
+                for (int i = 0; i < v_dim; i++) onorm += dn_out[i] * dn_out[i];
+                printf("[DN L0@0] dn_out[0..3]: %.4f %.4f %.4f %.4f |out|=%.4f\n",
+                       dn_out[0], dn_out[1], dn_out[2], dn_out[3], sqrtf(onorm));
+                printf("[DN L0@0] ssm_a[0..3]: %.6f %.6f %.6f %.6f\n",
+                       a_buf[0], a_buf[1], a_buf[2], a_buf[3]);
+                printf("[DN L0@0] dt_bias[0..3]: %.6f %.6f %.6f %.6f\n",
+                       dt_buf[0], dt_buf[1], dt_buf[2], dt_buf[3]);
+            }
+#endif
+
             /* i. Output projection: ssm_out @ dn_out → xb2 [dim] */
             qmatmul_vec(&layer->ssm_out, dn_out, state->xb2, dim, v_dim);
 
@@ -1164,6 +1219,17 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
 
             /* k. Residual */
             residual_add(state->x, state->xb2, dim);
+
+#if DELTANET_DEBUG
+            if (state->pos == 0) {
+                float xn = 0;
+                for (int i = 0; i < dim; i++) xn += state->x[i] * state->x[i];
+                if (L < 4 || L == 3 || L == 7 || L == 31)
+                    printf("[L%d@0] post-layer |x|=%.2f x[0..2]=%.4f %.4f %.4f %s\n",
+                           L, sqrtf(xn), state->x[0], state->x[1], state->x[2],
+                           is_deltanet ? "DN" : "ATT");
+            }
+#endif
 
         } else if (is_deltanet) {
             /* DeltaNet layer but missing tensors — identity pass-through */
@@ -1486,6 +1552,16 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
         /* o. Residual connection */
         residual_add(state->x, state->xb, dim);
 
+#if DELTANET_DEBUG
+        if (state->pos == 0 && (L < 4 || L == 7 || L == 31)) {
+            float xn = 0;
+            for (int i = 0; i < dim; i++) xn += state->x[i] * state->x[i];
+            printf("[L%d@0] post-FFN |x|=%.2f x[0..2]=%.4f %.4f %.4f %s\n",
+                   L, sqrtf(xn), state->x[0], state->x[1], state->x[2],
+                   is_deltanet ? "DN" : "ATT");
+        }
+#endif
+
         /* --- PLE: Per-Layer Embedding injection (Gemma 4) ---
          * Applied AFTER the attention+FFN sandwich, BEFORE layer_output_scale.
          * Formula:
@@ -1569,8 +1645,46 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
     memcpy(state->x, state->xb, (size_t)dim * sizeof(float));
 
     /* 4. Output projection -> logits (quantized matmul) */
+#if DELTANET_DEBUG
+    if (state->pos < 2) {
+        float xn = 0;
+        for (int i = 0; i < dim; i++) xn += state->x[i] * state->x[i];
+        printf("[FWD@%d] pre-output |x|=%.4f x[0..2]=%.4f %.4f %.4f\n",
+               state->pos, sqrtf(xn), state->x[0], state->x[1], state->x[2]);
+        printf("[FWD@%d] output_weight: data=%p type=%u n_elem=%llu\n",
+               state->pos, (void*)qm->output_weight.data, qm->output_weight.type,
+               (unsigned long long)qm->output_weight.n_elements);
+    }
+#endif
     qmatmul_vec(&qm->output_weight, state->x, state->logits,
                 c->vocab_size, dim);
+#if DELTANET_DEBUG
+    printf("[FWD@%d] logit0=%.4f |x|pre=%.2f\n", state->pos, state->logits[0],
+           sqrtf(state->x[0]*state->x[0]+state->x[1]*state->x[1]+state->x[2]*state->x[2]));
+    if (state->pos < 2) {
+        printf("[FWD@%d] logits[0..4]: %.4f %.4f %.4f %.4f %.4f\n",
+               state->pos, state->logits[0], state->logits[1],
+               state->logits[2], state->logits[3], state->logits[4]);
+        /* Manual row-0 dot product for sanity check */
+        int bs = dequant_type_block_size((ggml_type_t)qm->output_weight.type);
+        size_t bb = dequant_type_block_bytes((ggml_type_t)qm->output_weight.type);
+        printf("[FWD@%d] output_weight bs=%d bb=%zu type=%d\n",
+               state->pos, bs, bb, qm->output_weight.type);
+        if (bs > 0 && bb > 0) {
+            size_t row_bytes = ((size_t)dim / bs) * bb;
+            float tmp[256];
+            float dot = 0;
+            const uint8_t *row0 = (const uint8_t *)qm->output_weight.data;
+            int n_blocks = dim / bs;
+            for (int b = 0; b < n_blocks && b < 1; b++) {
+                dequant_row(row0 + b * bb, tmp, bs, (ggml_type_t)qm->output_weight.type);
+                printf("[FWD@%d] row0 block0[0..3]: %.4f %.4f %.4f %.4f\n",
+                       state->pos, tmp[0], tmp[1], tmp[2], tmp[3]);
+            }
+            (void)row_bytes; (void)dot;
+        }
+    }
+#endif
 
     /* 4b. Logit softcapping (Gemma 4) */
     if (!G4_DISABLE_SOFTCAP && c->logit_softcap > 0.0f)
