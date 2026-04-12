@@ -40,6 +40,8 @@ typedef struct {
     int   shared_kv_layers;   /* 0   = all layers compute own KV */
     int   head_dim_swa;       /* 0   = no SWA-specific head dim */
 
+    int   rope_dim_count;      /* 0 = full head_dim, >0 = partial RoPE (Qwen3.5: 64 of 256) */
+
     /* --- Qwen3.5 SSM/DeltaNet extensions (all default to 0/NULL) --- */
     int   ssm_d_conv;          /* conv kernel width (4 for Qwen3.5) */
     int   ssm_d_state;         /* head_k_dim (128) — Q/K per-head dim for SSM */

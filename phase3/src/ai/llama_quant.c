@@ -1190,15 +1190,14 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
 
 
 #if DELTANET_DEBUG
-            if (L == 0 && state->pos == 0) {
-                float onorm = 0;
+            if (L == 0) {
+                float onorm = 0, snorm = 0;
                 for (int i = 0; i < v_dim; i++) onorm += dn_out[i] * dn_out[i];
-                printf("[DN L0@0] dn_out[0..3]: %.4f %.4f %.4f %.4f |out|=%.4f\n",
-                       dn_out[0], dn_out[1], dn_out[2], dn_out[3], sqrtf(onorm));
-                printf("[DN L0@0] ssm_a[0..3]: %.6f %.6f %.6f %.6f\n",
-                       a_buf[0], a_buf[1], a_buf[2], a_buf[3]);
-                printf("[DN L0@0] dt_bias[0..3]: %.6f %.6f %.6f %.6f\n",
-                       dt_buf[0], dt_buf[1], dt_buf[2], dt_buf[3]);
+                int state_size = num_v_heads * head_k_dim_ssm * head_v_dim_ssm;
+                for (int i = 0; i < state_size; i++) snorm += ssm_s[i] * ssm_s[i];
+                printf("[DN L0@%d] |out|=%.3f |S|=%.3f out[0..2]=%.4f %.4f %.4f\n",
+                       state->pos, sqrtf(onorm), sqrtf(snorm),
+                       dn_out[0], dn_out[1], dn_out[2]);
             }
 #endif
 
@@ -1326,12 +1325,16 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
             /* e. RoPE on Q AND K — uses l_head_dim (256 for SWA, 512 for global).
              * Dual theta: SWA layers use rope_theta_swa, global use rope_theta.
              * NEOX (Gemma): pair d[i] with d[i + half] (split first/second half).
-             * Standard (Llama): pair d[2i] with d[2i+1] (interleaved). */
+             * Standard (Llama): pair d[2i] with d[2i+1] (interleaved).
+             * Partial RoPE (Qwen3.5): only first rope_dim_count dims get rotation. */
             {
-                int half = l_head_dim / 2;
+                int rope_dim = l_head_dim;
+                if (c->rope_dim_count > 0 && c->rope_dim_count < rope_dim)
+                    rope_dim = c->rope_dim_count;
+                int half = rope_dim / 2;
                 for (int h = 0; h < n_heads; h++) {
                     for (int i = 0; i < half; i++) {
-                        float freq = 1.0f / powf(l_rope_theta, (float)(2 * i) / (float)l_head_dim);
+                        float freq = 1.0f / powf(l_rope_theta, (float)(2 * i) / (float)rope_dim);
                         if (qm->rope_freqs && !is_swa) freq /= qm->rope_freqs[i];
                         float angle = (float)pos * freq;
                         float cos_a = cosf(angle);
@@ -1351,7 +1354,7 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
                 }
                 for (int h = 0; h < n_kv_heads; h++) {
                     for (int i = 0; i < half; i++) {
-                        float freq = 1.0f / powf(l_rope_theta, (float)(2 * i) / (float)l_head_dim);
+                        float freq = 1.0f / powf(l_rope_theta, (float)(2 * i) / (float)rope_dim);
                         if (qm->rope_freqs && !is_swa) freq /= qm->rope_freqs[i];
                         float angle = (float)pos * freq;
                         float cos_a = cosf(angle);
@@ -1399,10 +1402,13 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
 
             /* RoPE on Q only (K already has RoPE from source layer) */
             {
-                int half = l_head_dim / 2;
+                int rope_dim_q = l_head_dim;
+                if (c->rope_dim_count > 0 && c->rope_dim_count < rope_dim_q)
+                    rope_dim_q = c->rope_dim_count;
+                int half = rope_dim_q / 2;
                 for (int h = 0; h < n_heads; h++) {
                     for (int i = 0; i < half; i++) {
-                        float freq = 1.0f / powf(l_rope_theta, (float)(2 * i) / (float)l_head_dim);
+                        float freq = 1.0f / powf(l_rope_theta, (float)(2 * i) / (float)rope_dim_q);
                         if (qm->rope_freqs && !is_swa) freq /= qm->rope_freqs[i];
                         float angle = (float)pos * freq;
                         float cos_a = cosf(angle);

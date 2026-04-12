@@ -142,6 +142,11 @@ int llama_load_config(llama_config_t *config, const gguf_ctx_t *ctx)
     else
         config->rope_theta = 500000.0f;
 
+    /* Partial RoPE: only apply to first N dimensions (Qwen3.5: 64 of 256) */
+    snprintf(key, sizeof(key), "%s.rope.dimension_count", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val))
+        config->rope_dim_count = (int)u32_val;
+
     /* --- Gemma 4 / extended fields (all optional, default 0) --- */
 
     snprintf(key, sizeof(key), "%s.attention.layer_norm_rms_epsilon", arch);
