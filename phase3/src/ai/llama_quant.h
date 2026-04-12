@@ -53,6 +53,15 @@ typedef struct {
     qtensor_t ple_gate;           /* blk.N.inp_gate.weight [dim] — GELU gated */
     qtensor_t ple_proj;           /* blk.N.proj.weight [dim x ple_dim] */
     qtensor_t post_norm;          /* blk.N.post_norm.weight — post-PLE norm */
+    /* --- DeltaNet/SSM tensors (Qwen3.5, data=NULL for non-DeltaNet layers) --- */
+    qtensor_t ssm_conv1d;     /* depthwise conv1d kernel [d_conv, qkv_dim] */
+    qtensor_t ssm_alpha;      /* alpha gate projection [dim, num_v_heads] */
+    qtensor_t ssm_beta;       /* beta gate projection [dim, num_v_heads] */
+    qtensor_t ssm_a;          /* A_log decay rates [num_v_heads] */
+    qtensor_t ssm_dt_bias;    /* timestep bias [num_v_heads] */
+    qtensor_t ssm_norm;       /* output RMS norm [head_v_dim] */
+    qtensor_t ssm_out;        /* output projection [d_inner, dim] */
+    qtensor_t attn_out_gate;  /* output gate: DeltaNet Z or full-attn sigmoid gate */
 } qlayer_t;
 
 /* ---- Full quantized model (only layers array is malloc'd) ---- */

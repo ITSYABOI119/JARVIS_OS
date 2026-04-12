@@ -174,6 +174,30 @@ int llama_load_config(llama_config_t *config, const gguf_ctx_t *ctx)
            config->shared_kv_layers, config->logit_softcap,
            config->rms_norm_eps, config->rope_theta_swa);
 
+    /* Qwen3.5 SSM/DeltaNet extensions */
+    snprintf(key, sizeof(key), "%s.ssm.conv_kernel", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val)) config->ssm_d_conv = (int)u32_val;
+
+    snprintf(key, sizeof(key), "%s.ssm.state_size", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val)) config->ssm_d_state = (int)u32_val;
+
+    snprintf(key, sizeof(key), "%s.ssm.group_count", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val)) config->ssm_n_group = (int)u32_val;
+
+    snprintf(key, sizeof(key), "%s.ssm.time_step_rank", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val)) config->ssm_dt_rank = (int)u32_val;
+
+    snprintf(key, sizeof(key), "%s.ssm.inner_size", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val)) config->ssm_d_inner = (int)u32_val;
+
+    snprintf(key, sizeof(key), "%s.full_attention_interval", arch);
+    if (gguf_get_kv_u32(ctx, key, &u32_val)) config->full_attn_interval = (int)u32_val;
+
+    if (config->ssm_d_conv > 0)
+        printf("[config] SSM: d_conv=%d d_state=%d n_group=%d dt_rank=%d d_inner=%d full_attn=%d\n",
+               config->ssm_d_conv, config->ssm_d_state, config->ssm_n_group,
+               config->ssm_dt_rank, config->ssm_d_inner, config->full_attn_interval);
+
     /* --- Build per-layer arrays --- */
     int nl = config->n_layers;
     /* nl range already validated above, but be safe */
@@ -242,9 +266,11 @@ void llama_free_config(llama_config_t *config)
     free(config->layer_ffn_dim);
     free(config->layer_is_swa);
     free(config->kv_share_map);
+    free(config->layer_is_deltanet);
     config->layer_ffn_dim = NULL;
     config->layer_is_swa = NULL;
     config->kv_share_map = NULL;
+    config->layer_is_deltanet = NULL;
 }
 
 /* ---- Model Allocation ---- */
@@ -640,6 +666,41 @@ int llama_alloc_state(llama_state_t *state, const llama_config_t *config)
         state->ple_context = NULL;
     }
 
+    /* Qwen3.5 DeltaNet state buffers — count DeltaNet layers first */
+    state->n_deltanet = 0;
+    state->conv_state = NULL;
+    state->ssm_state = NULL;
+    state->qkv_scratch = NULL;
+    if (config->ssm_d_conv > 0 && config->layer_is_deltanet) {
+        for (int i = 0; i < config->n_layers; i++)
+            if (config->layer_is_deltanet[i]) state->n_deltanet++;
+
+        if (state->n_deltanet > 0) {
+            /* Conv state: [n_deltanet × (d_conv-1) × qkv_dim] */
+            int qkv_dim = config->ssm_n_group * config->ssm_d_state * 2 + config->ssm_d_inner;
+            size_t conv_size = (size_t)state->n_deltanet * (config->ssm_d_conv - 1) * qkv_dim;
+            state->conv_state = (float *)calloc(conv_size, sizeof(float));
+
+            /* SSM state: [n_deltanet × num_v_heads × head_k_dim × head_v_dim] */
+            int head_v_dim = config->ssm_d_inner / config->ssm_dt_rank;
+            size_t ssm_size = (size_t)state->n_deltanet * config->ssm_dt_rank *
+                              config->ssm_d_state * head_v_dim;
+            state->ssm_state = (float *)calloc(ssm_size, sizeof(float));
+
+            /* Scratch buffer for QKV + gate + alpha + beta projections */
+            int scratch_size = qkv_dim + config->ssm_d_inner + config->ssm_dt_rank * 2;
+            /* Also needs to fit gated Q for full-attention layers: n_heads * head_dim * 2 */
+            int gated_q_size = config->n_heads * config->head_dim * 2;
+            if (gated_q_size > scratch_size) scratch_size = gated_q_size;
+            state->qkv_scratch = (float *)calloc((size_t)scratch_size, sizeof(float));
+
+            if (!state->conv_state || !state->ssm_state || !state->qkv_scratch) {
+                llama_free_state(state);
+                return -1;
+            }
+        }
+    }
+
     /* Verify all allocations succeeded */
     if (!state->x || !state->xb || !state->xb2 ||
         !state->q || !state->k || !state->v ||
@@ -673,6 +734,9 @@ void llama_free_state(llama_state_t *state)
     free(state->value_cache);
     free(state->ple_all);
     free(state->ple_context);
+    free(state->conv_state);
+    free(state->ssm_state);
+    free(state->qkv_scratch);
 
     memset(state, 0, sizeof(*state));
 }

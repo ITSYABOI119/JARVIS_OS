@@ -40,10 +40,19 @@ typedef struct {
     int   shared_kv_layers;   /* 0   = all layers compute own KV */
     int   head_dim_swa;       /* 0   = no SWA-specific head dim */
 
+    /* --- Qwen3.5 SSM/DeltaNet extensions (all default to 0/NULL) --- */
+    int   ssm_d_conv;          /* conv kernel width (4 for Qwen3.5) */
+    int   ssm_d_state;         /* head_k_dim (128) — Q/K per-head dim for SSM */
+    int   ssm_n_group;         /* num_k_heads (16) — Q/K head count for SSM */
+    int   ssm_dt_rank;         /* num_v_heads (32) — V/output head count */
+    int   ssm_d_inner;         /* d_inner (4096) — V_dim = num_v_heads * head_v_dim */
+    int   full_attn_interval;  /* every Nth layer is full attention (4 for Qwen3.5) */
+
     /* Per-layer config (malloc'd, NULL for uniform/Llama models) */
     int  *layer_ffn_dim;      /* [n_layers] — per-layer FFN hidden dim */
     bool *layer_is_swa;       /* [n_layers] — true = sliding window attention */
     int  *kv_share_map;       /* [n_layers] — -1 = own KV, >=0 = index of source layer */
+    bool *layer_is_deltanet;  /* [n_layers] — true = DeltaNet recurrent layer */
 } llama_config_t;
 
 typedef struct {
@@ -87,6 +96,11 @@ typedef struct {
     /* Gemma 4 PLE scratch buffers (heap — too large for seL4 Process B stack) */
     float *ple_all;        /* [n_layers * ple_dim] — per-token PLE inputs */
     float *ple_context;    /* [n_layers * ple_dim] — context-aware projection */
+    /* Qwen3.5 DeltaNet state buffers (heap, fixed size, context-independent) */
+    float *conv_state;     /* [n_deltanet × (d_conv-1) × qkv_dim] — conv1d sliding window */
+    float *ssm_state;      /* [n_deltanet × num_v_heads × head_k_dim × head_v_dim] — recurrent state */
+    float *qkv_scratch;    /* scratch for fused QKV + gate projections */
+    int    n_deltanet;     /* number of DeltaNet layers (for state indexing) */
     int pos;
     int max_seq_len;
 } llama_state_t;

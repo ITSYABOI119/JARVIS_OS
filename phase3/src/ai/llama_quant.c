@@ -368,52 +368,103 @@ int qmodel_load(qmodel_t *qm, const gguf_ctx_t *ctx, const void *gguf_base)
                 int q_rows  = c->n_heads * c->head_dim;
                 int kv_rows = c->n_kv_heads * c->head_dim;
                 uint64_t expected = (uint64_t)(q_rows + 2 * kv_rows) * (uint64_t)c->dim;
-                if (tqkv->n_elements != expected) {
+
+                if (tqkv->n_elements != expected && c->ssm_d_state > 0) {
+                    /* Try SSM dimensions: Q=n_group*d_state, K=same, V=d_inner */
+                    q_rows  = c->ssm_n_group * c->ssm_d_state;
+                    kv_rows = q_rows;  /* K same as Q for DeltaNet */
+                    int v_rows = c->ssm_d_inner;
+                    expected = (uint64_t)(q_rows + kv_rows + v_rows) * (uint64_t)c->dim;
+                    if (tqkv->n_elements == expected) {
+                        /* SSM QKV: Q[q_rows] + K[kv_rows] + V[v_rows] */
+                        size_t row_bytes = dequant_row_bytes(c->dim, (ggml_type_t)tqkv->type);
+                        const uint8_t *fused = (const uint8_t *)gguf_base +
+                                               ctx->data_offset + tqkv->offset;
+                        L->wq.data = fused;
+                        L->wq.type = tqkv->type;
+                        L->wq.n_elements = (uint64_t)q_rows * c->dim;
+                        L->wq.n_bytes = (uint64_t)q_rows * row_bytes;
+                        L->wk.data = fused + (size_t)q_rows * row_bytes;
+                        L->wk.type = tqkv->type;
+                        L->wk.n_elements = (uint64_t)kv_rows * c->dim;
+                        L->wk.n_bytes = (uint64_t)kv_rows * row_bytes;
+                        L->wv.data = fused + (size_t)(q_rows + kv_rows) * row_bytes;
+                        L->wv.type = tqkv->type;
+                        L->wv.n_elements = (uint64_t)v_rows * c->dim;
+                        L->wv.n_bytes = (uint64_t)v_rows * row_bytes;
+                        if (i == 0) {
+                            printf("[qmodel] SSM fused QKV: q=%d k=%d v=%d rows, type=%s\n",
+                                   q_rows, kv_rows, v_rows,
+                                   dequant_type_name((ggml_type_t)tqkv->type));
+                        }
+                    } else {
+                        printf("[qmodel] layer %d: fused QKV n_elements=%llu, expected %llu\n",
+                               i, (unsigned long long)tqkv->n_elements, (unsigned long long)expected);
+                        goto fail;
+                    }
+                } else if (tqkv->n_elements != expected) {
                     printf("[qmodel] layer %d: fused QKV n_elements=%llu, expected %llu "
                            "(q=%d + 2*kv=%d rows, dim=%d)\n",
                            i, (unsigned long long)tqkv->n_elements,
                            (unsigned long long)expected, q_rows, kv_rows, c->dim);
                     goto fail;
-                }
+                } else {
+                    /* Standard fused QKV split (Phi-3, Falcon) */
+                    size_t row_bytes = dequant_row_bytes(c->dim, (ggml_type_t)tqkv->type);
+                    const uint8_t *fused = (const uint8_t *)gguf_base +
+                                           ctx->data_offset + tqkv->offset;
 
-                size_t row_bytes = dequant_row_bytes(c->dim, (ggml_type_t)tqkv->type);
-                const uint8_t *fused = (const uint8_t *)gguf_base +
-                                       ctx->data_offset + tqkv->offset;
+                    /* Q: rows [0, q_rows) */
+                    L->wq.data       = fused;
+                    L->wq.type       = tqkv->type;
+                    L->wq.n_elements = (uint64_t)q_rows * c->dim;
+                    L->wq.n_bytes    = (uint64_t)q_rows * row_bytes;
 
-                /* Q: rows [0, q_rows) */
-                L->wq.data       = fused;
-                L->wq.type       = tqkv->type;
-                L->wq.n_elements = (uint64_t)q_rows * c->dim;
-                L->wq.n_bytes    = (uint64_t)q_rows * row_bytes;
+                    /* K: rows [q_rows, q_rows + kv_rows) */
+                    L->wk.data       = fused + (size_t)q_rows * row_bytes;
+                    L->wk.type       = tqkv->type;
+                    L->wk.n_elements = (uint64_t)kv_rows * c->dim;
+                    L->wk.n_bytes    = (uint64_t)kv_rows * row_bytes;
 
-                /* K: rows [q_rows, q_rows + kv_rows) */
-                L->wk.data       = fused + (size_t)q_rows * row_bytes;
-                L->wk.type       = tqkv->type;
-                L->wk.n_elements = (uint64_t)kv_rows * c->dim;
-                L->wk.n_bytes    = (uint64_t)kv_rows * row_bytes;
+                    /* V: rows [q_rows + kv_rows, q_rows + 2*kv_rows) */
+                    L->wv.data       = fused + (size_t)(q_rows + kv_rows) * row_bytes;
+                    L->wv.type       = tqkv->type;
+                    L->wv.n_elements = (uint64_t)kv_rows * c->dim;
+                    L->wv.n_bytes    = (uint64_t)kv_rows * row_bytes;
 
-                /* V: rows [q_rows + kv_rows, q_rows + 2*kv_rows) */
-                L->wv.data       = fused + (size_t)(q_rows + kv_rows) * row_bytes;
-                L->wv.type       = tqkv->type;
-                L->wv.n_elements = (uint64_t)kv_rows * c->dim;
-                L->wv.n_bytes    = (uint64_t)kv_rows * row_bytes;
-
-                if (i == 0) {
-                    printf("[qmodel] Fused QKV detected: q=%d k=%d v=%d rows, "
-                           "row_bytes=%zu, type=%s\n",
-                           q_rows, kv_rows, kv_rows, row_bytes,
-                           dequant_type_name((ggml_type_t)tqkv->type));
+                    if (i == 0) {
+                        printf("[qmodel] Fused QKV detected: q=%d k=%d v=%d rows, "
+                               "row_bytes=%zu, type=%s\n",
+                               q_rows, kv_rows, kv_rows, row_bytes,
+                               dequant_type_name((ggml_type_t)tqkv->type));
+                    }
                 }
             }
         }
 
         snprintf(name, sizeof(name), "blk.%d.attn_output.weight", i);
-        err = resolve_qtensor(&L->wo, ctx, gguf_base, name);
-        if (err) goto fail;
+        {
+            const gguf_tensor_info_t *t = gguf_find_tensor(ctx, name);
+            if (t) {
+                L->wo.data       = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
+                L->wo.type       = t->type;
+                L->wo.n_elements = t->n_elements;
+                L->wo.n_bytes    = t->n_bytes;
+            }
+            /* DeltaNet layers use ssm_out instead — wo.data stays NULL, checked in forward pass */
+        }
 
         snprintf(name, sizeof(name), "blk.%d.ffn_norm.weight", i);
-        err = resolve_qtensor(&L->ffn_norm, ctx, gguf_base, name);
-        if (err) goto fail;
+        {
+            const gguf_tensor_info_t *t = gguf_find_tensor(ctx, name);
+            if (t) {
+                L->ffn_norm.data       = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
+                L->ffn_norm.type       = t->type;
+                L->ffn_norm.n_elements = t->n_elements;
+                L->ffn_norm.n_bytes    = t->n_bytes;
+            }
+            /* Qwen3.5 aliasing handled after all tensors loaded (below) */
+        }
 
         /* FFN gate/up weights — try separate tensors first, fall back to fused gate-up.
          * Fused layout (Phi-3): ffn_up has 2x hidden_dim rows = [gate || up] concatenated.
@@ -571,6 +622,56 @@ int qmodel_load(qmodel_t *qm, const gguf_ctx_t *ctx, const void *gguf_base)
                 }
             }
         }
+
+        /* DeltaNet/SSM tensors (optional — Qwen3.5, NULL for non-DeltaNet layers) */
+        snprintf(name, sizeof(name), "blk.%d.ssm_conv1d.weight", i);
+        { const gguf_tensor_info_t *t = gguf_find_tensor(ctx, name);
+          if (t) { L->ssm_conv1d.data = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
+                    L->ssm_conv1d.type = t->type; L->ssm_conv1d.n_elements = t->n_elements; L->ssm_conv1d.n_bytes = t->n_bytes; } }
+
+        snprintf(name, sizeof(name), "blk.%d.ssm_alpha.weight", i);
+        { const gguf_tensor_info_t *t = gguf_find_tensor(ctx, name);
+          if (t) { L->ssm_alpha.data = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
+                    L->ssm_alpha.type = t->type; L->ssm_alpha.n_elements = t->n_elements; L->ssm_alpha.n_bytes = t->n_bytes; } }
+
+        snprintf(name, sizeof(name), "blk.%d.ssm_beta.weight", i);
+        { const gguf_tensor_info_t *t = gguf_find_tensor(ctx, name);
+          if (t) { L->ssm_beta.data = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
+                    L->ssm_beta.type = t->type; L->ssm_beta.n_elements = t->n_elements; L->ssm_beta.n_bytes = t->n_bytes; } }
+
+        snprintf(name, sizeof(name), "blk.%d.ssm_a", i);
+        { const gguf_tensor_info_t *t = gguf_find_tensor(ctx, name);
+          if (t) { L->ssm_a.data = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
+                    L->ssm_a.type = t->type; L->ssm_a.n_elements = t->n_elements; L->ssm_a.n_bytes = t->n_bytes; } }
+
+        snprintf(name, sizeof(name), "blk.%d.ssm_dt.bias", i);
+        { const gguf_tensor_info_t *t = gguf_find_tensor(ctx, name);
+          if (t) { L->ssm_dt_bias.data = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
+                    L->ssm_dt_bias.type = t->type; L->ssm_dt_bias.n_elements = t->n_elements; L->ssm_dt_bias.n_bytes = t->n_bytes; } }
+
+        snprintf(name, sizeof(name), "blk.%d.ssm_norm.weight", i);
+        { const gguf_tensor_info_t *t = gguf_find_tensor(ctx, name);
+          if (t) { L->ssm_norm.data = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
+                    L->ssm_norm.type = t->type; L->ssm_norm.n_elements = t->n_elements; L->ssm_norm.n_bytes = t->n_bytes; } }
+
+        snprintf(name, sizeof(name), "blk.%d.ssm_out.weight", i);
+        { const gguf_tensor_info_t *t = gguf_find_tensor(ctx, name);
+          if (t) { L->ssm_out.data = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
+                    L->ssm_out.type = t->type; L->ssm_out.n_elements = t->n_elements; L->ssm_out.n_bytes = t->n_bytes; } }
+
+        /* Output gate (DeltaNet Z gate or full-attention sigmoid gate) */
+        snprintf(name, sizeof(name), "blk.%d.attn_gate.weight", i);
+        { const gguf_tensor_info_t *t = gguf_find_tensor(ctx, name);
+          if (t) { L->attn_out_gate.data = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
+                    L->attn_out_gate.type = t->type; L->attn_out_gate.n_elements = t->n_elements; L->attn_out_gate.n_bytes = t->n_bytes; } }
+
+        /* Qwen3.5: post_attention_norm serves as pre-FFN norm (no separate ffn_norm tensor).
+         * Alias it so the forward pass uses ffn_norm uniformly.
+         * Must run AFTER both ffn_norm and post_attn_norm loading attempts. */
+        if (!L->ffn_norm.data && L->post_attn_norm.data) {
+            L->ffn_norm = L->post_attn_norm;
+            L->post_attn_norm.data = NULL; /* clear so sandwich norm step is a no-op */
+        }
     }
 
     /* --- Derive per-layer arrays from actual tensor shapes ---
@@ -653,6 +754,21 @@ int qmodel_load(qmodel_t *qm, const gguf_ctx_t *ctx, const void *gguf_base)
             }
             printf("  hidden_dim=%d\n", cfg->hidden_dim);
         }
+    }
+
+    /* Derive DeltaNet layer map from tensor presence */
+    if (c->ssm_d_conv > 0) {
+        llama_config_t *cfg = &qm->config;
+        if (!cfg->layer_is_deltanet) {
+            cfg->layer_is_deltanet = (bool *)calloc((size_t)cfg->n_layers, sizeof(bool));
+            if (!cfg->layer_is_deltanet) goto fail;
+        }
+        int n_dn = 0, n_attn = 0;
+        for (int i = 0; i < cfg->n_layers; i++) {
+            cfg->layer_is_deltanet[i] = (qm->layers[i].ssm_conv1d.data != NULL);
+            if (cfg->layer_is_deltanet[i]) n_dn++; else n_attn++;
+        }
+        printf("[qmodel] Hybrid layers: %d DeltaNet, %d full-attention\n", n_dn, n_attn);
     }
 
     /* Tensor type summary — detect any unsupported quant types */
@@ -922,15 +1038,28 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
          * SWA layers use head_dim_swa; global layers use head_dim.
          * For Llama: layer_is_swa is NULL, is_swa is always 0 -> all layers use head_dim. */
         int is_swa = (c->layer_is_swa && c->layer_is_swa[L]);
+        int is_deltanet = (c->layer_is_deltanet && c->layer_is_deltanet[L]);
         int l_head_dim = (is_swa && c->head_dim_swa > 0) ? c->head_dim_swa : c->head_dim;
         int l_kv_dim   = n_kv_heads * l_head_dim;
         int l_q_dim    = n_heads * l_head_dim;
 
-        /* a. RMS norm -> xb
-         *    Use config's rms_norm_eps (1e-6 for Gemma 4, 1e-5 for Llama).
-         *    Norm weights are F32 in the GGUF — cast data pointer directly.
-         *    For non-F32 norm weights (unlikely), dequant into xb2 as scratch. */
+        /* Gated Q detection (Qwen3.5 full-attention layers):
+         * wq has 2x the expected rows = n_heads * head_dim * 2 (interleaved Q + gate).
+         * For Llama/Gemma: wq.n_elements == l_q_dim * dim, has_gated_q is false. */
+        int has_gated_q = (!is_deltanet && layer->wq.data &&
+                           layer->wq.n_elements == (uint64_t)(l_q_dim * 2) * (uint64_t)dim);
+
         float layer_norm_eps = c->rms_norm_eps > 0.0f ? c->rms_norm_eps : RMS_EPS;
+
+        if (is_deltanet) {
+            /* DeltaNet recurrent layer — identity pass-through for now.
+             * TODO (commit 3): implement Gated DeltaNet forward pass:
+             *   conv1d with state → L2 norm Q/K → discretize → delta-rule recurrence → output gate
+             * For now, skip the attention block entirely. FFN still runs below. */
+        } else {
+        /* ============ ATTENTION BLOCK (full-attention or standard GQA) ============ */
+
+        /* a. RMS norm -> xb */
         if (layer->attn_norm.type == GGML_TYPE_F32) {
             const float *norm = (const float *)layer->attn_norm.data;
             tensor_rms_norm(state->x, norm, state->xb, dim, layer_norm_eps);
@@ -958,8 +1087,25 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
         if (has_own_kv) {
             /* b-d. Normal: Q/K/V projections with PER-LAYER output dims.
              *    Q: [l_q_dim x dim],  K/V: [l_kv_dim x dim]
-             *    For Llama: l_q_dim == dim, l_kv_dim == kv_dim (unchanged). */
-            qmatmul_vec(&layer->wq, state->xb, state->q,  l_q_dim,  dim);
+             *    For Llama: l_q_dim == dim, l_kv_dim == kv_dim (unchanged).
+             *    Gated Q (Qwen3.5 full-attn): wq is [l_q_dim*2 x dim], interleaved
+             *    [Q_h0, Gate_h0, Q_h1, Gate_h1, ...]. Deinterleave into q + scratch. */
+            if (has_gated_q && state->qkv_scratch) {
+                /* Project into scratch: [l_q_dim * 2] output */
+                qmatmul_vec(&layer->wq, state->xb, state->qkv_scratch, l_q_dim * 2, dim);
+                /* Deinterleave: Q → state->q, Gate → scratch[l_q_dim*2 .. l_q_dim*3-1] */
+                float *gate_buf = state->qkv_scratch + l_q_dim * 2;
+                for (int h = 0; h < n_heads; h++) {
+                    memcpy(state->q + h * l_head_dim,
+                           state->qkv_scratch + h * 2 * l_head_dim,
+                           (size_t)l_head_dim * sizeof(float));
+                    memcpy(gate_buf + h * l_head_dim,
+                           state->qkv_scratch + h * 2 * l_head_dim + l_head_dim,
+                           (size_t)l_head_dim * sizeof(float));
+                }
+            } else {
+                qmatmul_vec(&layer->wq, state->xb, state->q,  l_q_dim,  dim);
+            }
             qmatmul_vec(&layer->wk, state->xb, state->k,  l_kv_dim, dim);
             qmatmul_vec(&layer->wv, state->xb, state->v,  l_kv_dim, dim);
 
@@ -1157,6 +1303,13 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
          *    For Llama: n_heads * head_dim == dim, so this is [dim, dim] (unchanged). */
         qmatmul_vec(&layer->wo, state->xb, state->xb2, dim, l_q_dim);
 
+        /* Gated Q: apply sigmoid(gate) to attention output (Qwen3.5 full-attn) */
+        if (has_gated_q && state->qkv_scratch) {
+            float *gate_buf = state->qkv_scratch + l_q_dim * 2;
+            for (int i = 0; i < dim; i++)
+                state->xb2[i] *= 1.0f / (1.0f + expf(-gate_buf[i % l_q_dim]));
+        }
+
         /* Post-attention RMSNorm (Gemma 4 sandwich norm) */
         if (!G4_DISABLE_SANDWICH && layer->post_attn_norm.data) {
             float norm_eps = c->rms_norm_eps > 0.0f ? c->rms_norm_eps : RMS_EPS;
@@ -1173,6 +1326,8 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
 
         /* i. Residual connection */
         residual_add(state->x, state->xb2, dim);
+
+        } /* end if (!is_deltanet) — attention block */
 
         /* --- Feed-Forward Network (SwiGLU) --- */
 
