@@ -78,7 +78,7 @@ COUNT=$(echo "$MODELS" | wc -l)
         echo "---"
 
         set +e
-        "$BENCH_BIN" "$model" -v 2>&1
+        "$BENCH_BIN" "$model" 2>&1
         RC=$?
         set -e
 

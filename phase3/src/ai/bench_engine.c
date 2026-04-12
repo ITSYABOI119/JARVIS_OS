@@ -17,7 +17,7 @@
  *       -lm -o /tmp/bench_engine
  *
  * Run:
- *   /tmp/bench_engine path/to/model.gguf [--tokens 64] [-v]
+ *   /tmp/bench_engine path/to/model.gguf [--tokens 64]
  *
  * Pure C11, no C++ dependencies.
  */
@@ -40,8 +40,6 @@
 #include "gguf_vocab.h"
 #include "tokenizer.h"
 #include "sampling.h"
-
-static int verbose = 0;
 
 /* ---- Helpers ---- */
 
@@ -142,15 +140,13 @@ int main(int argc, char **argv)
             max_tokens = atoi(argv[++i]);
             if (max_tokens < 1) max_tokens = 1;
             if (max_tokens > 512) max_tokens = 512;
-        } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
-            verbose = 1;
         } else if (argv[i][0] != '-') {
             model_path = argv[i];
         }
     }
 
     if (!model_path) {
-        fprintf(stderr, "Usage: bench_engine <model.gguf> [--tokens N] [-v|--verbose]\n");
+        fprintf(stderr, "Usage: bench_engine <model.gguf> [--tokens N]\n");
         return 1;
     }
 
@@ -164,13 +160,19 @@ int main(int argc, char **argv)
     long file_size = ftell(f);
     fseek(f, 0, SEEK_SET);
 
+    printf("JARVIS Quantized Engine Benchmark\n");
+    printf("==================================\n");
+    printf("Model: %s (%ld MB)\n", model_path, file_size / (1024 * 1024));
+    printf("Tokens per prompt: %d\n\n", max_tokens);
+    fflush(stdout);
+
     void *gguf_data = malloc((size_t)file_size);
     if (!gguf_data) {
         fprintf(stderr, "ERROR: cannot allocate %ld bytes\n", file_size);
         fclose(f);
         return 1;
     }
-    if (verbose) { printf("  Reading %.2f GB...\n", file_size / (1024.0 * 1024 * 1024)); fflush(stdout); }
+    printf("  Reading %.2f GB...\n", file_size / (1024.0 * 1024 * 1024)); fflush(stdout);
     double t_read = time_ms();
     if (fread(gguf_data, 1, (size_t)file_size, f) != (size_t)file_size) {
         fprintf(stderr, "ERROR: read failed\n");
@@ -179,18 +181,13 @@ int main(int argc, char **argv)
         return 1;
     }
     fclose(f);
-    if (verbose) { printf("  File read done (%.1fs)\n", (time_ms() - t_read) / 1000.0); fflush(stdout); }
-
-    printf("JARVIS Quantized Engine Benchmark\n");
-    printf("==================================\n");
-    printf("Model: %s (%ld MB)\n", model_path, file_size / (1024 * 1024));
-    printf("Tokens per prompt: %d\n\n", max_tokens);
+    printf("  File read done (%.1fs)\n", (time_ms() - t_read) / 1000.0); fflush(stdout);
 
     /* ---- Parse GGUF ---- */
     gguf_ctx_t ctx;
     double t_load_start = time_ms();
 
-    if (verbose) { printf("  Parsing GGUF...\n"); fflush(stdout); }
+    printf("  Parsing GGUF...\n"); fflush(stdout);
     int err = gguf_open_memory(&ctx, gguf_data, (size_t)file_size);
     if (err) {
         fprintf(stderr, "ERROR: gguf_open_memory failed (%s)\n", gguf_strerror(err));
@@ -199,7 +196,7 @@ int main(int argc, char **argv)
     }
 
     /* ---- Load quantized model ---- */
-    if (verbose) { printf("  Loading quantized model...\n"); fflush(stdout); }
+    printf("  Loading quantized model...\n"); fflush(stdout);
     qmodel_t qm;
     err = qmodel_load(&qm, &ctx, gguf_data);
     if (err) {
@@ -214,7 +211,7 @@ int main(int argc, char **argv)
     }
 
     /* ---- Extract vocab + init tokenizer ---- */
-    if (verbose) { printf("  Extracting vocabulary...\n"); fflush(stdout); }
+    printf("  Extracting vocabulary...\n"); fflush(stdout);
     gguf_vocab_t vocab;
     err = gguf_vocab_extract(gguf_data, (size_t)file_size, &vocab);
     if (err) {
@@ -284,7 +281,8 @@ int main(int argc, char **argv)
     int prompts_ok = 0;
 
     for (int p = 0; p < N_PROMPTS; p++) {
-        if (verbose) { printf("  Prompt: \"%s\"\n", prompts[p]); fflush(stdout); }
+        printf("\n--- Prompt %d/%d: \"%s\" ---\n", p + 1, N_PROMPTS, prompts[p]);
+        fflush(stdout);
 
         /* Build prompt tokens */
         int prompt_ids[256];
@@ -297,27 +295,38 @@ int main(int argc, char **argv)
         memset(state.value_cache, 0, kv_bytes);
 
         /* Prefill (timed) */
+        printf("  Prefill (%d tokens)...", n_prompt); fflush(stdout);
         double t0 = time_ms();
         for (int i = 0; i < n_prompt; i++)
             qmodel_forward(&qm, &state, prompt_ids[i]);
         double prefill_ms = time_ms() - t0;
+        printf(" %.1f tok/s\n", n_prompt * 1000.0 / prefill_ms); fflush(stdout);
 
-        /* Generation (timed) */
+        /* Generation (timed) — stream each token as decoded */
         int out_ids[512];
         int n_gen = 0;
+        printf("  > ");
 
         t0 = time_ms();
         for (int g = 0; g < max_tokens; g++) {
             int next = sample_greedy(state.logits, qm.config.vocab_size);
             out_ids[n_gen++] = next;
             if (next == eos_token) break;
-            qmodel_forward(&qm, &state, next);
-            if (verbose && (g + 1) % 8 == 0) { putchar('.'); fflush(stdout); }
-        }
-        if (verbose) putchar('\n');
-        double gen_ms = time_ms() - t0;
 
-        /* Decode output text */
+            /* Stream-decode this single token */
+            char tok_text[64];
+            int tok_len = tokenizer_decode(&tok, &next, 1, tok_text, (int)sizeof(tok_text));
+            if (tok_len > 0) {
+                printf("%s", tok_text);
+                fflush(stdout);
+            }
+
+            qmodel_forward(&qm, &state, next);
+        }
+        double gen_ms = time_ms() - t0;
+        printf("\n");
+
+        /* Full decode for the summary line (in case streaming missed anything) */
         char text[1024];
         int tlen = tokenizer_decode(&tok, out_ids, n_gen, text, (int)sizeof(text));
         if (tlen < 0) tlen = 0;
