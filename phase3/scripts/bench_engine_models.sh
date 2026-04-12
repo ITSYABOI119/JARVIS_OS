@@ -29,6 +29,7 @@ compile_bench() {
         "$REPO_ROOT/phase3/src/ai/dequant.c" \
         "$REPO_ROOT/phase3/src/ai/sampling.c" \
         "$REPO_ROOT/phase3/src/ai/inference.c" \
+        "$REPO_ROOT/phase3/src/ai/ssm.c" \
         -lm -o "$BENCH_BIN"
     if [ $? -ne 0 ]; then
         echo "ERROR: compilation failed"

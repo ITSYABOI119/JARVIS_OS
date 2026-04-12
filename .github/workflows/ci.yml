@@ -405,6 +405,14 @@ jobs:
           -lm -o /tmp/test_gemma4_forward
         /tmp/test_gemma4_forward
 
+    - name: "Phase 3: SSM Unit Tests (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -D_POSIX_C_SOURCE=200809L \
+          -I phase3/src/ai \
+          phase3/src/ai/test_ssm.c phase3/src/ai/ssm.c \
+          -lm -o /tmp/test_ssm
+        /tmp/test_ssm
+
     - name: "Phase 3: Engine Bench (compile only)"
       run: |
         gcc -Wall -Werror -O2 -mavx2 -mfma -std=c11 \
@@ -415,7 +423,7 @@ jobs:
           phase3/src/ai/gguf_parser.c phase3/src/ai/gguf_vocab.c \
           phase3/src/ai/tokenizer.c phase3/src/ai/tensor_ops.c \
           phase3/src/ai/dequant.c phase3/src/ai/sampling.c \
-          phase3/src/ai/inference.c \
+          phase3/src/ai/inference.c phase3/src/ai/ssm.c \
           -lm -o /tmp/bench_engine
         echo "bench_engine compiled (runtime requires model file)"
 

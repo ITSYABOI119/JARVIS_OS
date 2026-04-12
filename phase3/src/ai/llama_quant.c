@@ -27,6 +27,7 @@
 #include "dequant.h"
 #include "tensor_ops.h"
 #include "sampling.h"
+#include "ssm.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -1051,11 +1052,121 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
 
         float layer_norm_eps = c->rms_norm_eps > 0.0f ? c->rms_norm_eps : RMS_EPS;
 
-        if (is_deltanet) {
-            /* DeltaNet recurrent layer — identity pass-through for now.
-             * TODO (commit 3): implement Gated DeltaNet forward pass:
-             *   conv1d with state → L2 norm Q/K → discretize → delta-rule recurrence → output gate
-             * For now, skip the attention block entirely. FFN still runs below. */
+        if (is_deltanet && layer->ssm_conv1d.data && state->qkv_scratch) {
+            /* ============ DELTANET RECURRENT LAYER ============
+             * Gated DeltaNet: conv1d → L2 norm → discretize → delta-rule recurrence → output gate
+             * Uses SSM state (fixed size) instead of KV cache (growing). */
+
+            int num_k_heads = c->ssm_n_group;
+            int num_v_heads = c->ssm_dt_rank;
+            int head_k_dim_ssm = c->ssm_d_state;
+            int head_v_dim_ssm = c->ssm_d_inner / num_v_heads;
+            int q_dim = num_k_heads * head_k_dim_ssm;    /* 2048 */
+            int k_dim = q_dim;                             /* 2048 */
+            int v_dim = c->ssm_d_inner;                   /* 4096 */
+            int qkv_channels = q_dim + k_dim + v_dim;     /* 8192 */
+
+            /* a. RMS norm input */
+            if (layer->attn_norm.type == GGML_TYPE_F32) {
+                const float *norm = (const float *)layer->attn_norm.data;
+                tensor_rms_norm(state->x, norm, state->xb, dim, layer_norm_eps);
+            } else {
+                dequant_row(layer->attn_norm.data, state->xb2, dim,
+                            (ggml_type_t)layer->attn_norm.type);
+                tensor_rms_norm(state->x, state->xb2, state->xb, dim, layer_norm_eps);
+            }
+
+            /* b. QKV projection: attn_qkv @ xb → [qkv_channels] in scratch */
+            float *qkv = state->qkv_scratch;
+            qmatmul_vec(&layer->wq, state->xb, qkv, q_dim, dim);       /* Q */
+            qmatmul_vec(&layer->wk, state->xb, qkv + q_dim, k_dim, dim); /* K */
+            qmatmul_vec(&layer->wv, state->xb, qkv + q_dim + k_dim, v_dim, dim); /* V */
+
+            /* c. Z output gate: attn_out_gate @ xb → [v_dim] */
+            float *z_buf = qkv + qkv_channels;  /* after QKV in scratch */
+            qmatmul_vec(&layer->attn_out_gate, state->xb, z_buf, v_dim, dim);
+
+            /* d. Alpha/beta projections */
+            float alpha_raw[64], beta_raw[64]; /* max num_v_heads */
+            qmatmul_vec(&layer->ssm_alpha, state->xb, alpha_raw, num_v_heads, dim);
+            qmatmul_vec(&layer->ssm_beta, state->xb, beta_raw, num_v_heads, dim);
+
+            /* e. Conv1d with state */
+            /* Find this layer's conv state index (count DeltaNet layers before L) */
+            int dn_idx = 0;
+            for (int j = 0; j < L; j++)
+                if (c->layer_is_deltanet[j]) dn_idx++;
+            float *cs = state->conv_state +
+                        (size_t)dn_idx * (c->ssm_d_conv - 1) * qkv_channels;
+
+            /* Dequant conv kernel to F32 if needed */
+            const float *conv_k;
+            float conv_k_buf[4 * 8192]; /* max d_conv * qkv_channels — stack OK for host */
+            if (layer->ssm_conv1d.type == GGML_TYPE_F32) {
+                conv_k = (const float *)layer->ssm_conv1d.data;
+            } else {
+                int conv_elems = c->ssm_d_conv * qkv_channels;
+                dequant_row(layer->ssm_conv1d.data, conv_k_buf, conv_elems,
+                            (ggml_type_t)layer->ssm_conv1d.type);
+                conv_k = conv_k_buf;
+            }
+
+            deltanet_conv1d(qkv, cs, conv_k, c->ssm_d_conv, qkv_channels);
+
+            /* f. Dequant ssm_a and dt_bias */
+            float a_buf[64], dt_buf[64]; /* max num_v_heads */
+            if (layer->ssm_a.type == GGML_TYPE_F32)
+                memcpy(a_buf, layer->ssm_a.data, (size_t)num_v_heads * sizeof(float));
+            else
+                dequant_row(layer->ssm_a.data, a_buf, num_v_heads,
+                            (ggml_type_t)layer->ssm_a.type);
+            if (layer->ssm_dt_bias.type == GGML_TYPE_F32)
+                memcpy(dt_buf, layer->ssm_dt_bias.data, (size_t)num_v_heads * sizeof(float));
+            else
+                dequant_row(layer->ssm_dt_bias.data, dt_buf, num_v_heads,
+                            (ggml_type_t)layer->ssm_dt_bias.type);
+
+            /* g. Dequant ssm_norm */
+            float norm_buf_ssm[256]; /* max head_v_dim */
+            if (layer->ssm_norm.type == GGML_TYPE_F32)
+                memcpy(norm_buf_ssm, layer->ssm_norm.data, (size_t)head_v_dim_ssm * sizeof(float));
+            else
+                dequant_row(layer->ssm_norm.data, norm_buf_ssm, head_v_dim_ssm,
+                            (ggml_type_t)layer->ssm_norm.type);
+
+            /* h. DeltaNet recurrence: conv1d output → delta rule → gated output */
+            float *ssm_s = state->ssm_state +
+                           (size_t)dn_idx * num_v_heads * head_k_dim_ssm * head_v_dim_ssm;
+            float dn_out[4096]; /* max v_dim — output of recurrence */
+
+            deltanet_forward(qkv, qkv + q_dim, qkv + q_dim + k_dim,
+                             z_buf, alpha_raw, beta_raw,
+                             a_buf, dt_buf, norm_buf_ssm, layer_norm_eps,
+                             ssm_s, dn_out,
+                             num_k_heads, num_v_heads,
+                             head_k_dim_ssm, head_v_dim_ssm);
+
+            /* i. Output projection: ssm_out @ dn_out → xb2 [dim] */
+            qmatmul_vec(&layer->ssm_out, dn_out, state->xb2, dim, v_dim);
+
+            /* j. Post-attention norm (sandwich) */
+            if (layer->post_attn_norm.data) {
+                if (layer->post_attn_norm.type == GGML_TYPE_F32) {
+                    const float *norm = (const float *)layer->post_attn_norm.data;
+                    tensor_rms_norm(state->xb2, norm, state->xb2, dim, layer_norm_eps);
+                } else {
+                    float nbuf[4096];
+                    dequant_row(layer->post_attn_norm.data, nbuf, dim,
+                                (ggml_type_t)layer->post_attn_norm.type);
+                    tensor_rms_norm(state->xb2, nbuf, state->xb2, dim, layer_norm_eps);
+                }
+            }
+
+            /* k. Residual */
+            residual_add(state->x, state->xb2, dim);
+
+        } else if (is_deltanet) {
+            /* DeltaNet layer but missing tensors — identity pass-through */
         } else {
         /* ============ ATTENTION BLOCK (full-attention or standard GQA) ============ */
 
@@ -1501,6 +1612,22 @@ int qmodel_generate(const qmodel_t *qm, llama_state_t *state,
 {
     /* Reset state */
     state->pos = 0;
+
+    /* Reset SSM state (conv sliding window + recurrent state matrix) */
+    if (state->conv_state && state->n_deltanet > 0) {
+        const llama_config_t *c = &qm->config;
+        int qkv_dim = c->ssm_n_group * c->ssm_d_state * 2 + c->ssm_d_inner;
+        size_t conv_bytes = (size_t)state->n_deltanet * (c->ssm_d_conv - 1) *
+                            qkv_dim * sizeof(float);
+        memset(state->conv_state, 0, conv_bytes);
+    }
+    if (state->ssm_state && state->n_deltanet > 0) {
+        const llama_config_t *c = &qm->config;
+        int head_v_dim = c->ssm_d_inner / c->ssm_dt_rank;
+        size_t ssm_bytes = (size_t)state->n_deltanet * c->ssm_dt_rank *
+                           c->ssm_d_state * head_v_dim * sizeof(float);
+        memset(state->ssm_state, 0, ssm_bytes);
+    }
 
     /* Prefill: process all prompt tokens */
     for (int i = 0; i < n_prompt; i++)
