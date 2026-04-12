@@ -268,8 +268,11 @@ int tokenizer_decode(const tokenizer_t *t, const int *token_ids, int n_tokens,
         pos = w2;
     }
 
-    /* Strip leading space (SentencePiece prepends ▁ which becomes leading space) */
-    if (pos > 0 && out_text[0] == ' ') {
+    /* Strip leading space only for multi-token decodes (full sentence output).
+     * SentencePiece prepends ▁ which becomes a leading space — correct for
+     * word boundaries in stream mode (single-token decode), but unwanted
+     * at the very start of a complete decoded string. */
+    if (n_tokens > 1 && pos > 0 && out_text[0] == ' ') {
         memmove(out_text, out_text + 1, (size_t)pos);
         pos--;
     }
