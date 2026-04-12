@@ -1409,17 +1409,19 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
             }
         }
 
+        /* Gated Q: apply sigmoid(gate) to attention output BEFORE projection.
+         * Gate lives in attention-output space [n_heads * head_dim = 4096],
+         * NOT in projected space [dim = 2560]. Must apply before wo projection. */
+        if (has_gated_q && state->qkv_scratch) {
+            float *gate_buf = state->qkv_scratch + l_q_dim * 2;
+            for (int i = 0; i < l_q_dim; i++)
+                state->xb[i] *= 1.0f / (1.0f + expf(-gate_buf[i]));
+        }
+
         /* h. Output projection -> xb2 (quantized matmul)
          *    Wo maps [n_heads * l_head_dim] -> [dim].
          *    For Llama: n_heads * head_dim == dim, so this is [dim, dim] (unchanged). */
         qmatmul_vec(&layer->wo, state->xb, state->xb2, dim, l_q_dim);
-
-        /* Gated Q: apply sigmoid(gate) to attention output (Qwen3.5 full-attn) */
-        if (has_gated_q && state->qkv_scratch) {
-            float *gate_buf = state->qkv_scratch + l_q_dim * 2;
-            for (int i = 0; i < dim; i++)
-                state->xb2[i] *= 1.0f / (1.0f + expf(-gate_buf[i % l_q_dim]));
-        }
 
         /* Post-attention RMSNorm (Gemma 4 sandwich norm) */
         if (!G4_DISABLE_SANDWICH && layer->post_attn_norm.data) {
