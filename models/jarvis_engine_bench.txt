@@ -1,0 +1,686 @@
+=== JARVIS Native Engine Benchmark ===
+Date: Sun Apr 12 01:17:42 PM AEST 2026
+Host: jarvis-System-Product-Name
+CPU:  AMD Ryzen 7 2700X Eight-Core Processor
+RAM:  31.2 GB
+Models: 11
+
+[1/11] gemma-4-E2B-it-Q4_K_M.gguf (2.9G)
+---
+JARVIS Quantized Engine Benchmark
+==================================
+Model: /home/jarvis/Desktop/JARVIS_OS/models/gemma-4-E2B-it-Q4_K_M.gguf (2962 MB)
+Tokens: 128
+
+  Reading 2.89 GB...
+  File read done (1.5s)
+  Parsing GGUF...
+  Loading quantized model...
+[config] arch='gemma4' n_kv=56 n_tensors=601
+[config] dim=1536
+[config] n_layers=35
+[config] n_heads=8 n_kv_heads=1
+[config] head_dim=512
+[config] feed_forward_length is array (gemma4), hidden_dim=0 for now
+[config] vocab_size=262144 hidden_dim=0
+[config] extensions: ple=256 swa=512 swa_hd=256 shared_kv=20 softcap=30.0 eps=1e-06 theta_swa=10000
+[config] OK: dim=1536 layers=35 heads=8/1 hd=512/256 ffn=12288 vocab=262144
+[qmodel] Derived per-layer dims from tensor shapes:
+  layer  0: swa=1 ffn= 6144 kv_share=-1
+  layer  1: swa=1 ffn= 6144 kv_share=-1
+  layer  2: swa=1 ffn= 6144 kv_share=-1
+  layer  3: swa=1 ffn= 6144 kv_share=-1
+  layer  4: swa=0 ffn= 6144 kv_share=-1
+  layer  5: swa=1 ffn= 6144 kv_share=-1
+  layer  6: swa=1 ffn= 6144 kv_share=-1
+  layer  7: swa=1 ffn= 6144 kv_share=-1
+  layer  8: swa=1 ffn= 6144 kv_share=-1
+  layer  9: swa=0 ffn= 6144 kv_share=-1
+  layer 10: swa=1 ffn= 6144 kv_share=-1
+  layer 11: swa=1 ffn= 6144 kv_share=-1
+  layer 12: swa=1 ffn= 6144 kv_share=-1
+  layer 13: swa=1 ffn= 6144 kv_share=-1
+  layer 14: swa=0 ffn= 6144 kv_share=-1
+  layer 15: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 16: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 17: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 18: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 19: swa=0 ffn=12288 kv_share=14 (from L14)
+  layer 20: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 21: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 22: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 23: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 24: swa=0 ffn=12288 kv_share=14 (from L14)
+  layer 25: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 26: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 27: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 28: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 29: swa=0 ffn=12288 kv_share=14 (from L14)
+  layer 30: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 31: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 32: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 33: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 34: swa=0 ffn=12288 kv_share=14 (from L14)
+  hidden_dim=12288
+[qmodel] Tensor types (layer 0):
+  wq=Q4_K wk=Q4_K wv=Q6_K wo=Q4_K
+  gate=Q4_K up=Q4_K down=Q6_K norm=F32
+  q_norm=F32 k_norm=F32
+  post_attn=F32 post_ffw=F32 scale=F32
+  embed=Q4_K output=Q4_K
+
+=== AUDIT ===
+[AUDIT] inp_gate.n_elements=393216 (expected dim*ple_dim=393216)
+[AUDIT] inp_gate.type=F32 (F32 expected)
+[AUDIT] per_layer_model_proj LOADED: n_elements=13762560 type=BF16
+[AUDIT]   used as context component: BF16 matmul, combine (identity + context) / sqrt(2)
+[AUDIT] rope_neox=1 (Gemma should be 1)
+[AUDIT] attn_scale=1.0 for Gemma 4 (Q/K RMSNorm in use); Llama uses 1/sqrt(256)
+[AUDIT] rms_norm_eps=1e-06 (research says 1e-6)
+[AUDIT] kv_share_map: 15 own, 20 shared (config says shared_kv=20)
+[AUDIT] L0 q_norm.n_elements=256 (SWA head_dim=256)
+[AUDIT] L34 q_norm.n_elements=512 (global head_dim=512)
+[AUDIT] layer_output_scale L0=0.0178 L34=0.1670
+=== END AUDIT ===
+
+  Extracting vocabulary...
+[vocab] merges: 514906 total, 514906 matched to tokens
+Loaded in 233.6 ms
+  Name:   Gemma-4-E2B-It
+  Arch:   gemma4
+  Layers: 35, Dim: 1536, Heads: 8, KV Heads: 1
+  Vocab:  262144, BOS=2, EOS=106
+  Gemma:  yes
+  RSS:    3000 MB
+
+--- "The seL4 microkernel is" ---
+  Prefill (17 tokens)... 0.6 tok/s
+  > TheseL4microkernelisa**formallyverified,high-assurancemicrokernel**.
+
+Here'sabreakdownofwhatthatmeansandwhyit'ssignificant:
+
+###KeyCharacteristicsofseL4
+
+1.**MicrokernelArchitecture:**
+  ***Minimalism:**seL4isaverysmallkernelthatprovidesonlythemostessentialservices(likeinter-processcommunication(IPC),basicmemorymanagement,andthreadscheduling).
+  ***SeparationofConcerns:**Mostoperatingsystemservices(likefilesystems,devicedrivers,networkingstacks)areimplementedasuser-spaceprocesses(servers).Thissignificantlyreduces
+
+============================================
+   Benchmark Summary
+============================================
+  Model:    Gemma-4-E2B-It
+  Arch:     gemma4
+  Layers:   35
+  Dim:      1536
+  Vocab:    262144
+  Load:     233.6 ms (0.23 s)
+  Prefill:  17 tokens, 0.6 tok/s
+  Gen:      128 tokens, 0.6 tok/s
+  Peak RSS: 3062 MB
+============================================
+
+[2/11] google_gemma-4-E4B-it-Q4_K_M.gguf (5.1G)
+---
+JARVIS Quantized Engine Benchmark
+==================================
+Model: /home/jarvis/Desktop/JARVIS_OS/models/google_gemma-4-E4B-it-Q4_K_M.gguf (5154 MB)
+Tokens: 128
+
+  Reading 5.03 GB...
+  File read done (3.4s)
+  Parsing GGUF...
+  Loading quantized model...
+[config] arch='gemma4' n_kv=49 n_tensors=720
+[config] dim=2560
+[config] n_layers=42
+[config] n_heads=8 n_kv_heads=2
+[config] head_dim=512
+[config] vocab_size=262144 hidden_dim=10240
+[config] extensions: ple=256 swa=512 swa_hd=256 shared_kv=18 softcap=30.0 eps=1e-06 theta_swa=10000
+[config] OK: dim=2560 layers=42 heads=8/2 hd=512/256 ffn=10240 vocab=262144
+[qmodel] Derived per-layer dims from tensor shapes:
+  layer  0: swa=1 ffn=10240 kv_share=-1
+  layer  1: swa=1 ffn=10240 kv_share=-1
+  layer  2: swa=1 ffn=10240 kv_share=-1
+  layer  3: swa=1 ffn=10240 kv_share=-1
+  layer  4: swa=1 ffn=10240 kv_share=-1
+  layer  5: swa=0 ffn=10240 kv_share=-1
+  layer  6: swa=1 ffn=10240 kv_share=-1
+  layer  7: swa=1 ffn=10240 kv_share=-1
+  layer  8: swa=1 ffn=10240 kv_share=-1
+  layer  9: swa=1 ffn=10240 kv_share=-1
+  layer 10: swa=1 ffn=10240 kv_share=-1
+  layer 11: swa=0 ffn=10240 kv_share=-1
+  layer 12: swa=1 ffn=10240 kv_share=-1
+  layer 13: swa=1 ffn=10240 kv_share=-1
+  layer 14: swa=1 ffn=10240 kv_share=-1
+  layer 15: swa=1 ffn=10240 kv_share=-1
+  layer 16: swa=1 ffn=10240 kv_share=-1
+  layer 17: swa=0 ffn=10240 kv_share=-1
+  layer 18: swa=1 ffn=10240 kv_share=-1
+  layer 19: swa=1 ffn=10240 kv_share=-1
+  layer 20: swa=1 ffn=10240 kv_share=-1
+  layer 21: swa=1 ffn=10240 kv_share=-1
+  layer 22: swa=1 ffn=10240 kv_share=-1
+  layer 23: swa=0 ffn=10240 kv_share=-1
+  layer 24: swa=1 ffn=10240 kv_share=22 (from L22)
+  layer 25: swa=1 ffn=10240 kv_share=22 (from L22)
+  layer 26: swa=1 ffn=10240 kv_share=22 (from L22)
+  layer 27: swa=1 ffn=10240 kv_share=22 (from L22)
+  layer 28: swa=1 ffn=10240 kv_share=22 (from L22)
+  layer 29: swa=0 ffn=10240 kv_share=23 (from L23)
+  layer 30: swa=1 ffn=10240 kv_share=22 (from L22)
+  layer 31: swa=1 ffn=10240 kv_share=22 (from L22)
+  layer 32: swa=1 ffn=10240 kv_share=22 (from L22)
+  layer 33: swa=1 ffn=10240 kv_share=22 (from L22)
+  layer 34: swa=1 ffn=10240 kv_share=22 (from L22)
+  layer 35: swa=0 ffn=10240 kv_share=23 (from L23)
+  layer 36: swa=1 ffn=10240 kv_share=22 (from L22)
+  layer 37: swa=1 ffn=10240 kv_share=22 (from L22)
+  layer 38: swa=1 ffn=10240 kv_share=22 (from L22)
+  layer 39: swa=1 ffn=10240 kv_share=22 (from L22)
+  layer 40: swa=1 ffn=10240 kv_share=22 (from L22)
+  layer 41: swa=0 ffn=10240 kv_share=23 (from L23)
+  hidden_dim=10240
+[qmodel] Tensor types (layer 0):
+  wq=Q6_K wk=Q5_K wv=Q6_K wo=Q5_K
+  gate=Q4_K up=Q4_K down=Q6_K norm=F32
+  q_norm=F32 k_norm=F32
+  post_attn=F32 post_ffw=F32 scale=F32
+  embed=Q6_K output=Q6_K
+
+=== AUDIT ===
+[AUDIT] inp_gate.n_elements=655360 (expected dim*ple_dim=655360)
+[AUDIT] inp_gate.type=Q4_K (F32 expected)
+[AUDIT] per_layer_model_proj LOADED: n_elements=27525120 type=BF16
+[AUDIT]   used as context component: BF16 matmul, combine (identity + context) / sqrt(2)
+[AUDIT] rope_neox=1 (Gemma should be 1)
+[AUDIT] attn_scale=1.0 for Gemma 4 (Q/K RMSNorm in use); Llama uses 1/sqrt(256)
+[AUDIT] rms_norm_eps=1e-06 (research says 1e-6)
+[AUDIT] kv_share_map: 24 own, 18 shared (config says shared_kv=18)
+[AUDIT] L0 q_norm.n_elements=256 (SWA head_dim=256)
+[AUDIT] L34 q_norm.n_elements=256 (global head_dim=512)
+[AUDIT] layer_output_scale L0=0.0610 L41=0.4453
+=== END AUDIT ===
+
+  Extracting vocabulary...
+[vocab] merges: 514906 total, 514906 matched to tokens
+Loaded in 238.4 ms
+  Name:   Gemma 4 E4B It
+  Arch:   gemma4
+  Layers: 42, Dim: 2560, Heads: 8, KV Heads: 2
+  Vocab:  262144, BOS=2, EOS=1
+  Gemma:  yes
+  RSS:    5191 MB
+
+--- "The seL4 microkernel is" ---
+  Prefill (17 tokens)... 0.3 tok/s
+  > Hereareseveralwaystocompletethesentence"TheseL4microkernelis...",dependingonthespecificaspectyouwanttoemphasize.
+
+HereisacomprehensivebreakdownofwhatseL4is:
+
+---
+
+###1.TheTechnicalDefinition(MostAccurate)
+
+>**TheseL4microkernelisaformallyverified,minimal-sizedoperatingsystemkerneldesignedtoenforcestrictseparationbetweendifferentcomponentsofasystem.**
+
+**Keytakeawaysfromthisdefinition:**
+
+***Microkernel:**Itonlyprovidestheabsoluteminimumnecessaryservices(likeinter-processcommunication,basicmemorymanagement,andscheduling).Everythingelse(likefilesystems
+
+============================================
+   Benchmark Summary
+============================================
+  Model:    Gemma 4 E4B It
+  Arch:     gemma4
+  Layers:   42
+  Dim:      2560
+  Vocab:    262144
+  Load:     238.4 ms (0.24 s)
+  Prefill:  17 tokens, 0.3 tok/s
+  Gen:      128 tokens, 0.3 tok/s
+  Peak RSS: 5352 MB
+============================================
+
+[3/11] Llama-3.2-1B-Instruct-Q4_K_M.gguf (771M)
+---
+JARVIS Quantized Engine Benchmark
+==================================
+Model: /home/jarvis/Desktop/JARVIS_OS/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf (770 MB)
+Tokens: 128
+
+  Reading 0.75 GB...
+  File read done (0.5s)
+  Parsing GGUF...
+  Loading quantized model...
+[config] arch='llama' n_kv=36 n_tensors=147
+[config] dim=2048
+[config] n_layers=16
+[config] n_heads=32 n_kv_heads=8
+[config] head_dim=64
+[config] vocab_size=128256 hidden_dim=8192
+[config] extensions: ple=0 swa=0 swa_hd=0 shared_kv=0 softcap=0.0 eps=1e-05 theta_swa=0
+[config] OK: dim=2048 layers=16 heads=32/8 hd=64/0 ffn=8192 vocab=128256
+[qmodel] Tensor types (layer 0):
+  wq=Q4_K wk=Q4_K wv=Q6_K wo=Q4_K
+  gate=Q4_K up=Q4_K down=Q6_K norm=F32
+  embed=Q6_K output=Q6_K
+
+=== AUDIT ===
+[AUDIT] per_layer_model_proj NOT loaded
+[AUDIT] rope_neox=0 (Gemma should be 1)
+[AUDIT] attn_scale=1.0 for Gemma 4 (Q/K RMSNorm in use); Llama uses 1/sqrt(64)
+[AUDIT] rms_norm_eps=1e-05 (research says 1e-6)
+[AUDIT] kv_share_map is NULL (all layers compute own KV)
+=== END AUDIT ===
+
+  Extracting vocabulary...
+[vocab] merges: 280147 total, 280104 matched to tokens
+Loaded in 116.8 ms
+  Name:   Llama-3.2-1B-Instruct
+  Arch:   llama
+  Layers: 16, Dim: 2048, Heads: 32, KV Heads: 8
+  Vocab:  128256, BOS=128000, EOS=128009
+  Gemma:  no
+  RSS:    790 MB
+
+--- "The seL4 microkernel is" ---
+  Prefill (8 tokens)... 1.0 tok/s
+  >  a self-contained, open-source operating system that is designed to be highly secure and efficient. It is based on the Linux kernel and provides a number of features that make it well-suited for a wide range of applications.
+
+One of the key features of the seL4 microkernel is its ability to provide a high level of security through its use of a secure boot process and its ability to run in a secure environment. The seL4 microkernel also provides a number of security features, including:
+
+*   **Secure Boot**: seL4 provides a secure boot process that ensures the integrity of the operating system and its components. This process
+
+============================================
+   Benchmark Summary
+============================================
+  Model:    Llama-3.2-1B-Instruct
+  Arch:     llama
+  Layers:   16
+  Dim:      2048
+  Vocab:    128256
+  Load:     116.8 ms (0.12 s)
+  Prefill:  8 tokens, 1.0 tok/s
+  Gen:      128 tokens, 1.0 tok/s
+  Peak RSS: 819 MB
+============================================
+
+[4/11] Llama-3.2-3B-Instruct-Q4_K_M.gguf (1.9G)
+---
+JARVIS Quantized Engine Benchmark
+==================================
+Model: /home/jarvis/Desktop/JARVIS_OS/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf (1925 MB)
+Tokens: 128
+
+  Reading 1.88 GB...
+  File read done (1.2s)
+  Parsing GGUF...
+  Loading quantized model...
+[config] arch='llama' n_kv=35 n_tensors=255
+[config] dim=3072
+[config] n_layers=28
+[config] n_heads=24 n_kv_heads=8
+[config] head_dim=128
+[config] vocab_size=128256 hidden_dim=8192
+[config] extensions: ple=0 swa=0 swa_hd=0 shared_kv=0 softcap=0.0 eps=1e-05 theta_swa=0
+[config] OK: dim=3072 layers=28 heads=24/8 hd=128/0 ffn=8192 vocab=128256
+[qmodel] Tensor types (layer 0):
+  wq=Q4_K wk=Q4_K wv=Q6_K wo=Q4_K
+  gate=Q4_K up=Q4_K down=Q6_K norm=F32
+  embed=Q6_K output=Q6_K
+
+=== AUDIT ===
+[AUDIT] per_layer_model_proj NOT loaded
+[AUDIT] rope_neox=0 (Gemma should be 1)
+[AUDIT] attn_scale=1.0 for Gemma 4 (Q/K RMSNorm in use); Llama uses 1/sqrt(128)
+[AUDIT] rms_norm_eps=1e-05 (research says 1e-6)
+[AUDIT] kv_share_map is NULL (all layers compute own KV)
+=== END AUDIT ===
+
+  Extracting vocabulary...
+[vocab] merges: 280147 total, 280104 matched to tokens
+Loaded in 116.8 ms
+  Name:   Llama 3.2 3B Instruct
+  Arch:   llama
+  Layers: 28, Dim: 3072, Heads: 24, KV Heads: 8
+  Vocab:  128256, BOS=128000, EOS=128009
+  Gemma:  no
+  RSS:    1946 MB
+
+--- "The seL4 microkernel is" ---
+  Prefill (8 tokens)... 0.4 tok/s
+  >  a real-time operating system designed for safety-critical systems. It is based on the ARMv7 architecture and provides a high degree of isolation and predictability, making it suitable for applications such as aerospace, automotive, and medical devices.
+The seL4 microkernel is designed to be highly secure and fault-tolerant, with features such as:
+*   **Memory protection**: seL4 provides a high degree of memory protection, ensuring that sensitive data is isolated from the rest of the system.
+*   **Real-time scheduling**: seL4 uses a real-time scheduling algorithm to ensure that tasks are executed in a predictable and timely manner
+
+============================================
+   Benchmark Summary
+============================================
+  Model:    Llama 3.2 3B Instruct
+  Arch:     llama
+  Layers:   28
+  Dim:      3072
+  Vocab:    128256
+  Load:     116.8 ms (0.12 s)
+  Prefill:  8 tokens, 0.4 tok/s
+  Gen:      128 tokens, 0.4 tok/s
+  Peak RSS: 2054 MB
+============================================
+
+[5/11] Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf (4.6G)
+---
+JARVIS Quantized Engine Benchmark
+==================================
+Model: /home/jarvis/Desktop/JARVIS_OS/models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf (4692 MB)
+Tokens: 128
+
+  Reading 4.58 GB...
+  File read done (3.1s)
+  Parsing GGUF...
+  Loading quantized model...
+[config] arch='llama' n_kv=33 n_tensors=292
+[config] dim=4096
+[config] n_layers=32
+[config] n_heads=32 n_kv_heads=8
+[config] head_dim=128
+[config] vocab_size=128256 hidden_dim=14336
+[config] extensions: ple=0 swa=0 swa_hd=0 shared_kv=0 softcap=0.0 eps=1e-05 theta_swa=0
+[config] OK: dim=4096 layers=32 heads=32/8 hd=128/0 ffn=14336 vocab=128256
+[qmodel] Tensor types (layer 0):
+  wq=Q4_K wk=Q4_K wv=Q6_K wo=Q4_K
+  gate=Q4_K up=Q4_K down=Q6_K norm=F32
+  embed=Q4_K output=Q6_K
+
+=== AUDIT ===
+[AUDIT] per_layer_model_proj NOT loaded
+[AUDIT] rope_neox=0 (Gemma should be 1)
+[AUDIT] attn_scale=1.0 for Gemma 4 (Q/K RMSNorm in use); Llama uses 1/sqrt(128)
+[AUDIT] rms_norm_eps=1e-05 (research says 1e-6)
+[AUDIT] kv_share_map is NULL (all layers compute own KV)
+=== END AUDIT ===
+
+  Extracting vocabulary...
+[vocab] merges: 280147 total, 280104 matched to tokens
+Loaded in 118.5 ms
+  Name:   Meta Llama 3.1 8B Instruct
+  Arch:   llama
+  Layers: 32, Dim: 4096, Heads: 32, KV Heads: 8
+  Vocab:  128256, BOS=128000, EOS=128009
+  Gemma:  no
+  RSS:    4712 MB
+
+--- "The seL4 microkernel is" ---
+  Prefill (8 tokens)... 0.2 tok/s
+  >  a highly secure, open-source operating system kernel that has been formally verified to be free from common programming errors. It is designed to be used as a foundation for building secure systems, and has been used in a variety of applications, including secure communication protocols and secure boot systems.
+The seL4 microkernel is written in C and is designed to be highly portable, with support for a variety of architectures, including ARM, x86, and PowerPC. It is also designed to be highly configurable, allowing users to customize the kernel to meet their specific needs.
+One of the key features of seL4 is its use of a formal verification
+
+============================================
+   Benchmark Summary
+============================================
+  Model:    Meta Llama 3.1 8B Instruct
+  Arch:     llama
+  Layers:   32
+  Dim:      4096
+  Vocab:    128256
+  Load:     118.5 ms (0.12 s)
+  Prefill:  8 tokens, 0.2 tok/s
+  Gen:      128 tokens, 0.2 tok/s
+  Peak RSS: 4837 MB
+============================================
+
+[6/11] mistral-7b-instruct-v0.2.Q8_0.gguf (7.2G)
+---
+JARVIS Quantized Engine Benchmark
+==================================
+Model: /home/jarvis/Desktop/JARVIS_OS/models/mistral-7b-instruct-v0.2.Q8_0.gguf (7339 MB)
+Tokens: 128
+
+  Reading 7.17 GB...
+  File read done (5.0s)
+  Parsing GGUF...
+  Loading quantized model...
+[config] arch='llama' n_kv=24 n_tensors=291
+[config] dim=4096
+[config] n_layers=32
+[config] n_heads=32 n_kv_heads=8
+[config] head_dim=128
+[config] vocab_size=32000 hidden_dim=14336
+[config] extensions: ple=0 swa=0 swa_hd=0 shared_kv=0 softcap=0.0 eps=1e-05 theta_swa=0
+[config] OK: dim=4096 layers=32 heads=32/8 hd=128/0 ffn=14336 vocab=32000
+[qmodel] Tensor types (layer 0):
+  wq=Q8_0 wk=Q8_0 wv=Q8_0 wo=Q8_0
+  gate=Q8_0 up=Q8_0 down=Q8_0 norm=F32
+  embed=Q8_0 output=Q8_0
+
+=== AUDIT ===
+[AUDIT] per_layer_model_proj NOT loaded
+[AUDIT] rope_neox=0 (Gemma should be 1)
+[AUDIT] attn_scale=1.0 for Gemma 4 (Q/K RMSNorm in use); Llama uses 1/sqrt(128)
+[AUDIT] rms_norm_eps=1e-05 (research says 1e-6)
+[AUDIT] kv_share_map is NULL (all layers compute own KV)
+=== END AUDIT ===
+
+  Extracting vocabulary...
+Loaded in 11.1 ms
+  Name:   mistralai_mistral-7b-instruct-v0.2
+  Arch:   llama
+  Layers: 32, Dim: 4096, Heads: 32, KV Heads: 8
+  Vocab:  32000, BOS=1, EOS=2
+  Gemma:  no
+  RSS:    7344 MB
+
+--- "The seL4 microkernel is" ---
+  Prefill (8 tokens)... 0.2 tok/s
+  > asmall,high-performance,andhighlyreliableoperatingsystemkernel.Itisdesignedtoprovideahighdegreeofisolationbetweendifferentpartsofthesystem,makingitsuitableforuseinsafety-criticalandsecurity-sensitiveapplications.<0x0A><0x0A>OneofthekeyfeaturesofseL4isitsuseofacapability-basedaccesscontrolmechanism.Thismeansthatinsteadofusingaccesscontrollistsorothertraditionalmethodstomanageaccesstosystemresources,seL4usescapabilities,whicharesmall,cryptographicallysignedtokensthatrepresenttherighttoperformaspecificactiononaresource.<0x0A><0x0A>Capabilitiesprovideseveralbenefitsover
+
+============================================
+   Benchmark Summary
+============================================
+  Model:    mistralai_mistral-7b-instruct-v0.2
+  Arch:     llama
+  Layers:   32
+  Dim:      4096
+  Vocab:    32000
+  Load:     11.1 ms (0.01 s)
+  Prefill:  8 tokens, 0.2 tok/s
+  Gen:      128 tokens, 0.2 tok/s
+  Peak RSS: 7472 MB
+============================================
+
+[7/11] Phi-3-mini-4k-instruct-q4.gguf (2.3G)
+---
+JARVIS Quantized Engine Benchmark
+==================================
+Model: /home/jarvis/Desktop/JARVIS_OS/models/Phi-3-mini-4k-instruct-q4.gguf (2282 MB)
+Tokens: 128
+
+  Reading 2.23 GB...
+  File read done (1.5s)
+  Parsing GGUF...
+  Loading quantized model...
+qmodel_load: tensor 'blk.0.attn_q.weight' not found
+ERROR: qmodel_load failed (err=-1) [arch=phi3]
+[config] arch='phi3' n_kv=24 n_tensors=195
+[config] dim=3072
+[config] n_layers=32
+[config] n_heads=32 n_kv_heads=32
+[config] head_dim=96
+[config] vocab_size=32064 hidden_dim=8192
+[config] extensions: ple=0 swa=0 swa_hd=0 shared_kv=0 softcap=0.0 eps=1e-05 theta_swa=0
+[config] OK: dim=3072 layers=32 heads=32/32 hd=96/0 ffn=8192 vocab=32064
+  FAILED (exit 1)
+
+[8/11] Qwen3-4B-Q4_K_M.gguf (2.4G)
+---
+JARVIS Quantized Engine Benchmark
+==================================
+Model: /home/jarvis/Desktop/JARVIS_OS/models/Qwen3-4B-Q4_K_M.gguf (2381 MB)
+Tokens: 128
+
+  Reading 2.33 GB...
+  File read done (1.5s)
+  Parsing GGUF...
+  Loading quantized model...
+[config] arch='qwen3' n_kv=28 n_tensors=398
+[config] dim=2560
+[config] n_layers=36
+[config] n_heads=32 n_kv_heads=8
+[config] head_dim=128
+[config] vocab_size=151936 hidden_dim=9728
+[config] extensions: ple=0 swa=0 swa_hd=0 shared_kv=0 softcap=0.0 eps=1e-06 theta_swa=0
+[config] OK: dim=2560 layers=36 heads=32/8 hd=128/0 ffn=9728 vocab=151936
+[qmodel] Tensor types (layer 0):
+  wq=Q4_K wk=Q4_K wv=Q6_K wo=Q4_K
+  gate=Q4_K up=Q4_K down=Q6_K norm=F32
+  q_norm=F32 k_norm=F32
+  embed=Q6_K output=Q6_K
+
+=== AUDIT ===
+[AUDIT] per_layer_model_proj NOT loaded
+[AUDIT] rope_neox=0 (Gemma should be 1)
+[AUDIT] attn_scale=1.0 for Gemma 4 (Q/K RMSNorm in use); Llama uses 1/sqrt(128)
+[AUDIT] rms_norm_eps=1e-06 (research says 1e-6)
+[AUDIT] kv_share_map is NULL (all layers compute own KV)
+[AUDIT] L0 q_norm.n_elements=128 (SWA head_dim=0)
+[AUDIT] L34 q_norm.n_elements=128 (global head_dim=128)
+=== END AUDIT ===
+
+  Extracting vocabulary...
+[vocab] merges: 151387 total, 151386 matched to tokens
+Loaded in 90.8 ms
+  Name:   Qwen3 4B Instruct Awq
+  Arch:   qwen3
+  Layers: 36, Dim: 2560, Heads: 32, KV Heads: 8
+  Vocab:  151936, BOS=151643, EOS=151645
+  Gemma:  no
+  RSS:    2399 MB
+
+--- "The seL4 microkernel is" ---
+  Prefill (8 tokens)... 0.3 tok/s
+  >  a real-time operating system (RTOS) is a real-time operating system (RTOS) that is designed for embedded systems. It is a lightweight, scalable, and is written in C, and is designed for embedded systems. It is a real-time operating system (RTOS) that is designed for embedded systems. It is a small and has a small footprint, and is designed to be used in embedded systems. It is a small, and is used in applications that are used in applications. The seL4 is a small, and is a lightweight, and is a small and is used in applications that are typically used in embedded and is a
+
+============================================
+   Benchmark Summary
+============================================
+  Model:    Qwen3 4B Instruct Awq
+  Arch:     qwen3
+  Layers:   36
+  Dim:      2560
+  Vocab:    151936
+  Load:     90.8 ms (0.09 s)
+  Prefill:  8 tokens, 0.3 tok/s
+  Gen:      128 tokens, 0.3 tok/s
+  Peak RSS: 2543 MB
+============================================
+
+[9/11] Qwen3.5-4B-Q4_K_M.gguf (2.6G)
+---
+JARVIS Quantized Engine Benchmark
+==================================
+Model: /home/jarvis/Desktop/JARVIS_OS/models/Qwen3.5-4B-Q4_K_M.gguf (2613 MB)
+Tokens: 128
+
+  Reading 2.55 GB...
+  File read done (1.7s)
+  Parsing GGUF...
+  Loading quantized model...
+qmodel_load: tensor 'blk.0.attn_q.weight' not found
+ERROR: qmodel_load failed (err=-1) [arch=qwen35]
+[config] arch='qwen35' n_kv=46 n_tensors=426
+[config] dim=2560
+[config] n_layers=32
+[config] n_heads=16 n_kv_heads=4
+[config] head_dim=256
+[config] vocab_size=248320 hidden_dim=9216
+[config] extensions: ple=0 swa=0 swa_hd=0 shared_kv=0 softcap=0.0 eps=1e-06 theta_swa=0
+[config] OK: dim=2560 layers=32 heads=16/4 hd=256/0 ffn=9216 vocab=248320
+  FAILED (exit 1)
+
+[10/11] Qwen3.5-9B-Q4_K_M.gguf (5.3G)
+---
+JARVIS Quantized Engine Benchmark
+==================================
+Model: /home/jarvis/Desktop/JARVIS_OS/models/Qwen3.5-9B-Q4_K_M.gguf (5417 MB)
+Tokens: 128
+
+  Reading 5.29 GB...
+  File read done (2.8s)
+  Parsing GGUF...
+  Loading quantized model...
+qmodel_load: tensor 'blk.0.attn_q.weight' not found
+ERROR: qmodel_load failed (err=-1) [arch=qwen35]
+[config] arch='qwen35' n_kv=46 n_tensors=427
+[config] dim=4096
+[config] n_layers=32
+[config] n_heads=16 n_kv_heads=4
+[config] head_dim=256
+[config] vocab_size=248320 hidden_dim=12288
+[config] extensions: ple=0 swa=0 swa_hd=0 shared_kv=0 softcap=0.0 eps=1e-06 theta_swa=0
+[config] OK: dim=4096 layers=32 heads=16/4 hd=256/0 ffn=12288 vocab=248320
+  FAILED (exit 1)
+
+[11/11] tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf (638M)
+---
+JARVIS Quantized Engine Benchmark
+==================================
+Model: /home/jarvis/Desktop/JARVIS_OS/models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf (637 MB)
+Tokens: 128
+
+  Reading 0.62 GB...
+  File read done (0.4s)
+  Parsing GGUF...
+  Loading quantized model...
+[config] arch='llama' n_kv=23 n_tensors=201
+[config] dim=2048
+[config] n_layers=22
+[config] n_heads=32 n_kv_heads=4
+[config] head_dim=64
+[config] vocab_size=32000 hidden_dim=5632
+[config] extensions: ple=0 swa=0 swa_hd=0 shared_kv=0 softcap=0.0 eps=1e-05 theta_swa=0
+[config] OK: dim=2048 layers=22 heads=32/4 hd=64/0 ffn=5632 vocab=32000
+[qmodel] Tensor types (layer 0):
+  wq=Q4_K wk=Q4_K wv=Q6_K wo=Q4_K
+  gate=Q4_K up=Q4_K down=Q6_K norm=F32
+  embed=Q4_K output=Q6_K
+
+=== AUDIT ===
+[AUDIT] per_layer_model_proj NOT loaded
+[AUDIT] rope_neox=0 (Gemma should be 1)
+[AUDIT] attn_scale=1.0 for Gemma 4 (Q/K RMSNorm in use); Llama uses 1/sqrt(64)
+[AUDIT] rms_norm_eps=1e-05 (research says 1e-6)
+[AUDIT] kv_share_map is NULL (all layers compute own KV)
+=== END AUDIT ===
+
+  Extracting vocabulary...
+[vocab] merges: 61249 total, 61249 matched to tokens
+Loaded in 27.5 ms
+  Name:   tinyllama_tinyllama-1.1b-chat-v1.0
+  Arch:   llama
+  Layers: 22, Dim: 2048, Heads: 32, KV Heads: 4
+  Vocab:  32000, BOS=1, EOS=2
+  Gemma:  no
+  RSS:    644 MB
+
+--- "The seL4 microkernel is" ---
+  Prefill (8 tokens)... 1.2 tok/s
+  > alightweight,high-performance,andhighlyscalablekernelforembeddedsystems.Itisdesignedtobehighlyportable,withsupportformultiplearchitecturesandoperatingsystems.TheseL4kernelisbasedontheSeL4architecture,whichprovidesaflexibleandmodularframeworkforbuildinghigh-performance,scalable,andsecurekernelcomponents.TheseL4kernelisdesignedtobehighlyportable,withsupportformultiplearchitecturesandoperatingsystems.ItisbasedontheSeL4architecture,whichprovidesaflexibleandmodularframeworkforbuildinghigh-performance,scalable,andsecurekernel
+
+============================================
+   Benchmark Summary
+============================================
+  Model:    tinyllama_tinyllama-1.1b-chat-v1.0
+  Arch:     llama
+  Layers:   22
+  Dim:      2048
+  Vocab:    32000
+  Load:     27.5 ms (0.03 s)
+  Prefill:  8 tokens, 1.2 tok/s
+  Gen:      128 tokens, 1.2 tok/s
+  Peak RSS: 665 MB
+============================================
+
+=== Done: 11 models tested ===
