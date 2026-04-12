@@ -112,11 +112,18 @@ void deltanet_forward(const float *q, const float *k, const float *v,
         /* Map V-head to K-head (GQA grouping) */
         int kh = vh / v_per_k;
 
-        /* L2 normalize Q and K for this head (copy first — don't modify input) */
+        /* L2 normalize Q and K for this head (copy first — don't modify input).
+         * Q additionally scaled by 1/sqrt(head_k_dim) — the DeltaNet analogue of
+         * standard attention's 1/sqrt(head_dim) scaling. Without this, output
+         * magnitude is sqrt(head_k_dim) too large (verified against llama.cpp
+         * build_delta_net_autoregressive which does ggml_scale(q, 1/sqrt(S_k))). */
         memcpy(q_norm, q + kh * head_k_dim, (size_t)head_k_dim * sizeof(float));
         memcpy(k_norm, k + kh * head_k_dim, (size_t)head_k_dim * sizeof(float));
         l2_normalize(q_norm, head_k_dim, norm_eps);
         l2_normalize(k_norm, head_k_dim, norm_eps);
+        float q_scale = 1.0f / sqrtf((float)head_k_dim);
+        for (int i = 0; i < head_k_dim; i++)
+            q_norm[i] *= q_scale;
 
         float *S = ssm_state + (size_t)vh * head_k_dim * head_v_dim;
         const float *v_h = v + vh * head_v_dim;
