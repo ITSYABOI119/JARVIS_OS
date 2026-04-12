@@ -1,9 +1,9 @@
 /*
  * JARVIS AI-OS Phase 3 -- Quantized Inference Engine Benchmark
  *
- * Standalone benchmark harness for all 11 GGUF models using the
- * zero-copy quantized inference path (qmodel_forward). Measures
- * prefill and generation throughput with 10 fixed prompts.
+ * Standalone speed benchmark for GGUF models using the zero-copy
+ * quantized inference path (qmodel_forward). Single prompt, 128-token
+ * generation — matches llama-bench pp/tg methodology for fair comparison.
  *
  * Compile:
  *   gcc -O2 -mavx2 -mfma -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE \
@@ -17,7 +17,7 @@
  *       -lm -o /tmp/bench_engine
  *
  * Run:
- *   /tmp/bench_engine path/to/model.gguf [--tokens 64]
+ *   /tmp/bench_engine path/to/model.gguf [--tokens 128]
  *
  * Pure C11, no C++ dependencies.
  */
@@ -68,22 +68,6 @@ static long peak_rss_kb(void)
 }
 #endif
 
-/* ---- Fixed benchmark prompts ---- */
-
-static const char *prompts[] = {
-    "The seL4 microkernel is",
-    "Explain how virtual memory works in three sentences.",
-    "What is the difference between a process and a thread?",
-    "Write a C function that reverses a string in place.",
-    "The capital of Australia is",
-    "What are the key benefits of formally verified software?",
-    "Describe the TCP three-way handshake step by step.",
-    "What happens when you type a URL into a browser?",
-    "Compare RISC and CISC architectures in two sentences.",
-    "Write a bash one-liner to find all .c files larger than 1MB.",
-};
-#define N_PROMPTS ((int)(sizeof(prompts) / sizeof(prompts[0])))
-
 /* ---- Gemma 4 chat template token IDs (from inference_server.c) ----
  *   <bos> <|turn> user \n {text} <turn|> \n <|turn> model \n <|think|>
  *   bos=2, <|turn>=105, user=2364, \n=107, <turn|>=106, model=4368, <|think|>=98
@@ -96,6 +80,8 @@ static const char *prompts[] = {
 #define GEMMA_MODEL       4368
 #define GEMMA_THINK       98
 #define GEMMA_EOS_STOP    1
+
+static const char *bench_prompt = "The seL4 microkernel is";
 
 /* Build prompt token sequence. Returns total token count. */
 static int build_prompt(const tokenizer_t *tok, const llama_config_t *cfg,
@@ -133,7 +119,7 @@ int main(int argc, char **argv)
 {
     /* Parse CLI */
     const char *model_path = NULL;
-    int max_tokens = 64;
+    int max_tokens = 128;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--tokens") == 0 && i + 1 < argc) {
@@ -163,7 +149,7 @@ int main(int argc, char **argv)
     printf("JARVIS Quantized Engine Benchmark\n");
     printf("==================================\n");
     printf("Model: %s (%ld MB)\n", model_path, file_size / (1024 * 1024));
-    printf("Tokens per prompt: %d\n\n", max_tokens);
+    printf("Tokens: %d\n\n", max_tokens);
     fflush(stdout);
 
     void *gguf_data = malloc((size_t)file_size);
@@ -275,102 +261,71 @@ int main(int argc, char **argv)
                       (size_t)qm.config.n_kv_heads * (size_t)qm.config.head_dim *
                       sizeof(float);
 
-    /* ---- Run benchmark over all prompts ---- */
-    double total_prefill_tps = 0.0;
-    double total_gen_tps = 0.0;
-    int prompts_ok = 0;
+    /* ---- Build prompt ---- */
+    int prompt_ids[256];
+    int n_prompt = build_prompt(&tok, &qm.config, bench_prompt, prompt_ids, 256);
 
-    for (int p = 0; p < N_PROMPTS; p++) {
-        printf("\n--- Prompt %d/%d: \"%s\" ---\n", p + 1, N_PROMPTS, prompts[p]);
-        fflush(stdout);
+    printf("--- \"%s\" ---\n", bench_prompt);
+    fflush(stdout);
 
-        /* Build prompt tokens */
-        int prompt_ids[256];
-        int n_prompt = build_prompt(&tok, &qm.config, prompts[p],
-                                    prompt_ids, 256);
+    /* Reset KV cache */
+    state.pos = 0;
+    memset(state.key_cache, 0, kv_bytes);
+    memset(state.value_cache, 0, kv_bytes);
 
-        /* Reset KV cache */
-        state.pos = 0;
-        memset(state.key_cache, 0, kv_bytes);
-        memset(state.value_cache, 0, kv_bytes);
+    /* ---- Prefill (timed) ---- */
+    printf("  Prefill (%d tokens)...", n_prompt); fflush(stdout);
+    double t0 = time_ms();
+    for (int i = 0; i < n_prompt; i++)
+        qmodel_forward(&qm, &state, prompt_ids[i]);
+    double prefill_ms = time_ms() - t0;
+    double pp_tps = (prefill_ms > 0.0) ? n_prompt * 1000.0 / prefill_ms : 0.0;
+    printf(" %.1f tok/s\n", pp_tps); fflush(stdout);
 
-        /* Prefill (timed) */
-        printf("  Prefill (%d tokens)...", n_prompt); fflush(stdout);
-        double t0 = time_ms();
-        for (int i = 0; i < n_prompt; i++)
-            qmodel_forward(&qm, &state, prompt_ids[i]);
-        double prefill_ms = time_ms() - t0;
-        printf(" %.1f tok/s\n", n_prompt * 1000.0 / prefill_ms); fflush(stdout);
+    /* ---- Generation (timed) — stream each token ---- */
+    int n_gen = 0;
+    printf("  > ");
 
-        /* Generation (timed) — stream each token as decoded */
-        int out_ids[512];
-        int n_gen = 0;
-        printf("  > ");
+    t0 = time_ms();
+    for (int g = 0; g < max_tokens; g++) {
+        int next = sample_greedy(state.logits, qm.config.vocab_size);
+        n_gen++;
+        if (next == eos_token) break;
 
-        t0 = time_ms();
-        for (int g = 0; g < max_tokens; g++) {
-            int next = sample_greedy(state.logits, qm.config.vocab_size);
-            out_ids[n_gen++] = next;
-            if (next == eos_token) break;
-
-            /* Stream-decode this single token */
-            char tok_text[64];
-            int tok_len = tokenizer_decode(&tok, &next, 1, tok_text, (int)sizeof(tok_text));
-            if (tok_len > 0) {
-                printf("%s", tok_text);
-                fflush(stdout);
-            }
-
-            qmodel_forward(&qm, &state, next);
-        }
-        double gen_ms = time_ms() - t0;
-        printf("\n");
-
-        /* Full decode for the summary line (in case streaming missed anything) */
-        char text[1024];
-        int tlen = tokenizer_decode(&tok, out_ids, n_gen, text, (int)sizeof(text));
-        if (tlen < 0) tlen = 0;
-        /* Truncate display to 60 chars */
-        if (tlen > 60) {
-            text[57] = '.';
-            text[58] = '.';
-            text[59] = '.';
-            text[60] = '\0';
+        /* Stream-decode this single token */
+        char tok_text[64];
+        int tok_len = tokenizer_decode(&tok, &next, 1, tok_text, (int)sizeof(tok_text));
+        if (tok_len > 0) {
+            printf("%s", tok_text);
+            fflush(stdout);
         }
 
-        double pp_tps = (prefill_ms > 0.0) ? n_prompt * 1000.0 / prefill_ms : 0.0;
-        double gn_tps = (gen_ms > 0.0) ? n_gen * 1000.0 / gen_ms : 0.0;
-
-        printf("[%d/%d] pp: %3d tok %6.1f tok/s | gen: %3d tok %5.1f tok/s | \"%s\"\n",
-               p + 1, N_PROMPTS, n_prompt, pp_tps, n_gen, gn_tps, text);
-
-        total_prefill_tps += pp_tps;
-        total_gen_tps += gn_tps;
-        prompts_ok++;
+        qmodel_forward(&qm, &state, next);
     }
+    double gen_ms = time_ms() - t0;
+    double gn_tps = (gen_ms > 0.0) ? n_gen * 1000.0 / gen_ms : 0.0;
+    printf("\n");
 
     /* ---- Summary ---- */
     printf("\n");
     printf("============================================\n");
     printf("   Benchmark Summary\n");
     printf("============================================\n");
-    printf("  Model:       %s\n", model_name ? model_name : model_path);
-    printf("  Arch:        %s\n", arch_str ? arch_str : "(unknown)");
-    printf("  Layers:      %d\n", qm.config.n_layers);
-    printf("  Dim:         %d\n", qm.config.dim);
-    printf("  Vocab:       %d\n", qm.config.vocab_size);
-    printf("  Load time:   %.1f ms (%.2f s)\n", load_ms, load_ms / 1000.0);
+    printf("  Model:    %s\n", model_name ? model_name : model_path);
+    printf("  Arch:     %s\n", arch_str ? arch_str : "(unknown)");
+    printf("  Layers:   %d\n", qm.config.n_layers);
+    printf("  Dim:      %d\n", qm.config.dim);
+    printf("  Vocab:    %d\n", qm.config.vocab_size);
+    printf("  Load:     %.1f ms (%.2f s)\n", load_ms, load_ms / 1000.0);
+    printf("  Prefill:  %d tokens, %.1f tok/s\n", n_prompt, pp_tps);
+    printf("  Gen:      %d tokens, %.1f tok/s\n", n_gen, gn_tps);
 #ifdef __linux__
     {
         long rss_final = peak_rss_kb();
         if (rss_final > 0)
-            printf("  Peak RSS:    %ld MB\n", rss_final / 1024);
+            printf("  Peak RSS: %ld MB\n", rss_final / 1024);
     }
 #endif
-    if (prompts_ok > 0) {
-        printf("  Mean prefill: %.1f tok/s\n", total_prefill_tps / prompts_ok);
-        printf("  Mean gen:     %.1f tok/s\n", total_gen_tps / prompts_ok);
-    }
     printf("============================================\n");
 
     /* ---- Cleanup ---- */
