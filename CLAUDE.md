@@ -652,7 +652,8 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **GGUF Vocab Extraction:** `phase3/src/ai/gguf_vocab.c/h`
 - **SHIELD Safety Module:** `phase3/src/ai/shield.c/h`
 - **Dynamic Model Scaling:** `phase3/src/ai/model_scaling.c/h`
-- **Inference Benchmark:** `phase3/src/ai/bench_inference.c`
+- **Inference Benchmark (stale F32):** `phase3/src/ai/bench_inference.c`
+- **Engine Bench (quantized, all models):** `phase3/src/ai/bench_engine.c`
 - **GRUB Config:** `phase3/firmware/grub/grub.cfg`
 - **GPU Benchmarks:** `phase3/docs/GPU_BENCHMARK_RTX2070.md`
 - **Inference Benchmark Results:** `phase3/docs/INFERENCE_BENCHMARK.md`
@@ -674,9 +675,11 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Model Bench-Off:** `phase3/docs/MODEL_BENCH_OFF_2026-04-07.md` — tiers, compatibility, deferred contenders (Gemma 4 §7, Qwen3.5 §7b, Qwen3 §9)
 - **Bench Scripts:**
   - `phase3/scripts/bench_models.sh` — unified bench (speed/perplexity/quality) for JARVIS PC
+  - `phase3/scripts/bench_engine_models.sh` — JARVIS engine bench (all 11 models, quantized path)
   - `phase3/scripts/bench_speed_windows.ps1` — Windows speed bench (CPU + GPU modes)
   - `phase3/scripts/bench_perplexity_windows.ps1` — Windows perplexity bench (GPU, full WikiText-2)
 - **Bench Results:** `models/bench_results.txt` (JARVIS PC speed), `models/bench_results_mainpc.txt` (5600 CPU), `models/bench_results_mainpc_gpu.txt` (5600 + RTX 2070)
+- **Engine Bench Results:** `models/jarvis_engine_bench.txt` (JARVIS engine, quantized path, all models)
 - **Perplexity Results:** `models/perplexity_results.txt`
 - **Quality Results:** `models/quality_results/ALL_RESPONSES.txt` (11 models × 10 prompts, Claude-judged)
 - **Judge Consensus:** `models/quality_results/JUDGE_CONSENSUS.txt` (5-agent blind consensus)
