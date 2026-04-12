@@ -321,30 +321,89 @@ int qmodel_load(qmodel_t *qm, const gguf_ctx_t *ctx, const void *gguf_base)
         err = resolve_qtensor(&L->attn_norm, ctx, gguf_base, name);
         if (err) goto fail;
 
+        /* Q/K/V weights — try separate tensors first, fall back to fused QKV.
+         * Fused layout: [Q_rows || K_rows || V_rows] concatenated vertically.
+         * Split at load time into three qtensor_t views — forward pass unchanged. */
         snprintf(name, sizeof(name), "blk.%d.attn_q.weight", i);
-        err = resolve_qtensor(&L->wq, ctx, gguf_base, name);
-        if (err) goto fail;
+        {
+            const gguf_tensor_info_t *tq = gguf_find_tensor(ctx, name);
+            if (tq) {
+                /* --- Separate Q/K/V path (Llama, Gemma, Mistral) --- */
+                L->wq.data       = (const uint8_t *)gguf_base + ctx->data_offset + tq->offset;
+                L->wq.type       = tq->type;
+                L->wq.n_elements = tq->n_elements;
+                L->wq.n_bytes    = tq->n_bytes;
 
-        /* K/V weights: always optional — shared-KV layers may lack wk/wv tensors.
-         * Presence/absence is used below to derive the KV share map from ground truth. */
-        snprintf(name, sizeof(name), "blk.%d.attn_k.weight", i);
-        {
-            const gguf_tensor_info_t *t = gguf_find_tensor(ctx, name);
-            if (t) {
-                L->wk.data       = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
-                L->wk.type       = t->type;
-                L->wk.n_elements = t->n_elements;
-                L->wk.n_bytes    = t->n_bytes;
-            }
-        }
-        snprintf(name, sizeof(name), "blk.%d.attn_v.weight", i);
-        {
-            const gguf_tensor_info_t *t = gguf_find_tensor(ctx, name);
-            if (t) {
-                L->wv.data       = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
-                L->wv.type       = t->type;
-                L->wv.n_elements = t->n_elements;
-                L->wv.n_bytes    = t->n_bytes;
+                /* K/V weights: optional — shared-KV layers may lack wk/wv tensors.
+                 * Presence/absence is used below to derive the KV share map. */
+                snprintf(name, sizeof(name), "blk.%d.attn_k.weight", i);
+                {
+                    const gguf_tensor_info_t *t = gguf_find_tensor(ctx, name);
+                    if (t) {
+                        L->wk.data       = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
+                        L->wk.type       = t->type;
+                        L->wk.n_elements = t->n_elements;
+                        L->wk.n_bytes    = t->n_bytes;
+                    }
+                }
+                snprintf(name, sizeof(name), "blk.%d.attn_v.weight", i);
+                {
+                    const gguf_tensor_info_t *t = gguf_find_tensor(ctx, name);
+                    if (t) {
+                        L->wv.data       = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
+                        L->wv.type       = t->type;
+                        L->wv.n_elements = t->n_elements;
+                        L->wv.n_bytes    = t->n_bytes;
+                    }
+                }
+            } else {
+                /* --- Fused QKV path (Phi-3, Qwen3.5, Falcon) --- */
+                snprintf(name, sizeof(name), "blk.%d.attn_qkv.weight", i);
+                const gguf_tensor_info_t *tqkv = gguf_find_tensor(ctx, name);
+                if (!tqkv) {
+                    printf("[qmodel] layer %d: neither attn_q nor attn_qkv found\n", i);
+                    goto fail;
+                }
+
+                int q_rows  = c->n_heads * c->head_dim;
+                int kv_rows = c->n_kv_heads * c->head_dim;
+                uint64_t expected = (uint64_t)(q_rows + 2 * kv_rows) * (uint64_t)c->dim;
+                if (tqkv->n_elements != expected) {
+                    printf("[qmodel] layer %d: fused QKV n_elements=%llu, expected %llu "
+                           "(q=%d + 2*kv=%d rows, dim=%d)\n",
+                           i, (unsigned long long)tqkv->n_elements,
+                           (unsigned long long)expected, q_rows, kv_rows, c->dim);
+                    goto fail;
+                }
+
+                size_t row_bytes = dequant_row_bytes(c->dim, (ggml_type_t)tqkv->type);
+                const uint8_t *fused = (const uint8_t *)gguf_base +
+                                       ctx->data_offset + tqkv->offset;
+
+                /* Q: rows [0, q_rows) */
+                L->wq.data       = fused;
+                L->wq.type       = tqkv->type;
+                L->wq.n_elements = (uint64_t)q_rows * c->dim;
+                L->wq.n_bytes    = (uint64_t)q_rows * row_bytes;
+
+                /* K: rows [q_rows, q_rows + kv_rows) */
+                L->wk.data       = fused + (size_t)q_rows * row_bytes;
+                L->wk.type       = tqkv->type;
+                L->wk.n_elements = (uint64_t)kv_rows * c->dim;
+                L->wk.n_bytes    = (uint64_t)kv_rows * row_bytes;
+
+                /* V: rows [q_rows + kv_rows, q_rows + 2*kv_rows) */
+                L->wv.data       = fused + (size_t)(q_rows + kv_rows) * row_bytes;
+                L->wv.type       = tqkv->type;
+                L->wv.n_elements = (uint64_t)kv_rows * c->dim;
+                L->wv.n_bytes    = (uint64_t)kv_rows * row_bytes;
+
+                if (i == 0) {
+                    printf("[qmodel] Fused QKV detected: q=%d k=%d v=%d rows, "
+                           "row_bytes=%zu, type=%s\n",
+                           q_rows, kv_rows, kv_rows, row_bytes,
+                           dequant_type_name((ggml_type_t)tqkv->type));
+                }
             }
         }
 
@@ -356,13 +415,66 @@ int qmodel_load(qmodel_t *qm, const gguf_ctx_t *ctx, const void *gguf_base)
         err = resolve_qtensor(&L->ffn_norm, ctx, gguf_base, name);
         if (err) goto fail;
 
+        /* FFN gate/up weights — try separate tensors first, fall back to fused gate-up.
+         * Fused layout (Phi-3): ffn_up has 2x hidden_dim rows = [gate || up] concatenated.
+         * Split at load time into w_gate and w_up views — forward pass unchanged. */
         snprintf(name, sizeof(name), "blk.%d.ffn_gate.weight", i);
-        err = resolve_qtensor(&L->w_gate, ctx, gguf_base, name);
-        if (err) goto fail;
+        {
+            const gguf_tensor_info_t *tgate = gguf_find_tensor(ctx, name);
+            if (tgate) {
+                /* --- Separate gate + up (Llama, Gemma, Mistral) --- */
+                L->w_gate.data       = (const uint8_t *)gguf_base + ctx->data_offset + tgate->offset;
+                L->w_gate.type       = tgate->type;
+                L->w_gate.n_elements = tgate->n_elements;
+                L->w_gate.n_bytes    = tgate->n_bytes;
 
-        snprintf(name, sizeof(name), "blk.%d.ffn_up.weight", i);
-        err = resolve_qtensor(&L->w_up, ctx, gguf_base, name);
-        if (err) goto fail;
+                snprintf(name, sizeof(name), "blk.%d.ffn_up.weight", i);
+                err = resolve_qtensor(&L->w_up, ctx, gguf_base, name);
+                if (err) goto fail;
+            } else {
+                /* --- Fused gate-up (Phi-3): ffn_up = [gate_rows || up_rows] --- */
+                snprintf(name, sizeof(name), "blk.%d.ffn_up.weight", i);
+                const gguf_tensor_info_t *tup = gguf_find_tensor(ctx, name);
+                if (!tup) {
+                    printf("[qmodel] layer %d: neither ffn_gate nor ffn_up found\n", i);
+                    goto fail;
+                }
+
+                /* Fused tensor has 2*hidden_dim rows: gate first, then up */
+                int half_rows = c->hidden_dim;
+                uint64_t expected_fused = (uint64_t)(2 * half_rows) * (uint64_t)c->dim;
+                if (tup->n_elements != expected_fused) {
+                    printf("[qmodel] layer %d: ffn_up n_elements=%llu, expected %llu "
+                           "for fused gate-up (2*%d rows, dim=%d)\n",
+                           i, (unsigned long long)tup->n_elements,
+                           (unsigned long long)expected_fused, half_rows, c->dim);
+                    goto fail;
+                }
+
+                size_t row_bytes = dequant_row_bytes(c->dim, (ggml_type_t)tup->type);
+                const uint8_t *fused = (const uint8_t *)gguf_base +
+                                       ctx->data_offset + tup->offset;
+
+                /* Gate: first half_rows rows */
+                L->w_gate.data       = fused;
+                L->w_gate.type       = tup->type;
+                L->w_gate.n_elements = (uint64_t)half_rows * c->dim;
+                L->w_gate.n_bytes    = (uint64_t)half_rows * row_bytes;
+
+                /* Up: second half_rows rows */
+                L->w_up.data       = fused + (size_t)half_rows * row_bytes;
+                L->w_up.type       = tup->type;
+                L->w_up.n_elements = (uint64_t)half_rows * c->dim;
+                L->w_up.n_bytes    = (uint64_t)half_rows * row_bytes;
+
+                if (i == 0) {
+                    printf("[qmodel] Fused gate-up detected: %d + %d rows, "
+                           "row_bytes=%zu, type=%s\n",
+                           half_rows, half_rows, row_bytes,
+                           dequant_type_name((ggml_type_t)tup->type));
+                }
+            }
+        }
 
         snprintf(name, sizeof(name), "blk.%d.ffn_down.weight", i);
         err = resolve_qtensor(&L->w_down, ctx, gguf_base, name);
