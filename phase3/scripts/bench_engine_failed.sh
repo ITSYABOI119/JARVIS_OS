@@ -29,6 +29,7 @@ compile_bench() {
         "$REPO_ROOT/phase3/src/ai/dequant.c" \
         "$REPO_ROOT/phase3/src/ai/sampling.c" \
         "$REPO_ROOT/phase3/src/ai/inference.c" \
+        "$REPO_ROOT/phase3/src/ai/ssm.c" \
         -lm -o "$BENCH_BIN"
     if [ $? -ne 0 ]; then
         echo "ERROR: compilation failed"
@@ -70,6 +71,8 @@ COUNT=$(echo "$MODELS" | wc -l)
     echo "RAM:  $(grep 'MemTotal' /proc/meminfo 2>/dev/null | awk '{printf "%.1f GB", $2/1048576}' || echo 'unknown')"
     echo "Models: $COUNT"
     echo ""
+    echo "| model                          |       size |     params | backend    | threads |            test |                  t/s |"
+    echo "| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |"
 
     N=0
     echo "$MODELS" | while read -r model; do
@@ -77,20 +80,21 @@ COUNT=$(echo "$MODELS" | wc -l)
         NAME=$(basename "$model")
         SIZE=$(du -h "$model" 2>/dev/null | cut -f1 || echo "?")
 
-        echo "[$N/$COUNT] $NAME ($SIZE)"
-        echo "---"
+        echo "" >&2
+        echo "[$N/$COUNT] $NAME ($SIZE)" >&2
 
         set +e
-        "$BENCH_BIN" "$model" 2>&1
+        "$BENCH_BIN" "$model"
         RC=$?
         set -e
 
         if [ $RC -ne 0 ]; then
-            echo "  FAILED (exit $RC)"
+            printf "| %-30s | %10s |            | %-10s | %7d | %15s | %17s |\n" \
+                "$NAME" "$SIZE" "JARVIS" 1 "tg128" "FAILED"
         fi
-        echo ""
     done
 
+    echo ""
     echo "=== Done: $COUNT models tested ==="
 } 2>&1 | tee "$RESULTS"
 

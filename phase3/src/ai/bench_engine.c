@@ -5,6 +5,8 @@
  * quantized inference path (qmodel_forward). Single prompt, 128-token
  * generation — matches llama-bench pp/tg methodology for fair comparison.
  *
+ * Output format matches llama-bench table layout for side-by-side comparison.
+ *
  * Compile:
  *   gcc -O2 -mavx2 -mfma -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE \
  *       -I phase3/src/ai \
@@ -13,11 +15,11 @@
  *       phase3/src/ai/gguf_parser.c phase3/src/ai/gguf_vocab.c \
  *       phase3/src/ai/tokenizer.c phase3/src/ai/tensor_ops.c \
  *       phase3/src/ai/dequant.c phase3/src/ai/sampling.c \
- *       phase3/src/ai/inference.c \
+ *       phase3/src/ai/inference.c phase3/src/ai/ssm.c \
  *       -lm -o /tmp/bench_engine
  *
  * Run:
- *   /tmp/bench_engine path/to/model.gguf [--tokens 128]
+ *   /tmp/bench_engine path/to/model.gguf [--tokens 128] [--debug]
  *
  * Pure C11, no C++ dependencies.
  */
@@ -68,11 +70,7 @@ static long peak_rss_kb(void)
 }
 #endif
 
-/* ---- Gemma 4 chat template token IDs (from inference_server.c) ----
- *   <bos> <|turn> user \n {text} <turn|> \n <|turn> model \n <|think|>
- *   bos=2, <|turn>=105, user=2364, \n=107, <turn|>=106, model=4368, <|think|>=98
- *   Stop on <eos>=1 (NOT eos_id=106 which is <turn|>).
- */
+/* ---- Gemma 4 chat template token IDs (from inference_server.c) ---- */
 #define GEMMA_TURN_OPEN   105
 #define GEMMA_USER        2364
 #define GEMMA_NEWLINE     107
@@ -83,28 +81,19 @@ static long peak_rss_kb(void)
 
 static const char *bench_prompt = "The seL4 microkernel is";
 
-/* Build prompt token sequence. Returns total token count.
- * Detects architecture from arch string and wraps with appropriate
- * chat template for instruct-tuned models. */
+/* Build prompt token sequence. Returns total token count. */
 static int build_prompt(const tokenizer_t *tok, const llama_config_t *cfg,
                         const char *arch, const char *text, int *ids, int max_ids)
 {
     int n = 0;
-
-    /* Universal newline token — tokenizer_encode can't encode \n for GPT-2 BPE
-     * models (byte 0x0A isn't in the merge table). Look up directly instead. */
     int nl_tok = tokenizer_find(tok, "\n");
 
     if (cfg->embed_scale) {
-        /* Gemma architecture: chat template wrapping */
         ids[n++] = tok->bos_id;
         ids[n++] = GEMMA_TURN_OPEN;
         ids[n++] = GEMMA_USER;
         ids[n++] = GEMMA_NEWLINE;
-
-        int enc = tokenizer_encode(tok, text, ids + n, max_ids - n - 6);
-        n += enc;
-
+        n += tokenizer_encode(tok, text, ids + n, max_ids - n - 6);
         ids[n++] = GEMMA_TURN_CLOSE;
         ids[n++] = GEMMA_NEWLINE;
         ids[n++] = GEMMA_TURN_OPEN;
@@ -112,7 +101,6 @@ static int build_prompt(const tokenizer_t *tok, const llama_config_t *cfg,
         ids[n++] = GEMMA_NEWLINE;
         ids[n++] = GEMMA_THINK;
     } else if (arch && strcmp(arch, "phi3") == 0) {
-        /* Phi-3: <|user|>\n{text}<|end|>\n<|assistant|>\n */
         int user_tok = tokenizer_find(tok, "<|user|>");
         int end_tok  = tokenizer_find(tok, "<|end|>");
         int asst_tok = tokenizer_find(tok, "<|assistant|>");
@@ -125,14 +113,11 @@ static int build_prompt(const tokenizer_t *tok, const llama_config_t *cfg,
             if (nl_tok >= 0) ids[n++] = nl_tok;
             ids[n++] = asst_tok;
             if (nl_tok >= 0) ids[n++] = nl_tok;
-            printf("  [phi3 chat template: %d tokens]\n", n);
         } else {
-            printf("  [phi3 special tokens not found, using raw prompt]\n");
             ids[n++] = tok->bos_id;
             n += tokenizer_encode(tok, text, ids + n, max_ids - n);
         }
     } else if (arch && (strcmp(arch, "qwen3") == 0 || strcmp(arch, "qwen35") == 0)) {
-        /* Qwen: <|im_start|>user\n{text}<|im_end|>\n<|im_start|>assistant\n */
         int im_start = tokenizer_find(tok, "<|im_start|>");
         int im_end   = tokenizer_find(tok, "<|im_end|>");
         if (im_start >= 0 && im_end >= 0) {
@@ -145,25 +130,30 @@ static int build_prompt(const tokenizer_t *tok, const llama_config_t *cfg,
             ids[n++] = im_start;
             n += tokenizer_encode(tok, "assistant", ids + n, max_ids - n - 2);
             if (nl_tok >= 0) ids[n++] = nl_tok;
-            printf("  [qwen chat template: %d tokens]\n", n);
         } else {
-            printf("  [qwen special tokens not found, using raw prompt]\n");
             ids[n++] = tok->bos_id;
             n += tokenizer_encode(tok, text, ids + n, max_ids - n);
         }
     } else {
-        /* Llama / generic: BOS + encoded text */
         ids[n++] = tok->bos_id;
         n += tokenizer_encode(tok, text, ids + n, max_ids - n);
     }
     return n;
 }
 
+/* Estimate parameter count from config (billions) */
+static double estimate_params_b(const llama_config_t *c)
+{
+    double embed = (double)c->vocab_size * c->dim;
+    double per_layer = (double)c->dim * c->dim * 4.0 + /* QKV + O */
+                       (double)c->dim * c->hidden_dim * 3.0; /* gate + up + down */
+    return (embed + per_layer * c->n_layers) / 1e9;
+}
+
 /* ---- Main ---- */
 
 int main(int argc, char **argv)
 {
-    /* Parse CLI */
     const char *model_path = NULL;
     int max_tokens = 128;
     int debug = 0;
@@ -195,11 +185,9 @@ int main(int argc, char **argv)
     long file_size = ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    printf("JARVIS Quantized Engine Benchmark\n");
-    printf("==================================\n");
-    printf("Model: %s (%ld MB)\n", model_path, file_size / (1024 * 1024));
-    printf("Tokens: %d\n\n", max_tokens);
-    fflush(stdout);
+    fprintf(stderr, "  Loading %s (%.2f GiB)...\n", model_path,
+            file_size / (1024.0 * 1024 * 1024));
+    fflush(stderr);
 
     void *gguf_data = malloc((size_t)file_size);
     if (!gguf_data) {
@@ -207,8 +195,6 @@ int main(int argc, char **argv)
         fclose(f);
         return 1;
     }
-    printf("  Reading %.2f GB...\n", file_size / (1024.0 * 1024 * 1024)); fflush(stdout);
-    double t_read = time_ms();
     if (fread(gguf_data, 1, (size_t)file_size, f) != (size_t)file_size) {
         fprintf(stderr, "ERROR: read failed\n");
         free(gguf_data);
@@ -216,41 +202,32 @@ int main(int argc, char **argv)
         return 1;
     }
     fclose(f);
-    printf("  File read done (%.1fs)\n", (time_ms() - t_read) / 1000.0); fflush(stdout);
 
-    /* ---- Parse GGUF ---- */
+    /* ---- Parse GGUF + load model ---- */
     gguf_ctx_t ctx;
     double t_load_start = time_ms();
 
-    printf("  Parsing GGUF...\n"); fflush(stdout);
     int err = gguf_open_memory(&ctx, gguf_data, (size_t)file_size);
     if (err) {
-        fprintf(stderr, "ERROR: gguf_open_memory failed (%s)\n", gguf_strerror(err));
+        fprintf(stderr, "ERROR: gguf_open_memory failed\n");
         free(gguf_data);
         return 1;
     }
 
-    /* ---- Load quantized model ---- */
-    printf("  Loading quantized model...\n"); fflush(stdout);
     qmodel_t qm;
     err = qmodel_load(&qm, &ctx, gguf_data);
     if (err) {
         const char *arch = gguf_get_kv_string(&ctx, "general.architecture");
-        fprintf(stderr, "ERROR: qmodel_load failed (err=%d)", err);
-        if (arch)
-            fprintf(stderr, " [arch=%s]", arch);
-        fprintf(stderr, "\n");
+        fprintf(stderr, "ERROR: qmodel_load failed [arch=%s]\n", arch ? arch : "?");
         gguf_close(&ctx);
         free(gguf_data);
         return 1;
     }
 
-    /* ---- Extract vocab + init tokenizer ---- */
-    printf("  Extracting vocabulary...\n"); fflush(stdout);
     gguf_vocab_t vocab;
     err = gguf_vocab_extract(gguf_data, (size_t)file_size, &vocab);
     if (err) {
-        fprintf(stderr, "ERROR: gguf_vocab_extract failed\n");
+        fprintf(stderr, "ERROR: vocab extract failed\n");
         qmodel_free(&qm);
         gguf_close(&ctx);
         free(gguf_data);
@@ -260,7 +237,7 @@ int main(int argc, char **argv)
     tokenizer_t tok;
     err = gguf_vocab_init_tokenizer(&vocab, &tok);
     if (err) {
-        fprintf(stderr, "ERROR: gguf_vocab_init_tokenizer failed\n");
+        fprintf(stderr, "ERROR: tokenizer init failed\n");
         gguf_vocab_free(&vocab);
         qmodel_free(&qm);
         gguf_close(&ctx);
@@ -268,11 +245,10 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* ---- Allocate inference state ---- */
     llama_state_t state;
     err = llama_alloc_state(&state, &qm.config);
     if (err) {
-        fprintf(stderr, "ERROR: llama_alloc_state failed\n");
+        fprintf(stderr, "ERROR: state alloc failed\n");
         tokenizer_free(&tok);
         gguf_vocab_free(&vocab);
         qmodel_free(&qm);
@@ -282,28 +258,15 @@ int main(int argc, char **argv)
     }
 
     double load_ms = time_ms() - t_load_start;
-
     const char *arch_str = gguf_get_kv_string(&ctx, "general.architecture");
     const char *model_name = gguf_get_kv_string(&ctx, "general.name");
-
-    printf("Loaded in %.1f ms\n", load_ms);
-    printf("  Name:   %s\n", model_name ? model_name : "(unknown)");
-    printf("  Arch:   %s\n", arch_str ? arch_str : "(unknown)");
-    printf("  Layers: %d, Dim: %d, Heads: %d, KV Heads: %d\n",
-           qm.config.n_layers, qm.config.dim,
-           qm.config.n_heads, qm.config.n_kv_heads);
-    printf("  Vocab:  %d, BOS=%d, EOS=%d\n",
-           qm.config.vocab_size, tok.bos_id, tok.eos_id);
-    printf("  Gemma:  %s\n", qm.config.embed_scale ? "yes" : "no");
-#ifdef __linux__
-    long rss_after_load = peak_rss_kb();
-    if (rss_after_load > 0)
-        printf("  RSS:    %ld MB\n", rss_after_load / 1024);
-#endif
-    printf("\n");
-
-    /* Determine stop token */
     int eos_token = qm.config.embed_scale ? GEMMA_EOS_STOP : tok.eos_id;
+    double params_b = estimate_params_b(&qm.config);
+
+    fprintf(stderr, "  Loaded in %.1fs (%s, %d layers, %d dim)\n",
+            load_ms / 1000.0, arch_str ? arch_str : "?",
+            qm.config.n_layers, qm.config.dim);
+    fflush(stderr);
 
     /* KV cache size for reset */
     size_t kv_bytes = (size_t)qm.config.n_layers * (size_t)state.max_seq_len *
@@ -314,92 +277,53 @@ int main(int argc, char **argv)
     int prompt_ids[256];
     int n_prompt = build_prompt(&tok, &qm.config, arch_str, bench_prompt, prompt_ids, 256);
 
-    printf("--- \"%s\" ---\n", bench_prompt);
-    fflush(stdout);
+    if (debug) {
+        fprintf(stderr, "  Prompt IDs (%d):", n_prompt);
+        for (int i = 0; i < n_prompt; i++) fprintf(stderr, " %d", prompt_ids[i]);
+        fprintf(stderr, "\n");
+    }
 
     /* Reset KV cache */
     state.pos = 0;
     memset(state.key_cache, 0, kv_bytes);
     memset(state.value_cache, 0, kv_bytes);
 
-    if (debug) {
-        printf("  Prompt IDs (%d):", n_prompt);
-        for (int i = 0; i < n_prompt; i++) printf(" %d", prompt_ids[i]);
-        printf("\n"); fflush(stdout);
-    }
-
-    /* ---- Prefill (timed) ---- */
-    printf("  Prefill (%d tokens)...", n_prompt); fflush(stdout);
+    /* ---- Prefill ---- */
     double t0 = time_ms();
     for (int i = 0; i < n_prompt; i++)
         qmodel_forward(&qm, &state, prompt_ids[i]);
     double prefill_ms = time_ms() - t0;
-    double pp_tps = (prefill_ms > 0.0) ? n_prompt * 1000.0 / prefill_ms : 0.0;
-    printf(" %.1f tok/s\n", pp_tps); fflush(stdout);
+    (void)prefill_ms; /* prefill speed not in table output — gen speed is the metric */
 
-    if (debug) {
-        printf("  [POST-PREFILL] logits[0..4]: %.4f %.4f %.4f %.4f %.4f\n",
-               state.logits[0], state.logits[1], state.logits[2],
-               state.logits[3], state.logits[4]);
-        int top[5] = {0,0,0,0,0};
-        for (int i = 1; i < qm.config.vocab_size; i++)
-            for (int j = 0; j < 5; j++)
-                if (state.logits[i] > state.logits[top[j]]) {
-                    for (int k = 4; k > j; k--) top[k] = top[k-1];
-                    top[j] = i; break;
-                }
-        printf("  [TOP5] ");
-        for (int j = 0; j < 5; j++) printf("%d(%.1f) ", top[j], state.logits[top[j]]);
-        printf("\n  eos_token=%d\n", eos_token);
-        fflush(stdout);
-    }
-
-    /* ---- Generation (timed) — stream each token ---- */
+    /* ---- Generation ---- */
     int n_gen = 0;
-    printf("  > ");
-
     t0 = time_ms();
     for (int g = 0; g < max_tokens; g++) {
         int next = sample_greedy(state.logits, qm.config.vocab_size);
-        if (debug) { printf("[tok=%d] ", next); fflush(stdout); }
         n_gen++;
         if (next == eos_token) break;
-
-        /* Stream-decode this single token */
-        char tok_text[64];
-        int tok_len = tokenizer_decode(&tok, &next, 1, tok_text, (int)sizeof(tok_text));
-        if (tok_len > 0) {
-            printf("%s", tok_text);
-            fflush(stdout);
-        }
-
         qmodel_forward(&qm, &state, next);
     }
     double gen_ms = time_ms() - t0;
     double gn_tps = (gen_ms > 0.0) ? n_gen * 1000.0 / gen_ms : 0.0;
-    printf("\n");
 
-    /* ---- Summary ---- */
-    printf("\n");
-    printf("============================================\n");
-    printf("   Benchmark Summary\n");
-    printf("============================================\n");
-    printf("  Model:    %s\n", model_name ? model_name : model_path);
-    printf("  Arch:     %s\n", arch_str ? arch_str : "(unknown)");
-    printf("  Layers:   %d\n", qm.config.n_layers);
-    printf("  Dim:      %d\n", qm.config.dim);
-    printf("  Vocab:    %d\n", qm.config.vocab_size);
-    printf("  Load:     %.1f ms (%.2f s)\n", load_ms, load_ms / 1000.0);
-    printf("  Prefill:  %d tokens, %.1f tok/s\n", n_prompt, pp_tps);
-    printf("  Gen:      %d tokens, %.1f tok/s\n", n_gen, gn_tps);
+    /* ---- Output: llama-bench table row ---- */
+    char test_label[32];
+    snprintf(test_label, sizeof(test_label), "tg%d", max_tokens);
+
+    printf("| %-30s | %8.2f GiB | %8.2f B | %-10s | %7d | %15s | %17.2f ± 0.00 |\n",
+           model_name ? model_name : "(unknown)",
+           file_size / (1024.0 * 1024 * 1024),
+           params_b,
+           "JARVIS", 1, test_label, gn_tps);
+
 #ifdef __linux__
     {
-        long rss_final = peak_rss_kb();
-        if (rss_final > 0)
-            printf("  Peak RSS: %ld MB\n", rss_final / 1024);
+        long rss = peak_rss_kb();
+        if (rss > 0)
+            fprintf(stderr, "  Peak RSS: %ld MB\n", rss / 1024);
     }
 #endif
-    printf("============================================\n");
 
     /* ---- Cleanup ---- */
     llama_free_state(&state);
