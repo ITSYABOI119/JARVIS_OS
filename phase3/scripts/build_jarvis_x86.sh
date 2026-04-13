@@ -145,6 +145,7 @@ AI_FILES=(
     "llama_forward.c"
     "inference.c"         "inference.h"
     "gguf_vocab.c"        "gguf_vocab.h"
+    "ssm.c"               "ssm.h"
 )
 
 for f in "${AI_FILES[@]}"; do
