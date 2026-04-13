@@ -140,6 +140,10 @@ int nvme_read_sectors(nvme_controller_t *ctrl,
                       uint64_t lba, uint32_t count,
                       void *buf, uint64_t buf_phys);
 
+int nvme_write_sectors(nvme_controller_t *ctrl,
+                       uint64_t lba, uint32_t count,
+                       const void *buf, uint64_t buf_phys);
+
 int nvme_get_info(nvme_controller_t *ctrl,
                   uint64_t *total_lbas, uint32_t *block_size);
 

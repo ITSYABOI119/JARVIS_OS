@@ -195,6 +195,8 @@ copy_file "$DRV_SRC/pci.c" "$DRV_DST/pci.c"
 copy_file "$DRV_SRC/pci.h" "$DRV_DST/pci.h"
 copy_file "$DRV_SRC/nvme.c" "$DRV_DST/nvme.c"
 copy_file "$DRV_SRC/nvme.h" "$DRV_DST/nvme.h"
+copy_file "$DRV_SRC/nvme_log.c" "$DRV_DST/nvme_log.c"
+copy_file "$DRV_SRC/nvme_log.h" "$DRV_DST/nvme_log.h"
 copy_file "$DRV_SRC/fat32.c" "$DRV_DST/fat32.c"
 copy_file "$DRV_SRC/fat32.h" "$DRV_DST/fat32.h"
 
@@ -271,9 +273,22 @@ if [ -f "$CMAKE_FILE" ]; then
         echo -e "  ${CYAN}OK${NC}  src/drivers/nvme.c already in source list"
     fi
 
+    # Add src/drivers/nvme_log.c to source list if missing
+    if ! grep -q "src/drivers/nvme_log.c" "$CMAKE_FILE"; then
+        sed -i '/src\/drivers\/nvme.c/a\    src/drivers/nvme_log.c' "$CMAKE_FILE" 2>/dev/null
+        if grep -q "src/drivers/nvme_log.c" "$CMAKE_FILE"; then
+            echo -e "  ${GREEN}ADDED${NC}  src/drivers/nvme_log.c to source list"
+            PATCHED=1
+        else
+            echo -e "  ${RED}FAILED${NC}  Could not add nvme_log.c — edit CMakeLists.txt manually"
+        fi
+    else
+        echo -e "  ${CYAN}OK${NC}  src/drivers/nvme_log.c already in source list"
+    fi
+
     # Add src/drivers/fat32.c to source list if missing
     if ! grep -q "src/drivers/fat32.c" "$CMAKE_FILE"; then
-        sed -i '/src\/drivers\/nvme.c/a\    src/drivers/fat32.c' "$CMAKE_FILE" 2>/dev/null
+        sed -i '/src\/drivers\/nvme_log.c/a\    src/drivers/fat32.c' "$CMAKE_FILE" 2>/dev/null
         if grep -q "src/drivers/fat32.c" "$CMAKE_FILE"; then
             echo -e "  ${GREEN}ADDED${NC}  src/drivers/fat32.c to source list"
             PATCHED=1

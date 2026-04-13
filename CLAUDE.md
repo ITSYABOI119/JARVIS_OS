@@ -399,6 +399,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | **Gated DeltaNet SSM implementation (ssm.c/h, ~1200 LOC, 7 unit tests)** | **DONE** |
 | **Qwen3.5 4B + 9B hybrid SSM — loads and generates** | **DONE** |
 | Zero-embedding forward for invalid tokens (SSM temporal continuity) | DONE |
+| NVMe write logging (raw sector telemetry) | DONE |
 
 **Next:** Suppress verbose model-loader prints, wire dynamic scaling, TurboQuant/RotorQuant evaluation.
 
@@ -684,6 +685,8 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
   - `JARVIS_DBG_INFER_SUMMARY` — Per-inference summary line (default: ON)
   - Defaults for stability test: STATS + INFER_SUMMARY on, everything else off
 - **NVMe Driver:** `phase3/src/drivers/nvme.c/h`
+- **NVMe Log:** `phase3/src/drivers/nvme_log.c/h` — raw sector logging for bare-metal telemetry
+- **NVMe Log Parser:** `phase3/scripts/parse_nvme_log.py` — extract + format log from raw device
 - **FAT32 Parser:** `phase3/src/drivers/fat32.c/h`
 - **Fuzz Harness:** `phase3/src/drivers/fuzz_harness.c`
 - **Security Audit (Apr 2026):** `phase3/docs/SECURITY_AUDIT_2026-04-06.md`

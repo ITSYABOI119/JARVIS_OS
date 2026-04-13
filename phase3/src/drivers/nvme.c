@@ -432,6 +432,66 @@ int nvme_read_sectors(nvme_controller_t *ctrl,
 }
 
 /* ========================================================================
+ * Sector Write
+ * ======================================================================== */
+
+/**
+ * nvme_write_sectors - Write sectors to NVMe namespace
+ * @ctrl:     Controller state (must be initialized)
+ * @lba:      Starting LBA
+ * @count:    Number of sectors to write
+ * @buf:      Input buffer (data to write)
+ * @buf_phys: Physical address of input buffer
+ *
+ * Identical to nvme_read_sectors except issues NVME_IO_WRITE (opcode 0x01)
+ * instead of NVME_IO_READ (opcode 0x02). Limited to 2 pages (8KB) per command.
+ *
+ * Returns 0 on success, negative on error.
+ */
+int nvme_write_sectors(nvme_controller_t *ctrl,
+                       uint64_t lba, uint32_t count,
+                       const void *buf, uint64_t buf_phys)
+{
+    nvme_sq_entry_t cmd;
+    uint32_t max_sectors;
+    uint32_t byte_len;
+
+    if (!ctrl || !ctrl->initialized || !buf)
+        return -1;
+    if (count == 0)
+        return -1;
+
+    /* SEC-031: Validate block_size before arithmetic to prevent div-by-zero */
+    if (ctrl->ns_block_size == 0)
+        return -1;
+
+    /* Limit: max 8KB (2 pages) per command */
+    max_sectors = 8192 / ctrl->ns_block_size;
+    if (count > max_sectors)
+        return -1;
+
+    byte_len = count * ctrl->ns_block_size;
+
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.opcode = NVME_IO_WRITE;
+    cmd.nsid   = ctrl->ns_id;
+    cmd.prp1   = buf_phys;
+
+    /* If transfer > 4096 bytes, set PRP2 for the second page */
+    if (byte_len > 4096)
+        cmd.prp2 = buf_phys + 4096;
+
+    /* CDW10/11 = starting LBA (64-bit) */
+    cmd.cdw10 = (uint32_t)(lba & 0xFFFFFFFF);
+    cmd.cdw11 = (uint32_t)(lba >> 32);
+
+    /* CDW12 = number of logical blocks (0-based) */
+    cmd.cdw12 = count - 1;
+
+    return nvme_submit_and_wait(ctrl, &ctrl->io, &cmd);
+}
+
+/* ========================================================================
  * Info Getter
  * ======================================================================== */
 
