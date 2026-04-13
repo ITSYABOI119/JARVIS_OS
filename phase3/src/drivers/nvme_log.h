@@ -15,12 +15,13 @@
 #include "nvme.h"
 #include <stdint.h>
 
-/* Log region starts past all FAT32 partitions on the NVMe.
- * VERIFY on JARVIS PC: sudo fdisk -l /dev/nvme0n1
- * The Lexar NM790 1TB has ~1.95 billion sectors.
- * 0x40000000 = 1,073,741,824 = ~512GB offset (safe for 1TB drive). */
-#define NVME_LOG_BASE_LBA    0x40000000ULL
-#define NVME_LOG_MAX_ENTRIES  524288   /* 256 MB at 512 bytes/entry */
+/* Log region starts past all partitions on the NVMe.
+ * JARVIS PC (Lexar NM790 1TB): p4 ESP ends at sector 4000794623.
+ * Start at 4000794624 (next sector after last partition).
+ * 2700 sectors = header + 2699 entries (~1.3 MB, well within
+ * the ~172K unpartitioned sectors at end of disk). */
+#define NVME_LOG_BASE_LBA    4000794624ULL
+#define NVME_LOG_MAX_ENTRIES  2700
 #define NVME_LOG_MAGIC        0x4A524C47  /* "JRLG" */
 #define NVME_LOG_VERSION      1
 
