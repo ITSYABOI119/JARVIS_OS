@@ -16,7 +16,7 @@ Guidance for Claude Code when working with this repository.
 | **Phase 3** | **IN PROGRESS** | Months 24-36 | Beta on x86-64 bare metal (**LLM inference on seL4 VERIFIED**) |
 | Phase 4 | Future | Months 36+ | Production v1.0 |
 
-**Current:** Phase 3c, Active Development (April 13, 2026). **MILESTONE: JARVIS engine bench-off COMPLETE — 11/11 models load and generate across 5 architectures (Llama, Gemma 4, Phi-3, Qwen3, Qwen3.5 DeltaNet SSM).** Gemma 4 E2B (#1 quality, 8.40/10) validated on seL4 QEMU. Fused QKV/gate-up support unlocked Phi-3. Gated DeltaNet SSM (~1200 LOC) unlocked Qwen3.5 hybrid architecture. JARVIS engine speed: 0.17-1.25 tok/s single-threaded (28-44x gap to llama.cpp 8-thread, fixable with pthread + fused SIMD). Phase 3b complete (bare-metal boot, NVMe model loading, IPC workload, I211 NIC). Phase 3c hardening done (fuzz testing, security audit 25 findings). Next: suppress verbose model-loader prints, wire dynamic scaling, TurboQuant/RotorQuant evaluation. Two-PC setup: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/32GB/1TB NVMe) running bare-metal seL4.
+**Current:** Phase 3c, Active Development (April 13, 2026). **MILESTONE: JARVIS engine bench-off COMPLETE — 11/11 models load and generate across 6 model families (Llama, Gemma 4, Phi-3, Mistral, Qwen3, Qwen3.5 DeltaNet SSM).** Gemma 4 E2B (#1 quality, 8.40/10) validated on seL4 QEMU. Fused QKV/gate-up support unlocked Phi-3. Gated DeltaNet SSM (~1200 LOC) unlocked Qwen3.5 hybrid architecture. JARVIS engine speed: 0.17-1.25 tok/s single-threaded (28-44x gap to llama.cpp 8-thread, fixable with pthread + fused SIMD). Phase 3b complete (bare-metal boot, NVMe model loading, IPC workload, I211 NIC). Phase 3c hardening done (fuzz testing, security audit 25 findings). Next: suppress verbose model-loader prints, wire dynamic scaling, TurboQuant/RotorQuant evaluation. Two-PC setup: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/32GB/1TB NVMe) running bare-metal seL4.
 
 ---
 
@@ -392,12 +392,12 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | **Gemma 4 E2B validated: main PC native test — coherent English** | **DONE** |
 | **Gemma 4 E2B validated: JARVIS PC seL4 QEMU Process B (4/4 queries coherent)** | **DONE** |
 | **JARVIS engine bench harness (bench_engine.c, llama-bench table format)** | **DONE** |
-| **JARVIS engine bench: 11/11 models load, 5 architectures supported** | **DONE** |
+| **JARVIS engine bench: 11/11 models load, 6 model families supported** | **DONE** |
 | Fused QKV + fused gate-up tensor support (Phi-3) | DONE |
 | Phi-3 + Qwen3 chat template wrapping in bench_engine | DONE |
 | Partial RoPE support (Qwen3.5: 64 of 256 dims) | DONE |
 | **Gated DeltaNet SSM implementation (ssm.c/h, ~1200 LOC, 7 unit tests)** | **DONE** |
-| **Qwen3.5 4B + 9B hybrid SSM — loads and generates (DeltaNet math needs tuning)** | **DONE** |
+| **Qwen3.5 4B + 9B hybrid SSM — loads and generates** | **DONE** |
 | Zero-embedding forward for invalid tokens (SSM temporal continuity) | DONE |
 
 **Next:** Suppress verbose model-loader prints, wire dynamic scaling, TurboQuant/RotorQuant evaluation.
@@ -476,7 +476,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | AI inference | <500ms | 558ms CPU Phi-3, <100ms Llama 3.2 1B (host PC benchmarks, no log artifact) |
 | JARVIS engine (quantized, 1T) | — | Llama 1B: 1.0, Gemma 4 E2B: 0.6, Mistral 7B: 0.2 tok/s |
 | llama.cpp reference (8T) | — | Llama 1B: 40.4, Gemma 4 E2B: 19.7, Mistral 7B: 5.5 tok/s |
-| Models supported | — | 11/11 load, 5 architectures (Llama, Gemma 4, Phi-3, Qwen3, Qwen3.5 SSM) |
+| Models supported | — | 11/11 load, 6 model families (Llama, Gemma 4, Phi-3, Mistral, Qwen3, Qwen3.5 DeltaNet SSM) |
 | Boot time | <60s | ~2s |
 | SHIELD block rate | >90% | 100% harmful blocked, 0% FP (keyword + model-assisted) |
 | Multi-agent routing | >90% | 100% |
@@ -694,7 +694,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
   - `phase3/scripts/bench_speed_windows.ps1` — Windows speed bench (CPU + GPU modes)
   - `phase3/scripts/bench_perplexity_windows.ps1` — Windows perplexity bench (GPU, full WikiText-2)
 - **Bench Results:** `models/bench_results/bench_results.txt` (JARVIS PC speed), `models/bench_results/bench_results_mainpc.txt` (5600 CPU), `models/bench_results/bench_results_mainpc_gpu.txt` (5600 + RTX 2070)
-- **Engine Bench Results:** `models/bench_results/jarvis_engine_bench.txt` (JARVIS engine, 11/11 models, quantized path, 5 architectures)
+- **Engine Bench Results:** `models/bench_results/jarvis_engine_bench.txt` (JARVIS engine, 11/11 models, quantized path, 6 model families)
 - **Perplexity Results:** `models/bench_results/perplexity_results.txt`
 - **Quality Results:** `models/quality_results/ALL_RESPONSES.txt` (11 models × 10 prompts, Claude-judged)
 - **Judge Consensus:** `models/quality_results/JUDGE_CONSENSUS.txt` (5-agent blind consensus)
@@ -717,10 +717,10 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 
 - **Phase 1:** 39,106 LOC, 95 files, 338 test functions (COMPLETE)
 - **Phase 2:** ~27,000 LOC, 65 files, 108 tests (COMPLETE)
-- **Phase 3:** ~22,000 LOC, 85+ files, 378+ tests (IN PROGRESS — **11/11 models, 5 architectures, DeltaNet SSM**)
+- **Phase 3:** ~22,000 LOC, 85+ files, 378+ tests (IN PROGRESS — **11/11 models, 6 model families, DeltaNet SSM**)
 - **Total:** ~88,000+ LOC, 200+ files, 630+ tests
 - **Security:** 26/26 adversarial audit findings resolved (March 2026). SHIELD module: keyword + model-assisted risk scoring.
-- **Inference:** 11 GGUF models across 5 architectures on JARVIS engine. Gemma 4 E2B (8.40/10 quality) on seL4 QEMU. Qwen3.5 DeltaNet SSM hybrid working. 0.17-1.25 tok/s single-threaded.
+- **Inference:** 11 GGUF models across 6 model families on JARVIS engine. Gemma 4 E2B (8.40/10 quality) on seL4 QEMU. Qwen3.5 DeltaNet SSM hybrid working. 0.17-1.25 tok/s single-threaded.
 
 ### Hardware Setup
 
@@ -735,7 +735,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 ### Technology Stack
 
 - **Microkernel:** seL4 (formally verified) on ARM64 + x86-64
-- **AI Models:** 11 GGUF models across 5 architectures — Llama, Gemma 4 (PLE/SWA/KV-sharing), Phi-3 (fused QKV), Qwen3 (QK norms), Qwen3.5 (DeltaNet SSM hybrid)
+- **AI Models:** 11 GGUF models across 6 model families — Llama, Gemma 4 (PLE/SWA/KV-sharing), Phi-3 (fused QKV), Mistral (Q8_0), Qwen3 (QK norms), Qwen3.5 (DeltaNet SSM hybrid)
 - **Inference:** Quantized zero-copy (Q4_0/Q4_K/Q5_K/Q6_K/Q8_0/BF16 dequant on-the-fly, ~50MB heap). Gated DeltaNet SSM for Qwen3.5 hybrid layers.
 - **Build:** TII seL4 build system + CMake/Ninja
 - **Cross-compiler:** aarch64-linux-gnu-gcc 13.3.0 (ARM64), gcc 13.3.0 (x86-64)
