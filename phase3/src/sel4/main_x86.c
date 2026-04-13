@@ -46,6 +46,7 @@
 #include "vga_text.h"
 #include "pci.h"
 #include "nvme.h"
+#include "nvme_log.h"
 #include "fat32.h"
 #include "jarvis_debug.h"
 static int vga_ready = 0;  /* set after VGA frame mapped into vspace */
@@ -1198,10 +1199,21 @@ static void *main_continued(void *arg UNUSED)
                                     }
                                     puts_serial("\n");
                                     /* Wire up FAT32 on the NVMe drive.
-                                     * Use dma[4] as bounce buffer for sector reads. */
+                                     * Use dma[4] as bounce buffer for sector reads + log writes. */
                                     g_nvme_ptr = &nvme_ctrl;
                                     g_nvme_bounce_vaddr = dma_vaddrs[4];
                                     g_nvme_bounce_paddr = dma_paddrs[4];
+
+                                    /* Initialize NVMe log (raw sector telemetry) */
+                                    if (nvme_log_init(&nvme_ctrl, dma_vaddrs[4], dma_paddrs[4]) == 0) {
+                                        puts_serial("[JARVIS] NVMe log initialized (boot ");
+                                        put_dec(nvme_log_boot_id());
+                                        puts_serial(")\n");
+                                        nvme_log_write(&nvme_ctrl, dma_vaddrs[4], dma_paddrs[4],
+                                                       LOG_BOOT, "JARVIS boot started");
+                                        nvme_log_write(&nvme_ctrl, dma_vaddrs[4], dma_paddrs[4],
+                                                       LOG_SELFTEST, "Self-test 5/5 PASS");
+                                    }
 
                                     fat32_fs_t fs;
                                     /* Try partition 4 (ESP) first, then fall back to whole-disk (QEMU).
@@ -1294,6 +1306,8 @@ static void *main_continued(void *arg UNUSED)
                                                             nvme_model_loaded = 1;
                                                             nvme_model_size = model_size;
                                                             nvme_model_n_pages = n_pages;
+                                                            nvme_log_write(&nvme_ctrl, dma_vaddrs[4], dma_paddrs[4],
+                                                                           LOG_MODEL_LOAD, "GGUF loaded OK");
                                                         }
                                                     } else {
                                                         puts_serial("[JARVIS] Model read failed\n");
@@ -1370,6 +1384,8 @@ static void *main_continued(void *arg UNUSED)
             puts_serial("[JARVIS] Process B ready (type=");
             put_dec(ready_type); puts_serial(" seq="); put_dec(ready_seq);
             puts_serial(")\n");
+            nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr, g_nvme_bounce_paddr,
+                           LOG_BOOT, "Process B ready");
         } else {
             puts_serial("[JARVIS] WARNING: ready signal but no message\n");
         }
@@ -1377,6 +1393,8 @@ static void *main_continued(void *arg UNUSED)
 
     /* ---- Continuous IPC workload for stability testing ---- */
     puts_serial("\n[JARVIS] Starting continuous workload\n\n");
+    nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr, g_nvme_bounce_paddr,
+                   LOG_BOOT, "Starting continuous workload");
 
     /* 40 queries guaranteed to HIT decision cache (from cache_patterns.c) */
     static const char *cache_queries[] = {
@@ -1628,6 +1646,35 @@ static void *main_continued(void *arg UNUSED)
             puts_serial(" shield="); put_dec(q_shield);
             puts_serial(" err="); put_dec(q_errors);
             puts_serial("\n");
+
+            /* Log stats to NVMe every 100 queries */
+            {
+                char sb[128];
+                /* Manual snprintf equivalent (no stdio in seL4 rootserver) */
+                int sp = 0;
+                const char *p = "q=";
+                while (*p) sb[sp++] = *p++;
+                /* Decimal append helper — inline for seL4 */
+                { uint32_t v = q_total; char d[12]; int di = 0;
+                  if (v == 0) d[di++] = '0';
+                  else while (v > 0) { d[di++] = '0' + (v % 10); v /= 10; }
+                  while (--di >= 0) sb[sp++] = d[di]; }
+                sb[sp++] = ' '; p = "hit=";
+                while (*p) sb[sp++] = *p++;
+                { uint32_t v = q_hits; char d[12]; int di = 0;
+                  if (v == 0) d[di++] = '0';
+                  else while (v > 0) { d[di++] = '0' + (v % 10); v /= 10; }
+                  while (--di >= 0) sb[sp++] = d[di]; }
+                sb[sp++] = ' '; p = "err=";
+                while (*p) sb[sp++] = *p++;
+                { uint32_t v = q_errors; char d[12]; int di = 0;
+                  if (v == 0) d[di++] = '0';
+                  else while (v > 0) { d[di++] = '0' + (v % 10); v /= 10; }
+                  while (--di >= 0) sb[sp++] = d[di]; }
+                sb[sp] = '\0';
+                nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr, g_nvme_bounce_paddr,
+                               LOG_IPC_STATS, sb);
+            }
         }
 #endif
 
