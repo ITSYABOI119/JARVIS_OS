@@ -146,7 +146,8 @@ All responses are technically accurate and correctly formatted with markdown.
 | TurboQuant/RotorQuant evaluation | MEDIUM | 2-3 sessions | RotorQuant discovered — O(d) vs O(d^2), 28% faster decode |
 | Asymmetric K/V (Q8-K + TQ-V) | MEDIUM | ~460 LOC | After TQ/RQ evaluation |
 | Wire dynamic model scaling | MEDIUM | 2-3 sessions | Hot-swap from NVMe, state machine |
-| Perf: pthread matmul + AVX2 fused dequant-dot | MEDIUM | ~2 weeks | Target 5-20 tok/s CPU (from 0.3) |
+| **Perf: fused dequant-dot + SIMD attention** | **HIGH** | **~570 LOC, 1-2 weeks** | **Target 4-5 tok/s Llama 1B single-threaded (from 1.0). Spec: `docs/superpowers/specs/2026-04-13-perf-fused-dequant-dot-design.md`** |
+| Perf: pthread thread pool (Phase 3d/4) | LOW | TBD | Target 15-25 tok/s with 4-8 seL4 TCB workers. Deferred — needs seL4 threading infra |
 | **NVMe write logging** | **MEDIUM** | **~100 LOC** | **Raw sector log for 30-day test telemetry** |
 | Enhanced SHIELD | LOW | 2 weeks | Model-assisted risk scoring |
 | 30-day stability test on x86 | LOW | 30 days | Continuous workload, NVMe log capture |
@@ -644,11 +645,13 @@ While waiting for the JARVIS Project PC, the majority of Phase 3b implementation
 | 3c Gemma 4 engine work | **DONE** | Apr 11, 17 fixes, 4/4 queries on seL4 QEMU |
 | 3c architecture expansion (5 archs) | **DONE** | Apr 12, fused QKV + DeltaNet SSM + partial RoPE |
 | 3c engine bench (11/11 models) | **DONE** | Apr 12, bench_engine.c, 5 architectures |
-| 3c TurboQuant/RotorQuant eval | PENDING | RotorQuant discovered as alternative |
+| 3c NVMe write logging | **DONE** | Apr 13, raw sector telemetry for 30-day test |
+| **3c perf: fused dequant-dot + SIMD attn** | **NEXT** | **Target 4-5 tok/s Llama 1B (from 1.0). ~570 LOC, qdot.c/h** |
+| 3c TurboQuant/RotorQuant eval | PENDING | RotorQuant discovered as alternative (moved to Week 35b) |
 | 3c dynamic scaling | PENDING | Wire model hot-swap + state machine |
 | 3c finalization | PENDING | Final report, v0.3.0-beta |
 
-**Estimated remaining to v0.3.0-beta:** ~4-6 weeks (TQ/RQ eval + scaling + stability + report)
+**Estimated remaining to v0.3.0-beta:** ~5-7 weeks (perf + TQ/RQ eval + scaling + stability + report)
 
 ---
 
@@ -1620,30 +1623,136 @@ bare metal (write during self-test, recover from Ubuntu with `dd`).
 
 ---
 
-### Week 35: TurboQuant Implementation — Asymmetric K/V
+### Week 35: Single-Threaded Performance Optimization — Fused Dequant-Dot + SIMD Attention
+
+> **Design spec:** `docs/superpowers/specs/2026-04-13-perf-fused-dequant-dot-design.md`
+
+**Objective:** Llama 1B Q4_K_M: 1.0 tok/s -> 4-5 tok/s single-threaded on Ryzen 2700X.
+The "usable" threshold — 50-token response in 10 seconds. All work in `phase3/src/ai/`,
+no seL4 kernel changes, no threading.
+
+**Root cause of 40x gap vs llama.cpp:** `qmatmul_vec` dequantizes each block into a
+`float tmp[256]` stack buffer, then AVX2-dots the buffer. This means 3x memory traffic
+per block (read quantized -> write F32 tmp -> read F32 tmp), scalar nibble unpacking,
+and per-block function call overhead. Compute utilization is 3.9% of single-core peak.
+
+**Part 1: Fused Dequant-Dot Kernels (~305 LOC)**
+
+New files: `qdot.c/h` — type-specific AVX2 functions that unpack quantized data directly
+into SIMD registers, multiply by scale, and FMA with the F32 activation vector. No
+intermediate buffer. One call per row.
+
+| Kernel | Type | LOC | Models | Priority |
+|--------|------|-----|--------|----------|
+| `qdot_q4_k` | Q4_K (144B/256val) | ~55 | All Q4_K_M (wq, wk, wo, gate, up) | P0 |
+| `qdot_q6_k` | Q6_K (210B/256val) | ~65 | All models (wv, w_down, embed, output) | P0 |
+| `qdot_q8_0` | Q8_0 (34B/32val) | ~25 | Mistral 7B | P1 |
+| `qdot_q5_k` | Q5_K (176B/256val) | ~55 | Phi-3, Qwen3.5 | P1 |
+| `qdot_q4_0` | Q4_0 (18B/32val) | ~25 | TinyLlama | P2 |
+| `qdot_bf16` | BF16 (2B/val) | ~20 | Gemma 4 PLE | P2 |
+| `qdot_f16` | F16 (2B/val) | ~20 | Rare norm weights | P2 |
+| Dispatch + scalar fallback | — | ~40 | CI (no AVX2) | P0 |
+
+**AVX2 strategy for Q4_K (most common type):**
+```
+Per block (256 values, 144 bytes):
+  f16_to_f32(d, dmin), unpack scales[12] -> sc[8], mn[8]
+  For 4 groups of 64 values:
+    For k=0,8,16,24:
+      _mm_loadl_epi64: 8 bytes from qs[]
+      _mm256_cvtepu8_epi32: zero-extend to 8 x int32
+      mask 0x0F / _mm256_srli_epi32(..., 4): split lower/upper nibbles
+      _mm256_cvtepi32_ps + _mm256_fmsub_ps: scale to F32
+      _mm256_fmadd_ps: accumulate dot product with x[]
+```
+
+32 FMA operations per block, all in registers. Current path: ~850 cycles/block -> fused: ~200 cycles/block.
+
+**Part 2: Wire into qmatmul_vec (~30 LOC change)**
+
+Replace inner loop of `llama_quant.c:qmatmul_vec()`:
+```c
+// Before: per-block dequant + dot
+for (int b = 0; b < n_blocks; b++) { dequant_row(...); dot += avx2_dot(tmp, x); }
+
+// After: single call per row
+for (int i = 0; i < M; i++)
+    out[i] = qdot_row(wdata + i * row_bytes, x, K, wtype);
+```
+
+Existing `dequant.c` and `dequant_row()` are preserved — used by `qembed_lookup()` and tests.
+
+**Part 3: SIMD Attention (~80 LOC)**
+
+Replace scalar QK dot and V accumulation in `qmodel_forward` attention block:
+- `simd_dot_f32()`: reusable AVX2 dot with 4-accumulator unroll (~25 LOC)
+- QK scoring: `score = simd_dot_f32(q_head, k_t, l_head_dim)` (~5 LOC change)
+- V accumulation: broadcast weight, AVX2 FMA loop (~25 LOC)
+
+**Part 4: RoPE Table Precompute (~60 LOC)**
+
+Pre-compute cos/sin per position at first use, reuse across all layers and heads.
+Eliminates ~61K powf/cosf/sinf calls per token (Llama 1B). Small absolute gain (~2%)
+but removes variable cost scaling with model size. Dual-table for Gemma 4 SWA/global theta.
+
+**Expected Results:**
+
+| Stage | Optimization | Factor | Llama 1B tok/s | Gemma 4 E2B tok/s |
+|-------|-------------|--------|----------------|-------------------|
+| Baseline | Current | 1.0x | 0.99 | 0.59 |
+| Part 1+2 | Fused dequant-dot | 3.0-4.0x | 3.0-4.0 | 1.8-2.4 |
+| Part 3 | + SIMD attention | 1.1-1.2x | 3.3-4.8 | 2.0-2.9 |
+| Part 4 | + RoPE table | 1.02x | 3.4-4.9 | 2.0-3.0 |
+| **Final** | **All** | **3.5-5.0x** | **3.5-5.0** | **2.0-3.0** |
+
+**Testing:**
+- New `test_qdot.c`: 1000 random blocks per kernel, compare fused vs `dequant_row()+dot` reference, tolerance `|delta| < 1e-4 * |ref| + 1e-7`
+- Per-commit bench: `bench_engine --tokens 128` on Llama 1B, Gemma 4 E2B, Mistral 7B
+- Record tok/s delta in every commit message
+- Verify generation output matches (greedy decode should produce same tokens)
+- CI step: `test_qdot` compiled WITHOUT `-mavx2` (scalar fallback path)
+
+**Commit strategy (10 commits):**
+1. `bench: baseline tok/s before perf work` — record starting point
+2. `feat: fused Q4_K qdot` — AVX2 kernel + unit test
+3. `feat: fused Q6_K qdot` — second P0 kernel
+4. `feat: wire qdot into qmatmul_vec` — **big jump** (all models benefit)
+5. `feat: fused Q8_0 + Q4_0 + Q5_K qdot` — remaining quant types
+6. `feat: fused BF16/F16 qdot` — Gemma 4 PLE path
+7. `feat: SIMD attention QK dot + V accumulation`
+8. `feat: RoPE cos/sin precompute table`
+9. `docs: update CLAUDE.md + plan with perf results`
+10. `ci: add test_qdot to workflow`
+
+**Effort:** 1-2 weeks (~570 LOC new code, ~30 LOC changes)
+**Dependencies:** None — all work in Process B inference code
+**Acceptance:** Llama 1B >= 4.0 tok/s on JARVIS PC, all 11 models still produce coherent output, CI green
+
+**Risks:**
+- Q4_K/Q6_K nibble interleaving bugs (mitigated by unit tests before wiring in)
+- Performance below target (backup: Q8 activation quantization for additional 2x)
+- Gemma 4 PLE regression (mitigated by per-commit bench on Gemma 4 E2B)
+
+---
+
+### Week 35b: TurboQuant Evaluation + Asymmetric K/V (moved from Week 34-35)
+
+> **Note:** Moved from original Week 34-35 to prioritize single-threaded perf work.
+> TQ/RQ evaluation is independent and can proceed after perf optimization.
 
 **Tasks:**
-1. Implement asymmetric K/V compression (§12 of TURBOQUANT_EVALUATION.md)
-   - Q8_0 for K cache (preserve precision for dot products)
-   - TurboQuant 3-4 bit for V cache (softmax-averaged, tolerates compression)
-   - Boundary-layer protection (first/last 2 layers uncompressed)
-   - ~460 LOC estimated (§12.4)
+1. Deep-dive TurboQuant+ / RotorQuant comparison
+   - RotorQuant: O(d) block-diagonal rotations, 28% faster decode, llama.cpp branch
+   - TurboQuant+: PolarQuant + Walsh-Hadamard, O(d log d)
+   - Decision: which approach for asymmetric K/V compression
 
-2. Test against 3B and 8B models (d=128, TQ-viable)
-   - Three configurations: F32 KV (baseline), symmetric TQ, asymmetric Q8-K + TQ-V
-   - Same prompt set as Week 33 baseline
-   - Measure: quality match %, KV memory savings, tok/s impact
-
-3. If asymmetric recovers d=64 quality: re-test with 1B (would unlock TQ for IDLE tier)
-
-**Deliverables:**
-- Asymmetric K/V working on d=128 models
-- Three-way comparison (F32 vs symmetric vs asymmetric)
-- Decision: which TQ config ships in the dynamic scaling system
+2. If pursuing: implement asymmetric K/V (Q8-K + TQ/RQ-V, ~460 LOC)
+   - Test against 3B and 8B models
+   - Measure quality match %, KV memory savings, tok/s impact
 
 **Effort:** 2-3 sessions
-**Dependencies:** Week 34 TQ evaluation complete
-**Acceptance:** Asymmetric TQ on 3B achieves >80% generation match with >4x KV compression
+**Dependencies:** Week 35 perf optimization complete (need stable tok/s baseline)
+**Acceptance:** Clear decision on TQ/RQ approach with evidence
 
 ---
 
@@ -1657,7 +1766,7 @@ bare metal (write during self-test, recover from Ubuntu with `dd`).
    - Transitions driven by query rate, error rate, and SHIELD risk score
 
 2. Optionally integrate TQ compression into ACTIVE/CRITICAL tiers
-   - If Week 35 TQ results are positive: enable TQ for 3B and 8B KV cache
+   - If Week 35b TQ results are positive: enable TQ for 3B and 8B KV cache
    - If negative: ship with F32 KV, TQ deferred to Phase 4
 
 3. Test model scaling end-to-end
@@ -1671,7 +1780,7 @@ bare metal (write during self-test, recover from Ubuntu with `dd`).
 - Optional TQ compression integrated
 
 **Effort:** 2-3 sessions
-**Dependencies:** Week 33 baseline + Week 35 TQ results (if pursuing TQ)
+**Dependencies:** Week 33 baseline + Week 35b TQ results (if pursuing TQ)
 **Acceptance:** All 4 states functional, smooth transitions, no crashes during swap
 
 ---
