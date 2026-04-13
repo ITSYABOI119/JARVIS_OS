@@ -147,8 +147,9 @@ All responses are technically accurate and correctly formatted with markdown.
 | Asymmetric K/V (Q8-K + TQ-V) | MEDIUM | ~460 LOC | After TQ/RQ evaluation |
 | Wire dynamic model scaling | MEDIUM | 2-3 sessions | Hot-swap from NVMe, state machine |
 | Perf: pthread matmul + AVX2 fused dequant-dot | MEDIUM | ~2 weeks | Target 5-20 tok/s CPU (from 0.3) |
+| **NVMe write logging** | **MEDIUM** | **~100 LOC** | **Raw sector log for 30-day test telemetry** |
 | Enhanced SHIELD | LOW | 2 weeks | Model-assisted risk scoring |
-| 30-day stability test on x86 | LOW | 30 days | Continuous workload, bare metal |
+| 30-day stability test on x86 | LOW | 30 days | Continuous workload, NVMe log capture |
 | Final report + v0.3.0-beta tag | LAST | 1 week | After all above |
 
 ### Test Summary
@@ -1549,6 +1550,40 @@ and Qwen3.5 have larger gaps due to additional compute (PLE, DeltaNet recurrence
 **Effort:** 1 marathon session (similar intensity to Gemma 4)
 **Dependencies:** Week 33b Gemma 4 engine complete, merged to master
 **Acceptance:** 11/11 bench-off models loading and generating text
+
+---
+
+### Week 33d: NVMe Write Logging — Persistent Test Telemetry
+
+Add persistent logging to bare-metal seL4 so boot logs, inference results, and
+stability metrics survive reboot and can be recovered from Ubuntu.
+
+**Approach: Raw sector logging** (same pattern as Phase 2's `warm_reboot.c`).
+Write 512-byte log records to a reserved LBA range past all FAT32 partitions.
+Self-initializing header with magic/checksum. Recovery via `dd` from Ubuntu.
+
+Compared three options: raw sectors (~50 LOC, zero corruption risk), pre-allocated
+file overwrite (~150 LOC, low risk), full FAT32 write (~500-800 LOC, high risk).
+Raw sectors wins on simplicity, safety, and precedent.
+
+**Implementation:**
+
+| Component | LOC | Description |
+|-----------|-----|-------------|
+| `nvme_write_sectors()` | ~25 | Identical to read, opcode 0x01 instead of 0x02 |
+| `nvme_log.c/h` | ~80 | Log init (header read/create), append, flush |
+| `parse_nvme_log.py` | ~50 | Extract + format log from raw NVMe device |
+| Integration in `main_x86.c` | ~20 | Call log events throughout boot + workload |
+
+**Log format:** 512-byte records with header (magic, cursor, boot_id, checksum)
+and entries (timestamp, type, payload). Reserve 256 MB (512K sectors) — covers
+30-day test with 2x margin (~130 MB estimated for 260K records).
+
+**Testing:** QEMU first (write sector, read back, verify in disk image), then
+bare metal (write during self-test, recover from Ubuntu with `dd`).
+
+**Dependencies:** NVMe driver init (already working on bare metal)
+**Design spec:** `docs/superpowers/specs/2026-04-13-nvme-write-logging-design.md`
 
 ---
 
