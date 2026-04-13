@@ -1218,6 +1218,10 @@ static void *main_continued(void *arg UNUSED)
                                     fat32_fs_t fs;
                                     /* Try partition 4 (ESP) first, then fall back to whole-disk (QEMU).
                                      * Lexar NM790 2TB: p4 starts at sector 3997272064 (FAT32 ESP). */
+#if JARVIS_DBG_BOOT_LOG
+                                    nvme_log_write(&nvme_ctrl, dma_vaddrs[4], dma_paddrs[4],
+                                                   LOG_BOOT, "Starting FAT32");
+#endif
                                     #define NVME_FAT32_PART_LBA 3997272064ULL
                                     int fat_err = fat32_init(&fs, fat32_nvme_read, NVME_FAT32_PART_LBA);
                                     if (fat_err != 0) {
@@ -1277,6 +1281,24 @@ static void *main_continued(void *arg UNUSED)
                                                     model_frame_caps[p] = frm.cptr;
                                                     if (p > 0 && p % 50000 == 0) {
                                                         put_dec(p * 4 / 1024); puts_serial("MB allocated\n");
+#if JARVIS_DBG_BOOT_LOG
+                                                        {
+                                                            char pb[48];
+                                                            int pi = 0;
+                                                            const char *pre = "Model progress: ";
+                                                            while (*pre) pb[pi++] = *pre++;
+                                                            uint32_t pv = p;
+                                                            char pd[10]; int pdi = 0;
+                                                            if (pv == 0) pd[pdi++] = '0';
+                                                            else while (pv > 0) { pd[pdi++] = '0' + (pv % 10); pv /= 10; }
+                                                            while (--pdi >= 0) pb[pi++] = pd[pdi];
+                                                            const char *suf = " pages";
+                                                            while (*suf) pb[pi++] = *suf++;
+                                                            pb[pi] = '\0';
+                                                            nvme_log_write(&nvme_ctrl, dma_vaddrs[4], dma_paddrs[4],
+                                                                           LOG_BOOT, pb);
+                                                        }
+#endif
                                                     }
                                                 }
                                                 puts_serial("[JARVIS] Allocated "); put_dec(n_pages); puts_serial(" frames\n");
@@ -1294,6 +1316,10 @@ static void *main_continued(void *arg UNUSED)
                                                     /* Read model from FAT32 */
                                                     g_nvme_read_count = 0;
                                                     puts_serial("[JARVIS] Reading model from NVMe...\n");
+#if JARVIS_DBG_BOOT_LOG
+                                                    nvme_log_write(&nvme_ctrl, dma_vaddrs[4], dma_paddrs[4],
+                                                                   LOG_BOOT, "Loading model...");
+#endif
                                                     int rderr = fat32_read_file(&fs, model_cluster,
                                                                                 model_size, model_local);
                                                     if (rderr == 0) {
@@ -1363,6 +1389,10 @@ static void *main_continued(void *arg UNUSED)
     /* ---- Spawn inference process (Process B) ---- */
     seL4_CPtr req_notif = 0, resp_notif = 0;
     puts_serial("\n[JARVIS] Spawning inference process...\n");
+#if JARVIS_DBG_BOOT_LOG
+    nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr, g_nvme_bounce_paddr,
+                   LOG_BOOT, "Spawning Process B");
+#endif
     if (spawn_inference_process(&req_notif, &resp_notif,
                                  nvme_model_loaded ? model_frame_caps : NULL,
                                  nvme_model_loaded ? nvme_model_n_pages : 0,

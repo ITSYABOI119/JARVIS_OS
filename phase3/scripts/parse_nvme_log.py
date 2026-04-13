@@ -20,16 +20,28 @@ def main():
         print(f"ERROR: bad magic 0x{magic:08X} (expected 0x{MAGIC:08X})")
         sys.exit(1)
 
+    # Verify checksum (XOR of words 0..14)
+    words = struct.unpack_from('<15I', data, 0)
+    computed = 0
+    for w in words:
+        computed ^= w
+    chk_ok = "OK" if computed == checksum else f"MISMATCH (computed 0x{computed:08X})"
+
     print(f"=== JARVIS NVMe Log ===")
-    print(f"Version: {ver}")
-    print(f"Boot ID: {boot_id}")
-    print(f"Cursor:  {cursor}")
-    print(f"Total:   {total}")
-    print(f"Checksum: 0x{checksum:08X}")
+    print(f"  Version:   {ver}")
+    print(f"  Boot ID:   {boot_id}")
+    print(f"  Cursor:    {cursor}")
+    print(f"  Total:     {total}")
+    print(f"  Checksum:  0x{checksum:08X} ({chk_ok})")
+    print(f"  Sectors:   {len(data) // 512} read")
     print()
 
     # Parse entries
     n_entries = min(cursor, (len(data) // 512) - 1)
+    if n_entries == 0:
+        print("(no log entries)")
+    else:
+        print(f"--- {n_entries} entries ---")
     for i in range(n_entries):
         off = (i + 1) * 512
         if off + 512 > len(data):
@@ -37,7 +49,7 @@ def main():
         e_boot, e_seq, e_type, e_len = struct.unpack_from('<IIHH', data, off)
         payload = data[off+12:off+12+e_len].decode('utf-8', errors='replace').rstrip('\x00')
         tname = TYPES.get(e_type, f'UNK_{e_type}')
-        print(f"[{e_boot}:{e_seq:05d}] {tname:12s} {payload}")
+        print(f"  [{e_boot}:{e_seq:05d}] {tname:12s} {payload}")
 
 if __name__ == '__main__':
     main()

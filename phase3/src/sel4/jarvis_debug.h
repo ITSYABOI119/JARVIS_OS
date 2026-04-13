@@ -25,6 +25,10 @@
 /* Per-inference summary line (query + response snippet) */
 #define JARVIS_DBG_INFER_SUMMARY  1
 
+/* NVMe log writes at every boot stage (FAT32 init, model progress, spawn).
+ * Useful for diagnosing stalls. Turn OFF for 30-day stability test (write wear). */
+#define JARVIS_DBG_BOOT_LOG  1
+
 /* Per-forward-pass tracing in llama_quant.c ([L00@N], [FWD], [TOP5@N]).
  * NOTE: llama_quant.c does NOT include this header (it is built in both seL4
  * and standalone native-test contexts). It carries its own #ifndef fallback
