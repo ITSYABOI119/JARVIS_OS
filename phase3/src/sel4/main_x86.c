@@ -140,11 +140,34 @@ static uint32_t nvme_model_n_pages = 0;
 
 /* ---- Serial output via seL4 debug syscall ---- */
 
+/* NVMe log line buffer: accumulates chars until newline, then flushes
+ * the whole line as a LOG_BOOT entry. Captures ALL serial output
+ * (self-test, PCI scan, NVMe init, model loading, IPC, errors). */
+#if JARVIS_DBG_BOOT_LOG
+static char  log_line_buf[480];
+static int   log_line_pos = 0;
+#endif
+
 static void puts_serial(const char *s)
 {
     const char *p = s;
-    while (*p)
-        seL4_DebugPutChar(*p++);
+    while (*p) {
+        seL4_DebugPutChar(*p);
+#if JARVIS_DBG_BOOT_LOG
+        if (g_nvme_ptr) {
+            if (*p == '\n') {
+                log_line_buf[log_line_pos] = '\0';
+                if (log_line_pos > 0)
+                    nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr,
+                                   g_nvme_bounce_paddr, LOG_BOOT, log_line_buf);
+                log_line_pos = 0;
+            } else if (*p != '\r' && log_line_pos < 479) {
+                log_line_buf[log_line_pos++] = *p;
+            }
+        }
+#endif
+        p++;
+    }
 #ifdef __x86_64__
     if (vga_ready) vga_puts(s);
 #endif
@@ -1497,6 +1520,23 @@ static void *main_continued(void *arg UNUSED)
         if (slot < 14) {
             /* --- Cache query (70%) --- */
             const char *query = cache_queries[r % N_CACHE_QUERIES];
+#if JARVIS_DBG_BOOT_LOG
+            {
+                char qb[96] = "cache q=";
+                int qi = 8;
+                uint64_t qv = q_total;
+                char qd[20]; int qdi = 0;
+                if (qv == 0) qd[qdi++] = '0';
+                else while (qv > 0) { qd[qdi++] = '0' + (qv % 10); qv /= 10; }
+                while (--qdi >= 0) qb[qi++] = qd[qdi];
+                qb[qi++] = ' ';
+                const char *qp = query;
+                while (*qp && qi < 94) qb[qi++] = *qp++;
+                qb[qi] = '\0';
+                nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr,
+                               g_nvme_bounce_paddr, LOG_IPC_STATS, qb);
+            }
+#endif
 
             char normalized[128];
             cache_normalize_query(query, normalized, sizeof(normalized));
@@ -1516,6 +1556,23 @@ static void *main_continued(void *arg UNUSED)
             /* --- Inference (15%) --- */
             const char *query = inference_queries[r % N_INFERENCE_QUERIES];
             q_infer++;
+#if JARVIS_DBG_BOOT_LOG
+            {
+                char qb[96] = "infer q=";
+                int qi = 8;
+                uint64_t qv = q_total;
+                char qd[20]; int qdi = 0;
+                if (qv == 0) qd[qdi++] = '0';
+                else while (qv > 0) { qd[qdi++] = '0' + (qv % 10); qv /= 10; }
+                while (--qdi >= 0) qb[qi++] = qd[qdi];
+                qb[qi++] = ' ';
+                const char *qp = query;
+                while (*qp && qi < 94) qb[qi++] = *qp++;
+                qb[qi] = '\0';
+                nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr,
+                               g_nvme_bounce_paddr, LOG_IPC_STATS, qb);
+            }
+#endif
 
 #if JARVIS_DBG_IPC
             puts_serial("[DBG] INFER: sending...\n");
@@ -1587,6 +1644,20 @@ static void *main_continued(void *arg UNUSED)
         } else if (slot < 19) {
             /* --- Heartbeat (10%) --- */
             q_heartbeat++;
+#if JARVIS_DBG_BOOT_LOG
+            {
+                char qb[32] = "heartbeat q=";
+                int qi = 12;
+                uint64_t qv = q_total;
+                char qd[20]; int qdi = 0;
+                if (qv == 0) qd[qdi++] = '0';
+                else while (qv > 0) { qd[qdi++] = '0' + (qv % 10); qv /= 10; }
+                while (--qdi >= 0) qb[qi++] = qd[qdi];
+                qb[qi] = '\0';
+                nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr,
+                               g_nvme_bounce_paddr, LOG_IPC_STATS, qb);
+            }
+#endif
 #if JARVIS_DBG_IPC
             puts_serial("[DBG] HB: sending...\n");
 #endif

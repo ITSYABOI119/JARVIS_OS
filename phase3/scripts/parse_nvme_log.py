@@ -56,7 +56,8 @@ def main():
         if off + 512 > len(data):
             break
         e_boot, e_seq, e_type, e_len = struct.unpack_from('<IIHH', data, off)
-        payload = data[off+12:off+12+e_len].decode('utf-8', errors='replace').rstrip('\x00')
+        # Payload starts at offset 16 (after boot_id:4, seq:4, type:2, length:2, reserved:4)
+        payload = data[off+16:off+16+e_len].decode('utf-8', errors='replace').rstrip('\x00')
         tname = TYPES.get(e_type, f'UNK_{e_type}')
         print(f"  [{e_boot}:{e_seq:05d}] {tname:12s} {payload}")
 
