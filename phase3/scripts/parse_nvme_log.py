@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Parse JARVIS NVMe log from raw sector data (stdin)."""
+"""Parse JARVIS NVMe log from raw sector data.
+
+Usage:
+    python3 parse_nvme_log.py <file>       # read from file
+    python3 parse_nvme_log.py < raw.bin    # read from stdin
+"""
 import struct
 import sys
 
@@ -7,7 +12,11 @@ MAGIC = 0x4A524C47
 TYPES = {1:'BOOT', 2:'SELFTEST', 3:'MODEL_LOAD', 4:'INFER', 5:'IPC_STATS', 6:'ERROR', 7:'HEARTBEAT'}
 
 def main():
-    data = sys.stdin.buffer.read()
+    if len(sys.argv) > 1:
+        with open(sys.argv[1], 'rb') as f:
+            data = f.read()
+    else:
+        data = sys.stdin.buffer.read()
     if len(data) < 512:
         print("ERROR: need at least 512 bytes (1 sector)")
         sys.exit(1)

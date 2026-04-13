@@ -6,9 +6,9 @@
  * Header checksum is XOR of the first 15 uint32_t words (same pattern as
  * warm_reboot.c).
  *
- * Header is flushed to disk every 16 entries to limit metadata writes.
- * Call nvme_log_flush() explicitly to guarantee durability (e.g. before
- * reboot or on critical errors).
+ * Header is flushed to disk after every write to guarantee the cursor
+ * is durable. Previously flushed every 16 entries, but that caused
+ * cursor=0 on disk when boot stalled before reaching 16 entries.
  */
 
 #include "nvme_log.h"
@@ -114,11 +114,10 @@ int nvme_log_write(nvme_controller_t *ctrl, void *dma_buf, uint64_t dma_phys,
     log_hdr.cursor++;
     log_hdr.total_entries++;
 
-    /* Flush header every 16 entries to limit metadata writes */
-    if ((log_hdr.total_entries % 16) == 0)
-        return nvme_log_flush(ctrl, dma_buf, dma_phys);
-
-    return 0;
+    /* Always flush header so cursor is durable on disk.
+     * Without this, a stall/reboot before 16 entries leaves cursor=0
+     * on disk even though entry sectors were written successfully. */
+    return nvme_log_flush(ctrl, dma_buf, dma_phys);
 }
 
 /* ================================================================
