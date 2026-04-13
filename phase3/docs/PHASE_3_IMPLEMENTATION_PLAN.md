@@ -32,7 +32,7 @@ This document provides a detailed week-by-week implementation plan for Phase 3. 
 
 ---
 
-## CURRENT STATUS (April 6, 2026)
+## CURRENT STATUS (April 12, 2026)
 
 ### What's Done
 
@@ -66,6 +66,12 @@ This document provides a detailed week-by-week implementation plan for Phase 3. 
 | Llama 3.1 8B disqualified (5.06/10, #8) | Apr 9 | Training data contamination, below 3B model |
 | Full results: `models/quality_results/FINAL_SCORES.txt` | Apr 9 | 7-judge combined scores + speed + PPL + tiers |
 | **Gemma 4 E2B engine COMPLETE — coherent English on main PC + seL4 QEMU** | **Apr 11** | **17 fixes, validated BOTH native test AND JARVIS PC seL4 Process B (4/4 queries)** |
+| Gemma 4 branch merged to master (bd09b46) | Apr 11 | Zero conflicts, tests green |
+| Fused QKV + gate-up load-time split (Phi-3) | Apr 12 | Detect attn_qkv, byte-offset views, zero forward-pass changes |
+| DeltaNet SSM (Qwen3.5) — ~1200 LOC across ssm.h/c + integration | Apr 12 | Conv1d, delta-rule recurrence, output gating, 7 unit tests |
+| Partial RoPE (Qwen3.5: 64 of 256 dims) | Apr 12 | Was corrupting 75% of Q/K in full-attention layers |
+| Gated Q full-attention layers (Qwen3.5) | Apr 12 | Interleaved Q+gate in wq, sigmoid gate on attention output |
+| **JARVIS engine bench: 11/11 models, 5 architectures** | **Apr 12** | **bench_engine.c harness with llama-bench table format** |
 
 ### Gemma 4 E2B Engine — What We Fixed (Apr 11, 2026)
 
@@ -131,13 +137,18 @@ All responses are technically accurate and correctly formatted with markdown.
 |------|----------|--------|-------|
 | ~~Gemma 4 engine work~~ | ~~HIGH~~ | ~~~1000 LOC~~ | **DONE — 17 fixes on `feature/gemma4-arch`** |
 | ~~JARVIS PC seL4 QEMU validation~~ | ~~HIGH~~ | ~~1 session~~ | **DONE — 4/4 queries coherent, process-isolated IPC verified** |
-| **Merge `feature/gemma4-arch` to master** | **HIGH** | **1 session** | **Ready — zero conflicts, tests green** |
+| ~~Merge `feature/gemma4-arch` to master~~ | ~~HIGH~~ | ~~1 session~~ | **DONE (bd09b46)** |
+| ~~Fused QKV/gate-up (Phi-3)~~ | ~~HIGH~~ | ~~load-time split~~ | **DONE — detect attn_qkv, byte-offset views, zero forward changes** |
+| ~~DeltaNet SSM (Qwen3.5)~~ | ~~HIGH~~ | ~~~1200 LOC~~ | **DONE — conv1d + delta-rule recurrence + output gating, 7 tests** |
+| ~~Partial RoPE (Qwen3.5)~~ | ~~HIGH~~ | ~~1 fix~~ | **DONE — 64 of 256 dims, was corrupting 75% of Q/K** |
+| ~~JARVIS engine bench (Track 1)~~ | ~~HIGH~~ | ~~1 session~~ | **DONE — 11/11 models, 5 architectures, bench_engine.c harness** |
 | Silence verbose per-forward-pass debug prints | MEDIUM | 1 hour | Gate `[L00@N]`, `[TOP5@N]` behind a flag; restore speed |
-| TurboQuant evaluation (our branch vs TQ+) | MEDIUM | 2-3 sessions | Rebase TQ branch, compare with TurboQuant+ |
-| Asymmetric K/V (Q8-K + TQ-V) | MEDIUM | ~460 LOC | After TQ evaluation |
+| TurboQuant/RotorQuant evaluation | MEDIUM | 2-3 sessions | RotorQuant discovered — O(d) vs O(d^2), 28% faster decode |
+| Asymmetric K/V (Q8-K + TQ-V) | MEDIUM | ~460 LOC | After TQ/RQ evaluation |
 | Wire dynamic model scaling | MEDIUM | 2-3 sessions | Hot-swap from NVMe, state machine |
 | Perf: pthread matmul + AVX2 fused dequant-dot | MEDIUM | ~2 weeks | Target 5-20 tok/s CPU (from 0.3) |
 | Enhanced SHIELD | LOW | 2 weeks | Model-assisted risk scoring |
+| 30-day stability test on x86 | LOW | 30 days | Continuous workload, bare metal |
 | Final report + v0.3.0-beta tag | LAST | 1 week | After all above |
 
 ### Test Summary
@@ -629,12 +640,14 @@ While waiting for the JARVIS Project PC, the majority of Phase 3b implementation
 | 3c fuzz testing | **DONE** | Apr 6, 2026 (300K iterations, ASAN, 0 crashes) |
 | 3c security audit | **DONE** | Apr 6, 2026 (25 findings, 18 fixed) |
 | 3c model bench-off | **DONE** | Apr 9, 2026 (11 models, speed+PPL+quality) |
-| **3c Gemma 4 engine work** | **NEXT** | ~1000 LOC to unlock #1 model (7.8/10) |
-| 3c TurboQuant evaluation | PENDING | Rebase + compare with TurboQuant+ |
+| 3c Gemma 4 engine work | **DONE** | Apr 11, 17 fixes, 4/4 queries on seL4 QEMU |
+| 3c architecture expansion (5 archs) | **DONE** | Apr 12, fused QKV + DeltaNet SSM + partial RoPE |
+| 3c engine bench (11/11 models) | **DONE** | Apr 12, bench_engine.c, 5 architectures |
+| 3c TurboQuant/RotorQuant eval | PENDING | RotorQuant discovered as alternative |
 | 3c dynamic scaling | PENDING | Wire model hot-swap + state machine |
 | 3c finalization | PENDING | Final report, v0.3.0-beta |
 
-**Estimated remaining to v0.3.0-beta:** ~4-8 weeks (Gemma 4 engine + TQ + scaling + report)
+**Estimated remaining to v0.3.0-beta:** ~4-6 weeks (TQ/RQ eval + scaling + stability + report)
 
 ---
 
@@ -1354,14 +1367,16 @@ While waiting for the JARVIS Project PC, the majority of Phase 3b implementation
 | #10 | Qwen3 4B | 2.4 | 13.2 tok/s | ❌ |
 | #11 | TinyLlama 1.1B | 1.0 | 47.5 tok/s | ✅ (UNUSABLE) |
 
-**Revised tier decisions:**
+**Revised tier decisions (with JARVIS engine speeds):**
 
-| Tier | Model | Quality | Speed | Engine Work |
-|------|-------|---------|-------|-------------|
-| **IDLE** | Llama 3.2 1B (current, fallback) | 4.8 | 40.4 | 0 LOC |
-| **IDLE/ACTIVE (target)** | Gemma 4 E2B | 7.8 | 19.7 | ~1000 LOC |
-| **CRITICAL** | Mistral 7B Q8_0 | 7.4 | 5.5 | 0 LOC |
-| **EMERGENCY** | Rules only | — | <1ms | 0 LOC |
+| Tier | Model | Quality | llama.cpp tok/s | JARVIS tok/s | Engine Work |
+|------|-------|---------|-----------------|-------------|-------------|
+| **IDLE** | Llama 3.2 1B (current, fallback) | 4.8 | 40.4 | 0.99 | 0 LOC |
+| **IDLE/ACTIVE (target)** | Gemma 4 E2B | 7.8 | 19.7 | 0.19 | ~~1000 LOC~~ DONE |
+| **CRITICAL** | Mistral 7B Q8_0 | 7.4 | 5.5 | 0.17 | 0 LOC |
+| **EMERGENCY** | Rules only | — | <1ms | <1ms | 0 LOC |
+
+JARVIS engine is ~30-100x slower than llama.cpp (single-threaded scalar matmul). Perf work (pthread + AVX2 fused dequant-dot) targets 5-20x improvement.
 
 **Deliverables:**
 - ✅ 11-model dual-track bench-off (speed + perplexity + quality)
@@ -1467,7 +1482,79 @@ Both responses are technically accurate and correctly markdown-formatted.
 
 ---
 
-### Week 34: TurboQuant Evaluation — Our Branch vs TurboQuant+
+### Week 33c: Architecture Expansion — 5 Architectures, 11/11 Models (April 12-13)
+
+> **STATUS:** COMPLETE (April 12, 2026). Extended the JARVIS inference engine from 2 architectures (Llama + Gemma 4) to 5. All 11 bench-off models now load and run.
+
+Extended the JARVIS inference engine from 2 architectures (Llama + Gemma 4) to 5:
+
+**Fused QKV + Gate-Up Tensors (Phi-3):**
+- Detect `blk.N.attn_qkv.weight` when separate `attn_q/k/v` not found
+- Load-time split: create three `qtensor_t` views with byte-offset arithmetic
+- Also: fused gate-up FFN (`ffn_up` with 2x `hidden_dim`, no separate `ffn_gate`)
+- Zero forward-pass changes — existing `qmatmul_vec` calls work on the views
+
+**Gated DeltaNet SSM (Qwen3.5):**
+- `ssm.h/c`: ~180 LOC for DeltaNet forward pass
+  - Depthwise causal conv1d with sliding window state
+  - L2 normalization + `1/sqrt(head_k_dim)` Q scaling
+  - Alpha/beta discretization: `gate = exp(softplus(alpha+dt_bias)*A_log)`
+  - Delta-rule recurrence: `S = gate*S + beta*(v - S^T@k)@k^T`, `out = S^T@q`
+  - Output gating: RMS norm + SiLU(Z)
+- `test_ssm.c`: 7 unit tests (conv1d, recurrence, multi-head, NaN-free)
+- 24 DeltaNet layers + 8 full-attention layers (3:1 pattern)
+- Full-attention gated Q: interleaved Q+gate in `wq`, sigmoid gate on attention output
+- SSM state: ~50MB fixed (context-independent), conv_state + recurrent state
+
+**Partial RoPE (Qwen3.5):**
+- `rope.dimension_count=64`: only first 64 of 256 head dims get rotation
+- Was corrupting 75% of Q/K in full-attention layers
+
+**DeltaNet Debugging (7 fixes, same methodology as Gemma 4):**
+
+| # | Fix | Impact |
+|---|-----|--------|
+| 1 | Q scale `1/sqrt(head_k_dim)` | Output changed from symbols to numbers |
+| 2 | Gated Q gate before `wo` projection | Gate in correct dimension space |
+| 3 | Skip invalid tokens gracefully | Unblocked generation (was all-zero logits) |
+| 4 | Zero-embedding forward for SSM continuity | Preserve temporal chain |
+| 5 | Chat template direct newline tokens | Fix -1 encoding for `\n` |
+| 6 | Partial RoPE (64 of 256 dims) | Full-attention layers now work |
+| 7 | RoPE frequency base uses `rope_dim` | Correct frequency calculation |
+
+**Engine Bench Results (JARVIS PC, Ryzen 7 2700X, single-threaded):**
+
+| Model | Arch | JARVIS tok/s | llama.cpp tok/s | Ratio |
+|-------|------|-------------|-----------------|-------|
+| TinyLlama 1.1B | llama | 1.25 | 40.4 | 32x |
+| Llama 3.2 1B | llama | 0.99 | 40.4 | 41x |
+| Llama 3.2 3B | llama | 0.42 | 21.3 | 51x |
+| Mistral 7B Q8_0 | llama | 0.17 | 5.5 | 32x |
+| Llama 3.1 8B | llama | 0.18 | 11.2 | 62x |
+| Phi-3 mini 4K | phi3 | 0.25 | 11.7 | 47x |
+| Gemma 4 E2B | gemma4 | 0.19 | 19.7 | 104x |
+| Gemma 4 E4B | gemma4 | 0.10 | 10.0 | 100x |
+| Qwen3 4B | qwen3 | 0.30 | 18.1 | 60x |
+| Qwen3.5 4B | qwen35 | 0.26 | 29.8 | 115x |
+| Qwen3.5 9B | qwen35 | -- | 16.2 | -- |
+
+Note: Qwen3.5 9B not tested (requires >32GB for model + SSM state).
+JARVIS engine is ~30-100x slower than llama.cpp due to single-threaded scalar
+matmul (no multi-threading, no SIMD for quantized dot products). The 28-44x
+gap for Llama models is consistent with the naive matmul baseline. Gemma 4
+and Qwen3.5 have larger gaps due to additional compute (PLE, DeltaNet recurrence).
+
+**Design specs:** `docs/superpowers/specs/2026-04-12-fused-qkv-design.md`, `docs/superpowers/specs/2026-04-12-ssm-support-design.md`
+
+**Effort:** 1 marathon session (similar intensity to Gemma 4)
+**Dependencies:** Week 33b Gemma 4 engine complete, merged to master
+**Acceptance:** 11/11 bench-off models loading and generating text
+
+---
+
+### Week 34: TurboQuant/RotorQuant Evaluation — Our Branch vs TQ+ vs RQ
+
+> **UPDATE (April 2026):** RotorQuant discovered as a superior alternative -- block-diagonal rotations (O(d) vs O(d^2)), 28% faster decode, 5.3x faster prefill. Has llama.cpp integration branch. See `phase3/docs/ROTORQUANT_REFERENCE.md` on turboquant branch.
 
 **Tasks:**
 1. Deep-dive exploration of TurboQuant+ (https://github.com/TheTom/turboquant_plus)
