@@ -1599,50 +1599,99 @@ static void *main_continued(void *arg UNUSED)
 #if JARVIS_DBG_BOOT_LOG
             puts_serial("[PA] Waiting for PB response...\n");
 #endif
-            seL4_Wait(resp_notif, NULL);
+
+            /* Poll-drain loop: yield CPU to Process B, periodically drain
+             * the shared ring for MSG_DEBUG entries (written to NVMe log in
+             * real time) and check for MSG_RESPONSE (inference result).
+             * This replaces blocking seL4_Wait so that Process B's per-token
+             * debug progress appears in the NVMe log even during long inference. */
+            char full_response[512];
+            int resp_offset = 0;
+            {
+                int got_response = 0;
+                uint32_t poll_count = 0;
+                uint8_t msg_type;
+                uint16_t msg_seq;
+                uint8_t payload[SHMEM_MAX_PAYLOAD];
+                uint16_t msg_len;
+
+                while (!got_response) {
+                    /* Drain ring — grab MSG_DEBUG and check for MSG_RESPONSE */
+                    while (shmem_ipc_recv(shared_response_ring, &msg_type, &msg_seq,
+                                           payload, &msg_len) == 0) {
+                        if (msg_type == MSG_DEBUG) {
+                            payload[msg_len < SHMEM_MAX_PAYLOAD ? msg_len : SHMEM_MAX_PAYLOAD - 1] = '\0';
+#if JARVIS_DBG_BOOT_LOG
+                            nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr,
+                                           g_nvme_bounce_paddr, LOG_BOOT, (const char *)payload);
+#endif
+                            continue;
+                        }
+                        if (msg_type == MSG_RESPONSE) {
+                            int copy = (int)msg_len;
+                            if (resp_offset + copy > (int)sizeof(full_response) - 1)
+                                copy = (int)sizeof(full_response) - 1 - resp_offset;
+                            if (copy > 0) {
+                                memcpy(full_response + resp_offset, payload, (size_t)copy);
+                                resp_offset += copy;
+                            }
+                            got_response = 1;
+                            break;
+                        }
+                        /* Unknown type — skip */
+                        break;
+                    }
+
+                    if (!got_response) {
+                        poll_count++;
+                        if (poll_count % 1000 == 0) {
+#if JARVIS_DBG_BOOT_LOG
+                            {
+                                char wb[48] = "[PA] Still waiting for PB... poll ";
+                                int wi = 34;
+                                uint32_t v = poll_count;
+                                char d[10]; int di = 0;
+                                if (v == 0) d[di++] = '0';
+                                else while (v > 0) { d[di++] = '0' + (v % 10); v /= 10; }
+                                while (--di >= 0) wb[wi++] = d[di];
+                                wb[wi] = '\0';
+                                nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr,
+                                               g_nvme_bounce_paddr, LOG_BOOT, wb);
+                            }
+#endif
+                        }
+                        seL4_Yield();
+                    }
+                }
+
+                /* Continue draining any remaining MSG_RESPONSE chunks + MSG_DEBUG */
+                while (shmem_ipc_recv(shared_response_ring, &msg_type, &msg_seq,
+                                       payload, &msg_len) == 0) {
+                    if (msg_type == MSG_DEBUG) {
+                        payload[msg_len < SHMEM_MAX_PAYLOAD ? msg_len : SHMEM_MAX_PAYLOAD - 1] = '\0';
+#if JARVIS_DBG_BOOT_LOG
+                        nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr,
+                                       g_nvme_bounce_paddr, LOG_BOOT, (const char *)payload);
+#endif
+                        continue;
+                    }
+                    if (msg_type != MSG_RESPONSE) break;
+                    int copy = (int)msg_len;
+                    if (resp_offset + copy > (int)sizeof(full_response) - 1)
+                        copy = (int)sizeof(full_response) - 1 - resp_offset;
+                    if (copy > 0) {
+                        memcpy(full_response + resp_offset, payload, (size_t)copy);
+                        resp_offset += copy;
+                    }
+                }
+            }
+
 #if JARVIS_DBG_BOOT_LOG
             puts_serial("[PA] PB response received\n");
 #endif
 #if JARVIS_DBG_IPC
             puts_serial("[DBG] INFER: woke up\n");
 #endif
-
-            /* Drain all response messages */
-            char full_response[512];
-            int resp_offset = 0;
-            uint8_t msg_type;
-            uint16_t msg_seq;
-            uint8_t payload[SHMEM_MAX_PAYLOAD];
-            uint16_t msg_len;
-
-            while (shmem_ipc_recv(shared_response_ring, &msg_type, &msg_seq,
-                                   payload, &msg_len) == 0) {
-                if (msg_type == MSG_DEBUG) {
-                    /* Process B debug message — write to NVMe log */
-                    payload[msg_len < SHMEM_MAX_PAYLOAD ? msg_len : SHMEM_MAX_PAYLOAD - 1] = '\0';
-#if JARVIS_DBG_BOOT_LOG
-                    nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr,
-                                   g_nvme_bounce_paddr, LOG_BOOT, (const char *)payload);
-#endif
-                    continue;
-                }
-                if (msg_type != MSG_RESPONSE) {
-#if JARVIS_DBG_IPC
-                    puts_serial("[WARN] non-response in drain: type=");
-                    put_dec((uint32_t)msg_type);
-                    puts_serial(" seq="); put_dec((uint32_t)msg_seq);
-                    puts_serial("\n");
-#endif
-                    break;
-                }
-                int copy = (int)msg_len;
-                if (resp_offset + copy > (int)sizeof(full_response) - 1)
-                    copy = (int)sizeof(full_response) - 1 - resp_offset;
-                if (copy > 0) {
-                    memcpy(full_response + resp_offset, payload, (size_t)copy);
-                    resp_offset += copy;
-                }
-            }
 
 #if JARVIS_DBG_INFER_SUMMARY
             if (resp_offset > 0) {
