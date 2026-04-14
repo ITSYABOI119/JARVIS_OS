@@ -141,8 +141,8 @@ static uint32_t nvme_model_n_pages = 0;
 /* ---- Serial output via seL4 debug syscall ---- */
 
 /* NVMe log line buffer: accumulates chars until newline, then flushes
- * the whole line as a LOG_BOOT entry. Captures ALL serial output
- * (self-test, PCI scan, NVMe init, model loading, IPC, errors). */
+ * the whole line as a LOG_BOOT entry with [PA] source tag.
+ * Captures ALL Process A serial output automatically. */
 #if JARVIS_DBG_BOOT_LOG
 static char  log_line_buf[480];
 static int   log_line_pos = 0;
@@ -155,9 +155,15 @@ static void puts_serial(const char *s)
         seL4_DebugPutChar(*p);
 #if JARVIS_DBG_BOOT_LOG
         if (g_nvme_ptr) {
+            /* Start each line with [PA] tag */
+            if (log_line_pos == 0) {
+                log_line_buf[0] = '['; log_line_buf[1] = 'P';
+                log_line_buf[2] = 'A'; log_line_buf[3] = ']';
+                log_line_buf[4] = ' '; log_line_pos = 5;
+            }
             if (*p == '\n') {
                 log_line_buf[log_line_pos] = '\0';
-                if (log_line_pos > 0)
+                if (log_line_pos > 5)
                     nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr,
                                    g_nvme_bounce_paddr, LOG_BOOT, log_line_buf);
                 log_line_pos = 0;
@@ -1577,6 +1583,11 @@ static void *main_continued(void *arg UNUSED)
 #if JARVIS_DBG_IPC
             puts_serial("[DBG] INFER: sending...\n");
 #endif
+#if JARVIS_DBG_BOOT_LOG
+            puts_serial("[PA] Sending query to PB: ");
+            puts_serial(query);
+            puts_serial("\n");
+#endif
             shmem_ipc_send(shared_request_ring, MSG_QUERY, seq++,
                            query, (uint16_t)strlen(query));
 #if JARVIS_DBG_IPC
@@ -1586,7 +1597,13 @@ static void *main_continued(void *arg UNUSED)
 #if JARVIS_DBG_IPC
             puts_serial("[DBG] INFER: waiting...\n");
 #endif
+#if JARVIS_DBG_BOOT_LOG
+            puts_serial("[PA] Waiting for PB response...\n");
+#endif
             seL4_Wait(resp_notif, NULL);
+#if JARVIS_DBG_BOOT_LOG
+            puts_serial("[PA] PB response received\n");
+#endif
 #if JARVIS_DBG_IPC
             puts_serial("[DBG] INFER: woke up\n");
 #endif

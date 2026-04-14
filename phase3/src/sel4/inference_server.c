@@ -111,18 +111,57 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
     memset(state->value_cache, 0, kv_bytes);
 #if JARVIS_DBG_PB
     puts_serial("[PB] KV reset done\n");
+    puts_serial("[PB] Tokenized: "); put_dec((uint32_t)n_prompt); puts_serial(" tokens\n");
+    puts_serial("[PB] Starting prefill...\n");
 #endif
 
-    /* Generate — stop on <eos>=1, not <turn|>=106 */
+    /* Reset SSM state if applicable */
+    if (state->conv_state && state->n_deltanet > 0) {
+        const llama_config_t *cfg = &qm->config;
+        int qkv_dim = cfg->ssm_n_group * cfg->ssm_d_state * 2 + cfg->ssm_d_inner;
+        size_t conv_bytes = (size_t)state->n_deltanet * (cfg->ssm_d_conv - 1) *
+                            qkv_dim * sizeof(float);
+        memset(state->conv_state, 0, conv_bytes);
+    }
+    if (state->ssm_state && state->n_deltanet > 0) {
+        const llama_config_t *cfg = &qm->config;
+        int head_v_dim = cfg->ssm_d_inner / cfg->ssm_dt_rank;
+        size_t ssm_bytes = (size_t)state->n_deltanet * cfg->ssm_dt_rank *
+                           cfg->ssm_d_state * head_v_dim * sizeof(float);
+        memset(state->ssm_state, 0, ssm_bytes);
+    }
+
+    for (int i = 0; i < n_prompt; i++) {
 #if JARVIS_DBG_PB
-    puts_serial("[PB] generating...\n");
+        if (i == 0 || i == n_prompt - 1 || (i % 4 == 0)) {
+            puts_serial("[PB] Prefill token ");
+            put_dec((uint32_t)i); puts_serial("/");
+            put_dec((uint32_t)n_prompt); puts_serial("\n");
+        }
 #endif
-    int output_ids[64];
-    int n_gen = qmodel_generate(qm, state, prompt_ids, n_prompt,
-                                 output_ids, 50, 1 /* <eos> */,
-                                 0.0f, 1, 42);
+        qmodel_forward(qm, state, prompt_ids[i]);
+    }
 #if JARVIS_DBG_PB
-    puts_serial("[PB] generated "); put_dec((uint32_t)n_gen); puts_serial(" tokens\n");
+    puts_serial("[PB] Prefill complete, generating...\n");
+#endif
+
+    /* Autoregressive generation with per-token logging */
+    int output_ids[64];
+    int n_gen = 0;
+    while (n_gen < 50 && state->pos < state->max_seq_len) {
+        int next = sample_greedy(state->logits, qm->config.vocab_size);
+        output_ids[n_gen++] = next;
+#if JARVIS_DBG_PB
+        puts_serial("[PB] Generated token ");
+        put_dec((uint32_t)n_gen); puts_serial(": id=");
+        put_dec((uint32_t)next); puts_serial("\n");
+#endif
+        if (next == 1 /* <eos> */) break;
+        qmodel_forward(qm, state, next);
+    }
+#if JARVIS_DBG_PB
+    puts_serial("[PB] Generation complete: ");
+    put_dec((uint32_t)n_gen); puts_serial(" tokens\n");
 #endif
 
     /* Decode to text */
