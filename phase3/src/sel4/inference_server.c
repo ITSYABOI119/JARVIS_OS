@@ -55,6 +55,43 @@ static void put_dec(uint32_t val)
     while (--i >= 0) seL4_DebugPutChar(buf[i]);
 }
 
+/* ---- Debug log helper: serial + IPC to Process A for NVMe logging ---- */
+
+static shmem_ring_t *g_resp_ring = NULL;  /* set in main(), used by pb_log */
+
+static void pb_log(const char *msg)
+{
+    puts_serial(msg);
+    puts_serial("\n");
+#if JARVIS_DBG_PB
+    if (g_resp_ring) {
+        int len = 0;
+        const char *p = msg;
+        while (*p++) len++;
+        shmem_ipc_send(g_resp_ring, MSG_DEBUG, 0,
+                       msg, (uint16_t)(len > 240 ? 240 : len));
+    }
+#endif
+}
+
+/* Build a debug line with a number suffix: e.g. "[PB] Prefill token 4/15" */
+static void pb_log_num(const char *prefix, uint32_t val, const char *suffix)
+{
+    char buf[128];
+    int pos = 0;
+    const char *s = prefix;
+    while (*s && pos < 110) buf[pos++] = *s++;
+    /* decimal */
+    char d[12]; int di = 0;
+    if (val == 0) d[di++] = '0';
+    else { uint32_t v = val; while (v > 0) { d[di++] = '0' + (v % 10); v /= 10; } }
+    while (--di >= 0 && pos < 120) buf[pos++] = d[di];
+    s = suffix;
+    while (*s && pos < 126) buf[pos++] = *s++;
+    buf[pos] = '\0';
+    pb_log(buf);
+}
+
 /* ---- Process incoming IPC requests ---- */
 
 static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
@@ -80,9 +117,14 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
     query_buf[qlen] = '\0';
 
 #if JARVIS_DBG_PB
-    puts_serial("[PB] handle_query: \"");
-    puts_serial(query_buf);
-    puts_serial("\"\n");
+    {
+        char hq[280] = "[PB] handle_query: \"";
+        int hi = 20;
+        const char *hp = query_buf;
+        while (*hp && hi < 270) hq[hi++] = *hp++;
+        hq[hi++] = '"'; hq[hi] = '\0';
+        pb_log(hq);
+    }
 #endif
 
     /* Encode user text */
@@ -110,9 +152,9 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
     memset(state->key_cache, 0, kv_bytes);
     memset(state->value_cache, 0, kv_bytes);
 #if JARVIS_DBG_PB
-    puts_serial("[PB] KV reset done\n");
-    puts_serial("[PB] Tokenized: "); put_dec((uint32_t)n_prompt); puts_serial(" tokens\n");
-    puts_serial("[PB] Starting prefill...\n");
+    pb_log("[PB] KV reset done");
+    pb_log_num("[PB] Tokenized: ", (uint32_t)n_prompt, " tokens");
+    pb_log("[PB] Starting prefill...");
 #endif
 
     /* Reset SSM state if applicable */
@@ -134,15 +176,27 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
     for (int i = 0; i < n_prompt; i++) {
 #if JARVIS_DBG_PB
         if (i == 0 || i == n_prompt - 1 || (i % 4 == 0)) {
-            puts_serial("[PB] Prefill token ");
-            put_dec((uint32_t)i); puts_serial("/");
-            put_dec((uint32_t)n_prompt); puts_serial("\n");
+            char pfb[48];
+            int pfi = 0;
+            const char *pfs = "[PB] Prefill token ";
+            while (*pfs) pfb[pfi++] = *pfs++;
+            /* i */
+            { char d[10]; int di=0; uint32_t v=(uint32_t)i;
+              if(v==0) d[di++]='0'; else while(v>0){d[di++]='0'+(v%10);v/=10;}
+              while(--di>=0) pfb[pfi++]=d[di]; }
+            pfb[pfi++] = '/';
+            /* n_prompt */
+            { char d[10]; int di=0; uint32_t v=(uint32_t)n_prompt;
+              if(v==0) d[di++]='0'; else while(v>0){d[di++]='0'+(v%10);v/=10;}
+              while(--di>=0) pfb[pfi++]=d[di]; }
+            pfb[pfi] = '\0';
+            pb_log(pfb);
         }
 #endif
         qmodel_forward(qm, state, prompt_ids[i]);
     }
 #if JARVIS_DBG_PB
-    puts_serial("[PB] Prefill complete, generating...\n");
+    pb_log("[PB] Prefill complete, generating...");
 #endif
 
     /* Autoregressive generation with per-token logging */
@@ -152,16 +206,26 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
         int next = sample_greedy(state->logits, qm->config.vocab_size);
         output_ids[n_gen++] = next;
 #if JARVIS_DBG_PB
-        puts_serial("[PB] Generated token ");
-        put_dec((uint32_t)n_gen); puts_serial(": id=");
-        put_dec((uint32_t)next); puts_serial("\n");
+        {
+            char gb[64] = "[PB] Generated token ";
+            int gi = 21;
+            { char d[10]; int di=0; uint32_t v=(uint32_t)n_gen;
+              if(v==0) d[di++]='0'; else while(v>0){d[di++]='0'+(v%10);v/=10;}
+              while(--di>=0) gb[gi++]=d[di]; }
+            const char *ids = ": id=";
+            while (*ids) gb[gi++] = *ids++;
+            { char d[10]; int di=0; uint32_t v=(uint32_t)next;
+              if(v==0) d[di++]='0'; else while(v>0){d[di++]='0'+(v%10);v/=10;}
+              while(--di>=0) gb[gi++]=d[di]; }
+            gb[gi] = '\0';
+            pb_log(gb);
+        }
 #endif
         if (next == 1 /* <eos> */) break;
         qmodel_forward(qm, state, next);
     }
 #if JARVIS_DBG_PB
-    puts_serial("[PB] Generation complete: ");
-    put_dec((uint32_t)n_gen); puts_serial(" tokens\n");
+    pb_log_num("[PB] Generation complete: ", (uint32_t)n_gen, " tokens");
 #endif
 
     /* Decode to text */
@@ -169,7 +233,7 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
     int text_len = tokenizer_decode(tok, output_ids, n_gen, text_out, sizeof(text_out));
     if (text_len < 0) text_len = 0;
 #if JARVIS_DBG_PB
-    puts_serial("[PB] decoded "); put_dec((uint32_t)text_len); puts_serial(" bytes\n");
+    pb_log_num("[PB] decoded ", (uint32_t)text_len, " bytes");
 #endif
 
     /* Send response — split into multiple messages if >240 bytes */
@@ -252,6 +316,7 @@ int main(int argc, char **argv)
         goto idle;
     }
     puts_serial("[Process B] IPC rings validated\n");
+    g_resp_ring = response_ring;  /* Enable pb_log IPC transport */
 
     /* Parse model location (GRUB module mapped by Process A) */
     uintptr_t model_vaddr = 0;

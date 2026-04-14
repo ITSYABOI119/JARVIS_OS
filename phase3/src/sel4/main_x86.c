@@ -155,15 +155,14 @@ static void puts_serial(const char *s)
         seL4_DebugPutChar(*p);
 #if JARVIS_DBG_BOOT_LOG
         if (g_nvme_ptr) {
-            /* Start each line with [PA] tag */
+            /* Start each line with [SER] or [VGA] tag */
             if (log_line_pos == 0) {
-                log_line_buf[0] = '['; log_line_buf[1] = 'P';
-                log_line_buf[2] = 'A'; log_line_buf[3] = ']';
-                log_line_buf[4] = ' '; log_line_pos = 5;
+                const char *tag = vga_ready ? "[VGA] " : "[SER] ";
+                while (*tag) log_line_buf[log_line_pos++] = *tag++;
             }
             if (*p == '\n') {
                 log_line_buf[log_line_pos] = '\0';
-                if (log_line_pos > 5)
+                if (log_line_pos > 6)
                     nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr,
                                    g_nvme_bounce_paddr, LOG_BOOT, log_line_buf);
                 log_line_pos = 0;
@@ -1618,6 +1617,15 @@ static void *main_continued(void *arg UNUSED)
 
             while (shmem_ipc_recv(shared_response_ring, &msg_type, &msg_seq,
                                    payload, &msg_len) == 0) {
+                if (msg_type == MSG_DEBUG) {
+                    /* Process B debug message — write to NVMe log */
+                    payload[msg_len < SHMEM_MAX_PAYLOAD ? msg_len : SHMEM_MAX_PAYLOAD - 1] = '\0';
+#if JARVIS_DBG_BOOT_LOG
+                    nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr,
+                                   g_nvme_bounce_paddr, LOG_BOOT, (const char *)payload);
+#endif
+                    continue;
+                }
                 if (msg_type != MSG_RESPONSE) {
 #if JARVIS_DBG_IPC
                     puts_serial("[WARN] non-response in drain: type=");
