@@ -141,14 +141,18 @@ All responses are technically accurate and correctly formatted with markdown.
 | ~~Fused QKV/gate-up (Phi-3)~~ | ~~HIGH~~ | ~~load-time split~~ | **DONE — detect attn_qkv, byte-offset views, zero forward changes** |
 | ~~DeltaNet SSM (Qwen3.5)~~ | ~~HIGH~~ | ~~~1200 LOC~~ | **DONE — conv1d + delta-rule recurrence + output gating, 7 tests** |
 | ~~Partial RoPE (Qwen3.5)~~ | ~~HIGH~~ | ~~1 fix~~ | **DONE — 64 of 256 dims, was corrupting 75% of Q/K** |
-| ~~JARVIS engine bench (Track 1)~~ | ~~HIGH~~ | ~~1 session~~ | **DONE — 11/11 models, 5 architectures, bench_engine.c harness** |
-| Silence verbose per-forward-pass debug prints | MEDIUM | 1 hour | Gate `[L00@N]`, `[TOP5@N]` behind a flag; restore speed |
-| TurboQuant/RotorQuant evaluation | MEDIUM | 2-3 sessions | RotorQuant discovered — O(d) vs O(d^2), 28% faster decode |
-| Asymmetric K/V (Q8-K + TQ-V) | MEDIUM | ~460 LOC | After TQ/RQ evaluation |
-| Wire dynamic model scaling | MEDIUM | 2-3 sessions | Hot-swap from NVMe, state machine |
+| ~~JARVIS engine bench (Track 1)~~ | ~~HIGH~~ | ~~1 session~~ | **DONE — 11/11 models, 6 model families, bench_engine.c harness** |
+| ~~NVMe write logging~~ | ~~MEDIUM~~ | ~~~175 LOC~~ | **DONE — nvme_write_sectors + nvme_log + parse_nvme_log.py, bare-metal verified** |
+| ~~NVMe log auto-capture~~ | ~~MEDIUM~~ | ~~~100 LOC~~ | **DONE — puts_serial intercept, [VGA]/[SER] tags, per-query IPC log** |
+| ~~MSG_DEBUG IPC (PB→NVMe log)~~ | ~~MEDIUM~~ | ~~~80 LOC~~ | **DONE — pb_log() helper, Process B debug in NVMe log via IPC** |
+| ~~Poll-drain inference wait~~ | ~~MEDIUM~~ | ~~~50 LOC~~ | **IN PROGRESS — replace seL4_Wait with poll+yield+drain for real-time PB capture** |
+| Silence verbose model-loader prints | MEDIUM | 1 hour | Gate `[config]`, `[qmodel]`, `[AUDIT]` behind a flag |
 | **Perf: fused dequant-dot + SIMD attention** | **HIGH** | **~570 LOC, 1-2 weeks** | **Target 4-5 tok/s Llama 1B single-threaded (from 1.0). Spec: `docs/superpowers/specs/2026-04-13-perf-fused-dequant-dot-design.md`** |
 | Perf: pthread thread pool (Phase 3d/4) | LOW | TBD | Target 15-25 tok/s with 4-8 seL4 TCB workers. Deferred — needs seL4 threading infra |
-| **NVMe write logging** | **MEDIUM** | **~100 LOC** | **Raw sector log for 30-day test telemetry** |
+| TurboQuant/RotorQuant evaluation | MEDIUM | 2-3 sessions | RotorQuant discovered — O(d) vs O(d²), 28% faster decode |
+| Asymmetric K/V (Q8-K + TQ-V) | MEDIUM | ~460 LOC | After TQ/RQ evaluation |
+| Wire dynamic model scaling | MEDIUM | 2-3 sessions | Hot-swap from NVMe, state machine |
+| Debug bare-metal workload stall | HIGH | TBD | Stalls on first inference query — NVMe log shows q=4 hang. Need PB debug data |
 | Enhanced SHIELD | LOW | 2 weeks | Model-assisted risk scoring |
 | 30-day stability test on x86 | LOW | 30 days | Continuous workload, NVMe log capture |
 | Final report + v0.3.0-beta tag | LAST | 1 week | After all above |
@@ -643,9 +647,12 @@ While waiting for the JARVIS Project PC, the majority of Phase 3b implementation
 | 3c security audit | **DONE** | Apr 6, 2026 (25 findings, 18 fixed) |
 | 3c model bench-off | **DONE** | Apr 9, 2026 (11 models, speed+PPL+quality) |
 | 3c Gemma 4 engine work | **DONE** | Apr 11, 17 fixes, 4/4 queries on seL4 QEMU |
-| 3c architecture expansion (5 archs) | **DONE** | Apr 12, fused QKV + DeltaNet SSM + partial RoPE |
-| 3c engine bench (11/11 models) | **DONE** | Apr 12, bench_engine.c, 5 architectures |
-| 3c NVMe write logging | **DONE** | Apr 13, raw sector telemetry for 30-day test |
+| 3c architecture expansion (6 families) | **DONE** | Apr 12, fused QKV + DeltaNet SSM + partial RoPE |
+| 3c engine bench (11/11 models) | **DONE** | Apr 12, bench_engine.c, 6 model families |
+| 3c NVMe write logging | **DONE** | Apr 13, raw sector telemetry, bare-metal boot 4 captured 116 entries |
+| 3c NVMe log auto-capture + VGA/SER tags | **DONE** | Apr 13-14, puts_serial intercept, MSG_DEBUG IPC, pb_log() |
+| 3c poll-drain inference wait | **IN PROGRESS** | Replace seL4_Wait with poll+yield+drain for real-time PB capture |
+| **3c bare-metal workload stall** | **INVESTIGATING** | Stalls on first inference query (q=4). NVMe log + PB debug needed |
 | **3c perf: fused dequant-dot + SIMD attn** | **NEXT** | **Target 4-5 tok/s Llama 1B (from 1.0). ~570 LOC, qdot.c/h** |
 | 3c TurboQuant/RotorQuant eval | PENDING | RotorQuant discovered as alternative (moved to Week 35b) |
 | 3c dynamic scaling | PENDING | Wire model hot-swap + state machine |
