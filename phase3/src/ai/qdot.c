@@ -94,6 +94,108 @@ static float qdot_q4_k_avx2(const void *row_data, const float *x, int K)
     return hsum_avx2(acc);
 }
 
+/* ---- AVX2 fused Q6_K dequant-dot kernel ----
+ *
+ * Reads Q6_K blocks directly, dequantizes into SIMD registers, and
+ * accumulates dot product with F32 activation vector — no intermediate
+ * buffer.
+ *
+ * Block layout (210 bytes, 256 values):
+ *   ql[128] + qh[64] + scales[16] + d(f16)
+ *
+ * Two halves (n=0, n=128). Within each half, 32 iterations produce
+ * 4 values each (q1,q2,q3,q4) from interleaved ql/qh bits.
+ * Scale index: is = n/16 + l/16, used as sc[is+0], sc[is+2], sc[is+4], sc[is+6].
+ *
+ * AVX2 approach: process 8 l-values at a time. Within each group of 8,
+ * the scale index is constant when the group stays inside one 16-value
+ * sub-block (l mod 16 aligned). Groups at l=0,8 share is=n/16+0;
+ * groups at l=16,24 share is=n/16+1.
+ */
+static float qdot_q6_k_avx2(const void *row_data, const float *x, int K)
+{
+    const int n_blocks = K / 256;
+    const q6_k_block_t *blocks = (const q6_k_block_t *)row_data;
+    const __m256i mask_0f = _mm256_set1_epi32(0x0F);
+    const __m256i mask_03 = _mm256_set1_epi32(0x03);
+    const __m256i sub_32  = _mm256_set1_epi32(32);
+
+    __m256 acc = _mm256_setzero_ps();
+
+    for (int b = 0; b < n_blocks; b++) {
+        const q6_k_block_t *blk = &blocks[b];
+        float d = f16_to_f32(blk->d);
+        const uint8_t *ql = blk->ql;
+        const uint8_t *qh = blk->qh;
+        const int8_t  *sc = blk->scales;
+        const float *xb = x + b * 256;
+
+        for (int n = 0; n < 256; n += 128) {
+            for (int l = 0; l < 32; l += 8) {
+                int is = n / 16 + l / 16;
+
+                /* Load 8 bytes from ql[n/2+l] and ql[n/2+l+32],
+                 * zero-extend each byte to int32 */
+                __m128i ql1_8  = _mm_loadl_epi64((const __m128i *)(ql + n/2 + l));
+                __m128i ql2_8  = _mm_loadl_epi64((const __m128i *)(ql + n/2 + l + 32));
+                __m256i ql1_32 = _mm256_cvtepu8_epi32(ql1_8);
+                __m256i ql2_32 = _mm256_cvtepu8_epi32(ql2_8);
+
+                /* Load 8 bytes from qh[n/4+l], zero-extend to int32 */
+                __m128i qh_8  = _mm_loadl_epi64((const __m128i *)(qh + n/4 + l));
+                __m256i qh_32 = _mm256_cvtepu8_epi32(qh_8);
+
+                /* q1: low nibble of ql1 | (qh bits 0-1) << 4, minus 32 */
+                __m256i lo1 = _mm256_and_si256(ql1_32, mask_0f);
+                __m256i h1  = _mm256_and_si256(qh_32, mask_03);
+                __m256i q1  = _mm256_or_si256(lo1, _mm256_slli_epi32(h1, 4));
+                q1 = _mm256_sub_epi32(q1, sub_32);
+
+                /* q2: low nibble of ql2 | (qh bits 2-3) << 4, minus 32 */
+                __m256i lo2 = _mm256_and_si256(ql2_32, mask_0f);
+                __m256i h2  = _mm256_and_si256(_mm256_srli_epi32(qh_32, 2), mask_03);
+                __m256i q2  = _mm256_or_si256(lo2, _mm256_slli_epi32(h2, 4));
+                q2 = _mm256_sub_epi32(q2, sub_32);
+
+                /* q3: high nibble of ql1 | (qh bits 4-5) << 4, minus 32 */
+                __m256i hi1 = _mm256_srli_epi32(ql1_32, 4);
+                __m256i h3  = _mm256_and_si256(_mm256_srli_epi32(qh_32, 4), mask_03);
+                __m256i q3  = _mm256_or_si256(hi1, _mm256_slli_epi32(h3, 4));
+                q3 = _mm256_sub_epi32(q3, sub_32);
+
+                /* q4: high nibble of ql2 | (qh bits 6-7) << 4, minus 32 */
+                __m256i hi2 = _mm256_srli_epi32(ql2_32, 4);
+                __m256i h4  = _mm256_srli_epi32(qh_32, 6);  /* only 2 bits remain */
+                __m256i q4  = _mm256_or_si256(hi2, _mm256_slli_epi32(h4, 4));
+                q4 = _mm256_sub_epi32(q4, sub_32);
+
+                /* Convert to float, multiply by d * scale, FMA with x */
+                __m256 fq1 = _mm256_cvtepi32_ps(q1);
+                __m256 fq2 = _mm256_cvtepi32_ps(q2);
+                __m256 fq3 = _mm256_cvtepi32_ps(q3);
+                __m256 fq4 = _mm256_cvtepi32_ps(q4);
+
+                __m256 ds1 = _mm256_set1_ps(d * sc[is + 0]);
+                __m256 ds2 = _mm256_set1_ps(d * sc[is + 2]);
+                __m256 ds3 = _mm256_set1_ps(d * sc[is + 4]);
+                __m256 ds4 = _mm256_set1_ps(d * sc[is + 6]);
+
+                __m256 x1 = _mm256_loadu_ps(xb + n + l);
+                __m256 x2 = _mm256_loadu_ps(xb + n + l + 32);
+                __m256 x3 = _mm256_loadu_ps(xb + n + l + 64);
+                __m256 x4 = _mm256_loadu_ps(xb + n + l + 96);
+
+                acc = _mm256_fmadd_ps(_mm256_mul_ps(ds1, fq1), x1, acc);
+                acc = _mm256_fmadd_ps(_mm256_mul_ps(ds2, fq2), x2, acc);
+                acc = _mm256_fmadd_ps(_mm256_mul_ps(ds3, fq3), x3, acc);
+                acc = _mm256_fmadd_ps(_mm256_mul_ps(ds4, fq4), x4, acc);
+            }
+        }
+    }
+
+    return hsum_avx2(acc);
+}
+
 #endif /* __AVX2__ */
 
 /* ---- Scalar fallback: dequant + dot (uses existing dequant_row) ---- */
@@ -126,6 +228,8 @@ float qdot_row(const void *row_data, const float *x, int K, ggml_type_t type)
 #ifdef __AVX2__
     if (type == GGML_TYPE_Q4_K)
         return qdot_q4_k_avx2(row_data, x, K);
+    if (type == GGML_TYPE_Q6_K)
+        return qdot_q6_k_avx2(row_data, x, K);
 #endif
     return qdot_row_scalar(row_data, x, K, type);
 }
