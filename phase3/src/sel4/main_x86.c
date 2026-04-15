@@ -141,41 +141,42 @@ static uint32_t nvme_model_n_pages = 0;
 /* ---- Serial output via seL4 debug syscall ---- */
 
 /* NVMe log line buffer: accumulates chars until newline, then flushes
- * the whole line as a LOG_BOOT entry with [PA] source tag.
- * Captures ALL Process A serial output automatically. */
+ * the whole line as a LOG_BOOT entry with [SER]/[VGA] source tag.
+ * All serial output (puts_serial, put_dec, put_hex) goes through
+ * putc_serial so numbers appear in the NVMe log correctly. */
 #if JARVIS_DBG_BOOT_LOG
 static char  log_line_buf[480];
 static int   log_line_pos = 0;
 #endif
 
+static void putc_serial(char c)
+{
+    seL4_DebugPutChar(c);
+#if JARVIS_DBG_BOOT_LOG
+    if (g_nvme_ptr) {
+        if (log_line_pos == 0) {
+            const char *tag = vga_ready ? "[VGA] " : "[SER] ";
+            while (*tag) log_line_buf[log_line_pos++] = *tag++;
+        }
+        if (c == '\n') {
+            log_line_buf[log_line_pos] = '\0';
+            if (log_line_pos > 6)
+                nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr,
+                               g_nvme_bounce_paddr, LOG_BOOT, log_line_buf);
+            log_line_pos = 0;
+        } else if (c != '\r' && log_line_pos < 479) {
+            log_line_buf[log_line_pos++] = c;
+        }
+    }
+#endif
+#ifdef __x86_64__
+    if (vga_ready) vga_putc(c);
+#endif
+}
+
 static void puts_serial(const char *s)
 {
-    const char *p = s;
-    while (*p) {
-        seL4_DebugPutChar(*p);
-#if JARVIS_DBG_BOOT_LOG
-        if (g_nvme_ptr) {
-            /* Start each line with [SER] or [VGA] tag */
-            if (log_line_pos == 0) {
-                const char *tag = vga_ready ? "[VGA] " : "[SER] ";
-                while (*tag) log_line_buf[log_line_pos++] = *tag++;
-            }
-            if (*p == '\n') {
-                log_line_buf[log_line_pos] = '\0';
-                if (log_line_pos > 6)
-                    nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr,
-                                   g_nvme_bounce_paddr, LOG_BOOT, log_line_buf);
-                log_line_pos = 0;
-            } else if (*p != '\r' && log_line_pos < 479) {
-                log_line_buf[log_line_pos++] = *p;
-            }
-        }
-#endif
-        p++;
-    }
-#ifdef __x86_64__
-    if (vga_ready) vga_puts(s);
-#endif
+    while (*s) putc_serial(*s++);
 }
 
 static void put_hex(uint32_t val)
@@ -183,36 +184,16 @@ static void put_hex(uint32_t val)
     const char hex[] = "0123456789abcdef";
     puts_serial("0x");
     for (int i = 28; i >= 0; i -= 4)
-        seL4_DebugPutChar(hex[(val >> i) & 0xF]);
-#ifdef __x86_64__
-    if (vga_ready) {
-        for (int i = 28; i >= 0; i -= 4)
-            vga_putc(hex[(val >> i) & 0xF]);
-    }
-#endif
+        putc_serial(hex[(val >> i) & 0xF]);
 }
 
 static void put_dec(uint32_t val)
 {
     char buf[12];
     int i = 0;
-    if (val == 0) {
-        seL4_DebugPutChar('0');
-#ifdef __x86_64__
-        if (vga_ready) vga_putc('0');
-#endif
-        return;
-    }
-    while (val > 0) {
-        buf[i++] = '0' + (val % 10);
-        val /= 10;
-    }
-    while (--i >= 0) {
-        seL4_DebugPutChar(buf[i]);
-#ifdef __x86_64__
-        if (vga_ready) vga_putc(buf[i]);
-#endif
-    }
+    if (val == 0) { putc_serial('0'); return; }
+    while (val > 0) { buf[i++] = '0' + (val % 10); val /= 10; }
+    while (--i >= 0) putc_serial(buf[i]);
 }
 
 static uint32_t xorshift32(uint32_t *state) {
@@ -869,6 +850,11 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
     {
         uint64_t total_bytes = 0;
         int ram_large_count = 0;
+        /* Suppress NVMe logging for per-entry dump (40+ lines on 32GB system) */
+#if JARVIS_DBG_BOOT_LOG
+        nvme_controller_t *saved_nvme = g_nvme_ptr;
+        g_nvme_ptr = NULL;
+#endif
         for (int i = 0; i < ut_count; i++) {
             size_t size_bits = 0;
             uintptr_t paddr = 0;
@@ -876,7 +862,6 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
             simple_get_nth_untyped(&simple, i, &size_bits, &paddr, &device);
             size_t sz = (1UL << size_bits);
             if (!device) total_bytes += sz;
-            /* Print only RAM untypeds >= 1MB to reduce clutter */
             if (!device && size_bits >= 20) {
                 puts_serial("  ut["); put_dec((uint32_t)i);
                 puts_serial("]: size="); put_dec((uint32_t)(sz >> 20));
@@ -885,6 +870,10 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
                 ram_large_count++;
             }
         }
+#if JARVIS_DBG_BOOT_LOG
+        g_nvme_ptr = saved_nvme;
+#endif
+        /* This summary line goes to NVMe log */
         puts_serial("  RAM>=1MB: "); put_dec((uint32_t)ram_large_count);
         puts_serial(" of "); put_dec((uint32_t)ut_count);
         puts_serial(" total untypeds, ");
@@ -908,7 +897,7 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
 
     /* Configure Process B from CPIO archive */
     sel4utils_process_config_t config = process_config_default_simple(
-        &simple, INFERENCE_APP, seL4_MaxPrio - 1);
+        &simple, INFERENCE_APP, seL4_MaxPrio);
     config = process_config_auth(config, simple_get_tcb(&simple));
 
     error = sel4utils_configure_process_custom(&inference_process,
@@ -1600,16 +1589,47 @@ static void *main_continued(void *arg UNUSED)
             puts_serial("[PA] Waiting for PB response...\n");
 #endif
 
-            /* Block until Process B signals completion. seL4_Yield does NOT
-             * yield to lower-priority threads — Process B at MaxPrio-1 would
-             * starve if we polled. After waking, drain all MSG_DEBUG + MSG_RESPONSE
-             * from the ring. PB's debug messages are post-mortem only (not real-time)
-             * but if PB hangs, the VGA screen still shows per-token progress. */
-            seL4_Wait(resp_notif, NULL);
-
-            /* Drain all messages: MSG_DEBUG → NVMe log, MSG_RESPONSE → response buffer */
+            /* Wait for Process B response with timeout.
+             * PA and PB at equal priority — seL4_Yield gives PB CPU time.
+             * Timeout after 5M polls (~60-120s on bare metal) prevents
+             * permanent hang if PB crashes (fault goes to fault endpoint,
+             * not resp_notif, so seL4_Wait would block forever). */
             char full_response[512];
             int resp_offset = 0;
+            {
+                int got_response = 0;
+                uint32_t timeout_polls = 0;
+                const uint32_t POLL_TIMEOUT = 5000000;
+                const uint32_t LOG_INTERVAL = 500000;
+
+                while (!got_response && timeout_polls < POLL_TIMEOUT) {
+                    uint32_t wr = __atomic_load_n(
+                        &shared_response_ring->header.write_idx, __ATOMIC_ACQUIRE);
+                    uint32_t rd = __atomic_load_n(
+                        &shared_response_ring->header.read_idx, __ATOMIC_RELAXED);
+                    if (wr != rd) {
+                        got_response = 1;
+                        break;
+                    }
+                    timeout_polls++;
+                    if (timeout_polls % LOG_INTERVAL == 0) {
+                        puts_serial("[PA] Waiting for PB... ");
+                        put_dec(timeout_polls / 1000);
+                        puts_serial("K polls\n");
+                    }
+                    seL4_Yield();
+                }
+
+                if (!got_response) {
+                    puts_serial("[PA] TIMEOUT: PB did not respond after ");
+                    put_dec(POLL_TIMEOUT / 1000000);
+                    puts_serial("M polls -- PB may have crashed\n");
+                    q_errors++;
+                    goto next_query;
+                }
+            }
+
+            /* Drain all messages: MSG_DEBUG → NVMe log, MSG_RESPONSE → response buffer */
             {
                 uint8_t msg_type;
                 uint16_t msg_seq;
@@ -1626,15 +1646,7 @@ static void *main_continued(void *arg UNUSED)
 #endif
                         continue;
                     }
-                    if (msg_type != MSG_RESPONSE) {
-#if JARVIS_DBG_IPC
-                        puts_serial("[WARN] non-response in drain: type=");
-                        put_dec((uint32_t)msg_type);
-                        puts_serial(" seq="); put_dec((uint32_t)msg_seq);
-                        puts_serial("\n");
-#endif
-                        break;
-                    }
+                    if (msg_type != MSG_RESPONSE) break;
                     int copy = (int)msg_len;
                     if (resp_offset + copy > (int)sizeof(full_response) - 1)
                         copy = (int)sizeof(full_response) - 1 - resp_offset;
@@ -1812,6 +1824,7 @@ static void *main_continued(void *arg UNUSED)
         }
 #endif
 
+    next_query:
         seL4_Yield();
     }
 
