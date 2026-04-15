@@ -706,6 +706,23 @@ int llama_alloc_state(llama_state_t *state, const llama_config_t *config)
         }
     }
 
+    /* Forward pass scratch buffer — replaces large stack arrays that
+     * overflow seL4 Process B's stack (~208KB on stack → 128KB on heap).
+     * Sized for largest user: conv_k_buf needs d_conv * qkv_channels
+     * = 4 * 8192 = 32768 floats. Also used for norm_buf (max dim),
+     * dn_out (max d_inner), ple_out (max dim). All sequential, never overlap. */
+    {
+        int fwd_size = 32768;  /* 128KB — covers conv_k_buf worst case */
+        if (fwd_size < dim) fwd_size = dim;
+        if (fwd_size < hidden_dim) fwd_size = hidden_dim;
+        state->fwd_scratch = (float *)calloc((size_t)fwd_size, sizeof(float));
+        state->fwd_scratch_size = fwd_size;
+        if (!state->fwd_scratch) {
+            llama_free_state(state);
+            return -1;
+        }
+    }
+
     /* Verify all allocations succeeded */
     if (!state->x || !state->xb || !state->xb2 ||
         !state->q || !state->k || !state->v ||
@@ -742,6 +759,7 @@ void llama_free_state(llama_state_t *state)
     free(state->conv_state);
     free(state->ssm_state);
     free(state->qkv_scratch);
+    free(state->fwd_scratch);
 
     memset(state, 0, sizeof(*state));
 }

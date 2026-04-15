@@ -102,6 +102,8 @@ typedef struct {
     float *conv_state;     /* [n_deltanet × (d_conv-1) × qkv_dim] — conv1d sliding window */
     float *ssm_state;      /* [n_deltanet × num_v_heads × head_k_dim × head_v_dim] — recurrent state */
     float *qkv_scratch;    /* scratch for fused QKV + gate projections */
+    float *fwd_scratch;    /* scratch for forward pass temporaries (norm bufs, dn_out, conv_k, ple_out) */
+    int    fwd_scratch_size; /* size in floats */
     int    n_deltanet;     /* number of DeltaNet layers (for state indexing) */
     int pos;
     int max_seq_len;

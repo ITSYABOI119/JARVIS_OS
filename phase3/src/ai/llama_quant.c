@@ -1134,7 +1134,7 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
 
             /* Dequant conv kernel to F32 if needed */
             const float *conv_k;
-            float conv_k_buf[4 * 8192]; /* max d_conv * qkv_channels — stack OK for host */
+            float *conv_k_buf = state->fwd_scratch; /* max 4*8192 = 32768 floats (was 128KB stack) */
             if (layer->ssm_conv1d.type == GGML_TYPE_F32) {
                 conv_k = (const float *)layer->ssm_conv1d.data;
             } else {
@@ -1183,7 +1183,7 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
             /* h. DeltaNet recurrence: conv1d output → delta rule → gated output */
             float *ssm_s = state->ssm_state +
                            (size_t)dn_idx * num_v_heads * head_k_dim_ssm * head_v_dim_ssm;
-            float dn_out[4096]; /* max v_dim — output of recurrence */
+            float *dn_out = state->fwd_scratch; /* max v_dim (was 16KB stack) */
 
             deltanet_forward(qkv, qkv + q_dim, qkv + q_dim + k_dim,
                              z_buf, alpha_raw, beta_raw,
@@ -1214,7 +1214,7 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
                     const float *norm = (const float *)layer->post_attn_norm.data;
                     tensor_rms_norm(state->xb2, norm, state->xb2, dim, layer_norm_eps);
                 } else {
-                    float nbuf[4096];
+                    float *nbuf = state->fwd_scratch; /* max dim (was 16KB stack) */
                     dequant_row(layer->post_attn_norm.data, nbuf, dim,
                                 (ggml_type_t)layer->post_attn_norm.type);
                     tensor_rms_norm(state->xb2, nbuf, state->xb2, dim, layer_norm_eps);
@@ -1507,7 +1507,7 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
                 const float *norm = (const float *)layer->post_attn_norm.data;
                 tensor_rms_norm(state->xb2, norm, state->xb2, dim, norm_eps);
             } else {
-                float norm_buf[4096];
+                float *norm_buf = state->fwd_scratch; /* max dim (was 16KB stack) */
                 dequant_row(layer->post_attn_norm.data, norm_buf, dim,
                             (ggml_type_t)layer->post_attn_norm.type);
                 tensor_rms_norm(state->xb2, norm_buf, state->xb2, dim, norm_eps);
@@ -1553,7 +1553,7 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
                 const float *norm = (const float *)layer->post_ffw_norm.data;
                 tensor_rms_norm(state->xb, norm, state->xb, dim, norm_eps);
             } else {
-                float norm_buf[4096];
+                float *norm_buf = state->fwd_scratch; /* max dim (was 16KB stack) */
                 dequant_row(layer->post_ffw_norm.data, norm_buf, dim,
                             (ggml_type_t)layer->post_ffw_norm.type);
                 tensor_rms_norm(state->xb, norm_buf, state->xb, dim, norm_eps);
@@ -1598,7 +1598,7 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
             }
 
             /* proj = ple_proj @ gate (256 -> 1536) */
-            float ple_out[4096];
+            float *ple_out = state->fwd_scratch; /* max dim (was 16KB stack) */
             qmatmul_vec(&layer->ple_proj, gate, ple_out, dim, c->ple_dim);
 
             /* Apply per-layer post_norm (if present) */
