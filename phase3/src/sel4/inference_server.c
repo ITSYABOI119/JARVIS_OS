@@ -424,6 +424,118 @@ int main(int argc, char **argv)
 
     puts_serial("[Process B] Ready for inference requests\n");
 
+    /* ---- Probe model weight pages ----
+     * Read one byte from each major tensor to verify PB can access
+     * the model data mapped by PA. A page fault here means the
+     * mapping is broken — better to crash during probe with a clear
+     * diagnostic than silently during qmodel_forward. */
+    {
+        puts_serial("[Process B] Probing model weight pages...\n");
+        int probe_ok = 0;
+
+        if (qm.token_embed.data && qm.token_embed.n_bytes > 0) {
+            volatile uint8_t t = *(const volatile uint8_t *)qm.token_embed.data;
+            (void)t;
+            puts_serial("  token_embed: OK (");
+            put_dec((uint32_t)(qm.token_embed.n_bytes >> 10));
+            puts_serial("KB at ");
+            put_dec((uint32_t)((uintptr_t)qm.token_embed.data >> 20));
+            puts_serial("M)\n");
+            probe_ok++;
+        }
+
+        if (qm.output_weight.data && qm.output_weight.n_bytes > 0) {
+            volatile uint8_t t1 = *(const volatile uint8_t *)qm.output_weight.data;
+            volatile uint8_t t2 = *((const volatile uint8_t *)qm.output_weight.data
+                                     + qm.output_weight.n_bytes - 1);
+            (void)t1; (void)t2;
+            puts_serial("  output_weight: OK (");
+            put_dec((uint32_t)(qm.output_weight.n_bytes >> 10));
+            puts_serial("KB at ");
+            put_dec((uint32_t)((uintptr_t)qm.output_weight.data >> 20));
+            puts_serial("M)\n");
+            probe_ok++;
+        }
+
+        if (qm.config.n_layers > 0 && qm.layers) {
+            if (qm.layers[0].attn_norm.data && qm.layers[0].attn_norm.n_bytes > 0) {
+                volatile uint8_t t = *(const volatile uint8_t *)qm.layers[0].attn_norm.data;
+                (void)t;
+                puts_serial("  layer[0].attn_norm: OK\n");
+                probe_ok++;
+            }
+            if (qm.layers[0].wq.data && qm.layers[0].wq.n_bytes > 0) {
+                volatile uint8_t t1 = *(const volatile uint8_t *)qm.layers[0].wq.data;
+                volatile uint8_t t2 = *((const volatile uint8_t *)qm.layers[0].wq.data
+                                         + qm.layers[0].wq.n_bytes - 1);
+                (void)t1; (void)t2;
+                puts_serial("  layer[0].wq: OK (");
+                put_dec((uint32_t)(qm.layers[0].wq.n_bytes >> 10));
+                puts_serial("KB)\n");
+                probe_ok++;
+            }
+            int last = qm.config.n_layers - 1;
+            if (qm.layers[last].wq.data && qm.layers[last].wq.n_bytes > 0) {
+                volatile uint8_t t1 = *(const volatile uint8_t *)qm.layers[last].wq.data;
+                volatile uint8_t t2 = *((const volatile uint8_t *)qm.layers[last].wq.data
+                                         + qm.layers[last].wq.n_bytes - 1);
+                (void)t1; (void)t2;
+                puts_serial("  layer["); put_dec((uint32_t)last);
+                puts_serial("].wq: OK (");
+                put_dec((uint32_t)(qm.layers[last].wq.n_bytes >> 10));
+                puts_serial("KB)\n");
+                probe_ok++;
+            }
+        }
+
+        /* Full-sweep probe: read one byte per 4KB page across entire model */
+        puts_serial("  Full sweep: ");
+        put_dec((uint32_t)(model_data_size >> 20));
+        puts_serial("MB (");
+        put_dec((uint32_t)(model_data_size >> 12));
+        puts_serial(" pages)...\n");
+        {
+            const volatile uint8_t *base = (const volatile uint8_t *)model_data;
+            uint32_t n_pages = (uint32_t)(model_data_size >> 12);
+            uint32_t checksum = 0;
+            for (uint32_t p = 0; p < n_pages; p++) {
+                checksum += base[p * 4096];
+                if (p > 0 && (p % 50000) == 0) {
+                    puts_serial("    ");
+                    put_dec(p * 4 / 1024);
+                    puts_serial("MB probed OK\n");
+                }
+            }
+            puts_serial("  Full sweep OK: checksum=");
+            put_dec(checksum);
+            puts_serial(" ("); put_dec(n_pages);
+            puts_serial(" pages)\n");
+            probe_ok++;
+        }
+
+        puts_serial("[Process B] Probe complete: ");
+        put_dec((uint32_t)probe_ok);
+        puts_serial(" OK\n");
+    }
+
+    /* ---- Single forward pass sanity check ---- */
+    {
+        puts_serial("[Process B] Testing single forward pass (token 0)...\n");
+        state.pos = 0;
+        size_t kv_bytes = (size_t)qm.config.n_layers * state.max_seq_len *
+                          qm.config.n_kv_heads * qm.config.head_dim * sizeof(float);
+        memset(state.key_cache, 0, kv_bytes);
+        memset(state.value_cache, 0, kv_bytes);
+
+        qmodel_forward(&qm, &state, (int)vocab.bos_id);
+
+        int top = sample_greedy(state.logits, qm.config.vocab_size);
+        puts_serial("[Process B] Forward pass OK! top_token=");
+        put_dec((uint32_t)top);
+        puts_serial(" pos="); put_dec((uint32_t)state.pos);
+        puts_serial("\n");
+    }
+
     /* Signal Process A that we're ready — eliminates startup race */
     shmem_ipc_send(response_ring, MSG_HEARTBEAT_ACK, 0, NULL, 0);
     seL4_Signal(resp_notif);
