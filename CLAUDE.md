@@ -322,7 +322,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | MSG_DEBUG IPC for Process B -> NVMe log ([PB] tag) | DONE |
 | NVMe log bare-metal verified (boot 5, full boot timeline captured) | DONE |
 | Performance optimization plan (Week 35: fused dequant-dot + SIMD attention) | DONE |
-| Bare-metal workload stall diagnosed (q=4 inference — equal priority + timeout) | DIAGNOSED |
+| Bare-metal IPC inference: q=4,q=5 SUCCESS, ring overflow fix for q=6+ | FIXING |
 
 **Next:** Fused dequant-dot kernels (qdot.c, target 4-5 tok/s), fix test_llama_quant CI segfault, wire dynamic scaling, TurboQuant/RotorQuant evaluation.
 
@@ -523,6 +523,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - Serial console: 115200 baud, 8N1
 - `put_dec()` and `put_hex()` go through `putc_serial()` -> NVMe log. To suppress NVMe logging temporarily (e.g. verbose dumps), save/clear `g_nvme_ptr`.
 - Process A and Process B run at `seL4_MaxPrio` (equal priority). `seL4_Yield` only works between equal-priority threads — MaxPrio-1 gets starved.
+- Response ring has 15 slots. PB must reserve 3 for MSG_RESPONSE — use `pb_can_log()` before debug writes.
 
 ---
 

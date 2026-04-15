@@ -1603,14 +1603,36 @@ static void *main_continued(void *arg UNUSED)
                 const uint32_t LOG_INTERVAL = 500000;
 
                 while (!got_response && timeout_polls < POLL_TIMEOUT) {
-                    uint32_t wr = __atomic_load_n(
-                        &shared_response_ring->header.write_idx, __ATOMIC_ACQUIRE);
-                    uint32_t rd = __atomic_load_n(
-                        &shared_response_ring->header.read_idx, __ATOMIC_RELAXED);
-                    if (wr != rd) {
-                        got_response = 1;
-                        break;
+                    /* Drain MSG_DEBUG inline — keeps ring from filling up */
+                    {
+                        uint8_t pk_type;
+                        uint16_t pk_seq, pk_len;
+                        uint8_t pk_pay[SHMEM_MAX_PAYLOAD];
+                        while (shmem_ipc_recv(shared_response_ring, &pk_type, &pk_seq,
+                                               pk_pay, &pk_len) == 0) {
+                            if (pk_type == MSG_DEBUG) {
+                                pk_pay[pk_len < SHMEM_MAX_PAYLOAD ? pk_len : SHMEM_MAX_PAYLOAD - 1] = '\0';
+#if JARVIS_DBG_BOOT_LOG
+                                nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr,
+                                               g_nvme_bounce_paddr, LOG_BOOT, (const char *)pk_pay);
+#endif
+                                continue;
+                            }
+                            if (pk_type == MSG_RESPONSE) {
+                                int copy = (int)pk_len;
+                                if (resp_offset + copy > (int)sizeof(full_response) - 1)
+                                    copy = (int)sizeof(full_response) - 1 - resp_offset;
+                                if (copy > 0) {
+                                    memcpy(full_response + resp_offset, pk_pay, (size_t)copy);
+                                    resp_offset += copy;
+                                }
+                                got_response = 1;
+                                break;
+                            }
+                            break; /* unknown type */
+                        }
                     }
+                    if (got_response) break;
                     timeout_polls++;
                     if (timeout_polls % LOG_INTERVAL == 0) {
                         puts_serial("[PA] Waiting for PB... ");

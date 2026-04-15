@@ -59,12 +59,23 @@ static void put_dec(uint32_t val)
 
 static shmem_ring_t *g_resp_ring = NULL;  /* set in main(), used by pb_log */
 
+/* Check if response ring has room for debug messages.
+ * Reserve at least 3 slots for MSG_RESPONSE chunks.
+ * Returns 1 if safe to log, 0 if ring is getting full. */
+static int pb_can_log(void)
+{
+    if (!g_resp_ring) return 0;
+    uint32_t wr = __atomic_load_n(&g_resp_ring->header.write_idx, __ATOMIC_RELAXED);
+    uint32_t rd = __atomic_load_n(&g_resp_ring->header.read_idx, __ATOMIC_ACQUIRE);
+    return (wr - rd) < (g_resp_ring->header.size - 3);
+}
+
 static void pb_log(const char *msg)
 {
     puts_serial(msg);
     puts_serial("\n");
 #if JARVIS_DBG_PB
-    if (g_resp_ring) {
+    if (g_resp_ring && pb_can_log()) {
         int len = 0;
         const char *p = msg;
         while (*p++) len++;
@@ -418,9 +429,15 @@ int main(int argc, char **argv)
     seL4_Signal(resp_notif);
 
     /* ---- Main IPC loop ---- */
+    uint32_t pb_query_count = 0;
     while (1) {
+        pb_query_count++;
+        pb_log_num("[PB] Waiting for query #", pb_query_count, "");
+
         /* Wait for signal from Process A */
         seL4_Wait(req_notif, NULL);
+
+        pb_log_num("[PB] Woke for query #", pb_query_count, "");
 
         /* Process all pending requests */
         uint8_t msg_type;
