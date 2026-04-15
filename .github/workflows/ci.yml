@@ -260,6 +260,14 @@ jobs:
           -lm -o /tmp/test_qdot
         /tmp/test_qdot
 
+    - name: "Phase 3: Threadpool (C, pthread)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -DJARVIS_PTHREAD=1 \
+          -I phase3/src/ai \
+          phase3/src/ai/test_threadpool.c phase3/src/ai/threadpool.c \
+          -pthread -lm -o /tmp/test_threadpool
+        /tmp/test_threadpool
+
     - name: "Phase 3: BPE Tokenizer (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 \

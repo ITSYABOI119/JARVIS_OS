@@ -26,6 +26,7 @@
 #include "llama_quant.h"
 #include "dequant.h"
 #include "qdot.h"
+#include "threadpool.h"
 #include "tensor_ops.h"
 #include "sampling.h"
 #include "ssm.h"
@@ -46,6 +47,14 @@
 #endif
 
 #define RMS_EPS 1e-5f
+
+#ifdef JARVIS_PTHREAD
+typedef struct { const float *wf; const float *x; float *out; int K; } qmatmul_f32_ctx_t;
+typedef struct { const uint8_t *wdata; size_t row_bytes; const float *x; float *out; int K; ggml_type_t wtype; } qmatmul_qdot_ctx_t;
+
+static void qmatmul_f32_row(int idx, void *p);
+static void qmatmul_qdot_row(int idx, void *p);
+#endif
 
 /* ============================================================
  * Gemma 4 feature-disable flags for debugging
@@ -97,15 +106,37 @@ static void qmatmul_vec(const qtensor_t *W, const float *x, float *out,
 {
     const ggml_type_t wtype = (ggml_type_t)W->type;
 
+    const int use_threads =
+#ifdef JARVIS_PTHREAD
+        (jarvis_threads() > 1 && M >= 256);
+#else
+        0;
+#endif
+
     /* F32 fast path: direct dot product, no dequant needed */
     if (wtype == GGML_TYPE_F32) {
         const float *wf = (const float *)W->data;
-        for (int i = 0; i < M; i++) {
-            const float *row = wf + (size_t)i * K;
-            float dot = 0.0f;
-            for (int j = 0; j < K; j++)
-                dot += row[j] * x[j];
-            out[i] = dot;
+        if (use_threads) {
+#ifdef JARVIS_PTHREAD
+            qmatmul_f32_ctx_t ctx = { wf, x, out, K };
+            jarvis_parallel_for(0, M, qmatmul_f32_row, &ctx);
+#else
+            for (int i = 0; i < M; i++) {
+                const float *row = wf + (size_t)i * K;
+                float dot = 0.0f;
+                for (int j = 0; j < K; j++)
+                    dot += row[j] * x[j];
+                out[i] = dot;
+            }
+#endif
+        } else {
+            for (int i = 0; i < M; i++) {
+                const float *row = wf + (size_t)i * K;
+                float dot = 0.0f;
+                for (int j = 0; j < K; j++)
+                    dot += row[j] * x[j];
+                out[i] = dot;
+            }
         }
         return;
     }
@@ -118,9 +149,37 @@ static void qmatmul_vec(const qtensor_t *W, const float *x, float *out,
     }
     const uint8_t *wdata = (const uint8_t *)W->data;
 
-    for (int i = 0; i < M; i++)
-        out[i] = qdot_row(wdata + (size_t)i * row_bytes, x, K, wtype);
+    if (use_threads) {
+#ifdef JARVIS_PTHREAD
+        qmatmul_qdot_ctx_t ctx = { wdata, row_bytes, x, out, K, wtype };
+        jarvis_parallel_for(0, M, qmatmul_qdot_row, &ctx);
+#else
+        for (int i = 0; i < M; i++)
+            out[i] = qdot_row(wdata + (size_t)i * row_bytes, x, K, wtype);
+#endif
+    } else {
+        for (int i = 0; i < M; i++)
+            out[i] = qdot_row(wdata + (size_t)i * row_bytes, x, K, wtype);
+    }
 }
+
+#ifdef JARVIS_PTHREAD
+static void qmatmul_f32_row(int idx, void *p)
+{
+    qmatmul_f32_ctx_t *c = (qmatmul_f32_ctx_t *)p;
+    const float *row = c->wf + (size_t)idx * (size_t)c->K;
+    float dot = 0.0f;
+    for (int j = 0; j < c->K; j++)
+        dot += row[j] * c->x[j];
+    c->out[idx] = dot;
+}
+
+static void qmatmul_qdot_row(int idx, void *p)
+{
+    qmatmul_qdot_ctx_t *c = (qmatmul_qdot_ctx_t *)p;
+    c->out[idx] = qdot_row(c->wdata + (size_t)idx * c->row_bytes, c->x, c->K, c->wtype);
+}
+#endif
 
 /* ---- Quantized embedding lookup ----
  *
