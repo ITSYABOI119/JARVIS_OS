@@ -8,7 +8,7 @@ set -uo pipefail  # no -e: continue past failed models
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 MODELS_DIR="$REPO_ROOT/models"
-RESULTS="$MODELS_DIR/jarvis_engine_bench.txt"
+RESULTS="$MODELS_DIR/bench_results/jarvis_engine_$(hostname -s).txt"
 BENCH_BIN="/tmp/bench_engine"
 BENCH_SRC="$REPO_ROOT/phase3/src/ai/bench_engine.c"
 
@@ -30,6 +30,7 @@ compile_bench() {
         "$REPO_ROOT/phase3/src/ai/sampling.c" \
         "$REPO_ROOT/phase3/src/ai/inference.c" \
         "$REPO_ROOT/phase3/src/ai/ssm.c" \
+        "$REPO_ROOT/phase3/src/ai/qdot.c" \
         -lm -o "$BENCH_BIN"
     if [ $? -ne 0 ]; then
         echo "ERROR: compilation failed"
@@ -59,6 +60,9 @@ fi
 COUNT=$(echo "$MODELS" | wc -l)
 
 # --- Run benchmarks ----------------------------------------------------------
+
+# Ensure results directory exists BEFORE tee
+mkdir -p "$(dirname "$RESULTS")"
 
 {
     echo "=== JARVIS Native Engine Benchmark ==="
