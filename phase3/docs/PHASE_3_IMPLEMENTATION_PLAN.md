@@ -44,7 +44,7 @@ This document provides a detailed week-by-week implementation plan for Phase 3. 
 | Inference engine (C-only, quantized) | Mar 25, 2026 | 4/4 stages PASS, coherent text |
 | Process isolation (A+B via CPIO) | Mar 28, 2026 | Shared memory IPC, SEC-014 |
 | Bare-metal boot on Ryzen 2700X | Apr 3, 2026 | VGA output, self-test 5/5 PASS |
-| Bare-metal LLM inference | Apr 3, 2026 | Coherent text via process-isolated IPC |
+| Bare-metal LLM inference | Apr 15, 2026 | 7 queries, coherent text, 0 crashes (was QEMU-only until Apr 15) |
 | NVMe runtime model loading | Apr 4, 2026 | 770MB from Lexar NM790 FAT32, 1.6MB USB image |
 | Intel I211 NIC driver | Apr 5, 2026 | PCI 8086:1539, 11 mock tests, CI green |
 | IPC response drain fix | Apr 5, 2026 | Multi-message responses no longer cause shift |
@@ -145,14 +145,14 @@ All responses are technically accurate and correctly formatted with markdown.
 | ~~NVMe write logging~~ | ~~MEDIUM~~ | ~~~175 LOC~~ | **DONE — nvme_write_sectors + nvme_log + parse_nvme_log.py, bare-metal verified** |
 | ~~NVMe log auto-capture~~ | ~~MEDIUM~~ | ~~~100 LOC~~ | **DONE — puts_serial intercept, [VGA]/[SER] tags, per-query IPC log** |
 | ~~MSG_DEBUG IPC (PB→NVMe log)~~ | ~~MEDIUM~~ | ~~~80 LOC~~ | **DONE — pb_log() helper, Process B debug in NVMe log via IPC** |
-| ~~Poll-drain inference wait~~ | ~~MEDIUM~~ | ~~~50 LOC~~ | **IN PROGRESS — replace seL4_Wait with poll+yield+drain for real-time PB capture** |
+| ~~Poll-drain inference wait~~ | ~~MEDIUM~~ | ~~DONE~~ | **DONE — equal priority + 5M poll timeout + PA inline MSG_DEBUG drain** |
 | Silence verbose model-loader prints | MEDIUM | 1 hour | Gate `[config]`, `[qmodel]`, `[AUDIT]` behind a flag |
 | **Perf: fused dequant-dot + SIMD attention** | **HIGH** | **~570 LOC, 1-2 weeks** | **Target 4-5 tok/s Llama 1B single-threaded (from 1.0). Spec: `docs/superpowers/specs/2026-04-13-perf-fused-dequant-dot-design.md`** |
 | Perf: pthread thread pool (Phase 3d/4) | LOW | TBD | Target 15-25 tok/s with 4-8 seL4 TCB workers. Deferred — needs seL4 threading infra |
 | TurboQuant/RotorQuant evaluation | MEDIUM | 2-3 sessions | RotorQuant discovered — O(d) vs O(d²), 28% faster decode |
 | Asymmetric K/V (Q8-K + TQ-V) | MEDIUM | ~460 LOC | After TQ/RQ evaluation |
 | Wire dynamic model scaling | MEDIUM | 2-3 sessions | Hot-swap from NVMe, state machine |
-| Debug bare-metal workload stall | HIGH | TBD | Stalls on first inference query — NVMe log shows q=4 hang. Need PB debug data |
+| Debug bare-metal workload stall | HIGH | DONE | Root cause: 208KB stack arrays in qmodel_forward (DeltaNet/Gemma4 code). Fixed: fwd_scratch heap buffer |
 | Enhanced SHIELD | LOW | 2 weeks | Model-assisted risk scoring |
 | 30-day stability test on x86 | LOW | 30 days | Continuous workload, NVMe log capture |
 | Final report + v0.3.0-beta tag | LAST | 1 week | After all above |
@@ -639,7 +639,7 @@ While waiting for the JARVIS Project PC, the majority of Phase 3b implementation
 | 3b software (QEMU) | **DONE** | Mar 2026 |
 | 3b optimization (AVX2, SIMD) | **DONE** | Mar 31, 2026 |
 | 3b bare-metal boot | **DONE** | Apr 3, 2026 |
-| 3b bare-metal inference | **DONE** | Apr 3, 2026 |
+| 3b bare-metal inference | **DONE** | Apr 15, 2026 (was QEMU-only until stack overflow fix) |
 | 3b NVMe model loading | **DONE** | Apr 4, 2026 |
 | 3b I211 NIC + IPC fixes | **DONE** | Apr 5-6, 2026 |
 | 3b continuous workload | **DONE** | Apr 6, 2026 (QEMU verified, err=0) |
@@ -651,8 +651,9 @@ While waiting for the JARVIS Project PC, the majority of Phase 3b implementation
 | 3c engine bench (11/11 models) | **DONE** | Apr 12, bench_engine.c, 6 model families |
 | 3c NVMe write logging | **DONE** | Apr 13, raw sector telemetry, bare-metal boot 4 captured 116 entries |
 | 3c NVMe log auto-capture + VGA/SER tags | **DONE** | Apr 13-14, puts_serial intercept, MSG_DEBUG IPC, pb_log() |
-| 3c poll-drain inference wait | **IN PROGRESS** | Replace seL4_Wait with poll+yield+drain for real-time PB capture |
-| **3c bare-metal workload stall** | **INVESTIGATING** | Stalls on first inference query (q=4). NVMe log + PB debug needed |
+| 3c IPC inference wait: poll+yield+drain with timeout | **DONE** | Equal priority, 5M poll timeout, PA inline MSG_DEBUG drain |
+| **3c bare-metal inference VERIFIED** | **DONE** | Root cause: 208KB stack overflow in qmodel_forward. Fix: fwd_scratch heap buffer. 7 queries, 0 crashes. |
+| 3c QEMU NVMe virtual disk | **DONE** | whole-disk FAT32 image, instant iteration vs bare-metal reflash |
 | **3c perf: fused dequant-dot + SIMD attn** | **NEXT** | **Target 4-5 tok/s Llama 1B (from 1.0). ~570 LOC, qdot.c/h** |
 | 3c TurboQuant/RotorQuant eval | PENDING | RotorQuant discovered as alternative (moved to Week 35b) |
 | 3c dynamic scaling | PENDING | Wire model hot-swap + state machine |

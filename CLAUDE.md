@@ -271,8 +271,8 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | Self-test 5/5 PASS on real hardware | DONE |
 | Process isolation on real hardware | DONE |
 | Bare-metal boot guide + BIOS checklist | DONE |
-| **Llama 3.2 1B inference on bare-metal Ryzen 2700X** | **DONE** |
-| **Coherent text generation via process-isolated IPC on real hardware** | **DONE** |
+| **Llama 3.2 1B inference on bare-metal Ryzen 2700X** | **DONE (Apr 15)** |
+| **Coherent text generation via process-isolated IPC on real hardware** | **DONE (Apr 15)** |
 | NVMe driver (PCI detect, BAR0 map, admin queue, IDENTIFY, I/O read) | DONE |
 | FAT32 read-only parser (BPB, root dir scan, cluster chain) | DONE |
 | NVMe IDENTIFY succeeds in QEMU ("QEMU NVMe Ctrl") | DONE |
@@ -322,9 +322,14 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | MSG_DEBUG IPC for Process B -> NVMe log ([PB] tag) | DONE |
 | NVMe log bare-metal verified (boot 5, full boot timeline captured) | DONE |
 | Performance optimization plan (Week 35: fused dequant-dot + SIMD attention) | DONE |
-| Bare-metal IPC stall: stack overflow in qmodel_forward (208KB stack arrays -> heap) | FIXED |
+| **Bare-metal IPC inference VERIFIED: 7 queries, 0 crashes (stack overflow fixed)** | **DONE** |
+| Equal priority PA=PB (seL4_MaxPrio) + putc_serial NVMe log capture | DONE |
+| Inference timeout (5M poll) + ring overflow protection (pb_can_log) | DONE |
+| QEMU NVMe virtual disk for rapid iteration (whole-disk FAT32) | DONE |
+| Model data probe (197K page sweep + forward pass test) | DONE |
+| fwd_scratch heap buffer (208KB stack -> heap) | DONE |
 
-**Next:** Fused dequant-dot kernels (qdot.c, target 4-5 tok/s), fix test_llama_quant CI segfault, wire dynamic scaling, TurboQuant/RotorQuant evaluation.
+**Next:** Fused dequant-dot kernels (qdot.c, target 4-5 tok/s), wire dynamic scaling, 30-day stability test, TurboQuant/RotorQuant evaluation.
 
 ### Pre-Work Tasks (Before JARVIS Project PC)
 
@@ -511,9 +516,8 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - Format: 512-byte records (header + entries), XOR checksum
 - Auto-capture: `puts_serial()` intercept writes every line to NVMe log
 - Tags: `[VGA]` = visible on monitor, `[SER]` = serial only, `[PB]` = Process B via MSG_DEBUG IPC
-- Recovery: `sudo dd if=/dev/nvme0n1 bs=512 skip=4000794624 count=2700 of=/tmp/jarvis_log.bin`
-- Parser: `python3 phase3/scripts/parse_nvme_log.py /tmp/jarvis_log.bin`
-- Known issue: `seL4_Yield` doesn't yield to lower-priority Process B — poll-drain reverted to `seL4_Wait`
+- Recovery: `sudo dd if=/dev/nvme0n1 bs=512 skip=4000794624 count=2700 | python3 phase3/scripts/parse_nvme_log.py`
+- `seL4_Yield` only yields to equal-priority — PA and PB both at MaxPrio
 
 ### Bare-Metal Debugging Rules
 
@@ -647,6 +651,8 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Final Scores:** `models/quality_results/FINAL_SCORES.txt` (7-judge combined: quality + speed + PPL + tier decisions)
 - **x86 Build Script:** `phase3/scripts/build_jarvis_x86.sh`
 - **QEMU NVMe Test:** `phase3/scripts/qemu_test.sh` (pass model path as arg)
+- **QEMU NVMe Disk:** `~/nvme_test.img` FAT32 with MODEL.GUF; `-drive file=...,if=none,id=nvme0,format=raw -device nvme,serial=QEMU_NVME,drive=nvme0`
+- **Inference Server (PB):** `phase3/src/sel4/inference_server.c`
 - **NVMe Partition Setup:** `phase3/scripts/setup_nvme_partition.sh`
 - **Check CI:** `gh run list --limit 1` then `gh run view <id> --log-failed` if failed
 
