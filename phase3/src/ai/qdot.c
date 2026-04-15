@@ -94,6 +94,183 @@ static float qdot_q4_k_avx2(const void *row_data, const float *x, int K)
     return hsum_avx2(acc);
 }
 
+/* ---- AVX2 fused Q8_0 dequant-dot kernel ----
+ *
+ * Simplest kernel. Each block: 2-byte F16 scale + 32 signed int8 values.
+ * Process 8 values at a time: sign-extend int8 to int32, cvt to F32,
+ * multiply by scale, FMA with x.  4 iterations of 8 = 32 per block.
+ */
+static float qdot_q8_0_avx2(const void *row_data, const float *x, int K)
+{
+    const int n_blocks = K / 32;
+    const q8_0_block_t *blocks = (const q8_0_block_t *)row_data;
+
+    __m256 acc = _mm256_setzero_ps();
+
+    for (int b = 0; b < n_blocks; b++) {
+        float scale = f16_to_f32(blocks[b].d);
+        __m256 vscale = _mm256_set1_ps(scale);
+        const int8_t *qs = blocks[b].qs;
+        const float *xb = x + b * 32;
+
+        /* 4 groups of 8 values */
+        for (int k = 0; k < 32; k += 8) {
+            /* Load 8 int8 values, sign-extend to int32 */
+            __m128i raw8 = _mm_loadl_epi64((const __m128i *)(qs + k));
+            __m256i raw32 = _mm256_cvtepi8_epi32(raw8);
+
+            /* Convert to F32, multiply by scale, FMA with x */
+            __m256 fval = _mm256_cvtepi32_ps(raw32);
+            __m256 scaled = _mm256_mul_ps(fval, vscale);
+            __m256 xv = _mm256_loadu_ps(xb + k);
+            acc = _mm256_fmadd_ps(scaled, xv, acc);
+        }
+    }
+
+    return hsum_avx2(acc);
+}
+
+/* ---- AVX2 fused Q4_0 dequant-dot kernel ----
+ *
+ * Each block: 2-byte F16 scale + 16 bytes (32 nibbles, 2 per byte).
+ * Layout: low nibbles → positions 0..15, high nibbles → positions 16..31.
+ * Values: (nibble - 8) * scale.
+ * Process 8 bytes at a time → 8 low + 8 high values per iteration.
+ * 2 iterations of 8 bytes = 16 bytes → 32 values per block.
+ */
+static float qdot_q4_0_avx2(const void *row_data, const float *x, int K)
+{
+    const int n_blocks = K / 32;
+    const q4_0_block_t *blocks = (const q4_0_block_t *)row_data;
+    const __m256i mask_0f = _mm256_set1_epi32(0x0F);
+    const __m256i sub_8   = _mm256_set1_epi32(8);
+
+    __m256 acc = _mm256_setzero_ps();
+
+    for (int b = 0; b < n_blocks; b++) {
+        float scale = f16_to_f32(blocks[b].d);
+        __m256 vscale = _mm256_set1_ps(scale);
+        const uint8_t *qs = blocks[b].qs;
+        const float *xb = x + b * 32;
+
+        /* 2 groups of 8 bytes = 16 bytes total */
+        for (int k = 0; k < 16; k += 8) {
+            /* Load 8 bytes, zero-extend to 8 x int32 */
+            __m128i raw8 = _mm_loadl_epi64((const __m128i *)(qs + k));
+            __m256i raw32 = _mm256_cvtepu8_epi32(raw8);
+
+            /* Low nibble: positions k..k+7 → (lo - 8) * scale */
+            __m256i lo_i = _mm256_sub_epi32(_mm256_and_si256(raw32, mask_0f), sub_8);
+            __m256 flo = _mm256_cvtepi32_ps(lo_i);
+            __m256 x_lo = _mm256_loadu_ps(xb + k);
+            acc = _mm256_fmadd_ps(_mm256_mul_ps(flo, vscale), x_lo, acc);
+
+            /* High nibble: positions k+16..k+23 → (hi - 8) * scale */
+            __m256i hi_i = _mm256_sub_epi32(_mm256_srli_epi32(raw32, 4), sub_8);
+            __m256 fhi = _mm256_cvtepi32_ps(hi_i);
+            __m256 x_hi = _mm256_loadu_ps(xb + k + 16);
+            acc = _mm256_fmadd_ps(_mm256_mul_ps(fhi, vscale), x_hi, acc);
+        }
+    }
+
+    return hsum_avx2(acc);
+}
+
+/* ---- AVX2 fused Q5_K dequant-dot kernel ----
+ *
+ * Like Q4_K but values are 5-bit: low 4 from qs nibbles + high 1 from qh.
+ * Block: d(f16) + dmin(f16) + scales[12] + qh[32] + qs[128], 176 bytes, 256 values.
+ *
+ * qh layout: 32 bytes = 256 bits. For group j, u1=1<<(2j) and u2=1<<(2j+1)
+ * select the high bit per value. val = d*sc*(lo4 + hi1*16) - dmin*mn.
+ *
+ * AVX2 approach: process 8 bytes at a time. Extract low nibbles, extract
+ * the qh bit (test u1/u2 mask, shift left 4 if set), OR together for
+ * 5-bit value, then apply scale/min as in Q4_K.
+ */
+static float qdot_q5_k_avx2(const void *row_data, const float *x, int K)
+{
+    const int n_blocks = K / 256;
+    const q5_k_block_t *blocks = (const q5_k_block_t *)row_data;
+    const __m256i mask_0f = _mm256_set1_epi32(0x0F);
+    const __m256i sixteen = _mm256_set1_epi32(16);
+
+    __m256 acc = _mm256_setzero_ps();
+
+    for (int b = 0; b < n_blocks; b++) {
+        const q5_k_block_t *blk = &blocks[b];
+        float d    = f16_to_f32(blk->d);
+        float dmin = f16_to_f32(blk->dmin);
+        const uint8_t *qs = blk->qs;
+        const uint8_t *qh = blk->qh;
+        const float *xb = x + b * 256;
+
+        /* Unpack 6-bit scales and mins from 12 packed bytes (same as Q4_K) */
+        uint8_t sc[8], mn[8];
+        for (int i = 0; i < 4; i++) {
+            sc[i]     = blk->scales[i] & 63;
+            sc[i + 4] = (blk->scales[i + 8] & 0xF) | ((blk->scales[i] >> 6) << 4);
+            mn[i]     = blk->scales[i + 4] & 63;
+            mn[i + 4] = (blk->scales[i + 8] >> 4) | ((blk->scales[i + 4] >> 6) << 4);
+        }
+
+        /* 4 groups of 64 values */
+        uint8_t u1 = 1, u2 = 2;
+        for (int j = 0; j < 4; j++) {
+            __m256 vd1 = _mm256_set1_ps(d * sc[2 * j]);
+            __m256 vm1 = _mm256_set1_ps(dmin * mn[2 * j]);
+            __m256 vd2 = _mm256_set1_ps(d * sc[2 * j + 1]);
+            __m256 vm2 = _mm256_set1_ps(dmin * mn[2 * j + 1]);
+
+            __m256i vu1 = _mm256_set1_epi32(u1);
+            __m256i vu2 = _mm256_set1_epi32(u2);
+
+            /* Process 32 bytes in chunks of 8 */
+            for (int k = 0; k < 32; k += 8) {
+                /* Load 8 qs bytes, zero-extend to 8 x int32 */
+                __m128i raw8 = _mm_loadl_epi64((const __m128i *)(qs + 32 * j + k));
+                __m256i raw32 = _mm256_cvtepu8_epi32(raw8);
+
+                /* Load 8 qh bytes, zero-extend to 8 x int32 */
+                __m128i qh8 = _mm_loadl_epi64((const __m128i *)(qh + k));
+                __m256i qh32 = _mm256_cvtepu8_epi32(qh8);
+
+                /* --- Lower nibble path: positions 64*j + k .. k+7 --- */
+                __m256i lo_nib = _mm256_and_si256(raw32, mask_0f);
+                /* hi1 = (qh[k] & u1) ? 16 : 0 — test bit, then select 16 or 0 */
+                __m256i test1 = _mm256_and_si256(qh32, vu1);
+                /* Compare != 0: if nonzero, all bits set; mask with 16 */
+                __m256i nz1 = _mm256_andnot_si256(
+                    _mm256_cmpeq_epi32(test1, _mm256_setzero_si256()),
+                    sixteen);
+                __m256i val1 = _mm256_add_epi32(lo_nib, nz1);  /* lo4 + hi1*16 */
+                __m256 fval1 = _mm256_cvtepi32_ps(val1);
+                __m256 x_lo = _mm256_loadu_ps(xb + 64 * j + k);
+                __m256 dq1 = _mm256_fmsub_ps(vd1, fval1, vm1);  /* d1*val - m1 */
+                acc = _mm256_fmadd_ps(dq1, x_lo, acc);
+
+                /* --- Upper nibble path: positions 64*j + 32 + k .. k+7 --- */
+                __m256i hi_nib = _mm256_srli_epi32(raw32, 4);
+                /* hi2 = (qh[k] & u2) ? 16 : 0 */
+                __m256i test2 = _mm256_and_si256(qh32, vu2);
+                __m256i nz2 = _mm256_andnot_si256(
+                    _mm256_cmpeq_epi32(test2, _mm256_setzero_si256()),
+                    sixteen);
+                __m256i val2 = _mm256_add_epi32(hi_nib, nz2);  /* hi4 + hi2*16 */
+                __m256 fval2 = _mm256_cvtepi32_ps(val2);
+                __m256 x_hi = _mm256_loadu_ps(xb + 64 * j + 32 + k);
+                __m256 dq2 = _mm256_fmsub_ps(vd2, fval2, vm2);  /* d2*val - m2 */
+                acc = _mm256_fmadd_ps(dq2, x_hi, acc);
+            }
+
+            u1 <<= 2;
+            u2 <<= 2;
+        }
+    }
+
+    return hsum_avx2(acc);
+}
+
 /* ---- AVX2 fused Q6_K dequant-dot kernel ----
  *
  * Reads Q6_K blocks directly, dequantizes into SIMD registers, and
@@ -230,6 +407,12 @@ float qdot_row(const void *row_data, const float *x, int K, ggml_type_t type)
         return qdot_q4_k_avx2(row_data, x, K);
     if (type == GGML_TYPE_Q6_K)
         return qdot_q6_k_avx2(row_data, x, K);
+    if (type == GGML_TYPE_Q8_0)
+        return qdot_q8_0_avx2(row_data, x, K);
+    if (type == GGML_TYPE_Q4_0)
+        return qdot_q4_0_avx2(row_data, x, K);
+    if (type == GGML_TYPE_Q5_K)
+        return qdot_q5_k_avx2(row_data, x, K);
 #endif
     return qdot_row_scalar(row_data, x, K, type);
 }
