@@ -16,7 +16,7 @@ BENCH_SRC="$REPO_ROOT/phase3/src/ai/bench_engine.c"
 
 compile_bench() {
     echo "Compiling bench_engine..."
-    gcc -O2 -mavx2 -mfma -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -DJARVIS_PTHREAD=1 -pthread \
+    gcc -O2 -mavx2 -mfma -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE \
         -I "$REPO_ROOT/phase3/src/ai" \
         "$REPO_ROOT/phase3/src/ai/bench_engine.c" \
         "$REPO_ROOT/phase3/src/ai/llama_quant.c" \
