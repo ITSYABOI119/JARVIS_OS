@@ -271,6 +271,80 @@ static float qdot_q5_k_avx2(const void *row_data, const float *x, int K)
     return hsum_avx2(acc);
 }
 
+/* ---- AVX2 fused BF16 dequant-dot kernel ----
+ *
+ * BF16 = upper 16 bits of IEEE 754 F32.  Each element is 2 bytes; block
+ * size is 1 (per-element type).  A row of K values is K*2 bytes.
+ *
+ * AVX2 path: load 8 uint16 → zero-extend to 8 x int32 → shift left 16
+ * (placing the BF16 bits in the F32 exponent+mantissa position) →
+ * reinterpret bits as F32 → FMA with the matching 8-wide slice of x.
+ *
+ * No scale/bias fields; the bits are the value.
+ */
+static float qdot_bf16_avx2(const void *row_data, const float *x, int K)
+{
+    const uint16_t *bf = (const uint16_t *)row_data;
+    __m256 acc = _mm256_setzero_ps();
+
+    int k = 0;
+    for (; k <= K - 8; k += 8) {
+        __m128i raw16  = _mm_loadu_si128((const __m128i *)(bf + k)); /* 8 x uint16 */
+        __m256i raw32  = _mm256_cvtepu16_epi32(raw16);               /* zero-extend to int32 */
+        __m256i shift  = _mm256_slli_epi32(raw32, 16);               /* BF16 → F32 bit layout */
+        __m256  fval   = _mm256_castsi256_ps(shift);                  /* reinterpret as F32 */
+        __m256  xv     = _mm256_loadu_ps(x + k);
+        acc = _mm256_fmadd_ps(fval, xv, acc);
+    }
+
+    /* Scalar tail */
+    float dot = hsum_avx2(acc);
+    for (; k < K; k++) {
+        union { uint32_t u; float f; } un;
+        un.u = ((uint32_t)bf[k]) << 16;
+        dot += un.f * x[k];
+    }
+    return dot;
+}
+
+/* ---- AVX2 fused F16 dequant-dot kernel ----
+ *
+ * IEEE 754 half-float (F16).  Each element is 2 bytes; block size is 1.
+ * A row of K values is K*2 bytes.
+ *
+ * AVX2+F16C path: load 8 uint16 → _mm256_cvtph_ps (F16C instruction,
+ * implied by -mavx2 on GCC/Clang for Zen+) → FMA with x.
+ *
+ * Guarded by #ifdef __F16C__; falls through to scalar otherwise.
+ */
+static float qdot_f16_avx2(const void *row_data, const float *x, int K)
+{
+    const uint16_t *f16 = (const uint16_t *)row_data;
+
+#ifdef __F16C__
+    __m256 acc = _mm256_setzero_ps();
+
+    int k = 0;
+    for (; k <= K - 8; k += 8) {
+        __m128i raw16 = _mm_loadu_si128((const __m128i *)(f16 + k)); /* 8 x uint16 */
+        __m256  fval  = _mm256_cvtph_ps(raw16);                       /* F16 → F32 (F16C) */
+        __m256  xv    = _mm256_loadu_ps(x + k);
+        acc = _mm256_fmadd_ps(fval, xv, acc);
+    }
+
+    float dot = hsum_avx2(acc);
+    for (; k < K; k++)
+        dot += f16_to_f32(f16[k]) * x[k];
+    return dot;
+#else
+    /* No F16C: scalar path */
+    float dot = 0.0f;
+    for (int k = 0; k < K; k++)
+        dot += f16_to_f32(f16[k]) * x[k];
+    return dot;
+#endif
+}
+
 /* ---- AVX2 fused Q6_K dequant-dot kernel ----
  *
  * Reads Q6_K blocks directly, dequantizes into SIMD registers, and
@@ -413,6 +487,10 @@ float qdot_row(const void *row_data, const float *x, int K, ggml_type_t type)
         return qdot_q4_0_avx2(row_data, x, K);
     if (type == GGML_TYPE_Q5_K)
         return qdot_q5_k_avx2(row_data, x, K);
+    if (type == GGML_TYPE_BF16)
+        return qdot_bf16_avx2(row_data, x, K);
+    if (type == GGML_TYPE_F16)
+        return qdot_f16_avx2(row_data, x, K);
 #endif
     return qdot_row_scalar(row_data, x, K, type);
 }
