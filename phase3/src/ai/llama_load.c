@@ -625,6 +625,8 @@ int llama_alloc_state(llama_state_t *state, const llama_config_t *config)
 
     state->max_seq_len = max_seq;
     state->pos = 0;
+    state->rope_table_half = max_head_dim / 2;
+    state->rope_table_ready = false;
 
     /* xb/xb2 must fit the largest attention output: n_heads * max_head_dim.
      * For Gemma 4: 8*512=4096 > dim=1536, so xb must be larger than dim.
@@ -644,6 +646,15 @@ int llama_alloc_state(llama_state_t *state, const llama_config_t *config)
     state->hb     = (float *)calloc((size_t)hidden_dim, sizeof(float));
     state->hb2    = (float *)calloc((size_t)hidden_dim, sizeof(float));
     state->logits = (float *)calloc((size_t)vocab_size, sizeof(float));
+
+    /* RoPE tables (lazy-filled) */
+    {
+        size_t rope_elems = (size_t)max_seq * (size_t)state->rope_table_half;
+        state->rope_cos     = (float *)malloc(rope_elems * sizeof(float));
+        state->rope_sin     = (float *)malloc(rope_elems * sizeof(float));
+        state->rope_cos_swa = (float *)malloc(rope_elems * sizeof(float));
+        state->rope_sin_swa = (float *)malloc(rope_elems * sizeof(float));
+    }
 
     /* KV cache: use max kv_dim per layer for uniform cache stride.
      * SWA layers (smaller kv_dim) only use a prefix of each slot.
@@ -728,6 +739,7 @@ int llama_alloc_state(llama_state_t *state, const llama_config_t *config)
         !state->q || !state->k || !state->v ||
         !state->att || !state->hb || !state->hb2 ||
         !state->logits || !state->key_cache || !state->value_cache ||
+        !state->rope_cos || !state->rope_sin || !state->rope_cos_swa || !state->rope_sin_swa ||
         (config->ple_dim > 0 && (!state->ple_all || !state->ple_context))) {
         llama_free_state(state);
         return -1;
@@ -760,6 +772,10 @@ void llama_free_state(llama_state_t *state)
     free(state->ssm_state);
     free(state->qkv_scratch);
     free(state->fwd_scratch);
+    free(state->rope_cos);
+    free(state->rope_sin);
+    free(state->rope_cos_swa);
+    free(state->rope_sin_swa);
 
     memset(state, 0, sizeof(*state));
 }

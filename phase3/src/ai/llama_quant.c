@@ -153,6 +153,64 @@ static void residual_add(float *x, const float *y, int n)
         x[i] += y[i];
 }
 
+#ifdef __AVX2__
+static inline float dot_f32_avx2(const float *a, const float *b, int n)
+{
+    __m256 sum0 = _mm256_setzero_ps();
+    __m256 sum1 = _mm256_setzero_ps();
+    __m256 sum2 = _mm256_setzero_ps();
+    __m256 sum3 = _mm256_setzero_ps();
+
+    int i = 0;
+    for (; i + 31 < n; i += 32) {
+        sum0 = _mm256_fmadd_ps(_mm256_loadu_ps(a + i),       _mm256_loadu_ps(b + i),       sum0);
+        sum1 = _mm256_fmadd_ps(_mm256_loadu_ps(a + i + 8),   _mm256_loadu_ps(b + i + 8),   sum1);
+        sum2 = _mm256_fmadd_ps(_mm256_loadu_ps(a + i + 16),  _mm256_loadu_ps(b + i + 16),  sum2);
+        sum3 = _mm256_fmadd_ps(_mm256_loadu_ps(a + i + 24),  _mm256_loadu_ps(b + i + 24),  sum3);
+    }
+    __m256 sum = _mm256_add_ps(_mm256_add_ps(sum0, sum1), _mm256_add_ps(sum2, sum3));
+    for (; i + 7 < n; i += 8)
+        sum = _mm256_fmadd_ps(_mm256_loadu_ps(a + i), _mm256_loadu_ps(b + i), sum);
+
+    __m128 hi = _mm256_extractf128_ps(sum, 1);
+    __m128 lo = _mm256_castps256_ps128(sum);
+    __m128 s = _mm_add_ps(lo, hi);
+    s = _mm_hadd_ps(s, s);
+    s = _mm_hadd_ps(s, s);
+    float dot = _mm_cvtss_f32(s);
+    for (; i < n; i++)
+        dot += a[i] * b[i];
+    return dot;
+}
+
+static inline void accum_axpy_f32_avx2(float *dst, const float *src, float w, int n)
+{
+    __m256 vw = _mm256_set1_ps(w);
+    int i = 0;
+    for (; i + 31 < n; i += 32) {
+        __m256 d0 = _mm256_loadu_ps(dst + i);
+        __m256 d1 = _mm256_loadu_ps(dst + i + 8);
+        __m256 d2 = _mm256_loadu_ps(dst + i + 16);
+        __m256 d3 = _mm256_loadu_ps(dst + i + 24);
+        d0 = _mm256_fmadd_ps(_mm256_loadu_ps(src + i),      vw, d0);
+        d1 = _mm256_fmadd_ps(_mm256_loadu_ps(src + i + 8),  vw, d1);
+        d2 = _mm256_fmadd_ps(_mm256_loadu_ps(src + i + 16), vw, d2);
+        d3 = _mm256_fmadd_ps(_mm256_loadu_ps(src + i + 24), vw, d3);
+        _mm256_storeu_ps(dst + i,      d0);
+        _mm256_storeu_ps(dst + i + 8,  d1);
+        _mm256_storeu_ps(dst + i + 16, d2);
+        _mm256_storeu_ps(dst + i + 24, d3);
+    }
+    for (; i + 7 < n; i += 8) {
+        __m256 d = _mm256_loadu_ps(dst + i);
+        d = _mm256_fmadd_ps(_mm256_loadu_ps(src + i), vw, d);
+        _mm256_storeu_ps(dst + i, d);
+    }
+    for (; i < n; i++)
+        dst[i] += w * src[i];
+}
+#endif
+
 /* ---- Logit softcapping (Gemma 4) ----
  * Applies cap * tanh(x / cap) to prevent extreme logit values. */
 static void logit_softcap(float *logits, int n, float cap)
@@ -179,6 +237,59 @@ static void per_head_rms_norm(float *x, const float *weight, int n_heads,
         for (int j = 0; j < head_dim; j++)
             head[j] = head[j] * ss * weight[j];
     }
+}
+
+static void rope_ensure_tables(llama_state_t *state, const llama_config_t *c,
+                               const float *rope_freqs)
+{
+    if (!state || state->rope_table_ready) return;
+    if (!state->rope_cos || !state->rope_sin || !state->rope_cos_swa || !state->rope_sin_swa)
+        return;
+
+    const int max_seq = state->max_seq_len;
+    const int max_half = state->rope_table_half;
+
+    const int rope_dim_global = (c->rope_dim_count > 0 && c->rope_dim_count < c->head_dim)
+        ? c->rope_dim_count : c->head_dim;
+    const int rope_half_global = rope_dim_global / 2;
+
+    const int hd_swa = (c->head_dim_swa > 0) ? c->head_dim_swa : c->head_dim;
+    const float theta_swa = (c->rope_theta_swa > 0.0f) ? c->rope_theta_swa : c->rope_theta;
+    const int rope_dim_swa = (c->rope_dim_count > 0 && c->rope_dim_count < hd_swa)
+        ? c->rope_dim_count : hd_swa;
+    const int rope_half_swa = rope_dim_swa / 2;
+
+    for (int pos = 0; pos < max_seq; pos++) {
+        float *cg = state->rope_cos + (size_t)pos * (size_t)max_half;
+        float *sg = state->rope_sin + (size_t)pos * (size_t)max_half;
+        float *cs = state->rope_cos_swa + (size_t)pos * (size_t)max_half;
+        float *ss = state->rope_sin_swa + (size_t)pos * (size_t)max_half;
+
+        for (int i = 0; i < max_half; i++) {
+            if (i < rope_half_global) {
+                float freq = 1.0f / powf(c->rope_theta, (float)(2 * i) / (float)rope_dim_global);
+                if (rope_freqs) freq /= rope_freqs[i];
+                float angle = (float)pos * freq;
+                cg[i] = cosf(angle);
+                sg[i] = sinf(angle);
+            } else {
+                cg[i] = 1.0f;
+                sg[i] = 0.0f;
+            }
+
+            if (i < rope_half_swa) {
+                float freq = 1.0f / powf(theta_swa, (float)(2 * i) / (float)rope_dim_swa);
+                float angle = (float)pos * freq;
+                cs[i] = cosf(angle);
+                ss[i] = sinf(angle);
+            } else {
+                cs[i] = 1.0f;
+                ss[i] = 0.0f;
+            }
+        }
+    }
+
+    state->rope_table_ready = true;
 }
 
 /* ============================================================
@@ -871,6 +982,9 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
     if (c->head_dim_swa > max_head_dim) max_head_dim = c->head_dim_swa;
     int max_kv_dim = n_kv_heads * max_head_dim;
 
+    /* RoPE lookup tables (fills once per state) */
+    rope_ensure_tables(state, c, qm->rope_freqs);
+
     /* Bounds check token ID.
      * For invalid tokens: use zero embedding but still run the full forward pass.
      * This is critical for SSM/DeltaNet models — the recurrence S = gate*S + k⊗delta
@@ -1219,8 +1333,6 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
         }
 
         float norm_eps = c->rms_norm_eps > 0.0f ? c->rms_norm_eps : RMS_EPS;
-        float l_rope_theta = (!G4_DISABLE_DUAL_ROPE && is_swa && c->rope_theta_swa > 0.0f)
-                             ? c->rope_theta_swa : c->rope_theta;
 
         if (has_own_kv) {
             /* b-d. Normal: Q/K/V projections with PER-LAYER output dims.
@@ -1295,11 +1407,10 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
                 int half = rope_dim / 2;
                 for (int h = 0; h < n_heads; h++) {
                     for (int i = 0; i < half; i++) {
-                        float freq = 1.0f / powf(l_rope_theta, (float)(2 * i) / (float)rope_dim);
-                        if (qm->rope_freqs && !is_swa) freq /= qm->rope_freqs[i];
-                        float angle = (float)pos * freq;
-                        float cos_a = cosf(angle);
-                        float sin_a = sinf(angle);
+                        const float *cos_tbl = is_swa ? state->rope_cos_swa : state->rope_cos;
+                        const float *sin_tbl = is_swa ? state->rope_sin_swa : state->rope_sin;
+                        float cos_a = cos_tbl[(size_t)pos * (size_t)state->rope_table_half + (size_t)i];
+                        float sin_a = sin_tbl[(size_t)pos * (size_t)state->rope_table_half + (size_t)i];
                         int idx0, idx1;
                         if (c->rope_neox) {
                             idx0 = h * l_head_dim + i;          /* first half */
@@ -1315,11 +1426,10 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
                 }
                 for (int h = 0; h < n_kv_heads; h++) {
                     for (int i = 0; i < half; i++) {
-                        float freq = 1.0f / powf(l_rope_theta, (float)(2 * i) / (float)rope_dim);
-                        if (qm->rope_freqs && !is_swa) freq /= qm->rope_freqs[i];
-                        float angle = (float)pos * freq;
-                        float cos_a = cosf(angle);
-                        float sin_a = sinf(angle);
+                        const float *cos_tbl = is_swa ? state->rope_cos_swa : state->rope_cos;
+                        const float *sin_tbl = is_swa ? state->rope_sin_swa : state->rope_sin;
+                        float cos_a = cos_tbl[(size_t)pos * (size_t)state->rope_table_half + (size_t)i];
+                        float sin_a = sin_tbl[(size_t)pos * (size_t)state->rope_table_half + (size_t)i];
                         int idx0, idx1;
                         if (c->rope_neox) {
                             idx0 = h * l_head_dim + i;
@@ -1369,11 +1479,10 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
                 int half = rope_dim_q / 2;
                 for (int h = 0; h < n_heads; h++) {
                     for (int i = 0; i < half; i++) {
-                        float freq = 1.0f / powf(l_rope_theta, (float)(2 * i) / (float)rope_dim_q);
-                        if (qm->rope_freqs && !is_swa) freq /= qm->rope_freqs[i];
-                        float angle = (float)pos * freq;
-                        float cos_a = cosf(angle);
-                        float sin_a = sinf(angle);
+                        const float *cos_tbl = is_swa ? state->rope_cos_swa : state->rope_cos;
+                        const float *sin_tbl = is_swa ? state->rope_sin_swa : state->rope_sin;
+                        float cos_a = cos_tbl[(size_t)pos * (size_t)state->rope_table_half + (size_t)i];
+                        float sin_a = sin_tbl[(size_t)pos * (size_t)state->rope_table_half + (size_t)i];
                         int idx0, idx1;
                         if (c->rope_neox) {
                             idx0 = h * l_head_dim + i;
@@ -1423,9 +1532,14 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
                 : 1.0f / sqrtf((float)l_head_dim);  /* Llama: standard */
             for (int t = att_start; t <= pos; t++) {
                 float *k_t = key_layer + t * max_kv_dim + kv_h * l_head_dim;
-                float score = 0.0f;
+                float score;
+#ifdef __AVX2__
+                score = dot_f32_avx2(q_head, k_t, l_head_dim);
+#else
+                score = 0.0f;
                 for (int d = 0; d < l_head_dim; d++)
                     score += q_head[d] * k_t[d];
+#endif
                 att_h[t] = score * attn_scale;
             }
 
@@ -1438,8 +1552,12 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
             for (int t = att_start; t <= pos; t++) {
                 float *v_t = val_layer + t * max_kv_dim + kv_h * l_head_dim;
                 float w = att_h[t];
+#ifdef __AVX2__
+                accum_axpy_f32_avx2(out_h, v_t, w, l_head_dim);
+#else
                 for (int d = 0; d < l_head_dim; d++)
                     out_h[d] += w * v_t[d];
+#endif
             }
         }
 
