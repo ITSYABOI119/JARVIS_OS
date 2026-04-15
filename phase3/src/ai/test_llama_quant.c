@@ -131,11 +131,13 @@ static void test_alloc_state_small(void) {
 /* ---- Test 10: qmodel_forward with invalid token doesn't crash ---- */
 static void test_forward_bad_token(void) {
     TEST("qmodel_forward with out-of-range token produces zeroed logits");
-    /* Create a minimal qmodel with valid config but dummy data */
+    /* Create a minimal qmodel with valid config and dummy F32 layer weights.
+     * qmodel_forward runs the full forward pass even for invalid tokens (required
+     * for SSM temporal continuity), so we need valid layer data — not just NULL. */
     qmodel_t qm;
     memset(&qm, 0, sizeof(qm));
     qm.config.dim = 4;
-    qm.config.n_layers = 1;  /* Need >= 1 for KV cache alloc */
+    qm.config.n_layers = 1;
     qm.config.n_heads = 1;
     qm.config.n_kv_heads = 1;
     qm.config.head_dim = 4;
@@ -161,6 +163,28 @@ static void test_forward_bad_token(void) {
     qm.output_weight.type = GGML_TYPE_F32;
     qm.output_weight.n_elements = 40;
 
+    /* Allocate one layer with valid F32 weight pointers.
+     * All weights are zero (valid for F32). Norms are 1.0 to avoid NaN.
+     * dim=4, kv_dim=4, hidden_dim=8 → max tensor is 8×4=32 floats. */
+    float zero_weights[32];
+    memset(zero_weights, 0, sizeof(zero_weights));
+    float norm_ones[4] = {1, 1, 1, 1};
+
+    qlayer_t layer;
+    memset(&layer, 0, sizeof(layer));
+    /* Set all weight types to F32 with data pointing to zero buffer */
+    layer.wq.data = zero_weights;   layer.wq.type = GGML_TYPE_F32;   layer.wq.n_elements = 16;
+    layer.wk.data = zero_weights;   layer.wk.type = GGML_TYPE_F32;   layer.wk.n_elements = 16;
+    layer.wv.data = zero_weights;   layer.wv.type = GGML_TYPE_F32;   layer.wv.n_elements = 16;
+    layer.wo.data = zero_weights;   layer.wo.type = GGML_TYPE_F32;   layer.wo.n_elements = 16;
+    layer.w_gate.data = zero_weights; layer.w_gate.type = GGML_TYPE_F32; layer.w_gate.n_elements = 32;
+    layer.w_up.data = zero_weights;   layer.w_up.type = GGML_TYPE_F32;   layer.w_up.n_elements = 32;
+    layer.w_down.data = zero_weights; layer.w_down.type = GGML_TYPE_F32; layer.w_down.n_elements = 32;
+    /* Norm weights must be 1.0 (rms_norm divides by RMS, multiplies by weight) */
+    layer.attn_norm.data = norm_ones; layer.attn_norm.type = GGML_TYPE_F32; layer.attn_norm.n_elements = 4;
+    layer.ffn_norm.data = norm_ones;  layer.ffn_norm.type = GGML_TYPE_F32;  layer.ffn_norm.n_elements = 4;
+
+    qm.layers = &layer;
     qm.loaded = true;
 
     llama_state_t s;
