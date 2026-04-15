@@ -16,7 +16,7 @@ Guidance for Claude Code when working with this repository.
 | **Phase 3** | **IN PROGRESS** | Months 24-36 | Beta on x86-64 bare metal (**LLM inference on seL4 VERIFIED**) |
 | Phase 4 | Future | Months 36+ | Production v1.0 |
 
-**Current:** Phase 3c, Active Development (April 13, 2026). **MILESTONE: JARVIS engine bench-off COMPLETE — 11/11 models load and generate across 6 model families (Llama, Gemma 4, Phi-3, Mistral, Qwen3, Qwen3.5 DeltaNet SSM).** Gemma 4 E2B (#1 quality, 8.40/10) validated on seL4 QEMU. Fused QKV/gate-up support unlocked Phi-3. Gated DeltaNet SSM (~1200 LOC) unlocked Qwen3.5 hybrid architecture. JARVIS engine speed: 0.17-1.25 tok/s single-threaded (28-44x gap to llama.cpp 8-thread, fixable with pthread + fused SIMD). Phase 3b complete (bare-metal boot, NVMe model loading, IPC workload, I211 NIC). Phase 3c hardening done (fuzz testing, security audit 25 findings). Next: suppress verbose model-loader prints, wire dynamic scaling, TurboQuant/RotorQuant evaluation. Two-PC setup: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/32GB/1TB NVMe) running bare-metal seL4.
+**Current:** Phase 3c, Active Development (April 14, 2026). **MILESTONE: JARVIS engine bench-off COMPLETE — 11/11 models load and generate across 6 model families (Llama, Gemma 4, Phi-3, Mistral, Qwen3, Qwen3.5 DeltaNet SSM).** Gemma 4 E2B (#1 quality, 8.40/10) validated on seL4 QEMU. Fused QKV/gate-up support unlocked Phi-3. Gated DeltaNet SSM (~1200 LOC) unlocked Qwen3.5 hybrid architecture. JARVIS engine speed: 0.17-1.25 tok/s single-threaded (28-44x gap to llama.cpp 8-thread, fixable with pthread + fused SIMD). Phase 3b complete (bare-metal boot, NVMe model loading, IPC workload, I211 NIC). Phase 3c hardening done (fuzz testing, security audit 25 findings). NVMe persistent logging operational — auto-captures all serial output with [VGA]/[SER]/[PB] tags. Performance optimization plan written (Week 35: fused dequant-dot + SIMD attention, target 4-5 tok/s). Next: fused dequant-dot kernels, fix CI segfault, wire dynamic scaling. Two-PC setup: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/32GB/1TB NVMe) running bare-metal seL4.
 
 ---
 
@@ -242,93 +242,11 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 
 | Milestone | Status |
 |-----------|--------|
-| U-Boot 2026.01 working | DONE |
-| Auto-boot kernel8.img (1.7MB, 89ms) | DONE |
-| Boot flow: GPU→U-Boot→boot.scr→kernel8.img→seL4→JARVIS | DONE |
-| UART TX+RX (device frame at 0x5c0000) | DONE |
-| Python↔seL4 IPC (500-query bench, 100% success, 7ms RTT) | DONE |
-| SD/EMMC read+write (CMD17/18/24/25, ADMA2, PIO) | DONE |
-| CSD capacity parsing (any card size) | DONE |
-| 12-test EMMC driver suite: 12 PASS, 0 FAIL | DONE |
-| Decision cache loaded (258 patterns) | DONE |
-| BCM2711 System Timer + throughput (11.9 MB/s ADMA2) | DONE |
-| GENET MMIO mapping (6 pages at 0x604000, own device untyped) | DONE |
-| GENET UMAC init + RGMII config | DONE |
-| GENET PHY init via MDIO (BCM54213PE at addr 1) | DONE |
-| GENET TX DMA ring 16 (256 descs, TDMA enabled) | DONE |
-| GENET TX send (ARP broadcast test frame) | DONE |
-| 6-test GENET driver suite | DONE |
-| GENET RX DMA ring 16 (32 descs, RDMA + UMAC RX enabled) | DONE |
-| GENET RX recv + poll (polled receive) | DONE |
-| Basic networking stack (ARP reply + ICMP echo reply) | DONE |
-| 5-test RX + networking suite (hardware verified) | DONE |
-| Shell commands: ping, ifconfig, netstat (net_cmd.c) | DONE |
-| Outbound networking: ARP request, ICMP echo request | DONE |
-| ARP cache (8 entries) + ARP resolve with timeout | DONE |
-| GENET link status/speed/stats via MDIO | DONE |
-| UART IPC COMMAND handler (0x07/0x08) | DONE |
-| 10-test shell + integration suite (9 PASS + 1 SKIP hw verified) | DONE |
-| DWC2 USB host controller init (slave mode, 3 MMIO pages at 0x60A000) | DONE |
-| USB enumeration (GET_DESCRIPTOR, SET_ADDRESS, SET_CONFIGURATION) | DONE |
-| HID boot protocol keyboard (8-byte reports, scancode to ASCII) | DONE |
-| 6-test USB HID suite (4 PASS + 2 SKIP hardware verified) | DONE |
-| USB HID Ctrl/CapsLock/special key support | DONE |
-| USB keyboard shell integration (line buffer + echo) | DONE |
-| "usb" shell command | DONE |
-| 10-test USB keyboard suite (build pending) | DONE |
-| install_jarvis.sh Linux/WSL installer | DONE |
-| install_jarvis.bat Windows installer | DONE |
-| USER_GUIDE.md setup documentation | DONE |
-| ALPHA_TESTER_GUIDE.md tester onboarding | DONE |
-| build_installer_image.sh SD card image builder | DONE |
-| flash_sd.sh SD card flash utility | DONE |
-| BCM2711 GPIO driver (pin control, LED, pull-up/down) | DONE |
-| I2C BSC1 driver (100/400 kHz, bus scan) | DONE |
-| GPIO shell command (pin status) | DONE |
-| I2C shell command (bus scan) | DONE |
-| Stress test framework (all-driver exercise loop) | DONE |
-| PI4_PLATFORM_GUIDE.md (driver matrix, memory maps, benchmarks) | DONE |
-| 13-test GPIO + I2C + stress suite (build pending) | DONE |
-| BCM2711 PM watchdog timer (10s timeout, feed/reboot) | DONE |
-| VideoCore mailbox thermal monitoring (GPU temperature) | DONE |
-| Binary buddy skip enhancement in uart_device_map_page() | DONE |
-| Shell commands: temp, watchdog, reboot | DONE |
-| Watchdog heartbeat in IPC main loop (50ms) | DONE |
-| Python power_manager.py (host-side monitoring) | DONE |
-| 10-test watchdog + thermal suite (build verified) | DONE |
-| Embedded JARVIS device tree (jarvis.dts/dtb/dtb_data.h) | DONE |
-| FDT parser (jarvis_fdt_*, ~500 LOC, no alloc) | DONE |
-| Boot timing instrumentation (systimer-based) | DONE |
-| "dt" shell command (device tree info) | DONE |
-| 10-test FDT parser + boot timing suite (build verified) | DONE |
-| Boot manager (per-stage timing, lazy init tracking) | DONE |
-| Warm reboot (SD persistence, warm/cold detection) | DONE |
-| Power management (WFI idle, ARM frequency scaling) | DONE |
-| Shell commands: boot, power, reboot warm/cold | DONE |
-| thermal_mailbox_tag() generic mailbox API | DONE |
-| 10-test boot/warm/power suite (build verified) | DONE |
-| BCM2835 SPI0 driver (polled FIFO, full-duplex, 488 kHz default) | DONE |
-| iproc-rng200 Hardware RNG driver (FIFO entropy, soft reset) | DONE |
-| BCM2835 PWM driver (2-channel, M/S mode, mailbox clock) | DONE |
-| Shell commands: spi, rng, pwm | DONE |
-| 11-test SPI + RNG + PWM suite (build verified) | DONE |
-| BCM2711 DMA engine (channels 0-6, mem-to-mem, CB pool) | DONE |
-| Shell command: dma | DONE |
-| Python stability harness (UART IPC, CSV logging, hang detect) | DONE |
-| 8-test DMA engine suite (build verified) | DONE |
-| **Critical fix: direct MMIO TX (seL4 kernel CR/LF corruption)** | DONE |
-| **5-min stability test: 298/298 PASS (100%)** | DONE |
-| **1-hour smoke test: 3,562/3,570 PASS (99.8%)** | DONE |
-| Stability harness: daily rotation, checkpoints, resume | DONE |
-| Security self-audit: 3 bugs fixed (1 HIGH, 2 MEDIUM) | DONE |
-| SECURITY_SELF_AUDIT.md written | DONE |
-| 30-day stability test PASSED (30.6 days combined, 0 crashes) | DONE |
-| PHASE_2_FINAL_REPORT.md written | DONE |
-| PHASE_3_HARDWARE_RESEARCH.md written | DONE |
-| PHASE_3_KICKOFF.md written | DONE |
-| Adversarial security audit: 26 findings (1 CRIT, 6 HIGH, 7 MED, 8 LOW, 4 INFO) | DONE |
-| All 26 security findings fixed (2 commits: 0ff1cde + 708aa15) | DONE |
-| 211/211 tests passing after security hardening | DONE |
+| **Phase 2 Pi 4 (ALL 87 milestones DONE)** | **DONE** |
+| U-Boot boot, UART IPC, SD/EMMC, GENET networking, USB HID keyboard | DONE |
+| 21 BCM2711 drivers (GPIO, I2C, SPI, RNG, PWM, DMA, watchdog, thermal) | DONE |
+| 30-day stability test (30.6 days, 0 crashes, 99.8% pass rate) | DONE |
+| Security audit: 26 findings fixed, 211/211 tests passing | DONE |
 | **Phase 3a: GPU benchmarks (RTX 2070, 1B: 273 tok/s GPU, 44 CPU)** | **DONE** |
 | **Phase 3a: seL4 native Linux build env (123/123 PASS, KVM)** | **DONE** |
 | **Phase 3a: 247/247 Phase 3 tests validated on native x86-64** | **DONE** |
@@ -400,8 +318,13 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | **Qwen3.5 4B + 9B hybrid SSM — loads and generates** | **DONE** |
 | Zero-embedding forward for invalid tokens (SSM temporal continuity) | DONE |
 | NVMe write logging (raw sector telemetry) | DONE |
+| NVMe log auto-capture (puts_serial intercept, [VGA]/[SER] tags) | DONE |
+| MSG_DEBUG IPC for Process B -> NVMe log ([PB] tag) | DONE |
+| NVMe log bare-metal verified (boot 5, full boot timeline captured) | DONE |
+| Performance optimization plan (Week 35: fused dequant-dot + SIMD attention) | DONE |
+| Bare-metal workload stall diagnosed (q=4 inference — PB running, PA waiting) | INVESTIGATING |
 
-**Next:** Suppress verbose model-loader prints, wire dynamic scaling, TurboQuant/RotorQuant evaluation.
+**Next:** Fused dequant-dot kernels (qdot.c, target 4-5 tok/s), fix test_llama_quant CI segfault, wire dynamic scaling, TurboQuant/RotorQuant evaluation.
 
 ### Pre-Work Tasks (Before JARVIS Project PC)
 
@@ -454,7 +377,10 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | Fused QKV + gate-up tensor split | — | DONE | llama_quant.c | (load-time, no new tests) |
 | SSM / Gated DeltaNet (Qwen3.5) | — | DONE | ssm.c/h | 7 PASS |
 | Engine bench harness | — | DONE | bench_engine.c | (compile-only CI) |
-| **Total** | | | **85+ files** | **378+ tests, ~22,000 LOC** |
+| NVMe write (opcode 0x01) | — | DONE | nvme.c (extended) | 10 PASS |
+| NVMe log module | — | DONE | nvme_log.c/h | (bare-metal only) |
+| NVMe log parser | — | DONE | parse_nvme_log.py | (Python) |
+| **Total** | | | **90+ files** | **383+ tests, ~23,000 LOC** |
 
 **What remains for Phase 3b on real hardware:**
 - 30-day stability test on x86
@@ -578,6 +504,17 @@ RNG, SPI, PWM - auto-assigned (0xFE104000, 0xFE204000, 0xFE20C000)
 
 Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Separate memory spaces. Both proven independently, connected in Phase 2 via UART.
 
+### NVMe Write Logging
+
+- Log region: LBA 4000794624 (past p4 ESP on Lexar NM790 1TB)
+- Max entries: 2700 (1.3 MB, fits in unpartitioned tail of disk)
+- Format: 512-byte records (header + entries), XOR checksum
+- Auto-capture: `puts_serial()` intercept writes every line to NVMe log
+- Tags: `[VGA]` = visible on monitor, `[SER]` = serial only, `[PB]` = Process B via MSG_DEBUG IPC
+- Recovery: `sudo dd if=/dev/nvme0n1 bs=512 skip=4000794624 count=2700 of=/tmp/jarvis_log.bin`
+- Parser: `python3 phase3/scripts/parse_nvme_log.py /tmp/jarvis_log.bin`
+- Known issue: `seL4_Yield` doesn't yield to lower-priority Process B — poll-drain reverted to `seL4_Wait`
+
 ### Bare-Metal Debugging Rules
 
 - Use `#if EMMC_DEBUG` preprocessor guards for diagnostics, NOT code deletion (deleting debug code caused mysterious boot failures)
@@ -670,6 +607,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Inference Benchmark (stale F32):** `phase3/src/ai/bench_inference.c`
 - **Engine Bench (quantized, all models):** `phase3/src/ai/bench_engine.c`
 - **RotorQuant Reference:** `phase3/docs/ROTORQUANT_REFERENCE.md` — KV cache compression alternative (on `experiment/turboquant-benchmark` branch)
+- **Perf Optimization Spec:** `docs/superpowers/specs/2026-04-13-perf-fused-dequant-dot-design.md` — Week 35 plan, fused dequant-dot + SIMD attention
 - **GRUB Config:** `phase3/firmware/grub/grub.cfg`
 - **GPU Benchmarks:** `phase3/docs/GPU_BENCHMARK_RTX2070.md`
 - **Inference Benchmark Results:** `phase3/docs/INFERENCE_BENCHMARK.md`
@@ -683,7 +621,8 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
   - `JARVIS_DBG_RING` — Ring health checks before send (`[PB] ring @... magic=... w= r=`)
   - `JARVIS_DBG_STATS` — Periodic stats every 100 queries (default: ON)
   - `JARVIS_DBG_INFER_SUMMARY` — Per-inference summary line (default: ON)
-  - Defaults for stability test: STATS + INFER_SUMMARY on, everything else off
+  - `JARVIS_DBG_BOOT_LOG` — NVMe log at every boot stage + auto-capture serial output (default: ON)
+  - Defaults for stability test: STATS + INFER_SUMMARY on, BOOT_LOG off (write wear), everything else off
 - **NVMe Driver:** `phase3/src/drivers/nvme.c/h`
 - **NVMe Log:** `phase3/src/drivers/nvme_log.c/h` — raw sector logging for bare-metal telemetry
 - **NVMe Log Parser:** `phase3/scripts/parse_nvme_log.py` — extract + format log from raw device
@@ -720,8 +659,8 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 
 - **Phase 1:** 39,106 LOC, 95 files, 338 test functions (COMPLETE)
 - **Phase 2:** ~27,000 LOC, 65 files, 108 tests (COMPLETE)
-- **Phase 3:** ~22,000 LOC, 85+ files, 378+ tests (IN PROGRESS — **11/11 models, 6 model families, DeltaNet SSM**)
-- **Total:** ~88,000+ LOC, 200+ files, 630+ tests
+- **Phase 3:** ~23,000 LOC, 90+ files, 383+ tests (IN PROGRESS — **11/11 models, 6 model families, DeltaNet SSM, NVMe logging**)
+- **Total:** ~89,000+ LOC, 210+ files, 635+ tests
 - **Security:** 26/26 adversarial audit findings resolved (March 2026). SHIELD module: keyword + model-assisted risk scoring.
 - **Inference:** 11 GGUF models across 6 model families on JARVIS engine. Gemma 4 E2B (8.40/10 quality) on seL4 QEMU. Qwen3.5 DeltaNet SSM hybrid working. 0.17-1.25 tok/s single-threaded.
 
