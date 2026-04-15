@@ -25,6 +25,7 @@
 
 #include "llama_quant.h"
 #include "dequant.h"
+#include "qdot.h"
 #include "tensor_ops.h"
 #include "sampling.h"
 #include "ssm.h"
@@ -109,60 +110,16 @@ static void qmatmul_vec(const qtensor_t *W, const float *x, float *out,
         return;
     }
 
-    /* Quantized path: dequant one block at a time */
-    const int   block_size  = dequant_type_block_size(wtype);
-    const size_t block_bytes = dequant_type_block_bytes(wtype);
-
-    if (block_size <= 0 || block_bytes == 0) {
-        /* Unsupported type — zero output as safe fallback */
+    /* Quantized path: fused dequant-dot (one call per row) */
+    const size_t row_bytes = dequant_row_bytes(K, wtype);
+    if (row_bytes == 0) {
         memset(out, 0, (size_t)M * sizeof(float));
         return;
     }
+    const uint8_t *wdata = (const uint8_t *)W->data;
 
-    const size_t row_bytes = dequant_row_bytes(K, wtype);
-    const int    n_blocks  = K / block_size;
-    const uint8_t *wdata   = (const uint8_t *)W->data;
-
-    /* Stack buffer for one dequantized block (max 256 for Q4_K/Q6_K) */
-    float tmp[256];
-
-    for (int i = 0; i < M; i++) {
-        const uint8_t *block_ptr = wdata + (size_t)i * row_bytes;
-        float dot = 0.0f;
-
-        for (int b = 0; b < n_blocks; b++) {
-            dequant_row(block_ptr, tmp, block_size, wtype);
-
-            const float *xb = x + b * block_size;
-#ifdef __AVX2__
-            {
-                __m256 acc = _mm256_setzero_ps();
-                int j = 0;
-                for (; j + 7 < block_size; j += 8)
-                    acc = _mm256_fmadd_ps(_mm256_loadu_ps(tmp + j),
-                                           _mm256_loadu_ps(xb + j), acc);
-                __m128 hi = _mm256_extractf128_ps(acc, 1);
-                __m128 lo = _mm256_castps256_ps128(acc);
-                __m128 s = _mm_add_ps(lo, hi);
-                s = _mm_hadd_ps(s, s);
-                s = _mm_hadd_ps(s, s);
-                dot += _mm_cvtss_f32(s);
-                for (; j < block_size; j++)
-                    dot += tmp[j] * xb[j];
-            }
-#else
-            int j = 0;
-            for (; j + 3 < block_size; j += 4)
-                dot += tmp[j]*xb[j] + tmp[j+1]*xb[j+1] + tmp[j+2]*xb[j+2] + tmp[j+3]*xb[j+3];
-            for (; j < block_size; j++)
-                dot += tmp[j] * xb[j];
-#endif
-
-            block_ptr += block_bytes;
-        }
-
-        out[i] = dot;
-    }
+    for (int i = 0; i < M; i++)
+        out[i] = qdot_row(wdata + (size_t)i * row_bytes, x, K, wtype);
 }
 
 /* ---- Quantized embedding lookup ----
