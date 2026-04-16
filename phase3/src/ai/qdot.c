@@ -24,6 +24,17 @@ static inline float hsum_avx2(__m256 v)
     return _mm_cvtss_f32(s);
 }
 
+/* Safe 8-byte load into low half of __m128i.
+ * _mm_loadl_epi64 takes a __m128i* which ASAN may instrument as a
+ * 16-byte access, triggering false positives at buffer boundaries
+ * (e.g. qh[56] in a 64-byte array). Use memcpy to load exactly 8 bytes. */
+static inline __m128i load_u64_to_m128i(const void *p)
+{
+    uint64_t v;
+    memcpy(&v, p, 8);
+    return _mm_set_epi64x(0, (long long)v);
+}
+
 /* ---- AVX2 fused Q4_K dequant-dot kernel ----
  *
  * Reads Q4_K blocks directly, dequantizes into SIMD registers, and
@@ -71,7 +82,7 @@ static float qdot_q4_k_avx2(const void *row_data, const float *x, int K)
             /* Process 32 bytes in chunks of 8 */
             for (int k = 0; k < 32; k += 8) {
                 /* Load 8 quantized bytes, zero-extend to 8 x int32 */
-                __m128i raw8 = _mm_loadl_epi64((const __m128i *)(qs + 32 * j + k));
+                __m128i raw8 = load_u64_to_m128i((qs + 32 * j + k));
                 __m256i raw32 = _mm256_cvtepu8_epi32(raw8);
 
                 /* Lower nibble: 8 values at x[64*j + k .. k+7] */
@@ -116,7 +127,7 @@ static float qdot_q8_0_avx2(const void *row_data, const float *x, int K)
         /* 4 groups of 8 values */
         for (int k = 0; k < 32; k += 8) {
             /* Load 8 int8 values, sign-extend to int32 */
-            __m128i raw8 = _mm_loadl_epi64((const __m128i *)(qs + k));
+            __m128i raw8 = load_u64_to_m128i((qs + k));
             __m256i raw32 = _mm256_cvtepi8_epi32(raw8);
 
             /* Convert to F32, multiply by scale, FMA with x */
@@ -156,7 +167,7 @@ static float qdot_q4_0_avx2(const void *row_data, const float *x, int K)
         /* 2 groups of 8 bytes = 16 bytes total */
         for (int k = 0; k < 16; k += 8) {
             /* Load 8 bytes, zero-extend to 8 x int32 */
-            __m128i raw8 = _mm_loadl_epi64((const __m128i *)(qs + k));
+            __m128i raw8 = load_u64_to_m128i((qs + k));
             __m256i raw32 = _mm256_cvtepu8_epi32(raw8);
 
             /* Low nibble: positions k..k+7 → (lo - 8) * scale */
@@ -228,11 +239,11 @@ static float qdot_q5_k_avx2(const void *row_data, const float *x, int K)
             /* Process 32 bytes in chunks of 8 */
             for (int k = 0; k < 32; k += 8) {
                 /* Load 8 qs bytes, zero-extend to 8 x int32 */
-                __m128i raw8 = _mm_loadl_epi64((const __m128i *)(qs + 32 * j + k));
+                __m128i raw8 = load_u64_to_m128i((qs + 32 * j + k));
                 __m256i raw32 = _mm256_cvtepu8_epi32(raw8);
 
                 /* Load 8 qh bytes, zero-extend to 8 x int32 */
-                __m128i qh8 = _mm_loadl_epi64((const __m128i *)(qh + k));
+                __m128i qh8 = load_u64_to_m128i((qh + k));
                 __m256i qh32 = _mm256_cvtepu8_epi32(qh8);
 
                 /* --- Lower nibble path: positions 64*j + k .. k+7 --- */
@@ -387,13 +398,13 @@ static float qdot_q6_k_avx2(const void *row_data, const float *x, int K)
 
                 /* Load 8 bytes from ql[n/2+l] and ql[n/2+l+32],
                  * zero-extend each byte to int32 */
-                __m128i ql1_8  = _mm_loadl_epi64((const __m128i *)(ql + n/2 + l));
-                __m128i ql2_8  = _mm_loadl_epi64((const __m128i *)(ql + n/2 + l + 32));
+                __m128i ql1_8  = load_u64_to_m128i((ql + n/2 + l));
+                __m128i ql2_8  = load_u64_to_m128i((ql + n/2 + l + 32));
                 __m256i ql1_32 = _mm256_cvtepu8_epi32(ql1_8);
                 __m256i ql2_32 = _mm256_cvtepu8_epi32(ql2_8);
 
                 /* Load 8 bytes from qh[n/4+l], zero-extend to int32 */
-                __m128i qh_8  = _mm_loadl_epi64((const __m128i *)(qh + n/4 + l));
+                __m128i qh_8  = load_u64_to_m128i((qh + n/4 + l));
                 __m256i qh_32 = _mm256_cvtepu8_epi32(qh_8);
 
                 /* q1: low nibble of ql1 | (qh bits 0-1) << 4, minus 32 */
