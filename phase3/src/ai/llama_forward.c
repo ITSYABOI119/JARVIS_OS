@@ -16,58 +16,7 @@
 
 #define RMS_EPS 1e-5f
 
-static void rope_ensure_tables(llama_state_t *state, const llama_config_t *c,
-                               const float *rope_freqs)
-{
-    if (!state || state->rope_table_ready) return;
-    if (!state->rope_cos || !state->rope_sin || !state->rope_cos_swa || !state->rope_sin_swa)
-        return;
-
-    const int max_seq = state->max_seq_len;
-    const int max_half = state->rope_table_half;
-
-    const int rope_dim_global = (c->rope_dim_count > 0 && c->rope_dim_count < c->head_dim)
-        ? c->rope_dim_count : c->head_dim;
-    const int rope_half_global = rope_dim_global / 2;
-
-    const int hd_swa = (c->head_dim_swa > 0) ? c->head_dim_swa : c->head_dim;
-    const float theta_swa = (c->rope_theta_swa > 0.0f) ? c->rope_theta_swa : c->rope_theta;
-    const int rope_dim_swa = (c->rope_dim_count > 0 && c->rope_dim_count < hd_swa)
-        ? c->rope_dim_count : hd_swa;
-    const int rope_half_swa = rope_dim_swa / 2;
-
-    for (int pos = 0; pos < max_seq; pos++) {
-        float *cg = state->rope_cos + (size_t)pos * (size_t)max_half;
-        float *sg = state->rope_sin + (size_t)pos * (size_t)max_half;
-        float *cs = state->rope_cos_swa + (size_t)pos * (size_t)max_half;
-        float *ss = state->rope_sin_swa + (size_t)pos * (size_t)max_half;
-
-        for (int i = 0; i < max_half; i++) {
-            if (i < rope_half_global) {
-                float freq = 1.0f / powf(c->rope_theta, (float)(2 * i) / (float)rope_dim_global);
-                if (rope_freqs) freq /= rope_freqs[i];
-                float angle = (float)pos * freq;
-                cg[i] = cosf(angle);
-                sg[i] = sinf(angle);
-            } else {
-                cg[i] = 1.0f;
-                sg[i] = 0.0f;
-            }
-
-            if (i < rope_half_swa) {
-                float freq = 1.0f / powf(theta_swa, (float)(2 * i) / (float)rope_dim_swa);
-                float angle = (float)pos * freq;
-                cs[i] = cosf(angle);
-                ss[i] = sinf(angle);
-            } else {
-                cs[i] = 1.0f;
-                ss[i] = 0.0f;
-            }
-        }
-    }
-
-    state->rope_table_ready = true;
-}
+/* rope_ensure_tables() — defined in llama_load.c, declared in llama_model.h */
 
 /* ---- Helper: residual add (x += y) ---- */
 static void residual_add(float *x, const float *y, int n)

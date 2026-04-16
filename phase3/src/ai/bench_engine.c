@@ -170,6 +170,9 @@ int main(int argc, char **argv)
         } else if (strcmp(argv[i], "--threads") == 0 && i + 1 < argc) {
             threads = atoi(argv[++i]);
             if (threads < 1) threads = 1;
+#ifndef JARVIS_PTHREAD
+            fprintf(stderr, "Warning: --threads ignored (compile with -DJARVIS_PTHREAD=1 -pthread to enable)\n");
+#endif
         } else if (strcmp(argv[i], "--debug") == 0 || strcmp(argv[i], "-d") == 0) {
             debug = 1;
         } else if (argv[i][0] != '-') {

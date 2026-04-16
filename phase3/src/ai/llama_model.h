@@ -127,6 +127,8 @@ int  llama_load_model(llama_model_t *model, const char *gguf_path);
 void llama_free_model(llama_model_t *model);
 int  llama_alloc_state(llama_state_t *state, const llama_config_t *config);
 void llama_free_state(llama_state_t *state);
+void rope_ensure_tables(llama_state_t *state, const llama_config_t *config,
+                        const float *rope_freqs);
 
 /* Forward pass + generation (implemented in llama_forward.c) */
 void llama_forward(const llama_model_t *model, llama_state_t *state, int token);
