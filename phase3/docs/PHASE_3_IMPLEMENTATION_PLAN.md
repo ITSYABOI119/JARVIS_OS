@@ -1717,6 +1717,56 @@ but removes variable cost scaling with model size. Dual-table for Gemma 4 SWA/gl
 - New `test_qdot.c`: 1000 random blocks per kernel, compare fused vs `dequant_row()+dot` reference, tolerance `|delta| < 1e-4 * |ref| + 1e-7`
 - Per-commit bench: `bench_engine --tokens 128` on Llama 1B, Gemma 4 E2B, Mistral 7B
 - Record tok/s delta in every commit message
+
+---
+
+### Week 36 (Draft): Multi-Threaded Inference — Thread Pool for Matmul + Attention
+
+**Why this is separate from Week 35:** Week 35 targets the **single-core bottlenecks** (fused dequant-dot + SIMD). Multi-threading multiplies those wins, but introduces scheduling/coordination complexity that differs for **native Linux** vs **seL4**.
+
+**Objective (native Linux, JARVIS PC):** Llama 1B Q4_K_M: **~4–5 tok/s (1T)** → **~15–25 tok/s (8–16T)** on Ryzen 2700X.
+
+**Objective (seL4 Process B):** Use **4–8 worker TCBs** to accelerate matmuls while keeping Process B responsive to IPC.
+
+#### Part A: Native Linux pthread threadpool (fastest validation path)
+
+**Files (new):**
+- `phase3/src/ai/threadpool.h`
+- `phase3/src/ai/threadpool.c`
+
+**Integration points:**
+- `phase3/src/ai/llama_quant.c`: parallelize `qmatmul_vec()` over output rows \(M\)
+- (optional) `phase3/src/ai/llama_quant.c`: parallelize attention over heads \(n_heads\) when `pos` is large
+
+**Design:**
+- Create a fixed worker pool once (startup of `bench_engine` / inference init).
+- Each matmul submits a job: range of rows \([i0, i1)\), each row calls `qdot_row(...)`.
+- Use a single shared work queue + condition variable, or a simple “parallel for” with an atomic next-index.
+
+**Heuristics (avoid overhead on small mats):**
+- Only parallelize if `M >= 256` (tune after measurement) and `num_threads > 1`.
+- Pinning for stable perf: run with `taskset -c 0-15` (or `GOMP_CPU_AFFINITY` equivalent if using OpenMP later).
+
+**Correctness testing:**
+- Extend an existing unit test (or add `test_threadpool.c`) to run the same forward pass twice:
+  - once with `JARVIS_THREADS=1`
+  - once with `JARVIS_THREADS=N`
+  - compare logits within a small epsilon (FP reorder).
+
+#### Part B: seL4 worker pool (Process B TCB workers)
+
+**High-level plan (seL4-specific):**
+- Keep Process B “main thread” as the IPC handler + scheduler of work.
+- Spawn \(N\) worker threads (TCBs) inside Process B at init.
+- Share the model weights (already shared in PB address space); share activation buffers carefully:
+  - Each worker needs its own `xb/xb2/tmp` scratch slices or row-local scratch only.
+  - The fused `qdot_row()` path is naturally row-local; only reads weights + `x`.
+- Synchronization: a barrier per matmul (main thread waits for workers to finish a layer’s matmuls).
+
+**Acceptance:**
+- Demonstrate speedup on one heavy matmul (e.g., `w_down` / `output_weight`) with stable results.
+- No missed IPC heartbeats / no starvation (main thread must still service inbound messages).
+
 - Verify generation output matches (greedy decode should produce same tokens)
 - CI step: `test_qdot` compiled WITHOUT `-mavx2` (scalar fallback path)
 

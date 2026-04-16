@@ -28,6 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 
 /* ---- Config Loading (arch-aware: reads general.architecture, dispatches {arch}.* keys) ---- */
 
@@ -625,6 +626,8 @@ int llama_alloc_state(llama_state_t *state, const llama_config_t *config)
 
     state->max_seq_len = max_seq;
     state->pos = 0;
+    state->rope_table_half = max_head_dim / 2;
+    state->rope_table_ready = false;
 
     /* xb/xb2 must fit the largest attention output: n_heads * max_head_dim.
      * For Gemma 4: 8*512=4096 > dim=1536, so xb must be larger than dim.
@@ -644,6 +647,15 @@ int llama_alloc_state(llama_state_t *state, const llama_config_t *config)
     state->hb     = (float *)calloc((size_t)hidden_dim, sizeof(float));
     state->hb2    = (float *)calloc((size_t)hidden_dim, sizeof(float));
     state->logits = (float *)calloc((size_t)vocab_size, sizeof(float));
+
+    /* RoPE tables (lazy-filled) */
+    {
+        size_t rope_elems = (size_t)max_seq * (size_t)state->rope_table_half;
+        state->rope_cos     = (float *)calloc(rope_elems, sizeof(float));
+        state->rope_sin     = (float *)calloc(rope_elems, sizeof(float));
+        state->rope_cos_swa = (float *)calloc(rope_elems, sizeof(float));
+        state->rope_sin_swa = (float *)calloc(rope_elems, sizeof(float));
+    }
 
     /* KV cache: use max kv_dim per layer for uniform cache stride.
      * SWA layers (smaller kv_dim) only use a prefix of each slot.
@@ -728,6 +740,7 @@ int llama_alloc_state(llama_state_t *state, const llama_config_t *config)
         !state->q || !state->k || !state->v ||
         !state->att || !state->hb || !state->hb2 ||
         !state->logits || !state->key_cache || !state->value_cache ||
+        !state->rope_cos || !state->rope_sin || !state->rope_cos_swa || !state->rope_sin_swa ||
         (config->ple_dim > 0 && (!state->ple_all || !state->ple_context))) {
         llama_free_state(state);
         return -1;
@@ -760,6 +773,65 @@ void llama_free_state(llama_state_t *state)
     free(state->ssm_state);
     free(state->qkv_scratch);
     free(state->fwd_scratch);
+    free(state->rope_cos);
+    free(state->rope_sin);
+    free(state->rope_cos_swa);
+    free(state->rope_sin_swa);
 
     memset(state, 0, sizeof(*state));
+}
+
+/* ---- RoPE Table Precompute ---- */
+
+void rope_ensure_tables(llama_state_t *state, const llama_config_t *c,
+                        const float *rope_freqs)
+{
+    if (!state || state->rope_table_ready) return;
+    if (!state->rope_cos || !state->rope_sin || !state->rope_cos_swa || !state->rope_sin_swa)
+        return;
+
+    const int max_seq = state->max_seq_len;
+    const int max_half = state->rope_table_half;
+
+    const int rope_dim_global = (c->rope_dim_count > 0 && c->rope_dim_count < c->head_dim)
+        ? c->rope_dim_count : c->head_dim;
+    const int rope_half_global = rope_dim_global / 2;
+
+    const int hd_swa = (c->head_dim_swa > 0) ? c->head_dim_swa : c->head_dim;
+    const float theta_swa = (c->rope_theta_swa > 0.0f) ? c->rope_theta_swa : c->rope_theta;
+    const int rope_dim_swa = (c->rope_dim_count > 0 && c->rope_dim_count < hd_swa)
+        ? c->rope_dim_count : hd_swa;
+    const int rope_half_swa = rope_dim_swa / 2;
+
+    for (int pos = 0; pos < max_seq; pos++) {
+        float *cg = state->rope_cos + (size_t)pos * (size_t)max_half;
+        float *sg = state->rope_sin + (size_t)pos * (size_t)max_half;
+        float *cs = state->rope_cos_swa + (size_t)pos * (size_t)max_half;
+        float *ss = state->rope_sin_swa + (size_t)pos * (size_t)max_half;
+
+        for (int i = 0; i < max_half; i++) {
+            if (i < rope_half_global) {
+                float freq = 1.0f / powf(c->rope_theta, (float)(2 * i) / (float)rope_dim_global);
+                if (rope_freqs) freq /= rope_freqs[i];
+                float angle = (float)pos * freq;
+                cg[i] = cosf(angle);
+                sg[i] = sinf(angle);
+            } else {
+                cg[i] = 1.0f;
+                sg[i] = 0.0f;
+            }
+
+            if (i < rope_half_swa) {
+                float freq = 1.0f / powf(theta_swa, (float)(2 * i) / (float)rope_dim_swa);
+                float angle = (float)pos * freq;
+                cs[i] = cosf(angle);
+                ss[i] = sinf(angle);
+            } else {
+                cs[i] = 1.0f;
+                ss[i] = 0.0f;
+            }
+        }
+    }
+
+    state->rope_table_ready = true;
 }

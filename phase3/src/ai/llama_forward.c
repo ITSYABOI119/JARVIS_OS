@@ -16,6 +16,8 @@
 
 #define RMS_EPS 1e-5f
 
+/* rope_ensure_tables() — defined in llama_load.c, declared in llama_model.h */
+
 /* ---- Helper: residual add (x += y) ---- */
 static void residual_add(float *x, const float *y, int n)
 {
@@ -37,6 +39,8 @@ void llama_forward(const llama_model_t *model, llama_state_t *state, int token)
     int pos       = state->pos;
     int max_seq   = state->max_seq_len;
     int heads_per_kv = n_heads / n_kv_heads;
+
+    rope_ensure_tables(state, c, model->rope_freqs);
 
     /* Bounds check token ID (critical on bare-metal seL4 — no memory protection) */
     if (token < 0 || token >= c->vocab_size) {
@@ -67,11 +71,8 @@ void llama_forward(const llama_model_t *model, llama_state_t *state, int token)
          * otherwise compute standard frequencies from theta. */
         for (int h = 0; h < n_heads; h++) {
             for (int i = 0; i < head_dim / 2; i++) {
-                float freq = 1.0f / powf(c->rope_theta, (float)(2 * i) / (float)head_dim);
-                if (model->rope_freqs) freq /= model->rope_freqs[i];
-                float angle = (float)pos * freq;
-                float cos_a = cosf(angle);
-                float sin_a = sinf(angle);
+                float cos_a = state->rope_cos[(size_t)pos * (size_t)state->rope_table_half + (size_t)i];
+                float sin_a = state->rope_sin[(size_t)pos * (size_t)state->rope_table_half + (size_t)i];
                 int idx = h * head_dim + 2 * i;
                 float r0 = state->q[idx], r1 = state->q[idx + 1];
                 state->q[idx]     = r0 * cos_a - r1 * sin_a;
@@ -80,11 +81,8 @@ void llama_forward(const llama_model_t *model, llama_state_t *state, int token)
         }
         for (int h = 0; h < n_kv_heads; h++) {
             for (int i = 0; i < head_dim / 2; i++) {
-                float freq = 1.0f / powf(c->rope_theta, (float)(2 * i) / (float)head_dim);
-                if (model->rope_freqs) freq /= model->rope_freqs[i];
-                float angle = (float)pos * freq;
-                float cos_a = cosf(angle);
-                float sin_a = sinf(angle);
+                float cos_a = state->rope_cos[(size_t)pos * (size_t)state->rope_table_half + (size_t)i];
+                float sin_a = state->rope_sin[(size_t)pos * (size_t)state->rope_table_half + (size_t)i];
                 int idx = h * head_dim + 2 * i;
                 float r0 = state->k[idx], r1 = state->k[idx + 1];
                 state->k[idx]     = r0 * cos_a - r1 * sin_a;

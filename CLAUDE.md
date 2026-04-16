@@ -16,7 +16,7 @@ Guidance for Claude Code when working with this repository.
 | **Phase 3** | **IN PROGRESS** | Months 24-36 | Beta on x86-64 bare metal (**LLM inference on seL4 VERIFIED**) |
 | Phase 4 | Future | Months 36+ | Production v1.0 |
 
-**Current:** Phase 3c, Active Development (April 14, 2026). **MILESTONE: JARVIS engine bench-off COMPLETE — 11/11 models load and generate across 6 model families (Llama, Gemma 4, Phi-3, Mistral, Qwen3, Qwen3.5 DeltaNet SSM).** Gemma 4 E2B (#1 quality, 8.40/10) validated on seL4 QEMU. Fused QKV/gate-up support unlocked Phi-3. Gated DeltaNet SSM (~1200 LOC) unlocked Qwen3.5 hybrid architecture. JARVIS engine speed: 0.17-1.25 tok/s single-threaded (28-44x gap to llama.cpp 8-thread, fixable with pthread + fused SIMD). Phase 3b complete (bare-metal boot, NVMe model loading, IPC workload, I211 NIC). Phase 3c hardening done (fuzz testing, security audit 25 findings). NVMe persistent logging operational — auto-captures all serial output with [VGA]/[SER]/[PB] tags. Performance optimization plan written (Week 35: fused dequant-dot + SIMD attention, target 4-5 tok/s). Next: fused dequant-dot kernels, fix CI segfault, wire dynamic scaling. Two-PC setup: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/32GB/1TB NVMe) running bare-metal seL4.
+**Current:** Phase 3c, Active Development (April 14, 2026). **MILESTONE: JARVIS engine bench-off COMPLETE — 11/11 models load and generate across 6 model families (Llama, Gemma 4, Phi-3, Mistral, Qwen3, Qwen3.5 DeltaNet SSM).** Gemma 4 E2B (#1 quality, 8.40/10) validated on seL4 QEMU. Fused QKV/gate-up support unlocked Phi-3. Gated DeltaNet SSM (~1200 LOC) unlocked Qwen3.5 hybrid architecture. JARVIS engine speed: 0.17-1.25 tok/s single-threaded (28-44x gap to llama.cpp 8-thread, fixable with pthread + fused SIMD). Phase 3b complete (bare-metal boot, NVMe model loading, IPC workload, I211 NIC). Phase 3c hardening done (fuzz testing, security audit 25 findings). NVMe persistent logging operational — auto-captures all serial output with [VGA]/[SER]/[PB] tags. Performance optimization (Week 35) in-progress: fused dequant-dot (`qdot.c/h`) implemented + wired into quant matmul; SIMD attention and RoPE cos/sin lookup tables implemented; CI updated to run `test_qdot` and link `qdot.c` into quant targets. Next: run before/after tok/s validation, wire dynamic scaling. Two-PC setup: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/32GB/1TB NVMe) running bare-metal seL4.
 
 ---
 
@@ -329,7 +329,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | Model data probe (197K page sweep + forward pass test) | DONE |
 | fwd_scratch heap buffer (208KB stack -> heap) | DONE |
 
-**Next:** Fused dequant-dot kernels (qdot.c, target 4-5 tok/s), wire dynamic scaling, 30-day stability test, TurboQuant/RotorQuant evaluation.
+**Next:** Finish perf validation (before/after tok/s) on JARVIS PC, wire dynamic scaling, 30-day stability test, TurboQuant/RotorQuant evaluation.
 
 ### Pre-Work Tasks (Before JARVIS Project PC)
 

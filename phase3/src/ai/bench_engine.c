@@ -19,7 +19,7 @@
  *       -lm -o /tmp/bench_engine
  *
  * Run:
- *   /tmp/bench_engine path/to/model.gguf [--tokens 128] [--debug]
+ *   /tmp/bench_engine path/to/model.gguf [--tokens 128] [--threads N] [--debug]
  *
  * Pure C11, no C++ dependencies.
  */
@@ -34,7 +34,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
+#include <time.h> /* clock_gettime */
+#ifdef __linux__
+#include <unistd.h>
+#endif
 
 #include "llama_model.h"
 #include "llama_quant.h"
@@ -157,12 +160,19 @@ int main(int argc, char **argv)
     const char *model_path = NULL;
     int max_tokens = 128;
     int debug = 0;
+    int threads = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--tokens") == 0 && i + 1 < argc) {
             max_tokens = atoi(argv[++i]);
             if (max_tokens < 1) max_tokens = 1;
             if (max_tokens > 512) max_tokens = 512;
+        } else if (strcmp(argv[i], "--threads") == 0 && i + 1 < argc) {
+            threads = atoi(argv[++i]);
+            if (threads < 1) threads = 1;
+#ifndef JARVIS_PTHREAD
+            fprintf(stderr, "Warning: --threads ignored (compile with -DJARVIS_PTHREAD=1 -pthread to enable)\n");
+#endif
         } else if (strcmp(argv[i], "--debug") == 0 || strcmp(argv[i], "-d") == 0) {
             debug = 1;
         } else if (argv[i][0] != '-') {
@@ -171,9 +181,19 @@ int main(int argc, char **argv)
     }
 
     if (!model_path) {
-        fprintf(stderr, "Usage: bench_engine <model.gguf> [--tokens N] [--debug]\n");
+        fprintf(stderr, "Usage: bench_engine <model.gguf> [--tokens N] [--threads N] [--debug]\n");
+        fprintf(stderr, "Notes: threads default = all available CPUs; override via --threads or env JARVIS_THREADS.\n");
         return 1;
     }
+
+    /* Optional override for pthread builds (no-op for single-thread builds) */
+#ifdef __linux__
+    if (threads > 0) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%d", threads);
+        setenv("JARVIS_THREADS", buf, 1);
+    }
+#endif
 
     /* ---- Read entire GGUF into memory ---- */
     FILE *f = fopen(model_path, "rb");

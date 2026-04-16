@@ -26,6 +26,7 @@
 #include "llama_quant.h"
 #include "dequant.h"
 #include "qdot.h"
+#include "threadpool.h"
 #include "tensor_ops.h"
 #include "sampling.h"
 #include "ssm.h"
@@ -46,6 +47,16 @@
 #endif
 
 #define RMS_EPS 1e-5f
+
+#ifdef JARVIS_PTHREAD
+typedef struct { const float *wf; const float *x; float *out; int K; int M; } qmatmul_f32_ctx_t;
+typedef struct { const uint8_t *wdata; size_t row_bytes; const float *x; float *out; int K; ggml_type_t wtype; int M; } qmatmul_qdot_ctx_t;
+_Static_assert(sizeof(qmatmul_f32_ctx_t) <= 64, "ctx must fit threadpool ctx_buf[64]");
+_Static_assert(sizeof(qmatmul_qdot_ctx_t) <= 64, "ctx must fit threadpool ctx_buf[64]");
+
+static void qmatmul_f32_row(int idx, void *p);
+static void qmatmul_qdot_row(int idx, void *p);
+#endif
 
 /* ============================================================
  * Gemma 4 feature-disable flags for debugging
@@ -97,15 +108,37 @@ static void qmatmul_vec(const qtensor_t *W, const float *x, float *out,
 {
     const ggml_type_t wtype = (ggml_type_t)W->type;
 
+    const int use_threads =
+#ifdef JARVIS_PTHREAD
+        (jarvis_threads() > 1 && M >= 256);
+#else
+        0;
+#endif
+
     /* F32 fast path: direct dot product, no dequant needed */
     if (wtype == GGML_TYPE_F32) {
         const float *wf = (const float *)W->data;
-        for (int i = 0; i < M; i++) {
-            const float *row = wf + (size_t)i * K;
-            float dot = 0.0f;
-            for (int j = 0; j < K; j++)
-                dot += row[j] * x[j];
-            out[i] = dot;
+        if (use_threads) {
+#ifdef JARVIS_PTHREAD
+            qmatmul_f32_ctx_t ctx = { wf, x, out, K, M };
+            jarvis_parallel_for(0, M, qmatmul_f32_row, &ctx, sizeof(ctx));
+#else
+            for (int i = 0; i < M; i++) {
+                const float *row = wf + (size_t)i * K;
+                float dot = 0.0f;
+                for (int j = 0; j < K; j++)
+                    dot += row[j] * x[j];
+                out[i] = dot;
+            }
+#endif
+        } else {
+            for (int i = 0; i < M; i++) {
+                const float *row = wf + (size_t)i * K;
+                float dot = 0.0f;
+                for (int j = 0; j < K; j++)
+                    dot += row[j] * x[j];
+                out[i] = dot;
+            }
         }
         return;
     }
@@ -118,9 +151,39 @@ static void qmatmul_vec(const qtensor_t *W, const float *x, float *out,
     }
     const uint8_t *wdata = (const uint8_t *)W->data;
 
-    for (int i = 0; i < M; i++)
-        out[i] = qdot_row(wdata + (size_t)i * row_bytes, x, K, wtype);
+    if (use_threads) {
+#ifdef JARVIS_PTHREAD
+        qmatmul_qdot_ctx_t ctx = { wdata, row_bytes, x, out, K, wtype, M };
+        jarvis_parallel_for(0, M, qmatmul_qdot_row, &ctx, sizeof(ctx));
+#else
+        for (int i = 0; i < M; i++)
+            out[i] = qdot_row(wdata + (size_t)i * row_bytes, x, K, wtype);
+#endif
+    } else {
+        for (int i = 0; i < M; i++)
+            out[i] = qdot_row(wdata + (size_t)i * row_bytes, x, K, wtype);
+    }
 }
+
+#ifdef JARVIS_PTHREAD
+static void qmatmul_f32_row(int idx, void *p)
+{
+    qmatmul_f32_ctx_t *c = (qmatmul_f32_ctx_t *)p;
+    if (idx >= c->M) return;  /* bounds guard: stale end from previous round */
+    const float *row = c->wf + (size_t)idx * (size_t)c->K;
+    float dot = 0.0f;
+    for (int j = 0; j < c->K; j++)
+        dot += row[j] * c->x[j];
+    c->out[idx] = dot;
+}
+
+static void qmatmul_qdot_row(int idx, void *p)
+{
+    qmatmul_qdot_ctx_t *c = (qmatmul_qdot_ctx_t *)p;
+    if (idx >= c->M) return;  /* bounds guard: stale end from previous round */
+    c->out[idx] = qdot_row(c->wdata + (size_t)idx * c->row_bytes, c->x, c->K, c->wtype);
+}
+#endif
 
 /* ---- Quantized embedding lookup ----
  *
@@ -153,6 +216,64 @@ static void residual_add(float *x, const float *y, int n)
         x[i] += y[i];
 }
 
+#ifdef __AVX2__
+static inline float dot_f32_avx2(const float *a, const float *b, int n)
+{
+    __m256 sum0 = _mm256_setzero_ps();
+    __m256 sum1 = _mm256_setzero_ps();
+    __m256 sum2 = _mm256_setzero_ps();
+    __m256 sum3 = _mm256_setzero_ps();
+
+    int i = 0;
+    for (; i + 31 < n; i += 32) {
+        sum0 = _mm256_fmadd_ps(_mm256_loadu_ps(a + i),       _mm256_loadu_ps(b + i),       sum0);
+        sum1 = _mm256_fmadd_ps(_mm256_loadu_ps(a + i + 8),   _mm256_loadu_ps(b + i + 8),   sum1);
+        sum2 = _mm256_fmadd_ps(_mm256_loadu_ps(a + i + 16),  _mm256_loadu_ps(b + i + 16),  sum2);
+        sum3 = _mm256_fmadd_ps(_mm256_loadu_ps(a + i + 24),  _mm256_loadu_ps(b + i + 24),  sum3);
+    }
+    __m256 sum = _mm256_add_ps(_mm256_add_ps(sum0, sum1), _mm256_add_ps(sum2, sum3));
+    for (; i + 7 < n; i += 8)
+        sum = _mm256_fmadd_ps(_mm256_loadu_ps(a + i), _mm256_loadu_ps(b + i), sum);
+
+    __m128 hi = _mm256_extractf128_ps(sum, 1);
+    __m128 lo = _mm256_castps256_ps128(sum);
+    __m128 s = _mm_add_ps(lo, hi);
+    s = _mm_hadd_ps(s, s);
+    s = _mm_hadd_ps(s, s);
+    float dot = _mm_cvtss_f32(s);
+    for (; i < n; i++)
+        dot += a[i] * b[i];
+    return dot;
+}
+
+static inline void accum_axpy_f32_avx2(float *dst, const float *src, float w, int n)
+{
+    __m256 vw = _mm256_set1_ps(w);
+    int i = 0;
+    for (; i + 31 < n; i += 32) {
+        __m256 d0 = _mm256_loadu_ps(dst + i);
+        __m256 d1 = _mm256_loadu_ps(dst + i + 8);
+        __m256 d2 = _mm256_loadu_ps(dst + i + 16);
+        __m256 d3 = _mm256_loadu_ps(dst + i + 24);
+        d0 = _mm256_fmadd_ps(_mm256_loadu_ps(src + i),      vw, d0);
+        d1 = _mm256_fmadd_ps(_mm256_loadu_ps(src + i + 8),  vw, d1);
+        d2 = _mm256_fmadd_ps(_mm256_loadu_ps(src + i + 16), vw, d2);
+        d3 = _mm256_fmadd_ps(_mm256_loadu_ps(src + i + 24), vw, d3);
+        _mm256_storeu_ps(dst + i,      d0);
+        _mm256_storeu_ps(dst + i + 8,  d1);
+        _mm256_storeu_ps(dst + i + 16, d2);
+        _mm256_storeu_ps(dst + i + 24, d3);
+    }
+    for (; i + 7 < n; i += 8) {
+        __m256 d = _mm256_loadu_ps(dst + i);
+        d = _mm256_fmadd_ps(_mm256_loadu_ps(src + i), vw, d);
+        _mm256_storeu_ps(dst + i, d);
+    }
+    for (; i < n; i++)
+        dst[i] += w * src[i];
+}
+#endif
+
 /* ---- Logit softcapping (Gemma 4) ----
  * Applies cap * tanh(x / cap) to prevent extreme logit values. */
 static void logit_softcap(float *logits, int n, float cap)
@@ -180,6 +301,8 @@ static void per_head_rms_norm(float *x, const float *weight, int n_heads,
             head[j] = head[j] * ss * weight[j];
     }
 }
+
+/* rope_ensure_tables() — defined in llama_load.c, declared in llama_model.h */
 
 /* ============================================================
  * Public API
@@ -871,6 +994,9 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
     if (c->head_dim_swa > max_head_dim) max_head_dim = c->head_dim_swa;
     int max_kv_dim = n_kv_heads * max_head_dim;
 
+    /* RoPE lookup tables (fills once per state) */
+    rope_ensure_tables(state, c, qm->rope_freqs);
+
     /* Bounds check token ID.
      * For invalid tokens: use zero embedding but still run the full forward pass.
      * This is critical for SSM/DeltaNet models — the recurrence S = gate*S + k⊗delta
@@ -1219,8 +1345,6 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
         }
 
         float norm_eps = c->rms_norm_eps > 0.0f ? c->rms_norm_eps : RMS_EPS;
-        float l_rope_theta = (!G4_DISABLE_DUAL_ROPE && is_swa && c->rope_theta_swa > 0.0f)
-                             ? c->rope_theta_swa : c->rope_theta;
 
         if (has_own_kv) {
             /* b-d. Normal: Q/K/V projections with PER-LAYER output dims.
@@ -1295,11 +1419,10 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
                 int half = rope_dim / 2;
                 for (int h = 0; h < n_heads; h++) {
                     for (int i = 0; i < half; i++) {
-                        float freq = 1.0f / powf(l_rope_theta, (float)(2 * i) / (float)rope_dim);
-                        if (qm->rope_freqs && !is_swa) freq /= qm->rope_freqs[i];
-                        float angle = (float)pos * freq;
-                        float cos_a = cosf(angle);
-                        float sin_a = sinf(angle);
+                        const float *cos_tbl = is_swa ? state->rope_cos_swa : state->rope_cos;
+                        const float *sin_tbl = is_swa ? state->rope_sin_swa : state->rope_sin;
+                        float cos_a = cos_tbl[(size_t)pos * (size_t)state->rope_table_half + (size_t)i];
+                        float sin_a = sin_tbl[(size_t)pos * (size_t)state->rope_table_half + (size_t)i];
                         int idx0, idx1;
                         if (c->rope_neox) {
                             idx0 = h * l_head_dim + i;          /* first half */
@@ -1315,11 +1438,10 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
                 }
                 for (int h = 0; h < n_kv_heads; h++) {
                     for (int i = 0; i < half; i++) {
-                        float freq = 1.0f / powf(l_rope_theta, (float)(2 * i) / (float)rope_dim);
-                        if (qm->rope_freqs && !is_swa) freq /= qm->rope_freqs[i];
-                        float angle = (float)pos * freq;
-                        float cos_a = cosf(angle);
-                        float sin_a = sinf(angle);
+                        const float *cos_tbl = is_swa ? state->rope_cos_swa : state->rope_cos;
+                        const float *sin_tbl = is_swa ? state->rope_sin_swa : state->rope_sin;
+                        float cos_a = cos_tbl[(size_t)pos * (size_t)state->rope_table_half + (size_t)i];
+                        float sin_a = sin_tbl[(size_t)pos * (size_t)state->rope_table_half + (size_t)i];
                         int idx0, idx1;
                         if (c->rope_neox) {
                             idx0 = h * l_head_dim + i;
@@ -1369,11 +1491,10 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
                 int half = rope_dim_q / 2;
                 for (int h = 0; h < n_heads; h++) {
                     for (int i = 0; i < half; i++) {
-                        float freq = 1.0f / powf(l_rope_theta, (float)(2 * i) / (float)rope_dim_q);
-                        if (qm->rope_freqs && !is_swa) freq /= qm->rope_freqs[i];
-                        float angle = (float)pos * freq;
-                        float cos_a = cosf(angle);
-                        float sin_a = sinf(angle);
+                        const float *cos_tbl = is_swa ? state->rope_cos_swa : state->rope_cos;
+                        const float *sin_tbl = is_swa ? state->rope_sin_swa : state->rope_sin;
+                        float cos_a = cos_tbl[(size_t)pos * (size_t)state->rope_table_half + (size_t)i];
+                        float sin_a = sin_tbl[(size_t)pos * (size_t)state->rope_table_half + (size_t)i];
                         int idx0, idx1;
                         if (c->rope_neox) {
                             idx0 = h * l_head_dim + i;
@@ -1423,9 +1544,14 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
                 : 1.0f / sqrtf((float)l_head_dim);  /* Llama: standard */
             for (int t = att_start; t <= pos; t++) {
                 float *k_t = key_layer + t * max_kv_dim + kv_h * l_head_dim;
-                float score = 0.0f;
+                float score;
+#ifdef __AVX2__
+                score = dot_f32_avx2(q_head, k_t, l_head_dim);
+#else
+                score = 0.0f;
                 for (int d = 0; d < l_head_dim; d++)
                     score += q_head[d] * k_t[d];
+#endif
                 att_h[t] = score * attn_scale;
             }
 
@@ -1438,8 +1564,12 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
             for (int t = att_start; t <= pos; t++) {
                 float *v_t = val_layer + t * max_kv_dim + kv_h * l_head_dim;
                 float w = att_h[t];
+#ifdef __AVX2__
+                accum_axpy_f32_avx2(out_h, v_t, w, l_head_dim);
+#else
                 for (int d = 0; d < l_head_dim; d++)
                     out_h[d] += w * v_t[d];
+#endif
             }
         }
 

@@ -105,6 +105,15 @@ typedef struct {
     float *fwd_scratch;    /* scratch for forward pass temporaries (norm bufs, dn_out, conv_k, ple_out) */
     int    fwd_scratch_size; /* size in floats */
     int    n_deltanet;     /* number of DeltaNet layers (for state indexing) */
+    /* RoPE lookup tables: [max_seq_len × (max_head_dim/2)] for cos/sin.
+     * Filled lazily on first forward call (depends on model rope_freqs).
+     * Two tables to support dual-theta (SWA vs global) models. */
+    float *rope_cos;
+    float *rope_sin;
+    float *rope_cos_swa;
+    float *rope_sin_swa;
+    int    rope_table_half;   /* == max_head_dim/2 */
+    bool   rope_table_ready;
     int pos;
     int max_seq_len;
 } llama_state_t;
@@ -118,6 +127,8 @@ int  llama_load_model(llama_model_t *model, const char *gguf_path);
 void llama_free_model(llama_model_t *model);
 int  llama_alloc_state(llama_state_t *state, const llama_config_t *config);
 void llama_free_state(llama_state_t *state);
+void rope_ensure_tables(llama_state_t *state, const llama_config_t *config,
+                        const float *rope_freqs);
 
 /* Forward pass + generation (implemented in llama_forward.c) */
 void llama_forward(const llama_model_t *model, llama_state_t *state, int token);
