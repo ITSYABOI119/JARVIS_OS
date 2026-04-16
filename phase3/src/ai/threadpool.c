@@ -92,14 +92,15 @@ static void *worker_main(void *arg) {
         }
 
         jarvis_parallel_fn fn = g_pool.fn;
-        void *ctx = g_pool.ctx;
+        char local_ctx[64];
+        memcpy(local_ctx, g_pool.ctx_buf, sizeof(g_pool.ctx_buf));
         int end = g_pool.end;
         pthread_mutex_unlock(&g_pool.mu);
 
         for (;;) {
             int idx = atomic_fetch_add_explicit(&g_pool.next_idx, 1, memory_order_relaxed);
             if (idx >= end) break;
-            fn(idx, ctx);
+            fn(idx, local_ctx);
         }
 
         pthread_mutex_lock(&g_pool.mu);
