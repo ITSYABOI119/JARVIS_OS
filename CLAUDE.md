@@ -16,7 +16,7 @@ Guidance for Claude Code when working with this repository.
 | **Phase 3** | **IN PROGRESS** | Months 24-36 | Beta on x86-64 bare metal (**LLM inference on seL4 VERIFIED**) |
 | Phase 4 | Future | Months 36+ | Production v1.0 |
 
-**Current:** Phase 3c, Active Development (April 16, 2026). **MILESTONE: JARVIS engine bench-off COMPLETE — 11/11 models load and generate across 6 model families (Llama, Gemma 4, Phi-3, Mistral, Qwen3, Qwen3.5 DeltaNet SSM).** Gemma 4 E2B (#1 quality, 8.40/10) validated on seL4 QEMU. Fused QKV/gate-up support unlocked Phi-3. Gated DeltaNet SSM (~1200 LOC) unlocked Qwen3.5 hybrid architecture. JARVIS engine speed: 3.22 tok/s (1T), 20.61 tok/s (16T) — 2x gap to llama.cpp (down from 40x). Fused qdot + SIMD attention + RoPE tables + pthread threadpool. Phase 3b complete (bare-metal boot, NVMe model loading, IPC workload, I211 NIC). Phase 3c hardening done (fuzz testing, security audit 25 findings). NVMe persistent logging operational — auto-captures all serial output with [VGA]/[SER]/[PB] tags. Next: wire dynamic scaling, 30-day stability test. Two-PC setup: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/32GB/2TB NVMe) running bare-metal seL4.
+**Current:** Phase 3c, Active Development (April 16, 2026). **MILESTONE: JARVIS engine bench-off COMPLETE — 11/11 models load and generate across 6 model families (Llama, Gemma 4, Phi-3, Mistral, Qwen3, Qwen3.5 DeltaNet SSM).** Gemma 4 E2B (#1 quality, 8.40/10) validated on seL4 QEMU. Fused QKV/gate-up support unlocked Phi-3. Gated DeltaNet SSM (~1200 LOC) unlocked Qwen3.5 hybrid architecture. JARVIS engine speed: 3.22 tok/s (1T), 19.79 tok/s (16T) — 2x gap to llama.cpp (down from 40x). Fused qdot + SIMD attention + RoPE tables + pthread. Phase 3b complete (bare-metal boot, NVMe model loading, IPC workload, I211 NIC). Phase 3c hardening done (fuzz testing, security audit 25 findings). NVMe persistent logging operational — auto-captures all serial output with [VGA]/[SER]/[PB] tags. Next: wire dynamic scaling, 30-day stability test. Two-PC setup: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/32GB/2TB NVMe) running bare-metal seL4.
 
 ---
 
@@ -298,7 +298,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | Model bench-off: speed bench (11 models, Ryzen 2700X + Ryzen 5600 + RTX 2070) | DONE |
 | Model bench-off: perplexity bench (WikiText-2 full corpus, 10 models, RTX 2070) | DONE |
 | Model bench-off: quality bench (10 prompts, 11 models, Claude-judged blind) | DONE |
-| **Dynamic scaling tiers locked: Llama 3.2 1B (IDLE) / 3.2 3B (ACTIVE) / 3.1 8B (CRITICAL)** | **REVISED** |
+| **Dynamic scaling tiers: Llama 1B (IDLE 19.8t/s) / Gemma 4 E2B (ACTIVE 8.6t/s) / Mistral 7B (CRITICAL 4.2t/s)** | **REVISED** |
 | **Bench-off winner: Gemma 4 E2B (8.40/10 avg, 7 judges, 19.7 tok/s) — needs ~1000 LOC engine work** | **DECISION** |
 | **CRITICAL: Mistral 7B Q8_0 (7.50/10, 5.5 tok/s) — drop-in, ships now** | **DECISION** |
 | **Llama 3.1 8B disqualified** — 5.06/10 (#8 of 11), training data contamination | **DROPPED** |
@@ -318,7 +318,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | NVMe log auto-capture (puts_serial intercept, [VGA]/[SER] tags) | DONE |
 | MSG_DEBUG IPC for Process B -> NVMe log ([PB] tag) | DONE |
 | NVMe log bare-metal verified (boot 5, full boot timeline captured) | DONE |
-| Performance optimization plan (Week 35: fused dequant-dot + SIMD attention) | DONE |
+| Performance optimization plan (Week 35) | DONE |
 | **Bare-metal IPC inference VERIFIED: 7 queries, 0 crashes (stack overflow fixed)** | **DONE** |
 | Equal priority PA=PB (seL4_MaxPrio) + putc_serial NVMe log capture | DONE |
 | Inference timeout (5M poll) + ring overflow protection (pb_can_log) | DONE |
@@ -327,7 +327,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | fwd_scratch heap buffer (208KB stack -> heap) | DONE |
 | Fused dequant-dot (qdot.c/h, 7 types, AVX2) + SIMD attention + RoPE tables | DONE |
 | Pthread threadpool (atomic work, seL4 stubs, ctx race/overflow fixes) | DONE |
-| **Performance: Llama 1B 0.99 -> 3.22 (1T) -> 20.61 tok/s (16T)** | **DONE** |
+| **Performance: Llama 1B 0.99 -> 3.22 (1T) -> 19.79 tok/s (16T)** | **DONE** |
 
 **Next:** Wire dynamic scaling, 30-day stability test, TurboQuant/RotorQuant evaluation.
 
@@ -407,7 +407,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | Cache hit rate | >80% | 85.7% |
 | AI inference | <500ms | 558ms CPU Phi-3, <100ms Llama 3.2 1B (host PC benchmarks, no log artifact) |
 | JARVIS engine (quantized, 1T) | — | Llama 1B: 3.22, Gemma 4 E2B: 1.70, Mistral 7B: 0.56 tok/s |
-| JARVIS engine (quantized, 16T) | — | Llama 1B: 20.61 tok/s (Ryzen 2700X) |
+| JARVIS engine (quantized, 16T) | — | Llama 1B: 19.79, Gemma 4 E2B: 8.63, Mistral 7B: 4.16 tok/s |
 | llama.cpp ref (8T) | — | Llama 1B: 40.4, Gemma 4 E2B: 19.7 tok/s |
 | Models supported | — | 11/11 load, 6 model families (Llama, Gemma 4, Phi-3, Mistral, Qwen3, Qwen3.5 DeltaNet SSM) |
 | Boot time | <60s | ~2s |
@@ -673,7 +673,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Phase 3:** ~24,000 LOC, 90+ files, 395+ tests (IN PROGRESS — **11/11 models, 6 families, qdot+threadpool**)
 - **Total:** ~89,000+ LOC, 210+ files, 635+ tests
 - **Security:** 26/26 adversarial audit findings resolved (March 2026). SHIELD module: keyword + model-assisted risk scoring.
-- **Inference:** 11 GGUF models across 6 model families on JARVIS engine. Gemma 4 E2B (8.40/10 quality) on seL4 QEMU. Qwen3.5 DeltaNet SSM hybrid working. 0.17-1.25 tok/s single-threaded.
+- **Inference:** 11 GGUF models across 6 model families on JARVIS engine. Gemma 4 E2B (8.40/10 quality) on seL4 QEMU. Qwen3.5 DeltaNet SSM hybrid working. 3.22 tok/s (1T), 19.79 tok/s (16T).
 
 ### Hardware Setup
 

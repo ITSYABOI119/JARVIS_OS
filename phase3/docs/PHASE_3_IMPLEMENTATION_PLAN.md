@@ -147,7 +147,7 @@ All responses are technically accurate and correctly formatted with markdown.
 | ~~MSG_DEBUG IPC (PB→NVMe log)~~ | ~~MEDIUM~~ | ~~~80 LOC~~ | **DONE — pb_log() helper, Process B debug in NVMe log via IPC** |
 | ~~Poll-drain inference wait~~ | ~~MEDIUM~~ | ~~DONE~~ | **DONE — equal priority + 5M poll timeout + PA inline MSG_DEBUG drain** |
 | Silence verbose model-loader prints | MEDIUM | 1 hour | Gate `[config]`, `[qmodel]`, `[AUDIT]` behind a flag |
-| **Perf: fused dequant-dot + SIMD attention** | **HIGH** | **~570 LOC, 1-2 weeks** | **Target 4-5 tok/s Llama 1B single-threaded (from 1.0). Spec: `docs/superpowers/specs/2026-04-13-perf-fused-dequant-dot-design.md`** |
+| ~~Perf: fused dequant-dot + SIMD attention~~ | ~~HIGH~~ | **DONE** | **Llama 1B: 0.99 → 3.22 (1T) → 19.79 tok/s (16T). Spec: `docs/superpowers/specs/2026-04-13-perf-fused-dequant-dot-design.md`** |
 | Perf: pthread thread pool (Phase 3d/4) | LOW | TBD | Target 15-25 tok/s with 4-8 seL4 TCB workers. Deferred — needs seL4 threading infra |
 | TurboQuant/RotorQuant evaluation | MEDIUM | 2-3 sessions | RotorQuant discovered — O(d) vs O(d²), 28% faster decode |
 | Asymmetric K/V (Q8-K + TQ-V) | MEDIUM | ~460 LOC | After TQ/RQ evaluation |
@@ -654,7 +654,10 @@ While waiting for the JARVIS Project PC, the majority of Phase 3b implementation
 | 3c IPC inference wait: poll+yield+drain with timeout | **DONE** | Equal priority, 5M poll timeout, PA inline MSG_DEBUG drain |
 | **3c bare-metal inference VERIFIED** | **DONE** | Root cause: 208KB stack overflow in qmodel_forward. Fix: fwd_scratch heap buffer. 7 queries, 0 crashes. |
 | 3c QEMU NVMe virtual disk | **DONE** | whole-disk FAT32 image, instant iteration vs bare-metal reflash |
-| **3c perf: fused dequant-dot + SIMD attn** | **NEXT** | **Target 4-5 tok/s Llama 1B (from 1.0). ~570 LOC, qdot.c/h** |
+| 3c perf: fused dequant-dot + SIMD attn + RoPE + pthread | **DONE** | Llama 1B: 0.99 → 19.79 tok/s (16T). 11/11 models, ASAN clean. |
+| 3c pthread threadpool (ctx race, bounds check, local_ctx, gate→heap) | **DONE** | 5 threading bug fixes, ASAN verified on all 11 models |
+| 3c Gemma 4 E2B threading fix (PLE gate stack→fwd_scratch) | **DONE** | Stack-after-scope race in PLE gate[256] |
+| 3c bench script: always recompile + hostname output + threading enabled | **DONE** | rm cached binary, -DJARVIS_PTHREAD=1, auto thread count |
 | 3c TurboQuant/RotorQuant eval | PENDING | RotorQuant discovered as alternative (moved to Week 35b) |
 | 3c dynamic scaling | PENDING | Wire model hot-swap + state machine |
 | 3c finalization | PENDING | Final report, v0.3.0-beta |
@@ -1717,6 +1720,26 @@ but removes variable cost scaling with model size. Dual-table for Gemma 4 SWA/gl
 - New `test_qdot.c`: 1000 random blocks per kernel, compare fused vs `dequant_row()+dot` reference, tolerance `|delta| < 1e-4 * |ref| + 1e-7`
 - Per-commit bench: `bench_engine --tokens 128` on Llama 1B, Gemma 4 E2B, Mistral 7B
 - Record tok/s delta in every commit message
+
+---
+
+### Performance Results (April 16, 2026)
+
+| Model | Baseline (1T) | qdot (1T) | Threaded (16T) | Speedup |
+|-------|--------------|-----------|----------------|---------|
+| Gemma 4 E2B | 0.59 | 1.70 | 8.63 | 14.6x |
+| Gemma 4 E4B | 0.26 | 0.83 | 4.73 | 18.2x |
+| Llama 1B | 0.99 | 3.22 | 19.79 | 20.0x |
+| Llama 3B | 0.40 | 1.26 | 8.66 | 21.7x |
+| Llama 8B | 0.17 | 0.54 | 4.13 | 24.3x |
+| Mistral 7B | 0.17 | 0.56 | 4.16 | 24.5x |
+| Phi-3 Mini | 0.33 | 1.07 | 7.17 | 21.7x |
+| Qwen3 4B | 0.32 | 1.01 | 6.77 | 21.2x |
+| Qwen3.5 4B | 0.28 | 0.90 | 5.16 | 18.4x |
+| Qwen3.5 9B | 0.17 | 0.53 | 3.28 | 19.3x |
+| TinyLlama | 1.25 | 3.94 | 23.86 | 19.1x |
+
+Hardware: Ryzen 7 2700X (8C/16T), 32GB DDR4. llama.cpp reference: 40.44 tok/s (8T).
 
 ---
 
