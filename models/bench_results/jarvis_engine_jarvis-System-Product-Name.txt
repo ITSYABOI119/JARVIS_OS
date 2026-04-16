@@ -1,5 +1,5 @@
 === JARVIS Native Engine Benchmark ===
-Date: Thu Apr 16 05:46:15 PM AEST 2026
+Date: Thu Apr 16 06:44:58 PM AEST 2026
 Host: jarvis-System-Product-Name
 CPU:  AMD Ryzen 7 2700X Eight-Core Processor
 RAM:  31.2 GB
@@ -11,8 +11,76 @@ Models: 11
 [1/11] gemma-4-E2B-it-Q4_K_M.gguf (2.9G)
   Loading /home/jarvis/Desktop/JARVIS_OS/models/gemma-4-E2B-it-Q4_K_M.gguf (2.89 GiB)...
   Loaded in 0.2s (gemma4, 35 layers, 1536 dim)
-phase3/scripts/bench_engine_models.sh: line 102: 209974 Segmentation fault      (core dumped) "$BENCH_BIN" "$model"
-| gemma-4-E2B-it-Q4_K_M.gguf     |       2.9G |            | JARVIS     |       1 |           tg128 |            FAILED |
+  Peak RSS: 3063 MB
+[config] arch='gemma4' n_kv=56 n_tensors=601
+[config] dim=1536
+[config] n_layers=35
+[config] n_heads=8 n_kv_heads=1
+[config] head_dim=512
+[config] feed_forward_length is array (gemma4), hidden_dim=0 for now
+[config] vocab_size=262144 hidden_dim=0
+[config] extensions: ple=256 swa=512 swa_hd=256 shared_kv=20 softcap=30.0 eps=1e-06 theta_swa=10000
+[config] OK: dim=1536 layers=35 heads=8/1 hd=512/256 ffn=12288 vocab=262144
+[qmodel] Derived per-layer dims from tensor shapes:
+  layer  0: swa=1 ffn= 6144 kv_share=-1
+  layer  1: swa=1 ffn= 6144 kv_share=-1
+  layer  2: swa=1 ffn= 6144 kv_share=-1
+  layer  3: swa=1 ffn= 6144 kv_share=-1
+  layer  4: swa=0 ffn= 6144 kv_share=-1
+  layer  5: swa=1 ffn= 6144 kv_share=-1
+  layer  6: swa=1 ffn= 6144 kv_share=-1
+  layer  7: swa=1 ffn= 6144 kv_share=-1
+  layer  8: swa=1 ffn= 6144 kv_share=-1
+  layer  9: swa=0 ffn= 6144 kv_share=-1
+  layer 10: swa=1 ffn= 6144 kv_share=-1
+  layer 11: swa=1 ffn= 6144 kv_share=-1
+  layer 12: swa=1 ffn= 6144 kv_share=-1
+  layer 13: swa=1 ffn= 6144 kv_share=-1
+  layer 14: swa=0 ffn= 6144 kv_share=-1
+  layer 15: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 16: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 17: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 18: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 19: swa=0 ffn=12288 kv_share=14 (from L14)
+  layer 20: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 21: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 22: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 23: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 24: swa=0 ffn=12288 kv_share=14 (from L14)
+  layer 25: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 26: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 27: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 28: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 29: swa=0 ffn=12288 kv_share=14 (from L14)
+  layer 30: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 31: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 32: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 33: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 34: swa=0 ffn=12288 kv_share=14 (from L14)
+  hidden_dim=12288
+[qmodel] Tensor types (layer 0):
+  wq=Q4_K wk=Q4_K wv=Q6_K wo=Q4_K
+  gate=Q4_K up=Q4_K down=Q6_K norm=F32
+  q_norm=F32 k_norm=F32
+  post_attn=F32 post_ffw=F32 scale=F32
+  embed=Q4_K output=Q4_K
+
+=== AUDIT ===
+[AUDIT] inp_gate.n_elements=393216 (expected dim*ple_dim=393216)
+[AUDIT] inp_gate.type=F32 (F32 expected)
+[AUDIT] per_layer_model_proj LOADED: n_elements=13762560 type=BF16
+[AUDIT]   used as context component: BF16 matmul, combine (identity + context) / sqrt(2)
+[AUDIT] rope_neox=1 (Gemma should be 1)
+[AUDIT] attn_scale=1.0 for Gemma 4 (Q/K RMSNorm in use); Llama uses 1/sqrt(256)
+[AUDIT] rms_norm_eps=1e-06 (research says 1e-6)
+[AUDIT] kv_share_map: 15 own, 20 shared (config says shared_kv=20)
+[AUDIT] L0 q_norm.n_elements=256 (SWA head_dim=256)
+[AUDIT] L34 q_norm.n_elements=512 (global head_dim=512)
+[AUDIT] layer_output_scale L0=0.0178 L34=0.1670
+=== END AUDIT ===
+
+[vocab] merges: 514906 total, 514906 matched to tokens
+| Gemma-4-E2B-It                 |     2.89 GiB |     2.71 B | JARVIS     |       1 |           tg128 |              8.63 ± 0.00 |
 
 [2/11] google_gemma-4-E4B-it-Q4_K_M.gguf (5.1G)
   Loading /home/jarvis/Desktop/JARVIS_OS/models/google_gemma-4-E4B-it-Q4_K_M.gguf (5.03 GiB)...
@@ -92,7 +160,7 @@ phase3/scripts/bench_engine_models.sh: line 102: 209974 Segmentation fault      
 === END AUDIT ===
 
 [vocab] merges: 514906 total, 514906 matched to tokens
-| Gemma 4 E4B It                 |     5.03 GiB |     5.08 B | JARVIS     |       1 |           tg128 |              4.77 ± 0.00 |
+| Gemma 4 E4B It                 |     5.03 GiB |     5.08 B | JARVIS     |       1 |           tg128 |              4.73 ± 0.00 |
 
 [3/11] Llama-3.2-1B-Instruct-Q4_K_M.gguf (771M)
   Loading /home/jarvis/Desktop/JARVIS_OS/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf (0.75 GiB)...
@@ -120,7 +188,7 @@ phase3/scripts/bench_engine_models.sh: line 102: 209974 Segmentation fault      
 === END AUDIT ===
 
 [vocab] merges: 280147 total, 280104 matched to tokens
-| Llama-3.2-1B-Instruct          |     0.75 GiB |     1.34 B | JARVIS     |       1 |           tg128 |             19.90 ± 0.00 |
+| Llama-3.2-1B-Instruct          |     0.75 GiB |     1.34 B | JARVIS     |       1 |           tg128 |             19.79 ± 0.00 |
 
 [4/11] Llama-3.2-3B-Instruct-Q4_K_M.gguf (1.9G)
   Loading /home/jarvis/Desktop/JARVIS_OS/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf (1.88 GiB)...
@@ -148,7 +216,7 @@ phase3/scripts/bench_engine_models.sh: line 102: 209974 Segmentation fault      
 === END AUDIT ===
 
 [vocab] merges: 280147 total, 280104 matched to tokens
-| Llama 3.2 3B Instruct          |     1.88 GiB |     3.56 B | JARVIS     |       1 |           tg128 |              8.70 ± 0.00 |
+| Llama 3.2 3B Instruct          |     1.88 GiB |     3.56 B | JARVIS     |       1 |           tg128 |              8.66 ± 0.00 |
 
 [5/11] Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf (4.6G)
   Loading /home/jarvis/Desktop/JARVIS_OS/models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf (4.58 GiB)...
@@ -176,7 +244,7 @@ phase3/scripts/bench_engine_models.sh: line 102: 209974 Segmentation fault      
 === END AUDIT ===
 
 [vocab] merges: 280147 total, 280104 matched to tokens
-| Meta Llama 3.1 8B Instruct     |     4.58 GiB |     8.31 B | JARVIS     |       1 |           tg128 |              4.15 ± 0.00 |
+| Meta Llama 3.1 8B Instruct     |     4.58 GiB |     8.31 B | JARVIS     |       1 |           tg128 |              4.13 ± 0.00 |
 
 [6/11] mistral-7b-instruct-v0.2.Q8_0.gguf (7.2G)
   Loading /home/jarvis/Desktop/JARVIS_OS/models/mistral-7b-instruct-v0.2.Q8_0.gguf (7.17 GiB)...
@@ -203,7 +271,7 @@ phase3/scripts/bench_engine_models.sh: line 102: 209974 Segmentation fault      
 [AUDIT] kv_share_map is NULL (all layers compute own KV)
 === END AUDIT ===
 
-| mistralai_mistral-7b-instruct-v0.2 |     7.17 GiB |     7.92 B | JARVIS     |       1 |           tg128 |              4.20 ± 0.00 |
+| mistralai_mistral-7b-instruct-v0.2 |     7.17 GiB |     7.92 B | JARVIS     |       1 |           tg128 |              4.16 ± 0.00 |
 
 [7/11] Phi-3-mini-4k-instruct-q4.gguf (2.3G)
   Loading /home/jarvis/Desktop/JARVIS_OS/models/Phi-3-mini-4k-instruct-q4.gguf (2.23 GiB)...
@@ -232,7 +300,7 @@ phase3/scripts/bench_engine_models.sh: line 102: 209974 Segmentation fault      
 [AUDIT] kv_share_map is NULL (all layers compute own KV)
 === END AUDIT ===
 
-| Phi3                           |     2.23 GiB |     3.72 B | JARVIS     |       1 |           tg128 |              7.19 ± 0.00 |
+| Phi3                           |     2.23 GiB |     3.72 B | JARVIS     |       1 |           tg128 |              7.17 ± 0.00 |
 
 [8/11] Qwen3-4B-Q4_K_M.gguf (2.4G)
   Loading /home/jarvis/Desktop/JARVIS_OS/models/Qwen3-4B-Q4_K_M.gguf (2.33 GiB)...
@@ -263,7 +331,7 @@ phase3/scripts/bench_engine_models.sh: line 102: 209974 Segmentation fault      
 === END AUDIT ===
 
 [vocab] merges: 151387 total, 151386 matched to tokens
-| Qwen3 4B Instruct Awq          |     2.33 GiB |     4.02 B | JARVIS     |       1 |           tg128 |              6.78 ± 0.00 |
+| Qwen3 4B Instruct Awq          |     2.33 GiB |     4.02 B | JARVIS     |       1 |           tg128 |              6.77 ± 0.00 |
 
 [9/11] Qwen3.5-4B-Q4_K_M.gguf (2.6G)
   Loading /home/jarvis/Desktop/JARVIS_OS/models/Qwen3.5-4B-Q4_K_M.gguf (2.55 GiB)...
@@ -294,7 +362,7 @@ phase3/scripts/bench_engine_models.sh: line 102: 209974 Segmentation fault      
 === END AUDIT ===
 
 [vocab] merges: 247587 total, 247586 matched to tokens
-| Qwen3.5-4B                     |     2.55 GiB |     3.74 B | JARVIS     |       1 |           tg128 |              5.12 ± 0.00 |
+| Qwen3.5-4B                     |     2.55 GiB |     3.74 B | JARVIS     |       1 |           tg128 |              5.16 ± 0.00 |
 
 [10/11] Qwen3.5-9B-Q4_K_M.gguf (5.3G)
   Loading /home/jarvis/Desktop/JARVIS_OS/models/Qwen3.5-9B-Q4_K_M.gguf (5.29 GiB)...
@@ -325,7 +393,7 @@ phase3/scripts/bench_engine_models.sh: line 102: 209974 Segmentation fault      
 === END AUDIT ===
 
 [vocab] merges: 247587 total, 247586 matched to tokens
-| Qwen3.5-9B                     |     5.29 GiB |     8.00 B | JARVIS     |       1 |           tg128 |              3.26 ± 0.00 |
+| Qwen3.5-9B                     |     5.29 GiB |     8.00 B | JARVIS     |       1 |           tg128 |              3.28 ± 0.00 |
 
 [11/11] tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf (638M)
   Loading /home/jarvis/Desktop/JARVIS_OS/models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf (0.62 GiB)...
@@ -353,6 +421,6 @@ phase3/scripts/bench_engine_models.sh: line 102: 209974 Segmentation fault      
 === END AUDIT ===
 
 [vocab] merges: 61249 total, 61249 matched to tokens
-| tinyllama_tinyllama-1.1b-chat-v1.0 |     0.62 GiB |     1.20 B | JARVIS     |       1 |           tg128 |             23.63 ± 0.00 |
+| tinyllama_tinyllama-1.1b-chat-v1.0 |     0.62 GiB |     1.20 B | JARVIS     |       1 |           tg128 |             23.86 ± 0.00 |
 
 === Done: 11 models tested ===
