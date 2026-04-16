@@ -181,3 +181,178 @@ phase3/scripts/bench_engine_models.sh: line 102: 209974 Segmentation fault      
 [6/11] mistral-7b-instruct-v0.2.Q8_0.gguf (7.2G)
   Loading /home/jarvis/Desktop/JARVIS_OS/models/mistral-7b-instruct-v0.2.Q8_0.gguf (7.17 GiB)...
   Loaded in 0.0s (llama, 32 layers, 4096 dim)
+  Peak RSS: 7473 MB
+[config] arch='llama' n_kv=24 n_tensors=291
+[config] dim=4096
+[config] n_layers=32
+[config] n_heads=32 n_kv_heads=8
+[config] head_dim=128
+[config] vocab_size=32000 hidden_dim=14336
+[config] extensions: ple=0 swa=0 swa_hd=0 shared_kv=0 softcap=0.0 eps=1e-05 theta_swa=0
+[config] OK: dim=4096 layers=32 heads=32/8 hd=128/0 ffn=14336 vocab=32000
+[qmodel] Tensor types (layer 0):
+  wq=Q8_0 wk=Q8_0 wv=Q8_0 wo=Q8_0
+  gate=Q8_0 up=Q8_0 down=Q8_0 norm=F32
+  embed=Q8_0 output=Q8_0
+
+=== AUDIT ===
+[AUDIT] per_layer_model_proj NOT loaded
+[AUDIT] rope_neox=0 (Gemma should be 1)
+[AUDIT] attn_scale=1.0 for Gemma 4 (Q/K RMSNorm in use); Llama uses 1/sqrt(128)
+[AUDIT] rms_norm_eps=1e-05 (research says 1e-6)
+[AUDIT] kv_share_map is NULL (all layers compute own KV)
+=== END AUDIT ===
+
+| mistralai_mistral-7b-instruct-v0.2 |     7.17 GiB |     7.92 B | JARVIS     |       1 |           tg128 |              4.20 ± 0.00 |
+
+[7/11] Phi-3-mini-4k-instruct-q4.gguf (2.3G)
+  Loading /home/jarvis/Desktop/JARVIS_OS/models/Phi-3-mini-4k-instruct-q4.gguf (2.23 GiB)...
+  Loaded in 0.0s (phi3, 32 layers, 3072 dim)
+  Peak RSS: 2672 MB
+[config] arch='phi3' n_kv=24 n_tensors=195
+[config] dim=3072
+[config] n_layers=32
+[config] n_heads=32 n_kv_heads=32
+[config] head_dim=96
+[config] vocab_size=32064 hidden_dim=8192
+[config] extensions: ple=0 swa=0 swa_hd=0 shared_kv=0 softcap=0.0 eps=1e-05 theta_swa=0
+[config] OK: dim=3072 layers=32 heads=32/32 hd=96/0 ffn=8192 vocab=32064
+[qmodel] Fused QKV detected: q=3072 k=3072 v=3072 rows, row_bytes=2112, type=Q5_K
+[qmodel] Fused gate-up detected: 8192 + 8192 rows, row_bytes=1728, type=Q4_K
+[qmodel] Tensor types (layer 0):
+  wq=Q5_K wk=Q5_K wv=Q5_K wo=Q4_K
+  gate=Q4_K up=Q4_K down=Q6_K norm=F32
+  embed=Q4_K output=Q6_K
+
+=== AUDIT ===
+[AUDIT] per_layer_model_proj NOT loaded
+[AUDIT] rope_neox=0 (Gemma should be 1)
+[AUDIT] attn_scale=1.0 for Gemma 4 (Q/K RMSNorm in use); Llama uses 1/sqrt(96)
+[AUDIT] rms_norm_eps=1e-05 (research says 1e-6)
+[AUDIT] kv_share_map is NULL (all layers compute own KV)
+=== END AUDIT ===
+
+| Phi3                           |     2.23 GiB |     3.72 B | JARVIS     |       1 |           tg128 |              7.19 ± 0.00 |
+
+[8/11] Qwen3-4B-Q4_K_M.gguf (2.4G)
+  Loading /home/jarvis/Desktop/JARVIS_OS/models/Qwen3-4B-Q4_K_M.gguf (2.33 GiB)...
+  Loaded in 0.1s (qwen3, 36 layers, 2560 dim)
+  Peak RSS: 2544 MB
+[config] arch='qwen3' n_kv=28 n_tensors=398
+[config] dim=2560
+[config] n_layers=36
+[config] n_heads=32 n_kv_heads=8
+[config] head_dim=128
+[config] vocab_size=151936 hidden_dim=9728
+[config] extensions: ple=0 swa=0 swa_hd=0 shared_kv=0 softcap=0.0 eps=1e-06 theta_swa=0
+[config] OK: dim=2560 layers=36 heads=32/8 hd=128/0 ffn=9728 vocab=151936
+[qmodel] Tensor types (layer 0):
+  wq=Q4_K wk=Q4_K wv=Q6_K wo=Q4_K
+  gate=Q4_K up=Q4_K down=Q6_K norm=F32
+  q_norm=F32 k_norm=F32
+  embed=Q6_K output=Q6_K
+
+=== AUDIT ===
+[AUDIT] per_layer_model_proj NOT loaded
+[AUDIT] rope_neox=0 (Gemma should be 1)
+[AUDIT] attn_scale=1.0 for Gemma 4 (Q/K RMSNorm in use); Llama uses 1/sqrt(128)
+[AUDIT] rms_norm_eps=1e-06 (research says 1e-6)
+[AUDIT] kv_share_map is NULL (all layers compute own KV)
+[AUDIT] L0 q_norm.n_elements=128 (SWA head_dim=0)
+[AUDIT] L34 q_norm.n_elements=128 (global head_dim=128)
+=== END AUDIT ===
+
+[vocab] merges: 151387 total, 151386 matched to tokens
+| Qwen3 4B Instruct Awq          |     2.33 GiB |     4.02 B | JARVIS     |       1 |           tg128 |              6.78 ± 0.00 |
+
+[9/11] Qwen3.5-4B-Q4_K_M.gguf (2.6G)
+  Loading /home/jarvis/Desktop/JARVIS_OS/models/Qwen3.5-4B-Q4_K_M.gguf (2.55 GiB)...
+  Loaded in 0.2s (qwen35, 32 layers, 2560 dim)
+  Peak RSS: 2820 MB
+[config] arch='qwen35' n_kv=46 n_tensors=426
+[config] dim=2560
+[config] n_layers=32
+[config] n_heads=16 n_kv_heads=4
+[config] head_dim=256
+[config] vocab_size=248320 hidden_dim=9216
+[config] extensions: ple=0 swa=0 swa_hd=0 shared_kv=0 softcap=0.0 eps=1e-06 theta_swa=0
+[config] SSM: d_conv=4 d_state=128 n_group=16 dt_rank=32 d_inner=4096 full_attn=4
+[config] OK: dim=2560 layers=32 heads=16/4 hd=256/0 ffn=9216 vocab=248320
+[qmodel] SSM fused QKV: q=2048 k=2048 v=4096 rows, type=Q5_K
+[qmodel] Hybrid layers: 24 DeltaNet, 8 full-attention
+[qmodel] Tensor types (layer 0):
+  wq=Q5_K wk=Q5_K wv=Q5_K wo=F32
+  gate=Q4_K up=Q4_K down=Q6_K norm=F32
+  embed=Q6_K output=Q6_K
+
+=== AUDIT ===
+[AUDIT] per_layer_model_proj NOT loaded
+[AUDIT] rope_neox=0 (Gemma should be 1)
+[AUDIT] attn_scale=1.0 for Gemma 4 (Q/K RMSNorm in use); Llama uses 1/sqrt(256)
+[AUDIT] rms_norm_eps=1e-06 (research says 1e-6)
+[AUDIT] kv_share_map is NULL (all layers compute own KV)
+=== END AUDIT ===
+
+[vocab] merges: 247587 total, 247586 matched to tokens
+| Qwen3.5-4B                     |     2.55 GiB |     3.74 B | JARVIS     |       1 |           tg128 |              5.12 ± 0.00 |
+
+[10/11] Qwen3.5-9B-Q4_K_M.gguf (5.3G)
+  Loading /home/jarvis/Desktop/JARVIS_OS/models/Qwen3.5-9B-Q4_K_M.gguf (5.29 GiB)...
+  Loaded in 0.2s (qwen35, 32 layers, 4096 dim)
+  Peak RSS: 5624 MB
+[config] arch='qwen35' n_kv=46 n_tensors=427
+[config] dim=4096
+[config] n_layers=32
+[config] n_heads=16 n_kv_heads=4
+[config] head_dim=256
+[config] vocab_size=248320 hidden_dim=12288
+[config] extensions: ple=0 swa=0 swa_hd=0 shared_kv=0 softcap=0.0 eps=1e-06 theta_swa=0
+[config] SSM: d_conv=4 d_state=128 n_group=16 dt_rank=32 d_inner=4096 full_attn=4
+[config] OK: dim=4096 layers=32 heads=16/4 hd=256/0 ffn=12288 vocab=248320
+[qmodel] SSM fused QKV: q=2048 k=2048 v=4096 rows, type=Q5_K
+[qmodel] Hybrid layers: 24 DeltaNet, 8 full-attention
+[qmodel] Tensor types (layer 0):
+  wq=Q5_K wk=Q5_K wv=Q5_K wo=F32
+  gate=Q4_K up=Q4_K down=Q6_K norm=F32
+  embed=Q4_K output=Q6_K
+
+=== AUDIT ===
+[AUDIT] per_layer_model_proj NOT loaded
+[AUDIT] rope_neox=0 (Gemma should be 1)
+[AUDIT] attn_scale=1.0 for Gemma 4 (Q/K RMSNorm in use); Llama uses 1/sqrt(256)
+[AUDIT] rms_norm_eps=1e-06 (research says 1e-6)
+[AUDIT] kv_share_map is NULL (all layers compute own KV)
+=== END AUDIT ===
+
+[vocab] merges: 247587 total, 247586 matched to tokens
+| Qwen3.5-9B                     |     5.29 GiB |     8.00 B | JARVIS     |       1 |           tg128 |              3.26 ± 0.00 |
+
+[11/11] tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf (638M)
+  Loading /home/jarvis/Desktop/JARVIS_OS/models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf (0.62 GiB)...
+  Loaded in 0.0s (llama, 22 layers, 2048 dim)
+  Peak RSS: 665 MB
+[config] arch='llama' n_kv=23 n_tensors=201
+[config] dim=2048
+[config] n_layers=22
+[config] n_heads=32 n_kv_heads=4
+[config] head_dim=64
+[config] vocab_size=32000 hidden_dim=5632
+[config] extensions: ple=0 swa=0 swa_hd=0 shared_kv=0 softcap=0.0 eps=1e-05 theta_swa=0
+[config] OK: dim=2048 layers=22 heads=32/4 hd=64/0 ffn=5632 vocab=32000
+[qmodel] Tensor types (layer 0):
+  wq=Q4_K wk=Q4_K wv=Q6_K wo=Q4_K
+  gate=Q4_K up=Q4_K down=Q6_K norm=F32
+  embed=Q4_K output=Q6_K
+
+=== AUDIT ===
+[AUDIT] per_layer_model_proj NOT loaded
+[AUDIT] rope_neox=0 (Gemma should be 1)
+[AUDIT] attn_scale=1.0 for Gemma 4 (Q/K RMSNorm in use); Llama uses 1/sqrt(64)
+[AUDIT] rms_norm_eps=1e-05 (research says 1e-6)
+[AUDIT] kv_share_map is NULL (all layers compute own KV)
+=== END AUDIT ===
+
+[vocab] merges: 61249 total, 61249 matched to tokens
+| tinyllama_tinyllama-1.1b-chat-v1.0 |     0.62 GiB |     1.20 B | JARVIS     |       1 |           tg128 |             23.63 ± 0.00 |
+
+=== Done: 11 models tested ===
