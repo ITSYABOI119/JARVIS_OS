@@ -146,6 +146,8 @@ AI_FILES=(
     "inference.c"         "inference.h"
     "gguf_vocab.c"        "gguf_vocab.h"
     "ssm.c"               "ssm.h"
+    "qdot.c"              "qdot.h"
+    "threadpool.h"
 )
 
 for f in "${AI_FILES[@]}"; do
