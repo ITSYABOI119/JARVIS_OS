@@ -355,7 +355,6 @@ jobs:
           phase3/src/ai/qdot.c \
           phase3/src/ai/llama_forward.c phase3/src/ai/llama_load.c \
           phase3/src/ai/tensor_ops.c phase3/src/ai/dequant.c \
-          phase3/src/ai/qdot.c \
           phase3/src/ai/sampling.c phase3/src/ai/gguf_parser.c \
           phase3/src/ai/tokenizer.c phase3/src/ai/ssm.c \
           -lm -o /tmp/test_forward_compare
@@ -369,7 +368,6 @@ jobs:
           phase3/src/ai/qdot.c \
           phase3/src/ai/llama_load.c phase3/src/ai/llama_forward.c \
           phase3/src/ai/tensor_ops.c phase3/src/ai/dequant.c \
-          phase3/src/ai/qdot.c \
           phase3/src/ai/sampling.c phase3/src/ai/gguf_parser.c \
           phase3/src/ai/ssm.c \
           -lm -o /tmp/test_llama_quant
