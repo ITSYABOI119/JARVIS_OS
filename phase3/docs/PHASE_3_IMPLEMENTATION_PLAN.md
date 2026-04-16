@@ -1331,8 +1331,8 @@ While waiting for the JARVIS Project PC, the majority of Phase 3b implementation
 - Llama 3.2 1B Q4_K_M (0.8GB) — IDLE tier, already on disk
 - TinyLlama 1.1B Q4_K_M (0.6GB) — IDLE comparison, already on disk
 - Phi-3 Mini 4k Q4 (2.3GB) — ACTIVE comparison, already on disk (may have arch issues)
-- Llama 3.2 3B Q4_K_M (~2GB) — ACTIVE tier, downloading
-- Llama 3.1 8B Q4_K_M (~5GB) — CRITICAL tier, downloading
+- Gemma 4 E2B Q4_K_M (~2.9GB) — ACTIVE tier (bench-off #1 quality, 8.40/10)
+- Mistral 7B Q8_0 (~7.2GB) — CRITICAL tier (bench-off #2 quality, 7.50/10)
 
 **Track 2: llama.cpp reference** — measures what's POSSIBLE if we did engine work
 - Same 5 models as Track 1 (cross-validates JARVIS vs llama.cpp tok/s)
@@ -1841,7 +1841,7 @@ Hardware: Ryzen 7 2700X (8C/16T), 32GB DDR4. llama.cpp reference: 40.44 tok/s (8
 
 **Tasks:**
 1. Connect `model_scaling.c` state machine to real model hot-swap from NVMe
-   - IDLE (1B) → ACTIVE (3B) → CRITICAL (8B) → EMERGENCY (rules-only)
+   - IDLE (Llama 1B) → ACTIVE (Gemma 4 E2B) → CRITICAL (Mistral 7B) → EMERGENCY (rules-only)
    - Swap mechanism: Process A signals Process B to unload, reload new model from NVMe
    - Decision cache handles queries during swap (~30 seconds for 3B, ~60 seconds for 8B)
    - Transitions driven by query rate, error rate, and SHIELD risk score
