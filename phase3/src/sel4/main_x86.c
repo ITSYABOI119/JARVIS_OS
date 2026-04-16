@@ -1255,7 +1255,7 @@ static void *main_continued(void *arg UNUSED)
                                         puts_serial(" B/sec\n");
 
                                         uint32_t model_cluster = 0, model_size = 0;
-                                        int found = fat32_find_file(&fs, "MODEL   GUF",
+                                        int found = fat32_find_file(&fs, scaler_model_file(SCALING_IDLE),
                                                                      &model_cluster, &model_size);
                                         if (found == 0) {
                                             puts_serial("[JARVIS] Model file: cluster=");
