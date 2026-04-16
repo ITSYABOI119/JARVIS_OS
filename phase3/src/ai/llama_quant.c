@@ -1672,8 +1672,9 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
         if (has_ple && layer->ple_gate.data && layer->ple_proj.data) {
             const float *ple_slice = &ple_all[L * c->ple_dim];
 
-            /* gate = inp_gate @ x (1536 -> 256) */
-            float gate[256];
+            /* gate = inp_gate @ x (1536 -> 256) — use fwd_scratch[0..ple_dim-1]
+             * (was stack array, but threading reads gate via ctx.x after scope ends) */
+            float *gate = state->fwd_scratch;
             qmatmul_vec(&layer->ple_gate, state->x, gate, c->ple_dim, dim);
 
             /* GELU and multiply with ple_slice */
@@ -1684,8 +1685,8 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
                 gate[d] = g * ple_slice[d];
             }
 
-            /* proj = ple_proj @ gate (256 -> 1536) */
-            float *ple_out = state->fwd_scratch; /* max dim (was 16KB stack) */
+            /* proj = ple_proj @ gate (256 -> 1536) — ple_out starts after gate */
+            float *ple_out = state->fwd_scratch + c->ple_dim;
             qmatmul_vec(&layer->ple_proj, gate, ple_out, dim, c->ple_dim);
 
             /* Apply per-layer post_norm (if present) */
