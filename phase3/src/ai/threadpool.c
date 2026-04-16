@@ -201,11 +201,16 @@ void jarvis_parallel_for(int start, int end, jarvis_parallel_fn fn, void *ctx, s
     pthread_cond_broadcast(&g_pool.cv_work);
     pthread_mutex_unlock(&g_pool.mu);
 
-    /* Use the calling thread as worker 0 */
+    /* Use the calling thread as worker 0.
+     * IMPORTANT: use g_pool.ctx (the stable copy), not the original ctx
+     * parameter. This ensures all threads — including the caller — read
+     * from the same memory. Eliminates any aliasing issues between the
+     * caller's stack and worker threads. */
+    void *safe_ctx = g_pool.ctx;
     for (;;) {
         int idx = atomic_fetch_add_explicit(&g_pool.next_idx, 1, memory_order_relaxed);
         if (idx >= end) break;
-        fn(idx, ctx);
+        fn(idx, safe_ctx);
     }
 
     pthread_mutex_lock(&g_pool.mu);

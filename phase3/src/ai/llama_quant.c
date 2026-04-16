@@ -51,6 +51,8 @@
 #ifdef JARVIS_PTHREAD
 typedef struct { const float *wf; const float *x; float *out; int K; } qmatmul_f32_ctx_t;
 typedef struct { const uint8_t *wdata; size_t row_bytes; const float *x; float *out; int K; ggml_type_t wtype; } qmatmul_qdot_ctx_t;
+_Static_assert(sizeof(qmatmul_f32_ctx_t) <= 64, "ctx must fit threadpool ctx_buf[64]");
+_Static_assert(sizeof(qmatmul_qdot_ctx_t) <= 64, "ctx must fit threadpool ctx_buf[64]");
 
 static void qmatmul_f32_row(int idx, void *p);
 static void qmatmul_qdot_row(int idx, void *p);
