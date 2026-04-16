@@ -119,7 +119,7 @@ static void qmatmul_vec(const qtensor_t *W, const float *x, float *out,
         if (use_threads) {
 #ifdef JARVIS_PTHREAD
             qmatmul_f32_ctx_t ctx = { wf, x, out, K };
-            jarvis_parallel_for(0, M, qmatmul_f32_row, &ctx);
+            jarvis_parallel_for(0, M, qmatmul_f32_row, &ctx, sizeof(ctx));
 #else
             for (int i = 0; i < M; i++) {
                 const float *row = wf + (size_t)i * K;
@@ -152,7 +152,7 @@ static void qmatmul_vec(const qtensor_t *W, const float *x, float *out,
     if (use_threads) {
 #ifdef JARVIS_PTHREAD
         qmatmul_qdot_ctx_t ctx = { wdata, row_bytes, x, out, K, wtype };
-        jarvis_parallel_for(0, M, qmatmul_qdot_row, &ctx);
+        jarvis_parallel_for(0, M, qmatmul_qdot_row, &ctx, sizeof(ctx));
 #else
         for (int i = 0; i < M; i++)
             out[i] = qdot_row(wdata + (size_t)i * row_bytes, x, K, wtype);

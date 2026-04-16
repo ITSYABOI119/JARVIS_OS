@@ -37,6 +37,7 @@ typedef struct {
     int end;
     jarvis_parallel_fn fn;
     void *ctx;
+    char ctx_buf[64];    /* copy of caller's ctx struct — avoids stack pointer race */
 
     int active_workers;
     int has_work;
@@ -160,7 +161,7 @@ static void ensure_pool(void) {
     pthread_once(&g_once, init_pool_once);
 }
 
-void jarvis_parallel_for(int start, int end, jarvis_parallel_fn fn, void *ctx) {
+void jarvis_parallel_for(int start, int end, jarvis_parallel_fn fn, void *ctx, size_t ctx_size) {
     if (end <= start) return;
     if (!fn) return;
 
@@ -184,7 +185,15 @@ void jarvis_parallel_for(int start, int end, jarvis_parallel_fn fn, void *ctx) {
     g_pool.start = start;
     g_pool.end = end;
     g_pool.fn = fn;
-    g_pool.ctx = ctx;
+    /* Copy ctx into stable pool memory — caller's stack pointer becomes stale
+     * between parallel_for rounds. Workers read from g_pool.ctx_buf instead. */
+    if (ctx && ctx_size > 0) {
+        if (ctx_size > sizeof(g_pool.ctx_buf)) ctx_size = sizeof(g_pool.ctx_buf);
+        memcpy(g_pool.ctx_buf, ctx, ctx_size);
+        g_pool.ctx = g_pool.ctx_buf;
+    } else {
+        g_pool.ctx = ctx;
+    }
     atomic_store_explicit(&g_pool.next_idx, start, memory_order_relaxed);
     g_pool.active_workers = g_pool.n_workers;
     g_pool.has_work = 1;

@@ -34,7 +34,7 @@ int main(void) {
         atomic_init(&g_seen[i], 0);
 
     atomic_init(&g_hits, 0);
-    jarvis_parallel_for(0, N, hit_fn, NULL);
+    jarvis_parallel_for(0, N, hit_fn, NULL, 0);
 
     int hits = atomic_load_explicit(&g_hits, memory_order_relaxed);
     if (hits != N) {
