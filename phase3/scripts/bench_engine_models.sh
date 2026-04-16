@@ -46,11 +46,7 @@ if [ ! -f "$BENCH_SRC" ]; then
     exit 1
 fi
 
-if [ ! -x "$BENCH_BIN" ] || [ "$BENCH_SRC" -nt "$BENCH_BIN" ]; then
-    compile_bench
-else
-    echo "bench_engine binary is up to date."
-fi
+compile_bench
 
 # --- Discover models ---------------------------------------------------------
 
