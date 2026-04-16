@@ -8,6 +8,7 @@
 
 #include "qdot.h"
 #include <string.h>
+#include <stdio.h>  /* DEBUG: fprintf for bounds check */
 
 #ifdef __AVX2__
 #include <immintrin.h>
@@ -442,6 +443,15 @@ static float qdot_q6_k_avx2(const void *row_data, const float *x, int K)
                 __m256 ds3 = _mm256_set1_ps(d * sc[is + 4]);
                 __m256 ds4 = _mm256_set1_ps(d * sc[is + 6]);
 
+                /* DEBUG: bounds check x accesses */
+                {
+                    int max_x_idx = b * 256 + n + l + 96 + 7;
+                    if (max_x_idx >= K) {
+                        fprintf(stderr, "QDOT_Q6K OVERREAD: b=%d n=%d l=%d max_idx=%d K=%d\n",
+                                b, n, l, max_x_idx, K);
+                        __builtin_trap();
+                    }
+                }
                 __m256 x1 = _mm256_loadu_ps(xb + n + l);
                 __m256 x2 = _mm256_loadu_ps(xb + n + l + 32);
                 __m256 x3 = _mm256_loadu_ps(xb + n + l + 64);
