@@ -155,6 +155,17 @@ static void test_transition_counter(void) {
     PASS();
 }
 
+/* Test 10: scaler_model_file returns correct filenames */
+static void test_model_files(void) {
+    TEST("scaler_model_file returns correct filenames");
+    int ok = 1;
+    if (strcmp(scaler_model_file(SCALING_IDLE), "LLAMA1B GUF") != 0) ok = 0;
+    if (strcmp(scaler_model_file(SCALING_ACTIVE), "GEMMA2B GUF") != 0) ok = 0;
+    if (strcmp(scaler_model_file(SCALING_CRITICAL), "MISTR7B GUF") != 0) ok = 0;
+    if (scaler_model_file(SCALING_EMERGENCY) != NULL) ok = 0;
+    if (ok) PASS(); else FAIL("wrong filename for one or more states");
+}
+
 int main(void) {
     printf("=== Model Scaling State Machine Tests ===\n\n");
 
@@ -167,6 +178,7 @@ int main(void) {
     test_emergency_sticky();
     test_state_names();
     test_transition_counter();
+    test_model_files();
 
     printf("\n=== Results: %d PASS, %d FAIL ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

@@ -64,3 +64,14 @@ const char *scaler_state_name(scaling_state_t state) {
     default:                return "UNKNOWN";
     }
 }
+
+const char *scaler_model_file(scaling_state_t state)
+{
+    switch (state) {
+    case SCALING_IDLE:      return "LLAMA1B GUF";
+    case SCALING_ACTIVE:    return "GEMMA2B GUF";
+    case SCALING_CRITICAL:  return "MISTR7B GUF";
+    case SCALING_EMERGENCY: return NULL;
+    default:                return NULL;
+    }
+}

@@ -2,10 +2,10 @@
 #define MODEL_SCALING_H
 
 typedef enum {
-    SCALING_IDLE      = 0,  /* 1B model, low resource usage */
-    SCALING_ACTIVE    = 1,  /* 3B model, higher quality */
-    SCALING_CRITICAL  = 2,  /* 3B + validator (dual inference) */
-    SCALING_EMERGENCY = 3,  /* Rules-only, no model (failsafe) */
+    SCALING_IDLE      = 0,  /* Llama 3.2 1B Q4_K_M (19.79 tok/s, fast) */
+    SCALING_ACTIVE    = 1,  /* Gemma 4 E2B Q4_K_M (8.63 tok/s, #1 quality) */
+    SCALING_CRITICAL  = 2,  /* Mistral 7B Q8_0 (4.16 tok/s, #2 quality) */
+    SCALING_EMERGENCY = 3,  /* Cache + SHIELD rules only (no model) */
 } scaling_state_t;
 
 typedef struct {
@@ -24,5 +24,6 @@ void scaler_init(model_scaler_t *s);
 scaling_state_t scaler_update(model_scaler_t *s, float system_load, int pending_queries);
 void scaler_force_emergency(model_scaler_t *s);
 const char *scaler_state_name(scaling_state_t state);
+const char *scaler_model_file(scaling_state_t state);
 
 #endif
