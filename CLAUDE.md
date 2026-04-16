@@ -328,8 +328,9 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | Fused dequant-dot (qdot.c/h, 7 types, AVX2) + SIMD attention + RoPE tables | DONE |
 | Pthread threadpool (atomic work, seL4 stubs, ctx race/overflow fixes) | DONE |
 | **Performance: Llama 1B 0.99 -> 3.22 (1T) -> 19.79 tok/s (16T)** | **DONE** |
+| Dynamic model scaling (miss rate -> scaler -> NVMe hot-swap) | DONE |
 
-**Next:** Wire dynamic scaling, 30-day stability test, TurboQuant/RotorQuant evaluation.
+**Next:** 30-day stability test, TurboQuant/RotorQuant evaluation.
 
 ### Pre-Work Tasks (Before JARVIS Project PC)
 
