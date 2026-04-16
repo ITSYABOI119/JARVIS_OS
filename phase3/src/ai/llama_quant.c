@@ -49,8 +49,8 @@
 #define RMS_EPS 1e-5f
 
 #ifdef JARVIS_PTHREAD
-typedef struct { const float *wf; const float *x; float *out; int K; } qmatmul_f32_ctx_t;
-typedef struct { const uint8_t *wdata; size_t row_bytes; const float *x; float *out; int K; ggml_type_t wtype; } qmatmul_qdot_ctx_t;
+typedef struct { const float *wf; const float *x; float *out; int K; int M; } qmatmul_f32_ctx_t;
+typedef struct { const uint8_t *wdata; size_t row_bytes; const float *x; float *out; int K; ggml_type_t wtype; int M; } qmatmul_qdot_ctx_t;
 _Static_assert(sizeof(qmatmul_f32_ctx_t) <= 64, "ctx must fit threadpool ctx_buf[64]");
 _Static_assert(sizeof(qmatmul_qdot_ctx_t) <= 64, "ctx must fit threadpool ctx_buf[64]");
 
@@ -120,7 +120,7 @@ static void qmatmul_vec(const qtensor_t *W, const float *x, float *out,
         const float *wf = (const float *)W->data;
         if (use_threads) {
 #ifdef JARVIS_PTHREAD
-            qmatmul_f32_ctx_t ctx = { wf, x, out, K };
+            qmatmul_f32_ctx_t ctx = { wf, x, out, K, M };
             jarvis_parallel_for(0, M, qmatmul_f32_row, &ctx, sizeof(ctx));
 #else
             for (int i = 0; i < M; i++) {
@@ -153,7 +153,7 @@ static void qmatmul_vec(const qtensor_t *W, const float *x, float *out,
 
     if (use_threads) {
 #ifdef JARVIS_PTHREAD
-        qmatmul_qdot_ctx_t ctx = { wdata, row_bytes, x, out, K, wtype };
+        qmatmul_qdot_ctx_t ctx = { wdata, row_bytes, x, out, K, wtype, M };
         jarvis_parallel_for(0, M, qmatmul_qdot_row, &ctx, sizeof(ctx));
 #else
         for (int i = 0; i < M; i++)
@@ -169,6 +169,7 @@ static void qmatmul_vec(const qtensor_t *W, const float *x, float *out,
 static void qmatmul_f32_row(int idx, void *p)
 {
     qmatmul_f32_ctx_t *c = (qmatmul_f32_ctx_t *)p;
+    if (idx >= c->M) return;  /* bounds guard: stale end from previous round */
     const float *row = c->wf + (size_t)idx * (size_t)c->K;
     float dot = 0.0f;
     for (int j = 0; j < c->K; j++)
@@ -179,6 +180,7 @@ static void qmatmul_f32_row(int idx, void *p)
 static void qmatmul_qdot_row(int idx, void *p)
 {
     qmatmul_qdot_ctx_t *c = (qmatmul_qdot_ctx_t *)p;
+    if (idx >= c->M) return;  /* bounds guard: stale end from previous round */
     c->out[idx] = qdot_row(c->wdata + (size_t)idx * c->row_bytes, c->x, c->K, c->wtype);
 }
 #endif
