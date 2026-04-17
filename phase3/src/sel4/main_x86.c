@@ -1518,16 +1518,6 @@ static void *main_continued(void *arg UNUSED)
 
     while (1) {
         q_total++;
-
-        /* DEBUG: force model swap IDLE -> ACTIVE at query 50 */
-        if (q_total == 50 && !swap_in_progress && current_model_tier == SCALING_IDLE) {
-            puts_serial("\n[DEBUG] === FORCING MODEL SWAP AT q=50: IDLE -> ACTIVE ===\n\n");
-            /* Directly set scaler state so the evaluation block triggers the swap */
-            scaler.current_state = SCALING_ACTIVE;
-            scaler.target_state = SCALING_ACTIVE;
-            scaler.transitions++;
-        }
-
         uint32_t r = xorshift32(&rng_state);
         int slot = (int)(r % 20);
 
