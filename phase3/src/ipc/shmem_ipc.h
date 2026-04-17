@@ -36,14 +36,7 @@
 #define MSG_STATE_CHANGE   0x0D
 #define MSG_STATE_ACK      0x0E
 #define MSG_DEBUG          0x0F  /* Debug log from Process B -> Process A for NVMe logging */
-#define MSG_MODEL_SWAP     0x10  /* Model hot-swap: PA <-> PB */
-
-/* MSG_MODEL_SWAP payload commands (first byte of payload) */
-#define SWAP_UNLOAD    0x01  /* PA -> PB: free current model */
-#define SWAP_UNLOADED  0x02  /* PB -> PA: model freed */
-#define SWAP_LOAD      0x03  /* PA -> PB: load model (payload[1..4] = uint32 size) */
-#define SWAP_LOADED    0x04  /* PB -> PA: model ready */
-#define SWAP_FAILED    0x05  /* PB -> PA: load failed */
+/* 0x10 reserved (was MSG_MODEL_SWAP, removed 2026-04-17) */
 
 /* Ring buffer header (64 bytes, at start of shared page) */
 typedef struct {

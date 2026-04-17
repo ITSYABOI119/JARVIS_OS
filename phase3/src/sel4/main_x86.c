@@ -47,9 +47,13 @@
 #include "pci.h"
 #include "nvme.h"
 #include "nvme_log.h"
-#include "model_scaling.h"
 #include "fat32.h"
 #include "jarvis_debug.h"
+
+/* Single-model deployment — dynamic tiering removed 2026-04-17.
+ * Gemma 4 E2B Q4_K_M is the bench-off winner (8.40/10 quality, 8.63 tok/s @16T). */
+#define JARVIS_MODEL_FILE "GEMMA2B GUF"
+
 static int vga_ready = 0;  /* set after VGA frame mapped into vspace */
 
 /* seL4 IOPort wrappers for PCI config space (0xCF8/0xCFC).
@@ -138,7 +142,6 @@ static seL4_CPtr *model_frame_caps = NULL;  /* dynamically allocated after vspac
 static int nvme_model_loaded = 0;
 static uint32_t nvme_model_size = 0;
 static uint32_t nvme_model_n_pages = 0;
-static void *model_local_ptr = NULL;  /* model vaddr for swap orchestration */
 
 /* ---- Serial output via seL4 debug syscall ---- */
 
@@ -1255,7 +1258,7 @@ static void *main_continued(void *arg UNUSED)
                                         puts_serial(" B/sec\n");
 
                                         uint32_t model_cluster = 0, model_size = 0;
-                                        int found = fat32_find_file(&fs, scaler_model_file(SCALING_IDLE),
+                                        int found = fat32_find_file(&fs, JARVIS_MODEL_FILE,
                                                                      &model_cluster, &model_size);
                                         if (found == 0) {
                                             puts_serial("[JARVIS] Model file: cluster=");
@@ -1329,7 +1332,6 @@ static void *main_continued(void *arg UNUSED)
                                                 if (!model_local) {
                                                     puts_serial("[JARVIS] Model vspace map failed\n");
                                                 } else {
-                                                    model_local_ptr = model_local;
                                                     puts_serial("[JARVIS] Model mapped at vaddr ");
                                                     put_hex((uint32_t)(uintptr_t)model_local); puts_serial("\n");
 
@@ -1502,19 +1504,13 @@ static void *main_continued(void *arg UNUSED)
     uint64_t q_shield = 0, q_errors = 0;
     uint32_t rng_state = 42;
 
-    /* Dynamic model scaling */
-    model_scaler_t scaler;
-    scaler_init(&scaler);
-    scaling_state_t current_model_tier = SCALING_IDLE;
-    int swap_in_progress = 0;
-
-    /* Cache miss rate tracking (rolling window) */
-    #define MISS_WINDOW 100
-    int miss_history[MISS_WINDOW];
-    memset(miss_history, 0, sizeof(miss_history));
-    int miss_win_idx = 0;
-    int miss_win_count = 0;
-    int miss_win_total = 0;
+    /* Rolling cache-miss window — metrics only, no longer feeds any scaler */
+    #define CACHE_MISS_WINDOW 100
+    int cache_miss_history[CACHE_MISS_WINDOW];
+    memset(cache_miss_history, 0, sizeof(cache_miss_history));
+    int cache_miss_window_idx = 0;
+    int cache_miss_window_count = 0;
+    int cache_miss_window_total = 0;
 
     while (1) {
         q_total++;
@@ -1556,11 +1552,11 @@ static void *main_continued(void *arg UNUSED)
             if (cache_lookup(&g_cache, normalized, action, sizeof(action), &trust)) {
                 q_hits++;
                 /* Rolling miss window: cache hit = 0 */
-                if (miss_win_total >= MISS_WINDOW)
-                    miss_win_count -= miss_history[miss_win_idx];
-                miss_history[miss_win_idx] = 0;
-                miss_win_idx = (miss_win_idx + 1) % MISS_WINDOW;
-                if (miss_win_total < MISS_WINDOW) miss_win_total++;
+                if (cache_miss_window_total >= CACHE_MISS_WINDOW)
+                    cache_miss_window_count -= cache_miss_history[cache_miss_window_idx];
+                cache_miss_history[cache_miss_window_idx] = 0;
+                cache_miss_window_idx = (cache_miss_window_idx + 1) % CACHE_MISS_WINDOW;
+                if (cache_miss_window_total < CACHE_MISS_WINDOW) cache_miss_window_total++;
             } else {
 #if JARVIS_DBG_IPC
                 puts_serial("[WARN] expected cache hit: \"");
@@ -1568,12 +1564,12 @@ static void *main_continued(void *arg UNUSED)
 #endif
                 q_errors++;
                 /* Rolling miss window: cache miss = 1 */
-                if (miss_win_total >= MISS_WINDOW)
-                    miss_win_count -= miss_history[miss_win_idx];
-                miss_history[miss_win_idx] = 1;
-                miss_win_count++;
-                miss_win_idx = (miss_win_idx + 1) % MISS_WINDOW;
-                if (miss_win_total < MISS_WINDOW) miss_win_total++;
+                if (cache_miss_window_total >= CACHE_MISS_WINDOW)
+                    cache_miss_window_count -= cache_miss_history[cache_miss_window_idx];
+                cache_miss_history[cache_miss_window_idx] = 1;
+                cache_miss_window_count++;
+                cache_miss_window_idx = (cache_miss_window_idx + 1) % CACHE_MISS_WINDOW;
+                if (cache_miss_window_total < CACHE_MISS_WINDOW) cache_miss_window_total++;
             }
 
         } else if (slot < 17) {
@@ -1739,12 +1735,12 @@ static void *main_continued(void *arg UNUSED)
             }
 
             /* Rolling miss window: inference = cache miss */
-            if (miss_win_total >= MISS_WINDOW)
-                miss_win_count -= miss_history[miss_win_idx];
-            miss_history[miss_win_idx] = 1;
-            miss_win_count++;
-            miss_win_idx = (miss_win_idx + 1) % MISS_WINDOW;
-            if (miss_win_total < MISS_WINDOW) miss_win_total++;
+            if (cache_miss_window_total >= CACHE_MISS_WINDOW)
+                cache_miss_window_count -= cache_miss_history[cache_miss_window_idx];
+            cache_miss_history[cache_miss_window_idx] = 1;
+            cache_miss_window_count++;
+            cache_miss_window_idx = (cache_miss_window_idx + 1) % CACHE_MISS_WINDOW;
+            if (cache_miss_window_total < CACHE_MISS_WINDOW) cache_miss_window_total++;
 
         } else if (slot < 19) {
             /* --- Heartbeat (10%) --- */
@@ -1883,157 +1879,6 @@ static void *main_continued(void *arg UNUSED)
             }
         }
 #endif
-
-        /* --- Dynamic scaling evaluation --- */
-        if (!swap_in_progress && miss_win_total >= 10) {
-            float miss_rate = (float)miss_win_count / (float)miss_win_total;
-            scaling_state_t new_tier = scaler_update(&scaler, miss_rate, 0);
-            if (new_tier != current_model_tier) {
-                puts_serial("[SCALE] ");
-                puts_serial(scaler_state_name(current_model_tier));
-                puts_serial(" -> ");
-                puts_serial(scaler_state_name(new_tier));
-                puts_serial(" (miss_rate=");
-                put_dec((uint32_t)(miss_rate * 100));
-                puts_serial("%)\n");
-
-                if (new_tier == SCALING_EMERGENCY) {
-                    current_model_tier = SCALING_EMERGENCY;
-                } else {
-                    /* Initiate model swap */
-                    swap_in_progress = 1;
-                    puts_serial("[SWAP] Sending UNLOAD to PB\n");
-
-                    /* Step 1: Tell PB to unload */
-                    uint8_t swap_cmd = SWAP_UNLOAD;
-                    shmem_ipc_send(shared_request_ring, MSG_MODEL_SWAP, seq++, &swap_cmd, 1);
-                    seL4_Signal(req_notif);
-
-                    /* Wait for SWAP_UNLOADED */
-                    {
-                        int got = 0;
-                        uint32_t polls = 0;
-                        while (polls < 5000000 && !got) {
-                            uint8_t mt; uint16_t ms, ml;
-                            uint8_t pay[SHMEM_MAX_PAYLOAD];
-                            while (shmem_ipc_recv(shared_response_ring, &mt, &ms, pay, &ml) == 0) {
-                                if (mt == MSG_MODEL_SWAP && ml >= 1 && pay[0] == SWAP_UNLOADED) {
-                                    got = 1; break;
-                                }
-                                if (mt == MSG_DEBUG) {
-                                    pay[ml < SHMEM_MAX_PAYLOAD ? ml : SHMEM_MAX_PAYLOAD-1] = '\0';
-#if JARVIS_DBG_BOOT_LOG
-                                    nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr,
-                                                   g_nvme_bounce_paddr, LOG_BOOT, (const char *)pay);
-#endif
-                                }
-                            }
-                            if (!got) { polls++; seL4_Yield(); }
-                        }
-                        if (!got) {
-                            puts_serial("[SWAP] TIMEOUT waiting for UNLOADED\n");
-                            current_model_tier = SCALING_EMERGENCY;
-                            swap_in_progress = 0;
-                            goto next_query;
-                        }
-                    }
-
-                    /* Step 2: Read new model from NVMe */
-                    const char *fname = scaler_model_file(new_tier);
-                    puts_serial("[SWAP] Reading "); puts_serial(fname); puts_serial("...\n");
-
-                    fat32_fs_t swap_fs;
-                    int swap_ok = 0;
-                    int fe = fat32_init(&swap_fs, fat32_nvme_read, NVME_FAT32_PART_LBA);
-                    if (fe != 0) fe = fat32_init(&swap_fs, fat32_nvme_read, 0);
-                    if (fe == 0) {
-                        uint32_t sc = 0, ss = 0;
-                        if (fat32_find_file(&swap_fs, fname, &sc, &ss) == 0) {
-                            puts_serial("[SWAP] Size=");
-                            put_dec(ss >> 20); puts_serial("MB, reading...\n");
-                            if (fat32_read_file(&swap_fs, sc, ss, model_local_ptr) == 0) {
-                                /* Step 3: Tell PB to load */
-                                uint8_t load_cmd[5];
-                                load_cmd[0] = SWAP_LOAD;
-                                memcpy(load_cmd + 1, &ss, 4);
-                                shmem_ipc_send(shared_request_ring, MSG_MODEL_SWAP, seq++, load_cmd, 5);
-                                seL4_Signal(req_notif);
-
-                                /* Wait for LOADED or FAILED */
-                                int got_resp = 0;
-                                uint32_t p2 = 0;
-                                while (p2 < 5000000 && !got_resp) {
-                                    uint8_t mt; uint16_t ms, ml;
-                                    uint8_t pay[SHMEM_MAX_PAYLOAD];
-                                    while (shmem_ipc_recv(shared_response_ring, &mt, &ms, pay, &ml) == 0) {
-                                        if (mt == MSG_MODEL_SWAP && ml >= 1) {
-                                            if (pay[0] == SWAP_LOADED) { swap_ok = 1; got_resp = 1; }
-                                            if (pay[0] == SWAP_FAILED) { got_resp = 1; }
-                                            break;
-                                        }
-                                        if (mt == MSG_DEBUG) {
-                                            pay[ml < SHMEM_MAX_PAYLOAD ? ml : SHMEM_MAX_PAYLOAD-1] = '\0';
-#if JARVIS_DBG_BOOT_LOG
-                                            nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr,
-                                                           g_nvme_bounce_paddr, LOG_BOOT, (const char *)pay);
-#endif
-                                        }
-                                    }
-                                    if (!got_resp) { p2++; seL4_Yield(); }
-                                }
-
-                                if (swap_ok) {
-                                    puts_serial("[SWAP] Success: now ");
-                                    puts_serial(scaler_state_name(new_tier));
-                                    puts_serial("\n");
-                                    current_model_tier = new_tier;
-                                    nvme_model_size = ss;
-                                }
-                            }
-                        } else {
-                            puts_serial("[SWAP] File not found: ");
-                            puts_serial(fname); puts_serial("\n");
-                        }
-                    }
-
-                    if (!swap_ok) {
-                        puts_serial("[SWAP] Failed — trying previous model\n");
-                        /* Try to reload previous tier's model */
-                        const char *prev = scaler_model_file(current_model_tier);
-                        if (prev) {
-                            fat32_fs_t pfs;
-                            int pfe = fat32_init(&pfs, fat32_nvme_read, NVME_FAT32_PART_LBA);
-                            if (pfe != 0) pfe = fat32_init(&pfs, fat32_nvme_read, 0);
-                            uint32_t pc = 0, ps = 0;
-                            if (pfe == 0 && fat32_find_file(&pfs, prev, &pc, &ps) == 0
-                                && fat32_read_file(&pfs, pc, ps, model_local_ptr) == 0) {
-                                uint8_t lc[5] = { SWAP_LOAD };
-                                memcpy(lc + 1, &ps, 4);
-                                shmem_ipc_send(shared_request_ring, MSG_MODEL_SWAP, seq++, lc, 5);
-                                seL4_Signal(req_notif);
-                                for (uint32_t pp = 0; pp < 2000000; pp++) {
-                                    uint8_t mt; uint16_t ms, ml;
-                                    uint8_t pay[SHMEM_MAX_PAYLOAD];
-                                    if (shmem_ipc_recv(shared_response_ring, &mt, &ms, pay, &ml) == 0
-                                        && mt == MSG_MODEL_SWAP && ml >= 1 && pay[0] == SWAP_LOADED) {
-                                        puts_serial("[SWAP] Previous model reloaded\n");
-                                        swap_ok = 1;
-                                        break;
-                                    }
-                                    seL4_Yield();
-                                }
-                            }
-                        }
-                        if (!swap_ok) {
-                            puts_serial("[SWAP] EMERGENCY: all models failed\n");
-                            current_model_tier = SCALING_EMERGENCY;
-                        }
-                    }
-
-                    swap_in_progress = 0;
-                }
-            }
-        }
 
     next_query:
         seL4_Yield();

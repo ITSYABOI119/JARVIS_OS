@@ -138,7 +138,6 @@ AI_FILES=(
     "sampling.c"          "sampling.h"
     "gguf_parser.c"       "gguf_parser.h"
     "shield.c"            "shield.h"
-    "model_scaling.c"     "model_scaling.h"
     "llama_model.h"
     "llama_quant.c"       "llama_quant.h"
     "llama_load.c"

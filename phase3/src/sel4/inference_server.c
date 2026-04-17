@@ -585,50 +585,6 @@ int main(int argc, char **argv)
                 break;
             }
 
-            case MSG_MODEL_SWAP: {
-                uint8_t cmd = payload[0];
-                if (cmd == SWAP_UNLOAD) {
-                    pb_log("[PB] SWAP_UNLOAD: freeing model");
-                    if (model_loaded) {
-                        llama_free_state(&state);
-                        tokenizer_free(&tok);
-                        gguf_vocab_free(&vocab);
-                        qmodel_free(&qm);
-                        gguf_close(&gguf_ctx);
-                        model_loaded = 0;
-                    }
-                    uint8_t resp = SWAP_UNLOADED;
-                    shmem_ipc_send(response_ring, MSG_MODEL_SWAP, msg_seq, &resp, 1);
-                    seL4_Signal(resp_notif);
-                } else if (cmd == SWAP_LOAD) {
-                    uint32_t new_size = 0;
-                    if (msg_len >= 5) memcpy(&new_size, payload + 1, 4);
-                    pb_log_num("[PB] SWAP_LOAD: size=", new_size >> 20, "MB");
-
-                    model_data_size = (size_t)new_size;
-                    int load_err = 0;
-                    load_err = gguf_open_memory(&gguf_ctx, model_data, model_data_size);
-                    if (!load_err) load_err = qmodel_load(&qm, &gguf_ctx, model_data);
-                    if (!load_err) load_err = gguf_vocab_extract(model_data, model_data_size, &vocab);
-                    if (!load_err) load_err = gguf_vocab_init_tokenizer(&vocab, &tok);
-                    if (!load_err) load_err = llama_alloc_state(&state, &qm.config);
-
-                    if (!load_err) {
-                        model_loaded = 1;
-                        pb_log("[PB] SWAP_LOAD: model ready");
-                        uint8_t resp = SWAP_LOADED;
-                        shmem_ipc_send(response_ring, MSG_MODEL_SWAP, msg_seq, &resp, 1);
-                    } else {
-                        pb_log("[PB] SWAP_LOAD: FAILED");
-                        model_loaded = 0;
-                        uint8_t resp = SWAP_FAILED;
-                        shmem_ipc_send(response_ring, MSG_MODEL_SWAP, msg_seq, &resp, 1);
-                    }
-                    seL4_Signal(resp_notif);
-                }
-                break;
-            }
-
             default:
                 /* Unknown message type — ignore */
                 break;
