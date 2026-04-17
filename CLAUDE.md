@@ -18,6 +18,16 @@ Guidance for Claude Code when working with this repository.
 
 **Current:** Phase 3c, Active Development (April 16, 2026). **MILESTONE: JARVIS engine bench-off COMPLETE — 11/11 models load and generate across 6 model families (Llama, Gemma 4, Phi-3, Mistral, Qwen3, Qwen3.5 DeltaNet SSM).** Gemma 4 E2B (#1 quality, 8.40/10) validated on seL4 QEMU. Fused QKV/gate-up support unlocked Phi-3. Gated DeltaNet SSM (~1200 LOC) unlocked Qwen3.5 hybrid architecture. JARVIS engine speed: 3.22 tok/s (1T), 19.79 tok/s (16T) — 2x gap to llama.cpp (down from 40x). Fused qdot + SIMD attention + RoPE tables + pthread. Phase 3b complete (bare-metal boot, NVMe model loading, IPC workload, I211 NIC). Phase 3c hardening done (fuzz testing, security audit 25 findings). NVMe persistent logging operational — auto-captures all serial output with [VGA]/[SER]/[PB] tags. Next: wire dynamic scaling, 30-day stability test. Two-PC setup: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/32GB/2TB NVMe) running bare-metal seL4.
 
+## Pending Cleanup
+
+Diagnostic commits to revert once dynamic-scaling verified on bare-metal:
+
+- `a871ce4` — force swap IDLE->ACTIVE at q=50
+- `886aa7f` — q=50 -> q=2 (faster boot test)
+- `181e3aa` — spike miss-rate window (correct trigger)
+
+Revert: `git revert 181e3aa 886aa7f a871ce4`. Delete this section after.
+
 ---
 
 ## Architecture
@@ -318,15 +328,9 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | NVMe log auto-capture (puts_serial intercept, [VGA]/[SER] tags) | DONE |
 | MSG_DEBUG IPC for Process B -> NVMe log ([PB] tag) | DONE |
 | NVMe log bare-metal verified (boot 5, full boot timeline captured) | DONE |
-| Performance optimization plan (Week 35) | DONE |
 | **Bare-metal IPC inference VERIFIED: 7 queries, 0 crashes (stack overflow fixed)** | **DONE** |
-| Equal priority PA=PB (seL4_MaxPrio) + putc_serial NVMe log capture | DONE |
-| Inference timeout (5M poll) + ring overflow protection (pb_can_log) | DONE |
-| QEMU NVMe virtual disk for rapid iteration (whole-disk FAT32) | DONE |
-| Model data probe (197K page sweep + forward pass test) | DONE |
-| fwd_scratch heap buffer (208KB stack -> heap) | DONE |
-| Fused dequant-dot (qdot.c/h, 7 types, AVX2) + SIMD attention + RoPE tables | DONE |
-| Pthread threadpool (atomic work, seL4 stubs, ctx race/overflow fixes) | DONE |
+| Bare-metal debug: equal prio, poll timeout, ring overflow, QEMU NVMe, probe, fwd_scratch | DONE |
+| Fused qdot (7 types, AVX2) + SIMD attn + RoPE tables + pthread threadpool | DONE |
 | **Performance: Llama 1B 0.99 -> 3.22 (1T) -> 19.79 tok/s (16T)** | **DONE** |
 | Dynamic model scaling (miss rate -> scaler -> NVMe hot-swap) | DONE |
 
