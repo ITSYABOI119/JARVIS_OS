@@ -14,6 +14,8 @@
 3. **SHIELD Safety Framework** - Multi-layer validation with shadow execution
 4. **Shared Context Memory Pool** - Reduce agent coordination overhead by 70%
 
+> Specialist agents refer to domain-expert agents (device, network, filesystem, user) — NOT model-size tiers.
+
 **Combined Impact:**
 - 10x latency improvement for common operations
 - 60% memory savings during idle
@@ -240,6 +242,8 @@ def adaptive_cache_update(cache, ai_model):
 ---
 
 ## Enhancement 2: Dynamic Model Scaling
+
+> **Superseded 2026-04-17** — the 4-state scaler described below was never fully built. `model_scaling.c` and the runtime swap orchestration have been removed; system now ships single-model (Gemma 4 E2B). See `docs/decisions/2026-04-17-remove-dynamic-model-scaling.md`. Text retained below for historical reference only.
 
 ### The Problem
 **Fixed model size wastes resources:**

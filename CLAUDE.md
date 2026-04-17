@@ -33,7 +33,7 @@ Microkernel (Ring 0, cores 0-1)
 • ~12K LOC, seL4 (formally verified)
     ↓ ← Lock-free IPC →
 AI Decision Engine (Ring 3, cores 2-N)
-• Specialist agents (4-6)
+• Specialist agents (4-6) — domain-expert agents (device, network, filesystem, user), NOT model-size tiers
 • Decision cache (50ms→<1ms for 85% ops)
 • Dynamic model scaling (1B→7B→13B)
 • SHIELD safety framework

@@ -45,6 +45,9 @@ Validate ALL critical assumptions before committing $2.5M+ and 36 months.
 - Mock microkernel in Python (simulated latencies)
 - Real AI models (Mistral 7B INT8)
 - Multi-agent orchestration (4 agents)
+
+> Specialist agents refer to domain-expert agents (device, network, filesystem, user) — NOT model-size tiers.
+
 - Decision cache implementation
 - Dynamic model scaling
 - Natural language command shell
@@ -156,6 +159,9 @@ class DecisionCache:
 **Impact:** 80% of operations reduce from 50ms → <1ms
 
 ### 2. Dynamic Model Scaling (Opus Innovation) ⭐
+
+> **Superseded 2026-04-17** — this section describes a design that was never fully built. What existed (`model_scaling.c` + miss-rate-driven swap orchestration) was removed; system now ships single-model (Gemma 4 E2B). See `docs/decisions/2026-04-17-remove-dynamic-model-scaling.md`. Text retained below for historical reference only.
+
 **Problem:** Fixed model size wastes resources (idle) or underperforms (critical)
 **Solution:** Adaptive model loading based on workload
 
