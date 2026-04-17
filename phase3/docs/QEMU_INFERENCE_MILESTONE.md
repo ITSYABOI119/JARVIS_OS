@@ -250,7 +250,6 @@ Files created as part of the QEMU inference milestone effort:
 | `phase3/src/ai/gguf_vocab.c/h` | GGUF vocabulary extraction (128K BPE tokens from binary) |
 | `phase3/src/ai/gguf_parser.c/h` | GGUF file parser (extended with fmemopen memory API) |
 | `phase3/src/ai/shield.c/h` | SHIELD safety module (keyword + risk scoring) |
-| `phase3/src/ai/model_scaling.c/h` | Dynamic model scaling state machine (IDLE/ACTIVE/CRITICAL/EMERGENCY) |
 | `phase3/src/ai/bench_inference.c` | Host-side inference benchmark |
 | `phase3/src/ai/debug_reference.c` | Logit comparison reference data |
 
@@ -273,7 +272,6 @@ Files created as part of the QEMU inference milestone effort:
 | `phase3/src/ai/test_shield.c` | 8 PASS |
 | `phase3/src/ai/test_generation.c` | 6 PASS |
 | `phase3/src/ai/test_forward_compare.c` | SKIP on CI (requires model file) |
-| `phase3/src/ai/test_model_scaling.c` | 8 PASS |
 
 ### Drivers and Infrastructure
 
@@ -331,9 +329,8 @@ Phase 3 test count: 333 tests across 28 test files, all passing on native x86-64
 ### Phase 3c: Hardening
 
 1. **Performance optimization** -- Quantized matmul + cache tiling (target: 10-20 tok/s on CPU).
-2. **Dynamic model scaling** -- State machine operational on real hardware (1B/3B switching).
-3. **Fuzz testing** -- GGUF parser, IPC protocol, tokenizer inputs.
-4. **30-day stability test** -- Zero crashes, <1% error rate on x86 bare metal.
+2. **Fuzz testing** -- GGUF parser, IPC protocol, tokenizer inputs.
+3. **30-day stability test** -- Zero crashes, <1% error rate on x86 bare metal.
 
 ### Phase 3 Completion
 

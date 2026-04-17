@@ -16,7 +16,7 @@ Guidance for Claude Code when working with this repository.
 | **Phase 3** | **IN PROGRESS** | Months 24-36 | Beta on x86-64 bare metal (**LLM inference on seL4 VERIFIED**) |
 | Phase 4 | Future | Months 36+ | Production v1.0 |
 
-**Current:** Phase 3c, Active Development (April 16, 2026). **MILESTONE: JARVIS engine bench-off COMPLETE — 11/11 models load and generate across 6 model families (Llama, Gemma 4, Phi-3, Mistral, Qwen3, Qwen3.5 DeltaNet SSM).** Gemma 4 E2B (#1 quality, 8.40/10) validated on seL4 QEMU. Fused QKV/gate-up support unlocked Phi-3. Gated DeltaNet SSM (~1200 LOC) unlocked Qwen3.5 hybrid architecture. JARVIS engine speed: 3.22 tok/s (1T), 19.79 tok/s (16T) — 2x gap to llama.cpp (down from 40x). Fused qdot + SIMD attention + RoPE tables + pthread. Phase 3b complete (bare-metal boot, NVMe model loading, IPC workload, I211 NIC). Phase 3c hardening done (fuzz testing, security audit 25 findings). NVMe persistent logging operational — auto-captures all serial output with [VGA]/[SER]/[PB] tags. Next: wire dynamic scaling, 30-day stability test. Two-PC setup: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/32GB/2TB NVMe) running bare-metal seL4.
+**Current:** Phase 3c, Active Development (April 16, 2026). **MILESTONE: JARVIS engine bench-off COMPLETE — 11/11 models load and generate across 6 model families (Llama, Gemma 4, Phi-3, Mistral, Qwen3, Qwen3.5 DeltaNet SSM).** Gemma 4 E2B (#1 quality, 8.40/10) validated on seL4 QEMU. Fused QKV/gate-up support unlocked Phi-3. Gated DeltaNet SSM (~1200 LOC) unlocked Qwen3.5 hybrid architecture. JARVIS engine speed: 3.22 tok/s (1T), 19.79 tok/s (16T) — 2x gap to llama.cpp (down from 40x). Fused qdot + SIMD attention + RoPE tables + pthread. Phase 3b complete (bare-metal boot, NVMe model loading, IPC workload, I211 NIC). Phase 3c hardening done (fuzz testing, security audit 25 findings). NVMe persistent logging operational — auto-captures all serial output with [VGA]/[SER]/[PB] tags. Next: 30-day stability test on single-model Gemma 4 E2B. Two-PC setup: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/32GB/2TB NVMe) running bare-metal seL4.
 
 ---
 
@@ -35,7 +35,6 @@ Microkernel (Ring 0, cores 0-1)
 AI Decision Engine (Ring 3, cores 2-N)
 • Specialist agents (4-6) — domain-expert agents (device, network, filesystem, user), NOT model-size tiers
 • Decision cache (50ms→<1ms for 85% ops)
-• Dynamic model scaling (1B→7B→13B)
 • SHIELD safety framework
     ↓
 User Space Services (Ring 3)
@@ -65,7 +64,6 @@ User Space Services (Ring 3)
 ### Architecture Enhancements
 
 - **Decision Cache:** Pre-compiled query→bytecode patterns. 135x speedup (50ms→<1ms), 85.7% hit rate.
-- **Dynamic Model Scaling:** IDLE(1B)→ACTIVE(7B)→CRITICAL(7B+validator)→EMERGENCY(rules). 60% memory savings.
 - **SHIELD Safety:** Staged execution sandbox, continuous risk scoring (0-1.0), shadow execution, deterministic rollback.
 - **Shared Context Pool:** Lock-free shared state for agent coordination. 220x faster than serialization.
 
@@ -298,9 +296,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | Model bench-off: speed bench (11 models, Ryzen 2700X + Ryzen 5600 + RTX 2070) | DONE |
 | Model bench-off: perplexity bench (WikiText-2 full corpus, 10 models, RTX 2070) | DONE |
 | Model bench-off: quality bench (10 prompts, 11 models, Claude-judged blind) | DONE |
-| **Dynamic scaling tiers: Llama 1B (IDLE 19.8t/s) / Gemma 4 E2B (ACTIVE 8.6t/s) / Mistral 7B (CRITICAL 4.2t/s)** | **REVISED** |
-| **Bench-off winner: Gemma 4 E2B (8.40/10 avg, 7 judges, 19.7 tok/s) — needs ~1000 LOC engine work** | **DECISION** |
-| **CRITICAL: Mistral 7B Q8_0 (7.50/10, 5.5 tok/s) — drop-in, ships now** | **DECISION** |
+| **Bench-off winner: Gemma 4 E2B (8.40/10 avg, 7 judges, 19.7 tok/s) — single-model deployment** | **DECISION** |
 | **Llama 3.1 8B disqualified** — 5.06/10 (#8 of 11), training data contamination | **DROPPED** |
 | Deferred: Gemma 4 (§7, ~1000 LOC), Qwen3 (§9, ~200 LOC), Qwen3.5 (§7b, ~2000 LOC SSM) | Tracked |
 | **Gemma 4 E2B engine: ~4,400 LOC across 27 files — 17 fixes on `feature/gemma4-arch`** | **DONE** |
@@ -322,7 +318,6 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | Bare-metal debug: equal prio, poll timeout, ring overflow, QEMU NVMe, probe, fwd_scratch | DONE |
 | Fused qdot (7 types, AVX2) + SIMD attn + RoPE tables + pthread threadpool | DONE |
 | **Performance: Llama 1B 0.99 -> 3.22 (1T) -> 19.79 tok/s (16T)** | **DONE** |
-| Dynamic model scaling (miss rate -> scaler -> NVMe hot-swap) | DONE |
 
 **Next:** 30-day stability test, TurboQuant/RotorQuant evaluation.
 
@@ -366,7 +361,6 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | Custom x86 rootserver | 9-12 | DONE (QEMU) | main_x86.c | 5/5 self-test + 4/4 inference PASS |
 | SHIELD safety module | — | DONE | shield.c/h | 8 PASS |
 | Generation quality tests | — | DONE | test_generation.c | 6 PASS (model needed) |
-| Dynamic model scaling | — | DONE | model_scaling.c/h | 9 PASS |
 | IPC CRC-32 (SEC-020) | — | DONE | shmem_ipc.c/h | 3 PASS (13 total) |
 | GPT-2 full byte mapping | — | DONE | tokenizer.c | 12 PASS |
 | Tiled matmul + unroll | — | DONE | tensor_ops.c, llama_quant.c | 14+10 PASS |
@@ -606,7 +600,6 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Quantized Inference:** `phase3/src/ai/llama_quant.c/h`
 - **GGUF Vocab Extraction:** `phase3/src/ai/gguf_vocab.c/h`
 - **SHIELD Safety Module:** `phase3/src/ai/shield.c/h`
-- **Dynamic Model Scaling:** `phase3/src/ai/model_scaling.c/h`
 - **SSM / Gated DeltaNet:** `phase3/src/ai/ssm.c/h` — Qwen3.5 hybrid recurrent layers
 - **Inference Benchmark (stale F32):** `phase3/src/ai/bench_inference.c`
 - **Engine Bench (quantized, all models):** `phase3/src/ai/bench_engine.c`
@@ -665,7 +658,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 
 - **Phase 1:** 39,106 LOC, 95 files, 338 test functions (COMPLETE)
 - **Phase 2:** ~27,000 LOC, 65 files, 108 tests (COMPLETE)
-- **Phase 3:** ~24,000 LOC, 90+ files, 395+ tests (IN PROGRESS — **11/11 models, 6 families, qdot+threadpool**)
+- **Phase 3:** ~23,500 LOC, 88+ files, 383+ tests (IN PROGRESS — **11/11 models, 6 families, qdot+threadpool**)
 - **Total:** ~89,000+ LOC, 210+ files, 635+ tests
 - **Security:** 26/26 adversarial audit findings resolved (March 2026). SHIELD module: keyword + model-assisted risk scoring.
 - **Inference:** 11 GGUF models across 6 model families on JARVIS engine. Gemma 4 E2B (8.40/10 quality) on seL4 QEMU. Qwen3.5 DeltaNet SSM hybrid working. 3.22 tok/s (1T), 19.79 tok/s (16T).

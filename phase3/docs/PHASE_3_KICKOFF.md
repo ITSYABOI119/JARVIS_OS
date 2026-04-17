@@ -60,12 +60,8 @@ Leverage RTX 3060 12GB VRAM to run larger/better models. Evaluate 7B instruction
 **S2: Security Hardening**
 Fuzz testing for network packet parsing (deferred from Phase 2). Expand self-audit to cover CAmkES VM attack surface. Validate cross-VM IPC isolation.
 
-**S3: Dynamic Model Scaling (Production)**
-Implement the full 4-state scaling design from ARCHITECTURE_ENHANCEMENTS.md with GPU acceleration:
-- IDLE: 1B model (CPU, instant)
-- ACTIVE: 3.8B model (GPU, ~13ms)
-- CRITICAL: 7B model + validator (GPU, ~26ms)
-- EMERGENCY: Deterministic rules only (<1ms)
+**S3: Dynamic Model Scaling (Production) — REMOVED 2026-04-17**
+The 4-state scaler was never fully built; what existed was implementation drift (miss-rate-driven swap, not the designed safety-ensemble). System now ships single-model (Gemma 4 E2B). Success criterion changed to: single-model (Gemma 4 E2B) stable for 30 days. See `docs/decisions/2026-04-17-remove-dynamic-model-scaling.md`.
 
 ### Stretch Objectives
 

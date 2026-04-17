@@ -4,6 +4,8 @@
 **Purpose:** Survey current CPU-friendly LLMs (April 2026) for JARVIS AI-OS 4-state dynamic scaling tiers (IDLE / ACTIVE / CRITICAL / EMERGENCY) on Ryzen 7 2700X, 32GB RAM, custom C inference engine.
 **Status:** Section 1-3 only. Section 3 is the unbiased recommendation; further sections deferred per task instructions.
 
+> **Editorial note 2026-04-17** — The tier mapping throughout this document reflects the original bench-off framing. The dynamic scaling subsystem was subsequently removed; current architecture ships single-model (Gemma 4 E2B Q4_K_M). This document is retained for historical record of the bench-off data. See `docs/decisions/2026-04-17-remove-dynamic-model-scaling.md`.
+
 ## Hard Constraints (recap)
 
 | Constraint | Value |

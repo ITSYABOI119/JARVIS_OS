@@ -1837,32 +1837,9 @@ Hardware: Ryzen 7 2700X (8C/16T), 32GB DDR4. llama.cpp reference: 40.44 tok/s (8
 
 ---
 
-### Week 36: Wire Dynamic Model Scaling
+### Week 36: Wire Dynamic Model Scaling — REMOVED 2026-04-17
 
-**Tasks:**
-1. Connect `model_scaling.c` state machine to real model hot-swap from NVMe
-   - IDLE (Llama 1B) → ACTIVE (Gemma 4 E2B) → CRITICAL (Mistral 7B) → EMERGENCY (rules-only)
-   - Swap mechanism: Process A signals Process B to unload, reload new model from NVMe
-   - Decision cache handles queries during swap (~30 seconds for 3B, ~60 seconds for 8B)
-   - Transitions driven by query rate, error rate, and SHIELD risk score
-
-2. Optionally integrate TQ compression into ACTIVE/CRITICAL tiers
-   - If Week 35b TQ results are positive: enable TQ for 3B and 8B KV cache
-   - If negative: ship with F32 KV, TQ deferred to Phase 4
-
-3. Test model scaling end-to-end
-   - State transitions, model load/unload timing
-   - Continuous workload survives tier changes without errors
-   - Stress test: rapid state changes under load
-
-**Deliverables:**
-- 4-state dynamic scaling operational on bare metal
-- Model swap times measured
-- Optional TQ compression integrated
-
-**Effort:** 2-3 sessions
-**Dependencies:** Week 33 baseline + Week 35b TQ results (if pursuing TQ)
-**Acceptance:** All 4 states functional, smooth transitions, no crashes during swap
+This week was removed. Rationale: the 4-state scaler was never fully built (what existed was miss-rate-driven swap, not the safety-ensemble design). System ships single-model (Gemma 4 E2B). See `docs/decisions/2026-04-17-remove-dynamic-model-scaling.md`.
 
 ---
 
@@ -2057,7 +2034,6 @@ Hardware: Ryzen 7 2700X (8C/16T), 32GB DDR4. llama.cpp reference: 40.44 tok/s (8
 | POSIX Stubs | posix_stubs.c | 200-400 | 19-20 | mmap, pthreads, stdio stubs |
 | ggml Integration | (library) | ~20,000 (ggml) | 19-20 | Compiled as static lib |
 | Inference Handler | inference_handler.c | 300-500 | 21-22 | Model load + query API |
-| Model Scaling | model_scaling.c | 300-500 | 33-34 | 4-state IDLE→EMERGENCY |
 | Shared Memory IPC | shmem_ipc.c | 400-600 | 23-24 | Ring buffer + notifications |
 | SHIELD (full) | shield.c | 500-800 | 35-36 | All 6 components |
 | Fuzz Harness | fuzz_harness.c | 200-400 | 29-30 | Packet + IPC fuzzing |
