@@ -1522,10 +1522,11 @@ static void *main_continued(void *arg UNUSED)
         /* DEBUG: force model swap IDLE -> ACTIVE at query 50 */
         if (q_total == 2 && !swap_in_progress && current_model_tier == SCALING_IDLE) {
             puts_serial("\n[DEBUG] === FORCING MODEL SWAP AT q=2: IDLE -> ACTIVE ===\n\n");
-            /* Directly set scaler state so the evaluation block triggers the swap */
-            scaler.current_state = SCALING_ACTIVE;
-            scaler.target_state = SCALING_ACTIVE;
-            scaler.transitions++;
+            /* Spike miss-rate window so the eval block at line ~1898 picks
+             * SCALING_ACTIVE on the next iteration and dispatches a real
+             * MSG_MODEL_SWAP. 60% miss > 50% ACTIVE threshold, < 80% CRITICAL. */
+            miss_win_total = 100;
+            miss_win_count = 60;
         }
 
         uint32_t r = xorshift32(&rng_state);
