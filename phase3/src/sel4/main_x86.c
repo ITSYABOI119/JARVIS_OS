@@ -1520,8 +1520,8 @@ static void *main_continued(void *arg UNUSED)
         q_total++;
 
         /* DEBUG: force model swap IDLE -> ACTIVE at query 50 */
-        if (q_total == 2 && !swap_in_progress && current_model_tier == SCALING_IDLE) {
-            puts_serial("\n[DEBUG] === FORCING MODEL SWAP AT q=2: IDLE -> ACTIVE ===\n\n");
+        if (q_total == 50 && !swap_in_progress && current_model_tier == SCALING_IDLE) {
+            puts_serial("\n[DEBUG] === FORCING MODEL SWAP AT q=50: IDLE -> ACTIVE ===\n\n");
             /* Directly set scaler state so the evaluation block triggers the swap */
             scaler.current_state = SCALING_ACTIVE;
             scaler.target_state = SCALING_ACTIVE;
