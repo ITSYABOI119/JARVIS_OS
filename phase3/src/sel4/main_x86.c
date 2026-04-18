@@ -1238,13 +1238,13 @@ static void *main_continued(void *arg UNUSED)
                                     }
 
                                     fat32_fs_t fs;
-                                    /* Try partition 4 (ESP) first, then fall back to whole-disk (QEMU).
-                                     * Lexar NM790 2TB: p4 starts at sector 3997272064 (FAT32 ESP). */
+                                    /* Try JARVIS_DATA partition first, then fall back to whole-disk (QEMU).
+                                     * Lexar NM790 2TB: new p2 (JARVIS_DATA, 10GB FAT32) starts at sector 32768. */
 #if JARVIS_DBG_BOOT_LOG
                                     nvme_log_write(&nvme_ctrl, dma_vaddrs[4], dma_paddrs[4],
                                                    LOG_BOOT, "Starting FAT32");
 #endif
-                                    #define NVME_FAT32_PART_LBA 3997272064ULL
+                                    #define NVME_FAT32_PART_LBA 32768ULL
                                     int fat_err = fat32_init(&fs, fat32_nvme_read, NVME_FAT32_PART_LBA);
                                     if (fat_err != 0) {
                                         /* Fall back to whole-disk FAT32 (QEMU test images) */
