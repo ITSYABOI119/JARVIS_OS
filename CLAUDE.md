@@ -618,8 +618,8 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
   - `JARVIS_DBG_RING` — Ring health checks before send (`[PB] ring @... magic=... w= r=`)
   - `JARVIS_DBG_STATS` — Periodic stats every 100 queries (default: ON)
   - `JARVIS_DBG_INFER_SUMMARY` — Per-inference summary line (default: ON)
-  - `JARVIS_DBG_BOOT_LOG` — NVMe log at every boot stage + auto-capture serial output (default: ON)
-  - Defaults for stability test: STATS + INFER_SUMMARY on, BOOT_LOG off (write wear), everything else off
+  - `JARVIS_DBG_BOOT_LOG` — NVMe log at every boot stage + auto-capture serial output (default: OFF)
+  - Committed defaults ARE the stability config: STATS + INFER_SUMMARY on, IPC/PB/RING/BOOT_LOG off (BOOT_LOG off avoids NVMe write wear over 30 days)
 - **NVMe Driver:** `phase3/src/drivers/nvme.c/h`
 - **NVMe Log:** `phase3/src/drivers/nvme_log.c/h` — raw sector logging for bare-metal telemetry
 - **NVMe Log Parser:** `phase3/scripts/parse_nvme_log.py` — extract + format log from raw device

@@ -14,7 +14,7 @@
 #define JARVIS_DBG_IPC     0
 
 /* Process B inference tracing ([PB] handle_query, generating, decoded) */
-#define JARVIS_DBG_PB      1
+#define JARVIS_DBG_PB      0
 
 /* Ring health checks before send ([PB] ring @... magic=... w= r=) */
 #define JARVIS_DBG_RING    0
@@ -27,7 +27,7 @@
 
 /* NVMe log writes at every boot stage (FAT32 init, model progress, spawn).
  * Useful for diagnosing stalls. Turn OFF for 30-day stability test (write wear). */
-#define JARVIS_DBG_BOOT_LOG  1
+#define JARVIS_DBG_BOOT_LOG  0
 
 /* Per-forward-pass tracing in llama_quant.c ([L00@N], [FWD], [TOP5@N]).
  * NOTE: llama_quant.c does NOT include this header (it is built in both seL4
