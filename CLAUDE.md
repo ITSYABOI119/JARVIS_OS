@@ -521,6 +521,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - Process A and Process B run at `seL4_MaxPrio` (equal priority). `seL4_Yield` only works between equal-priority threads — MaxPrio-1 gets starved.
 - Response ring has 15 slots. PB must reserve 3 for MSG_RESPONSE — use `pb_can_log()` before debug writes.
 - `qmodel_forward` stack budget: keep below ~8KB. Large temporaries (>4KB) MUST use `state->fwd_scratch` heap buffer. seL4 Process B has limited stack.
+- **PA response consumption: POLL the ring, do NOT `seL4_Wait(resp_notif)` in the workload loop.** The inference path polls and never consumes `resp_notif`, leaving it signaled; heartbeat/shield used to `seL4_Wait(resp_notif)` + a single recv, which returned immediately on that stale signal and read before PB responded (~7% spurious errors, all in hb/shield). Fixed via `wait_for_response()` which polls the ring for the expected type and drains stale messages (race-free, like inference). The only legit `seL4_Wait(resp_notif)` is the pre-loop ready handshake. NOTE: the race is **Heisenbug** — enabling `JARVIS_DBG_IPC` serial prints inserts a scheduling window that masks it, so verify by err-rate ([STATS]) at `JARVIS_DBG_IPC=0`, not per-event logs.
 
 ---
 

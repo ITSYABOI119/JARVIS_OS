@@ -1029,6 +1029,34 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
     return 0;
 }
 
+/* Poll the response ring for a specific message type, draining/discarding any
+ * stale or non-matching messages (MSG_DEBUG, leftover MSG_RESPONSE, etc.).
+ * Returns 0 when a message of expected_type is dequeued, -1 on POLL_TIMEOUT.
+ *
+ * Mirrors the robust polling the inference path uses and deliberately does NOT
+ * wait on resp_notif: the inference path never consumes resp_notif so it is left
+ * signaled, and a seL4_Wait(resp_notif) in the hb/shield paths returned
+ * immediately on that stale signal and read the ring before PB had responded
+ * (~7% spurious errors at q=100). Polling the ring (the source of truth) is
+ * race-free. The race is masked by serial debug output (Heisenbug); see Task 5. */
+static int wait_for_response(shmem_ring_t *ring, uint8_t expected_type)
+{
+    const uint32_t POLL_TIMEOUT = 5000000;
+    uint32_t polls = 0;
+    uint8_t  msg_type;
+    uint16_t msg_seq, msg_len;
+    uint8_t  payload[SHMEM_MAX_PAYLOAD];
+    while (polls < POLL_TIMEOUT) {
+        while (shmem_ipc_recv(ring, &msg_type, &msg_seq, payload, &msg_len) == 0) {
+            if (msg_type == expected_type) return 0;
+            /* stale / non-matching (MSG_DEBUG, leftover MSG_RESPONSE, ...) — discard */
+        }
+        polls++;
+        seL4_Yield();
+    }
+    return -1;
+}
+
 /* ---- Main continuation (runs on vspace-managed stack) ---- */
 
 static void *main_continued(void *arg UNUSED)
@@ -1763,36 +1791,15 @@ static void *main_continued(void *arg UNUSED)
             puts_serial("[DBG] HB: sending...\n");
 #endif
             shmem_ipc_send(shared_request_ring, MSG_HEARTBEAT, seq++, NULL, 0);
-#if JARVIS_DBG_IPC
-            puts_serial("[DBG] HB: signaling...\n");
-#endif
             seL4_Signal(req_notif);
-#if JARVIS_DBG_IPC
-            puts_serial("[DBG] HB: waiting...\n");
-#endif
-            seL4_Wait(resp_notif, NULL);
-#if JARVIS_DBG_IPC
-            puts_serial("[DBG] HB: woke up\n");
-#endif
-
-            uint8_t msg_type;
-            uint16_t msg_seq;
-            uint8_t payload[SHMEM_MAX_PAYLOAD];
-            uint16_t msg_len;
-            if (shmem_ipc_recv(shared_response_ring, &msg_type, &msg_seq,
-                               payload, &msg_len) == 0) {
-                if (msg_type != MSG_HEARTBEAT_ACK) {
-#if JARVIS_DBG_IPC
-                    puts_serial("[WARN] heartbeat got type=");
-                    put_dec((uint32_t)msg_type); puts_serial("\n");
-#endif
-                    q_errors++;
-                }
-            } else {
-#if JARVIS_DBG_IPC
-                puts_serial("[ERR] no heartbeat ACK\n");
-#endif
+            /* Poll the ring for the ACK (race-free); do NOT seL4_Wait(resp_notif) —
+             * the inference path leaves it stale-signaled, so the old Wait+single-recv
+             * returned immediately and read before PB responded (~7% spurious errors). */
+            if (wait_for_response(shared_response_ring, MSG_HEARTBEAT_ACK) != 0) {
                 q_errors++;
+#if JARVIS_DBG_IPC
+                puts_serial("[ERR] heartbeat timeout\n");
+#endif
             }
 
         } else {
@@ -1805,36 +1812,13 @@ static void *main_continued(void *arg UNUSED)
 #endif
             shmem_ipc_send(shared_request_ring, MSG_SHIELD_CHECK, seq++,
                            query, (uint16_t)strlen(query));
-#if JARVIS_DBG_IPC
-            puts_serial("[DBG] SHIELD: signaling...\n");
-#endif
             seL4_Signal(req_notif);
-#if JARVIS_DBG_IPC
-            puts_serial("[DBG] SHIELD: waiting...\n");
-#endif
-            seL4_Wait(resp_notif, NULL);
-#if JARVIS_DBG_IPC
-            puts_serial("[DBG] SHIELD: woke up\n");
-#endif
-
-            uint8_t msg_type;
-            uint16_t msg_seq;
-            uint8_t payload[SHMEM_MAX_PAYLOAD];
-            uint16_t msg_len;
-            if (shmem_ipc_recv(shared_response_ring, &msg_type, &msg_seq,
-                               payload, &msg_len) == 0) {
-                if (msg_type != MSG_SHIELD_RESULT) {
-#if JARVIS_DBG_IPC
-                    puts_serial("[WARN] shield got type=");
-                    put_dec((uint32_t)msg_type); puts_serial("\n");
-#endif
-                    q_errors++;
-                }
-            } else {
-#if JARVIS_DBG_IPC
-                puts_serial("[ERR] no shield response\n");
-#endif
+            /* Poll the ring for the result (race-free); see heartbeat note above. */
+            if (wait_for_response(shared_response_ring, MSG_SHIELD_RESULT) != 0) {
                 q_errors++;
+#if JARVIS_DBG_IPC
+                puts_serial("[ERR] shield timeout\n");
+#endif
             }
         }
 
