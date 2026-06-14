@@ -1849,8 +1849,11 @@ static void *main_continued(void *arg UNUSED)
             puts_serial(" err="); put_dec(q_errors);
             puts_serial("\n");
 
-            /* Log stats to NVMe every 100 queries */
-            {
+            /* Log stats to NVMe on a coarser interval (JARVIS_STATS_NVME_INTERVAL).
+             * The NVMe log holds only NVME_LOG_MAX_ENTRIES (2700) and does NOT wrap,
+             * so writing every 1000 queries (vs the per-100 serial line) lets the log
+             * span the full 30-day run instead of saturating in ~18 days. */
+            if (q_total % JARVIS_STATS_NVME_INTERVAL == 0) {
                 char sb[128];
                 /* Manual snprintf equivalent (no stdio in seL4 rootserver) */
                 int sp = 0;

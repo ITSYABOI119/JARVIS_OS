@@ -503,7 +503,8 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 ### NVMe Write Logging
 
 - Log region: LBA 4000794624 (past p4, the 1.7G vfat tail partition). Drive confirmed via lsblk: **Lexar NM790 2TB**, 4,000,797,360 sectors (1907 GiB). The log's 2700 sectors fit the ~2,736-sector tail with only ~36 sectors (~18 KB) of headroom — TIGHT. NOTE: nvme_log.h's comments ("1TB", "~172K-sector tail") are BOTH stale/wrong; fix them.
-- Max entries: 2700 (1.3 MB, fits in unpartitioned tail of disk)
+- Max entries: 2700 (1.3 MB, fits in unpartitioned tail of disk) — log does NOT wrap; cursor persists across boots, so `nvme_log_write` returns -2 once full
+- Periodic stats cadence: serial `[STATS]` prints every 100 queries (free), but the NVMe `LOG_IPC_STATS` entry is written every `JARVIS_STATS_NVME_INTERVAL` (1000) queries (`jarvis_debug.h`) so the 2700-entry log spans the full 30-day run (~480 entries) instead of saturating in ~18 days
 - Format: 512-byte records (header + entries), XOR checksum
 - Auto-capture: `puts_serial()` intercept writes every line to NVMe log
 - Tags: `[VGA]` = visible on monitor, `[SER]` = serial only, `[PB]` = Process B via MSG_DEBUG IPC
