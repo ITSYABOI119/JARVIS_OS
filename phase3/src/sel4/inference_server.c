@@ -62,7 +62,7 @@ static shmem_ring_t *g_resp_ring = NULL;  /* set in main(), used by pb_log */
 /* Check if response ring has room for debug messages.
  * Reserve at least 3 slots for MSG_RESPONSE chunks.
  * Returns 1 if safe to log, 0 if ring is getting full. */
-static int pb_can_log(void)
+__attribute__((unused)) static int pb_can_log(void)
 {
     if (!g_resp_ring) return 0;
     uint32_t wr = __atomic_load_n(&g_resp_ring->header.write_idx, __ATOMIC_RELAXED);
