@@ -16,10 +16,12 @@
 #include <stdint.h>
 
 /* Log region starts past all partitions on the NVMe.
- * JARVIS PC (Lexar NM790 1TB): p4 ESP ends at sector 4000794623.
- * Start at 4000794624 (next sector after last partition).
- * 2700 sectors = header + 2699 entries (~1.3 MB, well within
- * the ~172K unpartitioned sectors at end of disk). */
+ * JARVIS PC (Lexar NM790 2TB, 4,000,797,360 sectors total): p4 ends
+ * at sector 4000794623. Start at 4000794624 (next sector after the
+ * last partition). 2700 sectors = header + 2699 entries (~1.3 MB) —
+ * this fits the ~2,736-sector disk tail with only ~36 sectors to
+ * spare, so do NOT raise NVME_LOG_MAX_ENTRIES without re-checking the
+ * tail (sectors = /sys/block/nvme0n1/size minus the log base LBA). */
 #define NVME_LOG_BASE_LBA    4000794624ULL
 #define NVME_LOG_MAX_ENTRIES  2700
 #define NVME_LOG_MAGIC        0x4A524C47  /* "JRLG" */

@@ -1363,7 +1363,7 @@ static void *main_continued(void *arg UNUSED)
                                                 }
                                             }
                                         } else {
-                                            puts_serial("[JARVIS] Model file MODEL.GUF not found on FAT32\n");
+                                            puts_serial("[JARVIS] Model file (JARVIS_MODEL_FILE) not found on FAT32\n");
                                         }
                                     } else {
                                         puts_serial("[JARVIS] FAT32 init failed: err=");

@@ -229,14 +229,14 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 ### Bare-Metal Development Rules
 
 - **Always test in QEMU before flashing USB** — run `phase3/scripts/qemu_test.sh` after every build. If it crashes in QEMU, don't waste time reflashing.
-- **Build without embedded model for fast iteration** — use `-DJARVIS_EMBED_MODEL=""` for quick boot tests. Model loading tested separately via GRUB module.
+- **Build without embedded model for fast iteration** — use `-DJARVIS_EMBED_MODEL=""` for quick boot tests. Model loading is tested separately via the NVMe FAT32 runtime path (the GRUB-module approach was abandoned — seL4 overwrites module memory during rootserver relocation).
 - **Verify GRUB menu entry works** — wrong image names cause silent boot failures (keyboard dies, no output). Check grub.cfg image names match `ls ~/sel4-x86/jbuild/images/`.
 
 ---
 
 ## Current Status (Phase 3 — Process-Isolated LLM Inference on seL4)
 
-**NVMe RUNTIME MODEL LOADING MILESTONE** (April 4, 2026) — **LLM inference with runtime NVMe model loading on bare-metal seL4 on Ryzen 7 2700X.** 1.6MB USB boot image loads 770MB Llama 3.2 1B Q4_K_M from NVMe FAT32 partition (Lexar NM790, PCI bus 1) at runtime. NVMe driver: PCI detection → BAR0 MMIO → admin queue → IDENTIFY → I/O queue → FAT32 read → 197K frames → Process B. Coherent text generation via process-isolated IPC. No embedded model binary. Self-test 5/5 PASS, 181 untypeds, 32410MB RAM.
+**NVMe RUNTIME MODEL LOADING MILESTONE** (April 4, 2026) — **LLM inference with runtime NVMe model loading on bare-metal seL4 on Ryzen 7 2700X.** 1.6MB USB boot image loads the model GGUF from the NVMe FAT32 partition (Lexar NM790, PCI bus 1) at runtime — model-agnostic, loading whatever `JARVIS_MODEL_FILE` names (current default `"GEMMA2B GUF"` = Gemma 4 E2B Q4_K_M, ~2.89 GiB). NVMe driver: PCI detection → BAR0 MMIO → admin queue → IDENTIFY → I/O queue → FAT32 read → frames → Process B. (Original Apr 4 milestone: 770MB Llama 3.2 1B Q4_K_M → 197K frames.) Coherent text generation via process-isolated IPC. No embedded model binary. Self-test 5/5 PASS, 181 untypeds, 32410MB RAM.
 
 | Milestone | Status |
 |-----------|--------|
@@ -244,7 +244,8 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | U-Boot boot, UART IPC, SD/EMMC, GENET networking, USB HID keyboard | DONE |
 | 21 BCM2711 drivers (GPIO, I2C, SPI, RNG, PWM, DMA, watchdog, thermal) | DONE |
 | 30-day stability test (30.6 days, 0 crashes, 99.8% pass rate) | DONE |
-| Security audit: 26 findings fixed, 211/211 tests passing | DONE |
+| Phase 2 security audit: 6 C findings (4 fixed) + Snyk dependency audit | DONE |
+| Cross-codebase adversarial audit (Mar 2026, phase2+phase3 C ~35K LOC): 26 findings fixed, 211/211 tests | DONE |
 | **Phase 3a: GPU benchmarks (RTX 2070, 1B: 273 tok/s GPU, 44 CPU)** | **DONE** |
 | **Phase 3a: seL4 native Linux build env (123/123 PASS, KVM)** | **DONE** |
 | **Phase 3a: 247/247 Phase 3 tests validated on native x86-64** | **DONE** |
@@ -279,7 +280,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | **NVMe full model loading: 770MB from FAT32 → 197K frames → Process B** | **DONE** |
 | **Runtime inference from NVMe (no embedded model)** | **DONE** |
 | NVMe on bare metal (Lexar NM790 — no HMB needed) | DONE |
-| FAT32 partition LBA for bare metal — try ESP (p4) then whole-disk | DONE |
+| FAT32 partition LBA = 32768 (JARVIS_DATA partition); whole-disk (LBA 0) fallback for QEMU | DONE |
 | PCI multi-bus scan (buses 0-15) for NVMe on bus 1 | DONE |
 | Continuous IPC workload loop (63 queries, xorshift PRNG, stats, error tracking) | DONE |
 | Intel I211 NIC driver (PCI 8086:1539, TX+RX polled) | DONE |
@@ -298,7 +299,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | Model bench-off: quality bench (10 prompts, 11 models, Claude-judged blind) | DONE |
 | **Bench-off winner: Gemma 4 E2B (8.40/10 avg, 7 judges, 19.7 tok/s) — single-model deployment** | **DECISION** |
 | **Llama 3.1 8B disqualified** — 5.06/10 (#8 of 11), training data contamination | **DROPPED** |
-| Deferred: Gemma 4 (§7, ~1000 LOC), Qwen3 (§9, ~200 LOC), Qwen3.5 (§7b, ~2000 LOC SSM) | Tracked |
+| Bench-off deferred contenders (Gemma 4, Qwen3, Qwen3.5 SSM) — ALL since IMPLEMENTED (rows below); only RotorQuant/TurboQuant remains | DONE |
 | **Gemma 4 E2B engine: ~4,400 LOC across 27 files — 17 fixes on `feature/gemma4-arch`** | **DONE** |
 | **Gemma 4 E2B validated: main PC native test — coherent English** | **DONE** |
 | **Gemma 4 E2B validated: JARVIS PC seL4 QEMU Process B (4/4 queries coherent)** | **DONE** |
@@ -374,7 +375,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | NVMe write (opcode 0x01) | — | DONE | nvme.c (extended) | 10 PASS |
 | NVMe log module | — | DONE | nvme_log.c/h | (bare-metal only) |
 | NVMe log parser | — | DONE | parse_nvme_log.py | (Python) |
-| **Total** | | | **90+ files** | **383+ tests, ~23,000 LOC** |
+| **Total** | | | **120 code files (39 test)** | **383+ test asserts, ~35,700 LOC** |
 
 **What remains for Phase 3b on real hardware:**
 - 30-day stability test on x86
@@ -501,7 +502,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 
 ### NVMe Write Logging
 
-- Log region: LBA 4000794624 (past p4 ESP on Lexar NM790 1TB)
+- Log region: LBA 4000794624 (past p4, the 1.7G vfat tail partition). Drive confirmed via lsblk: **Lexar NM790 2TB**, 4,000,797,360 sectors (1907 GiB). The log's 2700 sectors fit the ~2,736-sector tail with only ~36 sectors (~18 KB) of headroom — TIGHT. NOTE: nvme_log.h's comments ("1TB", "~172K-sector tail") are BOTH stale/wrong; fix them.
 - Max entries: 2700 (1.3 MB, fits in unpartitioned tail of disk)
 - Format: 512-byte records (header + entries), XOR checksum
 - Auto-capture: `puts_serial()` intercept writes every line to NVMe log
@@ -640,7 +641,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Final Scores:** `models/quality_results/FINAL_SCORES.txt` (7-judge combined: quality + speed + PPL + tier decisions)
 - **x86 Build Script:** `phase3/scripts/build_jarvis_x86.sh`
 - **QEMU NVMe Test:** `phase3/scripts/qemu_test.sh` (pass model path as arg)
-- **QEMU NVMe Disk:** `~/nvme_test.img` FAT32 with MODEL.GUF; `-drive file=...,if=none,id=nvme0,format=raw -device nvme,serial=QEMU_NVME,drive=nvme0`
+- **QEMU NVMe Disk:** `~/nvme_test.img` FAT32 with the model file named to match `JARVIS_MODEL_FILE` (currently `GEMMA2B GUF`); `-drive file=...,if=none,id=nvme0,format=raw -device nvme,serial=QEMU_NVME,drive=nvme0`
 - **Inference Server (PB):** `phase3/src/sel4/inference_server.c`
 - **NVMe Partition Setup:** `phase3/scripts/setup_nvme_partition.sh`
 - **Check CI:** `gh run list --limit 1` then `gh run view <id> --log-failed` if failed
@@ -656,12 +657,16 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 
 ### Codebase Metrics
 
-- **Phase 1:** 39,106 LOC, 95 files, 338 test functions (COMPLETE)
-- **Phase 2:** ~27,000 LOC, 65 files, 108 tests (COMPLETE)
-- **Phase 3:** ~23,500 LOC, 88+ files, 383+ tests (IN PROGRESS — **11/11 models, 6 families, qdot+threadpool**)
-- **Total:** ~89,000+ LOC, 210+ files, 635+ tests
-- **Security:** 26/26 adversarial audit findings resolved (March 2026). SHIELD module: keyword + model-assisted risk scoring.
-- **Inference:** 11 GGUF models across 6 model families on JARVIS engine. Gemma 4 E2B (8.40/10 quality) on seL4 QEMU. Qwen3.5 DeltaNet SSM hybrid working. 3.22 tok/s (1T), 19.79 tok/s (16T).
+Tracked `.c/.h/.py` files and their `wc -l` LOC via `git ls-files` (measured 2026-06-14):
+
+- **Phase 0:** 4,919 LOC, 11 code files (COMPLETE)
+- **Phase 1:** 40,837 LOC, 102 code files, 41 test files (COMPLETE)
+- **Phase 2:** 27,236 LOC, 65 code files, 8 test files (COMPLETE)
+- **Phase 3:** 35,705 LOC, 120 code files, 39 test files (IN PROGRESS — **11/11 models, 6 families, qdot+threadpool**)
+- **Total (phases):** ~108,700 LOC, 298 code files, 88 test files (648 tracked files repo-wide)
+- Per-assertion PASS counts run higher than file counts (self-reported ~383+ Phase 3 / ~635+ total).
+- **Security:** March 2026 adversarial audit — 26 findings, all resolved (phase2+phase3 C). April 2026 Phase 3c audit — 25 findings (all 5 HIGH + 5 MEDIUM fixed, 7 LOW/INFO accepted). Phase 2's own audit: 6 C findings (4 fixed) + Snyk. SHIELD: keyword + model-assisted risk scoring.
+- **Inference:** 11 GGUF models across 6 model families on JARVIS engine. Gemma 4 E2B (8.40/10 quality) is the single deployed model. Qwen3.5 DeltaNet SSM hybrid working. 3.22 tok/s (1T), 19.79 tok/s (16T).
 
 ### Hardware Setup
 
