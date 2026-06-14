@@ -28,7 +28,7 @@ MOUNT_DIR=$(mktemp -d)
 sudo mount "$DISK_IMG" "$MOUNT_DIR"
 if [ -f "$MODEL" ]; then
     echo "Copying model ($(du -h "$MODEL" | cut -f1))..."
-    sudo cp "$MODEL" "$MOUNT_DIR/MODEL.GUF"
+    sudo cp "$MODEL" "$MOUNT_DIR/GEMMA2B.GUF"
 else
     echo "WARNING: Model not found at $MODEL"
 fi
