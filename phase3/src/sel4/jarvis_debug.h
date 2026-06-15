@@ -29,13 +29,12 @@
  * Useful for diagnosing stalls. Turn OFF for 30-day stability test (write wear). */
 #define JARVIS_DBG_BOOT_LOG  0
 
-/* Periodic [STATS] is printed to serial every 100 queries (free), but the NVMe
- * log holds only NVME_LOG_MAX_ENTRIES (2700) and does NOT wrap — the cursor
- * persists across boots. At ~16k queries/day a per-100 NVMe write saturates the
- * log in ~18 days. Write the NVMe LOG_IPC_STATS entry on this coarser interval
- * instead so 2700 entries span the full 30-day run:
- *   ~16k queries/day / 1000 = ~16 NVMe entries/day = ~480 over 30 days (<< 2700). */
-#define JARVIS_STATS_NVME_INTERVAL  1000
+/* Serial [STATS] prints every 100 queries; NVMe LOG_IPC_STATS is written every
+ * JARVIS_STATS_NVME_INTERVAL. Measured bare-metal rate is ~3k queries/day (single
+ * core, scalar) -> interval=100 gives ~870 entries over 30 days, well under the
+ * 2700-entry saturating log. (Task 3 used 1000 on a 16k/day estimate the bare-metal
+ * run disproved; q=400 err=0 verified on real hardware 2026-06-15.) */
+#define JARVIS_STATS_NVME_INTERVAL  100
 
 /* Per-forward-pass tracing in llama_quant.c ([L00@N], [FWD], [TOP5@N]).
  * NOTE: llama_quant.c does NOT include this header (it is built in both seL4
