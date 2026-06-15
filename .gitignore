@@ -83,3 +83,8 @@ nul
 NUL
 
 wikitext-2-raw/
+
+# Crash dumps / agent scratch (clean tree)
+bash.exe.stackdump
+*.stackdump
+.codex/

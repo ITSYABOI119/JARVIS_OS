@@ -1,0 +1,38 @@
+=== JARVIS Native Engine Benchmark (Single-Threaded, qdot) ===
+Date: Wed Apr 16 04:23:55 PM AEST 2026
+Host: jarvis-System-Product-Name
+CPU:  AMD Ryzen 7 2700X Eight-Core Processor
+RAM:  31.2 GB
+Models: 11
+Threads: 1 (single-threaded, fused qdot + SIMD attention + RoPE tables)
+
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+| Gemma-4-E2B-It                 |     2.89 GiB |     2.71 B | JARVIS     |       1 |           tg128 |              1.70 ± 0.00 |
+| Gemma 4 E4B It                 |     5.03 GiB |     5.08 B | JARVIS     |       1 |           tg128 |              0.83 ± 0.00 |
+| Llama-3.2-1B-Instruct          |     0.75 GiB |     1.34 B | JARVIS     |       1 |           tg128 |              3.22 ± 0.00 |
+| Llama 3.2 3B Instruct          |     1.88 GiB |     3.56 B | JARVIS     |       1 |           tg128 |              1.26 ± 0.00 |
+| Meta Llama 3.1 8B Instruct     |     4.58 GiB |     8.31 B | JARVIS     |       1 |           tg128 |              0.54 ± 0.00 |
+| mistralai_mistral-7b-instruct-v0.2 |     7.17 GiB |     7.92 B | JARVIS     |       1 |           tg128 |              0.56 ± 0.00 |
+| Phi3                           |     2.23 GiB |     3.72 B | JARVIS     |       1 |           tg128 |              1.07 ± 0.00 |
+| Qwen3 4B Instruct Awq          |     2.33 GiB |     4.02 B | JARVIS     |       1 |           tg128 |              1.01 ± 0.00 |
+| Qwen3.5-4B                     |     2.55 GiB |     3.74 B | JARVIS     |       1 |           tg128 |              0.90 ± 0.00 |
+| Qwen3.5-9B                     |     5.29 GiB |     8.00 B | JARVIS     |       1 |           tg128 |              0.53 ± 0.00 |
+| tinyllama_tinyllama-1.1b-chat-v1.0 |     0.62 GiB |     1.20 B | JARVIS     |       1 |           tg128 |              3.94 ± 0.00 |
+
+=== Speedup vs baseline (pre-qdot, jarvis_engine_bench.txt) ===
+| Model            | Before | After | Speedup |
+|------------------|--------|-------|---------|
+| Gemma 4 E2B      |   0.59 |  1.70 |   2.9x  |
+| Gemma 4 E4B      |   0.26 |  0.83 |   3.2x  |
+| Llama 1B         |   0.99 |  3.22 |   3.3x  |
+| Llama 3B         |   0.40 |  1.26 |   3.2x  |
+| Llama 8B         |   0.17 |  0.54 |   3.2x  |
+| Mistral 7B       |   0.17 |  0.56 |   3.3x  |
+| Phi-3 Mini       |   0.33 |  1.07 |   3.2x  |
+| Qwen3 4B         |   0.32 |  1.01 |   3.2x  |
+| Qwen3.5 4B       |   0.28 |  0.90 |   3.2x  |
+| Qwen3.5 9B       |   0.17 |  0.53 |   3.1x  |
+| TinyLlama        |   1.25 |  3.94 |   3.2x  |
+
+=== Done: 11 models tested ===

@@ -21,3 +21,5 @@ Recent commits use short, descriptive subjects such as `Week 32: ARM64 build com
 
 ## Agent-Specific Instructions
 Follow `CLAUDE.md` for weekly workflow, test matrices, and phase-specific constraints.
+
+## Imported Claude Cowork project instructions
