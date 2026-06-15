@@ -16,7 +16,7 @@ Guidance for Claude Code when working with this repository.
 | **Phase 3** | **IN PROGRESS** | Months 24-36 | Beta on x86-64 bare metal (**LLM inference on seL4 VERIFIED**) |
 | Phase 4 | Future | Months 36+ | Production v1.0 |
 
-**Current:** Phase 3c, Active Development (April 16, 2026). **MILESTONE: JARVIS engine bench-off COMPLETE — 11/11 models load and generate across 6 model families (Llama, Gemma 4, Phi-3, Mistral, Qwen3, Qwen3.5 DeltaNet SSM).** Gemma 4 E2B (#1 quality, 8.40/10) validated on seL4 QEMU. Fused QKV/gate-up support unlocked Phi-3. Gated DeltaNet SSM (~1200 LOC) unlocked Qwen3.5 hybrid architecture. JARVIS engine speed: 3.22 tok/s (1T), 19.79 tok/s (16T) — 2x gap to llama.cpp (down from 40x). Fused qdot + SIMD attention + RoPE tables + pthread. Phase 3b complete (bare-metal boot, NVMe model loading, IPC workload, I211 NIC). Phase 3c hardening done (fuzz testing, security audit 25 findings). NVMe persistent logging operational — auto-captures all serial output with [VGA]/[SER]/[PB] tags. Bare-metal **burn-in passed** (2026-06-15 — hours, ~400 queries, err=0; NOT a 30-day soak): x86 boot/model-load/coherent gen, heartbeat/shield IPC fix err=0 over 400 real-hardware queries, durable NVMe log (boot_id constant). Formal 30-day x86 soak **DEFERRED — descoped from v0.3.0-beta gating (risk-accepted, ADR `docs/decisions/2026-06-15-defer-30-day-x86-stability-soak.md`)** — next: TurboQuant/RotorQuant eval + Phase 4 perf (AVX2/threading). Two-PC setup: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/32GB/2TB NVMe) running bare-metal seL4.
+**Current:** Phase 3c, Active Development (April 16, 2026). **MILESTONE: JARVIS engine bench-off COMPLETE — 11/11 models load and generate across 6 model families (Llama, Gemma 4, Phi-3, Mistral, Qwen3, Qwen3.5 DeltaNet SSM).** Gemma 4 E2B (#1 quality, 8.40/10) validated on seL4 QEMU. Fused QKV/gate-up support unlocked Phi-3. Gated DeltaNet SSM (~1200 LOC) unlocked Qwen3.5 hybrid architecture. JARVIS engine speed: 3.22 tok/s (1T), 19.79 tok/s (16T) — 2x gap to llama.cpp (down from 40x). Fused qdot + SIMD attention + RoPE tables + pthread. Phase 3b complete (bare-metal boot, NVMe model loading, IPC workload, I211 NIC). Phase 3c hardening done (fuzz testing, security audit 25 findings). NVMe persistent logging operational — auto-captures all serial output with [VGA]/[SER]/[PB] tags. Bare-metal **burn-in passed** (2026-06-15 — hours, ~400 queries, err=0; NOT a 30-day soak): x86 boot/model-load/coherent gen, heartbeat/shield IPC fix err=0 over 400 real-hardware queries, durable NVMe log (boot_id constant). Formal 30-day x86 soak **DEFERRED — descoped from v0.3.0-beta gating (risk-accepted, ADR `docs/decisions/2026-06-15-defer-30-day-x86-stability-soak.md`)** — next: Phase 4 perf (AVX2/threading); TurboQuant/RotorQuant evaluated → deferred to Phase 4 (ADR `docs/decisions/2026-06-15-defer-turboquant-rotorquant-to-phase4.md`). Two-PC setup: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/32GB/2TB NVMe) running bare-metal seL4.
 
 ---
 
@@ -299,7 +299,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | Model bench-off: quality bench (10 prompts, 11 models, Claude-judged blind) | DONE |
 | **Bench-off winner: Gemma 4 E2B (8.40/10 avg, 7 judges, 19.7 tok/s) — single-model deployment** | **DECISION** |
 | **Llama 3.1 8B disqualified** — 5.06/10 (#8 of 11), training data contamination | **DROPPED** |
-| Bench-off deferred contenders (Gemma 4, Qwen3, Qwen3.5 SSM) — ALL since IMPLEMENTED (rows below); only RotorQuant/TurboQuant remains | DONE |
+| Bench-off deferred contenders (Gemma 4, Qwen3, Qwen3.5 SSM) — ALL since IMPLEMENTED (rows below); RotorQuant/TurboQuant evaluated → deferred to Phase 4 (ADR 2026-06-15) | DONE |
 | **Gemma 4 E2B engine: ~4,400 LOC across 27 files — 17 fixes on `feature/gemma4-arch`** | **DONE** |
 | **Gemma 4 E2B validated: main PC native test — coherent English** | **DONE** |
 | **Gemma 4 E2B validated: JARVIS PC seL4 QEMU Process B (4/4 queries coherent)** | **DONE** |
@@ -320,7 +320,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | Fused qdot (7 types, AVX2) + SIMD attn + RoPE tables + pthread threadpool | DONE |
 | **Performance: Llama 1B 0.99 -> 3.22 (1T) -> 19.79 tok/s (16T)** | **DONE** |
 
-**Next:** 30-day x86 soak **DEFERRED — descoped from v0.3.0-beta gating (risk-accepted, ADR `docs/decisions/2026-06-15-defer-30-day-x86-stability-soak.md`)**; bare-metal **burn-in** passed (~400 queries, err=0, boot_id constant — not a soak). Active: TurboQuant/RotorQuant evaluation, Phase 4 perf (AVX2 + threading in the seL4 build).
+**Next:** 30-day x86 soak **DEFERRED — descoped from v0.3.0-beta gating (risk-accepted, ADR `docs/decisions/2026-06-15-defer-30-day-x86-stability-soak.md`)**; bare-metal **burn-in** passed (~400 queries, err=0, boot_id constant — not a soak). Active: Phase 4 perf (AVX2 + threading in the seL4 build). TurboQuant/RotorQuant: evaluated, deferred to Phase 4 (ADR `docs/decisions/2026-06-15-defer-turboquant-rotorquant-to-phase4.md`).
 
 ### Pre-Work Tasks (Before JARVIS Project PC)
 

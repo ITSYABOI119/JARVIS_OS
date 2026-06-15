@@ -149,8 +149,8 @@ All responses are technically accurate and correctly formatted with markdown.
 | Silence verbose model-loader prints | MEDIUM | 1 hour | Gate `[config]`, `[qmodel]`, `[AUDIT]` behind a flag |
 | ~~Perf: fused dequant-dot + SIMD attention~~ | ~~HIGH~~ | **DONE** | **Llama 1B: 0.99 → 3.22 (1T) → 19.79 tok/s (16T). Spec: `docs/superpowers/specs/2026-04-13-perf-fused-dequant-dot-design.md`** |
 | Perf: pthread thread pool (Phase 3d/4) | LOW | TBD | Target 15-25 tok/s with 4-8 seL4 TCB workers. Deferred — needs seL4 threading infra |
-| TurboQuant/RotorQuant evaluation | MEDIUM | 2-3 sessions | RotorQuant discovered — O(d) vs O(d²), 28% faster decode |
-| Asymmetric K/V (Q8-K + TQ-V) | MEDIUM | ~460 LOC | After TQ/RQ evaluation |
+| TurboQuant/RotorQuant evaluation | ~~MEDIUM~~ | **DONE (evaluated)** | Verdict: **defer to Phase 4** — TQ fails multi-step at d=64, low value for the 2B KV-sharing deployed model; RotorQuant preferred but needs a C port. ADR `docs/decisions/2026-06-15-defer-turboquant-rotorquant-to-phase4.md` |
+| ~~Asymmetric K/V (Q8-K + TQ-V)~~ | ~~MEDIUM~~ | **DEFERRED → Phase 4** | Depends on TQ/RQ, which is deferred to Phase 4 (ADR 2026-06-15) |
 | ~~Wire dynamic model scaling~~ | ~~MEDIUM~~ | **SUPERSEDED** | 4-state hot-swap subsystem REMOVED 2026-04-17 — ships single-model Gemma 4 E2B. See `docs/decisions/2026-04-17-remove-dynamic-model-scaling.md` |
 | Debug bare-metal workload stall | HIGH | DONE | Root cause: 208KB stack arrays in qmodel_forward (DeltaNet/Gemma4 code). Fixed: fwd_scratch heap buffer |
 | Enhanced SHIELD | LOW | 2 weeks | Model-assisted risk scoring |
@@ -658,11 +658,11 @@ While waiting for the JARVIS Project PC, the majority of Phase 3b implementation
 | 3c pthread threadpool (ctx race, bounds check, local_ctx, gate→heap) | **DONE** | 5 threading bug fixes, ASAN verified on all 11 models |
 | 3c Gemma 4 E2B threading fix (PLE gate stack→fwd_scratch) | **DONE** | Stack-after-scope race in PLE gate[256] |
 | 3c bench script: always recompile + hostname output + threading enabled | **DONE** | rm cached binary, -DJARVIS_PTHREAD=1, auto thread count |
-| 3c TurboQuant/RotorQuant eval | PENDING | RotorQuant discovered as alternative (moved to Week 35b) |
+| 3c TurboQuant/RotorQuant eval | ~~PENDING~~ **DONE (evaluated)** | Verdict: defer to Phase 4 — ADR `docs/decisions/2026-06-15-defer-turboquant-rotorquant-to-phase4.md` |
 | 3c dynamic scaling | ~~PENDING~~ **REMOVED** | 4-state hot-swap deleted 2026-04-17 (ships single-model) — `docs/decisions/2026-04-17-remove-dynamic-model-scaling.md` |
 | 3c finalization | PENDING | Final report, v0.3.0-beta |
 
-**Estimated remaining to v0.3.0-beta:** ~5-7 weeks (perf + TQ/RQ eval + scaling + stability + report)
+**Estimated remaining to v0.3.0-beta:** final report + v0.3.0-beta tag. (Perf DONE; TQ/RQ evaluated → deferred to Phase 4, ADR 2026-06-15; dynamic scaling removed, ADR 2026-04-17; 30-day soak deferred/owner-scheduled, ADR 2026-06-15.)
 
 ---
 
@@ -1607,6 +1607,8 @@ bare metal (write during self-test, recover from Ubuntu with `dd`).
 
 ### Week 34: TurboQuant/RotorQuant Evaluation — Our Branch vs TQ+ vs RQ
 
+> **DONE / SUPERSEDED (2026-06-15):** This evaluation is **complete** — verdict: **defer TQ/RQ to Phase 4** (TQ fails multi-step generation at d=64; low value for the 2B KV-sharing deployed model; RotorQuant preferred but needs a C port). Full record on the parked `experiment/turboquant-benchmark` branch. See ADR `docs/decisions/2026-06-15-defer-turboquant-rotorquant-to-phase4.md`. Tasks below retained for historical context.
+
 > **UPDATE (April 2026):** RotorQuant discovered as a superior alternative -- block-diagonal rotations (O(d) vs O(d^2)), 28% faster decode, 5.3x faster prefill. Has llama.cpp integration branch. See `phase3/docs/ROTORQUANT_REFERENCE.md` on turboquant branch.
 
 **Tasks:**
@@ -1821,6 +1823,8 @@ Hardware: Ryzen 7 2700X (8C/16T), 32GB DDR4. llama.cpp reference: 40.44 tok/s (8
 ---
 
 ### Week 35b: TurboQuant Evaluation + Asymmetric K/V (moved from Week 34-35)
+
+> **DONE / SUPERSEDED (2026-06-15):** TQ/RQ evaluation complete — **deferred to Phase 4** (ADR `docs/decisions/2026-06-15-defer-turboquant-rotorquant-to-phase4.md`). Asymmetric K/V depends on TQ/RQ → also deferred to Phase 4. Tasks below retained for historical context.
 
 > **Note:** Moved from original Week 34-35 to prioritize single-threaded perf work.
 > TQ/RQ evaluation is independent and can proceed after perf optimization.
