@@ -16,7 +16,7 @@ Guidance for Claude Code when working with this repository.
 | **Phase 3** | **IN PROGRESS** | Months 24-36 | Beta on x86-64 bare metal (**LLM inference on seL4 VERIFIED**) |
 | Phase 4 | Future | Months 36+ | Production v1.0 |
 
-**Current:** Phase 3c, Active Development (April 16, 2026). **MILESTONE: JARVIS engine bench-off COMPLETE — 11/11 models load and generate across 6 model families (Llama, Gemma 4, Phi-3, Mistral, Qwen3, Qwen3.5 DeltaNet SSM).** Gemma 4 E2B (#1 quality, 8.40/10) validated on seL4 QEMU. Fused QKV/gate-up support unlocked Phi-3. Gated DeltaNet SSM (~1200 LOC) unlocked Qwen3.5 hybrid architecture. JARVIS engine speed: 3.22 tok/s (1T), 19.79 tok/s (16T) — 2x gap to llama.cpp (down from 40x). Fused qdot + SIMD attention + RoPE tables + pthread. Phase 3b complete (bare-metal boot, NVMe model loading, IPC workload, I211 NIC). Phase 3c hardening done (fuzz testing, security audit 25 findings). NVMe persistent logging operational — auto-captures all serial output with [VGA]/[SER]/[PB] tags. Bare-metal stability VERIFIED (2026-06-15): x86 boot/model-load/coherent gen, heartbeat/shield IPC fix err=0 over 400 real-hardware queries, durable NVMe log (boot_id constant). Formal 30-day x86 soak DEFERRED (ADR `docs/decisions/2026-06-15-defer-30-day-x86-stability-soak.md`) — next: TurboQuant/RotorQuant eval + Phase 4 perf (AVX2/threading). Two-PC setup: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/32GB/2TB NVMe) running bare-metal seL4.
+**Current:** Phase 3c, Active Development (April 16, 2026). **MILESTONE: JARVIS engine bench-off COMPLETE — 11/11 models load and generate across 6 model families (Llama, Gemma 4, Phi-3, Mistral, Qwen3, Qwen3.5 DeltaNet SSM).** Gemma 4 E2B (#1 quality, 8.40/10) validated on seL4 QEMU. Fused QKV/gate-up support unlocked Phi-3. Gated DeltaNet SSM (~1200 LOC) unlocked Qwen3.5 hybrid architecture. JARVIS engine speed: 3.22 tok/s (1T), 19.79 tok/s (16T) — 2x gap to llama.cpp (down from 40x). Fused qdot + SIMD attention + RoPE tables + pthread. Phase 3b complete (bare-metal boot, NVMe model loading, IPC workload, I211 NIC). Phase 3c hardening done (fuzz testing, security audit 25 findings). NVMe persistent logging operational — auto-captures all serial output with [VGA]/[SER]/[PB] tags. Bare-metal **burn-in passed** (2026-06-15 — hours, ~400 queries, err=0; NOT a 30-day soak): x86 boot/model-load/coherent gen, heartbeat/shield IPC fix err=0 over 400 real-hardware queries, durable NVMe log (boot_id constant). Formal 30-day x86 soak **DEFERRED — descoped from v0.3.0-beta gating (risk-accepted, ADR `docs/decisions/2026-06-15-defer-30-day-x86-stability-soak.md`)** — next: TurboQuant/RotorQuant eval + Phase 4 perf (AVX2/threading). Two-PC setup: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/32GB/2TB NVMe) running bare-metal seL4.
 
 ---
 
@@ -320,7 +320,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | Fused qdot (7 types, AVX2) + SIMD attn + RoPE tables + pthread threadpool | DONE |
 | **Performance: Llama 1B 0.99 -> 3.22 (1T) -> 19.79 tok/s (16T)** | **DONE** |
 
-**Next:** ~~30-day stability test~~ → bare-metal stability VERIFIED (err=0 over 400 queries, boot_id constant); formal 30-day x86 soak **DEFERRED** (see `docs/decisions/2026-06-15-defer-30-day-x86-stability-soak.md`). Active: TurboQuant/RotorQuant evaluation, Phase 4 perf (AVX2 + threading in the seL4 build).
+**Next:** 30-day x86 soak **DEFERRED — descoped from v0.3.0-beta gating (risk-accepted, ADR `docs/decisions/2026-06-15-defer-30-day-x86-stability-soak.md`)**; bare-metal **burn-in** passed (~400 queries, err=0, boot_id constant — not a soak). Active: TurboQuant/RotorQuant evaluation, Phase 4 perf (AVX2 + threading in the seL4 build).
 
 ### Pre-Work Tasks (Before JARVIS Project PC)
 
@@ -377,7 +377,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | NVMe log parser | — | DONE | parse_nvme_log.py | (Python) |
 | **Total** | | | **120 code files (39 test)** | **383+ test asserts, ~35,700 LOC** |
 
-**Phase 3b on real hardware — bare-metal stability VERIFIED (2026-06-15):** clean boot, NVMe model load (LBA-32768), coherent Gemma 4 E2B, heartbeat/shield IPC fix holding at err=0 over 400 queries (q=100/200/300/400), durable NVMe logging with constant boot_id. Formal 30-day x86 soak **DEFERRED** (demonstrated via this verification + Phase 2's 30.6-day Pi 4 run on the same portable IPC/cache code) — see `docs/decisions/2026-06-15-defer-30-day-x86-stability-soak.md`.
+**Phase 3b on real hardware — bare-metal burn-in passed (2026-06-15, NOT a 30-day soak):** clean boot, NVMe model load (LBA-32768), coherent Gemma 4 E2B, heartbeat/shield IPC fix holding at err=0 over 400 queries (q=100/200/300/400), durable NVMe logging with constant boot_id. Formal 30-day x86 soak **DEFERRED — descoped from v0.3.0-beta gating (risk-accepted)**: the new x86 surfaces (shmem_ipc, in-process inference, NVMe load) are covered by this ~400-query burn-in + 300K-iter fuzz + 2 audits + the IPC fix; Phase 2's 30.6-day Pi 4 run (different IPC/ARM stack) is supporting context, not equivalent coverage. See `docs/decisions/2026-06-15-defer-30-day-x86-stability-soak.md`.
 
 ### Phase 3 Weeks
 
