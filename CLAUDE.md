@@ -167,6 +167,9 @@ JARVIS_OS/
 │   ├── scripts/               # Build scripts
 │   ├── firmware/              # Boot images, GRUB configs
 │   └── weeks/ (empty/unused)  # Phase 3 used phase3/docs/ topic docs + docs/decisions/ ADRs + PHASE_3_FINAL_REPORT.md, not weekly status files
+├── phase4/                     # IN PROGRESS (Production v1.0)
+│   ├── docs/                   # ROADMAP.md (Phases 4-7), PHASE_4_GOAL1_INFERENCE_PERF.md (goal #1 research+plan)
+│   └── weeks/                  # weekN/WEEK_N_STATUS.md (weekly status resumes, like Phase 2)
 ├── JARVIS_UNIFIED_PLAN.md     # 36-month master plan
 ├── ARCHITECTURE_ENHANCEMENTS.md
 ├── archive/                    # Historical research
@@ -224,6 +227,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 
 - **Phase 2** used weekly status files: `phase2/weeks/weekN/WEEK_N_STATUS.md` (weeks 27-49), committed weekly with the week number in the message.
 - **Phase 3** was documented via topic/milestone docs in `phase3/docs/` (KICKOFF, HARDWARE_RESEARCH, IMPLEMENTATION_PLAN, the QEMU/native test-results docs, MODEL_BENCH_OFF, the security audits), the ADRs in `docs/decisions/`, and `phase3/docs/PHASE_3_FINAL_REPORT.md` — **not** weekly status files (there is no `phase3/weeks/`).
+- **Phase 4** resumes weekly status files at `phase4/weeks/weekN/WEEK_N_STATUS.md` (like Phase 2); Phase 3 used topic docs.
 - Implement, test, update the relevant doc; commit with a descriptive subject referencing the milestone/ADR where applicable.
 
 ### Bare-Metal Development Rules
@@ -579,6 +583,8 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Phase 3 Implementation Plan:** `phase3/docs/PHASE_3_IMPLEMENTATION_PLAN.md`
 - **Phase 3 Final Report:** `phase3/docs/PHASE_3_FINAL_REPORT.md` — beta summary (soak/scaling/TQ-RQ deferred; v0.2.1-beta tagged 06de75c)
 - **Decision records (ADRs):** `docs/decisions/` — dynamic-scaling removal (2026-04-17), 30-day soak deferral + TurboQuant/RotorQuant deferral (2026-06-15), GPU-inference deferral (2026-06-16)
+- **Phase 4 Goal #1 (Inference Perf) Plan:** `phase4/docs/PHASE_4_GOAL1_INFERENCE_PERF.md` — AVX2/XSAVE + SMP findings (VERIFIED) + M0–M4 plan
+- **Phase 4 Weeks:** `phase4/weeks/weekN/WEEK_N_STATUS.md`
 - **seL4 x86 QEMU Setup:** `phase3/docs/SEL4_X86_QEMU_SETUP.md`
 - **x86 Rootserver Notes:** `phase3/docs/SEL4_X86_ROOTSERVER_NOTES.md`
 - **GGML Portability Notes:** `phase3/src/ai/GGML_PORTABILITY_NOTES.md`
