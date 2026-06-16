@@ -260,6 +260,12 @@ jobs:
           -lm -o /tmp/test_qdot
         /tmp/test_qdot
 
+    - name: Phase 3 - AVX2 qdot correctness (-mavx2)
+      run: |
+        cd phase3/src/ai
+        gcc -Wall -Werror -O2 -std=c11 -mavx2 -mfma test_avx2_correctness.c qdot.c dequant.c -o /tmp/test_avx2_correctness -lm
+        /tmp/test_avx2_correctness
+
     - name: "Phase 3: Threadpool (C, pthread)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 -DJARVIS_PTHREAD=1 \
