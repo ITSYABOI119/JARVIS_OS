@@ -463,6 +463,89 @@ static void test_excessive_tensors(void)
     PASS();
 }
 
+/* Build a GGUF with 0 tensors and 2 array KV pairs:
+ *   "test.ffn"    = u32[6]  { 6144,6144,6144,12288,12288,12288 }
+ *   "test.floats" = f32[2]  { 1.0, 2.0 }   (non-integer — must be rejected) */
+static size_t build_array_gguf(uint8_t *buf, size_t buf_size)
+{
+    uint8_t *p = buf;
+    memset(buf, 0, buf_size);
+
+    uint32_t magic = GGUF_MAGIC, version = 3;
+    uint64_t n_tensors = 0, n_kv = 2;
+    memcpy(p, &magic, 4);     p += 4;
+    memcpy(p, &version, 4);   p += 4;
+    memcpy(p, &n_tensors, 8); p += 8;
+    memcpy(p, &n_kv, 8);      p += 8;
+
+    /* KV 1: "test.ffn" = u32 array */
+    p += put_gguf_string(p, "test.ffn");
+    uint32_t type_arr = GGUF_TYPE_ARRAY;
+    memcpy(p, &type_arr, 4); p += 4;
+    uint32_t elem_u32 = GGUF_TYPE_UINT32;
+    memcpy(p, &elem_u32, 4); p += 4;
+    uint64_t cnt = 6;
+    memcpy(p, &cnt, 8); p += 8;
+    uint32_t ffn_vals[6] = { 6144, 6144, 6144, 12288, 12288, 12288 };
+    for (int i = 0; i < 6; i++) { memcpy(p, &ffn_vals[i], 4); p += 4; }
+
+    /* KV 2: "test.floats" = f32 array */
+    p += put_gguf_string(p, "test.floats");
+    memcpy(p, &type_arr, 4); p += 4;
+    uint32_t elem_f32 = GGUF_TYPE_FLOAT32;
+    memcpy(p, &elem_f32, 4); p += 4;
+    uint64_t cnt2 = 2;
+    memcpy(p, &cnt2, 8); p += 8;
+    float fvals[2] = { 1.0f, 2.0f };
+    for (int i = 0; i < 2; i++) { memcpy(p, &fvals[i], 4); p += 4; }
+
+    return (size_t)(p - buf);
+}
+
+static void test_kv_array_u32(void)
+{
+    TEST("KV metadata: numeric array extraction (gguf_get_kv_array_u32)");
+
+    uint8_t data[8192];
+    size_t sz = build_array_gguf(data, sizeof(data));
+    const char *path = write_temp_gguf(data, sz);
+    ASSERT(path, "failed to write temp file");
+
+    gguf_ctx_t ctx;
+    int err = gguf_open(&ctx, path);
+    ASSERT(err == GGUF_OK, gguf_strerror(err));
+    ASSERT(ctx.n_kv == 2, "wrong kv count");
+
+    /* Count-only query (out=NULL, max=0) */
+    size_t count = 0;
+    ASSERT(gguf_get_kv_array_u32(&ctx, "test.ffn", NULL, 0, &count), "count-only query failed");
+    ASSERT(count == 6, "wrong array count");
+
+    /* Full read */
+    uint32_t out[6] = {0};
+    count = 0;
+    ASSERT(gguf_get_kv_array_u32(&ctx, "test.ffn", out, 6, &count), "full read failed");
+    ASSERT(count == 6, "wrong full-read count");
+    ASSERT(out[0] == 6144 && out[2] == 6144, "wrong early FFN values");
+    ASSERT(out[3] == 12288 && out[5] == 12288, "wrong late FFN values");
+
+    /* Truncated read: max=3 still reports full count, reads first 3 */
+    uint32_t out3[3] = {0};
+    count = 0;
+    ASSERT(gguf_get_kv_array_u32(&ctx, "test.ffn", out3, 3, &count), "truncated read failed");
+    ASSERT(count == 6, "truncated read should report full count");
+    ASSERT(out3[0] == 6144 && out3[1] == 6144 && out3[2] == 6144, "wrong truncated values");
+
+    /* Non-integer (float) array must be rejected */
+    ASSERT(!gguf_get_kv_array_u32(&ctx, "test.floats", out, 6, &count), "float array should be rejected");
+
+    /* Missing key must be rejected */
+    ASSERT(!gguf_get_kv_array_u32(&ctx, "nonexistent.arr", out, 6, &count), "missing key should be rejected");
+
+    gguf_close(&ctx);
+    PASS();
+}
+
 /* ---- Main ---- */
 
 int main(void)
@@ -472,6 +555,7 @@ int main(void)
     test_header_parsing();
     test_kv_string();
     test_kv_numeric();
+    test_kv_array_u32();
     test_tensor_info();
     test_data_alignment();
     test_tensor_data_read();

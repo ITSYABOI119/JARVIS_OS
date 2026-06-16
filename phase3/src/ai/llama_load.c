@@ -237,25 +237,49 @@ int llama_load_config(llama_config_t *config, const gguf_ctx_t *ctx)
         }
     }
 
-    /* Per-layer FFN dim: for models with variable FFN sizes per layer.
-     * TODO: Read actual values from gemma4.feed_forward_length GGUF array
-     *       once the parser supports array element extraction.
-     * Heuristic: first n_unique layers use smaller FFN (6144),
-     *            remaining layers use larger FFN (12288).
-     * Also set hidden_dim to the max for buffer allocation purposes. */
+    /* Per-layer FFN dim: for models with variable FFN sizes per layer (Gemma 4
+     * stores {arch}.feed_forward_length as a per-layer u32 array rather than a
+     * scalar). Read the real array when present; otherwise fall back to the
+     * validated heuristic (smaller FFN for early/unique layers, larger for the
+     * rest). hidden_dim is set to the max for buffer allocation purposes. */
     if (config->hidden_dim == 0 && config->shared_kv_layers > 0) {
         config->layer_ffn_dim = (int *)malloc((size_t)nl * sizeof(int));
         if (!config->layer_ffn_dim) return -1;
-        int n_unique = nl - config->shared_kv_layers;
-        if (n_unique <= 0) n_unique = 1;
-        for (int i = 0; i < nl; i++) {
-            if (i < n_unique)
-                config->layer_ffn_dim[i] = 6144;   /* smaller FFN for early layers */
-            else
-                config->layer_ffn_dim[i] = 12288;  /* larger FFN for later layers */
+
+        snprintf(key, sizeof(key), "%s.feed_forward_length", arch);
+        uint32_t *ffn_arr = (uint32_t *)malloc((size_t)nl * sizeof(uint32_t));
+        if (!ffn_arr) { free(config->layer_ffn_dim); config->layer_ffn_dim = NULL; return -1; }
+        size_t ffn_count = 0;
+        bool ffn_from_gguf = gguf_get_kv_array_u32(ctx, key, ffn_arr,
+                                                   (size_t)nl, &ffn_count);
+
+        int max_ffn = 0;
+        if (ffn_from_gguf && ffn_count == (size_t)nl) {
+            /* Real per-layer values from the GGUF array. */
+            for (int i = 0; i < nl; i++) {
+                config->layer_ffn_dim[i] = (int)ffn_arr[i];
+                if (config->layer_ffn_dim[i] > max_ffn)
+                    max_ffn = config->layer_ffn_dim[i];
+            }
+            printf("[config] per-layer FFN from GGUF array (%d layers, max=%d)\n",
+                   nl, max_ffn);
+        } else {
+            /* Fallback heuristic (matches Gemma 4 E2B layout). */
+            int n_unique = nl - config->shared_kv_layers;
+            if (n_unique <= 0) n_unique = 1;
+            for (int i = 0; i < nl; i++) {
+                if (i < n_unique)
+                    config->layer_ffn_dim[i] = 6144;   /* smaller FFN for early layers */
+                else
+                    config->layer_ffn_dim[i] = 12288;  /* larger FFN for later layers */
+            }
+            max_ffn = 12288;
+            printf("[config] per-layer FFN heuristic (%s array absent)\n", key);
         }
+        free(ffn_arr);
+
         /* Set hidden_dim to max for buffer allocation */
-        config->hidden_dim = 12288;
+        config->hidden_dim = max_ffn;
     }
 
     printf("[config] OK: dim=%d layers=%d heads=%d/%d hd=%d/%d ffn=%d vocab=%d\n",

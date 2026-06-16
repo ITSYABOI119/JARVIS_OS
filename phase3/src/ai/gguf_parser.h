@@ -120,10 +120,14 @@ typedef struct {
             uint64_t len;
             char     str[GGUF_MAX_KV_STR_LEN];
         } s;
-        /* Arrays: we store type + count but skip the data (too variable) */
+        /* Arrays: we store type + count and the file offset of the element
+         * data (we do NOT eagerly copy the data — it may be large, e.g. a
+         * 128K-entry tokenizer array). Use gguf_get_kv_array_u32() to read
+         * numeric array elements on demand via the kept-open file handle. */
         struct {
             uint32_t elem_type;
             uint64_t count;
+            uint64_t data_offset;  /* file offset of first element (0 = not recorded) */
         } arr;
     } value;
 } gguf_kv_t;
@@ -240,6 +244,23 @@ bool gguf_get_kv_f32(const gguf_ctx_t *ctx, const char *key, float *out);
  * Find a metadata uint64 value by key.
  */
 bool gguf_get_kv_u64(const gguf_ctx_t *ctx, const char *key, uint64_t *out);
+
+/**
+ * Read a numeric array metadata value by key into a caller-provided buffer.
+ *
+ * Supports arrays whose element type is UINT8/INT8/UINT16/INT16/UINT32/INT32
+ * (each element is widened to uint32_t in 'out'). Reads up to 'max' elements;
+ * '*out_count' (if non-NULL) is set to the array's full element count so the
+ * caller can detect truncation.
+ *
+ * The array data is read on demand from the kept-open file handle, so the
+ * GGUF context must still be open (not yet gguf_close()'d).
+ *
+ * Returns true on success, false if the key is missing, is not an array, has
+ * an unsupported (non-integer) element type, or the data cannot be read.
+ */
+bool gguf_get_kv_array_u32(const gguf_ctx_t *ctx, const char *key,
+                           uint32_t *out, size_t max, size_t *out_count);
 
 /**
  * Get human-readable error message for error code.

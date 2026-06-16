@@ -249,11 +249,17 @@ static int read_kv_pair(FILE *fp, gguf_kv_t *kv)
         case GGUF_TYPE_STRING:
             return read_gguf_string(fp, kv->value.s.str, sizeof(kv->value.s.str), &kv->value.s.len);
         case GGUF_TYPE_ARRAY:
-            /* Read array header but skip the data */
+            /* Read array header, record where the element data begins, then
+             * skip the data. gguf_get_kv_array_u32() can seek back to read
+             * numeric elements on demand. */
             err = read_u32(fp, &kv->value.arr.elem_type);
             if (err) return err;
             err = read_u64(fp, &kv->value.arr.count);
             if (err) return err;
+            {
+                long pos = ftell(fp);
+                kv->value.arr.data_offset = (pos < 0) ? 0 : (uint64_t)pos;
+            }
             /* Skip array elements */
             for (uint64_t i = 0; i < kv->value.arr.count; i++) {
                 err = skip_gguf_value(fp, kv->value.arr.elem_type, 0);
@@ -520,6 +526,59 @@ bool gguf_get_kv_u64(const gguf_ctx_t *ctx, const char *key, uint64_t *out)
     const gguf_kv_t *kv = find_kv(ctx, key);
     if (!kv || kv->type != GGUF_TYPE_UINT64) return false;
     *out = kv->value.u64;
+    return true;
+}
+
+/* Read one integer array element of the given GGUF element type from fp,
+ * widening it into *out (uint32_t). Returns GGUF_OK or an error code.
+ * Returns GGUF_ERR_FORMAT for non-integer element types. */
+static int read_array_elem_u32(FILE *fp, uint32_t elem_type, uint32_t *out)
+{
+    int err;
+    switch (elem_type) {
+        case GGUF_TYPE_UINT8:  { uint8_t  v; err = read_u8(fp, &v);  if (err) return err; *out = v; return GGUF_OK; }
+        case GGUF_TYPE_INT8:   { int8_t   v; err = read_i8(fp, &v);  if (err) return err; *out = (uint32_t)(int32_t)v; return GGUF_OK; }
+        case GGUF_TYPE_UINT16: { uint16_t v; err = read_u16(fp, &v); if (err) return err; *out = v; return GGUF_OK; }
+        case GGUF_TYPE_INT16:  { int16_t  v; err = read_i16(fp, &v); if (err) return err; *out = (uint32_t)(int32_t)v; return GGUF_OK; }
+        case GGUF_TYPE_UINT32: { uint32_t v; err = read_u32(fp, &v); if (err) return err; *out = v; return GGUF_OK; }
+        case GGUF_TYPE_INT32:  { int32_t  v; err = read_i32(fp, &v); if (err) return err; *out = (uint32_t)v; return GGUF_OK; }
+        default:               return GGUF_ERR_FORMAT;  /* not an integer element type */
+    }
+}
+
+bool gguf_get_kv_array_u32(const gguf_ctx_t *ctx, const char *key,
+                           uint32_t *out, size_t max, size_t *out_count)
+{
+    const gguf_kv_t *kv = find_kv(ctx, key);
+    if (!kv || kv->type != GGUF_TYPE_ARRAY) return false;
+    if (!ctx->fp || kv->value.arr.data_offset == 0) return false;
+
+    uint64_t count = kv->value.arr.count;
+    if (out_count) *out_count = (size_t)count;
+
+    /* Verify the element type is a supported integer type before seeking. */
+    switch (kv->value.arr.elem_type) {
+        case GGUF_TYPE_UINT8:  case GGUF_TYPE_INT8:
+        case GGUF_TYPE_UINT16: case GGUF_TYPE_INT16:
+        case GGUF_TYPE_UINT32: case GGUF_TYPE_INT32:
+            break;
+        default:
+            return false;  /* non-integer (e.g. string/float) array */
+    }
+
+    if (out == NULL || max == 0) return true;  /* count-only query */
+
+    /* Seek to the recorded element data and read up to 'max' elements.
+     * fp is shared with tensor reads, which always fseek to an absolute
+     * offset before reading, so we need not restore the position. */
+    if (fseek(ctx->fp, (long)kv->value.arr.data_offset, SEEK_SET) != 0)
+        return false;
+
+    uint64_t n = (count < (uint64_t)max) ? count : (uint64_t)max;
+    for (uint64_t i = 0; i < n; i++) {
+        if (read_array_elem_u32(ctx->fp, kv->value.arr.elem_type, &out[i]) != GGUF_OK)
+            return false;
+    }
     return true;
 }
 
