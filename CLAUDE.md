@@ -16,7 +16,7 @@ Guidance for Claude Code when working with this repository.
 | **Phase 3** | **COMPLETE (beta)** | Months 24-36 | Beta on x86-64 bare metal (**LLM inference on seL4 VERIFIED**) — v0.2.1-beta tagged (30-day soak deferred) |
 | Phase 4 | IN PROGRESS | Months 36+ | Production v1.0 |
 
-**Current:** Phase 4 started (2026-06-16). Phase 3 CLOSED — v0.2.1-beta tagged @ 06de75c (2026-06-16). **MILESTONE: JARVIS engine bench-off COMPLETE — 11/11 models load and generate across 6 model families (Llama, Gemma 4, Phi-3, Mistral, Qwen3, Qwen3.5 DeltaNet SSM).** Gemma 4 E2B (#1 quality, 8.40/10) validated on seL4 QEMU. Fused QKV/gate-up support unlocked Phi-3. Gated DeltaNet SSM (~1200 LOC) unlocked Qwen3.5 hybrid architecture. JARVIS engine speed: 3.22 tok/s (1T), 19.79 tok/s (16T) — 2x gap to llama.cpp (down from 40x). Fused qdot + SIMD attention + RoPE tables + pthread. Phase 3b complete (bare-metal boot, NVMe model loading, IPC workload, I211 NIC). Phase 3c hardening done (fuzz testing, security audit 25 findings). NVMe persistent logging operational — auto-captures all serial output with [VGA]/[SER]/[PB] tags. Bare-metal **burn-in passed** (2026-06-15 — hours, ~400 queries, err=0; NOT a 30-day soak): x86 boot/model-load/coherent gen, heartbeat/shield IPC fix err=0 over 400 real-hardware queries, durable NVMe log (boot_id constant). Formal 30-day x86 soak **DEFERRED — descoped from v0.2.1-beta gating (risk-accepted, ADR `docs/decisions/2026-06-15-defer-30-day-x86-stability-soak.md`)** — next: Phase 4 perf (AVX2/threading); TurboQuant/RotorQuant evaluated → deferred to Phase 4 (ADR `docs/decisions/2026-06-15-defer-turboquant-rotorquant-to-phase4.md`). **Phase 3 final report written (`phase3/docs/PHASE_3_FINAL_REPORT.md`); v0.2.1-beta TAGGED @ 06de75c (2026-06-16).** Two-PC setup: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/32GB/2TB NVMe) running bare-metal seL4. Phase 4 goal #1 reframed to **Inference performance** — v1.0 = CPU AVX2+threading in the seL4 build (~8–9 tok/s Gemma E2B @16T target); GPU inference DEFERRED (no usable GPU — ADR `docs/decisions/2026-06-16-defer-gpu-inference.md`); GPU display/UI (goal #2) unaffected.
+**Current:** Phase 4 started (2026-06-16). Phase 3 CLOSED — v0.2.1-beta tagged @ 06de75c (2026-06-16). **MILESTONE: JARVIS engine bench-off COMPLETE — 11/11 models load and generate across 6 model families (Llama, Gemma 4, Phi-3, Mistral, Qwen3, Qwen3.5 DeltaNet SSM).** Gemma 4 E2B (#1 quality, 8.40/10) validated on seL4 QEMU. Fused QKV/gate-up support unlocked Phi-3. Gated DeltaNet SSM (~1200 LOC) unlocked Qwen3.5 hybrid architecture. JARVIS engine speed: 3.22 tok/s (1T), 19.79 tok/s (16T) — 2x gap to llama.cpp (down from 40x). Fused qdot + SIMD attention + RoPE tables + pthread. Phase 3b complete (bare-metal boot, NVMe model loading, IPC workload, I211 NIC). Phase 3c hardening done (fuzz testing, security audit 25 findings). NVMe persistent logging operational — auto-captures all serial output with [VGA]/[SER]/[PB] tags. Bare-metal **burn-in passed** (2026-06-15 — hours, ~400 queries, err=0; NOT a 30-day soak): x86 boot/model-load/coherent gen, heartbeat/shield IPC fix err=0 over 400 real-hardware queries, durable NVMe log (boot_id constant). Formal 30-day x86 soak **DEFERRED — descoped from v0.2.1-beta gating (risk-accepted, ADR `docs/decisions/2026-06-15-defer-30-day-x86-stability-soak.md`)** — next: Phase 4 perf (AVX2/threading); TurboQuant/RotorQuant evaluated → deferred to Phase 4 (ADR `docs/decisions/2026-06-15-defer-turboquant-rotorquant-to-phase4.md`). **Phase 3 final report written (`phase3/docs/PHASE_3_FINAL_REPORT.md`); v0.2.1-beta TAGGED @ 06de75c (2026-06-16).** Two-PC setup: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/32GB/2TB NVMe) running bare-metal seL4. Phase 4 goal #1 reframed to **Inference performance** — v1.0 = CPU AVX2+threading in the seL4 build (~8–9 tok/s Gemma E2B @16T target); GPU inference DEFERRED (no usable GPU — ADR `docs/decisions/2026-06-16-defer-gpu-inference.md`); GPU display/UI (goal #2) unaffected. **M0 DONE (2026-06-16):** seL4 kernel rebuilt to XSAVE (feature-set 7) so it context-switches AVX YMM — AVX2-under-preemption safety gate PASSED on KVM (XCR0.avx=1 in PA+PB, 0 mismatches / 24k probes, self-test 5/5); M1 (global `-mavx2`) next. This build runs `KernelFastpath=ON` → outside seL4's verified X64 config; functional-but-unverified by design (see `phase4/docs/PHASE_4_GOAL1_INFERENCE_PERF.md` §3).
 
 ---
 
@@ -30,7 +30,7 @@ Hardware Layer
 Microkernel (Ring 0, cores 0-1)
 • Interrupt handling (<1ms)
 • Memory management, IPC primitives
-• ~12K LOC, seL4 (formally verified)
+• ~12K LOC, seL4 (formally verified*)
     ↓ ← Lock-free IPC →
 AI Decision Engine (Ring 3, cores 2-N)
 • Specialist agents (4-6) — domain-expert agents (device, network, filesystem, user), NOT model-size tiers
@@ -40,6 +40,8 @@ AI Decision Engine (Ring 3, cores 2-N)
 User Space Services (Ring 3)
 • Device drivers, File systems, Applications
 ```
+
+> *\*seL4 "(formally verified)" refers to its verified configurations. JARVIS's x86-64 build runs `KernelFastpath=ON`, which is **outside** the verified X64 config ("C-level functional correctness, **no fast path**") — so JARVIS runs a functional-but-unverified seL4 configuration by design (IPC/AVX perf > holding the proof). See `phase4/docs/PHASE_4_GOAL1_INFERENCE_PERF.md` §3.*
 
 **Why:** AI inference (50-500ms) is 3 orders of magnitude too slow for Ring 0 interrupt handling (<1ms). Microkernel isolates time-critical ops from AI.
 
@@ -692,7 +694,7 @@ Tracked `.c/.h/.py` files and their `wc -l` LOC via `git ls-files` (measured 202
 
 ### Technology Stack
 
-- **Microkernel:** seL4 (formally verified) on ARM64 + x86-64
+- **Microkernel:** seL4 (formally verified*) on ARM64 + x86-64 — *\*the x86-64 build runs `KernelFastpath=ON`, outside seL4's verified X64 config ("no fast path"); functional-but-unverified by design (perf > proof) — see `phase4/docs/PHASE_4_GOAL1_INFERENCE_PERF.md` §3*
 - **AI Models:** 11 GGUF models across 6 model families — Llama, Gemma 4 (PLE/SWA/KV-sharing), Phi-3 (fused QKV), Mistral (Q8_0), Qwen3 (QK norms), Qwen3.5 (DeltaNet SSM hybrid)
 - **Inference:** Quantized zero-copy (Q4_0/Q4_K/Q5_K/Q6_K/Q8_0/BF16 dequant on-the-fly, ~50MB heap). Gated DeltaNet SSM for Qwen3.5 hybrid layers.
 - **Build:** TII seL4 build system + CMake/Ninja

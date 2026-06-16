@@ -50,6 +50,10 @@
 #include "fat32.h"
 #include "jarvis_debug.h"
 
+#if JARVIS_AVX2_PROBE
+#include "avx2_probe.h"
+#endif
+
 /* Single-model deployment — dynamic tiering removed 2026-04-17.
  * Gemma 4 E2B Q4_K_M is the bench-off winner (8.40/10 quality, 8.63 tok/s @16T). */
 #define JARVIS_MODEL_FILE "GEMMA2B GUF"
@@ -1542,6 +1546,11 @@ static void *main_continued(void *arg UNUSED)
 
     while (1) {
         q_total++;
+#if JARVIS_AVX2_PROBE
+        /* M0: dirty YMM in PA each iteration so the kernel's lazy per-TCB FPU
+         * path exercises cross-thread YMM save/restore against PB's probe. */
+        avx2_probe_touch((uint64_t)q_total);
+#endif
         uint32_t r = xorshift32(&rng_state);
         int slot = (int)(r % 20);
 

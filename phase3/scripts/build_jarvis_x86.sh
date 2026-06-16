@@ -121,6 +121,7 @@ copy_file() {
 echo -e "${GREEN}[1/4] Rootserver${NC}"
 copy_file "$JARVIS_DIR/phase3/src/sel4/main_x86.c" "$DEST/src/main.c"
 copy_file "$JARVIS_DIR/phase3/src/sel4/jarvis_debug.h" "$DEST/src/jarvis_debug.h"
+copy_file "$JARVIS_DIR/phase3/src/sel4/avx2_probe.h" "$DEST/src/avx2_probe.h"
 echo ""
 
 # ── [2/4] AI modules ───────────────────────────────────────────────
@@ -206,6 +207,7 @@ PROC_B_DIR="$SEL4_DIR/projects/jarvis-x86/apps/jarvis-inference/src"
 mkdir -p "$PROC_B_DIR/ai" 2>/dev/null || true
 copy_file "$JARVIS_DIR/phase3/src/sel4/inference_server.c" "$PROC_B_DIR/main.c"
 copy_file "$JARVIS_DIR/phase3/src/sel4/jarvis_debug.h" "$PROC_B_DIR/jarvis_debug.h"
+copy_file "$JARVIS_DIR/phase3/src/sel4/avx2_probe.h" "$PROC_B_DIR/avx2_probe.h"
 
 # Process B needs its own copy of AI modules (separate compilation unit)
 for f in "${AI_FILES[@]}"; do
@@ -353,10 +355,31 @@ if [ ! -d "$BUILD_DIR" ]; then
     exit 1
 fi
 
-# Ensure IOMMU is disabled (NVMe DMA needs direct physical access).
-# Force-set every build — cmake reconfiguration can re-enable defaults.
+# Kernel config — force-set every build (cmake reconfiguration can reset defaults):
+#   - KernelIOMMU=OFF: NVMe DMA needs direct physical access.
+#   - XSAVE/AVX (Phase 4 goal #1 M0): KernelFPU=XSAVE + feature-set 7 (FPU+SSE+AVX)
+#     + size 832 so the kernel context-switches the AVX YMM state for Ring-3 code.
+#     Without this the kernel is FXSAVE-only (512B, x87+SSE only) and AVX2 in
+#     userspace corrupts YMM across preemption. XSAVEOPT is the variant Zen+ (2700X)
+#     supports. NOTE: this is the kernel's save/restore capability only — it does NOT
+#     turn on -mavx2 in the engine apps (that is M1); the M0 probe is target()-isolated.
 cd "$BUILD_DIR"
-cmake -DKernelIOMMU=OFF . >/dev/null 2>&1
+# Pass 1: flip the kernel to XSAVE FPU mode (so it context-switches AVX YMM state).
+# SIMULATION=OFF is REQUIRED — the seL4 cmake-tool's ApplyCommonSimulationSettings()
+# force-sets KernelFPU=FXSAVE under SIMULATION ("cannot simulate some more recent
+# features" — TCG QEMU has no AVX), which silently overrides any XSAVE request. JARVIS
+# targets KVM -cpu host / bare metal (real AVX2), so simulation mode must be off.
+cmake -DKernelIOMMU=OFF \
+      -DSIMULATION=OFF \
+      -DKernelFPU=XSAVE \
+      -DKernelXSave=XSAVEOPT \
+      -DKernelXSaveFeatureSet=7 \
+      -DKernelXSaveSize=832 \
+      . >/dev/null 2>&1
+# Pass 2: KernelXSaveFeatureSet DEPENDS on KernelFPUXSave, which only flips ON during
+# pass 1; on the pass where it first becomes selectable it takes its default (3 =
+# FPU+SSE). Re-assert =7 (FPU+SSE+AVX) now that it is available, else AVX is excluded.
+cmake -DKernelXSaveFeatureSet=7 -DKernelXSaveSize=832 . >/dev/null 2>&1
 ninja
 
 echo ""

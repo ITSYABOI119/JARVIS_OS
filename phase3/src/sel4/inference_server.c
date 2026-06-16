@@ -26,6 +26,10 @@
 #include "shmem_ipc.h"
 #include "jarvis_debug.h"
 
+#if JARVIS_AVX2_PROBE
+#include "avx2_probe.h"
+#endif
+
 #include "gguf_parser.h"
 #include "llama_model.h"
 #include "llama_quant.h"
@@ -541,11 +545,24 @@ int main(int argc, char **argv)
     shmem_ipc_send(response_ring, MSG_HEARTBEAT_ACK, 0, NULL, 0);
     seL4_Signal(resp_notif);
 
+#if JARVIS_AVX2_PROBE
+    /* M0: confirm the kernel enabled AVX state-saving (XCR0.AVX) at PB startup. */
+    avx2_probe_init("PB");
+#endif
+
     /* ---- Main IPC loop ---- */
     uint32_t pb_query_count = 0;
     while (1) {
         pb_query_count++;
         pb_log_num("[PB] Waiting for query #", pb_query_count, "");
+
+#if JARVIS_AVX2_PROBE
+        /* M0 AVX2-under-preemption gate: a burst of long YMM reductions each loop
+         * cycle, interleaved with the live PA<->PB workload (timer ticks + IPC
+         * force context switches; PA also dirties YMM via avx2_probe_touch). */
+        for (int _pi = 0; _pi < 8; _pi++)
+            avx2_probe_run("PB", ((uint64_t)pb_query_count << 8) ^ (uint64_t)_pi ^ 0x5A5Au);
+#endif
 
         /* Wait for signal from Process A */
         seL4_Wait(req_notif, NULL);
@@ -601,6 +618,18 @@ int main(int argc, char **argv)
 
 idle:
     puts_serial("[Process B] Idle.\n");
+#if JARVIS_AVX2_PROBE
+    /* M0: even with no model loaded (e.g. QEMU without the slow emulated-NVMe copy),
+     * exercise the AVX2-under-preemption gate in PB so the KVM run still validates YMM
+     * save/restore. PB runs long YMM bursts then yields to PA (which also dirties YMM)
+     * on the single core — timer preemption + Yield force cross-thread FPU switches. */
+    avx2_probe_init("PB");
+    while (1) {
+        for (int _pi = 0; _pi < 8; _pi++)
+            avx2_probe_run("PB", ((uint64_t)0xB0B0u << 8) ^ (uint64_t)_pi);
+        seL4_Yield();
+    }
+#endif
     while (1) {
         seL4_Yield();
     }

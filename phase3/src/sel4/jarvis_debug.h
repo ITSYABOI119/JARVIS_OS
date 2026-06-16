@@ -29,6 +29,13 @@
  * Useful for diagnosing stalls. Turn OFF for 30-day stability test (write wear). */
 #define JARVIS_DBG_BOOT_LOG  0
 
+/* Phase 4 goal #1 / M0: AVX2-under-preemption safety probe (avx2_probe.h).
+ * When 1, Process B runs a target("avx2,fma")-isolated YMM reduction vs a scalar
+ * reference interleaved with the live PA<->PB workload, and confirms XCR0.AVX is
+ * set (kernel saves AVX state). Default 0 — the M0 gate run builds with it =1.
+ * This is a compile guard ONLY; it does NOT enable global -mavx2 (that is M1). */
+#define JARVIS_AVX2_PROBE  0
+
 /* Serial [STATS] prints every 100 queries; NVMe LOG_IPC_STATS is written every
  * JARVIS_STATS_NVME_INTERVAL. Measured bare-metal rate is ~3k queries/day (single
  * core, scalar) -> interval=100 gives ~870 entries over 30 days, well under the
