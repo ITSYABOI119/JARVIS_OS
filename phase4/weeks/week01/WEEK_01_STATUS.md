@@ -25,6 +25,8 @@ This week answered the two gating questions authoritatively by reading the **liv
 
 seL4 on the box: **14.0.0** (`ebbda2af5`), x86_64/pc99, MCS off, IOMMU off.
 
+**x64 verification status (feeds the M2 decision):** the current **uniprocessor x86-64** build IS in seL4's maintained verified set — the verified-configurations page lists `X64`/`PC99` with *"C-level functional correctness"* (<https://docs.sel4.systems/projects/sel4/verified-configurations.html>; FAQ: *"For 64-bit Arm v8 and x86 there are functional-correctness proofs to C code"*). All proofs are **uniprocessor**; multicore **SMP is explicitly an unverified configuration** and multicore verification is still in progress (<https://sel4.systems/Verification/proofs.html>). So the formal-verification guarantee is genuinely in force on JARVIS today, and enabling SMP (M2 Branch A) would forfeit it — this *strengthens* the verification objection to going multi-core. (x64 verification is weaker than Armv7: no binary/translation validation, no security proofs, and VT-x/fast-path excluded.)
+
 ## Engine seams identified
 
 - **AVX2** = build-flag flip in `apps/{sel4test-driver,jarvis-inference}/CMakeLists.txt` (+ `build_jarvis_x86.sh`); the SIMD code already exists behind `#ifdef __AVX2__`. Today: **no `-mavx2/-mfma/-march` anywhere** (verified).
