@@ -166,7 +166,7 @@ JARVIS_OS/
 │   │   └── sel4/             # seL4 x86-64 rootserver
 │   ├── scripts/               # Build scripts
 │   ├── firmware/              # Boot images, GRUB configs
-│   └── weeks/                 # Weekly status docs
+│   └── weeks/ (empty/unused)  # Phase 3 used phase3/docs/ topic docs + docs/decisions/ ADRs + PHASE_3_FINAL_REPORT.md, not weekly status files
 ├── JARVIS_UNIFIED_PLAN.md     # 36-month master plan
 ├── ARCHITECTURE_ENHANCEMENTS.md
 ├── archive/                    # Historical research
@@ -220,11 +220,11 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 - Python tests: `python test_*.py` (mock mode if seL4 unavailable)
 - Always aim for 100% pass rate
 
-### Weekly Development Pattern
+### Development Documentation Pattern
 
-1. Create `phase2/weeks/weekN/WEEK_N_STATUS.md`
-2. Implement, test, update status docs
-3. **COMMIT WEEKLY** with week number in commit message (MANDATORY)
+- **Phase 2** used weekly status files: `phase2/weeks/weekN/WEEK_N_STATUS.md` (weeks 27-49), committed weekly with the week number in the message.
+- **Phase 3** was documented via topic/milestone docs in `phase3/docs/` (KICKOFF, HARDWARE_RESEARCH, IMPLEMENTATION_PLAN, the QEMU/native test-results docs, MODEL_BENCH_OFF, the security audits), the ADRs in `docs/decisions/`, and `phase3/docs/PHASE_3_FINAL_REPORT.md` — **not** weekly status files (there is no `phase3/weeks/`).
+- Implement, test, update the relevant doc; commit with a descriptive subject referencing the milestone/ADR where applicable.
 
 ### Bare-Metal Development Rules
 
@@ -528,9 +528,10 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 
 ### Reading Order (New Session)
 1. This file (CLAUDE.md) → architecture + current status
-2. `phase2/weeks/week47/WEEK_47_STATUS.md` → latest week details
-3. `phase2/docs/PHASE_2_KICKOFF.md` → Phase 2 goals
-4. Source files as needed
+2. `phase3/docs/PHASE_3_FINAL_REPORT.md` → current phase (Phase 3) summary + ADR pointers
+3. `phase2/weeks/week47/WEEK_47_STATUS.md` → Phase 2 latest-week detail (history)
+4. `phase2/docs/PHASE_2_KICKOFF.md` → Phase 2 goals
+5. Source files as needed
 
 ### Quick Reference
 - **Build:** `wsl -e bash -lc "cd .../phase2/scripts && tr -d '\r' < build_and_copy_kernel.sh | bash"`
@@ -573,8 +574,8 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Security Self-Audit:** `phase2/docs/SECURITY_SELF_AUDIT.md`
 - **Adversarial Security Audit:** `phase3/docs/SECURITY_AUDIT_2026-03-22.md`
 - **Phase 2 Final Report:** `phase2/docs/PHASE_2_FINAL_REPORT.md`
-- **Phase 3 Hardware Research:** `phase2/docs/PHASE_3_HARDWARE_RESEARCH.md`
-- **Phase 3 Kickoff:** `phase2/docs/PHASE_3_KICKOFF.md`
+- **Phase 3 Hardware Research:** `phase3/docs/PHASE_3_HARDWARE_RESEARCH.md`
+- **Phase 3 Kickoff:** `phase3/docs/PHASE_3_KICKOFF.md`
 - **Phase 3 Implementation Plan:** `phase3/docs/PHASE_3_IMPLEMENTATION_PLAN.md`
 - **Phase 3 Final Report:** `phase3/docs/PHASE_3_FINAL_REPORT.md` — beta summary (soak/scaling/TQ-RQ deferred; v0.3.0-beta pending tag)
 - **Decision records (ADRs):** `docs/decisions/` — dynamic-scaling removal (2026-04-17), 30-day soak deferral + TurboQuant/RotorQuant deferral (2026-06-15)
