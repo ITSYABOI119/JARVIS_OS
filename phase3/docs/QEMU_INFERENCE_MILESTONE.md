@@ -8,7 +8,7 @@
 
 ## Achievement
 
-Llama 3.2 1B Instruct Q4_K_M generating coherent, factually relevant text on seL4 x86-64 running in QEMU with KVM acceleration. This is the first known instance of quantized LLM inference running natively on a formally verified microkernel.
+Llama 3.2 1B Instruct Q4_K_M generating coherent, factually relevant text on seL4 x86-64 running in QEMU with KVM acceleration. This is the first known instance of quantized LLM inference running natively on seL4 — a microkernel formally verified in its canonical configurations. (JARVIS's x86-64 build runs a performance configuration — fast path, plus AVX from M1 — *outside* seL4's verified X64 set, so the running system is not itself proof-carrying; see `docs/decisions/2026-06-16-x86-verification-stance.md`.)
 
 The entire inference pipeline -- GGUF parsing, quantized weight loading, BPE tokenization, transformer forward pass, and greedy sampling -- executes in seL4 userspace (Ring 3) using custom C code with no external dependencies. Weights are embedded in .rodata via objcopy and accessed through zero-copy pointers. The working heap is approximately 50 MB (KV cache + activations), compared to 5.7 GB required for full F32 dequantization.
 
@@ -71,7 +71,7 @@ The output is coherent, topically accurate, and consistent with the host-side F3
 
 | Parameter | Value |
 |-----------|-------|
-| Kernel | seL4 x86-64 (formally verified microkernel) |
+| Kernel | seL4 x86-64 (performance config — outside seL4's verified X64 set; see docs/decisions/2026-06-16-x86-verification-stance.md) |
 | Emulator | QEMU with KVM (-enable-kvm -cpu host) |
 | Host CPU | AMD Ryzen 7 2700X (8C/16T, 3.7 GHz) |
 | Host RAM | 32 GB DDR4 |
