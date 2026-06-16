@@ -16,7 +16,7 @@ Guidance for Claude Code when working with this repository.
 | **Phase 3** | **IN PROGRESS** | Months 24-36 | Beta on x86-64 bare metal (**LLM inference on seL4 VERIFIED**) |
 | Phase 4 | Future | Months 36+ | Production v1.0 |
 
-**Current:** Phase 3c, Active Development (April 16, 2026). **MILESTONE: JARVIS engine bench-off COMPLETE — 11/11 models load and generate across 6 model families (Llama, Gemma 4, Phi-3, Mistral, Qwen3, Qwen3.5 DeltaNet SSM).** Gemma 4 E2B (#1 quality, 8.40/10) validated on seL4 QEMU. Fused QKV/gate-up support unlocked Phi-3. Gated DeltaNet SSM (~1200 LOC) unlocked Qwen3.5 hybrid architecture. JARVIS engine speed: 3.22 tok/s (1T), 19.79 tok/s (16T) — 2x gap to llama.cpp (down from 40x). Fused qdot + SIMD attention + RoPE tables + pthread. Phase 3b complete (bare-metal boot, NVMe model loading, IPC workload, I211 NIC). Phase 3c hardening done (fuzz testing, security audit 25 findings). NVMe persistent logging operational — auto-captures all serial output with [VGA]/[SER]/[PB] tags. Bare-metal **burn-in passed** (2026-06-15 — hours, ~400 queries, err=0; NOT a 30-day soak): x86 boot/model-load/coherent gen, heartbeat/shield IPC fix err=0 over 400 real-hardware queries, durable NVMe log (boot_id constant). Formal 30-day x86 soak **DEFERRED — descoped from v0.3.0-beta gating (risk-accepted, ADR `docs/decisions/2026-06-15-defer-30-day-x86-stability-soak.md`)** — next: Phase 4 perf (AVX2/threading); TurboQuant/RotorQuant evaluated → deferred to Phase 4 (ADR `docs/decisions/2026-06-15-defer-turboquant-rotorquant-to-phase4.md`). **Phase 3 final report written (`phase3/docs/PHASE_3_FINAL_REPORT.md`); v0.3.0-beta pending tag.** Two-PC setup: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/32GB/2TB NVMe) running bare-metal seL4.
+**Current:** Phase 3c, Active Development (April 16, 2026). **MILESTONE: JARVIS engine bench-off COMPLETE — 11/11 models load and generate across 6 model families (Llama, Gemma 4, Phi-3, Mistral, Qwen3, Qwen3.5 DeltaNet SSM).** Gemma 4 E2B (#1 quality, 8.40/10) validated on seL4 QEMU. Fused QKV/gate-up support unlocked Phi-3. Gated DeltaNet SSM (~1200 LOC) unlocked Qwen3.5 hybrid architecture. JARVIS engine speed: 3.22 tok/s (1T), 19.79 tok/s (16T) — 2x gap to llama.cpp (down from 40x). Fused qdot + SIMD attention + RoPE tables + pthread. Phase 3b complete (bare-metal boot, NVMe model loading, IPC workload, I211 NIC). Phase 3c hardening done (fuzz testing, security audit 25 findings). NVMe persistent logging operational — auto-captures all serial output with [VGA]/[SER]/[PB] tags. Bare-metal **burn-in passed** (2026-06-15 — hours, ~400 queries, err=0; NOT a 30-day soak): x86 boot/model-load/coherent gen, heartbeat/shield IPC fix err=0 over 400 real-hardware queries, durable NVMe log (boot_id constant). Formal 30-day x86 soak **DEFERRED — descoped from v0.2.1-beta gating (risk-accepted, ADR `docs/decisions/2026-06-15-defer-30-day-x86-stability-soak.md`)** — next: Phase 4 perf (AVX2/threading); TurboQuant/RotorQuant evaluated → deferred to Phase 4 (ADR `docs/decisions/2026-06-15-defer-turboquant-rotorquant-to-phase4.md`). **Phase 3 final report written (`phase3/docs/PHASE_3_FINAL_REPORT.md`); v0.2.1-beta pending tag.** Two-PC setup: Main PC (5600/2070/32GB) for dev, JARVIS PC (2700X/280X/32GB/2TB NVMe) running bare-metal seL4.
 
 ---
 
@@ -320,7 +320,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | Fused qdot (7 types, AVX2) + SIMD attn + RoPE tables + pthread threadpool | DONE |
 | **Performance: Llama 1B 0.99 -> 3.22 (1T) -> 19.79 tok/s (16T)** | **DONE** |
 
-**Next:** 30-day x86 soak **DEFERRED — descoped from v0.3.0-beta gating (risk-accepted, ADR `docs/decisions/2026-06-15-defer-30-day-x86-stability-soak.md`)**; bare-metal **burn-in** passed (~400 queries, err=0, boot_id constant — not a soak). Active: Phase 4 perf (AVX2 + threading in the seL4 build). TurboQuant/RotorQuant: evaluated, deferred to Phase 4 (ADR `docs/decisions/2026-06-15-defer-turboquant-rotorquant-to-phase4.md`).
+**Next:** 30-day x86 soak **DEFERRED — descoped from v0.2.1-beta gating (risk-accepted, ADR `docs/decisions/2026-06-15-defer-30-day-x86-stability-soak.md`)**; bare-metal **burn-in** passed (~400 queries, err=0, boot_id constant — not a soak). Active: Phase 4 perf (AVX2 + threading in the seL4 build). TurboQuant/RotorQuant: evaluated, deferred to Phase 4 (ADR `docs/decisions/2026-06-15-defer-turboquant-rotorquant-to-phase4.md`).
 
 ### Pre-Work Tasks (Before JARVIS Project PC)
 
@@ -377,7 +377,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | NVMe log parser | — | DONE | parse_nvme_log.py | (Python) |
 | **Total** | | | **120 code files (39 test)** | **383+ test asserts, ~35,700 LOC** |
 
-**Phase 3b on real hardware — bare-metal burn-in passed (2026-06-15, NOT a 30-day soak):** clean boot, NVMe model load (LBA-32768), coherent Gemma 4 E2B, heartbeat/shield IPC fix holding at err=0 over 400 queries (q=100/200/300/400), durable NVMe logging with constant boot_id. Formal 30-day x86 soak **DEFERRED — descoped from v0.3.0-beta gating (risk-accepted)**: the new x86 surfaces (shmem_ipc, in-process inference, NVMe load) are covered by this ~400-query burn-in + 300K-iter fuzz + 2 audits + the IPC fix; Phase 2's 30.6-day Pi 4 run (different IPC/ARM stack) is supporting context, not equivalent coverage. See `docs/decisions/2026-06-15-defer-30-day-x86-stability-soak.md`.
+**Phase 3b on real hardware — bare-metal burn-in passed (2026-06-15, NOT a 30-day soak):** clean boot, NVMe model load (LBA-32768), coherent Gemma 4 E2B, heartbeat/shield IPC fix holding at err=0 over 400 queries (q=100/200/300/400), durable NVMe logging with constant boot_id. Formal 30-day x86 soak **DEFERRED — descoped from v0.2.1-beta gating (risk-accepted)**: the new x86 surfaces (shmem_ipc, in-process inference, NVMe load) are covered by this ~400-query burn-in + 300K-iter fuzz + 2 audits + the IPC fix; Phase 2's 30.6-day Pi 4 run (different IPC/ARM stack) is supporting context, not equivalent coverage. See `docs/decisions/2026-06-15-defer-30-day-x86-stability-soak.md`.
 
 ### Phase 3 Weeks
 
@@ -386,7 +386,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | 1-6 | Phase 3a: GPU benchmarks + native Linux build env (COMPLETE) |
 | 7-28 | Phase 3b: Pure bare-metal seL4 x86-64 — BARE-METAL BOOT ACHIEVED |
 | 29-40 | Phase 3c: Hardening, fuzz testing, SHIELD |
-| 41-44 | Final report + git tag v0.3.0-beta |
+| 41-44 | Final report + git tag v0.2.1-beta |
 
 ### Validated Metrics
 
@@ -577,7 +577,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Phase 3 Hardware Research:** `phase3/docs/PHASE_3_HARDWARE_RESEARCH.md`
 - **Phase 3 Kickoff:** `phase3/docs/PHASE_3_KICKOFF.md`
 - **Phase 3 Implementation Plan:** `phase3/docs/PHASE_3_IMPLEMENTATION_PLAN.md`
-- **Phase 3 Final Report:** `phase3/docs/PHASE_3_FINAL_REPORT.md` — beta summary (soak/scaling/TQ-RQ deferred; v0.3.0-beta pending tag)
+- **Phase 3 Final Report:** `phase3/docs/PHASE_3_FINAL_REPORT.md` — beta summary (soak/scaling/TQ-RQ deferred; v0.2.1-beta pending tag)
 - **Decision records (ADRs):** `docs/decisions/` — dynamic-scaling removal (2026-04-17), 30-day soak deferral + TurboQuant/RotorQuant deferral (2026-06-15)
 - **seL4 x86 QEMU Setup:** `phase3/docs/SEL4_X86_QEMU_SETUP.md`
 - **x86 Rootserver Notes:** `phase3/docs/SEL4_X86_ROOTSERVER_NOTES.md`

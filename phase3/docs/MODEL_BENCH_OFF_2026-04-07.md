@@ -342,7 +342,7 @@ This means:
 ### 7b.5 When to Revisit
 
 Revisit Qwen3.5 when:
-1. JARVIS has shipped v0.3.0-beta with the Llama 3.x trio
+1. JARVIS has shipped v0.2.1-beta with the Llama 3.x trio
 2. The Qwen3 adapter (§9.1) is done and merged — proving the `general.architecture` dispatch framework works
 3. A DeltaNet/Mamba2 reference implementation exists in C (not just Python) — ideally in llama.cpp
 4. Qwen3.5 benchmarks show clear quality wins over Llama 3.x at the same size tier

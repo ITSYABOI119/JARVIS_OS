@@ -24,7 +24,7 @@ Do **not** integrate TurboQuant or RotorQuant in Phase 3. **Defer to Phase 4.** 
 - The Phase 3c "TurboQuant/RotorQuant eval" item is **DONE (evaluated)**; the outcome is **deferred to Phase 4** — not skipped, not integrated.
 - Phase 4 KV-compression work, if pursued, should: prefer **RotorQuant** (IsoQuant quaternion, ~20 LOC of rotation math) ported to C; target **7B+ / d≥128** models; and adopt the **"deferred K quantization"** trick (K stays FP16 during prefill) regardless of which rotation is chosen.
 - Optional future cherry-pick: the clean `qmatmul.h` refactor from the branch — **only if** it preserves the AVX2 path in `llama_quant.c`. (Noted as a future option; not done now.)
-- `v0.3.0-beta` remaining work no longer includes TQ/RQ — only the final report + tag (the stability soak is owner-scheduled/decoupled, ADR `docs/decisions/2026-06-15-defer-30-day-x86-stability-soak.md`).
+- `v0.2.1-beta` remaining work no longer includes TQ/RQ — only the final report + tag (the stability soak is owner-scheduled/decoupled, ADR `docs/decisions/2026-06-15-defer-30-day-x86-stability-soak.md`).
 
 ## What would trigger resurrection
 

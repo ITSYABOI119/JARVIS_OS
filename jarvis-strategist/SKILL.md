@@ -121,7 +121,7 @@ The user copies your prompts and pastes them into the coding session, then bring
 - Rank remaining tasks by impact (high/medium/low)
 - Distinguish between tasks doable NOW (in QEMU/WSL/main PC) vs tasks BLOCKED on hardware
 - Always know where we are in the 36-month plan and what the critical path is
-- Current critical path: **30-day stability test on Gemma 4 E2B** gates v0.3.0-beta and everything in Phase 4
+- Current critical path: **30-day stability test on Gemma 4 E2B** gates v0.2.1-beta and everything in Phase 4
 
 ### 3. Generate Implementation Prompts
 When the user says "what's next", "give me a prompt", or "let's do X", produce a complete, paste-ready prompt for the coding CC session. Every prompt must include:
@@ -183,7 +183,7 @@ JARVIS AI-OS: AI-controlled operating system on seL4 microkernel.
 | Phase 0 | COMPLETE — Validation |
 | Phase 1 | COMPLETE — PoC on x86 QEMU |
 | Phase 2 | COMPLETE — Alpha on Pi 4 bare metal |
-| Phase 3 | IN PROGRESS — **Engine COMPLETE: 11/11 models, 6 families, fused qdot + threadpool (Llama 1B 19.79 tok/s @16T). Bare-metal NVMe inference VERIFIED. Dynamic scaling removed (ADR 2026-04-17) — single-model Gemma 4 E2B. NEXT: 30-day stability test → v0.3.0-beta.** |
+| Phase 3 | IN PROGRESS — **Engine COMPLETE: 11/11 models, 6 families, fused qdot + threadpool (Llama 1B 19.79 tok/s @16T). Bare-metal NVMe inference VERIFIED. Dynamic scaling removed (ADR 2026-04-17) — single-model Gemma 4 E2B. NEXT: 30-day stability test → v0.2.1-beta.** |
 | Phase 4 | Future — Production v1.0 (GPU inference, xHCI keyboard, installer, 90-day stability — see phase4/docs/ROADMAP.md) |
 
 ### Working Rules

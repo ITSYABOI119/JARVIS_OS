@@ -11,7 +11,7 @@ Successfully built and ran the JARVIS rootserver in QEMU. Output captured:
 
 ```
 ==================================================
-  JARVIS AI-OS v0.3.0-dev | seL4 x86-64 | PC99
+  JARVIS AI-OS v0.2.1-dev | seL4 x86-64 | PC99
 ==================================================
 
 Boot: 94 untypeds

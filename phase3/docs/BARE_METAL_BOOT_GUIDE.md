@@ -193,7 +193,7 @@ With CSM enabled and VGA text mode active, the monitor displays the rootserver o
 
 ```
 ==================================================
-  JARVIS AI-OS v0.3.0-dev | seL4 x86-64 | PC99
+  JARVIS AI-OS v0.2.1-dev | seL4 x86-64 | PC99
 ==================================================
 
 [JARVIS] Init decision cache...

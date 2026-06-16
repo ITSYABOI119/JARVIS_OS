@@ -55,7 +55,7 @@ timeout 600 qemu-system-x86_64 -enable-kvm -cpu host -nographic -serial mon:stdi
 
 ```
 ==================================================
-  JARVIS AI-OS v0.3.0-dev | seL4 x86-64 | PC99
+  JARVIS AI-OS v0.2.1-dev | seL4 x86-64 | PC99
 ==================================================
 
 Boot: 107 untypeds

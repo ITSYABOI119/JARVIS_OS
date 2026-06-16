@@ -1887,7 +1887,7 @@ int main(void)
 
     puts_serial("\n\n");
     puts_serial("==================================================\n");
-    puts_serial("  JARVIS AI-OS v0.3.0-dev | seL4 x86-64 | PC99\n");
+    puts_serial("  JARVIS AI-OS v0.2.1-dev | seL4 x86-64 | PC99\n");
     puts_serial("==================================================\n\n");
 
     if (info) {

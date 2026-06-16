@@ -334,7 +334,7 @@ Phase 3 test count: 333 tests across 28 test files, all passing on native x86-64
 
 ### Phase 3 Completion
 
-- Git tag `v0.3.0-beta`
+- Git tag `v0.2.1-beta`
 - Final report documenting all Phase 3 work
 - Ready for Phase 4 (Production v1.0)
 

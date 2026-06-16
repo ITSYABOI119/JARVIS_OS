@@ -18,7 +18,7 @@ This document provides a detailed week-by-week implementation plan for Phase 3. 
 1. Standalone x86 operation (single machine, no Pi 4, no Linux, no VM) — **MUST**
 2. Native AI inference in seL4 userspace (1B-3B model, CPU) — **MUST**
 3. Native IPC <1μs round-trip (shared memory between seL4 processes) — **MUST**
-4. 30-day stability test on x86 (0 crashes, <1% errors) — **MUST — DEFERRED** (descoped from v0.3.0-beta gating, risk-accepted, ADR 2026-06-15). No 30-day x86 soak run; risk covered by a ~400-query bare-metal burn-in (err=0), 300K-iter fuzz, two security audits, and the hb/shield IPC fix. The load-bearing NEW x86 surfaces (shmem_ipc, in-process qmodel inference, NVMe model loading) have burn-in + fuzz + audit coverage, NOT 30-day duration. Phase 2's 30.6-day Pi 4 run covered the decision cache + UART rings + ARM drivers (a subset / different IPC) — supporting context, not equivalent coverage. See `docs/decisions/2026-06-15-defer-30-day-x86-stability-soak.md`
+4. 30-day stability test on x86 (0 crashes, <1% errors) — **MUST — DEFERRED** (descoped from v0.2.1-beta gating, risk-accepted, ADR 2026-06-15). No 30-day x86 soak run; risk covered by a ~400-query bare-metal burn-in (err=0), 300K-iter fuzz, two security audits, and the hb/shield IPC fix. The load-bearing NEW x86 surfaces (shmem_ipc, in-process qmodel inference, NVMe model loading) have burn-in + fuzz + audit coverage, NOT 30-day duration. Phase 2's 30.6-day Pi 4 run covered the decision cache + UART rings + ARM drivers (a subset / different IPC) — supporting context, not equivalent coverage. See `docs/decisions/2026-06-15-defer-30-day-x86-stability-soak.md`
 5. Security audit passed (fuzz testing + code review of x86 code) — **MUST**
 6. Decision cache performance maintained (>80% hit rate) — **MUST**
 7. ~~Dynamic model scaling operational (4-state CPU)~~ — **SUPERSEDED / REMOVED 2026-04-17** (the 4-state IDLE/ACTIVE/CRITICAL/EMERGENCY hot-swap subsystem was deleted; ships single-model Gemma 4 E2B — see `docs/decisions/2026-04-17-remove-dynamic-model-scaling.md`)
@@ -154,8 +154,8 @@ All responses are technically accurate and correctly formatted with markdown.
 | ~~Wire dynamic model scaling~~ | ~~MEDIUM~~ | **SUPERSEDED** | 4-state hot-swap subsystem REMOVED 2026-04-17 — ships single-model Gemma 4 E2B. See `docs/decisions/2026-04-17-remove-dynamic-model-scaling.md` |
 | Debug bare-metal workload stall | HIGH | DONE | Root cause: 208KB stack arrays in qmodel_forward (DeltaNet/Gemma4 code). Fixed: fwd_scratch heap buffer |
 | Enhanced SHIELD | LOW | 2 weeks | Model-assisted risk scoring |
-| 30-day stability test on x86 | MUST | **DEFERRED** | Descoped from v0.3.0-beta gating (risk-accepted, ADR 2026-06-15) — **not run, not met/passed**. Risk covered by ~400-query bare-metal burn-in (err=0) + 300K fuzz + 2 audits + hb/shield IPC fix; Pi 4 30.6-day run is supporting context (subset/different IPC) |
-| Final report + v0.3.0-beta tag | LAST | 1 week | After all above |
+| 30-day stability test on x86 | MUST | **DEFERRED** | Descoped from v0.2.1-beta gating (risk-accepted, ADR 2026-06-15) — **not run, not met/passed**. Risk covered by ~400-query bare-metal burn-in (err=0) + 300K fuzz + 2 audits + hb/shield IPC fix; Pi 4 30.6-day run is supporting context (subset/different IPC) |
+| Final report + v0.2.1-beta tag | LAST | 1 week | After all above |
 
 ### Test Summary
 
@@ -660,9 +660,9 @@ While waiting for the JARVIS Project PC, the majority of Phase 3b implementation
 | 3c bench script: always recompile + hostname output + threading enabled | **DONE** | rm cached binary, -DJARVIS_PTHREAD=1, auto thread count |
 | 3c TurboQuant/RotorQuant eval | ~~PENDING~~ **DONE (evaluated)** | Verdict: defer to Phase 4 — ADR `docs/decisions/2026-06-15-defer-turboquant-rotorquant-to-phase4.md` |
 | 3c dynamic scaling | ~~PENDING~~ **REMOVED** | 4-state hot-swap deleted 2026-04-17 (ships single-model) — `docs/decisions/2026-04-17-remove-dynamic-model-scaling.md` |
-| 3c finalization | PENDING | Final report, v0.3.0-beta |
+| 3c finalization | PENDING | Final report, v0.2.1-beta |
 
-**Estimated remaining to v0.3.0-beta:** final report + v0.3.0-beta tag. (Perf DONE; TQ/RQ evaluated → deferred to Phase 4, ADR 2026-06-15; dynamic scaling removed, ADR 2026-04-17; 30-day soak deferred/owner-scheduled, ADR 2026-06-15.)
+**Estimated remaining to v0.2.1-beta:** final report + v0.2.1-beta tag. (Perf DONE; TQ/RQ evaluated → deferred to Phase 4, ADR 2026-06-15; dynamic scaling removed, ADR 2026-04-17; 30-day soak deferred/owner-scheduled, ADR 2026-06-15.)
 
 ---
 
@@ -1222,7 +1222,7 @@ While waiting for the JARVIS Project PC, the majority of Phase 3b implementation
 
 ### Week 27-28: 30-Day Stability Test (Start)
 
-> **SUPERSEDED (2026-06-15):** The formal 30-day x86 soak below is **DEFERRED — descoped from v0.3.0-beta gating (risk-accepted), not run.** The new x86 surfaces are instead covered by a ~400-query bare-metal burn-in (err=0, boot_id constant) + 300K fuzz + 2 audits + the hb/shield IPC fix; Phase 2's 30.6-day Pi 4 run (different IPC/ARM stack) is supporting context, not equivalent coverage. See ADR `docs/decisions/2026-06-15-defer-30-day-x86-stability-soak.md`. The tasks below are retained for historical context.
+> **SUPERSEDED (2026-06-15):** The formal 30-day x86 soak below is **DEFERRED — descoped from v0.2.1-beta gating (risk-accepted), not run.** The new x86 surfaces are instead covered by a ~400-query bare-metal burn-in (err=0, boot_id constant) + 300K fuzz + 2 audits + the hb/shield IPC fix; Phase 2's 30.6-day Pi 4 run (different IPC/ARM stack) is supporting context, not equivalent coverage. See ADR `docs/decisions/2026-06-15-defer-30-day-x86-stability-soak.md`. The tasks below are retained for historical context.
 
 **Tasks:**
 1. Start 30-day stability test
@@ -1260,7 +1260,7 @@ While waiting for the JARVIS Project PC, the majority of Phase 3b implementation
 
 ### Week 29-30: Stability Monitoring + Fuzz Testing Setup
 
-> **STATUS:** ✅ FUZZ TESTING COMPLETE (Apr 6, 2026). 30-day x86 soak **DEFERRED — descoped from v0.3.0-beta gating (risk-accepted, ADR 2026-06-15), not run.** Pi 4's 30.6-day run covered shared cache/ring concepts on a different IPC (UART) — supporting context, not equivalent coverage of the new x86 surfaces (shmem_ipc/inference/NVMe), which have burn-in + fuzz + audit instead. Fuzz harness: 300K iterations, 0 crashes, ASAN clean. Found and fixed div-by-zero in shmem_ipc.c.
+> **STATUS:** ✅ FUZZ TESTING COMPLETE (Apr 6, 2026). 30-day x86 soak **DEFERRED — descoped from v0.2.1-beta gating (risk-accepted, ADR 2026-06-15), not run.** Pi 4's 30.6-day run covered shared cache/ring concepts on a different IPC (UART) — supporting context, not equivalent coverage of the new x86 surfaces (shmem_ipc/inference/NVMe), which have burn-in + fuzz + audit instead. Fuzz harness: 300K iterations, 0 crashes, ASAN clean. Found and fixed div-by-zero in shmem_ipc.c.
 
 **Tasks:**
 1. ~~Monitor 30-day stability test (Day 8-14)~~ — DEFERRED (ADR 2026-06-15; Pi 4 run is supporting context, not equivalent — not "proven on x86")
@@ -1879,7 +1879,7 @@ This week was removed. Rationale: the 4-state scaler was never fully built (what
 
 ## Month 9-10: Finalization (Weeks 39-44)
 
-### Focus: Final Report, Documentation, v0.3.0-beta Tag
+### Focus: Final Report, Documentation, v0.2.1-beta Tag
 
 ---
 
@@ -1934,7 +1934,7 @@ This week was removed. Rationale: the 4-state scaler was never fully built (what
    - Network: TX/RX packet rates
 
 **Deliverables:**
-- ~~30-day stability test PASSED~~ → **NOT run.** 30-day x86 soak **DEFERRED — descoped from v0.3.0-beta gating (risk-accepted)** per ADR `docs/decisions/2026-06-15-defer-30-day-x86-stability-soak.md`; ~400-query bare-metal burn-in (err=0, boot_id constant) + 300K fuzz + 2 audits cover the new x86 surfaces instead
+- ~~30-day stability test PASSED~~ → **NOT run.** 30-day x86 soak **DEFERRED — descoped from v0.2.1-beta gating (risk-accepted)** per ADR `docs/decisions/2026-06-15-defer-30-day-x86-stability-soak.md`; ~400-query bare-metal burn-in (err=0, boot_id constant) + 300K fuzz + 2 audits cover the new x86 surfaces instead
 - Final performance benchmarks documented
 - All tests passing
 
@@ -1993,14 +1993,14 @@ This week was removed. Rationale: the 4-state scaler was never fully built (what
      - External beta testing
      - 90-day stability test
 
-3. Git tag: `v0.3.0-beta`
+3. Git tag: `v0.2.1-beta`
    - Final commit with all docs
    - Tag Phase 3 completion
 
 **Deliverables:**
 - PHASE_3_FINAL_REPORT.md complete
 - PHASE_4_KICKOFF.md (preliminary)
-- Git tag v0.3.0-beta
+- Git tag v0.2.1-beta
 - Phase 3 COMPLETE
 
 **Effort:** 10-14 hours (2 weeks)

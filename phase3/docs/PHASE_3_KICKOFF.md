@@ -410,7 +410,7 @@ Items flagged in PHASE_2_FINAL_REPORT.md and SECURITY_SELF_AUDIT.md:
 | **Month 7-8** | 25-32 | 3b→3c | 30-day stability + fuzz testing | Stability PASSED on x86, fuzz harness |
 | **Month 9-10** | 33-36 | 3c | Security audit + model scaling | 4-state CPU scaling, SHIELD expansion |
 | **Month 11** | 37-40 | 3c | Polish + Pi 4 maintenance | Multi-platform build, documentation |
-| **Month 12** | 41-44 | Report | Final report + Phase 4 planning | PHASE_3_FINAL_REPORT.md, git tag v0.3.0-beta |
+| **Month 12** | 41-44 | Report | Final report + Phase 4 planning | PHASE_3_FINAL_REPORT.md, git tag v0.2.1-beta |
 
 **Total estimated: 40-44 weeks** at 8-12 hours/week (~400-500 hours)
 

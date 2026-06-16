@@ -2,7 +2,7 @@
 
 **Version:** 1.0  
 **Date:** June 2026  
-**Prerequisite:** Phase 3 complete (`v0.3.0-beta` tag, 30-day x86 stability test passed)
+**Prerequisite:** Phase 3 complete (`v0.2.1-beta` tag, 30-day x86 stability test passed)
 
 This document is the simple forward roadmap. Each phase has specific goals and a clear "done" definition. Phases are sequential — do not start the next until the current phase's exit criteria are met.
 
@@ -152,7 +152,7 @@ Keeps scope honest and prevents creep.
 ## Dependency chain
 
 ```
-Phase 3 (v0.3.0-beta)
+Phase 3 (v0.2.1-beta)
     ↓
 Phase 4 (v1.0.0)     — fast, visible, installable
     ↓
