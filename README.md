@@ -12,7 +12,7 @@ This is a one-person project, built and validated on existing hardware. There is
 
 ## What it is
 
-An LLM is far too slow to handle hardware interrupts: AI inference takes **50–500 ms**, while interrupts must be serviced in **<1 ms** — three orders of magnitude apart. So JARVIS uses **Model B**: the formally verified seL4 microkernel owns the time-critical path at **Ring 0**, and the AI decision engine runs at **Ring 3** on dedicated cores, making high-level decisions and talking to the kernel over lock-free IPC.
+An LLM is far too slow to handle hardware interrupts: AI inference takes **50–500 ms**, while interrupts must be serviced in **<1 ms** — three orders of magnitude apart. So JARVIS uses **Model B**: the seL4 microkernel owns the time-critical path at **Ring 0**, and the AI decision engine runs at **Ring 3** on dedicated cores, making high-level decisions and talking to the kernel over lock-free IPC. (seL4 is a formally verified microkernel; JARVIS's x86-64 build deliberately runs a *performance* configuration — fast path + AVX — **outside** seL4's verified X64 set, so the running system is not itself proof-carrying. See [docs/decisions/2026-06-16-x86-verification-stance.md](docs/decisions/2026-06-16-x86-verification-stance.md).)
 
 Today that is real, not a plan. On a Ryzen 7 2700X, JARVIS boots seL4 to a self-test, brings up its own PCI/NVMe/FAT32/VGA drivers, loads **Gemma 4 E2B** (Q4_K_M, ~2.9 GiB) from an NVMe partition at runtime, spawns a second isolated seL4 process for inference, and generates coherent text — all in C, with no operating system underneath it.
 

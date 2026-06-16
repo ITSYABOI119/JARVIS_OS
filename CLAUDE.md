@@ -585,7 +585,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Phase 3 Kickoff:** `phase3/docs/PHASE_3_KICKOFF.md`
 - **Phase 3 Implementation Plan:** `phase3/docs/PHASE_3_IMPLEMENTATION_PLAN.md`
 - **Phase 3 Final Report:** `phase3/docs/PHASE_3_FINAL_REPORT.md` — beta summary (soak/scaling/TQ-RQ deferred; v0.2.1-beta tagged 06de75c)
-- **Decision records (ADRs):** `docs/decisions/` — dynamic-scaling removal (2026-04-17), 30-day soak deferral + TurboQuant/RotorQuant deferral (2026-06-15), GPU-inference deferral (2026-06-16)
+- **Decision records (ADRs):** `docs/decisions/` — dynamic-scaling removal (2026-04-17), 30-day soak deferral + TurboQuant/RotorQuant deferral (2026-06-15), GPU-inference deferral (2026-06-16), x86 verification stance (2026-06-16)
 - **Phase 4 Goal #1 (Inference Perf) Plan:** `phase4/docs/PHASE_4_GOAL1_INFERENCE_PERF.md` — AVX2/XSAVE + SMP findings (VERIFIED) + M0–M4 plan
 - **Phase 4 Weeks:** `phase4/weeks/weekN/WEEK_N_STATUS.md`
 - **seL4 x86 QEMU Setup:** `phase3/docs/SEL4_X86_QEMU_SETUP.md`

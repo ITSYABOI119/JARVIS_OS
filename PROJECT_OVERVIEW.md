@@ -39,7 +39,7 @@ This fundamental incompatibility has prevented AI from controlling operating sys
 
 ### The Solution in One Sentence
 
-JARVIS uses a **microkernel architecture** where a tiny, formally-verified kernel (seL4) handles time-critical operations at Ring 0, while AI makes high-level decisions at Ring 3, with a **decision cache** (85.7% hit rate) making 85% of operations instant (<1ms) and only 15% requiring slow AI inference.
+JARVIS uses a **microkernel architecture** where a tiny kernel (seL4) handles time-critical operations at Ring 0, while AI makes high-level decisions at Ring 3, with a **decision cache** (85.7% hit rate) making 85% of operations instant (<1ms) and only 15% requiring slow AI inference. (seL4 is formally verified in its canonical configurations; JARVIS's deployed x86-64 build runs a performance config — fast path + AVX — outside the verified X64 set. See `docs/decisions/2026-06-16-x86-verification-stance.md`.)
 
 ### Current Achievement
 
