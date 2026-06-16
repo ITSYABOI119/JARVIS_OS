@@ -25,7 +25,7 @@ This document is the simple forward roadmap. Each phase has specific goals and a
 
 ### Goals
 
-1. **GPU inference** — Run the inference engine on GPU (Vulkan or CUDA path). Target: ≥50 tok/s for Gemma 4 E2B on RTX 2070 class hardware.
+1. **Inference performance** — Make Gemma 4 E2B fast enough to use daily on the seL4 box. **v1.0 path = CPU: enable AVX2/FMA + a seL4-native threadpool in the seL4 build** (the AVX2 qdot/attention kernels exist but compile out today — the seL4 build is scalar single-thread, ~0.2 tok/s). Target: approach the native threaded engine (~8–9 tok/s Gemma 4 E2B @16T; ~20 tok/s Llama 1B). **GPU inference (≥50 tok/s, Vulkan) is DEFERRED — no usable GPU — see docs/decisions/2026-06-16-defer-gpu-inference.md; revisit on a hardware change.**
 2. **Graphical output** — Move beyond VGA text: framebuffer or HDMI with a minimal status UI (boot, model load, query/response).
 3. **Input** — USB keyboard (xHCI) working on bare metal for local interaction.
 4. **Installer** — One-script install: build → USB image → flash → boot checklist. Documented in a user guide.
@@ -35,7 +35,8 @@ This document is the simple forward roadmap. Each phase has specific goals and a
 
 ### Done when
 
-- [ ] GPU inference benchmark recorded and reproducible
+- [ ] seL4-build inference benchmark recorded + reproducible: AVX2+threaded Gemma 4 E2B tok/s on the 2700X (target ≈ native threaded)
+- [ ] (deferred) GPU inference benchmark — gated on hardware, see ADR 2026-06-16
 - [ ] Local keyboard input works without serial console
 - [ ] Fresh machine can boot JARVIS from USB following the guide alone
 - [ ] 90-day stability log archived with pass criteria met

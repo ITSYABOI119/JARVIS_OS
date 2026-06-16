@@ -320,7 +320,7 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | Fused qdot (7 types, AVX2) + SIMD attn + RoPE tables + pthread threadpool | DONE |
 | **Performance: Llama 1B 0.99 -> 3.22 (1T) -> 19.79 tok/s (16T)** | **DONE** |
 
-**Next:** 30-day x86 soak **DEFERRED — descoped from v0.2.1-beta gating (risk-accepted, ADR `docs/decisions/2026-06-15-defer-30-day-x86-stability-soak.md`)**; bare-metal **burn-in** passed (~400 queries, err=0, boot_id constant — not a soak). Active: Phase 4 perf (AVX2 + threading in the seL4 build). TurboQuant/RotorQuant: evaluated, deferred to Phase 4 (ADR `docs/decisions/2026-06-15-defer-turboquant-rotorquant-to-phase4.md`).
+**Next:** 30-day x86 soak **DEFERRED — descoped from v0.2.1-beta gating (risk-accepted, ADR `docs/decisions/2026-06-15-defer-30-day-x86-stability-soak.md`)**; bare-metal **burn-in** passed (~400 queries, err=0, boot_id constant — not a soak). Active: Phase 4 perf (AVX2 + threading in the seL4 build). TurboQuant/RotorQuant: evaluated, deferred to Phase 4 (ADR `docs/decisions/2026-06-15-defer-turboquant-rotorquant-to-phase4.md`). Phase 4 started — goal #1 reframed to **Inference performance**: v1.0 = CPU AVX2+threading in the seL4 build (~8–9 tok/s Gemma E2B @16T target); GPU inference DEFERRED (no usable GPU — ADR `docs/decisions/2026-06-16-defer-gpu-inference.md`). GPU display/UI (goal #2) unaffected.
 
 ### Pre-Work Tasks (Before JARVIS Project PC)
 
@@ -578,7 +578,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Phase 3 Kickoff:** `phase3/docs/PHASE_3_KICKOFF.md`
 - **Phase 3 Implementation Plan:** `phase3/docs/PHASE_3_IMPLEMENTATION_PLAN.md`
 - **Phase 3 Final Report:** `phase3/docs/PHASE_3_FINAL_REPORT.md` — beta summary (soak/scaling/TQ-RQ deferred; v0.2.1-beta pending tag)
-- **Decision records (ADRs):** `docs/decisions/` — dynamic-scaling removal (2026-04-17), 30-day soak deferral + TurboQuant/RotorQuant deferral (2026-06-15)
+- **Decision records (ADRs):** `docs/decisions/` — dynamic-scaling removal (2026-04-17), 30-day soak deferral + TurboQuant/RotorQuant deferral (2026-06-15), GPU-inference deferral (2026-06-16)
 - **seL4 x86 QEMU Setup:** `phase3/docs/SEL4_X86_QEMU_SETUP.md`
 - **x86 Rootserver Notes:** `phase3/docs/SEL4_X86_ROOTSERVER_NOTES.md`
 - **GGML Portability Notes:** `phase3/src/ai/GGML_PORTABILITY_NOTES.md`
