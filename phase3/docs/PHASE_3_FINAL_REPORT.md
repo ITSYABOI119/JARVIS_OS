@@ -3,7 +3,7 @@
 **Version:** 1.0
 **Date:** 2026-06-15
 **Phase:** Phase 3 — Beta on x86-64 bare metal (Months 24-36)
-**Status:** **Phase 3 engineering complete; `v0.2.1-beta` pending tag** (tag is a separate reviewed step)
+**Status:** **Phase 3 engineering complete; `v0.2.1-beta` TAGGED @ 06de75c (2026-06-16)**
 **Author:** JARVIS Development Team (Solo Developer)
 **Hardware:** JARVIS PC — Ryzen 7 2700X, 32 GB DDR4, 2 TB NVMe (Lexar NM790), R9 280X (display only), ASUS X470-F
 
