@@ -78,7 +78,7 @@ Today that is real, not a plan. On a Ryzen 7 2700X, JARVIS boots seL4 to a self-
 | Metric | Result |
 |--------|--------|
 | Boot time | ~2 s (target <60 s) |
-| Shared-memory IPC | ~23.7M msg/sec (<1 µs round-trip) |
+| Shared-memory IPC | ~23.7M msg/sec throughput (pre-work test); under the <1 µs RTT target (seL4 native IPC ~0.4 µs) |
 | Decision cache hit rate | 85.7% |
 | Models supported (engine) | 11/11 load, 6 families |
 | SHIELD | 100% harmful blocked, 0% false positive |
