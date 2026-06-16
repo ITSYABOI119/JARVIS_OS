@@ -407,7 +407,7 @@ Items flagged in PHASE_2_FINAL_REPORT.md and SECURITY_SELF_AUDIT.md:
 | **Month 4** | 13-16 | 3b | NIC driver + ggml integration | Networking + AI inference compiling for seL4 |
 | **Month 5** | 17-20 | 3b | Native AI inference + shared memory IPC | Full pipeline: query → cache/CPU AI → response |
 | **Month 6** | 21-24 | 3b | Integration testing | End-to-end standalone operation |
-| **Month 7-8** | 25-32 | 3b→3c | 30-day stability + fuzz testing | Stability PASSED on x86, fuzz harness |
+| **Month 7-8** | 25-32 | 3b→3c | 30-day stability + fuzz testing | Bare-metal burn-in (err=0); 30-day x86 soak DEFERRED (ADR 2026-06-15); fuzz harness done |
 | **Month 9-10** | 33-36 | 3c | Security audit + model scaling | 4-state CPU scaling, SHIELD expansion |
 | **Month 11** | 37-40 | 3c | Polish + Pi 4 maintenance | Multi-platform build, documentation |
 | **Month 12** | 41-44 | Report | Final report + Phase 4 planning | PHASE_3_FINAL_REPORT.md, git tag v0.2.1-beta |
@@ -440,7 +440,7 @@ Week 40: Phase 3c complete, final report
 - **Week 6:** Phase 3a complete. GPU AI working with Pi 4 over UART from spare PC. Go/no-go for bare-metal port.
 - **Week 9:** seL4 boots on Ryzen or not. If AMD incompatibility, investigate early.
 - **Week 21:** ggml running in seL4 userspace or not. If portability issues, evaluate what POSIX stubs are needed.
-- **Week 28:** 30-day stability on x86. If passed, Phase 3b complete. If not, debug and re-run.
+- **Week 28:** 30-day stability on x86. If passed, Phase 3b complete. If not, debug and re-run. (SUPERSEDED 2026-06-15: the 30-day x86 soak was deferred/decoupled — ADR; Phase 3b completion rests on bare-metal burn-in + fuzz + audits, not the soak.)
 
 ---
 

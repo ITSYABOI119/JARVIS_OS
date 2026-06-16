@@ -2,7 +2,7 @@
 
 **Version:** 1.0  
 **Date:** June 2026  
-**Prerequisite:** Phase 3 complete (`v0.2.1-beta` tag, 30-day x86 stability test passed)
+**Prerequisite:** Phase 3 complete (`v0.2.1-beta` tag). The 30-day x86 stability soak was DEFERRED / owner-scheduled (ADR docs/decisions/2026-06-15-defer-30-day-x86-stability-soak.md) and is NOT a hard prerequisite for Phase 4 — bare-metal burn-in (err=0/400q) + 300K fuzz + 2 audits cover the beta.
 
 This document is the simple forward roadmap. Each phase has specific goals and a clear "done" definition. Phases are sequential — do not start the next until the current phase's exit criteria are met.
 
