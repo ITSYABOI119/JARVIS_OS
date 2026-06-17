@@ -1,6 +1,6 @@
 # Phase 4 — Goal #1: Inference Performance (CPU)
 
-**Status:** M1 DONE (AVX2 in the seL4 build; Gemma 4 E2B ~1.53 tok/s bare metal, 2026-06-17); M2 (SMP decision) next
+**Status:** M2 DONE (Branch A — seL4 SMP enabled `NUM_NODES=2`; multicore foundation validated bare metal, no 1T penalty, 2026-06-17); M3 (seL4-native threadpool) next
 **Date:** 2026-06-16
 **Scope:** Roadmap goal #1 reframed (GPU inference deferred, ADR `docs/decisions/2026-06-16-defer-gpu-inference.md`). v1.0 "fast" = **AVX2/FMA + a seL4-native threadpool in the seL4 build**, up from the current scalar single-thread (~0.2 tok/s).
 **Sources:** live `~/sel4-x86` build config read read-only via `ssh jarvis` (2026-06-16); seL4 14.0.0 (`ebbda2af5`); seL4 reference manual + kernel source. **Where web claims conflict with the box config read, the config read wins.**
@@ -96,18 +96,23 @@ The config read proves AVX is **not** saved today, so M0 is **not** a fast confi
 - **Test + CI:** reuse M0's correctness test in CI; record a bare-metal tok/s line via the NVMe `IPC_STATS`/bench path (no new CI step — measurement is on-box).
 - **NOW vs JARVIS-PC:** JARVIS-PC (build + bench). Correctness already covered by M0 CI.
 
-### M2 — SMP decision point  *(decision; then JARVIS-PC if branch A)*  — **uniprocessor is VERIFIED, so a decision is required**
-Present both branches; do not assume:
-- **Branch A — enable SMP spike:** rebuild `-DSMP=ON -DNUM_NODES=4` (up to 8); confirm boot + `bootinfo->numNodes==N` + PA/PB + NVMe model load still work; a `seL4_TCB_SetAffinity` smoke test proves a thread runs off core 0 (per-core counter). **Decide on maturity grounds, not verification (write an ADR).** Per §3 (CORRECTED): this build already runs `KernelFastpath=ON`, so it is **not** the verified X64 config today — SMP does **not** forfeit a proof we hold. The real SMP cost is maturity (the multicore BKL kernel is less battle-tested; SMP verification only "in progress").
-- **Branch B — ship AVX2 single-thread for v1.0, defer threading:** if the AVX2-only tok/s (M1) is "fast enough to use daily," declare goal #1 met for v1.0 on the single-thread CPU path and defer the threadpool (+SMP) to a later phase. Records an ADR either way.
-- **Exit criteria:** a recorded decision (A or B) with the M1 tok/s number as the input, plus an ADR.
-- **Test + CI:** none (decision). If branch A: add a `seL4_TCB_SetAffinity` on-box smoke check (bare-metal only).
-- **NOW vs JARVIS-PC:** decision = NOW; SMP spike = JARVIS-PC.
+### M2 — SMP decision point  *(decision + JARVIS-PC spike)*  — ✅ **DONE (2026-06-17, Branch A — SMP enabled, validated bare metal)**
 
-### M3 — seL4-native threadpool  *(JARVIS-PC)*  — **GATED on M2 = branch A**
+> **DECISION: Branch A** (enable SMP; pursue the M3 threadpool). Recorded in `docs/decisions/2026-06-17-enable-smp-branch-a.md`. A **maturity** call, **not** a verification forfeit — this build already runs `KernelFastpath=ON`, outside the verified X64 config (ADR 2026-06-16).
+>
+> **RESULT (KVM `-smp 2 -cpu host` + bare metal, NVMe log boot_id=1):** `-DSMP=ON -DNUM_NODES=2` (BSP + 1 AP — minimal cross-core test; production N is an M3 decision, cap 8). Both nodes boot (`node #0` + `node #1` → user space), `bootinfo->numNodes==2`, **self-test 5/5**, Process B + shmem IPC + Gemma 4 E2B load/gen all intact under SMP, `IPC_STATS q=100 err=0`, **~1.53 tok/s 1T (within ~0.2% of M1 → NO SMP penalty)**. SMP config made repo-reproducible by a **config-verification gate** in `build_jarvis_x86.sh` (asserts `ENABLE_SMP_SUPPORT=1` + `MAX_NUM_NODES=2` + XSAVE/feat-7 + FXSAVE-off + IOMMU-off on every build). **E1: seL4 does NOT auto-distribute** — PA and PB both land on core 0 (AP idle); M3 workers MUST `seL4_TCB_SetAffinity`. No inference speedup yet (the threadpool is M3). Detail + E1–E7 recon: `phase4/weeks/week04/WEEK_04_STATUS.md`.
+
+Branches (for the record):
+- **Branch A — enable SMP (CHOSEN):** rebuilt `-DSMP=ON -DNUM_NODES=2`; boot + `numNodes==2` + PA/PB + NVMe Gemma load confirmed (KVM + bare metal). The `SetAffinity` worker proof is deferred to M3 — E1 shows the existing system correctly stays on node 0 *without* affinity, so M2's job (regression-free multicore foundation) is met.
+- **Branch B — ship AVX2 single-thread (FALLBACK, kept open):** ~1.53 tok/s (M1) is usable; M2 proved the 1T path is unharmed by SMP, so Branch B remains a valid v1.0 fallback if M3 threading underdelivers.
+- **Exit criteria:** ✅ recorded decision (A) with the M1 tok/s as input, an ADR, and KVM+bare-metal spike validation.
+- **NOW vs JARVIS-PC:** decision = done; SMP spike = done (JARVIS-PC, KVM + bare metal).
+
+### M3 — seL4-native threadpool  *(JARVIS-PC)*  — **UNBLOCKED (M2 = Branch A, 2026-06-17)**
 - **Goal:** replace the pthread stub with a seL4 worker pool backing `jarvis_parallel_for`; parallelize `qmatmul_vec` rows; measure tok/s.
+- **Design inputs (M2 spike E1–E7, `phase4/weeks/week04/WEEK_04_STATUS.md`):** (E1) seL4 does **not** auto-distribute → workers MUST `seL4_TCB_SetAffinity` to cores 1..N-1; (E2) workers must **block** on a notification when idle, not `seL4_Yield`-spin (a lone runnable thread pins its core at 100%); (E4) BKL = CLH lock serializes every syscall → keep the parallel-for hot path **syscall-free** (shared-mem atomic `next_idx` work-stealing + **one** wake notify per worker, not per-tile IPC); (E5) production N = **physical** cores (Q4_K matmul is bandwidth-bound; SMT siblings unlikely to add throughput); (E6) workers = `sel4utils_configure_thread` **sharing PB's CSpace+VSpace** (see weights/`state` directly), each with a pre-allocated stack + IPC buffer + priority; (E7) the `qmatmul_vec` disjoint-row seam is already thread-safe (out rows disjoint, W/x read-only) — keep `state->fwd_scratch` **out** of the parallel path and pre-allocate per-worker buffers (no hot-path malloc; VKA/allocman + musl `malloc` are not thread-safe).
 - **Files:** new `phase3/src/ai/threadpool_sel4.c` (worker TCBs via `sel4utils_configure_thread_config` sharing PB CSpace+VSpace, `SetAffinity`, atomic `next_idx` + notification wake, atomic-counter barrier); wire into the seL4 source list with the same `jarvis_parallel_for`/`jarvis_threads` ABI; `inference_server.c` (spawn workers once at startup); audit shared state (VKA/morecore/rings) for races.
-- **Exit criteria:** correct generation unchanged; **tok/s scales with workers, approaching native threaded — target ~8–9 tok/s Gemma 4 E2B at up to 16T** (subject to the 8-node cap and memory bandwidth).
+- **Exit criteria:** correct generation unchanged; **tok/s scales with workers — target ~5–8 tok/s Gemma 4 E2B (stretch ~8–9 at higher N)** (subject to the 8-node cap and memory bandwidth). Production `NUM_NODES` chosen here after bandwidth testing (M2 spike used 2).
 - **Test + CI:** `phase3/src/ai/test_parallel_for.c` — `jarvis_parallel_for` over a known reduction returns the same result as the serial path for 1..N workers (host-portable harness, pthread or stub backend) → **new CI step "parallel-for backend"**. On-box: N-worker vs 1-worker tok/s.
 - **NOW vs JARVIS-PC:** ABI/correctness test = NOW (CI); the seL4 backend + scaling = JARVIS-PC.
 

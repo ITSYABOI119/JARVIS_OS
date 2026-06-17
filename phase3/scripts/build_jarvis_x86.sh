@@ -122,6 +122,7 @@ echo -e "${GREEN}[1/4] Rootserver${NC}"
 copy_file "$JARVIS_DIR/phase3/src/sel4/main_x86.c" "$DEST/src/main.c"
 copy_file "$JARVIS_DIR/phase3/src/sel4/jarvis_debug.h" "$DEST/src/jarvis_debug.h"
 copy_file "$JARVIS_DIR/phase3/src/sel4/avx2_probe.h" "$DEST/src/avx2_probe.h"
+copy_file "$JARVIS_DIR/phase3/src/sel4/smp_probe.h" "$DEST/src/smp_probe.h"
 echo ""
 
 # ── [2/4] AI modules ───────────────────────────────────────────────
@@ -208,6 +209,7 @@ mkdir -p "$PROC_B_DIR/ai" 2>/dev/null || true
 copy_file "$JARVIS_DIR/phase3/src/sel4/inference_server.c" "$PROC_B_DIR/main.c"
 copy_file "$JARVIS_DIR/phase3/src/sel4/jarvis_debug.h" "$PROC_B_DIR/jarvis_debug.h"
 copy_file "$JARVIS_DIR/phase3/src/sel4/avx2_probe.h" "$PROC_B_DIR/avx2_probe.h"
+copy_file "$JARVIS_DIR/phase3/src/sel4/smp_probe.h" "$PROC_B_DIR/smp_probe.h"
 
 # Process B needs its own copy of AI modules (separate compilation unit)
 for f in "${AI_FILES[@]}"; do
@@ -400,6 +402,15 @@ fi
 
 # Kernel config — force-set every build (cmake reconfiguration can reset defaults):
 #   - KernelIOMMU=OFF: NVMe DMA needs direct physical access.
+#   - SMP (Phase 4 goal #1 M2): -DSMP=ON -DNUM_NODES=2 => CONFIG_ENABLE_SMP_SUPPORT
+#     + CONFIG_MAX_NUM_NODES=2 (BSP + 1 AP). jarvis-x86/settings.cmake reads the SMP
+#     and NUM_NODES cache vars and FORCE-sets KernelMaxNumNodes from them, so
+#     -DKernelMaxNumNodes alone is overridden (drive it via SMP/NUM_NODES). This is
+#     the multicore foundation for the M3 threadpool — NO inference speedup yet (PA
+#     and PB still run on node 0 until M3 wires SetAffinity). Further departs the
+#     verified X64 config (already unverified by design — KernelFastpath=ON; ADR
+#     2026-06-16), so it is a maturity call, not a proof forfeit. Production N is
+#     chosen at M3 after bandwidth testing — keep 2 here (minimal cross-core test).
 #   - XSAVE/AVX (Phase 4 goal #1 M0): KernelFPU=XSAVE + feature-set 7 (FPU+SSE+AVX)
 #     + size 832 so the kernel context-switches the AVX YMM state for Ring-3 code.
 #     Without this the kernel is FXSAVE-only (512B, x87+SSE only) and AVX2 in
@@ -418,6 +429,8 @@ cmake -DKernelIOMMU=OFF \
       -DKernelXSave=XSAVEOPT \
       -DKernelXSaveFeatureSet=7 \
       -DKernelXSaveSize=832 \
+      -DSMP=ON \
+      -DNUM_NODES=2 \
       . >/dev/null 2>&1
 # Pass 2: KernelXSaveFeatureSet DEPENDS on KernelFPUXSave, which only flips ON during
 # pass 1; on the pass where it first becomes selectable it takes its default (3 =
@@ -425,6 +438,39 @@ cmake -DKernelIOMMU=OFF \
 cmake -DKernelXSaveFeatureSet=7 -DKernelXSaveSize=832 . >/dev/null 2>&1
 ninja
 
+echo ""
+
+# ── Verify kernel config (Phase 4 M2 SMP + preserved M0/M1) ─────────────
+# A silent wrong-config build is the exact trap that bit IOMMU and XSAVE before
+# (a -D that did not "take"). Abort loudly if SMP did not enable, or if an M0/M1
+# invariant regressed. Source of truth = the generated kernel gen_config.h.
+GEN_CFG="$BUILD_DIR/kernel/gen_config/kernel/gen_config.h"
+if [ -f "$GEN_CFG" ]; then
+    echo -e "${GREEN}Kernel config verification:${NC}"
+    cfg_fail=0
+    check_cfg() {  # check_cfg "<grep -E pattern>" "<label>"
+        if grep -Eq "$1" "$GEN_CFG"; then
+            echo -e "  ${GREEN}OK${NC}    $2"
+        else
+            echo -e "  ${RED}FAIL${NC}  $2"
+            cfg_fail=1
+        fi
+    }
+    check_cfg '#define CONFIG_MAX_NUM_NODES[[:space:]]+2'      "SMP: CONFIG_MAX_NUM_NODES=2 (BSP + 1 AP)   [M2]"
+    check_cfg '#define CONFIG_ENABLE_SMP_SUPPORT[[:space:]]+1' "SMP: CONFIG_ENABLE_SMP_SUPPORT=1           [M2]"
+    check_cfg '#define CONFIG_XSAVE[[:space:]]+1'              "FPU: CONFIG_XSAVE=1 (kernel saves AVX YMM) [M0]"
+    check_cfg '#define CONFIG_XSAVE_FEATURE_SET[[:space:]]+7'  "FPU: XSAVE feature-set 7 (FPU+SSE+AVX)     [M0]"
+    check_cfg '/\* disabled: CONFIG_FXSAVE \*/'                "FPU: FXSAVE disabled                       [M0]"
+    check_cfg '/\* disabled: CONFIG_IOMMU \*/'                 "IOMMU disabled (NVMe direct DMA)           [M1]"
+    check_cfg '#define CONFIG_FASTPATH[[:space:]]+1'           "KernelFastpath=ON (unverified by design)"
+    if [ "$cfg_fail" -ne 0 ]; then
+        echo -e "${RED}Kernel config verification FAILED — not the intended M2 config. Aborting.${NC}"
+        exit 1
+    fi
+    echo -e "  ${GREEN}All kernel config invariants hold (M2 SMP enabled; M0/M1 preserved).${NC}"
+else
+    echo -e "  ${YELLOW}WARN${NC}  gen_config.h not found at $GEN_CFG — cannot verify kernel config"
+fi
 echo ""
 
 # ── Image sizes ─────────────────────────────────────────────────────

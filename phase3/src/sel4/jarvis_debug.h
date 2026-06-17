@@ -43,6 +43,15 @@
  * only for the M1 bare-metal bench (one LOG_INFER entry per inference). */
 #define JARVIS_M1_MEASURE  0
 
+/* Phase 4 goal #1 / M2: SMP viability probe (smp_probe.h). When 1, Process A
+ * reads bootinfo->numNodes and logs "SMP numNodes=N nodeID=M apic=K" to the NVMe
+ * log + serial (the primary M2 gate — numNodes==2 proves BSP + 1 AP both booted),
+ * and Process B prints its local-APIC id to serial at startup (E1: do PA and PB
+ * land on different cores by default?). Compile guard ONLY; does NOT enable SMP
+ * (that is the kernel build: -DSMP=ON -DNUM_NODES=2). Default 0 — the M2 spike
+ * build sets it = 1; the deployed image rebuilds with it = 0. */
+#define JARVIS_SMP_PROBE  0
+
 /* Serial [STATS] prints every 100 queries; NVMe LOG_IPC_STATS is written every
  * JARVIS_STATS_NVME_INTERVAL. Measured bare-metal rate is ~3k queries/day (single
  * core, scalar) -> interval=100 gives ~870 entries over 30 days, well under the

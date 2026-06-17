@@ -30,6 +30,10 @@
 #include "avx2_probe.h"
 #endif
 
+#if JARVIS_SMP_PROBE
+#include "smp_probe.h"
+#endif
+
 #if JARVIS_M1_MEASURE
 static inline uint64_t m1_rdtsc(void) {
     uint32_t lo, hi;
@@ -374,6 +378,14 @@ int main(int argc, char **argv)
     }
     puts_serial("[Process B] IPC rings validated\n");
     g_resp_ring = response_ring;  /* Enable pb_log IPC transport */
+
+#if JARVIS_SMP_PROBE
+    /* M2 / E1: which core did PB land on? Under SMP, a spawned process inherits
+     * the creator's (node 0) affinity unless SetAffinity is called — so this is
+     * expected to match PA's apic (both on core 0; AP idle) until M3 wires
+     * SetAffinity. Serial-only (QEMU captures it); compare against PA's apic. */
+    { puts_serial("[PB] SMP apic="); put_dec(smp_apic_id()); puts_serial("\n"); }
+#endif
 
     /* Parse model location (GRUB module mapped by Process A) */
     uintptr_t model_vaddr = 0;

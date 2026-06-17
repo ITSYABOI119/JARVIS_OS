@@ -54,6 +54,10 @@
 #include "avx2_probe.h"
 #endif
 
+#if JARVIS_SMP_PROBE
+#include "smp_probe.h"
+#endif
+
 /* Single-model deployment — dynamic tiering removed 2026-04-17.
  * Gemma 4 E2B Q4_K_M is the bench-off winner (8.40/10 quality, 8.63 tok/s @16T). */
 #define JARVIS_MODEL_FILE "GEMMA2B GUF"
@@ -1267,6 +1271,32 @@ static void *main_continued(void *arg UNUSED)
                                                        LOG_BOOT, "JARVIS boot started");
                                         nvme_log_write(&nvme_ctrl, dma_vaddrs[4], dma_paddrs[4],
                                                        LOG_SELFTEST, "Self-test 5/5 PASS");
+#if JARVIS_SMP_PROBE
+                                        /* M2 PRIMARY GATE: bootinfo->numNodes == 2 proves BSP + 1 AP
+                                         * both booted (kernel sets it from the started CPU count).
+                                         * Also record this core's APIC id (PA placement, E1). */
+                                        {
+                                            seL4_BootInfo *smp_bi = platsupport_get_bootinfo();
+                                            unsigned nn  = smp_bi ? (unsigned)smp_bi->numNodes : 0;
+                                            unsigned nid = smp_bi ? (unsigned)smp_bi->nodeID  : 0;
+                                            unsigned ap  = smp_apic_id();
+                                            char sb[48]; int sp = 0;
+                                            const char *t = "SMP numNodes=";
+                                            while (*t) sb[sp++] = *t++;
+                                            if (nn >= 10) sb[sp++] = (char)('0' + (nn / 10) % 10);
+                                            sb[sp++] = (char)('0' + nn % 10);
+                                            t = " nodeID="; while (*t) sb[sp++] = *t++;
+                                            sb[sp++] = (char)('0' + nid % 10);
+                                            t = " apic="; while (*t) sb[sp++] = *t++;
+                                            if (ap >= 100) sb[sp++] = (char)('0' + (ap / 100) % 10);
+                                            if (ap >= 10)  sb[sp++] = (char)('0' + (ap / 10) % 10);
+                                            sb[sp++] = (char)('0' + ap % 10);
+                                            sb[sp] = '\0';
+                                            nvme_log_write(&nvme_ctrl, dma_vaddrs[4], dma_paddrs[4],
+                                                           LOG_BOOT, sb);
+                                            puts_serial(sb); puts_serial("\n");
+                                        }
+#endif
                                     }
 
                                     fat32_fs_t fs;
@@ -1918,6 +1948,19 @@ int main(void)
         put_dec(info->untyped.end - info->untyped.start);
         puts_serial(" untypeds\n");
     }
+
+#if JARVIS_SMP_PROBE
+    /* M2 PRIMARY GATE (serial, NVMe-independent so it shows on a model-less KVM
+     * boot too): numNodes==2 proves BSP + 1 AP both booted; apic = the core PA
+     * is running on (E1). A durable copy is also written to the NVMe log in
+     * main_continued when NVMe is present (bare metal). */
+    if (info) {
+        puts_serial("[SMP] numNodes="); put_dec((uint32_t)info->numNodes);
+        puts_serial(" nodeID="); put_dec((uint32_t)info->nodeID);
+        puts_serial(" apic="); put_dec(smp_apic_id());
+        puts_serial(" (PA)\n");
+    }
+#endif
 
     /* Init cache */
     puts_serial("\n[JARVIS] Init decision cache...\n");
