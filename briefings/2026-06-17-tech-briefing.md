@@ -1,26 +1,20 @@
 # JARVIS Daily Tech Briefing — Wednesday, June 17, 2026
 
-**Quiet day on the core stack** — no blockbuster seL4 or CPU-inference release in the last 48h. The most on-target read is a hands-on seL4 clock/timer write-up from Tim Retout (with a small cleanup patch merged upstream). The notable security item is Arch locking down the AUR after a wave of malicious commits.
-
-## seL4 / Microkernels
-
-- **Tim Retout — "seL4 clock magic" (Jun 12):** practical walkthrough of seL4's clock/timer handling; he also landed a small upstream patch dropping a legacy Python module from a build helper script. Rare real-world seL4 hacking content, and a sign upstream is taking low-friction cleanups. [retout.co.uk](https://retout.co.uk/2026/06/12/sel4-clock-magic/)
-- **Ecosystem (standing, not 48h):** seL4 Summit 2026 is being organized and Riverside Research — which acquired founding member Cog Systems — joined the Foundation as an Associate Member. High-assurance seL4 vendors continue to consolidate. [sel4.systems/news](https://sel4.systems/news/)
+**Lead — EAGLE3 speculative decoding lands in llama.cpp (build b9669, Jun 16).** The EAGLE3 draft-head support (PR #18039) is now in tree, and b9669 adds backend draft-sampling on top of it. *Why it matters:* speculative decoding is a direct lever on token-generation throughput — exactly your Phase 4 goal #1 (closing the ~2x tok/s gap to llama.cpp) — and a draft-head approach could lift the seL4-build rate without new SIMD work. [GitHub releases](https://github.com/ggml-org/llama.cpp/releases/) · [PR #18039](https://github.com/ggml-org/llama.cpp/pull/18039)
 
 ## Local LLM Inference
 
-- **llama.cpp daily builds continue — latest b9670 (Jun 16):** routine multi-platform binaries (CUDA 12.4/13.3, ROCm, OpenVINO, Metal, Vulkan). Worth a periodic rebase to pull upstream CPU/quant kernel fixes into your AVX2 + threading work. [GitHub releases](https://github.com/ggml-org/llama.cpp/releases)
-- **Ollama (through ~v0.30.8, Jun 12):** bumped llama.cpp to broaden GGUF hardware support and upgraded the Apple-Silicon MLX path; recent point releases shipped **Gemma 4 QAT weights** (~Jun 5). QAT weights for your deployed Gemma 4 family can lift low-bit (Q4) accuracy with no architecture change — worth a perplexity/quality A-B against your current Q4_K_M. [ollama.com](https://ollama.com/)
+- **EAGLE3 in llama.cpp — how it works (Jun 16):** target model records low/mid/high hidden states, a lightweight speculative layer autoregressively proposes draft tokens, and the target verifies them in parallel; b9669 offloads draft sampling to the backend and supports tree attention + batch>1. Trade-off for JARVIS: needs a draft model + extra KV memory, so it's a Phase-4 throughput experiment, not a free win — but the accept-rate gains are larger than plain n-gram drafting. [PR #18039](https://github.com/ggml-org/llama.cpp/pull/18039) · [releases](https://github.com/ggml-org/llama.cpp/releases/)
 
-## Model Releases
+## Quantization
 
-- **Nothing edge/CPU-relevant in the last 1–2 days.** The notable recent open-weight drops — MiniMax M3 (Jun 1), NVIDIA Nemotron 3 Ultra (Jun 4) — are large, GPU-class models, off-scope for JARVIS. The edge-relevant item this month remains Gemma 4 QAT (above). [local-LLM overview](https://pinggy.io/blog/top_5_local_llm_tools_and_models/)
+- **Community llama.cpp fork combines 1-bit + RotorQuant + TurboQuant + EAGLE3 (`llama.cpp-1-bit-turbo`):** a third-party HIP/ROCm fork (AMD RDNA2-targeted) shipping a `Q1_0_G128` 1-bit quant plus RotorQuant and TurboQuant KV compression and P-EAGLE. Niche and GPU-oriented, but it's a concrete reference impl of the exact KV-quant methods you evaluated and deferred to Phase 4 — useful to read before you revisit TQ/RQ. [GitHub](https://github.com/carlosfundora/llama.cpp-1-bit-turbo)
 
 ## Systems / OS
 
-- **Linux 7.1 released (Jun 14):** headline is a brand-new from-scratch NTFS implementation with full write support (delayed allocation, iomap, folios) — a significant filesystem milestone after ~4 years of work. [9to5Linux](https://9to5linux.com/linux-kernel-7-1-officially-released-heres-whats-new)
-- **Arch locks down AUR signups after malicious commits (Jun 13–15):** package supply-chain incident — a reminder to pin/verify anything pulled from community repos onto a dev box. [Tux Machines](https://news.tuxmachines.org/n/2026/06/15/Arch_Linux_locks_down_AUR_signups_amid_wave_of_malicious_commit.shtml)
-- **Stephen Kell — what stack alignment does a Linux x86-64 syscall require? (Jun 12):** a poorly-documented ABI corner, with the author noting the kernel syscall ABI isn't fully specified anywhere. Directly relevant if you're hand-writing syscall/boot/asm paths in the x86-64 rootserver. [humprog.org](https://www.humprog.org/~stephen/blog/2026/06/12/#system-calling-alignment)
+- **Haiku OS enables AVX-512 (Phoronix, Jun 13):** waddlesplash/trungnt2910 reworked the kernel's FPU handling so AVX-512 state is preserved across context switches on capable CPUs. *Why it matters:* this is the same class of change as your M0 — rebuilding the seL4 kernel to XSAVE/feature-set 7 so it context-switches AVX YMM. A fresh, independent reference for getting the FPU-state save/restore path right. [Phoronix](https://www.phoronix.com/news/Haiku-OS-May-2026)
+- **Linux sanitizes RISC-V syscall-table indexing under speculation (6.19-rc5, ~Jun 13):** Spectre-style guard on the user-controlled syscall number before it indexes the syscall table, matching existing x86/ARM handling. Evergreen reminder for anyone hand-rolling syscall dispatch on bare metal. [Phoronix](https://www.phoronix.com/news/Linux-6.19-RISC-V-Side-Channel)
+- **Update — Arch AUR malware now "under control," 1,500+ packages (Jun 15):** the supply-chain incident from prior briefings has grown to 1,500+ affected packages; Arch says it's contained and is rolling back. If your dev/build host touches AUR or runs `npm install` in builds, still worth an audit. [Phoronix](https://www.phoronix.com/)
 
 ---
-*Sources: links inline above. "Recent" = roughly Jun 12–17, 2026; sandbox clock read 2026-06-16 23:32 UTC, session date Jun 17. Generated by the scheduled `jarvis-tech-briefing` task.*
+*De-duplicated against the Jun 16 and earlier Jun 17 briefings (Retout seL4 clock post, llama.cpp b9670 generic build, Ollama/Gemma 4 QAT, MiniMax/Nemotron, Linux 7.1 NTFS, Kell syscall-alignment, seL4 Summit/Riverside all dropped as already-covered). seL4/Microkernels and Model Releases omitted — nothing net-new in the window. "Recent" = roughly Jun 13–17, 2026; sandbox 
