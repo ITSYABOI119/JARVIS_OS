@@ -40,7 +40,7 @@ typedef struct {
     char ctx_buf[64];    /* copy of caller's ctx struct — avoids stack pointer race */
 
     int active_workers;
-    int has_work;
+    unsigned generation;
     int shutting_down;
     int initialized;
 } jarvis_threadpool_t;
@@ -81,16 +81,17 @@ int jarvis_threads(void) {
 
 static void *worker_main(void *arg) {
     (void)arg;
+    unsigned last_gen = 0;                 /* per-worker: last dispatch this thread ran */
     for (;;) {
         pthread_mutex_lock(&g_pool.mu);
-        while (!g_pool.has_work && !g_pool.shutting_down) {
+        while (g_pool.generation == last_gen && !g_pool.shutting_down) {
             pthread_cond_wait(&g_pool.cv_work, &g_pool.mu);
         }
         if (g_pool.shutting_down) {
             pthread_mutex_unlock(&g_pool.mu);
             return NULL;
         }
-
+        last_gen = g_pool.generation;       /* claim this dispatch exactly once */
         jarvis_parallel_fn fn = g_pool.fn;
         char local_ctx[64];
         memcpy(local_ctx, g_pool.ctx_buf, sizeof(g_pool.ctx_buf));
@@ -104,12 +105,11 @@ static void *worker_main(void *arg) {
         }
 
         pthread_mutex_lock(&g_pool.mu);
-        g_pool.active_workers--;
-        if (g_pool.active_workers == 0) {
-            g_pool.has_work = 0;
+        if (--g_pool.active_workers == 0) {
             pthread_cond_signal(&g_pool.cv_done);
         }
         pthread_mutex_unlock(&g_pool.mu);
+        /* loop back; the generation gate blocks re-entry until the NEXT dispatch */
     }
 }
 
@@ -126,7 +126,7 @@ static void init_pool_once(void) {
     g_pool.fn = NULL;
     g_pool.ctx = NULL;
     g_pool.active_workers = 0;
-    g_pool.has_work = 0;
+    g_pool.generation = 0;
     g_pool.shutting_down = 0;
     g_pool.initialized = 0;
 
@@ -165,29 +165,26 @@ static void ensure_pool(void) {
 void jarvis_parallel_for(int start, int end, jarvis_parallel_fn fn, void *ctx, size_t ctx_size) {
     if (end <= start) return;
     if (!fn) return;
-
     ensure_pool();
-
     if (g_pool.n_threads <= 1) {
         for (int i = start; i < end; i++) fn(i, ctx);
         return;
     }
 
     pthread_mutex_lock(&g_pool.mu);
-    while (g_pool.has_work && !g_pool.shutting_down) {
-        pthread_cond_wait(&g_pool.cv_done, &g_pool.mu);
-    }
     if (g_pool.shutting_down) {
         pthread_mutex_unlock(&g_pool.mu);
         for (int i = start; i < end; i++) fn(i, ctx);
         return;
     }
+    /* previous dispatch must be fully drained before we republish shared state */
+    while (g_pool.active_workers != 0) {
+        pthread_cond_wait(&g_pool.cv_done, &g_pool.mu);
+    }
 
     g_pool.start = start;
     g_pool.end = end;
     g_pool.fn = fn;
-    /* Copy ctx into stable pool memory — caller's stack pointer becomes stale
-     * between parallel_for rounds. Workers read from g_pool.ctx_buf instead. */
     if (ctx && ctx_size > 0) {
         if (ctx_size > sizeof(g_pool.ctx_buf)) ctx_size = sizeof(g_pool.ctx_buf);
         memcpy(g_pool.ctx_buf, ctx, ctx_size);
@@ -197,17 +194,11 @@ void jarvis_parallel_for(int start, int end, jarvis_parallel_fn fn, void *ctx, s
     }
     atomic_store_explicit(&g_pool.next_idx, start, memory_order_relaxed);
     g_pool.active_workers = g_pool.n_workers;
-    g_pool.has_work = 1;
-
+    g_pool.generation++;                    /* publish the new dispatch */
     pthread_cond_broadcast(&g_pool.cv_work);
     pthread_mutex_unlock(&g_pool.mu);
 
-    /* Use the calling thread as worker 0.
-     * IMPORTANT: use g_pool.ctx (the stable copy), not the original ctx
-     * parameter. This ensures all threads — including the caller — read
-     * from the same memory. Eliminates any aliasing issues between the
-     * caller's stack and worker threads. */
-    void *safe_ctx = g_pool.ctx;
+    void *safe_ctx = g_pool.ctx;            /* stable copy — caller is worker 0 */
     for (;;) {
         int idx = atomic_fetch_add_explicit(&g_pool.next_idx, 1, memory_order_relaxed);
         if (idx >= end) break;
@@ -215,7 +206,7 @@ void jarvis_parallel_for(int start, int end, jarvis_parallel_fn fn, void *ctx, s
     }
 
     pthread_mutex_lock(&g_pool.mu);
-    while (g_pool.has_work) {
+    while (g_pool.active_workers != 0) {
         pthread_cond_wait(&g_pool.cv_done, &g_pool.mu);
     }
     pthread_mutex_unlock(&g_pool.mu);

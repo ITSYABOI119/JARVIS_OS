@@ -382,7 +382,8 @@ Note: `DeclareTutorialApp()` does NOT exist. Use `add_executable()` + `DeclareRo
 | NVMe write (opcode 0x01) | — | DONE | nvme.c (extended) | 10 PASS |
 | NVMe log module | — | DONE | nvme_log.c/h | (bare-metal only) |
 | NVMe log parser | — | DONE | parse_nvme_log.py | (Python) |
-| **Total** | | | **121 code files (40 test)** | **383+ test asserts, ~35,700 LOC** |
+| Threadpool join race fix + parallel_for ABI test | — | DONE | threadpool.c, test_parallel_for.c | ~6 PASS |
+| **Total** | | | **122 code files (41 test)** | **383+ test asserts, ~35,700 LOC** |
 
 **Phase 3b on real hardware — bare-metal burn-in passed (2026-06-15, NOT a 30-day soak):** clean boot, NVMe model load (LBA-32768), coherent Gemma 4 E2B, heartbeat/shield IPC fix holding at err=0 over 400 queries (q=100/200/300/400), durable NVMe logging with constant boot_id. Formal 30-day x86 soak **DEFERRED — descoped from v0.2.1-beta gating (risk-accepted)**: the new x86 surfaces (shmem_ipc, in-process inference, NVMe load) are covered by this ~400-query burn-in + 300K-iter fuzz + 2 audits + the IPC fix; Phase 2's 30.6-day Pi 4 run (different IPC/ARM stack) is supporting context, not equivalent coverage. See `docs/decisions/2026-06-15-defer-30-day-x86-stability-soak.md`.
 
@@ -620,6 +621,8 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Inference Benchmark (stale F32):** `phase3/src/ai/bench_inference.c`
 - **Engine Bench (quantized, all models):** `phase3/src/ai/bench_engine.c`
 - **AVX2 Correctness Test:** `phase3/src/ai/test_avx2_correctness.c`
+- **Parallel-for ABI Test:** `phase3/src/ai/test_parallel_for.c` — jarvis_parallel_for work-stealing correctness (reduction==serial, ctx-copy, 100x multi-dispatch, swept threads)
+- **Threadpool join (note):** `phase3/src/ai/threadpool.c` uses a per-dispatch generation counter — cross-dispatch over-decrement race fixed 2026-06-17 (caught by `test_parallel_for.c`); the seL4 M3 backend ports this corrected work-stealing core
 - **AVX2 Probe (M0, seL4 on-box):** `phase3/src/sel4/avx2_probe.h` — `target("avx2,fma")`-isolated YMM save/restore probe (`JARVIS_AVX2_PROBE`, default off)
 - **SMP Probe (M2, seL4 on-box):** `phase3/src/sel4/smp_probe.h` — `smp_apic_id()` (CPUID leaf 1) for the numNodes gate + PA/PB core placement (`JARVIS_SMP_PROBE`, default off)
 - **RotorQuant Reference:** `phase3/docs/ROTORQUANT_REFERENCE.md` — KV cache compression alternative (on `experiment/turboquant-benchmark` branch)
@@ -681,7 +684,7 @@ Tracked `.c/.h/.py` files and their `wc -l` LOC via `git ls-files` (measured 202
 - **Phase 0:** 4,919 LOC, 11 code files (COMPLETE)
 - **Phase 1:** 40,837 LOC, 102 code files, 41 test files (COMPLETE)
 - **Phase 2:** 27,236 LOC, 65 code files, 8 test files (COMPLETE)
-- **Phase 3:** 35,705 LOC, 121 code files, 40 test files (IN PROGRESS — **11/11 models, 6 families, qdot+threadpool**)
+- **Phase 3:** 35,705 LOC, 122 code files, 41 test files (IN PROGRESS — **11/11 models, 6 families, qdot+threadpool**)
 - **Total (phases):** ~108,700 LOC, 299 code files, 89 test files (648 tracked files repo-wide)
 - Per-assertion PASS counts run higher than file counts (self-reported ~383+ Phase 3 / ~635+ total).
 - **Security:** March 2026 adversarial audit — 26 findings, all resolved (phase2+phase3 C). April 2026 Phase 3c audit — 25 findings (all 5 HIGH + 5 MEDIUM fixed, 7 LOW/INFO accepted). Phase 2's own audit: 6 C findings (4 fixed) + Snyk. SHIELD: keyword + model-assisted risk scoring.

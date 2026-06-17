@@ -274,6 +274,17 @@ jobs:
           -pthread -lm -o /tmp/test_threadpool
         /tmp/test_threadpool
 
+    - name: "Phase 3: Parallel-for backend (work-stealing join, swept threads)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -DJARVIS_PTHREAD=1 -pthread \
+          -I phase3/src/ai \
+          phase3/src/ai/test_parallel_for.c phase3/src/ai/threadpool.c \
+          -o /tmp/test_parallel_for
+        for n in 1 2 4 8; do
+          echo "--- JARVIS_THREADS=$n ---"
+          JARVIS_THREADS=$n /tmp/test_parallel_for || exit 1
+        done
+
     - name: "Phase 3: BPE Tokenizer (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 \
