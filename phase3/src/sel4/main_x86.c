@@ -1675,6 +1675,13 @@ static void *main_continued(void *arg UNUSED)
                                                pk_pay, &pk_len) == 0) {
                             if (pk_type == MSG_DEBUG) {
                                 pk_pay[pk_len < SHMEM_MAX_PAYLOAD ? pk_len : SHMEM_MAX_PAYLOAD - 1] = '\0';
+#if JARVIS_M1_MEASURE
+                                if (pk_pay[0]=='M' && pk_pay[1]=='1' && pk_pay[2]==' ') {
+                                    puts_serial("[INFER] "); puts_serial((const char *)pk_pay); puts_serial("\n");
+                                    nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr,
+                                                   g_nvme_bounce_paddr, LOG_INFER, (const char *)pk_pay);
+                                }
+#endif
 #if JARVIS_DBG_BOOT_LOG
                                 nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr,
                                                g_nvme_bounce_paddr, LOG_BOOT, (const char *)pk_pay);
@@ -1725,6 +1732,13 @@ static void *main_continued(void *arg UNUSED)
                                        payload, &msg_len) == 0) {
                     if (msg_type == MSG_DEBUG) {
                         payload[msg_len < SHMEM_MAX_PAYLOAD ? msg_len : SHMEM_MAX_PAYLOAD - 1] = '\0';
+#if JARVIS_M1_MEASURE
+                        if (payload[0]=='M' && payload[1]=='1' && payload[2]==' ') {
+                            puts_serial("[INFER] "); puts_serial((const char *)payload); puts_serial("\n");
+                            nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr,
+                                           g_nvme_bounce_paddr, LOG_INFER, (const char *)payload);
+                        }
+#endif
 #if JARVIS_DBG_BOOT_LOG
                         nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr,
                                        g_nvme_bounce_paddr, LOG_BOOT, (const char *)payload);

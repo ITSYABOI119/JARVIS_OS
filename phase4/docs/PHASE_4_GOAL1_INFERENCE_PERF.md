@@ -1,6 +1,6 @@
 # Phase 4 — Goal #1: Inference Performance (CPU)
 
-**Status:** M0 DONE (kernel XSAVE + AVX2-under-preemption safety gate PASSED on KVM, 2026-06-16); M1 next
+**Status:** M1 DONE (AVX2 in the seL4 build; Gemma 4 E2B ~1.53 tok/s bare metal, 2026-06-17); M2 (SMP decision) next
 **Date:** 2026-06-16
 **Scope:** Roadmap goal #1 reframed (GPU inference deferred, ADR `docs/decisions/2026-06-16-defer-gpu-inference.md`). v1.0 "fast" = **AVX2/FMA + a seL4-native threadpool in the seL4 build**, up from the current scalar single-thread (~0.2 tok/s).
 **Sources:** live `~/sel4-x86` build config read read-only via `ssh jarvis` (2026-06-16); seL4 14.0.0 (`ebbda2af5`); seL4 reference manual + kernel source. **Where web claims conflict with the box config read, the config read wins.**
@@ -87,8 +87,10 @@ The config read proves AVX is **not** saved today, so M0 is **not** a fast confi
 - **Test + CI:** `phase3/src/ai/test_avx2_correctness.c` — AVX2 `qdot_row` vs `qdot_row_scalar` for all 7 quant types, bit-exact; compiled `-mavx2 -mfma` on the CI runner (Zen/AVX2 host) → **new CI step "AVX2 qdot vs scalar"**. (Host CI proves numeric equivalence; the seL4-preemption safety is the bare-metal exit gate.)
 - **NOW vs JARVIS-PC:** correctness test = NOW (CI). Kernel rebuild + preemption safety = JARVIS-PC.
 
-### M1 — Enable `-mavx2 -mfma` in the seL4 app build (single-thread)  *(JARVIS-PC)*  — depends on M0
+### M1 — Enable `-mavx2 -mfma` in the seL4 app build (single-thread)  *(JARVIS-PC)*  — ✅ **DONE (2026-06-17, bare-metal verified)**
 - **Goal:** light up the existing AVX2 kernels in the deployed build; verify boot + numeric correctness vs scalar + measure tok/s.
+
+> **RESULT (bare metal, NVMe log boot_id=1):** `-mavx2 -mfma -mf16c` on both app targets (+ `-isystem <gcc include>` so `immintrin.h` resolves under the seL4 `-nostdinc` build); kernel unchanged from M0's XSAVE. Boots clean under **SIMULATION=OFF + IOMMU-off + XSAVE + AVX2**, **self-test 5/5**, **coherent Gemma 4 E2B** (15 inferences), `IPC_STATS q=100 err=0`. **Decode ~1.53 tok/s** single-thread (gen=50, cyc≈120.7e9, TSC 3.6999970 GHz) — **~7.6× the ~0.2 scalar baseline, ~90% of the native 1T engine (1.70)**. **Both M0 carve-outs CLOSED** (coherent model-gen + SIMULATION=OFF bare-metal boot). Config delta vs the burn-in kernel: the *only* functional change is FXSAVE→XSAVE — `KernelIOMMU` re-forced OFF in `jarvis-x86/settings.cmake` (NVMe needs direct DMA; the sim block used to force it off, lost with SIMULATION=OFF). Measurement via flag-guarded `JARVIS_M1_MEASURE` (RDTSC → `LOG_INFER`); deployed image rebuilt with it OFF. Detail: `phase4/weeks/week03/WEEK_03_STATUS.md`.
 - **Files:** `apps/{sel4test-driver,jarvis-inference}/CMakeLists.txt` `target_compile_options` (+`build_jarvis_x86.sh`). No engine `.c` change.
 - **Exit criteria:** boots on bare metal; coherent Gemma 4 E2B generation unchanged vs scalar; **tok/s approaches the native single-thread engine — target ~1.7 tok/s Gemma 4 E2B, ~3.2 tok/s Llama 1B, up from ~0.2 scalar.**
 - **Test + CI:** reuse M0's correctness test in CI; record a bare-metal tok/s line via the NVMe `IPC_STATS`/bench path (no new CI step — measurement is on-box).

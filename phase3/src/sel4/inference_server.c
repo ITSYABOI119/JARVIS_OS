@@ -30,6 +30,14 @@
 #include "avx2_probe.h"
 #endif
 
+#if JARVIS_M1_MEASURE
+static inline uint64_t m1_rdtsc(void) {
+    uint32_t lo, hi;
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+}
+#endif
+
 #include "gguf_parser.h"
 #include "llama_model.h"
 #include "llama_quant.h"
@@ -217,6 +225,9 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
     /* Autoregressive generation with per-token logging */
     int output_ids[64];
     int n_gen = 0;
+#if JARVIS_M1_MEASURE
+    uint64_t m1_t0 = m1_rdtsc();
+#endif
     while (n_gen < 50 && state->pos < state->max_seq_len) {
         int next = sample_greedy(state->logits, qm->config.vocab_size);
         output_ids[n_gen++] = next;
@@ -241,6 +252,9 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
     }
 #if JARVIS_DBG_PB
     pb_log_num("[PB] Generation complete: ", (uint32_t)n_gen, " tokens");
+#endif
+#if JARVIS_M1_MEASURE
+    uint64_t m1_cyc = m1_rdtsc() - m1_t0;
 #endif
 
     /* Decode to text */
@@ -287,6 +301,34 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
     if (text_len == 0) {
         shmem_ipc_send(response_ring, MSG_RESPONSE, seq, "", 0);
     }
+
+#if JARVIS_M1_MEASURE
+    /* M1: report decode timing + a printable response snippet to PA for the NVMe log
+     * (LOG_INFER). Offline: tok/s = gen * TSC_HZ / cyc, TSC_HZ = 3.7e9 on the 2700X.
+     * The snippet lets generation coherence be verified from the NVMe log alone (no
+     * serial capture needed). Capped well under SHMEM_MAX_PAYLOAD (240). */
+    {
+        char m1[240]; int p = 0;
+        const char *pre = "M1 gen=";
+        while (*pre) m1[p++] = *pre++;
+        { char d[12]; int di = 0; uint32_t v = (uint32_t)n_gen;
+          if (v == 0) d[di++] = '0'; else while (v) { d[di++] = (char)('0' + v % 10); v /= 10; }
+          while (--di >= 0) m1[p++] = d[di]; }
+        const char *cc = " cyc=";
+        while (*cc) m1[p++] = *cc++;
+        { char d[24]; int di = 0; uint64_t v = m1_cyc;
+          if (v == 0) d[di++] = '0'; else while (v) { d[di++] = (char)('0' + v % 10); v /= 10; }
+          while (--di >= 0) m1[p++] = d[di]; }
+        const char *sep = " | ";
+        while (*sep) m1[p++] = *sep++;
+        for (int i = 0; i < text_len && p < 236; i++) {
+            char c = text_out[i];
+            m1[p++] = (c >= 0x20 && c <= 0x7e) ? c : '.';  /* printable-only for the log */
+        }
+        m1[p] = '\0';
+        shmem_ipc_send(response_ring, MSG_DEBUG, 0, m1, (uint16_t)p);
+    }
+#endif
 
 #if JARVIS_DBG_PB
     puts_serial("[PB] signaling Process A\n");

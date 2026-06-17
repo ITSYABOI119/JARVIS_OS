@@ -36,6 +36,13 @@
  * This is a compile guard ONLY; it does NOT enable global -mavx2 (that is M1). */
 #define JARVIS_AVX2_PROBE  0
 
+/* Phase 4 goal #1 / M1: decode tok/s measurement. When 1, Process B brackets the
+ * generation loop with RDTSC and reports "M1 gen=<n> cyc=<cycles>" via MSG_DEBUG;
+ * Process A writes it to the NVMe log (LOG_INFER) + serial. Convert offline:
+ * tok/s = n * TSC_HZ / cyc (Ryzen 2700X invariant TSC = 3.7 GHz). Default 0 — set 1
+ * only for the M1 bare-metal bench (one LOG_INFER entry per inference). */
+#define JARVIS_M1_MEASURE  0
+
 /* Serial [STATS] prints every 100 queries; NVMe LOG_IPC_STATS is written every
  * JARVIS_STATS_NVME_INTERVAL. Measured bare-metal rate is ~3k queries/day (single
  * core, scalar) -> interval=100 gives ~870 entries over 30 days, well under the

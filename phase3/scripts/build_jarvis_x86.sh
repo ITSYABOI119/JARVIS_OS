@@ -334,6 +334,38 @@ else
 fi
 echo ""
 
+# ── [6/6] AVX2 app compile flags (Phase 4 goal #1, M1) ───────────────
+# Enable -mavx2 -mfma -mf16c on BOTH app targets so the engine's #ifdef __AVX2__
+# kernels (qdot.c, tensor_ops.c, llama_quant.c) light up automatically — no engine
+# source change. Safe ONLY because M0 rebuilt the kernel to XSAVE (it context-switches
+# the AVX YMM state); do NOT enable AVX2 on an FXSAVE kernel.
+# NOTE: -mavx2 makes the engine #include <immintrin.h>, but the seL4 app build does NOT
+# search gcc's intrinsics-header dir — so we add it via -isystem (musl still supplies
+# libc headers). The dir is computed from gcc so it tracks the toolchain version.
+# The sed normalizes the whole option list (idempotent + self-correcting if a prior
+# run left bare -mavx2 without the -isystem path).
+echo -e "${GREEN}[6/6] AVX2 compile flags${NC}"
+AVX2_FLAGS="-mavx2 -mfma -mf16c"
+GCC_AVX_INC="$(gcc -print-file-name=include 2>/dev/null)"
+if [ -n "$GCC_AVX_INC" ] && [ -f "$GCC_AVX_INC/immintrin.h" ]; then
+    AVX2_FLAGS="$AVX2_FLAGS -isystem $GCC_AVX_INC"
+else
+    echo -e "  ${YELLOW}WARN${NC}  gcc immintrin.h dir not found — AVX2 build will fail (need -isystem <gcc include>)"
+fi
+PB_CMAKE="$SEL4_DIR/projects/jarvis-x86/apps/jarvis-inference/CMakeLists.txt"
+for pair in "sel4test-driver:$CMAKE_FILE" "jarvis-inference:$PB_CMAKE"; do
+    app="${pair%%:*}"; cmf="${pair#*:}"
+    if [ ! -f "$cmf" ]; then
+        echo -e "  ${YELLOW}SKIP${NC}  $app CMakeLists not found ($cmf)"
+    elif grep -qE "target_compile_options\($app PRIVATE -Wall -g -O2" "$cmf"; then
+        sed -i "s|target_compile_options($app PRIVATE -Wall -g -O2[^)]*)|target_compile_options($app PRIVATE -Wall -g -O2 $AVX2_FLAGS)|" "$cmf"
+        echo -e "  ${GREEN}SET${NC}  $app: -Wall -g -O2 $AVX2_FLAGS"
+    else
+        echo -e "  ${YELLOW}SKIP${NC}  $app — target_compile_options not in expected form; add $AVX2_FLAGS manually"
+    fi
+done
+echo ""
+
 # ── Summary ─────────────────────────────────────────────────────────
 echo -e "${GREEN}────────────────────────────────────────────────${NC}"
 echo -e "${BOLD}Files synced:${NC} $COPY_COUNT"
@@ -353,6 +385,17 @@ if [ ! -d "$BUILD_DIR" ]; then
     echo -e "${RED}Error: Build directory not found: $BUILD_DIR${NC}"
     echo "Run cmake first — see phase3/docs/SEL4_X86_QEMU_SETUP.md"
     exit 1
+fi
+
+# Force KernelIOMMU OFF (NVMe needs direct physical DMA; no VT-d). The jarvis-x86 project
+# settings.cmake (inherited from sel4test) force-sets IOMMU ON for non-simulation x86 builds,
+# which -DKernelIOMMU=OFF on the cmake line CANNOT override. Under SIMULATION=ON the sim block
+# forced it OFF for us; with SIMULATION=OFF (needed for AVX/XSAVE) that force is gone, so we
+# patch the project settings directly (idempotent).
+JX_SETTINGS="$SEL4_DIR/projects/jarvis-x86/settings.cmake"
+if [ -f "$JX_SETTINGS" ] && grep -q 'set(KernelIOMMU ON CACHE BOOL "" FORCE)' "$JX_SETTINGS"; then
+    sed -i 's/set(KernelIOMMU ON CACHE BOOL "" FORCE)/set(KernelIOMMU OFF CACHE BOOL "" FORCE)  # JARVIS: NVMe needs direct DMA (no VT-d)/' "$JX_SETTINGS"
+    echo -e "${GREEN}Patched KernelIOMMU ON->OFF in jarvis-x86/settings.cmake${NC}"
 fi
 
 # Kernel config — force-set every build (cmake reconfiguration can reset defaults):
