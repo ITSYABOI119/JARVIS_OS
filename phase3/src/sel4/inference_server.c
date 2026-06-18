@@ -48,6 +48,7 @@ static inline uint64_t m1_rdtsc(void) {
 #include "gguf_vocab.h"
 #include "tokenizer.h"
 #include "sampling.h"
+#include "threadpool.h"
 
 #ifdef JARVIS_HAS_MODEL
 extern const unsigned char _binary_model_gguf_start[];
@@ -594,6 +595,22 @@ int main(int argc, char **argv)
         puts_serial(" pos="); put_dec((uint32_t)state.pos);
         puts_serial("\n");
     }
+
+    /* M3: initialize the seL4 worker pool from PA-passed argv (n_threads, done, wakes)
+     * BEFORE the ready handshake, so jarvis_threads() reflects the pool on the first
+     * inference. If JARVIS_SEL4_SMP is off or argc<7, jarvis_threads()==1 -> serial. */
+#ifdef JARVIS_SEL4_SMP
+    if (argc >= 7) {
+        int n_threads = (int)atol(argv[5]);
+        seL4_CPtr done = (seL4_CPtr)atol(argv[6]);
+        seL4_CPtr wake[JARVIS_MAX_WORKERS]; int n_wake = 0;   /* shared cap from threadpool.h */
+        for (int i = 7; i < argc && n_wake < (JARVIS_MAX_WORKERS - 1); i++)
+            wake[n_wake++] = (seL4_CPtr)atol(argv[i]);
+        jarvis_sel4_pool_init(n_threads, done, wake, n_wake);
+        puts_serial("[PB] M3 pool init: n_threads="); put_dec((uint32_t)n_threads);
+        puts_serial(" workers="); put_dec((uint32_t)n_wake); puts_serial("\n");
+    }
+#endif
 
     /* Signal Process A that we're ready — eliminates startup race */
     shmem_ipc_send(response_ring, MSG_HEARTBEAT_ACK, 0, NULL, 0);

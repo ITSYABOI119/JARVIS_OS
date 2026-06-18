@@ -29,6 +29,10 @@
 #include <simple/simple.h>
 #include <simple-default/simple-default.h>
 #include <cpio/cpio.h>
+#include <elf/elf.h>
+#include <sel4utils/thread.h>
+#include <sel4utils/thread_config.h>
+#include <sel4utils/api.h>
 
 #include "decision_cache.h"
 #include "cache_patterns.h"
@@ -148,6 +152,7 @@ static sel4utils_process_t inference_process;
 #define MODEL_MAX_PAGES (2048 * 1024)  /* 2M pages = 8GB — fits Mistral 7B Q8_0 */
 static seL4_CPtr *model_frame_caps = NULL;  /* dynamically allocated after vspace init */
 static int nvme_model_loaded = 0;
+static int g_num_nodes = 1;  /* bootinfo->numNodes (SMP); set in main(), used at PB spawn for the M3 worker count */
 static uint32_t nvme_model_size = 0;
 static uint32_t nvme_model_n_pages = 0;
 
@@ -828,6 +833,36 @@ static int find_model_untypeds(uintptr_t *model_paddr_out,
  * We map those frames into Process B's vspace at this address. */
 #define MODEL_VADDR_B   0x60000000UL  /* Virtual address in Process B for model */
 
+/* M3 worker pool sizing (>= kernel NUM_NODES cap of 8). */
+#define JARVIS_MAX_WORKERS 8
+
+/* Resolve a global symbol's vaddr from PB's (ET_EXEC, unstripped) ELF blob via .symtab.
+ * PA never links the threadpool (PB-only), so it finds the worker entry by name. For an
+ * ET_EXEC, no PIE bias → st_value is the runtime vaddr in PB's VSpace. */
+typedef struct { uint32_t st_name; uint8_t st_info, st_other; uint16_t st_shndx;
+                 uint64_t st_value, st_size; } jarvis_elf64_sym_t;
+static uintptr_t resolve_pb_symbol(const void *elf_blob, size_t elf_size, const char *want) {
+    elf_t e;
+    if (elf_newFile(elf_blob, elf_size, &e) != 0) return 0;
+    size_t si = 0;
+    const void *symtab = elf_getSectionNamed(&e, ".symtab", &si);
+    if (!symtab) return 0;
+    size_t entsz = elf_getSectionEntrySize(&e, si);
+    size_t secsz = elf_getSectionSize(&e, si);
+    if (entsz == 0) return 0;
+    uint32_t stridx = elf_getSectionLink(&e, si);
+    const char *strtab = (const char *)elf_getSection(&e, stridx);
+    if (!strtab) return 0;
+    size_t strtab_size = elf_getSectionSize(&e, stridx);   /* bound st_name to avoid OOB strcmp */
+    size_t n = secsz / entsz;
+    for (size_t i = 0; i < n; i++) {
+        const jarvis_elf64_sym_t *s = (const jarvis_elf64_sym_t *)((const char *)symtab + i * entsz);
+        if (s->st_name && s->st_name < strtab_size &&
+            strcmp(strtab + s->st_name, want) == 0) return (uintptr_t)s->st_value;
+    }
+    return 0;
+}
+
 /* ---- Spawn inference process (Process B) ---- */
 
 static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_notif_out,
@@ -1016,18 +1051,106 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
         return -1;
     }
 
-    /* Build argv: req_notif, resp_notif, shmem_vaddr, model_vaddr, model_size */
-    char arg0[32], arg1[32], arg2[32], arg3[32], arg4[32];
-    snprintf(arg0, sizeof(arg0), "%lu", (unsigned long)remote_req_notif);
-    snprintf(arg1, sizeof(arg1), "%lu", (unsigned long)remote_resp_notif);
-    snprintf(arg2, sizeof(arg2), "%lu", (unsigned long)remote_vaddr);
-    snprintf(arg3, sizeof(arg3), "%lu", (unsigned long)(model_n_pages > 0 ? MODEL_VADDR_B : 0));
-    snprintf(arg4, sizeof(arg4), "%lu", (unsigned long)model_size);
-    char *argv[] = { arg0, arg1, arg2, arg3, arg4 };
+    /* ---- M3: create the seL4 worker pool inside PB's VSpace/CSpace ----
+     * PB has no allocator, so PA (rootserver) allocates the worker TCBs/stacks/IPC
+     * buffers + the wake/done notifications and starts the workers in PB's VSpace; PB
+     * drives dispatch at runtime. The worker entry is resolved by NAME from PB's ET_EXEC
+     * unstripped .symtab (PA never links the threadpool). Guarded by CONFIG_ENABLE_SMP_SUPPORT
+     * so the uniprocessor (NUM_NODES=1) build still compiles — seL4_TCB_SetAffinity is
+     * SMP-only — and degrades to serial (workers_started=0 -> pb_n_threads=1). */
+    seL4_CPtr remote_wake[JARVIS_MAX_WORKERS] = {0};
+    seL4_CPtr remote_done = 0;
+    int workers_started = 0;
+#ifdef CONFIG_ENABLE_SMP_SUPPORT
+    {
+        int n_threads = g_num_nodes;            /* total incl. PB main (dispatcher, core 0) */
+        int n_workers = n_threads - 1;
+        if (n_workers > JARVIS_MAX_WORKERS - 1) n_workers = JARVIS_MAX_WORKERS - 1;
+        if (n_workers < 0) n_workers = 0;
+        uintptr_t worker_entry = (n_workers > 0)
+            ? resolve_pb_symbol(elf, elf_size, "jarvis_sel4_worker_entry") : 0;
+        if (n_workers > 0 && worker_entry == 0) {
+            puts_serial("[JARVIS] M3: worker_entry symbol NOT found — degrading to serial\n");
+            n_workers = 0;
+        }
+        if (n_workers > 0) {
+            seL4_Word pb_cspace_data =
+                api_make_guard_skip_word(seL4_WordBits - inference_process.cspace_size);
+            /* Join (done) notification. sel4utils_copy_cap_to_process returns 0 on FAILURE;
+             * a null done cap would hang the dispatcher's seL4_Wait(done), so verify both the
+             * alloc AND the copy into PB's CSpace before committing to any worker. */
+            vka_object_t done_obj;
+            if (vka_alloc_notification(&vka, &done_obj) != 0 ||
+                (remote_done = sel4utils_copy_cap_to_process(&inference_process, &vka,
+                                                             done_obj.cptr)) == 0) {
+                puts_serial("[JARVIS] M3: done-notification alloc/copy failed — degrading to serial\n");
+                n_workers = 0;
+            }
+            for (int i = 1; i <= n_workers; i++) {
+                vka_object_t wake_obj;
+                if (vka_alloc_notification(&vka, &wake_obj) != 0) {
+                    puts_serial("[JARVIS] M3: wake-notification alloc failed — degrading to serial\n");
+                    n_workers = 0; break;
+                }
+                /* copy returns 0 on FAILURE — a null wake cap faults the worker and deadlocks
+                 * the join, so degrade to serial rather than dispatch to it. */
+                remote_wake[i] = sel4utils_copy_cap_to_process(&inference_process, &vka, wake_obj.cptr);
+                if (remote_wake[i] == 0) {
+                    puts_serial("[JARVIS] M3: wake cap copy failed — degrading to serial\n");
+                    n_workers = 0; break;
+                }
+
+                sel4utils_thread_config_t cfg = {0};
+                cfg = thread_config_cspace(cfg, inference_process.cspace.cptr, pb_cspace_data);
+                cfg = thread_config_auth(cfg, simple_get_tcb(&simple));
+                cfg = thread_config_priority(cfg, seL4_MaxPrio);
+                sel4utils_thread_t wt;
+                if (sel4utils_configure_thread_config(&vka, &inference_process.vspace,
+                                                      &inference_process.vspace, cfg, &wt) != 0) {
+                    puts_serial("[JARVIS] M3: worker configure failed — degrading to serial\n");
+                    n_workers = 0; break;
+                }
+                /* numNodes already reflects ACTUAL started cores, so core i (1..numNodes-1)
+                 * is valid; log (non-fatal) if the pin is rejected — the worker still runs. */
+                if (seL4_TCB_SetAffinity(wt.tcb.cptr, (seL4_Word)i) != seL4_NoError)
+                    puts_serial("[JARVIS] M3: SetAffinity failed (worker left unpinned)\n");
+                if (sel4utils_start_thread(&wt, (sel4utils_thread_entry_fn)worker_entry,
+                                           (void *)(uintptr_t)remote_wake[i],
+                                           (void *)(uintptr_t)i, 1) != 0) {
+                    puts_serial("[JARVIS] M3: worker start failed — degrading to serial\n");
+                    n_workers = 0; break;
+                }
+                workers_started++;
+            }
+            if (n_workers == 0) workers_started = 0;
+        }
+    }
+#endif /* CONFIG_ENABLE_SMP_SUPPORT */
+    int pb_n_threads = (workers_started > 0) ? (workers_started + 1) : 1;
+    puts_serial("[JARVIS] M3: started "); put_dec((uint32_t)workers_started);
+    puts_serial(" workers, pb_n_threads="); put_dec((uint32_t)pb_n_threads); puts_serial("\n");
+
+    /* Build argv: req_notif, resp_notif, shmem_vaddr, model_vaddr, model_size,
+     * then M3: pb_n_threads, done cptr, and the per-worker wake cptrs. */
+    char abuf[7 + JARVIS_MAX_WORKERS][32];
+    snprintf(abuf[0], 32, "%lu", (unsigned long)remote_req_notif);
+    snprintf(abuf[1], 32, "%lu", (unsigned long)remote_resp_notif);
+    snprintf(abuf[2], 32, "%lu", (unsigned long)remote_vaddr);
+    snprintf(abuf[3], 32, "%lu", (unsigned long)(model_n_pages > 0 ? MODEL_VADDR_B : 0));
+    snprintf(abuf[4], 32, "%lu", (unsigned long)model_size);
+    snprintf(abuf[5], 32, "%d",  pb_n_threads);
+    snprintf(abuf[6], 32, "%lu", (unsigned long)remote_done);
+    int argc_n = 7;
+    for (int i = 1; i <= workers_started; i++) {
+        snprintf(abuf[6 + i], 32, "%lu", (unsigned long)remote_wake[i]);
+        argc_n++;
+    }
+    char *argv[7 + JARVIS_MAX_WORKERS];
+    for (int i = 0; i < argc_n; i++) argv[i] = abuf[i];
 
     /* Spawn Process B */
     error = sel4utils_spawn_process_v(&inference_process, &vka, &vspace,
-                                       5, argv, 1);
+                                       argc_n, argv, 1);
     if (error) {
         puts_serial("[JARVIS] Failed to spawn inference process\n");
         return -1;
@@ -1947,6 +2070,7 @@ int main(void)
         puts_serial("Boot: ");
         put_dec(info->untyped.end - info->untyped.start);
         puts_serial(" untypeds\n");
+        g_num_nodes = (int)info->numNodes;   /* M3: worker count = numNodes-1 (set before PB spawn) */
     }
 
 #if JARVIS_SMP_PROBE

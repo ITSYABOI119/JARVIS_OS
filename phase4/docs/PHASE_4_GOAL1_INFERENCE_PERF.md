@@ -1,6 +1,6 @@
 # Phase 4 — Goal #1: Inference Performance (CPU)
 
-**Status:** M2 DONE (Branch A — seL4 SMP enabled `NUM_NODES=2`; multicore foundation validated bare metal, no 1T penalty, 2026-06-17); M3 (seL4-native threadpool) next
+**Status:** M3 DONE (seL4-native threadpool — Gemma 4 E2B **5.46 tok/s @ `NUM_NODES=6`** bare metal, **3.57×** the 1.53 single-thread, 2026-06-18); M4 (record benchmark) next
 **Date:** 2026-06-16
 **Scope:** Roadmap goal #1 reframed (GPU inference deferred, ADR `docs/decisions/2026-06-16-defer-gpu-inference.md`). v1.0 "fast" = **AVX2/FMA + a seL4-native threadpool in the seL4 build**, up from the current scalar single-thread (~0.2 tok/s).
 **Sources:** live `~/sel4-x86` build config read read-only via `ssh jarvis` (2026-06-16); seL4 14.0.0 (`ebbda2af5`); seL4 reference manual + kernel source. **Where web claims conflict with the box config read, the config read wins.**
@@ -108,7 +108,9 @@ Branches (for the record):
 - **Exit criteria:** ✅ recorded decision (A) with the M1 tok/s as input, an ADR, and KVM+bare-metal spike validation.
 - **NOW vs JARVIS-PC:** decision = done; SMP spike = done (JARVIS-PC, KVM + bare metal).
 
-### M3 — seL4-native threadpool  *(JARVIS-PC)*  — **UNBLOCKED (M2 = Branch A, 2026-06-17)**
+### M3 — seL4-native threadpool  *(JARVIS-PC)*  — ✅ **DONE (2026-06-18, Gemma 5.46 tok/s @ NN=6, 3.57×)**
+
+> **RESULT (bare metal, deployed Gemma 4 E2B):** PA creates N−1 worker TCBs in PB's VSpace/CSpace (PB has no allocator), resolving the worker entry from PB's ET_EXEC `.symtab`; workers pin to distinct cores (`seL4_TCB_SetAffinity`), block on per-worker wake notifications, and run the corrected work-stealing core over `qmatmul_vec` rows (generation publish + active-counter join). **Verified byte-identical to the serial path** (greedy determinism, all prompts). Hybrid N-sweep — F1 QEMU-Llama relative scaling (4.97→8.95→10.80→12.54 over NN=2/4/5/6) + **F2 bare-metal Gemma: NN=4 4.21, NN=6 5.46 tok/s** (4→6 = +30%, the bandwidth knee), **err=0 across q=100→800** → **production `NUM_NODES=6`**. Two bring-up bugs fixed (unchecked `sel4utils_copy_cap_to_process` → null-cap deadlock, caught by adversarial review; worker started outside sel4runtime → `seL4_SetIPCBuffer`, caught by QEMU smoke). As-built spec + sweep: `phase4/docs/PHASE_4_M3_THREADPOOL_DESIGN.md`; week: `phase4/weeks/week05/WEEK_05_STATUS.md`.
 - **Goal:** replace the pthread stub with a seL4 worker pool backing `jarvis_parallel_for`; parallelize `qmatmul_vec` rows; measure tok/s.
 - **Design:** full architecture + verified seL4 API + the *PB-has-no-allocator* correction (PA allocates the workers) in `phase4/docs/PHASE_4_M3_THREADPOOL_DESIGN.md`.
 - **Design inputs (M2 spike E1–E7, `phase4/weeks/week04/WEEK_04_STATUS.md`):** (E1) seL4 does **not** auto-distribute → workers MUST `seL4_TCB_SetAffinity` to cores 1..N-1; (E2) workers must **block** on a notification when idle, not `seL4_Yield`-spin (a lone runnable thread pins its core at 100%); (E4) BKL = CLH lock serializes every syscall → keep the parallel-for hot path **syscall-free** (shared-mem atomic `next_idx` work-stealing + **one** wake notify per worker, not per-tile IPC); (E5) production N = **physical** cores (Q4_K matmul is bandwidth-bound; SMT siblings unlikely to add throughput); (E6) workers = `sel4utils_configure_thread` **sharing PB's CSpace+VSpace** (see weights/`state` directly), each with a pre-allocated stack + IPC buffer + priority; (E7) the `qmatmul_vec` disjoint-row seam is already thread-safe (out rows disjoint, W/x read-only) — keep `state->fwd_scratch` **out** of the parallel path and pre-allocate per-worker buffers (no hot-path malloc; VKA/allocman + musl `malloc` are not thread-safe).

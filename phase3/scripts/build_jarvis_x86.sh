@@ -149,6 +149,7 @@ AI_FILES=(
     "ssm.c"               "ssm.h"
     "qdot.c"              "qdot.h"
     "threadpool.h"
+    "threadpool_sel4.c"
 )
 
 for f in "${AI_FILES[@]}"; do
@@ -368,6 +369,39 @@ for pair in "sel4test-driver:$CMAKE_FILE" "jarvis-inference:$PB_CMAKE"; do
 done
 echo ""
 
+# ── [6b/6] M3 seL4-native threadpool (Process B only) ────────────────
+# threadpool_sel4.c implements jarvis_parallel_for with seL4 worker threads (created by
+# Process A in PB's VSpace). Add it to the jarvis-inference source list + define
+# JARVIS_SEL4_SMP on that target ONLY. PA never compiles it (it resolves the worker entry
+# from PB's ELF by name). Idempotent (grep-guarded).
+echo -e "${GREEN}[6b/6] M3 threadpool (Process B)${NC}"
+PB_CMAKE="$SEL4_DIR/projects/jarvis-x86/apps/jarvis-inference/CMakeLists.txt"
+if [ -f "$PB_CMAKE" ]; then
+    if ! grep -q "src/ai/threadpool_sel4.c" "$PB_CMAKE"; then
+        sed -i '/src\/ai\/qdot.c/a\    src/ai/threadpool_sel4.c' "$PB_CMAKE"
+        if grep -q "src/ai/threadpool_sel4.c" "$PB_CMAKE"; then
+            echo -e "  ${GREEN}ADDED${NC}  src/ai/threadpool_sel4.c to jarvis-inference sources"
+        else
+            echo -e "  ${RED}FAILED${NC}  could not add threadpool_sel4.c — edit PB CMakeLists manually"
+        fi
+    else
+        echo -e "  ${CYAN}OK${NC}  src/ai/threadpool_sel4.c already in sources"
+    fi
+    if ! grep -q "JARVIS_SEL4_SMP" "$PB_CMAKE"; then
+        sed -i '/target_compile_options(jarvis-inference/a\target_compile_definitions(jarvis-inference PRIVATE JARVIS_SEL4_SMP)' "$PB_CMAKE"
+        if grep -q "JARVIS_SEL4_SMP" "$PB_CMAKE"; then
+            echo -e "  ${GREEN}ADDED${NC}  JARVIS_SEL4_SMP define on jarvis-inference"
+        else
+            echo -e "  ${RED}FAILED${NC}  could not add JARVIS_SEL4_SMP — edit PB CMakeLists manually"
+        fi
+    else
+        echo -e "  ${CYAN}OK${NC}  JARVIS_SEL4_SMP already defined"
+    fi
+else
+    echo -e "  ${YELLOW}SKIP${NC}  jarvis-inference CMakeLists not found ($PB_CMAKE)"
+fi
+echo ""
+
 # ── Summary ─────────────────────────────────────────────────────────
 echo -e "${GREEN}────────────────────────────────────────────────${NC}"
 echo -e "${BOLD}Files synced:${NC} $COPY_COUNT"
@@ -417,6 +451,9 @@ fi
 #     userspace corrupts YMM across preemption. XSAVEOPT is the variant Zen+ (2700X)
 #     supports. NOTE: this is the kernel's save/restore capability only — it does NOT
 #     turn on -mavx2 in the engine apps (that is M1); the M0 probe is target()-isolated.
+# M3: worker count = NUM_NODES (kernel SMP node count). Default 6 (the dual-channel DDR4
+# bandwidth knee for the N-sweep); override per-build via JARVIS_NUM_NODES. Cap is 8.
+NN="${JARVIS_NUM_NODES:-6}"
 cd "$BUILD_DIR"
 # Pass 1: flip the kernel to XSAVE FPU mode (so it context-switches AVX YMM state).
 # SIMULATION=OFF is REQUIRED — the seL4 cmake-tool's ApplyCommonSimulationSettings()
@@ -430,7 +467,7 @@ cmake -DKernelIOMMU=OFF \
       -DKernelXSaveFeatureSet=7 \
       -DKernelXSaveSize=832 \
       -DSMP=ON \
-      -DNUM_NODES=2 \
+      -DNUM_NODES=${NN} \
       . >/dev/null 2>&1
 # Pass 2: KernelXSaveFeatureSet DEPENDS on KernelFPUXSave, which only flips ON during
 # pass 1; on the pass where it first becomes selectable it takes its default (3 =
@@ -456,7 +493,7 @@ if [ -f "$GEN_CFG" ]; then
             cfg_fail=1
         fi
     }
-    check_cfg '#define CONFIG_MAX_NUM_NODES[[:space:]]+2'      "SMP: CONFIG_MAX_NUM_NODES=2 (BSP + 1 AP)   [M2]"
+    check_cfg "#define CONFIG_MAX_NUM_NODES[[:space:]]+${NN}\b"  "SMP: CONFIG_MAX_NUM_NODES=${NN} (M3 NUM_NODES)   [M2/M3]"
     check_cfg '#define CONFIG_ENABLE_SMP_SUPPORT[[:space:]]+1' "SMP: CONFIG_ENABLE_SMP_SUPPORT=1           [M2]"
     check_cfg '#define CONFIG_XSAVE[[:space:]]+1'              "FPU: CONFIG_XSAVE=1 (kernel saves AVX YMM) [M0]"
     check_cfg '#define CONFIG_XSAVE_FEATURE_SET[[:space:]]+7'  "FPU: XSAVE feature-set 7 (FPU+SSE+AVX)     [M0]"

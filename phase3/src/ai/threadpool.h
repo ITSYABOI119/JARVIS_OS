@@ -12,7 +12,7 @@
 
 #include <stddef.h>
 
-#ifdef JARVIS_PTHREAD
+#if defined(JARVIS_PTHREAD) || defined(JARVIS_SEL4_SMP)
 
 typedef void (*jarvis_parallel_fn)(int idx, void *ctx);
 
@@ -42,6 +42,20 @@ static inline void jarvis_parallel_for(int start, int end, jarvis_parallel_fn fn
 }
 static inline void jarvis_threadpool_shutdown(void) { (void)0; }
 
-#endif /* JARVIS_PTHREAD */
+#endif /* JARVIS_PTHREAD || JARVIS_SEL4_SMP */
+
+#ifdef JARVIS_SEL4_SMP
+#include <sel4/sel4.h>
+/* Shared worker-pool bound: dispatcher + up to (N-1) workers. >= kernel NUM_NODES cap (8).
+ * PA (main_x86.c) carries its own copy of this constant (it does not include this header);
+ * keep them in sync if ever bumped. */
+#define JARVIS_MAX_WORKERS 8
+/* PA-started worker entry (sel4utils_thread_entry_fn): arg0 = this worker's wake cptr
+ * (in PB's CSpace), arg1 = worker index. */
+void jarvis_sel4_worker_entry(void *arg0, void *arg1, void *ipc_buf);
+/* Called once by PB main (dispatcher) before the IPC loop. wake[] has n_wake entries
+ * (= n_threads-1), one per worker, in PB-CSpace cptr order. */
+void jarvis_sel4_pool_init(int n_threads, seL4_CPtr done, const seL4_CPtr *wake, int n_wake);
+#endif
 
 #endif /* JARVIS_THREADPOOL_H */

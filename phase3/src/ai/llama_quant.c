@@ -27,6 +27,13 @@
 #include "dequant.h"
 #include "qdot.h"
 #include "threadpool.h"
+/* M3: light up the threaded qmatmul path under EITHER backend — pthread (host/CI) or
+ * the seL4-native worker pool (Process B). Serial fallback applies when neither is set.
+ * CI's pthread build defines JARVIS_PTHREAD -> JARVIS_PARALLEL, so the host tests are
+ * unaffected by this rename. */
+#if defined(JARVIS_PTHREAD) || defined(JARVIS_SEL4_SMP)
+#define JARVIS_PARALLEL 1
+#endif
 #include "tensor_ops.h"
 #include "sampling.h"
 #include "ssm.h"
@@ -48,7 +55,7 @@
 
 #define RMS_EPS 1e-5f
 
-#ifdef JARVIS_PTHREAD
+#ifdef JARVIS_PARALLEL
 typedef struct { const float *wf; const float *x; float *out; int K; int M; } qmatmul_f32_ctx_t;
 typedef struct { const uint8_t *wdata; size_t row_bytes; const float *x; float *out; int K; ggml_type_t wtype; int M; } qmatmul_qdot_ctx_t;
 _Static_assert(sizeof(qmatmul_f32_ctx_t) <= 64, "ctx must fit threadpool ctx_buf[64]");
@@ -109,7 +116,7 @@ static void qmatmul_vec(const qtensor_t *W, const float *x, float *out,
     const ggml_type_t wtype = (ggml_type_t)W->type;
 
     const int use_threads =
-#ifdef JARVIS_PTHREAD
+#ifdef JARVIS_PARALLEL
         (jarvis_threads() > 1 && M >= 256);
 #else
         0;
@@ -119,7 +126,7 @@ static void qmatmul_vec(const qtensor_t *W, const float *x, float *out,
     if (wtype == GGML_TYPE_F32) {
         const float *wf = (const float *)W->data;
         if (use_threads) {
-#ifdef JARVIS_PTHREAD
+#ifdef JARVIS_PARALLEL
             qmatmul_f32_ctx_t ctx = { wf, x, out, K, M };
             jarvis_parallel_for(0, M, qmatmul_f32_row, &ctx, sizeof(ctx));
 #else
@@ -152,7 +159,7 @@ static void qmatmul_vec(const qtensor_t *W, const float *x, float *out,
     const uint8_t *wdata = (const uint8_t *)W->data;
 
     if (use_threads) {
-#ifdef JARVIS_PTHREAD
+#ifdef JARVIS_PARALLEL
         qmatmul_qdot_ctx_t ctx = { wdata, row_bytes, x, out, K, wtype, M };
         jarvis_parallel_for(0, M, qmatmul_qdot_row, &ctx, sizeof(ctx));
 #else
@@ -165,7 +172,7 @@ static void qmatmul_vec(const qtensor_t *W, const float *x, float *out,
     }
 }
 
-#ifdef JARVIS_PTHREAD
+#ifdef JARVIS_PARALLEL
 static void qmatmul_f32_row(int idx, void *p)
 {
     qmatmul_f32_ctx_t *c = (qmatmul_f32_ctx_t *)p;

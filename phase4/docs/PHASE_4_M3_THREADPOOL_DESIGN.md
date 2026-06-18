@@ -1,9 +1,26 @@
 # Phase 4 — M3: seL4-native Threadpool Design
 
-**Status:** DESIGN (no implementation, no build). Gated on M2 = Branch A (SMP enabled, `docs/decisions/2026-06-17-enable-smp-branch-a.md`).
-**Date:** 2026-06-17
-**Scope:** the worker pool that backs `jarvis_parallel_for` in Process B so `qmatmul_vec` rows run across cores. Implementation (`threadpool_sel4.c` + `test_parallel_for.c` + CI step + on-box N-sweep) is the **next** milestone, gated on this design.
-**API verified read-only against the box** (seL4 14.0.0 `~/sel4-x86`, 2026-06-17) — see **§Verified API**. Where the box differs from the design paraphrase, the box wins; corrections are flagged ⚠️.
+**Status:** ✅ **IMPLEMENTED (M3 done 2026-06-18)** — Gemma 4 E2B **5.46 tok/s @ `NUM_NODES=6`** bare metal (**3.57×** the 1.53 single-thread). The design below is the as-built spec; deltas discovered during implementation are recorded in **§Implemented** immediately below.
+**Date:** 2026-06-17 (design) · 2026-06-18 (implemented)
+**Scope:** the worker pool that backs `jarvis_parallel_for` in Process B so `qmatmul_vec` rows run across cores.
+**API verified read-only against the box** (seL4 14.0.0 `~/sel4-x86`) — see **§Verified API**. Where the box differs from the design paraphrase, the box wins; corrections are flagged ⚠️.
+
+---
+
+## Implemented (M3 — 2026-06-18)
+
+Built as designed (PA creates the workers in PB's VSpace/CSpace; PB drives dispatch), with these implementation facts:
+
+- **Worker-entry resolution (as designed):** PA walks PB's **ET_EXEC, unstripped `.symtab`** (`resolve_pb_symbol` in `main_x86.c`) to get `jarvis_sel4_worker_entry`'s runtime vaddr — libelf has no by-name lookup, and PA never links the threadpool (PB-only `JARVIS_SEL4_SMP`). Confirmed: `[JARVIS] M3: started 5 workers, pb_n_threads=6`.
+- **The seL4 join is NOT a verbatim port of the pthread backend.** It ports the **work-stealing CORE** (atomic `next_idx`) but replaces the join entirely: a **generation-counter publish (release/acquire)** + **per-worker one-shot wake Notifications** + an **active-counter join** (last worker signals `done`, dispatcher blocks on `seL4_Wait(done)`). This is structurally immune to the pthread cross-dispatch over-decrement race that M3 step 1 fixed (`docs`: `test_parallel_for.c`).
+- **Two bugs found + fixed during bring-up (both would have been box-only failures):**
+  1. **Unchecked `sel4utils_copy_cap_to_process` (returns 0 on failure)** → a null `done`/`wake` cap propagated to PB would `seL4_Signal(0)`/`seL4_Wait(0)` and **deadlock the first dispatch**. Caught by the **pre-build adversarial review**; fixed by checking both copies and degrading to serial.
+  2. **Worker started outside `sel4runtime`'s per-thread init** → its libsel4 syscall-stub IPC-buffer TLS pointer (`__sel4_ipc_buffer`) was unset, so the worker's first `seL4_Wait` faulted (`vm fault @ 0x8`) and the dispatch deadlocked. Caught by the **QEMU boot smoke** (static review can't see it); fixed by `seL4_SetIPCBuffer((seL4_IPCBuffer *)ipc_buf)` (the 3rd `sel4utils_start_thread` entry arg) before any syscall.
+- **Correctness proof (greedy decoding is deterministic):** a **serial control** (N=1, `n_workers=0`) vs the **parallel** run (N=2) was **byte-identical for every prompt**. Even the one garbage output (`"The seL4 microkernel is" → ï¿½ï¿½ï¿½`) is **identical serial and parallel** → a pre-existing Llama-1B byte-token artifact, **not** a parallel bug.
+- **N-sweep (hybrid):**
+  - **F1 — QEMU-KVM, Llama-1B (relative scaling, 0 faults/timeouts each):** NN=2 → 4.97, NN=4 → 8.95, NN=5 → 10.80, NN=6 → 12.54 tok/s. Still climbing at 6 — Llama-1B (~770 MB/token) is compute-bound here (ceiling ~54 tok/s), so its knee doesn't transfer to Gemma.
+  - **F2 — bare-metal, deployed Gemma 4 E2B (RDTSC decode, TSC 3.6999970 GHz):** **NN=4 → 4.21 tok/s** (2.75×), **NN=6 → 5.46 tok/s** (3.57×); 4→6 marginal **+30%** (efficiency 1.05 → 0.91 tok/s/thread) = the Gemma bandwidth knee (~2.9 GB/token) appearing. **`err=0` across q=100→800** at NN=6.
+- **Chosen production `NUM_NODES = 6`** (best measured, in the ~4–6 target, 6 of 8 physical cores). NN=8 not measured (diminishing returns). Build default + config-gate set to 6.
 
 ---
 
