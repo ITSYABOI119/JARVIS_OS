@@ -1,6 +1,6 @@
 # Phase 4 — Goal #2: Graphical Output (Framebuffer / HDMI Status UI)
 
-**Status:** PLAN + Step 1 in progress (UEFI boot migration). No framebuffer/UI code yet (that is Step 2).
+**Status:** **Step 1 (UEFI boot migration) COMPLETE — 2026-06-18.** No framebuffer/UI code yet (that is Step 2, next).
 **Date:** 2026-06-18
 **Goal:** Move beyond the 80×25 VGA text console to a real **graphical framebuffer status UI** on the JARVIS PC monitor — boot progress, model load, query/response, tok/s, SHIELD/err state — rendered from the design tokens in `phase4/docs/ui_mockups/JARVIS_OS_DESIGN_TOKENS.md`. ROADMAP Phase 4 goal #2.
 **Scope:** **DISPLAY only.** GPU *compute* (inference) stays deferred (ADR `docs/decisions/2026-06-16-defer-gpu-inference.md`). This goal does not touch the R9 280X as a compute device — only as the firmware-initialized framebuffer it already is.
@@ -30,7 +30,10 @@ There are two ways to get a framebuffer tag to seL4. We choose the **UEFI + GOP*
 
 ## 3. Two-step, risk-isolated plan
 
-### Step 1 — UEFI boot migration + full-stack re-validation  *(THIS task; no graphics code)*
+### Step 1 — UEFI boot migration + full-stack re-validation  — ✅ **DONE (2026-06-18)**
+
+> **RESULT (bare-metal UEFI, NVMe log boot_id=1, independently verified):** the full existing stack survives the UEFI boot — self-test **5/5**, **real Gemma 4 E2B (2962 MB) loaded over NVMe**, **M3 `NUM_NODES=6` (5 workers)**, **coherent** inference, **`err=0` across `[STATS]` q=100/200/300** (ran to q=382), **0 kernel faults**, decode **~5.53 tok/s** (117 samples; matches M3's 5.46 → **goal-#1 perf holds under UEFI**). Validated first under **OVMF** (GRUB-UEFI → multiboot2 → rootserver → NVMe → model → M3 → inference), then confirmed on real hardware. **Durability:** grub `default → 1` (the multiboot2/efi_gop UEFI entry) + `reflash_usb.sh` and `create_boot_usb.sh` now default to UEFI (BIOS kept as an explicit `--bios`/`--bios-only` fallback) so routine reflashes don't silently revert the migration; `BARE_METAL_BOOT_GUIDE.md` rewritten to the verified UEFI procedure (CSM off, Secure Boot OS Type "Other OS"). The `0xB8000` VGA map was already non-fatal (`main_x86.c:1196–1219`, `vga_ready` default 0) — no rootserver change needed. **Step 2 (the framebuffer UI) is next.**
+
 Switch the boot from legacy BIOS/multiboot1 to **UEFI GRUB** and prove the existing stack survives **before** touching the framebuffer. The monitor will be **dark** under UEFI (no VGA text console exists until the FB UI is built — this is expected, not a failure), so **all validation is via the durable NVMe telemetry log**, not the screen.
 
 - Reflash the USB with UEFI GRUB (`create_boot_usb.sh --uefi-only`, `x86_64-efi`), default boot entry = the multiboot2/UEFI entry (`multiboot2`/`module2` + `insmod efi_gop`/`all_video`).

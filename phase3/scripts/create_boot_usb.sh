@@ -3,13 +3,13 @@
 # JARVIS AI-OS — Create Bootable USB for seL4 x86-64
 #
 # Creates a USB drive that boots GRUB, which then loads the seL4 kernel
-# and JARVIS rootserver via multiboot. Supports both BIOS (Legacy/CSM)
-# and UEFI boot modes.
+# and JARVIS rootserver via multiboot. DEFAULT = UEFI (the v1.0 boot standard
+# since Phase 4 goal #2 Step 1); --bios-only is the legacy BIOS/CSM fallback.
 #
 # Usage:
-#   sudo ./create_boot_usb.sh /dev/sdX --confirm
-#   sudo ./create_boot_usb.sh /dev/sdX --confirm --uefi-only
-#   sudo ./create_boot_usb.sh /dev/sdX --confirm --bios-only
+#   sudo ./create_boot_usb.sh /dev/sdX --confirm              # UEFI (default)
+#   sudo ./create_boot_usb.sh /dev/sdX --confirm --bios-only  # legacy BIOS fallback
+#   sudo ./create_boot_usb.sh /dev/sdX --confirm --uefi-only  # force UEFI explicitly
 #
 # Requirements:
 #   - grub-install (grub-pc-bin for BIOS, grub-efi-amd64-bin for UEFI)
@@ -31,7 +31,9 @@ NC='\033[0m'
 # ── Defaults ────────────────────────────────────────────────────────
 DEVICE=""
 CONFIRMED=0
-BOOT_MODE="both"  # "both", "bios", "uefi"
+# DEFAULT = UEFI (Phase 4 goal #2 Step 1; CSM is sunset). Use --bios-only for the
+# legacy fallback, or --bios-only/--uefi-only to force a mode. "uefi" | "bios" | "both"
+BOOT_MODE="uefi"
 BUILD_DIR="${SEL4_BUILD_DIR:-$HOME/sel4-x86/jbuild}"
 GRUB_CFG_SRC=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

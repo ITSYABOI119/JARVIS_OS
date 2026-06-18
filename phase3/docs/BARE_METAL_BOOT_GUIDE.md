@@ -1,8 +1,8 @@
 # JARVIS AI-OS — Bare Metal Boot Guide (seL4 x86-64)
 
 **Date:** April 2, 2026
-**Platform:** x86-64 PC99 (Ryzen 7 2700X, ASUS X470-F Gaming, 16GB DDR4)
-**Status:** Infrastructure ready, awaiting RTX 3060
+**Platform:** x86-64 PC99 (Ryzen 7 2700X, ASUS X470-F Gaming, 32GB DDR4, R9 280X display)
+**Status:** UEFI boot VERIFIED bare-metal (Phase 4 goal #2 Step 1, 2026-06-18) — the full stack survives UEFI (self-test 5/5, NVMe Gemma load, M3 NUM_NODES=6, coherent inference, err=0, ~5.5 tok/s). Framebuffer status UI = goal #2 Step 2.
 
 ---
 
@@ -69,15 +69,15 @@ Navigate to these settings and change them as indicated:
 | Path | Setting | Value | Why |
 |------|---------|-------|-----|
 | Advanced > CPU Configuration | SVM Mode | **Enabled** | Hardware virtualization (KVM for QEMU testing) |
-| Boot > Secure Boot | OS Type | **Other OS** | seL4 kernel is not signed; disables Secure Boot |
-| Boot > CSM (Compatibility Support Module) | Launch CSM | **Enabled** | Legacy/MBR GRUB boot (multiboot1 works best here) |
-| Boot > Boot Option Priorities | #1 Boot Option | **USB device** | Boot from USB stick before NVMe |
+| Boot > CSM (Compatibility Support Module) | Launch CSM | **Disabled** | Pure UEFI boot — the v1.0 standard (CSM is sunset; installer/release need UEFI; GOP is the goal-#2 framebuffer path) |
+| Boot > Secure Boot | OS Type | **Other OS** | Non-enforcing — the GRUB/shim isn't enrolled in Microsoft keys; "Windows UEFI mode" would block the boot |
+| Boot > Boot Option Priorities | #1 Boot Option | **UEFI: \<USB stick\>** | Boot the UEFI USB entry (not a plain/legacy entry) before NVMe |
 | Save & Exit | | **Save Changes and Reset** | Apply settings |
 
 ### Notes
 
 - If "Secure Boot" does not show an OS Type option, look for a standalone "Secure Boot" enable/disable toggle under the Boot or Security tab.
-- CSM must be enabled for the Legacy GRUB boot path. If you want to try UEFI boot instead, disable CSM and use the UEFI GRUB menu entry.
+- Boot in **UEFI mode** (CSM disabled): the grub default entry (`default=1`) is the multiboot2/efi_gop UEFI entry. At the boot picker choose the **`UEFI: <stick>`** entry. The **legacy BIOS path is the fallback** — flash with `reflash_usb.sh --bios` / `create_boot_usb.sh --bios-only`, then re-enable CSM.
 - SVM Mode is not required for bare-metal seL4, but it is useful for QEMU/KVM testing on the same machine.
 
 ---
@@ -125,14 +125,17 @@ ls -lh ~/sel4-x86/jbuild/images/
 # Identify your USB device
 lsblk -d -o NAME,SIZE,TYPE,TRAN,MODEL | grep disk
 
-# Create boot USB (replace /dev/sdX with your USB device)
+# Create boot USB — DEFAULT IS UEFI (GPT+ESP, x86_64-efi). Replace /dev/sdX.
 sudo ./phase3/scripts/create_boot_usb.sh /dev/sdX --confirm
 
-# For BIOS-only (simpler, more reliable for first boot):
+# Legacy BIOS/CSM fallback:
 sudo ./phase3/scripts/create_boot_usb.sh /dev/sdX --confirm --bios-only
+
+# Quick reflash of an existing build (defaults to UEFI; --bios for legacy):
+sudo bash ./phase3/scripts/reflash_usb.sh /dev/sdX
 ```
 
-The script partitions the USB, copies seL4 images and GRUB config, and installs GRUB. It refuses `/dev/sda` and NVMe devices as a safety measure.
+The script partitions the USB, copies the seL4 images + GRUB config, and installs GRUB (UEFI by default → `/EFI/BOOT/BOOTX64.EFI`). It refuses NVMe and the root-filesystem disk as a safety measure.
 
 ### Manual
 
@@ -175,21 +178,19 @@ sudo umount /mnt/usb
 
 ---
 
-## 5. Booting
+## 5. Booting (UEFI)
 
 1. Insert the boot USB into the JARVIS Project PC
-2. Power on (or reboot)
-3. If BIOS boot order was set correctly (Section 2), GRUB loads automatically
-4. Select **"JARVIS seL4 x86-64"** from the GRUB menu
-5. seL4 boots, loads the rootserver, and JARVIS self-tests run
-
-If GRUB does not appear, press **F8** during POST (on X470-F Gaming) to open the one-time boot menu and select the USB device.
+2. Power on (or reboot); press **F8** during POST (X470-F) for the one-time boot menu and select the **`UEFI: <stick>`** entry
+3. The GRUB menu appears on the monitor (~10s) and auto-selects **"JARVIS seL4 x86-64 (UEFI)"** (the multiboot2 entry, grub `default=1`)
+4. seL4 boots via multiboot2 → loads the rootserver → self-test → loads Gemma from NVMe → starts inference
+5. **The monitor goes dark / freezes on the last GRUB frame when seL4 takes over — this is EXPECTED.** There is no on-screen output until the goal #2 Step 2 framebuffer UI exists. **Validate via the NVMe telemetry log** (Section 6) or the COM1 serial console (Section 8).
 
 ---
 
-## 6. Expected VGA Output
+## 6. Expected Output (serial / NVMe log — monitor is dark under UEFI)
 
-With CSM enabled and VGA text mode active, the monitor displays the rootserver output via the VGA text driver:
+Under UEFI the monitor is **dark** (VGA text mode needs CSM). The rootserver output below is what appears on the **COM1 serial console** and, with `JARVIS_DBG_BOOT_LOG=1`, in the **NVMe telemetry log** (read back via `sudo dd if=/dev/nvme0n1 bs=512 skip=4000794624 count=2700 | python3 phase3/scripts/parse_nvme_log.py`):
 
 ```
 ==================================================
@@ -236,9 +237,9 @@ Key differences on real hardware compared to QEMU:
 | GRUB menu appears, but no kernel | Module line in grub.cfg wrong | Check `ls ~/sel4-x86/jbuild/images/` and update grub.cfg image names |
 | Triple fault after GRUB | IOAPIC/LAPIC issue | Try the "Serial Only" GRUB entry; disable IOMMU in BIOS |
 | Hang after seL4 kernel banner | Timer source issue | Check PIT/HPET/TSC config; try rebuilding without `-DSIMULATION=1` |
-| Garbled VGA text | Not in text mode | BIOS CSM must be enabled (UEFI GOP framebuffer is not VGA text) |
+| Monitor dark after GRUB | Expected under UEFI | Not a fault — no framebuffer UI until goal #2 Step 2. Validate via NVMe log / serial. |
 | Works on QEMU, fails on real HW | ACPI or memory map differences | Debug with serial console (Section 8); check IOMMU/VT-d setting |
-| "No valid untypeds" | BIOS memory map issue | Enable CSM; UEFI firmware may report memory differently |
+| "No valid untypeds" | Memory map / IOMMU | UEFI memory map validated in Step 1; if it recurs, confirm IOMMU/AMD-Vi is Disabled. |
 | Kernel assertion failure | IOMMU/AMD-Vi enabled | Disable AMD-Vi in BIOS for first boot |
 | GRUB rescue prompt | grub.cfg not found on USB | Verify grub.cfg is at `/boot/grub/grub.cfg` on the USB partition |
 | "file not found" in GRUB | Image name mismatch | Image filenames in grub.cfg must match files in `/boot/` |
@@ -274,7 +275,7 @@ seL4 x86-64 has two independent output paths:
 
 - **Serial (COM1 at 0x3F8):** The seL4 kernel writes boot messages, ELF loading status, and assertion failures here. The rootserver also writes here via `puts_serial()` / `seL4_DebugPutChar()`.
 
-- **VGA text (0xB8000):** The JARVIS VGA driver (`vga_text.c`) writes directly to VGA text-mode memory. This provides rootserver output on the monitor independently of serial. CSM must be enabled for VGA text mode to work.
+- **VGA text (0xB8000):** The JARVIS VGA driver (`vga_text.c`) writes to VGA text-mode memory, available **only under legacy BIOS/CSM**. Under UEFI there is no VGA text window — the `0xB8000` map fails gracefully (non-fatal, `vga_ready=0`) and the monitor stays dark until the goal #2 Step 2 framebuffer (GOP) UI exists. Use serial / the NVMe log for UEFI validation.
 
 Both outputs run simultaneously when available. For initial bring-up, VGA alone is sufficient. Add serial later for kernel-level debugging if needed.
 
@@ -319,7 +320,6 @@ Later (after NVMe boot is implemented), the USB step goes away and iteration bec
 
 ---
 
-*Guide updated: April 2, 2026*
-*Hardware: Ryzen 7 2700X, ASUS X470-F Gaming, 16GB DDR4, RTX 3060 (pending)*
-*seL4 QEMU verified: 247/247 tests pass, process-isolated LLM inference on seL4*
-*Boot protocol: Multiboot1 (BIOS/CSM) + Multiboot2 (UEFI) via GRUB2*
+*Guide updated: June 18, 2026 (Phase 4 goal #2 Step 1 — UEFI boot migration)*
+*Hardware: Ryzen 7 2700X, ASUS X470-F Gaming, 32GB DDR4, R9 280X (display only)*
+*Boot protocol: **UEFI / Multiboot2** via GRUB2 (default) — verified bare metal (self-test 5/5, NVMe Gemma load, M3 NUM_NODES=6, err=0, ~5.5 tok/s). Legacy BIOS/Multiboot1 kept as the `--bios` fallback.*
