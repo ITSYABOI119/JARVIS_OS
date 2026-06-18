@@ -35,7 +35,7 @@ This document is the simple forward roadmap. Each phase has specific goals and a
 
 ### Done when
 
-- [ ] seL4-build inference benchmark recorded + reproducible: AVX2+threaded Gemma 4 E2B tok/s on the 2700X (target ≈ native threaded)
+- [x] seL4-build inference benchmark recorded + reproducible: Gemma 4 E2B **5.46 tok/s @ `NUM_NODES=6`** (3.57× the 1.53 1T), 2026-06-18 — see `phase4/docs/PHASE_4_GOAL1_BENCHMARK.md`
 - [ ] (deferred) GPU inference benchmark — gated on hardware, see ADR 2026-06-16
 - [ ] Local keyboard input works without serial console
 - [ ] Fresh machine can boot JARVIS from USB following the guide alone
@@ -179,4 +179,4 @@ Beyond               — research directions
 ---
 
 **Last updated:** June 2026  
-**Status:** Draft — Phase 4 not started
+**Status:** Phase 4 IN PROGRESS — goal #1 (inference performance, CPU) COMPLETE 2026-06-18; goals #2–7 open
