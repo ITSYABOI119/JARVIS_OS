@@ -1,7 +1,7 @@
 # Phase 4 — Goal #2: Graphical Output (Framebuffer / HDMI Status UI)
 
-**Status:** **Step 1 (UEFI boot migration) COMPLETE — 2026-06-18.** No framebuffer/UI code yet (that is Step 2, next).
-**Date:** 2026-06-18
+**Status:** **Step 1 (UEFI boot migration) DONE 2026-06-18; Step 2a (FB plumbing) + Step 2b (first pixels) DONE 2026-06-19.** Step 2c (bitmap font + status UI) is next.
+**Date:** 2026-06-18 (updated 2026-06-19)
 **Goal:** Move beyond the 80×25 VGA text console to a real **graphical framebuffer status UI** on the JARVIS PC monitor — boot progress, model load, query/response, tok/s, SHIELD/err state — rendered from the design tokens in `phase4/docs/ui_mockups/JARVIS_OS_DESIGN_TOKENS.md`. ROADMAP Phase 4 goal #2.
 **Scope:** **DISPLAY only.** GPU *compute* (inference) stays deferred (ADR `docs/decisions/2026-06-16-defer-gpu-inference.md`). This goal does not touch the R9 280X as a compute device — only as the firmware-initialized framebuffer it already is.
 **Sources:** 3-agent feasibility exploration (2026-06-18): box probe (`fb0` under Linux), seL4 14.0.0 kernel source read, JARVIS rootserver read. Where a web claim conflicts with the box/source read, the read wins.
@@ -42,13 +42,22 @@ Switch the boot from legacy BIOS/multiboot1 to **UEFI GRUB** and prove the exist
 - **Validate from the NVMe log:** rootserver banner + self-test 5/5; **NVMe detected + Gemma loaded** (the big risk — UEFI memory map / device-untyped coverage / the `0xCF8` IOPort PCI cap); M3 workers (`NUM_NODES=6`) + **coherent** inference; `[STATS] q=100 err=0`; **tok/s ≈ 5.46** (goal-#1 perf holds under UEFI).
 - **Exit criteria:** the whole stack is byte-for-byte functionally intact under UEFI (load + coherent gen + err=0 + ~5.46 tok/s). **Gate: report results for human review before committing.** Then commit the UEFI migration (the `create_boot_usb` default → UEFI; the VGA map is already non-fatal) with the capture flags reset to 0.
 
-### Step 2 — framebuffer plumbing + blitter + status UI  *(NEXT task, after Step 1 is validated + committed)*
-Only once UEFI boot is proven:
+### Step 2 — framebuffer plumbing + blitter + first pixels
+The original three sub-pieces, split into risk-isolated steps so a boot/kernel change couldn't silently break the goal-#1 stack:
 
-1. **MB2 type-5 framebuffer-request tag** in the kernel's multiboot2 header (`multiboot.S` — today the MB2 header is **end-tag-only**; add the `type=5` tag requesting linear 1920×1080×32) so the firmware/GRUB hands the GOP framebuffer to seL4, which forwards it as **id=4**.
-2. **Rootserver id=4 consumer:** read the `seL4_X86_BootInfo_fb_t` (addr/pitch/width/height/bpp/type) from the forwarded bootinfo extra-header, and **map the framebuffer** (~8.3 MB / ~2025 4 KB frames at `0xE0000000`) by **reusing the existing NVMe-BAR0 device-frame map pattern** (`main_x86.c:1273–1308`: `vka_alloc_frame_at(paddr+i*4096)` per page → `vspace_map_pages`). Confirm device-untyped coverage spans the full FB region.
-3. **Pixel blitter + bitmap font:** a `fb_putpixel`/`fb_fill`/`fb_blit` core and an 8×16 bitmap font (augmenting `vga_text.c`'s text role), then a **status-screen renderer** that draws the boot-log → live status UI per `phase4/docs/ui_mockups/JARVIS_OS_DESIGN_TOKENS.md`.
-4. **Confirm pixel format (BGRX vs RGBX)** from the id=4 `type` field + a known-color test pixel **before** trusting the design-token hex colors.
+#### Step 2a — FB plumbing (MB2 tag + id=4 consumer)  — ✅ **DONE (2026-06-18)**
+> Kernel **MB2 type-5 framebuffer-request tag** (`build_jarvis_x86.sh` idempotently patches `multiboot.S`; the request is **0/0/0 = "no preference"**, NOT a forced 1920×1080×32 — it pairs with grub `set gfxpayload=keep` to keep the firmware GOP mode) + a rootserver **id=4 consumer** that reads + logs the forwarded `seL4_X86_BootInfo_fb_t`. Validated under OVMF: kernel "Got framebuffer info ... type=1" + rootserver "[JARVIS] FB: addr=... type=1". No drawing. (Review catch: `seL4_X86_BootInfo_fb_t` is an *incomplete* type in userspace — the payload struct is kernel-internal — so the consumer mirrors the layout locally.)
+
+#### Step 2b — device-untyped dump + FB map + test pattern  — ✅ **DONE (2026-06-19, FIRST PIXELS)**
+> **RESULT (R9 280X bare metal, boot_id=1 log + photo, independently verified):** the **6-rect test pattern renders on the monitor** — byte order is **BGRX** (top-left rect shows RED with the default `fb_set_rb_swap(0)`; **no R↔B swap** needed — bake that into 2c). The real descriptor was **1920×1080×32 type=1 @ ~0xE0000000**; a device-untyped covered the FB region; the UC map succeeded across ~2025 pages. **No regression:** self-test 5/5, **Gemma 4 E2B 2962 MB / 758480 pages**, M3 `NUM_NODES=6` (5 workers), coherent inference, **err=0 over q=100/200**.
+> - `framebuffer.c/h`: a 32bpp linear, pitch-addressed blitter (`fb_init`/`fb_putpixel`/`fb_fill_rect`/`fb_clear`/`fb_flush`). seL4-only (no host test).
+> - `main_x86.c`: parse id=4 → dump device-untypeds (so a failed map shows whether `[addr, addr+pitch*height)` is covered) → map the FB **Uncacheable** → draw the pattern. All **NON-FATAL**.
+> - **Mapped UNCACHEABLE, not WriteCombining:** `vspace_map_pages`' last arg is `int cacheable` (libsel4utils: `1 → WriteBack`, `0 → Uncached`), **not** a `seL4_X86_VMAttributes` — so passing `0` gives UC, MTRR-independent and guaranteed visible. (Review caught that passing `seL4_X86_WriteCombining`=4 is *truthy* → WriteBack → no pixels.) True WriteCombining (faster) needs a raw `seL4_X86_Page_Map` path → deferred to 2c perf.
+
+#### Step 2c — bitmap font + status UI  *(NEXT)*
+1. **Bitmap font + status-screen renderer** from `phase4/docs/ui_mockups/JARVIS_OS_DESIGN_TOKENS.md` (boot-log → live status: model load, query/response, tok/s, err). Byte order is **BGRX, no swap** — use the design-token hex directly.
+2. **FB diagnostics are serial-only:** the FB block runs **before `nvme_log_init`**, so the `[JARVIS] FB:` descriptor/dump lines never reach the NVMe log — a dark boot is currently only diagnosable over serial. **Re-log the descriptor + map result via a structured `nvme_log_write` after `nvme_log_init`** so a dark boot is diagnosable from the durable log.
+3. **Optional true-WC mapping** via a raw `seL4_X86_Page_Map` path (faster fills than UC) — only if the UC fill latency matters.
 
 ## 4. Key files & references
 
@@ -75,8 +84,8 @@ Only once UEFI boot is proven:
 
 - **Boot-mode change (the whole point of isolating Step 1).** UEFI vs legacy BIOS can shift the E820/memory map, the device-untyped layout, and PCI/IOPort access. The NVMe model load + inference stack must be **re-validated end-to-end** under UEFI before any UI work. This is why Step 1 ships and is reviewed on its own.
 - **No VGA-text fallback under UEFI.** The legacy `0xB8000` text window is absent/unused under pure UEFI, so the **monitor stays dark until the Step-2 FB UI exists**. Validation is serial + NVMe-log only. The `0xB8000` map must stay non-fatal (confirmed already so, §3).
-- **Device-untyped coverage for the FB.** The ~8.3 MB framebuffer at `0xE0000000` must be covered by a device-untyped the rootserver can retype (Step 2). If `vka_alloc_frame_at` can't reach part of the region, the map fails — verify coverage when wiring the id=4 consumer.
-- **Pixel format (BGRX vs RGBX) + pitch ≠ width×bpp.** GOP pixel order and a pitch larger than `width*4` (scanline padding) must be read from the id=4 record and confirmed with a test pixel **before** trusting design-token colors.
+- **Device-untyped coverage for the FB.** The ~8.3 MB framebuffer at `0xE0000000` must be covered by a device-untyped the rootserver can retype (Step 2). If `vka_alloc_frame_at` can't reach part of the region, the map fails — verify coverage when wiring the id=4 consumer. *(RESOLVED 2b: a device untyped covered the FB region; the per-page UC map succeeded across ~2025 pages on the R9 280X.)*
+- **Pixel format (BGRX vs RGBX) + pitch ≠ width×bpp.** GOP pixel order and a pitch larger than `width*4` (scanline padding) must be read from the id=4 record and confirmed with a test pixel **before** trusting design-token colors. *(RESOLVED 2b: BGRX — top-left RED with `fb_set_rb_swap(0)`, no swap; blitter is pitch-addressed.)*
 
 ## 6. Honesty / verification stance
 

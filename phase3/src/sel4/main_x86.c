@@ -52,6 +52,7 @@
 #include "nvme.h"
 #include "nvme_log.h"
 #include "fat32.h"
+#include "framebuffer.h"
 #include "jarvis_debug.h"
 
 #if JARVIS_AVX2_PROBE
@@ -67,6 +68,11 @@
 #define JARVIS_MODEL_FILE "GEMMA2B GUF"
 
 static int vga_ready = 0;  /* set after VGA frame mapped into vspace */
+
+/* Phase 4 goal #2 Step 2b: frame caps for the mapped GOP framebuffer.
+ * 4096 pages * 4KB = 16MB — covers 1920x1080x32 (~2025 pages) with margin. */
+#define FB_MAX_PAGES 4096
+static seL4_CPtr g_fb_caps[FB_MAX_PAGES];
 
 /* seL4 IOPort wrappers for PCI config space (0xCF8/0xCFC).
  * Cap acquired at runtime, stored here for the wrapper functions. */
@@ -1215,6 +1221,167 @@ static void *main_continued(void *arg UNUSED)
             puts_serial("[JARVIS] VGA: alloc frame at 0xB8000 failed (err=");
             put_dec((uint32_t)vga_err);
             puts_serial(")\n");
+        }
+    }
+
+    /* Phase 4 goal #2: framebuffer descriptor (id=4) + first pixels.
+     * Step 2a: parse the multiboot2 framebuffer seL4 forwards as extra-bootinfo
+     * id=4 (SEL4_BOOTINFO_HEADER_X86_FRAMEBUFFER) and log it. The payload struct
+     * (struct multiboot2_fb) lives in a kernel-internal header not on the userspace
+     * include path -> seL4_X86_BootInfo_fb_t is INCOMPLETE here, so mirror it.
+     * Step 2b: dump device-untypeds, map the framebuffer WRITE-COMBINING (reusing
+     * the NVMe-BAR0 device-frame pattern), and draw a test pattern. All NON-FATAL. */
+    {
+        typedef struct __attribute__((packed)) {
+            uint64_t addr;
+            uint32_t pitch;
+            uint32_t width;
+            uint32_t height;
+            uint8_t  bpp;
+            uint8_t  type;
+        } jarvis_fb_info_t;
+
+        uint64_t fb_addr = 0;
+        uint32_t fb_pitch = 0, fb_width = 0, fb_height = 0;
+        uint8_t  fb_bpp = 0, fb_type = 0;
+        int fb_valid = 0;
+
+        seL4_BootInfo *fb_bi = platsupport_get_bootinfo();
+        if (fb_bi && fb_bi->extraLen > 0) {
+            uintptr_t cur = (uintptr_t)fb_bi + seL4_BootInfoFrameSize;
+            uintptr_t end = cur + fb_bi->extraLen;
+            while (cur + sizeof(seL4_BootInfoHeader) <= end) {
+                seL4_BootInfoHeader *h = (seL4_BootInfoHeader *)cur;
+                if (h->id == SEL4_BOOTINFO_HEADER_X86_FRAMEBUFFER &&
+                    cur + sizeof(seL4_BootInfoHeader) + sizeof(jarvis_fb_info_t) <= end) {
+                    jarvis_fb_info_t *fb =
+                        (jarvis_fb_info_t *)(cur + sizeof(seL4_BootInfoHeader));
+                    fb_addr  = fb->addr;  fb_pitch  = fb->pitch;
+                    fb_width = fb->width; fb_height = fb->height;
+                    fb_bpp   = fb->bpp;   fb_type   = fb->type;
+                    fb_valid = 1;
+                    break;
+                }
+                if (h->len == 0) break;   /* malformed chunk — avoid an infinite loop */
+                cur += h->len;
+            }
+        }
+
+        if (fb_valid) {
+            puts_serial("[JARVIS] FB: addr=");   /* put_hex self-prefixes 0x */
+            put_hex((uint32_t)(fb_addr >> 32)); put_hex((uint32_t)fb_addr);
+            puts_serial(" pitch="); put_dec(fb_pitch);
+            puts_serial(" "); put_dec(fb_width);
+            puts_serial("x"); put_dec(fb_height);
+            puts_serial(" bpp="); put_dec((uint32_t)fb_bpp);
+            puts_serial(" type="); put_dec((uint32_t)fb_type);
+            puts_serial("\n");
+        } else if (fb_bi && fb_bi->extraLen > 0) {
+            puts_serial("[JARVIS] FB: no id=4 framebuffer chunk in extra-bootinfo\n");
+        } else {
+            puts_serial("[JARVIS] FB: bootinfo extraLen=0 (no framebuffer forwarded)\n");
+        }
+
+        /* Step 2b — only with a usable direct-RGB (type==1) 32bpp framebuffer. */
+        int fb_drawable = fb_valid && fb_type == 1 && fb_addr != 0 &&
+                          fb_pitch != 0 && fb_width != 0 && fb_height != 0;
+        if (fb_drawable && fb_bpp != 32) {
+            puts_serial("[JARVIS] FB: bpp!=32 — blitter is 32bpp, skipping draw\n");
+            fb_drawable = 0;
+        }
+
+        if (fb_drawable) {
+            uint64_t fb_end = fb_addr + (uint64_t)fb_pitch * fb_height;
+
+            /* (a) Dump device-untypeds so a failed FB map shows whether
+             *     [fb_addr, fb_end) is covered by a device untyped. */
+            puts_serial("[JARVIS] FB region ");
+            put_hex((uint32_t)(fb_addr >> 32)); put_hex((uint32_t)fb_addr);
+            puts_serial("..");
+            put_hex((uint32_t)(fb_end >> 32)); put_hex((uint32_t)fb_end);
+            puts_serial("\n[JARVIS] device untypeds:\n");
+            int utc = (int)simple_get_untyped_count(&simple);
+            int fb_covered = 0;
+            for (int i = 0; i < utc; i++) {
+                size_t sb = 0; uintptr_t pa = 0; bool dev = false;
+                simple_get_nth_untyped(&simple, i, &sb, &pa, &dev);
+                if (!dev) continue;
+                uint64_t ua = (uint64_t)pa, ue = ua + (1ULL << sb);
+                puts_serial("  dev paddr=");
+                put_hex((uint32_t)(ua >> 32)); put_hex((uint32_t)ua);
+                puts_serial(" size=2^"); put_dec((uint32_t)sb);
+                if (fb_addr >= ua && fb_end <= ue) {
+                    puts_serial(" [covers FB]");
+                    fb_covered = 1;
+                }
+                puts_serial("\n");
+            }
+            if (!fb_covered) {
+                /* Not necessarily a failure: device untypeds are power-of-2 chunks, so a
+                 * large FB can straddle two adjacent ones; the map below is per-page. */
+                puts_serial("[JARVIS] FB: note — no SINGLE device untyped covers the FB region (per-page map may still succeed)\n");
+            }
+
+            /* (b) Map the FB UNCACHEABLE. vspace_map_pages' last arg is `int cacheable`
+             *     (NOT a seL4_X86_VMAttributes): libsel4utils maps 1 -> WriteBack
+             *     (cacheable), 0 -> Uncacheable. A cacheable mapping would NOT reliably
+             *     show pixels (the GPU scanout does not snoop the CPU cache), so we pass 0
+             *     (UC) — the same device-memory mapping the NVMe BAR0/DMA path uses; UC is
+             *     MTRR-independent and guaranteed visible. (True WriteCombining is faster
+             *     but needs a raw seL4_X86_Page_Map path vspace_map_pages can't express —
+             *     deferred to a 2c perf pass.) Reuse the NVMe-BAR0 device-frame pattern. */
+            uint32_t fb_pages = (uint32_t)((fb_pitch * (uint64_t)fb_height + 4095) / 4096);
+            void *fb_vaddr = 0;
+            if (fb_pages == 0 || fb_pages > FB_MAX_PAGES) {
+                puts_serial("[JARVIS] FB: page count "); put_dec(fb_pages);
+                puts_serial(" out of range (max "); put_dec(FB_MAX_PAGES);
+                puts_serial("), skipping map\n");
+            } else {
+                int map_ok = 1;
+                for (uint32_t pg = 0; pg < fb_pages; pg++) {
+                    vka_object_t frame;
+                    int err = vka_alloc_frame_at(&vka, seL4_PageBits,
+                        (uintptr_t)(fb_addr + (uint64_t)pg * 4096), &frame);
+                    if (err) {
+                        puts_serial("[JARVIS] FB map failed at page "); put_dec(pg);
+                        puts_serial(" err="); put_dec((uint32_t)err); puts_serial("\n");
+                        map_ok = 0;
+                        break;
+                    }
+                    g_fb_caps[pg] = frame.cptr;
+                }
+                if (map_ok) {
+                    /* last arg is `int cacheable`: 0 => Uncacheable (see comment above). */
+                    fb_vaddr = vspace_map_pages(&vspace, g_fb_caps, NULL,
+                        seL4_AllRights, fb_pages, seL4_PageBits, 0);
+                    if (!fb_vaddr) {
+                        puts_serial("[JARVIS] FB: vspace_map_pages failed (no draw)\n");
+                    } else {
+                        puts_serial("[JARVIS] FB mapped UC at vaddr ");
+                        put_hex((uint32_t)((uintptr_t)fb_vaddr >> 32));
+                        put_hex((uint32_t)(uintptr_t)fb_vaddr);
+                        puts_serial(" pages="); put_dec(fb_pages); puts_serial("\n");
+                    }
+                }
+            }
+
+            /* (c) Test pattern (only if the map succeeded). */
+            if (fb_vaddr && fb_init(fb_vaddr, fb_pitch, fb_width, fb_height, fb_bpp) == 0) {
+                fb_clear(0x0A0B0E);                          /* dark canvas */
+                fb_fill_rect(60,  60,  220, 160, 0xFF0000);  /* RED   — byte-order test */
+                fb_fill_rect(320, 60,  220, 160, 0x00FF00);  /* GREEN */
+                fb_fill_rect(580, 60,  220, 160, 0x0000FF);  /* BLUE  */
+                fb_fill_rect(60,  260, 220, 160, 0x4F7CFF);  /* accent */
+                fb_fill_rect(320, 260, 220, 160, 0x3FB950);  /* ok */
+                fb_fill_rect(580, 260, 220, 160, 0xF2564B);  /* err */
+                fb_flush();
+                puts_serial("[JARVIS] FB: test pattern drawn at vaddr ");
+                put_hex((uint32_t)((uintptr_t)fb_vaddr >> 32));
+                put_hex((uint32_t)(uintptr_t)fb_vaddr);
+                puts_serial("\n");
+            } else if (fb_vaddr) {
+                puts_serial("[JARVIS] FB: fb_init rejected the descriptor (no draw)\n");
+            }
         }
     }
 #endif

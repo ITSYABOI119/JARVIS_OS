@@ -203,6 +203,8 @@ copy_file "$DRV_SRC/nvme_log.c" "$DRV_DST/nvme_log.c"
 copy_file "$DRV_SRC/nvme_log.h" "$DRV_DST/nvme_log.h"
 copy_file "$DRV_SRC/fat32.c" "$DRV_DST/fat32.c"
 copy_file "$DRV_SRC/fat32.h" "$DRV_DST/fat32.h"
+copy_file "$DRV_SRC/framebuffer.c" "$DRV_DST/framebuffer.c"
+copy_file "$DRV_SRC/framebuffer.h" "$DRV_DST/framebuffer.h"
 
 # Inference server (Process B — lives in jarvis-inference app, NOT sel4test-driver)
 PROC_B_DIR="$SEL4_DIR/projects/jarvis-x86/apps/jarvis-inference/src"
@@ -303,6 +305,19 @@ if [ -f "$CMAKE_FILE" ]; then
         fi
     else
         echo -e "  ${CYAN}OK${NC}  src/drivers/fat32.c already in source list"
+    fi
+
+    # Add src/drivers/framebuffer.c to source list if missing (goal #2 Step 2b)
+    if ! grep -q "src/drivers/framebuffer.c" "$CMAKE_FILE"; then
+        sed -i '/src\/drivers\/fat32.c/a\    src/drivers/framebuffer.c' "$CMAKE_FILE" 2>/dev/null
+        if grep -q "src/drivers/framebuffer.c" "$CMAKE_FILE"; then
+            echo -e "  ${GREEN}ADDED${NC}  src/drivers/framebuffer.c to source list"
+            PATCHED=1
+        else
+            echo -e "  ${RED}FAILED${NC}  Could not add framebuffer.c — edit CMakeLists.txt manually"
+        fi
+    else
+        echo -e "  ${CYAN}OK${NC}  src/drivers/framebuffer.c already in source list"
     fi
 
     # Add JARVIS_SEL4 compile definition (needed for pci.c IOPort backend)
@@ -432,6 +447,58 @@ JX_SETTINGS="$SEL4_DIR/projects/jarvis-x86/settings.cmake"
 if [ -f "$JX_SETTINGS" ] && grep -q 'set(KernelIOMMU ON CACHE BOOL "" FORCE)' "$JX_SETTINGS"; then
     sed -i 's/set(KernelIOMMU ON CACHE BOOL "" FORCE)/set(KernelIOMMU OFF CACHE BOOL "" FORCE)  # JARVIS: NVMe needs direct DMA (no VT-d)/' "$JX_SETTINGS"
     echo -e "${GREEN}Patched KernelIOMMU ON->OFF in jarvis-x86/settings.cmake${NC}"
+fi
+
+# ── Kernel: multiboot2 framebuffer-request tag (Phase 4 goal #2 Step 2a) ─────
+# seL4 already PARSES a multiboot2 framebuffer tag and FORWARDS it to the rootserver
+# as SEL4_BOOTINFO_HEADER_X86_FRAMEBUFFER (id=4) — but the kernel's MB2 header never
+# REQUESTS one, so GRUB sets none up. Insert a type-5 framebuffer-request tag
+# (width/height/depth = 0/0/0 = no preference => keep the firmware GOP mode) before
+# the MB2 end tag. Idempotent (grep-guarded); runs BEFORE ninja so the kernel rebuilds
+# with it. Independent of CONFIG_MULTIBOOT_GRAPHICS_MODE_* (that only wires the MB1
+# header), so no Kconfig change is needed. NOTE: this deliberately leaves the
+# (repo-managed) kernel source multiboot.S modified; it is re-applied (guarded) every
+# build, so a `repo sync`/`git checkout` revert self-heals on the next build.
+# The awk match is the EXACT end-tag comment (so the inserted "MB2 terminator" line
+# can never be a second match), and we gate on awk explicitly — `awk ... && mv` would
+# be EXEMPT from `set -e` (left operand of &&), so a silent awk failure must be caught
+# here, not relied on the grep guard below.
+MB2_S="$SEL4_DIR/kernel/src/arch/x86/multiboot.S"
+if [ -f "$MB2_S" ]; then
+    if ! grep -q "JARVIS goal #2: framebuffer-request" "$MB2_S"; then
+        if awk '
+            /end tag - type, flags, size/ && !ins {
+                print "    /* JARVIS goal #2: framebuffer-request tag (type 5). 0/0/0 = no preference =>"
+                print "     * keep the firmware GOP mode. seL4 forwards the result as id=4 to the rootserver. */"
+                print "    .align  8"
+                print "    .word   5      /* type = framebuffer */"
+                print "    .word   0      /* flags (0 = required) */"
+                print "    .long   20     /* size = type(2)+flags(2)+size(4)+width(4)+height(4)+depth(4) */"
+                print "    .long   0      /* width  (0 = no preference) */"
+                print "    .long   0      /* height (0 = no preference) */"
+                print "    .long   0      /* depth  (0 = no preference) */"
+                print "    .align  8      /* pad to 8 before the MB2 terminator */"
+                ins=1
+            }
+            { print }
+        ' "$MB2_S" > "$MB2_S.jarvis.tmp"; then
+            mv "$MB2_S.jarvis.tmp" "$MB2_S"
+        else
+            rm -f "$MB2_S.jarvis.tmp"
+            echo -e "${RED}FAILED to patch multiboot.S (awk error). Aborting.${NC}"
+            exit 1
+        fi
+        if grep -q "JARVIS goal #2: framebuffer-request" "$MB2_S"; then
+            echo -e "${GREEN}Patched kernel multiboot.S — added MB2 framebuffer-request tag (goal #2 Step 2a)${NC}"
+        else
+            echo -e "${RED}FAILED to patch multiboot.S ('end tag - type, flags, size' marker not found). Aborting.${NC}"
+            exit 1
+        fi
+    else
+        echo -e "${CYAN}multiboot.S already has the MB2 framebuffer-request tag${NC}"
+    fi
+else
+    echo -e "${YELLOW}WARN${NC}  kernel multiboot.S not found at $MB2_S — no FB-request tag added"
 fi
 
 # Kernel config — force-set every build (cmake reconfiguration can reset defaults):
