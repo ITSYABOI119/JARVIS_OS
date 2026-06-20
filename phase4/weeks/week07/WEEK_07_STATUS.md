@@ -1,7 +1,7 @@
 # Week 07 Status: Phase 4 Goal #2 (Graphical Output) — UEFI migration + FIRST PIXELS
 
 **Date:** June 19, 2026
-**Status:** Goal #2 **Step 1 (UEFI boot migration) DONE 2026-06-18**, **Step 2a (FB plumbing) + Step 2b (first pixels) DONE 2026-06-19**. The R9 280X monitor now shows a rendered test pattern driven by seL4 — the first graphical output of JARVIS. Step 2c (bitmap font + status UI) is next.
+**Status:** Goal #2 **Steps 1 → 2c-2c DONE (2026-06-18 → 2026-06-20)** — UEFI migration, first pixels, bitmap-font status panel, observability ([SNAP]+T+ms), scrolling event log, and per-state HUD chrome (header band + STATE badge + ROUTE + COUNTERS + natural oldest→newest scroll). The R9 280X monitor shows a live, styled JARVIS HUD driven by seL4. **Goal #2 display is v1-complete** (remaining backlog optional).
 **Phase:** Phase 4 — Production (v1.0). Goal #1 (inference perf, CPU) COMPLETE at M4 (week06); goal #2 (display) is the current workstream. Hardware-in-the-loop on the JARVIS PC (R9 280X, UEFI/GOP).
 
 ---
@@ -55,11 +55,22 @@ LOG-ONLY (`main_x86.c`) — runs with or without a framebuffer, fully verified o
 - **No-scroll event-log ring** (`fb_log_reset`/`append`/`count`/`row` in framebuffer.c): last 26 completed serial lines, each written in place at `count % 26` (`>`=head) — the UC framebuffer can't cheaply memmove-scroll. Fed from `putc_serial` completed lines (low cadence, never per-token, no recursion). 1px JCLR_LINE bordered "EVENT LOG" region.
 - **Verified:** host **24/24** (T8 wrap/truncate, T9 render-at-cell/cursor/no-OOB); box build gate caught a `*/`-in-comment bug (fixed); QEMU no-regression; **physical boot PASS** — event-log renders + scrolls, panel unchanged, boot_id log 5/5 / Gemma 2962 MB / M3 NN=6 / `[STATS] err=0` q=400 / FB 1024×768×32 pages=768. No-scroll order accepted v1; natural scroll → 2c-2c.
 
-## Next — Step 2c-2c+ (per-state styling + natural scroll)
+## Step 2c-2c — per-state HUD styling + natural-order scroll (DONE 2026-06-20) 🎉
 
-1. **Per-state HUD styling** from `jarvis-framebuffer-hud.html` (header band + STATE badge, route line, live counters — token palette, NO faked widgets) + **natural oldest→newest scroll** (cacheable shadow buffer + dirty-row flush).
-2. **fat32 FAT-sector cache** (boot-speed; ~160 MB redundant FAT reads) + exact data-only `%` via a fat32 progress callback.
-3. **Optional** true-WC mapping (raw `seL4_X86_Page_Map`) and 1920×1080 GRUB `gfxmode` for more UI room.
+The styled HUD with a real terminal-style scroll — **goal #2 display is v1-complete.**
+- **Per-state chrome (`main_x86.c`):** header band + right-aligned **STATE badge** (`fb_badge` — partial-width so it never wipes the wordmark; 6×6 colored dot + UPPERCASE label) `BOOTING`(blue)→`READY`(green)→`ERROR`(red), driven purely by `nvme_model_loaded`/`q_errors`; a **ROUTE** ratio line (`CACHE …% | -> LLM …%`) and a **COUNTERS** strip (the six real loop counters) via the quiet draw-only twins. Drawn **only at the `[STATS]` q%100 tick** (never per-query) → no `[PANEL]` flood; reconstructable from `[SNAP]`+`[STATS]`. Gated on `JARVIS_DBG_STATS` (ON).
+- **Natural-order scroll (`framebuffer.c/h`):** replaced the no-scroll ring with a full-window repaint (`fb_log_repaint` + `fb_log_visible`) — oldest top, newest bottom, `>` on the newest. UC FB never memmove'd (shadow buffer rejected as over-engineering; ~3 ms repaint at deploy cadence).
+- **Tokens (`jarvis_ui_tokens.h`):** collisions fixed (ROUTE 10→11, COUNTERS 43→41), `JUI_SHIELD_ROW` removed (collided with the EVENT LOG label), header geometry added. Banner `v0.2.1-dev`→`v0.2.1-beta`.
+- **Honesty:** no faked widgets — no CPU meter / agent grid / SHIELD bar / tok/s / queue depth / progress bar (no live source). SHIELD is passive (PB ALLOWs; `shield.c` not linked) → `shield=` is a count, not "blocked."
+- **Verified:** host **35/35** (`-Wall -Werror`); adversarial review (7 lenses) GO no-fixes; box build clean; QEMU no-regression + banner `v0.2.1-beta`; **physical boot PASS** (photos + boot_id=1 log) — natural scroll, BOOTING→READY badge, ROUTE+COUNTERS in the free bands with no overlap, no faked widgets; log: 5/5, FB 1024×768×32 @0xe0000000 UC pages=768, Gemma 2962 MB, M3 NN=6, **`[STATS] err=0` through q=1200**, 0 faults, 2376 entries checksum OK.
+
+## Next — goal #2 backlog (optional) → goals #3–7
+
+Goal #2 display is **v1-complete**. Remaining goal-#2 items are all optional/deferred:
+1. **fat32 FAT-sector cache** (boot-speed; ~160 MB redundant FAT reads → read counter overshoots ~3125 MB for a 2962 MB file) + exact data-only `%` via a fat32 progress callback; optional NVMe progress bar.
+2. **Optional** true-WC mapping (raw `seL4_X86_Page_Map`) and 1920×1080 GRUB `gfxmode` for more UI room.
+
+Then Phase 4 **goals #3–7**: xHCI USB keyboard input, one-script installer, 90-day soak, docs, `v1.0.0` MIT release.
 
 ---
 

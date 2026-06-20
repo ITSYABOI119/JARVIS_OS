@@ -217,11 +217,13 @@ void fb_draw_text(uint32_t x, uint32_t y, const char *s, uint32_t fg, uint32_t b
 }
 
 /* ============================================================================
- * Step 2c-2b: scrolling event-log region (no-scroll line-ring).
- * The framebuffer is UNCACHEABLE, so a top-scroll would re-read ~1.7 MB UC per
- * line. Instead each new line overwrites ring row (count-1)%ROWS in place (one
- * ~123 KB strip cleared+drawn), wrapping when full, with a '>' head cursor.
- * The ring updates even with no framebuffer so the logic is host-testable.
+ * Step 2c-2b/2c-2c: scrolling event-log region (natural chronological order).
+ * The framebuffer is UNCACHEABLE — never memmove it. The ring stores the last
+ * FBLOG_ROWS completed lines; each append recomputes the screen mapping and
+ * repaints the whole window: OLDEST at top row, NEWEST at bottom, '>' on the
+ * newest. At the deploy cadence (a completed line every few seconds) the ~26-row
+ * repaint (~3.3 MB UC, ~3 ms) is negligible — no shadow buffer needed. The ring
+ * updates even with no framebuffer so the logic is host-testable.
  * ==========================================================================*/
 #define FBLOG_ROWS  JUI_LOG_H_ROWS
 #define FBLOG_COLS  JUI_LOG_W_COLS
@@ -246,16 +248,35 @@ static void fb_log_frame(void)
     fb_fill_rect(x0 + w, y0 - 1, 1, h + 2, JCLR_LINE);        /* right  */
 }
 
-/* Render one ring row in place: clear its strip, draw gutter cursor + the text. */
-static void fb_log_render_row(uint32_t row, int is_head)
+/* Render one SCREEN row in place: clear its strip, gutter cursor (newest only),
+ * then the given text. Takes text + newest-flag (does NOT self-index g_log). */
+static void fb_log_render_row_text(uint32_t row, const char *text, int is_new)
 {
     if (!g_fb) return;
     uint32_t x0 = JUI_LOG_COL * JUI_CELL_W;
     uint32_t y  = (JUI_LOG_ROW + row) * JUI_CELL_H;
     fb_fill_rect(x0, y, (uint32_t)FBLOG_COLS * JUI_CELL_W, JUI_CELL_H, FBP_BG);
-    fb_draw_char(x0, y, is_head ? '>' : ' ', JCLR_LIVE, FBP_BG);
-    fb_draw_text(x0 + 2u * JUI_CELL_W, y, g_log[row],
-                 is_head ? JCLR_TEXT2 : JCLR_MUTED, FBP_BG);
+    fb_draw_char(x0, y, is_new ? '>' : ' ', JCLR_LIVE, FBP_BG);
+    fb_draw_text(x0 + 2u * JUI_CELL_W, y, text,
+                 is_new ? JCLR_TEXT2 : JCLR_MUTED, FBP_BG);
+}
+
+/* Repaint the whole window: oldest visible line at screen row 0, newest at the
+ * bottom (with the '>' cursor). vis = lines currently shown; on a partial fill
+ * the unfilled rows below are blanked. UC-safe (no memmove). */
+static void fb_log_repaint(void)
+{
+    if (!g_fb) return;
+    uint32_t vis = (g_log_count < FBLOG_ROWS) ? g_log_count : FBLOG_ROWS;
+    for (uint32_t r = 0; r < FBLOG_ROWS; r++) {
+        if (r < vis) {
+            uint32_t L = (g_log_count - vis) + r;   /* global line index, oldest..newest */
+            int is_new = (L == g_log_count - 1u);
+            fb_log_render_row_text(r, g_log[L % FBLOG_ROWS], is_new);
+        } else {
+            fb_log_render_row_text(r, "", 0);        /* blank row (partial fill) */
+        }
+    }
 }
 
 void fb_log_reset(void)
@@ -276,11 +297,19 @@ void fb_log_append(const char *line)
     g_log_count++;
     if (!g_fb) return;                          /* ring updated; no FB to draw on */
     if (!g_log_framed) { fb_log_frame(); g_log_framed = 1; }
-    if (g_log_count > 1)                         /* un-cursor the previous head */
-        fb_log_render_row((row + FBLOG_ROWS - 1u) % FBLOG_ROWS, 0);
-    fb_log_render_row(row, 1);
+    fb_log_repaint();                            /* natural-order full-window repaint */
     fb_flush();
 }
 
 uint32_t    fb_log_count(void)       { return g_log_count; }
-const char *fb_log_row(uint32_t row) { return (row < FBLOG_ROWS) ? g_log[row] : ""; }
+const char *fb_log_row(uint32_t row) { return (row < FBLOG_ROWS) ? g_log[row] : ""; }  /* raw slot */
+
+/* The line shown at screen_row: 0 = oldest visible .. (vis-1) = newest. "" if blank/OOB. */
+const char *fb_log_visible(uint32_t screen_row)
+{
+    if (screen_row >= FBLOG_ROWS) return "";
+    uint32_t vis = (g_log_count < FBLOG_ROWS) ? g_log_count : FBLOG_ROWS;
+    if (screen_row >= vis) return "";
+    uint32_t L = (g_log_count - vis) + screen_row;
+    return g_log[L % FBLOG_ROWS];
+}

@@ -64,18 +64,30 @@
 /* self-test line ("Self-test 5/5 PASS", FBP_OK) is live-backed; place it on a
  * free row below FBP_Y_LAST when adding it as a persistent field.            */
 
-/* ---- Aspirational 2c-2 expanded-view positions (col,row; NOT yet drawn) ----
- * Provided so the expanded HUD can be laid out against one grid. Each needs
- * the data plumbing noted before it can leave [ASPIRATIONAL].                 */
-#define JUI_LOG_COL        2u     /* event-log region origin (col)             */
-#define JUI_LOG_ROW       14u     /* needs: 2c-2 scrolling nvme_log renderer   */
-#define JUI_LOG_W_COLS   124u
-#define JUI_LOG_H_ROWS    26u
-#define JUI_COUNTERS_ROW  43u     /* [LIVE data] q/hits/infer/hb/shield/err strip */
-#define JUI_ROUTE_ROW     10u     /* [LIVE data] CACHE-HIT vs ->LLM (cache_lookup) */
-#define JUI_CPU_COL       80u     /* [ASPIRATIONAL] per-core meter — no source */
-#define JUI_AGENTS_ROW     8u     /* [ASPIRATIONAL] per-agent — not in deploy loop */
-#define JUI_SHIELD_ROW    13u     /* [ASPIRATIONAL] risk meter — runtime echoes ALLOW */
+/* ---- 2c-2 LIVE region geometry (col,row; px = col*8, row*16) ---------------
+ * The event-log region (JUI_LOG_*) is drawn since 2c-2b; the header band /
+ * route / counters positions are drawn since 2c-2c. Two collisions were resolved:
+ * ROUTE_ROW 10->11 (abutted FBP_Y_LAST) and COUNTERS_ROW 43->41; SHIELD_ROW was
+ * dropped (it collided with the EVENT LOG label at row 13).                    */
+#define JUI_LOG_COL        2u     /* [LIVE] event-log region origin (col)        */
+#define JUI_LOG_ROW       14u     /* [LIVE] event-log region origin (row)        */
+#define JUI_LOG_W_COLS   124u     /* [LIVE]                                      */
+#define JUI_LOG_H_ROWS    26u     /* [LIVE]                                      */
+#define JUI_HDR_ROW         1u    /* [LIVE] header band == FBP_Y_TITLE/16        */
+#define JUI_HDR_BADGE_RCOL 126u   /* [LIVE] STATE badge RIGHT edge col (2-col right margin) */
+#define JUI_HDR_DIV_Y      31u    /* [LIVE] 1px JCLR_LINE divider under the header (px) */
+#define JUI_ROUTE_ROW      11u    /* [LIVE] CACHE/->LLM ratio (cache_lookup); row 11 = y176 (free gap) */
+#define JUI_COUNTERS_ROW   41u    /* [LIVE] q/hits/infer/hb/shield/err strip; row 41 = y656 (below log border row40=y640) */
+#define JUI_COUNTERS_DIV_Y 655u   /* [LIVE] 1px JCLR_LINE divider above the counters strip (px) */
+/* JUI_SHIELD_ROW REMOVED — collided with the EVENT LOG label at row 13. Do NOT reintroduce. */
+#define JUI_CPU_COL        80u    /* [ASPIRATIONAL] per-core meter — no source -> OMIT (marker only) */
+#define JUI_AGENTS_ROW      8u    /* [ASPIRATIONAL] per-agent — not in deploy loop -> OMIT (marker only) */
+
+/* STATE badge (header, right-aligned): label + color, all LIVE-derived.
+ *   !nvme_model_loaded            -> "BOOTING"  JUI_C_BOOTING (FBP_ACCENT)
+ *   model resident && q_errors==0 -> "READY"    JUI_C_READY   (FBP_OK)
+ *   q_errors > 0                  -> "ERROR"    JUI_C_ERROR   (FBP_ERR)
+ * JUI_C_ACTIVE (cyan) stays ASPIRATIONAL — no live "active" signal; do NOT use. */
 
 /* ============================================================================
  * 3. STATE -> ACCENT  (header status badge color)

@@ -43,16 +43,16 @@ void fb_draw_text(uint32_t x, uint32_t y, const char *s, uint32_t fg, uint32_t b
  * Exposed for the host test. Each byte = one scanline, bit 0x80 = leftmost pixel. */
 const uint8_t *fb_font_glyph(char c);
 
-/* ---- Step 2c-2b: scrolling event-log region (no-scroll line-ring) ----
- * A ring of the last JUI_LOG_H_ROWS completed serial lines, drawn into the log
- * region (geometry/colors from jarvis_ui_tokens.h). The UC framebuffer is never
- * memmove'd: each new line overwrites ring row (count-1)%rows in place and is
- * marked with a '>' head cursor; the prior head loses its cursor. fb_log_append
- * updates the ring even with no framebuffer (host-testable) and only draws when
- * fb_ready(). */
+/* ---- Step 2c-2b/2c-2c: scrolling event-log region (natural chronological order) ----
+ * A ring of the last JUI_LOG_H_ROWS completed serial lines (geometry/colors from
+ * jarvis_ui_tokens.h). The UC framebuffer is never memmove'd: each append repaints
+ * the whole window in place — OLDEST at the top row, NEWEST at the bottom, '>' on
+ * the newest. fb_log_append updates the ring even with no framebuffer (host-testable)
+ * and only draws when fb_ready(). */
 void        fb_log_reset(void);              /* clear ring + draw the region frame   */
-void        fb_log_append(const char *line); /* append one completed line + render    */
+void        fb_log_append(const char *line); /* append one completed line + repaint   */
 uint32_t    fb_log_count(void);              /* total lines appended (test accessor)  */
-const char *fb_log_row(uint32_t row);        /* ring row text (test); "" if out of range */
+const char *fb_log_row(uint32_t row);        /* raw ring slot (test/back-compat)      */
+const char *fb_log_visible(uint32_t screen_row); /* line as displayed: 0=oldest..vis-1=newest */
 
 #endif /* JARVIS_FRAMEBUFFER_H */

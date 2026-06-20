@@ -1289,6 +1289,23 @@ static void fb_status_line_quiet(uint32_t y, const char *text, uint32_t fg) {
     fb_flush();
 }
 
+/* Step 2c-2c: right-aligned STATE badge (colored bullet + UPPERCASE label) in the header
+ * band. PARTIAL-WIDTH — must NOT use fb_status_line (its full-row clear would wipe the
+ * wordmark that shares this row). Clears a fixed 16-col box at the right edge, then draws
+ * a small colored dot (the ● substitute — not in the 0x20-0x7E font) + the label
+ * right-aligned to JUI_HDR_BADGE_RCOL. */
+static void fb_badge(const char *state, uint32_t color) {
+    if (!fb_ready()) return;
+    uint32_t y = JUI_HDR_ROW * JUI_CELL_H;                            /* header row (y16) */
+    fb_fill_rect((JUI_HDR_BADGE_RCOL - 16u) * JUI_CELL_W, y,
+                 16u * JUI_CELL_W, FB_FONT_H, FBP_BG);                /* clear fixed box */
+    uint32_t n = 0; while (state[n]) n++;                             /* label length */
+    uint32_t tx = (JUI_HDR_BADGE_RCOL - n) * JUI_CELL_W;             /* right-align to RCOL */
+    fb_fill_rect(tx - JUI_CELL_W + 1u, y + 5u, 6u, 6u, color);       /* colored bullet */
+    fb_draw_text(tx, y, state, color, FBP_BG);
+    fb_flush();
+}
+
 /* Step 2c-2a: one-line full-state snapshot — durable (NVMe log) + serial, LOG-ONLY (no fb_*),
  * so it runs with or without a framebuffer and is verifiable from the QEMU serial smoke. The
  * "what AND when" chokepoint that makes every later UI slice reconstructable from the log.
@@ -1521,6 +1538,12 @@ static void *main_continued(void *arg UNUSED)
                 }
                 fb_status_line(FBP_Y_QUERIES, "Queries : q=0  err=0", FBP_OK);
                 fb_status_line(FBP_Y_LAST,    "Last    : -", FBP_FG);
+                /* Step 2c-2c: header divider (under wordmark) + counters divider (above the
+                 * counters strip), drawn once; plus the initial BOOTING badge (model not yet
+                 * resident here — the FB block runs before the NVMe model load). */
+                fb_fill_rect(0, JUI_HDR_DIV_Y, fb_width, 1, JCLR_LINE);
+                fb_fill_rect(0, JUI_COUNTERS_DIV_Y, fb_width, 1, JCLR_LINE);
+                fb_badge("BOOTING", JUI_C_BOOTING);
                 /* fb_status_line flushed each line already — no extra fb_flush needed. */
                 puts_serial("[JARVIS] FB: status panel drawn at vaddr ");
                 put_hex((uint32_t)((uintptr_t)fb_vaddr >> 32));
@@ -1978,6 +2001,7 @@ static void *main_continued(void *arg UNUSED)
     /* Step 2c-2a: T+ms zero-point = workload start; emit the init full-state snapshot. */
     g_boot_tsc = jarvis_rdtsc();
     jarvis_log_snapshot(0, 0);
+    fb_badge("READY", JUI_C_READY);   /* Step 2c-2c: model resident + err=0 at workload entry */
 
     /* 40 queries guaranteed to HIT decision cache (from cache_patterns.c) */
     static const char *cache_queries[] = {
@@ -2374,6 +2398,31 @@ static void *main_continued(void *arg UNUSED)
             puts_serial("\n");
             jarvis_log_snapshot(q_total, q_errors);   /* Step 2c-2a: full-state [SNAP] at the [STATS] cadence */
 
+            /* Step 2c-2c: per-state chrome at the [STATS] cadence only (quiet/draw-only — no
+             * [PANEL] flood; reconstructable from [SNAP] model=+err= and [STATS] hits/infer/err).
+             * NEVER per-query. Badge READY/ERROR; route ratio; the six real event counters. */
+            fb_badge(q_errors ? "ERROR" : "READY", q_errors ? JUI_C_ERROR : JUI_C_READY);
+            {
+                char rl[80]; char *rp = rl;
+                rp = fbp_str(rp, "Route   : CACHE ");
+                rp = fbp_u32(rp, (uint32_t)(q_total ? q_hits * 100u / q_total : 0));
+                rp = fbp_str(rp, "%  |  -> LLM ");
+                rp = fbp_u32(rp, (uint32_t)(q_total ? q_infer * 100u / q_total : 0));
+                rp = fbp_str(rp, "%  (<1ms hit)"); *rp = '\0';
+                fb_status_line_quiet(JUI_ROUTE_ROW * JUI_CELL_H, rl, FBP_OK);
+            }
+            {
+                char cl[112]; char *cp = cl;
+                cp = fbp_str(cp, "q=");       cp = fbp_u32(cp, (uint32_t)q_total);
+                cp = fbp_str(cp, " hits=");   cp = fbp_u32(cp, (uint32_t)q_hits);
+                cp = fbp_str(cp, " infer=");  cp = fbp_u32(cp, (uint32_t)q_infer);
+                cp = fbp_str(cp, " hb=");     cp = fbp_u32(cp, (uint32_t)q_heartbeat);
+                cp = fbp_str(cp, " shield="); cp = fbp_u32(cp, (uint32_t)q_shield);
+                cp = fbp_str(cp, " err=");    cp = fbp_u32(cp, (uint32_t)q_errors);
+                *cp = '\0';
+                fb_status_line_quiet(JUI_COUNTERS_ROW * JUI_CELL_H, cl, q_errors ? FBP_ERR : FBP_FG);
+            }
+
             /* Log stats to NVMe on a coarser interval (JARVIS_STATS_NVME_INTERVAL).
              * The NVMe log holds only NVME_LOG_MAX_ENTRIES (2700) and does NOT wrap,
              * so writing every 1000 queries (vs the per-100 serial line) lets the log
@@ -2444,7 +2493,7 @@ int main(void)
 
     puts_serial("\n\n");
     puts_serial("==================================================\n");
-    puts_serial("  JARVIS AI-OS v0.2.1-dev | seL4 x86-64 | PC99\n");
+    puts_serial("  JARVIS AI-OS v0.2.1-beta | seL4 x86-64 | PC99\n");
     puts_serial("==================================================\n\n");
 
     if (info) {

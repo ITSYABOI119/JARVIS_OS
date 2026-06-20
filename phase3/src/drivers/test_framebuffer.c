@@ -104,16 +104,27 @@ int main(void)
             snprintf(nm, sizeof nm, "L%d", i);
             fb_log_append(nm);
         }
-        EXPECT(fb_log_count() == 28u,             "T8 log_count==28 after 28 appends");
-        EXPECT(strcmp(fb_log_row(0), "L26") == 0, "T8 wrap: row0==L26 (line 26 overwrote L0)");
-        EXPECT(strcmp(fb_log_row(1), "L27") == 0, "T8 wrap: row1==L27 (newest head)");
-        EXPECT(strcmp(fb_log_row(2), "L2")  == 0, "T8 row2==L2 (not yet overwritten)");
+        EXPECT(fb_log_count() == 28u,                 "T8 log_count==28 after 28 appends");
+        EXPECT(strcmp(fb_log_visible(0),  "L2")  == 0, "T8 chrono: visible(0)==L2 (oldest shown)");
+        EXPECT(strcmp(fb_log_visible(1),  "L3")  == 0, "T8 chrono: visible(1)==L3");
+        EXPECT(strcmp(fb_log_visible(24), "L26") == 0, "T8 chrono: visible(24)==L26");
+        EXPECT(strcmp(fb_log_visible(25), "L27") == 0, "T8 chrono: visible(25)==L27 (newest, bottom)");
+        EXPECT(strcmp(fb_log_row(0), "L26") == 0,      "T8 raw slot: row0==L26 (back-compat)");
         char longln[200];
         for (int i = 0; i < 199; i++) longln[i] = 'x';
         longln[199] = '\0';
         fb_log_append(longln);                    /* append #29 lands at row 28%26 == 2 */
         EXPECT(strlen(fb_log_row(28u % JUI_LOG_H_ROWS)) == JUI_LOG_W_COLS,
                "T8 over-long line truncated to JUI_LOG_W_COLS");
+    }
+
+    /* T8b — partial fill: lines fill top-down (oldest at row 0), blanks below */
+    {
+        fb_log_reset();
+        fb_log_append("first"); fb_log_append("second"); fb_log_append("third");
+        EXPECT(strcmp(fb_log_visible(0), "first") == 0, "T8b partial: visible(0)==first (top/oldest)");
+        EXPECT(strcmp(fb_log_visible(2), "third") == 0, "T8b partial: visible(2)==third (newest)");
+        EXPECT(fb_log_visible(3)[0] == '\0',            "T8b partial: visible(3)=='' (blank below)");
     }
 
     /* T9 — event-log render lands at the right grid cell; '>' cursor; no OOB.
@@ -146,6 +157,37 @@ int main(void)
             }
         EXPECT(cok, "T9 '>' head cursor at (col 2, row 14) in JCLR_LIVE");
         EXPECT(LBUF[LGUARD] == 0xDEADBEEFu, "T9 log render: guard word untouched (no OOB)");
+    }
+
+    /* T9b — natural-order render: oldest at top, newest pinned to the BOTTOM row */
+    {
+        static uint32_t LB2[128u * 640u + 1u];   /* 640 = (JUI_LOG_ROW+JUI_LOG_H_ROWS)*16 (incl. bottom row) */
+        const uint32_t S2 = 128u, G2 = 128u * 640u;
+        for (uint32_t i = 0; i < 128u * 640u + 1u; i++) LB2[i] = 0xDEADBEEFu;
+        EXPECT(fb_init(LB2, 128u * 4u, 128u, 640u, 32) == 0, "T9b init 128x640 log FB");
+        fb_set_rb_swap(0);
+        fb_log_reset();
+        char nm[8];
+        for (int i = 0; i < 30; i++) { snprintf(nm, sizeof nm, "L%d", i); fb_log_append(nm); }  /* 30 > 26 rows */
+        EXPECT(strcmp(fb_log_visible(0),  "L4")  == 0, "T9b chrono: visible(0)==L4 (oldest shown)");
+        EXPECT(strcmp(fb_log_visible(25), "L29") == 0, "T9b chrono: visible(25)==L29 (newest)");
+        uint32_t bx = JUI_LOG_COL * JUI_CELL_W;
+        uint32_t by = (JUI_LOG_ROW + 25u) * JUI_CELL_H;     /* bottom screen row 25 = py624 */
+        const uint8_t *gc = fb_font_glyph('>');
+        int bok = 1;
+        for (uint32_t r = 0; r < FB_FONT_H && bok; r++)
+            for (uint32_t c = 0; c < FB_FONT_W && bok; c++) {
+                uint32_t want = ((gc[r] >> (7u - c)) & 1u) ? JCLR_LIVE : FBP_BG;
+                if (LB2[(by + r) * S2 + bx + c] != want) bok = 0;
+            }
+        EXPECT(bok, "T9b '>' cursor on BOTTOM row 25 (py624) in JCLR_LIVE");
+        uint32_t ty0 = JUI_LOG_ROW * JUI_CELL_H;            /* top screen row 0 */
+        int spok = 1;
+        for (uint32_t r = 0; r < FB_FONT_H && spok; r++)
+            for (uint32_t c = 0; c < FB_FONT_W && spok; c++)
+                if (LB2[(ty0 + r) * S2 + bx + c] != FBP_BG) spok = 0;
+        EXPECT(spok, "T9b top row 0 gutter is SPACE (no '>' cursor)");
+        EXPECT(LB2[G2] == 0xDEADBEEFu, "T9b guard word untouched (no OOB)");
     }
 
     printf("Framebuffer tests: %d PASS, %d FAIL\n", pass, fail);
