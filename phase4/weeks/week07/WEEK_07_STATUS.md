@@ -41,12 +41,19 @@ The R9 280X monitor now shows a live **status panel** (8×16 bitmap font) on the
 
 **Verified ENTIRELY from the boot_id log** (UI-reconstructable-from-log): 700-query run, `[STATS] err=0` throughout; Model `%` climb + green `[loaded]` as `[PANEL]` lines; **0** per-query `[PANEL] Queries` flood; self-test 5/5; M3 `NUM_NODES=6` (5 workers); `FB 1024x768x32 … pages=768` relog.
 
-## Next — Step 2c-2 (scrolling log + design-token UI)
+## Step 2c-2a — observability: [SNAP] log line + T+ms (DONE 2026-06-20)
 
-1. **Scrolling boot/event log** + **design-token styling** from a chosen `phase4/docs/ui_mockups/` mockup.
-2. **Observability:** one-block full-UI snapshot at init + steady cadence; boot-relative TSC→ms timestamps; "UI fully reconstructable from the log" exit gate.
-3. **fat32 FAT-sector cache** (boot-speed; ~160 MB redundant FAT reads) + exact data-only `%` via a fat32 progress callback.
-4. **Optional** true-WC mapping (raw `seL4_X86_Page_Map`) and 1920×1080 GRUB `gfxmode` for more UI room.
+LOG-ONLY (`main_x86.c`) — runs with or without a framebuffer, fully verified on the QEMU serial smoke (no physical boot needed). Adds:
+- **`[SNAP]` full-state line** — `[SNAP] T+<ms> disp=<WxHxBPP|no-fb> model=<loading|loaded> NN=<n> q=<n> err=<n> last="…"`, written durable (NVMe log) + serial, at init and at the `[STATS]` every-100q point.
+- **Boot-relative `T+<ms>`** (TSC→ms, approximate — invariant TSC ~3.7 GHz) prepended to the `[STATS]` serial line + the `LOG_IPC_STATS` entry → telemetry now carries **what AND when**.
+
+**Verified on QEMU serial** (`BOOT_LOG=0`, `-smp 6`, **q=500, err=0**): `[SNAP]` at init + every 100q with climbing `T+ms`/`q`/`err`/`last`; `[STATS]` carries `T+ms`; no regression (5/5, model load, M3 NN=6, coherent inference). The box build gate caught a real bug first — the TSC helper sat next to the embedded-model `rdtsc()` under `#ifdef JARVIS_HAS_MODEL` (OFF in the NVMe build) and compiled out; relocated to unconditional file scope with its own `jarvis_rdtsc`. This makes every later UI slice reconstructable from the log (the standing UI-mirror rule).
+
+## Next — Step 2c-2b+ (token-header UI + scrolling log)
+
+1. **Token-header** (`jarvis_ui_tokens.h`) + **scrolling boot/event log** + design-token styling from a chosen `phase4/docs/ui_mockups/` mockup.
+2. **fat32 FAT-sector cache** (boot-speed; ~160 MB redundant FAT reads) + exact data-only `%` via a fat32 progress callback.
+3. **Optional** true-WC mapping (raw `seL4_X86_Page_Map`) and 1920×1080 GRUB `gfxmode` for more UI room.
 
 ---
 

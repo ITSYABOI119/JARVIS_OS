@@ -81,6 +81,22 @@ static uint32_t g_fb_desc_pitch = 0, g_fb_desc_w = 0, g_fb_desc_h = 0, g_fb_desc
 static uint8_t  g_fb_desc_bpp = 0, g_fb_desc_type = 0;
 static char     g_fb_last_resp[64] = "-";   /* last inference response (truncated) for the panel */
 
+/* Step 2c-2a: boot-relative TSC->ms (file-scope so it compiles in the NVMe build — the embedded
+ * rdtsc()/stages live under #ifdef JARVIS_HAS_MODEL, which is OFF here). APPROXIMATE: the 2700X
+ * invariant TSC ticks at the ~3.7 GHz P0/nominal clock (turbo doesn't change it), ~3.7e6 ticks/ms —
+ * a relative "when" for the log, not a calibrated clock. */
+#define TSC_PER_MS 3700000ULL
+static uint64_t g_boot_tsc = 0;   /* set at workload start; T+ms is measured from here */
+static inline uint64_t jarvis_rdtsc(void) {
+    uint32_t lo, hi;
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+}
+static uint32_t jarvis_uptime_ms(void) {
+    if (g_boot_tsc == 0) return 0;
+    return (uint32_t)((jarvis_rdtsc() - g_boot_tsc) / TSC_PER_MS);
+}
+
 /* seL4 IOPort wrappers for PCI config space (0xCF8/0xCFC).
  * Cap acquired at runtime, stored here for the wrapper functions. */
 static seL4_CPtr g_pci_ioport_cap = 0;
@@ -1268,6 +1284,33 @@ static void fb_status_line_quiet(uint32_t y, const char *text, uint32_t fg) {
     fb_flush();
 }
 
+/* Step 2c-2a: one-line full-state snapshot — durable (NVMe log) + serial, LOG-ONLY (no fb_*),
+ * so it runs with or without a framebuffer and is verifiable from the QEMU serial smoke. The
+ * "what AND when" chokepoint that makes every later UI slice reconstructable from the log.
+ * q_total/q_errors are workload-loop locals -> passed in. Worst case ~169 chars (<< 496 payload).
+ * Durable write is always-on (init + every 100q) -> ~2 LOG_IPC_STATS entries/100q, ~1800 over a
+ * 30-day run at the measured ~3k q/day — under the 2700-entry no-wrap cap, but tighter than before:
+ * revisit the cadence if the query rate rises ~1.5x+. */
+static void jarvis_log_snapshot(uint64_t q_total, uint64_t q_errors) {
+    char ln[224]; char *p = ln;
+    p = fbp_str(p, "[SNAP] T+"); p = fbp_u32(p, jarvis_uptime_ms());
+    p = fbp_str(p, " disp=");
+    if (g_fb_desc_valid) {
+        p = fbp_u32(p, g_fb_desc_w); *p++ = 'x';
+        p = fbp_u32(p, g_fb_desc_h); *p++ = 'x';
+        p = fbp_u32(p, g_fb_desc_bpp);
+    } else {
+        p = fbp_str(p, "no-fb");
+    }
+    p = fbp_str(p, " model="); p = fbp_str(p, nvme_model_loaded ? "loaded" : "loading");
+    p = fbp_str(p, " NN=");    p = fbp_u32(p, (uint32_t)g_num_nodes);
+    p = fbp_str(p, " q=");     p = fbp_u32(p, (uint32_t)q_total);
+    p = fbp_str(p, " err=");   p = fbp_u32(p, (uint32_t)q_errors);
+    p = fbp_str(p, " last=\""); p = fbp_str(p, g_fb_last_resp); *p++ = '"'; *p = '\0';
+    puts_serial(ln); puts_serial("\n");
+    nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr, g_nvme_bounce_paddr, LOG_IPC_STATS, ln);
+}
+
 /* ---- Main continuation (runs on vspace-managed stack) ---- */
 
 static void *main_continued(void *arg UNUSED)
@@ -1926,6 +1969,9 @@ static void *main_continued(void *arg UNUSED)
     puts_serial("\n[JARVIS] Starting continuous workload\n\n");
     nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr, g_nvme_bounce_paddr,
                    LOG_BOOT, "Starting continuous workload");
+    /* Step 2c-2a: T+ms zero-point = workload start; emit the init full-state snapshot. */
+    g_boot_tsc = jarvis_rdtsc();
+    jarvis_log_snapshot(0, 0);
 
     /* 40 queries guaranteed to HIT decision cache (from cache_patterns.c) */
     static const char *cache_queries[] = {
@@ -2312,13 +2358,15 @@ static void *main_continued(void *arg UNUSED)
         /* Stats every 100 queries */
 #if JARVIS_DBG_STATS
         if (q_total % 100 == 0) {
-            puts_serial("[STATS] q="); put_dec(q_total);
+            puts_serial("[STATS] T+"); put_dec(jarvis_uptime_ms());
+            puts_serial(" q="); put_dec(q_total);
             puts_serial(" hits="); put_dec(q_hits);
             puts_serial(" infer="); put_dec(q_infer);
             puts_serial(" hb="); put_dec(q_heartbeat);
             puts_serial(" shield="); put_dec(q_shield);
             puts_serial(" err="); put_dec(q_errors);
             puts_serial("\n");
+            jarvis_log_snapshot(q_total, q_errors);   /* Step 2c-2a: full-state [SNAP] at the [STATS] cadence */
 
             /* Log stats to NVMe on a coarser interval (JARVIS_STATS_NVME_INTERVAL).
              * The NVMe log holds only NVME_LOG_MAX_ENTRIES (2700) and does NOT wrap,
@@ -2328,7 +2376,13 @@ static void *main_continued(void *arg UNUSED)
                 char sb[128];
                 /* Manual snprintf equivalent (no stdio in seL4 rootserver) */
                 int sp = 0;
-                const char *p = "q=";
+                const char *p = "T+";
+                while (*p) sb[sp++] = *p++;
+                { uint32_t v = jarvis_uptime_ms(); char d[12]; int di = 0;
+                  if (v == 0) d[di++] = '0';
+                  else while (v > 0) { d[di++] = '0' + (v % 10); v /= 10; }
+                  while (--di >= 0) sb[sp++] = d[di]; }
+                sb[sp++] = ' '; p = "q=";
                 while (*p) sb[sp++] = *p++;
                 /* Decimal append helper — inline for seL4 */
                 { uint32_t v = q_total; char d[12]; int di = 0;

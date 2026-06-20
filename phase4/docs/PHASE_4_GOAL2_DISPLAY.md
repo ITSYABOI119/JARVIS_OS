@@ -1,6 +1,6 @@
 # Phase 4 — Goal #2: Graphical Output (Framebuffer / HDMI Status UI)
 
-**Status:** **Step 1 (UEFI boot migration) DONE 2026-06-18; Step 2a (FB plumbing) + Step 2b (first pixels) DONE 2026-06-19; Step 2c-1 (bitmap font + LIVE status panel) DONE 2026-06-20.** Step 2c-2 (scrolling log + design-token UI) is next.
+**Status:** **Step 1 (UEFI boot migration) DONE 2026-06-18; Step 2a (FB plumbing) + Step 2b (first pixels) DONE 2026-06-19; Step 2c-1 (bitmap font + LIVE status panel) DONE 2026-06-20; Step 2c-2a (observability: [SNAP] log line + T+ms) DONE 2026-06-20.** Step 2c-2b (token-header UI + scrolling log) is next.
 **Date:** 2026-06-18 (updated 2026-06-20)
 **Goal:** Move beyond the 80×25 VGA text console to a real **graphical framebuffer status UI** on the JARVIS PC monitor — boot progress, model load, query/response, tok/s, SHIELD/err state — rendered from the design tokens in `phase4/docs/ui_mockups/JARVIS_OS_DESIGN_TOKENS.md`. ROADMAP Phase 4 goal #2.
 **Scope:** **DISPLAY only.** GPU *compute* (inference) stays deferred (ADR `docs/decisions/2026-06-16-defer-gpu-inference.md`). This goal does not touch the R9 280X as a compute device — only as the firmware-initialized framebuffer it already is.
@@ -65,11 +65,23 @@ The original three sub-pieces, split into risk-isolated steps so a boot/kernel c
 >
 > **From-log verification:** 700-query run, `[STATS] err=0` throughout; Model `%` climb + green `[loaded]` present as `[PANEL]` lines; **0** per-query `[PANEL] Queries` entries (quiet twin works); self-test 5/5; M3 `NUM_NODES=6` (5 workers).
 
-#### Step 2c-2 — scrolling log + design-token UI  *(NEXT)*
-1. A **scrolling boot/event log** region + **design-token styling** from a chosen `phase4/docs/ui_mockups/` mockup.
-2. **Observability:** a one-block full-UI **panel snapshot** (all fields in one log entry) at init + a steady cadence, plus a boot-relative **TSC→ms timestamp** so the log shows what *and when*; "UI fully reconstructable from the log" as the exit gate.
-3. **fat32 FAT-sector cache** (boot-speed): the read counter overshoots because `fat32_next_cluster` re-reads ~160 MB of FAT sectors through the same callback; cache them (and add an exact data-only `%` via a fat32 progress callback).
-4. **Optional true-WC mapping** (raw `seL4_X86_Page_Map`, faster fills than UC) and an **optional 1920×1080 GRUB `gfxmode`** if more UI room is wanted (the panel is resolution-agnostic — it reads the id=4 descriptor).
+#### Step 2c-2a — observability (log snapshot + timestamps)  — ✅ **DONE (2026-06-20)**
+> **LOG-ONLY (no framebuffer/render/token changes), `main_x86.c`.** A one-line full-state snapshot
+> `[SNAP] T+<ms> disp=<WxHxBPP|no-fb> model=<loading|loaded> NN=<n> q=<n> err=<n> last="…"` written
+> durably (NVMe log) + serial, at init and at the `[STATS]` every-100q point; plus a boot-relative
+> **`T+<ms>`** (TSC→ms, APPROXIMATE — invariant TSC ~3.7 GHz) prepended to the `[STATS]` serial line and
+> the `LOG_IPC_STATS` entry. Makes every later UI slice "reconstructable from the log — what AND when".
+> **Verified on the QEMU serial smoke** (`BOOT_LOG=0`, `-smp 6`, **q=500 err=0**): `[SNAP]` at init + every
+> 100q with climbing `T+ms`/`q`/`err`/`last`, `[STATS]` now carries `T+ms`, no regression (5/5, model load,
+> M3 NN=6, coherent inference). The build gate caught a real bug first — the TSC helper was placed next to
+> the embedded-model `rdtsc()` under `#ifdef JARVIS_HAS_MODEL` (OFF in the NVMe build) and got compiled
+> out; relocated to unconditional file scope with its own `jarvis_rdtsc`. (Durable `[SNAP]` in the boot_id
+> log to be confirmed at the next bare-metal boot — low-risk, deferred per the slice plan.)
+
+#### Step 2c-2b+ — token-header UI, scrolling log, perf  *(NEXT)*
+1. **Token-header integration** (`jarvis_ui_tokens.h`) + a **scrolling boot/event log** region, styled from a chosen `phase4/docs/ui_mockups/` mockup (design-token styling).
+2. **fat32 FAT-sector cache** (boot-speed): the read counter overshoots because `fat32_next_cluster` re-reads ~160 MB of FAT sectors through the same callback; cache them (and add an exact data-only `%` via a fat32 progress callback).
+3. **Optional true-WC mapping** (raw `seL4_X86_Page_Map`, faster fills than UC) and an **optional 1920×1080 GRUB `gfxmode`** if more UI room is wanted (the panel is resolution-agnostic — it reads the id=4 descriptor).
 
 ## 4. Key files & references
 
