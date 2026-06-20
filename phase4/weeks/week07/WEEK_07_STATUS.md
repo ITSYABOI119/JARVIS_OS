@@ -49,9 +49,15 @@ LOG-ONLY (`main_x86.c`) — runs with or without a framebuffer, fully verified o
 
 **Verified on QEMU serial** (`BOOT_LOG=0`, `-smp 6`, **q=500, err=0**): `[SNAP]` at init + every 100q with climbing `T+ms`/`q`/`err`/`last`; `[STATS]` carries `T+ms`; no regression (5/5, model load, M3 NN=6, coherent inference). The box build gate caught a real bug first — the TSC helper sat next to the embedded-model `rdtsc()` under `#ifdef JARVIS_HAS_MODEL` (OFF in the NVMe build) and compiled out; relocated to unconditional file scope with its own `jarvis_rdtsc`. This makes every later UI slice reconstructable from the log (the standing UI-mirror rule).
 
-## Next — Step 2c-2b+ (token-header UI + scrolling log)
+## Step 2c-2b — jarvis_ui_tokens.h + scrolling event-log (DONE 2026-06-20)
 
-1. **Token-header** (`jarvis_ui_tokens.h`) + **scrolling boot/event log** + design-token styling from a chosen `phase4/docs/ui_mockups/` mockup.
+- **Byte-identical token refactor:** main_x86.c `#include`s `jarvis_ui_tokens.h`; the inline FBP_*/FBP_Y_* block is deleted (single source, panel doesn't shift). build_jarvis_x86.sh copies the header to src/ + src/drivers/ so the out-of-tree `#include` resolves.
+- **No-scroll event-log ring** (`fb_log_reset`/`append`/`count`/`row` in framebuffer.c): last 26 completed serial lines, each written in place at `count % 26` (`>`=head) — the UC framebuffer can't cheaply memmove-scroll. Fed from `putc_serial` completed lines (low cadence, never per-token, no recursion). 1px JCLR_LINE bordered "EVENT LOG" region.
+- **Verified:** host **24/24** (T8 wrap/truncate, T9 render-at-cell/cursor/no-OOB); box build gate caught a `*/`-in-comment bug (fixed); QEMU no-regression; **physical boot PASS** — event-log renders + scrolls, panel unchanged, boot_id log 5/5 / Gemma 2962 MB / M3 NN=6 / `[STATS] err=0` q=400 / FB 1024×768×32 pages=768. No-scroll order accepted v1; natural scroll → 2c-2c.
+
+## Next — Step 2c-2c+ (per-state styling + natural scroll)
+
+1. **Per-state HUD styling** from `jarvis-framebuffer-hud.html` (header band + STATE badge, route line, live counters — token palette, NO faked widgets) + **natural oldest→newest scroll** (cacheable shadow buffer + dirty-row flush).
 2. **fat32 FAT-sector cache** (boot-speed; ~160 MB redundant FAT reads) + exact data-only `%` via a fat32 progress callback.
 3. **Optional** true-WC mapping (raw `seL4_X86_Page_Map`) and 1920×1080 GRUB `gfxmode` for more UI room.
 

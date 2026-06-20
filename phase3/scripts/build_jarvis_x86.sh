@@ -121,6 +121,7 @@ copy_file() {
 echo -e "${GREEN}[1/4] Rootserver${NC}"
 copy_file "$JARVIS_DIR/phase3/src/sel4/main_x86.c" "$DEST/src/main.c"
 copy_file "$JARVIS_DIR/phase3/src/sel4/jarvis_debug.h" "$DEST/src/jarvis_debug.h"
+copy_file "$JARVIS_DIR/phase3/src/sel4/jarvis_ui_tokens.h" "$DEST/src/jarvis_ui_tokens.h"
 copy_file "$JARVIS_DIR/phase3/src/sel4/avx2_probe.h" "$DEST/src/avx2_probe.h"
 copy_file "$JARVIS_DIR/phase3/src/sel4/smp_probe.h" "$DEST/src/smp_probe.h"
 echo ""
@@ -205,6 +206,8 @@ copy_file "$DRV_SRC/fat32.c" "$DRV_DST/fat32.c"
 copy_file "$DRV_SRC/fat32.h" "$DRV_DST/fat32.h"
 copy_file "$DRV_SRC/framebuffer.c" "$DRV_DST/framebuffer.c"
 copy_file "$DRV_SRC/framebuffer.h" "$DRV_DST/framebuffer.h"
+# Step 2c-2b: framebuffer.c #includes jarvis_ui_tokens.h — make it resolvable in src/drivers/ too
+copy_file "$JARVIS_DIR/phase3/src/sel4/jarvis_ui_tokens.h" "$DRV_DST/jarvis_ui_tokens.h"
 
 # Inference server (Process B — lives in jarvis-inference app, NOT sel4test-driver)
 PROC_B_DIR="$SEL4_DIR/projects/jarvis-x86/apps/jarvis-inference/src"

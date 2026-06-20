@@ -1,6 +1,6 @@
 # Phase 4 — Goal #2: Graphical Output (Framebuffer / HDMI Status UI)
 
-**Status:** **Step 1 (UEFI boot migration) DONE 2026-06-18; Step 2a (FB plumbing) + Step 2b (first pixels) DONE 2026-06-19; Step 2c-1 (bitmap font + LIVE status panel) DONE 2026-06-20; Step 2c-2a (observability: [SNAP] log line + T+ms) DONE 2026-06-20.** Step 2c-2b (token-header UI + scrolling log) is next.
+**Status:** **Step 1 (UEFI boot migration) DONE 2026-06-18; Step 2a (FB plumbing) + Step 2b (first pixels) DONE 2026-06-19; Step 2c-1 (bitmap font + LIVE status panel) DONE 2026-06-20; Step 2c-2a (observability: [SNAP] log line + T+ms) DONE 2026-06-20; Step 2c-2b (jarvis_ui_tokens.h + scrolling event-log) DONE 2026-06-20.** Step 2c-2c (per-state HUD styling + natural-order scroll) is next.
 **Date:** 2026-06-18 (updated 2026-06-20)
 **Goal:** Move beyond the 80×25 VGA text console to a real **graphical framebuffer status UI** on the JARVIS PC monitor — boot progress, model load, query/response, tok/s, SHIELD/err state — rendered from the design tokens in `phase4/docs/ui_mockups/JARVIS_OS_DESIGN_TOKENS.md`. ROADMAP Phase 4 goal #2.
 **Scope:** **DISPLAY only.** GPU *compute* (inference) stays deferred (ADR `docs/decisions/2026-06-16-defer-gpu-inference.md`). This goal does not touch the R9 280X as a compute device — only as the firmware-initialized framebuffer it already is.
@@ -78,8 +78,13 @@ The original three sub-pieces, split into risk-isolated steps so a boot/kernel c
 > out; relocated to unconditional file scope with its own `jarvis_rdtsc`. (Durable `[SNAP]` in the boot_id
 > log to be confirmed at the next bare-metal boot — low-risk, deferred per the slice plan.)
 
-#### Step 2c-2b+ — token-header UI, scrolling log, perf  *(NEXT)*
-1. **Token-header integration** (`jarvis_ui_tokens.h`) + a **scrolling boot/event log** region, styled from a chosen `phase4/docs/ui_mockups/` mockup (design-token styling).
+#### Step 2c-2b — jarvis_ui_tokens.h + scrolling event-log region  — ✅ **DONE (2026-06-20)**
+> **Token centralization (byte-identical refactor):** main_x86.c now `#include`s `jarvis_ui_tokens.h` and the inline FBP_*/FBP_Y_* block is deleted — the header is the single source (panel does not shift). framebuffer.c uses the JUI_LOG_* geometry + JCLR_* palette; build_jarvis_x86.sh copies the header to src/ and src/drivers/ so the `#include` resolves out-of-tree.
+> **Scrolling event-log region:** a **no-scroll line-ring** of the last 26 completed serial lines (the UC framebuffer can't cheaply memmove-scroll, so each new line clears+redraws one row-strip in place at `count % 26`; `>` marks the head). Fed from `putc_serial` completed lines (low cadence — `[STATS]`/`[INFER]`/boot, never per-token; no recursion — fb_log_append never prints). framebuffer.c: `fb_log_reset`/`fb_log_append`/`fb_log_count`/`fb_log_row` + a 1px JCLR_LINE bordered "EVENT LOG" region.
+> **Verified:** host test **24/24** (T8 ring wrap/truncate, T9 render-at-cell/`>`-cursor/no-OOB); the box build gate caught a `*/`-in-comment bug (fixed); QEMU no-regression (FB inert → feed/render skipped); **physical boot PASS** — the event-log region renders + scrolls (`>`=head), the six-field panel is unchanged, boot_id log 5/5 / Gemma 2962 MB / M3 NN=6 / `[STATS] err=0` through q=400 / FB 1024×768×32 pages=768. The no-scroll reading-order (overwrite top→bottom) is **accepted for v1**; natural oldest→newest scroll is deferred to 2c-2c.
+
+#### Step 2c-2c+ — per-state styling, natural scroll, perf  *(NEXT)*
+1. **Per-state HUD styling** from `phase4/docs/ui_mockups/jarvis-framebuffer-hud.html` (header band + STATE badge from JUI_C_*, route line, live counters strip) — token palette, NO faked widgets — **and** a **natural oldest→newest scroll** for the event-log (cacheable shadow buffer + dirty-row flush; never memmove the UC FB).
 2. **fat32 FAT-sector cache** (boot-speed): the read counter overshoots because `fat32_next_cluster` re-reads ~160 MB of FAT sectors through the same callback; cache them (and add an exact data-only `%` via a fat32 progress callback).
 3. **Optional true-WC mapping** (raw `seL4_X86_Page_Map`, faster fills than UC) and an **optional 1920×1080 GRUB `gfxmode`** if more UI room is wanted (the panel is resolution-agnostic — it reads the id=4 descriptor).
 

@@ -1,12 +1,15 @@
 /*
- * Host test for the framebuffer blitter + 8x16 font (Phase 4 goal #2 Step 2c-1).
- * Links framebuffer.c directly — NO mocks (it is pure C). The blitter is seL4-only
- * at runtime, but its math/font are host-testable. Build:
- *   gcc -Wall -Werror -O2 -std=c11 test_framebuffer.c framebuffer.c -o test_framebuffer
+ * Host test for the framebuffer blitter + 8x16 font + scrolling event-log
+ * (Phase 4 goal #2 Steps 2c-1 / 2c-2b). Links framebuffer.c directly — NO mocks
+ * (pure C). The blitter is seL4-only at runtime, but its math/font/log-ring are
+ * host-testable. framebuffer.c #includes jarvis_ui_tokens.h, so add its dir. Build:
+ *   gcc -Wall -Werror -O2 -std=c11 -I ../sel4 test_framebuffer.c framebuffer.c -o test_framebuffer
  */
 #include <stdio.h>
 #include <stdint.h>
+#include <string.h>
 #include "framebuffer.h"
+#include "jarvis_ui_tokens.h"
 
 static int pass = 0, fail = 0;
 #define EXPECT(cond, msg) do { \
@@ -91,6 +94,58 @@ int main(void)
                 if (buf[(16u + r) * STRIDE + 8u + c] != want) ok = 0;
             }
         EXPECT(ok, "T7 draw_text advance==8: 'i' at x=8");
+    }
+
+    /* T8 — event-log ring: append / wrap / truncate (ring logic, FB-independent) */
+    {
+        fb_log_reset();
+        char nm[8];
+        for (int i = 0; i < 28; i++) {           /* 28 appends into a JUI_LOG_H_ROWS(26)-row ring */
+            snprintf(nm, sizeof nm, "L%d", i);
+            fb_log_append(nm);
+        }
+        EXPECT(fb_log_count() == 28u,             "T8 log_count==28 after 28 appends");
+        EXPECT(strcmp(fb_log_row(0), "L26") == 0, "T8 wrap: row0==L26 (line 26 overwrote L0)");
+        EXPECT(strcmp(fb_log_row(1), "L27") == 0, "T8 wrap: row1==L27 (newest head)");
+        EXPECT(strcmp(fb_log_row(2), "L2")  == 0, "T8 row2==L2 (not yet overwritten)");
+        char longln[200];
+        for (int i = 0; i < 199; i++) longln[i] = 'x';
+        longln[199] = '\0';
+        fb_log_append(longln);                    /* append #29 lands at row 28%26 == 2 */
+        EXPECT(strlen(fb_log_row(28u % JUI_LOG_H_ROWS)) == JUI_LOG_W_COLS,
+               "T8 over-long line truncated to JUI_LOG_W_COLS");
+    }
+
+    /* T9 — event-log render lands at the right grid cell; '>' cursor; no OOB.
+     * Needs an FB tall enough to contain the first log row (JUI_LOG_ROW*16). */
+    {
+        static uint32_t LBUF[128u * 256u + 1u];
+        const uint32_t LSTRIDE = 128u, LGUARD = 128u * 256u;
+        for (uint32_t i = 0; i < 128u * 256u + 1u; i++) LBUF[i] = 0xDEADBEEFu;
+        EXPECT(fb_init(LBUF, 128u * 4u, 128u, 256u, 32) == 0, "T9 init 128x256 log FB");
+        fb_set_rb_swap(0);
+        fb_log_reset();
+        fb_log_append("A");                        /* head row 0, with '>' cursor */
+        uint32_t ty = JUI_LOG_ROW * JUI_CELL_H;                 /* row 0 = py 224 */
+        uint32_t tx = (JUI_LOG_COL + 2u) * JUI_CELL_W;          /* text after 2-char gutter */
+        const uint8_t *gA = fb_font_glyph('A');
+        int ok = 1;
+        for (uint32_t r = 0; r < FB_FONT_H && ok; r++)
+            for (uint32_t c = 0; c < FB_FONT_W && ok; c++) {
+                uint32_t want = ((gA[r] >> (7u - c)) & 1u) ? JCLR_TEXT2 : FBP_BG;
+                if (LBUF[(ty + r) * LSTRIDE + tx + c] != want) ok = 0;
+            }
+        EXPECT(ok, "T9 head text 'A' at (col 4, row 14) in JCLR_TEXT2");
+        uint32_t gx = JUI_LOG_COL * JUI_CELL_W;
+        const uint8_t *gcur = fb_font_glyph('>');
+        int cok = 1;
+        for (uint32_t r = 0; r < FB_FONT_H && cok; r++)
+            for (uint32_t c = 0; c < FB_FONT_W && cok; c++) {
+                uint32_t want = ((gcur[r] >> (7u - c)) & 1u) ? JCLR_LIVE : FBP_BG;
+                if (LBUF[(ty + r) * LSTRIDE + gx + c] != want) cok = 0;
+            }
+        EXPECT(cok, "T9 '>' head cursor at (col 2, row 14) in JCLR_LIVE");
+        EXPECT(LBUF[LGUARD] == 0xDEADBEEFu, "T9 log render: guard word untouched (no OOB)");
     }
 
     printf("Framebuffer tests: %d PASS, %d FAIL\n", pass, fail);

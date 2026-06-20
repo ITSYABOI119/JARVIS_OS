@@ -3,6 +3,7 @@
  * See framebuffer.h. 32bpp linear, pitch-addressed, uncacheable target.
  */
 #include "framebuffer.h"
+#include "jarvis_ui_tokens.h"   /* Step 2c-2b: log-region geometry + palette (single source) */
 
 static volatile uint8_t *g_fb     = 0;
 static uint32_t          g_pitch  = 0;   /* bytes per scanline (>= width*4) */
@@ -214,3 +215,72 @@ void fb_draw_text(uint32_t x, uint32_t y, const char *s, uint32_t fg, uint32_t b
         if (x >= g_width) break;
     }
 }
+
+/* ============================================================================
+ * Step 2c-2b: scrolling event-log region (no-scroll line-ring).
+ * The framebuffer is UNCACHEABLE, so a top-scroll would re-read ~1.7 MB UC per
+ * line. Instead each new line overwrites ring row (count-1)%ROWS in place (one
+ * ~123 KB strip cleared+drawn), wrapping when full, with a '>' head cursor.
+ * The ring updates even with no framebuffer so the logic is host-testable.
+ * ==========================================================================*/
+#define FBLOG_ROWS  JUI_LOG_H_ROWS
+#define FBLOG_COLS  JUI_LOG_W_COLS
+static char     g_log[FBLOG_ROWS][FBLOG_COLS + 1];
+static uint32_t g_log_count  = 0;   /* total appended; current head = (count-1)%ROWS */
+static int      g_log_framed = 0;   /* region frame drawn once */
+
+/* Draw the region frame: "EVENT LOG" label, cleared interior, 1px hairline border. */
+static void fb_log_frame(void)
+{
+    if (!g_fb) return;
+    uint32_t x0 = JUI_LOG_COL * JUI_CELL_W;
+    uint32_t y0 = JUI_LOG_ROW * JUI_CELL_H;
+    uint32_t w  = (uint32_t)FBLOG_COLS * JUI_CELL_W;
+    uint32_t h  = (uint32_t)FBLOG_ROWS * JUI_CELL_H;
+    fb_fill_rect(x0, y0 - JUI_CELL_H, w, JUI_CELL_H, FBP_BG);
+    fb_draw_text(x0, y0 - JUI_CELL_H, "EVENT LOG", JCLR_MUTED, FBP_BG);
+    fb_fill_rect(x0, y0, w, h, FBP_BG);                       /* interior */
+    fb_fill_rect(x0 - 1, y0 - 1, w + 2, 1, JCLR_LINE);        /* top    */
+    fb_fill_rect(x0 - 1, y0 + h, w + 2, 1, JCLR_LINE);        /* bottom */
+    fb_fill_rect(x0 - 1, y0 - 1, 1, h + 2, JCLR_LINE);        /* left   */
+    fb_fill_rect(x0 + w, y0 - 1, 1, h + 2, JCLR_LINE);        /* right  */
+}
+
+/* Render one ring row in place: clear its strip, draw gutter cursor + the text. */
+static void fb_log_render_row(uint32_t row, int is_head)
+{
+    if (!g_fb) return;
+    uint32_t x0 = JUI_LOG_COL * JUI_CELL_W;
+    uint32_t y  = (JUI_LOG_ROW + row) * JUI_CELL_H;
+    fb_fill_rect(x0, y, (uint32_t)FBLOG_COLS * JUI_CELL_W, JUI_CELL_H, FBP_BG);
+    fb_draw_char(x0, y, is_head ? '>' : ' ', JCLR_LIVE, FBP_BG);
+    fb_draw_text(x0 + 2u * JUI_CELL_W, y, g_log[row],
+                 is_head ? JCLR_TEXT2 : JCLR_MUTED, FBP_BG);
+}
+
+void fb_log_reset(void)
+{
+    for (uint32_t r = 0; r < FBLOG_ROWS; r++) g_log[r][0] = '\0';
+    g_log_count  = 0;
+    g_log_framed = 0;
+    if (g_fb) { fb_log_frame(); g_log_framed = 1; fb_flush(); }
+}
+
+void fb_log_append(const char *line)
+{
+    if (!line) return;
+    uint32_t row = g_log_count % FBLOG_ROWS;   /* head = where this line lands */
+    uint32_t i = 0;
+    for (; line[i] && i < FBLOG_COLS; i++) g_log[row][i] = line[i];   /* truncate */
+    g_log[row][i] = '\0';
+    g_log_count++;
+    if (!g_fb) return;                          /* ring updated; no FB to draw on */
+    if (!g_log_framed) { fb_log_frame(); g_log_framed = 1; }
+    if (g_log_count > 1)                         /* un-cursor the previous head */
+        fb_log_render_row((row + FBLOG_ROWS - 1u) % FBLOG_ROWS, 0);
+    fb_log_render_row(row, 1);
+    fb_flush();
+}
+
+uint32_t    fb_log_count(void)       { return g_log_count; }
+const char *fb_log_row(uint32_t row) { return (row < FBLOG_ROWS) ? g_log[row] : ""; }

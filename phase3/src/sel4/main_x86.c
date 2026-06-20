@@ -54,6 +54,7 @@
 #include "fat32.h"
 #include "framebuffer.h"
 #include "jarvis_debug.h"
+#include "jarvis_ui_tokens.h"   /* Step 2c-2b: FBP_ and JUI_ palette + geometry (single source) */
 
 #if JARVIS_AVX2_PROBE
 #include "avx2_probe.h"
@@ -224,6 +225,21 @@ static void putc_serial(char c)
 #endif
 #ifdef __x86_64__
     if (vga_ready) vga_putc(c);
+    /* Step 2c-2b: mirror COMPLETED lines into the FB scrolling event-log (only when a
+     * framebuffer is mapped). Separate accumulator from the BOOT_LOG one above; cadence
+     * is low in deploy ([STATS]/[INFER]/boot lines), never per-token. fb_log_append does
+     * not print, so there is no recursion back into putc_serial. */
+    if (fb_ready()) {
+        static char fb_line[JUI_LOG_W_COLS + 1];
+        static int  fb_pos = 0;
+        if (c == '\n') {
+            fb_line[fb_pos] = '\0';
+            if (fb_pos > 0) fb_log_append(fb_line);
+            fb_pos = 0;
+        } else if (c != '\r' && fb_pos < (int)JUI_LOG_W_COLS) {
+            fb_line[fb_pos++] = c;
+        }
+    }
 #endif
 }
 
@@ -1224,19 +1240,8 @@ static int wait_for_response(shmem_ring_t *ring, uint8_t expected_type)
 }
 
 /* ---- Step 2c-1: status-panel helpers (fixed-position fields; the FB is Uncacheable,
- *      so updates are in-place — clear a line's strip, redraw — never a full-frame scroll). */
-#define FBP_X         16u
-#define FBP_BG        0x0A0B0Eu
-#define FBP_FG        0xC8D0E0u   /* light gray */
-#define FBP_ACCENT    0x4F7CFFu
-#define FBP_OK        0x3FB950u
-#define FBP_ERR       0xF2564Bu
-#define FBP_Y_TITLE     16u
-#define FBP_Y_DISPLAY   48u
-#define FBP_Y_MODEL     72u
-#define FBP_Y_THREADS   96u
-#define FBP_Y_QUERIES  120u
-#define FBP_Y_LAST     144u
+ *      so updates are in-place — clear a line's strip, redraw — never a full-frame scroll).
+ *      FBP_ and FBP_Y_ palette + field geometry now come from jarvis_ui_tokens.h (2c-2b). */
 
 static char *fbp_str(char *p, const char *s) { while (*s) *p++ = *s++; return p; }
 static char *fbp_u32(char *p, uint32_t v) {
@@ -1495,6 +1500,7 @@ static void *main_continued(void *arg UNUSED)
              *     updated in place later (model load, [STATS] cadence). No scroll. */
             if (fb_vaddr && fb_init(fb_vaddr, fb_pitch, fb_width, fb_height, fb_bpp) == 0) {
                 fb_clear(FBP_BG);   /* one-time full-frame UC clear (~2M writes, sub-second; 2b-validated) */
+                fb_log_reset();     /* Step 2c-2b: draw the empty event-log region frame */
                 fb_status_line(FBP_Y_TITLE, "JARVIS AI-OS   Phase 4 / goal #2", FBP_ACCENT);
                 {   /* Display : WxHxBPP  @0xADDR  BGRX */
                     char dl[80]; char *dp = dl;

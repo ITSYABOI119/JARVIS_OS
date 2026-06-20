@@ -238,9 +238,9 @@ jobs:
           -o /tmp/test_vga_text
         /tmp/test_vga_text
 
-    - name: "Phase 3: Framebuffer Blitter + Font"
+    - name: "Phase 3: Framebuffer Blitter + Font + Event-Log"
       run: |
-        gcc -Wall -Werror -O2 -std=c11 \
+        gcc -Wall -Werror -O2 -std=c11 -I phase3/src/sel4 \
           phase3/src/drivers/test_framebuffer.c phase3/src/drivers/framebuffer.c \
           -o /tmp/test_framebuffer && /tmp/test_framebuffer
 
