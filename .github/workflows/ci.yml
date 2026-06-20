@@ -238,6 +238,12 @@ jobs:
           -o /tmp/test_vga_text
         /tmp/test_vga_text
 
+    - name: "Phase 3: Framebuffer Blitter + Font"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 \
+          phase3/src/drivers/test_framebuffer.c phase3/src/drivers/framebuffer.c \
+          -o /tmp/test_framebuffer && /tmp/test_framebuffer
+
     - name: "Phase 3: Tensor Ops (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 \

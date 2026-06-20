@@ -32,4 +32,15 @@ void fb_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t rgb);
 void fb_clear(uint32_t rgb);
 void fb_flush(void);                 /* sfence — orders store buffers (harmless no-op for UC) */
 
+/* 8x16 bitmap-font text (Step 2c-1). Colors go through fb_pack (rb_swap honored).
+ * Glyphs are clipped at the framebuffer edges — never writes out of bounds. */
+#define FB_FONT_W 8u
+#define FB_FONT_H 16u
+void fb_draw_char(uint32_t x, uint32_t y, char c, uint32_t fg, uint32_t bg);
+void fb_draw_text(uint32_t x, uint32_t y, const char *s, uint32_t fg, uint32_t bg);
+
+/* 16-byte glyph bitmap for c (printable 0x20–0x7E; out-of-range → space glyph).
+ * Exposed for the host test. Each byte = one scanline, bit 0x80 = leftmost pixel. */
+const uint8_t *fb_font_glyph(char c);
+
 #endif /* JARVIS_FRAMEBUFFER_H */

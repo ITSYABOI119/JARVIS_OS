@@ -30,11 +30,23 @@ Added a minimal blitter and drew a test pattern on the real monitor:
 
 The FB was first written to map **Write-Combining** via `vspace_map_pages(..., seL4_X86_WriteCombining)`. But `vspace_map_pages`' last arg is `int cacheable` (libsel4utils maps `1 → WriteBack`, `0 → Uncached`), **not** a `seL4_X86_VMAttributes` — so passing the WC enum value (4) is *truthy* → a **WriteBack/cacheable** mapping, which the GPU scanout never sees (no cache snoop) → blank screen. Fixed by passing **`0` (Uncacheable)** — MTRR-independent and guaranteed visible, the same device-memory mapping the NVMe BAR0/DMA path uses. True WriteCombining (faster) needs a raw `seL4_X86_Page_Map` path — deferred to 2c.
 
-## Next — Step 2c (font + status UI)
+## Step 2c-1 — bitmap font + LIVE status panel (DONE 2026-06-20) 🎉
 
-1. **Bitmap font + status-screen renderer** from `phase4/docs/ui_mockups/JARVIS_OS_DESIGN_TOKENS.md` (boot-log → live status: model load, query/response, tok/s, err). Use the design-token hex directly (BGRX, no swap).
-2. **FB diagnostics are serial-only** — the FB block runs **before `nvme_log_init`**, so the `[JARVIS] FB:` descriptor/dump lines never reach the durable NVMe log. **Re-log the descriptor + map result via a structured `nvme_log_write` after init** so a dark boot is diagnosable from the log, not just serial.
-3. **Optional true-WC mapping** (raw `seL4_X86_Page_Map`) if UC fill latency matters.
+The R9 280X monitor now shows a live **status panel** (8×16 bitmap font) on the **1024×768×32** GOP framebuffer — replacing the 2b test pattern. Fixed-position fields (Title / Display / Model / Threads / Queries / Last), updated in place (UC FB → strip-clear + redraw). All updates stay **off the per-token path**:
+- **Model** `[loading N%]` driven by the **NVMe read counter** (the slow phase; the first cut wrongly tracked the ~2 s frame-alloc loop and froze at 98%). Counter includes FAT-lookup sectors → **clamped to 100**; then green **`[loaded]`**.
+- **Queries** ticks **per query** via a draw-only twin (`fb_status_line_quiet`) so it can't flood the no-wrap log; **Last** refreshes **per inference**.
+- **`[PANEL]` log mirror:** `fb_status_line` mirrors its text to the log as `[PANEL] <text>` (BOOT_LOG=1 → durable NVMe), so the on-screen `%` climb is diagnosable off-box — the new standing rule "all on-screen UI must mirror to the log."
+- **`framebuffer.c/h`:** 8×16 font + `fb_draw_char`/`fb_draw_text`/`fb_font_glyph`; **host-tested** `test_framebuffer.c` (15/15) + CI step.
+- **Relog resolved:** FB descriptor re-logged after `nvme_log_init` → `FB 1024x768x32 … UC mapped pages=768` durable.
+
+**Verified ENTIRELY from the boot_id log** (UI-reconstructable-from-log): 700-query run, `[STATS] err=0` throughout; Model `%` climb + green `[loaded]` as `[PANEL]` lines; **0** per-query `[PANEL] Queries` flood; self-test 5/5; M3 `NUM_NODES=6` (5 workers); `FB 1024x768x32 … pages=768` relog.
+
+## Next — Step 2c-2 (scrolling log + design-token UI)
+
+1. **Scrolling boot/event log** + **design-token styling** from a chosen `phase4/docs/ui_mockups/` mockup.
+2. **Observability:** one-block full-UI snapshot at init + steady cadence; boot-relative TSC→ms timestamps; "UI fully reconstructable from the log" exit gate.
+3. **fat32 FAT-sector cache** (boot-speed; ~160 MB redundant FAT reads) + exact data-only `%` via a fat32 progress callback.
+4. **Optional** true-WC mapping (raw `seL4_X86_Page_Map`) and 1920×1080 GRUB `gfxmode` for more UI room.
 
 ---
 

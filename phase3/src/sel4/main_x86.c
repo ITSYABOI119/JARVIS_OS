@@ -74,6 +74,13 @@ static int vga_ready = 0;  /* set after VGA frame mapped into vspace */
 #define FB_MAX_PAGES 4096
 static seL4_CPtr g_fb_caps[FB_MAX_PAGES];
 
+/* Step 2c-1: FB descriptor stashed for the post-nvme_log_init relog + the status panel. */
+static int      g_fb_desc_valid = 0, g_fb_desc_drawable = 0, g_fb_desc_mapped = 0;
+static uint64_t g_fb_desc_addr = 0;
+static uint32_t g_fb_desc_pitch = 0, g_fb_desc_w = 0, g_fb_desc_h = 0, g_fb_desc_pages = 0;
+static uint8_t  g_fb_desc_bpp = 0, g_fb_desc_type = 0;
+static char     g_fb_last_resp[64] = "-";   /* last inference response (truncated) for the panel */
+
 /* seL4 IOPort wrappers for PCI config space (0xCF8/0xCFC).
  * Cap acquired at runtime, stored here for the wrapper functions. */
 static seL4_CPtr g_pci_ioport_cap = 0;
@@ -93,6 +100,10 @@ static nvme_controller_t *g_nvme_ptr = NULL;
 static void *g_nvme_bounce_vaddr = NULL;
 static uint64_t g_nvme_bounce_paddr = 0;
 static uint64_t g_nvme_read_count = 0;
+static uint32_t g_model_total_sectors = 0;   /* GGUF size in 512B sectors — drives the load %% */
+/* fwd decl: defined just after fb_status_line; called from the read callback below so the
+ * Model field %% tracks the SLOW NVMe read, not the fast frame-alloc loop. */
+static void fb_model_pct(uint32_t done, uint32_t total);
 
 static int fat32_nvme_read(uint64_t lba, uint32_t count, void *buf)
 {
@@ -109,6 +120,8 @@ static int fat32_nvme_read(uint64_t lba, uint32_t count, void *buf)
             puts_serial("  ");
             put_dec((uint32_t)(g_nvme_read_count * 512 / (1024 * 1024)));
             puts_serial("MB read\n");
+            /* Step 2c-1: live load %% off the SLOW read (clamped — counter includes FAT-lookup sectors). */
+            fb_model_pct((uint32_t)g_nvme_read_count, g_model_total_sectors);
         }
     }
     return 0;
@@ -1194,6 +1207,67 @@ static int wait_for_response(shmem_ring_t *ring, uint8_t expected_type)
     return -1;
 }
 
+/* ---- Step 2c-1: status-panel helpers (fixed-position fields; the FB is Uncacheable,
+ *      so updates are in-place — clear a line's strip, redraw — never a full-frame scroll). */
+#define FBP_X         16u
+#define FBP_BG        0x0A0B0Eu
+#define FBP_FG        0xC8D0E0u   /* light gray */
+#define FBP_ACCENT    0x4F7CFFu
+#define FBP_OK        0x3FB950u
+#define FBP_ERR       0xF2564Bu
+#define FBP_Y_TITLE     16u
+#define FBP_Y_DISPLAY   48u
+#define FBP_Y_MODEL     72u
+#define FBP_Y_THREADS   96u
+#define FBP_Y_QUERIES  120u
+#define FBP_Y_LAST     144u
+
+static char *fbp_str(char *p, const char *s) { while (*s) *p++ = *s++; return p; }
+static char *fbp_u32(char *p, uint32_t v) {
+    char d[12]; int di = 0;
+    if (v == 0) d[di++] = '0'; else while (v) { d[di++] = (char)('0' + (v % 10)); v /= 10; }
+    while (di) *p++ = d[--di];
+    return p;
+}
+static char *fbp_hex(char *p, uint32_t v) {
+    static const char hx[] = "0123456789abcdef";
+    for (int s = 28; s >= 0; s -= 4) *p++ = hx[(v >> s) & 0xF];
+    return p;
+}
+/* Redraw one fixed-position status line in place: clear its strip, draw the text.
+ * Also mirrors the verbatim text to the log as "[PANEL] <text>" (BOOT_LOG=1 -> durable NVMe;
+ * deploy BOOT_LOG=0 -> serial-only, no NVMe wear) so the on-screen state is diagnosable off-box. */
+static void fb_status_line(uint32_t y, const char *text, uint32_t fg) {
+    if (!fb_ready()) return;                              /* no-op on a non-drawable boot */
+    fb_fill_rect(FBP_X, y, 1600, FB_FONT_H, FBP_BG);     /* fb_fill_rect clamps to width */
+    fb_draw_text(FBP_X, y, text, fg, FBP_BG);
+    fb_flush();
+    puts_serial("[PANEL] "); puts_serial(text); puts_serial("\n");
+}
+
+/* Live model-load %% in the Model field, driven by the NVMe read counter (the slow phase the
+ * user actually waits on). g_nvme_read_count includes FAT-lookup sectors, so done can exceed
+ * total -> clamp to 100. Emits a [PANEL] line each step via fb_status_line. */
+static void fb_model_pct(uint32_t done, uint32_t total) {
+    if (!fb_ready() || total == 0) return;
+    uint32_t pct = (uint32_t)((uint64_t)done * 100u / total);
+    if (pct > 100) pct = 100;
+    char ml[64]; char *mp = ml;
+    mp = fbp_str(mp, "Model   : Gemma 4 E2B (2962 MB)  [loading ");
+    mp = fbp_u32(mp, pct); mp = fbp_str(mp, "%]"); *mp = '\0';
+    fb_status_line(FBP_Y_MODEL, ml, FBP_FG);
+}
+
+/* Draw-only twin of fb_status_line — NO [PANEL] log mirror. Used for the per-query Queries
+ * field so the no-wrap 2700-entry NVMe log isn't flooded under BOOT_LOG=1 (q/err is already
+ * durable via [STATS]/IPC_STATS). */
+static void fb_status_line_quiet(uint32_t y, const char *text, uint32_t fg) {
+    if (!fb_ready()) return;
+    fb_fill_rect(FBP_X, y, 1600, FB_FONT_H, FBP_BG);
+    fb_draw_text(FBP_X, y, text, fg, FBP_BG);
+    fb_flush();
+}
+
 /* ---- Main continuation (runs on vspace-managed stack) ---- */
 
 static void *main_continued(void *arg UNUSED)
@@ -1282,6 +1356,12 @@ static void *main_continued(void *arg UNUSED)
             puts_serial("[JARVIS] FB: bootinfo extraLen=0 (no framebuffer forwarded)\n");
         }
 
+        /* Step 2c-1: stash the descriptor for the post-nvme_log_init relog + the panel. */
+        g_fb_desc_valid = fb_valid;
+        g_fb_desc_addr  = fb_addr;  g_fb_desc_pitch = fb_pitch;
+        g_fb_desc_w     = fb_width; g_fb_desc_h     = fb_height;
+        g_fb_desc_bpp   = fb_bpp;   g_fb_desc_type  = fb_type;
+
         /* Step 2b — only with a usable direct-RGB (type==1) 32bpp framebuffer. */
         int fb_drawable = fb_valid && fb_type == 1 && fb_addr != 0 &&
                           fb_pitch != 0 && fb_width != 0 && fb_height != 0;
@@ -1291,6 +1371,7 @@ static void *main_continued(void *arg UNUSED)
         }
 
         if (fb_drawable) {
+            g_fb_desc_drawable = 1;
             uint64_t fb_end = fb_addr + (uint64_t)fb_pitch * fb_height;
 
             /* (a) Dump device-untypeds so a failed FB map shows whether
@@ -1365,17 +1446,34 @@ static void *main_continued(void *arg UNUSED)
                 }
             }
 
-            /* (c) Test pattern (only if the map succeeded). */
+            if (fb_vaddr) { g_fb_desc_mapped = 1; g_fb_desc_pages = fb_pages; }
+
+            /* (c) Status panel (Step 2c-1) — fixed-position fields, drawn once here and
+             *     updated in place later (model load, [STATS] cadence). No scroll. */
             if (fb_vaddr && fb_init(fb_vaddr, fb_pitch, fb_width, fb_height, fb_bpp) == 0) {
-                fb_clear(0x0A0B0E);                          /* dark canvas */
-                fb_fill_rect(60,  60,  220, 160, 0xFF0000);  /* RED   — byte-order test */
-                fb_fill_rect(320, 60,  220, 160, 0x00FF00);  /* GREEN */
-                fb_fill_rect(580, 60,  220, 160, 0x0000FF);  /* BLUE  */
-                fb_fill_rect(60,  260, 220, 160, 0x4F7CFF);  /* accent */
-                fb_fill_rect(320, 260, 220, 160, 0x3FB950);  /* ok */
-                fb_fill_rect(580, 260, 220, 160, 0xF2564B);  /* err */
-                fb_flush();
-                puts_serial("[JARVIS] FB: test pattern drawn at vaddr ");
+                fb_clear(FBP_BG);   /* one-time full-frame UC clear (~2M writes, sub-second; 2b-validated) */
+                fb_status_line(FBP_Y_TITLE, "JARVIS AI-OS   Phase 4 / goal #2", FBP_ACCENT);
+                {   /* Display : WxHxBPP  @0xADDR  BGRX */
+                    char dl[80]; char *dp = dl;
+                    dp = fbp_str(dp, "Display : ");
+                    dp = fbp_u32(dp, fb_width);  *dp++ = 'x'; dp = fbp_u32(dp, fb_height);
+                    *dp++ = 'x'; dp = fbp_u32(dp, fb_bpp);
+                    dp = fbp_str(dp, "  @0x"); dp = fbp_hex(dp, (uint32_t)fb_addr);
+                    dp = fbp_str(dp, "  BGRX"); *dp = '\0';
+                    fb_status_line(FBP_Y_DISPLAY, dl, FBP_FG);
+                }
+                fb_status_line(FBP_Y_MODEL, "Model   : Gemma 4 E2B (2962 MB)  [loading...]", FBP_FG);
+                {   /* Threads : NUM_NODES=N  (M3 worker pool) */
+                    char tl[64]; char *tp = tl;
+                    tp = fbp_str(tp, "Threads : NUM_NODES=");
+                    tp = fbp_u32(tp, (uint32_t)g_num_nodes);
+                    tp = fbp_str(tp, "  (M3 worker pool)"); *tp = '\0';
+                    fb_status_line(FBP_Y_THREADS, tl, FBP_FG);
+                }
+                fb_status_line(FBP_Y_QUERIES, "Queries : q=0  err=0", FBP_OK);
+                fb_status_line(FBP_Y_LAST,    "Last    : -", FBP_FG);
+                /* fb_status_line flushed each line already — no extra fb_flush needed. */
+                puts_serial("[JARVIS] FB: status panel drawn at vaddr ");
                 put_hex((uint32_t)((uintptr_t)fb_vaddr >> 32));
                 put_hex((uint32_t)(uintptr_t)fb_vaddr);
                 puts_serial("\n");
@@ -1561,6 +1659,31 @@ static void *main_continued(void *arg UNUSED)
                                                        LOG_BOOT, "JARVIS boot started");
                                         nvme_log_write(&nvme_ctrl, dma_vaddrs[4], dma_paddrs[4],
                                                        LOG_SELFTEST, "Self-test 5/5 PASS");
+                                        {   /* Step 2c-1: the FB block ran before this, so its
+                                             * [JARVIS] FB: lines were serial-only — relog the
+                                             * descriptor + map outcome durably here. */
+                                            char fbl[96]; char *fp = fbl;
+                                            fp = fbp_str(fp, "FB ");
+                                            if (g_fb_desc_valid) {
+                                                fp = fbp_u32(fp, g_fb_desc_w); *fp++ = 'x';
+                                                fp = fbp_u32(fp, g_fb_desc_h); *fp++ = 'x';
+                                                fp = fbp_u32(fp, g_fb_desc_bpp);
+                                                fp = fbp_str(fp, " type="); fp = fbp_u32(fp, g_fb_desc_type);
+                                                fp = fbp_str(fp, " @0x"); fp = fbp_hex(fp, (uint32_t)g_fb_desc_addr);
+                                                if (g_fb_desc_mapped) {
+                                                    fp = fbp_str(fp, " UC mapped pages=");
+                                                    fp = fbp_u32(fp, g_fb_desc_pages);
+                                                } else {
+                                                    fp = fbp_str(fp, g_fb_desc_drawable ?
+                                                                 " drawable not-mapped" : " NOT-DRAWABLE");
+                                                }
+                                            } else {
+                                                fp = fbp_str(fp, "no id=4 forwarded");
+                                            }
+                                            *fp = '\0';
+                                            nvme_log_write(&nvme_ctrl, dma_vaddrs[4], dma_paddrs[4],
+                                                           LOG_BOOT, fbl);
+                                        }
 #if JARVIS_SMP_PROBE
                                         /* M2 PRIMARY GATE: bootinfo->numNodes == 2 proves BSP + 1 AP
                                          * both booted (kernel sets it from the started CPU count).
@@ -1689,6 +1812,7 @@ static void *main_continued(void *arg UNUSED)
 
                                                     /* Read model from FAT32 */
                                                     g_nvme_read_count = 0;
+                                                    g_model_total_sectors = (uint32_t)((model_size + 511) / 512);
                                                     puts_serial("[JARVIS] Reading model from NVMe...\n");
 #if JARVIS_DBG_BOOT_LOG
                                                     nvme_log_write(&nvme_ctrl, dma_vaddrs[4], dma_paddrs[4],
@@ -1708,6 +1832,9 @@ static void *main_continued(void *arg UNUSED)
                                                             nvme_model_n_pages = n_pages;
                                                             nvme_log_write(&nvme_ctrl, dma_vaddrs[4], dma_paddrs[4],
                                                                            LOG_MODEL_LOAD, "GGUF loaded OK");
+                                                            if (fb_ready())   /* Step 2c-1: panel update */
+                                                                fb_status_line(FBP_Y_MODEL,
+                                                                    "Model   : Gemma 4 E2B (2962 MB)  [loaded]", FBP_OK);
                                                         }
                                                     } else {
                                                         puts_serial("[JARVIS] Model read failed\n");
@@ -2098,6 +2225,23 @@ static void *main_continued(void *arg UNUSED)
             }
 #endif
 
+            /* Step 2c-1: capture the last inference response (sanitized) for the panel. */
+            if (resp_offset > 0) {
+                int n = resp_offset > 47 ? 47 : resp_offset;
+                for (int i = 0; i < n; i++) {
+                    char ch = full_response[i];
+                    g_fb_last_resp[i] = (ch >= 0x20 && ch < 0x7F) ? ch : ' ';
+                }
+                g_fb_last_resp[n] = '\0';
+                /* Step 2c-1: Last refreshes on each NEW inference response (~15% of
+                 * queries, off the per-token path) — not at the 100-query cadence. */
+                if (fb_ready()) {
+                    char ll[80]; char *lp = ll;
+                    lp = fbp_str(lp, "Last    : "); lp = fbp_str(lp, g_fb_last_resp); *lp = '\0';
+                    fb_status_line(FBP_Y_LAST, ll, FBP_FG);
+                }
+            }
+
             if (resp_offset == 0) {
                 q_errors++;
 #if JARVIS_DBG_IPC
@@ -2211,6 +2355,16 @@ static void *main_continued(void *arg UNUSED)
 #endif
 
     next_query:
+        /* Step 2c-1: live per-query counter — END of every iteration (reached by all
+         * paths incl. the inference-timeout goto). One ~field-line UC write (~0.2ms),
+         * NOT per-token; q_total/q_errors are final here. */
+        if (fb_ready()) {
+            char ql[64]; char *qp = ql;
+            qp = fbp_str(qp, "Queries : q="); qp = fbp_u32(qp, (uint32_t)q_total);
+            qp = fbp_str(qp, "  err=");        qp = fbp_u32(qp, (uint32_t)q_errors);
+            *qp = '\0';
+            fb_status_line_quiet(FBP_Y_QUERIES, ql, q_errors ? FBP_ERR : FBP_OK);
+        }
         seL4_Yield();
     }
 
