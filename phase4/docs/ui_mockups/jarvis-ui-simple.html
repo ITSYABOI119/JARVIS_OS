@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<!--
+  CONCEPT: JARVIS — Simple Start
+  A calm, conversation-first screen: the minimal "version 1" of the JARVIS AI-OS display.
+  No HUD, no meters, no arc reactor — just a slim header, the conversation (JARVIS streams
+  its answer), and one input line with a quiet status. Friendly and uncluttered: the thing
+  you ship first and grow from. One accent color, lots of breathing room.
+
+  FRAMEBUFFER REALITY (R9 280X @ 1280x720, simple 2D primitives):
+    Native  : header bar, dividers, input box  -> filled rects + 1px lines;
+              all text -> bitmap-font blits; blinking cursor -> a small rect toggled on/off.
+    Aspirational (approximate or drop on the framebuffer):
+              the soft glow on the online dot, the rounded corners, and the gentle
+              token fade -> use a solid dot, square corners, and instant text.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>JARVIS · Simple</title>
+<style>
+  :root{
+    --bg:#0b0f14; --surface:#11161d; --line:#1d2630;
+    --text:#dbe6ef; --muted:#6b7d8c; --faint:#3d4b57;
+    --accent:#5fd0c8;            /* one calm teal-cyan */
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{height:100%;background:#05080b;color:var(--text);
+    font-family:system-ui,-apple-system,'Segoe UI',sans-serif;overflow:hidden;}
+  .mono{font-family:ui-monospace,'Cascadia Code',Consolas,'Courier New',monospace;}
+
+  .stage{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(ellipse at 50% 35%,#0c1118,#05080b 70%);}
+  .screen{position:relative;width:1280px;height:720px;background:var(--bg);
+    border:1px solid #16202a;border-radius:12px;overflow:hidden;
+    box-shadow:0 30px 80px rgba(0,0,0,.7);display:flex;flex-direction:column;}
+
+  /* header */
+  header{display:flex;align-items:center;justify-content:space-between;
+    padding:20px 30px;border-bottom:1px solid var(--line);}
+  .brand{display:flex;align-items:center;gap:11px;font-weight:600;letter-spacing:.2em;font-size:15px;}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--accent);
+    box-shadow:0 0 11px var(--accent);animation:pulse 2.6s ease-in-out infinite;}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.42}}
+  header .meta{font-size:12.5px;color:var(--muted);letter-spacing:.04em;}
+  header .meta b{color:var(--text);font-weight:500;}
+
+  /* conversation */
+  .conv{flex:1;overflow:hidden;padding:46px 0 30px;display:flex;flex-direction:column;
+    gap:30px;max-width:760px;width:100%;margin:0 auto;}
+  .msg{padding:0 30px;}
+  .who{font-size:11px;letter-spacing:.2em;text-transform:uppercase;margin-bottom:9px;color:var(--faint);}
+  .msg.you .who{color:var(--muted);}
+  .msg.jarvis .who{color:var(--accent);}
+  .bubble{font-size:18px;line-height:1.65;}
+  .msg.you .bubble{color:#a9b8c4;}
+  .cursor{display:inline-block;width:8px;height:18px;background:var(--accent);
+    vertical-align:-3px;margin-left:3px;animation:blink 1.05s steps(1) infinite;}
+  @keyframes blink{0%,50%{opacity:1}50.01%,100%{opacity:0}}
+
+  /* input */
+  .inputbar{border-top:1px solid var(--line);padding:18px 30px;
+    display:flex;align-items:center;gap:16px;}
+  .field{flex:1;display:flex;align-items:center;gap:10px;background:var(--surface);
+    border:1px solid var(--line);border-radius:10px;padding:14px 16px;color:var(--muted);font-size:15px;}
+  .icaret{width:8px;height:17px;background:var(--accent);animation:blink 1.05s steps(1) infinite;}
+  .status{font-size:12.5px;color:var(--muted);white-space:nowrap;}
+  .status b{color:var(--accent);font-weight:600;}
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="screen">
+    <header>
+      <div class="brand"><span class="dot"></span>JARVIS</div>
+      <div class="meta mono">Gemma&nbsp;4&nbsp;E2B&nbsp;·&nbsp;<b>seL4&nbsp;·&nbsp;Ring&nbsp;0</b></div>
+    </header>
+
+    <div class="conv">
+      <div class="msg you">
+        <div class="who">You</div>
+        <div class="bubble">What's the system status?</div>
+      </div>
+      <div class="msg jarvis">
+        <div class="who">JARVIS</div>
+        <div class="bubble"><span id="t"></span><span class="cursor"></span></div>
+      </div>
+    </div>
+
+    <div class="inputbar">
+      <div class="field"><span class="icaret"></span><span>Ask JARVIS&hellip;</span></div>
+      <div class="status mono"><b>5.2</b>&nbsp;tok/s&nbsp;·&nbsp;cache&nbsp;86%</div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // gently stream JARVIS's reply (mock data)
+  var text = "All systems nominal. Running on the seL4 microkernel with five cores handling "
+           + "inference — Gemma 4 E2B is answering at about 5 tokens a second. 86% of your "
+           + "recent queries were served from cache in under a millisecond. Nothing needs "
+           + "your attention right now.";
+  var words = text.split(' '), i = 0, t = document.getElementById('t');
+  (function step(){
+    if (i < words.length){ t.textContent += (i ? ' ' : '') + words[i++]; setTimeout(step, 95); }
+  })();
+</script>
+</body>
+</html>

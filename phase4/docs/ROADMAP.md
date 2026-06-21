@@ -26,8 +26,9 @@ This document is the simple forward roadmap. Each phase has specific goals and a
 ### Goals
 
 1. **Inference performance** — Make Gemma 4 E2B fast enough to use daily on the seL4 box. **v1.0 path = CPU: enable AVX2/FMA + a seL4-native threadpool in the seL4 build** (the AVX2 qdot/attention kernels exist but compile out today — the seL4 build is scalar single-thread, ~0.2 tok/s). Target: approach the native threaded engine (~8–9 tok/s Gemma 4 E2B @16T; ~20 tok/s Llama 1B). **GPU inference (≥50 tok/s, Vulkan) is DEFERRED — no usable GPU — see docs/decisions/2026-06-16-defer-gpu-inference.md; revisit on a hardware change.**
-2. **Graphical output** — Move beyond VGA text: framebuffer or HDMI with a minimal status UI (boot, model load, query/response).
-3. **Input** — USB keyboard (xHCI) working on bare metal for local interaction.
+2. **Graphical output** — Move beyond VGA text: framebuffer or HDMI with a minimal status UI (boot, model load, query/response). **DONE (v1-complete)** — bare-metal GOP framebuffer HUD (status panel + STATE badge + route/counters + scrolling event log), capped at bitmap fidelity (no GPU / font engine / compositor on the box).
+   - **Goal #2b — Remote Telemetry Console (v1.0):** Adopt the **headless-appliance** model — the box is a network inference appliance that **emits** its existing `[SNAP]`/`[STATS]`/`[INFER]` telemetry over the (currently dormant) **Intel I211 NIC**; a **browser console on a separate machine** renders the rich, honesty-corrected "Jarvis OS" design (UI seed = the local, git-ignored `phase4/docs/ui_mockups/design-system/`). The box's own monitor keeps the thin HUD as a local "alive" readout. **MVP = telemetry-OUT only** (low-risk); **control-IN is deferred to ~Phase 6** (see goal #3 + the ADR). Absorbs part of goal #2's "status UI" intent — the rich UI lives off-box because the bare-metal box can't render it. **Done when:** the console shows live, honest box state over the network. ADR: `docs/decisions/2026-06-21-adopt-headless-appliance-remote-console.md`.
+3. **Input (optional / standalone-convenience)** — USB keyboard (xHCI) on bare metal for local interaction. **Down-ranked from v1.0-blocker to optional per the 2026-06-21 headless-appliance ADR** — primary interaction is the remote console; the local keyboard is kept **recoverable as the safe, physically-gated fallback control path** (no network attack surface).
 4. **Installer** — One-script install: build → USB image → flash → boot checklist. Documented in a user guide.
 5. **90-day stability** — Continuous workload on JARVIS PC: 0 crashes, <1% error rate, no memory growth.
 6. **Documentation** — User guide, bare-metal boot guide (updated), architecture overview for contributors.
@@ -36,8 +37,10 @@ This document is the simple forward roadmap. Each phase has specific goals and a
 ### Done when
 
 - [x] seL4-build inference benchmark recorded + reproducible: Gemma 4 E2B **5.46 tok/s @ `NUM_NODES=6`** (3.57× the 1.53 1T), 2026-06-18 — see `phase4/docs/PHASE_4_GOAL1_BENCHMARK.md`
+- [x] **Graphical output (goal #2)** v1-complete — bare-metal GOP framebuffer HUD (2026-06-20)
 - [ ] (deferred) GPU inference benchmark — gated on hardware, see ADR 2026-06-16
-- [ ] Local keyboard input works without serial console
+- [ ] **Remote Telemetry Console (goal #2b)** shows live, honest box state over the network (telemetry-OUT MVP) — see ADR 2026-06-21
+- [ ] (optional) Local keyboard input works without serial console — down-ranked per ADR 2026-06-21; not a v1.0 blocker
 - [ ] Fresh machine can boot JARVIS from USB following the guide alone
 - [ ] 90-day stability log archived with pass criteria met
 - [ ] `v1.0.0` tagged and repo public
@@ -82,7 +85,7 @@ This document is the simple forward roadmap. Each phase has specific goals and a
 2. **Event-driven wake** — Monitors trigger Process A → cache lookup or inference when thresholds crossed. No constant polling of the LLM.
 3. **Proactive actions** — At least 5 automated butler behaviors (e.g. low-disk warning, daily briefing, anomaly alert). Trust Level 0–1 only; higher risk asks or notifies.
 4. **User model** — Semantic memory includes a structured profile: schedule patterns, communication style, priority topics. Updated from consolidation, not manual config files.
-5. **Natural language primary** — Shell/commands exist but conversation is the default interface for all system interaction.
+5. **Natural language primary** — Shell/commands exist but conversation is the default interface for all system interaction. **This is where the Remote Telemetry Console's control-IN channel lands** — turning the console from read-only telemetry (shipped in Phase 4 goal #2b) into a two-way interface — gated on the full security checklist: **auth + HMAC, real SHIELD (close SEC-039), rate-limiting, a hardened/fuzzed inbound parser, and ideally a less-privileged input process (SEC-014)**. See `docs/decisions/2026-06-21-adopt-headless-appliance-remote-console.md`.
 6. **Multi-agent routing** — Device, network, filesystem, and user specialists route queries correctly (>95% accuracy on test suite).
 7. **7-day supervised autonomy** — JARVIS runs 7 days with you present: proactive actions logged, zero unapproved high-risk actions, <5% false-positive interrupts.
 
@@ -175,8 +178,9 @@ Beyond               — research directions
 - `ARCHITECTURE_ENHANCEMENTS.md` — decision cache, SHIELD, shared context pool designs
 - `archive/research/jarvis_research_findings.md` — working / episodic / semantic / procedural memory research
 - `PROJECT_OVERVIEW.md` — Instinct Integration (Hopfield) Phase 4+ notes
+- `docs/decisions/2026-06-21-adopt-headless-appliance-remote-console.md` — headless-appliance ADR (goal #2b Remote Telemetry Console; goal #3 keyboard down-rank; control-IN deferral to Phase 6). The console's UI seed is the local design-system at `phase4/docs/ui_mockups/design-system/` (git-ignored).
 
 ---
 
 **Last updated:** June 2026  
-**Status:** Phase 4 IN PROGRESS — goal #1 (inference performance, CPU) COMPLETE 2026-06-18; goals #2–7 open
+**Status:** Phase 4 IN PROGRESS — goal #1 (inference perf, CPU) COMPLETE 2026-06-18; goal #2 (graphical output) v1-complete 2026-06-20; **goal #2b (Remote Telemetry Console) added 2026-06-21 (headless-appliance ADR)**; goals #3–7 open (#3 keyboard down-ranked to optional)

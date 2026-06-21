@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<!--
+  CONCEPT: JARVIS — Boot Log (the real v1 display)
+  This is what JARVIS actually shows on screen at startup today: VGA text-mode boot output —
+  banner, decision-cache load, the 5 self-tests, PCI/NVMe/FAT32 detection, model load, Process B
+  spawn, READY, then a steady status line. No chat, no graphics — just the startup log, made
+  legible. This mirrors the [VGA]-tagged lines the rootserver prints (main_x86.c) and the NVMe
+  telemetry log; it's the honest starting point for the framebuffer UI.
+
+  FRAMEBUFFER REALITY: this is ~100% native — monospace text blits on a solid background, a couple
+  of 1px dividers, and one filled rect for the cursor. Nothing here is aspirational. The only thing
+  the real framebuffer wouldn't do yet is smooth line-by-line timing (it just prints as it boots).
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>JARVIS · boot</title>
+<style>
+  :root{
+    --bg:#06080c; --text:#c4d2dc; --dim:#5b6b78; --faint:#33424d;
+    --ok:#4fd6b0; --info:#69b7d6; --warn:#f0b24a; --tag:#7d8f9b;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{height:100%;background:#03050a;color:var(--text);
+    font-family:ui-monospace,'Cascadia Code',Consolas,'Courier New',monospace;overflow:hidden;}
+  .stage{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(ellipse at 50% 40%,#080b11,#03050a 70%);}
+  .screen{position:relative;width:1280px;height:720px;background:var(--bg);
+    border:1px solid #121a22;border-radius:8px;overflow:hidden;
+    box-shadow:0 26px 70px rgba(0,0,0,.7);display:flex;flex-direction:column;
+    font-size:15px;line-height:1.62;}
+
+  .banner{padding:20px 30px 14px;border-bottom:1px solid #121a22;}
+  .banner .t{letter-spacing:.16em;color:#dfeaf2;}
+  .banner .t b{color:var(--ok);}
+  .banner .s{color:var(--dim);font-size:12.5px;margin-top:3px;letter-spacing:.04em;}
+
+  .log{flex:1;overflow:hidden;padding:16px 30px;}
+  .ln{white-space:pre;opacity:0;animation:in .12s ease forwards;}
+  @keyframes in{to{opacity:1;}}
+  .tag{color:var(--tag);}
+  .ok{color:var(--ok);} .info{color:var(--info);} .dim{color:var(--dim);} .warn{color:var(--warn);}
+  .val{color:#dfeaf2;}
+  .cursor{display:inline-block;width:9px;height:16px;background:var(--ok);
+    vertical-align:-2px;animation:blink 1.05s steps(1) infinite;}
+  @keyframes blink{0%,50%{opacity:1}50.01%,100%{opacity:0}}
+
+  .statusbar{border-top:1px solid #121a22;padding:13px 30px;display:flex;gap:26px;
+    font-size:13px;color:var(--dim);letter-spacing:.03em;}
+  .statusbar b{color:var(--text);font-weight:500;}
+  .statusbar .on{color:var(--ok);}
+  .statusbar .grow{flex:1;}
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="screen">
+    <div class="banner">
+      <div class="t">JARVIS AI-OS &nbsp;<b>v0.2.1-dev</b>&nbsp; &middot; &nbsp;seL4 x86-64 &middot; PC99</div>
+      <div class="s">181 untypeds &middot; 32410 MB RAM &middot; Ryzen 7 2700X</div>
+    </div>
+
+    <div class="log" id="log"></div>
+
+    <div class="statusbar" id="sb" style="opacity:0">
+      <span class="on">&#9679; ONLINE</span>
+      <span>model <b>Gemma 4 E2B</b></span>
+      <span><b>5.2</b> tok/s</span>
+      <span>cache <b>85.7%</b></span>
+      <span>cores <b>5/8</b></span>
+      <span class="grow"></span>
+      <span>uptime <b>00:00:02</b></span>
+    </div>
+  </div>
+</div>
+
+<script>
+  // The actual startup sequence (condensed from main_x86.c / inference_server.c output).
+  var L = [
+    ['dim',  'cache  ', 'decision cache: 308 patterns loaded'],
+    ['',     '', ''],
+    ['ok',   '[ 1/5 ]', 'decision cache ............. PASS'],
+    ['ok',   '[ 2/5 ]', 'SHIELD safety .............. PASS'],
+    ['ok',   '[ 3/5 ]', 'tensor operations .......... PASS'],
+    ['ok',   '[ 4/5 ]', 'dequantization ............. PASS'],
+    ['ok',   '[ 5/5 ]', 'tokenizer + sampling ....... PASS'],
+    ['ok',   'self-test', '5/5 PASS'],
+    ['',     '', ''],
+    ['info', '[ pci  ]', 'scanning buses 0-15 ... NVMe @ bus 1'],
+    ['info', '[ nvme ]', 'Lexar NM790  IDENTIFY ok  (2.00 TB)'],
+    ['info', '[ fat32]', 'JARVIS_DATA @ LBA 32768'],
+    ['info', '[ load ]', 'GEMMA2B.GUF  ...  2.89 GiB'],
+    ['info', '[ load ]', 'mapped 757105 pages -> Process B'],
+    ['info', '[ gguf ]', 'magic OK   Gemma 4 E2B   Q4_K_M'],
+    ['info', '[ spawn]', 'jarvis-inference started'],
+    ['info', '[  pb  ]', 'inference server up · IPC rings validated'],
+    ['',     '', ''],
+    ['ok',   '[ READY]', 'JARVIS online in 2.1s']
+  ];
+  var box = document.getElementById('log'), i = 0;
+  function row(cls, tag, msg){
+    var d = document.createElement('div'); d.className = 'ln';
+    if (tag) d.innerHTML = '<span class="tag">' + tag + '</span>  <span class="' + (cls||'val') + '">' + msg + '</span>';
+    else d.innerHTML = '&nbsp;';
+    d.style.animationDelay = '0s'; box.appendChild(d); return d;
+  }
+  (function step(){
+    if (i < L.length){ row(L[i][0], L[i][1], L[i][2]); i++; setTimeout(step, 130); }
+    else { var c = document.createElement('span'); c.className='cursor'; box.appendChild(c);
+           document.getElementById('sb').style.transition='opacity .6s'; document.getElementById('sb').style.opacity='1'; }
+  })();
+</script>
+</body>
+</html>

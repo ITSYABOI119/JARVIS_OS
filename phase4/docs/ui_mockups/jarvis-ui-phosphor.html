@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<!--
+  CONCEPT: PHOSPHOR — JARVIS AI-OS status terminal (bare-metal v1)
+
+  RATIONALE: This is the pragmatic day-one console for an AI-controlled seL4 OS rendered
+  on a raw x86-64 framebuffer over HDMI (R9 280X). It is a monospace character grid on
+  deep black with a single phosphor accent (cyan, amber via --accent), composed of
+  box-drawing panels: a left vitals column, per-core text load bars, a central live
+  JARVIS conversation that streams tokens with a blinking block cursor, a SHIELD/agents
+  strip, and a jarvis> command line. Everything maps to "draw filled rect + blit monospace glyph".
+
+  FRAMEBUFFER REALITY:
+   - MAPS 1:1 to real 2D framebuffer primitives: all box-drawing panels (lines/rects),
+     every label:value vitals line (monospace bitmap text), per-core text bars [|||||···],
+     the streaming token text + blinking block cursor, the agents/SHIELD strip, the
+     command line, and the boot log. These are literally glyph-cell writes + filled rects.
+   - APPROXIMATED / ASPIRATIONAL (the framebuffer would only fake these): the faint
+     scanline overlay, the subtle screen flicker, the corner vignette, the soft text
+     "phosphor glow" (text-shadow), and the pulsing-core opacity fade. On the real
+     framebuffer these degrade gracefully to flat cyan-on-black text with no glow —
+     the layout and information are unchanged.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JARVIS AI-OS · PHOSPHOR</title>
+<style>
+  :root{
+    /* ---- color system: single phosphor accent + dim/bright tints ---- */
+    --accent:        #34e7e4;   /* phosphor cyan. swap to #ffb000 for amber */
+    --accent-bright: #aefffe;
+    --accent-dim:    #1c8d8c;
+    --accent-faint:  #0e4847;
+    --accent-ghost:  #072524;
+    --bg:            #03040a;
+    --bg-panel:      #050810;
+    --line:         #123c3b;
+    --warn:         #f5c542;
+    --bad:          #ff5c6c;
+    --ok:           var(--accent);
+    --txt:          #8fdedd;
+    --txt-dim:      #4f8f8e;
+    --cell: 9px;                /* monospace column width target */
+  }
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  html,body{
+    height:100%;
+    background:#000;
+    font-family: ui-monospace,'Cascadia Code','Consolas','Courier New',monospace;
+    overflow:hidden;
+    color:var(--txt);
+  }
+  body{
+    display:flex; align-items:center; justify-content:center;
+    /* letterbox surround so the canvas reads as a screen */
+    background:
+      radial-gradient(120% 120% at 50% 30%, #0a0c12 0%, #000 70%);
+  }
+
+  /* ---------- bezel / screen ---------- */
+  .bezel{
+    width:1280px; height:720px;
+    position:relative;
+    border-radius:14px;
+    padding:14px;
+    background:linear-gradient(160deg,#15171c,#070809 60%,#101216);
+    box-shadow:
+      0 0 0 1px #000,
+      0 0 0 3px #1c1f25,
+      0 24px 80px -20px rgba(0,0,0,.9),
+      inset 0 0 2px #2a2e36;
+  }
+  .screen{
+    position:relative;
+    width:100%; height:100%;
+    background:
+      radial-gradient(130% 110% at 50% 0%, #05101a 0%, var(--bg) 55%, #010103 100%);
+    border-radius:6px;
+    overflow:hidden;
+    box-shadow: inset 0 0 90px 8px rgba(0,0,0,.9);
+    padding:14px 16px;
+    display:grid;
+    grid-template-rows: auto 1fr auto;
+    gap:8px;
+    font-size:13px; line-height:1.42;
+  }
+  /* CRT overlays (aspirational) */
+  .screen::before{ /* scanlines */
+    content:""; position:absolute; inset:0; pointer-events:none; z-index:50;
+    background:repeating-linear-gradient(
+      to bottom, rgba(0,0,0,0) 0px, rgba(0,0,0,0) 2px, rgba(0,0,0,.16) 3px);
+    mix-blend-mode:multiply;
+  }
+  .screen::after{ /* vignette */
+    content:""; position:absolute; inset:0; pointer-events:none; z-index:51;
+    background:radial-gradient(120% 120% at 50% 50%, transparent 60%, rgba(0,0,0,.55) 100%);
+  }
+  @keyframes flicker{
+    0%,100%{ opacity:1 } 47%{ opacity:.98 } 48%{ opacity:.94 }
+    49%{ opacity:1 } 71%{ opacity:.985 } 72%{ opacity:.965 } 73%{ opacity:1 }
+  }
+  .flick{ animation:flicker 6s infinite steps(1); height:100%; display:grid;
+          grid-template-rows:auto 1fr auto; gap:8px; }
+  .glow{ text-shadow:0 0 4px var(--accent-faint); }
+
+  /* ---------- header / boot board ---------- */
+  header{ display:flex; align-items:baseline; justify-content:space-between;
+          border-bottom:1px solid var(--line); padding-bottom:5px; }
+  .brand{ color:var(--accent-bright); font-weight:700; letter-spacing:2px;
+          text-shadow:0 0 6px var(--accent-dim); font-size:15px; }
+  .brand .ver{ color:var(--txt-dim); font-weight:400; letter-spacing:1px; font-size:11px; margin-left:8px;}
+  .hdr-right{ color:var(--txt-dim); font-size:11px; display:flex; gap:18px; align-items:baseline;}
+  .hdr-right b{ color:var(--accent); font-weight:400; }
+  .pulse{ color:var(--accent); animation:pulse 1.6s infinite ease-in-out; }
+  @keyframes pulse{ 0%,100%{opacity:1} 50%{opacity:.35} }
+
+  /* ---------- main 3-column grid ---------- */
+  .main{ display:grid; grid-template-columns: 268px 1fr 232px; gap:10px; min-height:0; }
+  .panel{
+    border:1px solid var(--line);
+    background:linear-gradient(180deg, var(--bg-panel), #02030700);
+    position:relative; min-height:0;
+    display:flex; flex-direction:column;
+  }
+  .panel-t{
+    color:var(--accent); font-size:11px; letter-spacing:1.5px;
+    padding:3px 8px; border-bottom:1px solid var(--line);
+    display:flex; justify-content:space-between; align-items:center;
+    background:rgba(52,231,228,.04);
+  }
+  .panel-t .dim{ color:var(--txt-dim); letter-spacing:.5px; }
+  .panel-b{ padding:7px 9px; overflow:hidden; }
+
+  /* vitals lines */
+  .v{ display:flex; justify-content:space-between; padding:1.5px 0; white-space:nowrap; }
+  .v .k{ color:var(--txt-dim); }
+  .v .val{ color:var(--txt); }
+  .v .val.hi{ color:var(--accent-bright); text-shadow:0 0 4px var(--accent-faint); }
+  .v .val.ok{ color:var(--accent); }
+  .v .val.warn{ color:var(--warn); }
+  .sep{ color:var(--line); margin:5px 0; user-select:none; font-size:11px; letter-spacing:-1px; }
+  .ring0{ color:var(--accent-bright); }
+  .ring3{ color:var(--accent); }
+
+  /* per-core bars */
+  .core{ display:flex; gap:6px; align-items:center; font-size:12px; padding:.5px 0; }
+  .core .lbl{ color:var(--txt-dim); width:30px; }
+  .core .bar{ color:var(--accent); letter-spacing:1px; }
+  .core .bar .off{ color:var(--accent-ghost); }
+  .core .pct{ color:var(--txt-dim); width:32px; text-align:right; }
+  .core.idle .bar{ color:var(--accent-dim); }
+
+  /* ---------- center conversation ---------- */
+  .convo{ display:flex; flex-direction:column; min-height:0; }
+  .convo .panel-b{ flex:1; overflow:hidden; display:flex; flex-direction:column; gap:2px;
+                   font-size:13.5px; line-height:1.5; }
+  .msg{ margin-bottom:7px; }
+  .who{ font-size:10.5px; letter-spacing:1px; }
+  .who.user{ color:var(--warn); }
+  .who.ai{ color:var(--accent-bright); text-shadow:0 0 5px var(--accent-dim); }
+  .who .t{ color:var(--txt-dim); margin-left:8px; letter-spacing:0; }
+  .utext{ color:var(--txt); padding-left:2px; }
+  .atext{ color:var(--accent); padding-left:2px; }
+  .atext .meta{ color:var(--txt-dim); }
+  .think{ color:var(--txt-dim); font-style:normal; }
+  .cursor{ display:inline-block; width:8px; height:15px; background:var(--accent-bright);
+           vertical-align:-2px; box-shadow:0 0 6px var(--accent); animation:blink 1.05s steps(1) infinite; }
+  @keyframes blink{ 0%,50%{opacity:1} 51%,100%{opacity:0} }
+  .convo-foot{ border-top:1px solid var(--line); padding:3px 9px; font-size:10.5px;
+               color:var(--txt-dim); display:flex; justify-content:space-between; }
+  .convo-foot b{ color:var(--accent); font-weight:400; }
+
+  /* ---------- right column: agents + shield ---------- */
+  .agent{ display:flex; align-items:center; gap:7px; padding:2.5px 0; font-size:12px; }
+  .agent .dot{ width:7px; height:7px; border-radius:1px; background:var(--accent);
+               box-shadow:0 0 5px var(--accent); flex:none; }
+  .agent .dot.idle{ background:var(--accent-faint); box-shadow:none; }
+  .agent .dot.work{ animation:pulse 1s infinite; }
+  .agent .nm{ color:var(--txt); width:74px; }
+  .agent .st{ color:var(--txt-dim); font-size:10.5px; flex:1; text-align:right; }
+  .agent .st.act{ color:var(--accent); }
+
+  .shield-head{ display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;}
+  .shield-state{ color:var(--accent); font-size:11px; letter-spacing:1px; }
+  .riskbar{ font-size:12px; letter-spacing:1px; margin:3px 0; }
+  .riskbar .fill{ color:var(--accent); } .riskbar .lo{color:var(--accent-ghost);}
+  .risknum{ color:var(--accent-bright); }
+  .note{ color:var(--txt-dim); font-size:10px; line-height:1.4; margin-top:5px; border-top:1px solid var(--line); padding-top:4px;}
+
+  /* IPC mini graph (text) */
+  .spark{ color:var(--accent); letter-spacing:0px; font-size:12px; }
+
+  /* ---------- command line ---------- */
+  .cmd{ border:1px solid var(--line); background:#02050a; display:flex; align-items:center;
+        gap:8px; padding:6px 10px; font-size:13.5px; }
+  .cmd .ps{ color:var(--accent-bright); text-shadow:0 0 5px var(--accent-dim); }
+  .cmd .inp{ color:var(--txt); flex:1; }
+  .cmd .cur2{ display:inline-block; width:8px; height:15px; background:var(--accent);
+              vertical-align:-2px; animation:blink 1.05s steps(1) infinite; }
+  .cmd .hint{ color:var(--txt-dim); font-size:10.5px; }
+
+  /* boot log scroll-in line */
+  .bootline{ color:var(--txt-dim); font-size:11px; }
+  .bootline .ok{ color:var(--accent); }
+  .scrollbox{ overflow:hidden; }
+</style>
+</head>
+<body>
+<div class="bezel">
+ <div class="screen">
+  <div class="flick">
+
+   <!-- ============ HEADER ============ -->
+   <header>
+     <div class="brand glow">JARVIS<span class="ver">AI-OS · v0.2.1-beta · PHOSPHOR</span></div>
+     <div class="hdr-right">
+       <span>seL4 microkernel · <b>Ring 0</b></span>
+       <span>boot <b>2.04s</b></span>
+       <span>uptime <b id="uptime">04:11:38</b></span>
+       <span><span class="pulse">●</span> <b id="clock">--:--:--</b></span>
+     </div>
+   </header>
+
+   <!-- ============ MAIN GRID ============ -->
+   <div class="main">
+
+     <!-- LEFT: vitals + cores -->
+     <div style="display:flex; flex-direction:column; gap:10px; min-height:0;">
+       <div class="panel" style="flex:none;">
+         <div class="panel-t">┤ SYSTEM VITALS ├ <span class="dim" id="boot-id">boot_id 0x9F2A</span></div>
+         <div class="panel-b">
+           <div class="v"><span class="k">host</span><span class="val">JARVIS-PC</span></div>
+           <div class="v"><span class="k">cpu</span><span class="val">Ryzen 7 2700X</span></div>
+           <div class="v"><span class="k">cores</span><span class="val">8c / 16t</span></div>
+           <div class="v"><span class="k">mem</span><span class="val">32 GiB DDR4</span></div>
+           <div class="v"><span class="k">nvme</span><span class="val">Lexar NM790 2TB</span></div>
+           <div class="sep">────────────────────────────</div>
+           <div class="v"><span class="k">ring0</span><span class="val ring0">seL4 · &lt;1ms irq</span></div>
+           <div class="v"><span class="k">ring3</span><span class="val ring3">AI engine · 50–500ms</span></div>
+           <div class="v"><span class="k">proc A</span><span class="val">rootsrv·cache·drv·IPC</span></div>
+           <div class="v"><span class="k">proc B</span><span class="val ok">LLM inference</span></div>
+           <div class="sep">────────────────────────────</div>
+           <div class="v"><span class="k">model</span><span class="val hi">Gemma 4 E2B</span></div>
+           <div class="v"><span class="k">quant</span><span class="val">Q4_K_M · 2.89 GiB</span></div>
+           <div class="v"><span class="k">tok/s</span><span class="val ok" id="tps">5.20</span></div>
+           <div class="v"><span class="k">families</span><span class="val">6 supported</span></div>
+         </div>
+       </div>
+
+       <div class="panel" style="flex:none;">
+         <div class="panel-t">┤ DECISION CACHE ├</div>
+         <div class="panel-b">
+           <div class="v"><span class="k">hit rate</span><span class="val hi" id="hit">85.7%</span></div>
+           <div class="v"><span class="k">lookup</span><span class="val ok">&lt;1 ms</span></div>
+           <div class="v"><span class="k">patterns</span><span class="val">308 compiled</span></div>
+           <div class="v"><span class="k">queries</span><span class="val" id="qcount">41,902</span></div>
+           <div class="v"><span class="k">ipc msg/s</span><span class="val ok" id="ipc">12,840</span></div>
+           <div class="spark" id="spark">▁▂▃▅▇▆▄▃▂▃▅▆▇▅▄▃▂▁▂▄▆</div>
+         </div>
+       </div>
+
+       <div class="panel" style="flex:1; min-height:0;">
+         <div class="panel-t">┤ CORES · per-thread load ├</div>
+         <div class="panel-b" id="cores"></div>
+       </div>
+     </div>
+
+     <!-- CENTER: conversation -->
+     <div class="panel convo">
+       <div class="panel-t">┤ JARVIS · conversation ├ <span class="dim">Ring 3 · Process B</span></div>
+       <div class="panel-b scrollbox" id="convo">
+         <div class="msg">
+           <div class="who ai">JARVIS<span class="t">boot · 04:00:01</span></div>
+           <div class="atext">Kernel up. Cache warm — 308 patterns resident. Gemma 4 E2B mapped from NVMe. <span class="meta">Standing by.</span></div>
+         </div>
+         <div class="msg">
+           <div class="who user">USER<span class="t">04:11:30</span></div>
+           <div class="utext">jarvis, summarize current system load and whether we have headroom for a second model.</div>
+         </div>
+         <div class="msg">
+           <div class="who ai">JARVIS<span class="t">04:11:31 · LLM · 5 cores</span></div>
+           <div class="atext" id="stream"></div>
+         </div>
+       </div>
+       <div class="convo-foot">
+         <span>route: <b id="route">cache miss → LLM</b> · ctx 1,408 tok</span>
+         <span>gen <b id="genc">0</b> tok · <b id="genrate">5.2</b> tok/s · q#41,902</span>
+       </div>
+     </div>
+
+     <!-- RIGHT: agents + shield + ipc -->
+     <div style="display:flex; flex-direction:column; gap:10px; min-height:0;">
+       <div class="panel" style="flex:none;">
+         <div class="panel-t">┤ SPECIALIST AGENTS ├</div>
+         <div class="panel-b" id="agents">
+           <div class="agent"><span class="dot work"></span><span class="nm">Device</span><span class="st act" data-st>polling NVMe</span></div>
+           <div class="agent"><span class="dot"></span><span class="nm">Network</span><span class="st" data-st>I211 link up</span></div>
+           <div class="agent"><span class="dot idle"></span><span class="nm">Filesystem</span><span class="st" data-st>idle</span></div>
+           <div class="agent"><span class="dot work"></span><span class="nm">User</span><span class="st act" data-st>handling query</span></div>
+         </div>
+       </div>
+
+       <div class="panel" style="flex:none;">
+         <div class="panel-t">┤ SHIELD ├ <span class="dim">monitoring</span></div>
+         <div class="panel-b">
+           <div class="shield-head">
+             <span class="shield-state" id="shield-state">● MONITORING</span>
+             <span class="risknum" id="risknum">0.08</span>
+           </div>
+           <div class="riskbar" id="riskbar"></div>
+           <div class="v" style="margin-top:3px;"><span class="k">last verdict</span><span class="val ok">ALLOW</span></div>
+           <div class="v"><span class="k">checked</span><span class="val" id="schk">41,902</span></div>
+           <div class="v"><span class="k">flagged</span><span class="val warn">3</span></div>
+           <div class="note">risk meter only — continuous scoring, not a hard guarantee. staged execution + rollback are advisory in this build.</div>
+         </div>
+       </div>
+
+       <div class="panel" style="flex:1; min-height:0;">
+         <div class="panel-t">┤ IPC RINGS ├ <span class="dim">CRC-32</span></div>
+         <div class="panel-b">
+           <div class="v"><span class="k">A → B</span><span class="val ok" id="ab">ok</span></div>
+           <div class="v"><span class="k">B → A</span><span class="val ok" id="ba">ok</span></div>
+           <div class="v"><span class="k">crc err</span><span class="val">0</span></div>
+           <div class="v"><span class="k">depth</span><span class="val" id="depth">3 / 15</span></div>
+           <div class="sep">────────────────────</div>
+           <div class="spark" id="spark2" style="font-size:13px; line-height:1.55;"></div>
+         </div>
+       </div>
+     </div>
+
+   </div>
+
+   <!-- ============ COMMAND LINE ============ -->
+   <div class="cmd">
+     <span class="ps glow">jarvis&gt;</span>
+     <span class="inp" id="cmdtext">status --agents --shield</span><span class="cur2"></span>
+     <span class="hint">[tab] complete · [↑] history · cache 85.7% · ring0 nominal</span>
+   </div>
+
+  </div><!-- /flick -->
+ </div><!-- /screen -->
+</div><!-- /bezel -->
+
+<script>
+(function(){
+  "use strict";
+  const $ = s => document.querySelector(s);
+
+  /* ---------- clock + uptime ---------- */
+  let up = 4*3600 + 11*60 + 38;
+  function pad(n){ return String(n).padStart(2,'0'); }
+  function tick(){
+    const d = new Date();
+    $('#clock').textContent = pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());
+    up++;
+    $('#uptime').textContent = pad(Math.floor(up/3600))+':'+pad(Math.floor(up/60)%60)+':'+pad(up%60);
+  }
+  setInterval(tick, 1000); tick();
+
+  /* ---------- per-core text bars ---------- */
+  const NCORE = 8;
+  // ~5 cores busy during inference; cores 5-7 lighter
+  const coreBase = [0.82,0.78,0.85,0.80,0.74,0.18,0.12,0.22];
+  const coreEl = [];
+  const coresWrap = $('#cores');
+  for(let i=0;i<NCORE;i++){
+    const row = document.createElement('div');
+    row.className = 'core' + (coreBase[i]<0.3?' idle':'');
+    row.innerHTML = '<span class="lbl">c'+i+'</span><span class="bar"></span><span class="pct"></span>';
+    coresWrap.appendChild(row);
+    coreEl.push(row);
+  }
+  function bar(frac){
+    const W = 14, on = Math.round(frac*W);
+    let s = '[';
+    for(let i=0;i<W;i++) s += i<on ? '|' : '<span class="off">·</span>';
+    return s + ']';
+  }
+  function drift(){
+    for(let i=0;i<NCORE;i++){
+      let f = coreBase[i] + (Math.random()-0.5)*0.16;
+      f = Math.max(0.04, Math.min(0.99, f));
+      const b = coreEl[i].querySelector('.bar');
+      b.innerHTML = bar(f);
+      coreEl[i].querySelector('.pct').textContent = Math.round(f*100)+'%';
+    }
+  }
+  drift(); setInterval(drift, 700);
+
+  /* ---------- IPC sparkline + counters ---------- */
+  const blocks = '▁▂▃▄▅▆▇█';
+  function sparkline(n, lo, hi){
+    let s='';
+    for(let i=0;i<n;i++){
+      const v = lo + Math.random()*(hi-lo);
+      s += blocks[Math.max(0,Math.min(7,Math.round(v*7)))];
+    }
+    return s;
+  }
+  let qc = 41902, ipcv = 12840;
+  function counters(){
+    qc += Math.floor(Math.random()*4);
+    ipcv = 12000 + Math.floor(Math.random()*1800);
+    $('#qcount').textContent = qc.toLocaleString();
+    $('#ipc').textContent = ipcv.toLocaleString();
+    $('#schk').textContent = qc.toLocaleString();
+    $('#spark').textContent = sparkline(21, .25, .95);
+    $('#spark2').textContent = sparkline(20, .15, .9) + '\n' + sparkline(20, .2, .85);
+    $('#depth').textContent = (1+Math.floor(Math.random()*6))+' / 15';
+    // hit-rate jitter around 85.7
+    $('#hit').textContent = (85.4 + Math.random()*0.6).toFixed(1)+'%';
+    // tok/s jitter
+    const t = (5.0 + Math.random()*0.5);
+    $('#tps').textContent = t.toFixed(2);
+    $('#genrate').textContent = t.toFixed(1);
+  }
+  counters(); setInterval(counters, 900);
+
+  /* ---------- SHIELD risk meter ---------- */
+  function riskRender(){
+    const r = 0.05 + Math.random()*0.10;       // low, drifting
+    const W = 18, on = Math.round(r*W);
+    let s='';
+    for(let i=0;i<W;i++) s += i<on ? '<span class="fill">▰</span>' : '<span class="lo">▱</span>';
+    $('#riskbar').innerHTML = s;
+    $('#risknum').textContent = r.toFixed(2);
+  }
+  riskRender(); setInterval(riskRender, 1500);
+
+  /* ---------- agent activity flips ---------- */
+  const agentStates = {
+    Device:    ['polling NVMe','frame DMA','idle','irq ack'],
+    Network:   ['I211 link up','rx poll','tx drain','idle'],
+    Filesystem:['idle','FAT32 read','cluster walk','idle'],
+    User:      ['handling query','routing','tokenizing','await input']
+  };
+  setInterval(()=>{
+    document.querySelectorAll('#agents .agent').forEach(a=>{
+      const nm = a.querySelector('.nm').textContent;
+      const st = a.querySelector('[data-st]');
+      const pool = agentStates[nm];
+      const pick = pool[Math.floor(Math.random()*pool.length)];
+      st.textContent = pick;
+      const active = pick!=='idle' && pick!=='await input';
+      st.classList.toggle('act', active);
+      const dot = a.querySelector('.dot');
+      dot.classList.toggle('idle', !active);
+      dot.classList.toggle('work', active);
+    });
+  }, 1600);
+
+  /* ---------- streaming token generation (the heart of the UI) ---------- */
+  const answer =
+    "System load is steady: 5 of 8 cores pinned by the Gemma 4 E2B threadpool " +
+    "at ~5.2 tok/s, cores 5–7 mostly free for drivers and IPC. Memory sits at " +
+    "9.1 of 32 GiB — the 2.89 GiB model plus a ~128 MiB working heap. Cache is " +
+    "carrying 85.7% of traffic at sub-millisecond lookup, so the LLM only wakes " +
+    "for the long tail.\n\n" +
+    "Headroom for a second model: marginal. RAM is fine, but cores 0–4 are " +
+    "saturated — a second resident model would contend for the threadpool and " +
+    "drop both to ~3 tok/s. Recommendation: keep one model hot, swap on demand " +
+    "from NVMe (~1.1s load), or wait for the 16-thread tuning pass.";
+
+  // tokenize-ish: split on spaces but keep the gaps so it streams word-by-word
+  const toks = answer.match(/\S+\s*|\n\n/g) || [];
+  const streamEl = $('#stream');
+  const genc = $('#genc');
+  const cursor = document.createElement('span');
+  cursor.className = 'cursor';
+  let ti = 0, gen = 0;
+
+  function streamNext(){
+    if(ti >= toks.length){
+      // done — finalize, then loop after a pause
+      $('#route').textContent = 'served by LLM';
+      cursor.remove();
+      setTimeout(restart, 6000);
+      return;
+    }
+    const t = toks[ti++];
+    if(t === '\n\n'){
+      streamEl.appendChild(document.createElement('br'));
+      streamEl.appendChild(document.createElement('br'));
+    } else {
+      streamEl.appendChild(document.createTextNode(t));
+      gen++;
+      genc.textContent = gen;
+    }
+    streamEl.appendChild(cursor);
+    // jitter the cadence to feel like ~5 tok/s (≈190ms) with variance
+    setTimeout(streamNext, 120 + Math.random()*150);
+  }
+  function restart(){
+    streamEl.textContent = '';
+    gen = 0; ti = 0; genc.textContent = 0;
+    $('#route').textContent = 'cache miss → LLM';
+    streamEl.appendChild(cursor);
+    setTimeout(streamNext, 600);
+  }
+  // first run
+  streamEl.appendChild(cursor);
+  setTimeout(streamNext, 900);
+
+  /* ---------- command-line cycling (cosmetic) ---------- */
+  const cmds = [
+    'status --agents --shield',
+    'cache stats --top',
+    'model swap qwen3.5-4b --from-nvme',
+    'shield risk --window 5m',
+    'cores --watch'
+  ];
+  let ci = 0;
+  setInterval(()=>{ ci=(ci+1)%cmds.length; $('#cmdtext').textContent = cmds[ci]; }, 4200);
+
+})();
+</script>
+</body>
+</html>

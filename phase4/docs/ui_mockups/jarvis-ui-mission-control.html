@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<!--
+  CONCEPT: JARVIS · MISSION CONTROL
+  RATIONALE: An operations-grade dashboard for an AI-controlled OS — calm, legible, and
+  trustworthy ("NASA-meets-JARVIS"). A bordered panel grid puts the human↔AI conversation
+  at the center-left, with compact telemetry cards on the right and a slim event log below,
+  so an operator can read the machine's state at a glance while talking to it.
+  FRAMEBUFFER REALITY: Maps cleanly to a real 2D framebuffer — filled rects (panels, bars),
+  1px lines (borders, dividers, sparklines), monospace bitmap text (all labels/values/stream),
+  and simple filled bars/segments (cores grid, RAM/NVMe, tok/s + risk meters). Aspirational /
+  framebuffer-approximated only: the corner radii, soft drop-shadows, subtle background gradient,
+  text-glow on the accent, and the blink/pulse opacity fades — a flat framebuffer would render
+  these as hard-edged solid rects with no glow (acceptable degradation; nothing depends on them).
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JARVIS · Mission Control</title>
+<style>
+  :root{
+    --bg:#0e1217;
+    --panel:#151b22;
+    --panel-2:#11161c;
+    --line:#243039;
+    --line-soft:#1c252d;
+    --ink:#e6edf3;
+    --ink-dim:#8da0ad;
+    --ink-faint:#5a6b76;
+    --teal:#2dd4bf;
+    --teal-dim:#1c8e80;
+    --amber:#f5a524;
+    --amber-dim:#9a6a1c;
+    --red:#f76d6d;
+    --green:#54d98c;
+    --grid-gap:12px;
+  }
+
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{height:100%;}
+  body{
+    background:
+      radial-gradient(1200px 700px at 50% -10%, #161d26 0%, var(--bg) 60%),
+      var(--bg);
+    color:var(--ink);
+    font-family:ui-monospace,'Cascadia Code','Consolas','Courier New',monospace;
+    display:flex; align-items:center; justify-content:center;
+    min-height:100vh;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  /* ---- Framebuffer canvas / bezel ---- */
+  .bezel{
+    width:1280px; height:720px;
+    background:#05080b;
+    border-radius:14px;
+    padding:10px;
+    box-shadow:0 30px 80px rgba(0,0,0,.6), inset 0 0 0 1px #000;
+    position:relative;
+  }
+  .screen{
+    width:100%; height:100%;
+    background:
+      radial-gradient(900px 520px at 50% -5%, #171f29 0%, var(--bg) 65%),
+      var(--bg);
+    border-radius:7px;
+    border:1px solid #222c35;
+    overflow:hidden;
+    display:flex; flex-direction:column;
+    position:relative;
+  }
+  /* faint scanline texture — approximated; flat fb would omit */
+  .screen::after{
+    content:""; position:absolute; inset:0; pointer-events:none;
+    background:repeating-linear-gradient(0deg, rgba(255,255,255,.012) 0 1px, transparent 1px 3px);
+    mix-blend-mode:overlay;
+  }
+
+  /* ===== TOP STATUS STRIP ===== */
+  .topbar{
+    height:42px; flex:0 0 42px;
+    display:flex; align-items:center; gap:18px;
+    padding:0 16px;
+    border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg, #131922, #10151b);
+  }
+  .brand{display:flex; align-items:baseline; gap:9px;}
+  .brand .logo{
+    color:var(--teal); font-weight:700; letter-spacing:2px; font-size:15px;
+    text-shadow:0 0 12px rgba(45,212,191,.45);
+  }
+  .brand .sub{color:var(--ink-faint); font-size:10.5px; letter-spacing:1px;}
+  .topbar .seg{display:flex; align-items:center; gap:7px; font-size:11px; color:var(--ink-dim);}
+  .topbar .seg b{color:var(--ink); font-weight:600;}
+  .divider{width:1px; height:18px; background:var(--line); }
+  .spacer{flex:1;}
+  .pill{
+    display:inline-flex; align-items:center; gap:6px;
+    font-size:10.5px; letter-spacing:.5px;
+    padding:3px 9px; border:1px solid var(--line); border-radius:20px;
+    color:var(--ink-dim); background:var(--panel-2);
+  }
+  .pill.ok{color:var(--teal); border-color:var(--teal-dim);}
+  .dot{width:7px; height:7px; border-radius:50%; background:var(--teal);
+       box-shadow:0 0 8px var(--teal);}
+  .dot.pulse{animation:pulse 2s infinite ease-in-out;}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.35;}}
+  .clock{font-size:12px; color:var(--ink); letter-spacing:1px; font-variant-numeric:tabular-nums;}
+
+  /* ===== MAIN GRID ===== */
+  .grid{
+    flex:1; min-height:0;
+    display:grid;
+    grid-template-columns: 1fr 320px;
+    grid-template-rows: 1fr 116px;
+    gap:var(--grid-gap);
+    padding:var(--grid-gap);
+  }
+  .col-right{
+    grid-column:2; grid-row:1;
+    display:flex; flex-direction:column; gap:var(--grid-gap);
+    min-height:0;
+  }
+
+  .panel{
+    background:linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);
+    border:1px solid var(--line);
+    border-radius:8px;
+    display:flex; flex-direction:column;
+    min-height:0;
+    position:relative;
+  }
+  .panel-h{
+    display:flex; align-items:center; gap:8px;
+    padding:8px 12px;
+    border-bottom:1px solid var(--line-soft);
+    flex:0 0 auto;
+  }
+  .panel-h .ttl{
+    font-size:10.5px; letter-spacing:1.6px; color:var(--ink-dim);
+    text-transform:uppercase; font-weight:600;
+  }
+  .panel-h .tick{color:var(--teal); font-size:10px; letter-spacing:1px;}
+  .panel-h .right{margin-left:auto; font-size:10px; color:var(--ink-faint); letter-spacing:.5px;}
+  .panel-b{padding:12px; overflow:hidden; flex:1; min-height:0;}
+
+  /* ===== CONVERSATION PANEL ===== */
+  .conv{grid-column:1; grid-row:1;}
+  .conv .panel-b{display:flex; flex-direction:column; padding:0;}
+  .chat{
+    flex:1; overflow:hidden; padding:14px 16px;
+    display:flex; flex-direction:column; gap:14px;
+    min-height:0;
+  }
+  .msg{display:flex; gap:11px; align-items:flex-start;}
+  .who{
+    flex:0 0 56px; font-size:10px; letter-spacing:1px; text-transform:uppercase;
+    padding-top:2px; font-weight:600;
+  }
+  .who.user{color:var(--ink-dim);}
+  .who.ai{color:var(--teal); text-shadow:0 0 10px rgba(45,212,191,.3);}
+  .bubble{
+    flex:1; font-size:13px; line-height:1.6; color:var(--ink);
+    border-left:2px solid var(--line); padding:2px 0 2px 13px;
+  }
+  .msg.user .bubble{color:var(--ink); border-left-color:#2c3a44;}
+  .msg.ai .bubble{border-left-color:var(--teal-dim);}
+  .meta{
+    font-size:9.5px; color:var(--ink-faint); margin-top:5px; letter-spacing:.5px;
+    display:flex; gap:12px; flex-wrap:wrap;
+  }
+  .meta .route{color:var(--amber);}
+  .meta .route.cache{color:var(--teal);}
+  .cursor{
+    display:inline-block; width:8px; height:15px; vertical-align:-2px;
+    background:var(--teal); margin-left:2px;
+    box-shadow:0 0 8px var(--teal);
+    animation:blink 1s steps(1) infinite;
+  }
+  @keyframes blink{50%{opacity:0;}}
+
+  /* conversation footer / prompt line */
+  .prompt{
+    flex:0 0 auto; border-top:1px solid var(--line-soft);
+    padding:11px 16px; display:flex; align-items:center; gap:11px;
+    background:var(--panel-2);
+  }
+  .prompt .ps1{color:var(--teal); font-size:13px; font-weight:600;}
+  .prompt .field{
+    flex:1; font-size:12.5px; color:var(--ink-dim); letter-spacing:.3px;
+  }
+  .prompt .field .typed{color:var(--ink);}
+  .prompt .caret{
+    display:inline-block; width:8px; height:15px; vertical-align:-2px;
+    background:var(--ink-dim); animation:blink 1.1s steps(1) infinite;
+  }
+  .prompt .hint{font-size:9.5px; color:var(--ink-faint); letter-spacing:.5px;}
+  .kbd{border:1px solid var(--line); border-radius:4px; padding:1px 5px; color:var(--ink-dim);}
+
+  /* ===== STAT CARDS (right column) ===== */
+  .card{flex:0 0 auto;}
+  .card.grow{flex:1 1 auto; min-height:0;}
+
+  .stat-row{display:flex; align-items:baseline; justify-content:space-between; gap:8px;}
+  .stat-row + .stat-row{margin-top:9px;}
+  .lab{font-size:10.5px; color:var(--ink-dim); letter-spacing:.4px;}
+  .val{font-size:12.5px; color:var(--ink); font-weight:600; font-variant-numeric:tabular-nums;}
+  .val.teal{color:var(--teal);}
+  .val.amber{color:var(--amber);}
+
+  /* model card */
+  .model-name{font-size:14px; color:var(--ink); font-weight:700; letter-spacing:.3px;}
+  .model-tags{display:flex; gap:6px; margin-top:8px; flex-wrap:wrap;}
+  .tag{font-size:9px; letter-spacing:.5px; padding:2px 7px; border:1px solid var(--line);
+       border-radius:4px; color:var(--ink-dim); background:var(--panel-2);}
+  .tag.teal{color:var(--teal); border-color:var(--teal-dim);}
+
+  /* tok/s gauge */
+  .gauge-wrap{display:flex; align-items:center; gap:14px;}
+  .gauge{
+    --pct:65;
+    width:74px; height:74px; flex:0 0 74px; border-radius:50%;
+    background:
+      conic-gradient(var(--teal) calc(var(--pct)*1%), #1d262e 0);
+    -webkit-mask:radial-gradient(circle 30px at center, transparent 29px, #000 30px);
+            mask:radial-gradient(circle 30px at center, transparent 29px, #000 30px);
+    position:relative;
+  }
+  .gauge-c{position:relative;}
+  .gauge-num{
+    position:absolute; inset:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; pointer-events:none;
+  }
+  .gauge-num b{font-size:18px; color:var(--teal); line-height:1; font-variant-numeric:tabular-nums;}
+  .gauge-num span{font-size:8.5px; color:var(--ink-faint); letter-spacing:1px; margin-top:3px;}
+  .gauge-info{flex:1;}
+  .gauge-info .big{font-size:11px; color:var(--ink-dim); line-height:1.7;}
+  .gauge-info .big b{color:var(--ink);}
+
+  /* cores grid */
+  .cores{display:grid; grid-template-columns:repeat(8,1fr); gap:5px; margin-top:4px;}
+  .core{
+    height:30px; border:1px solid var(--line-soft); border-radius:3px;
+    background:var(--panel-2); position:relative; overflow:hidden;
+  }
+  .core .fill{
+    position:absolute; left:0; right:0; bottom:0; background:var(--teal-dim);
+    transition:height .6s ease; opacity:.85;
+  }
+  .core.hot .fill{background:var(--teal);}
+  .core .id{
+    position:absolute; top:2px; left:0; right:0; text-align:center;
+    font-size:8px; color:var(--ink-faint); z-index:2;
+  }
+  .cores-legend{display:flex; justify-content:space-between; margin-top:7px;
+    font-size:9px; color:var(--ink-faint); letter-spacing:.4px;}
+
+  /* bars (RAM/NVMe) */
+  .bar-block + .bar-block{margin-top:11px;}
+  .bar-head{display:flex; justify-content:space-between; font-size:10.5px;
+    color:var(--ink-dim); margin-bottom:5px; letter-spacing:.3px;}
+  .bar-head b{color:var(--ink); font-variant-numeric:tabular-nums;}
+  .bar{height:8px; background:var(--panel-2); border:1px solid var(--line-soft);
+       border-radius:4px; overflow:hidden;}
+  .bar .fg{height:100%; background:var(--teal-dim); border-radius:3px;}
+  .bar .fg.warm{background:var(--amber-dim);}
+
+  /* agents list */
+  .agent{display:flex; align-items:center; gap:9px; padding:5px 0;}
+  .agent + .agent{border-top:1px solid var(--line-soft);}
+  .agent .adot{width:7px; height:7px; border-radius:50%; flex:0 0 7px;}
+  .agent .aname{font-size:11.5px; color:var(--ink); flex:0 0 84px; letter-spacing:.3px;}
+  .agent .astat{font-size:10px; color:var(--ink-dim); flex:1; letter-spacing:.3px;}
+  .agent .acount{font-size:10px; color:var(--ink-faint); font-variant-numeric:tabular-nums;}
+
+  /* SHIELD risk meter */
+  .shield-h{display:flex; align-items:center; justify-content:space-between; margin-bottom:9px;}
+  .shield-state{font-size:11px; letter-spacing:1px; color:var(--green); font-weight:600;}
+  .risk-scale{height:9px; border-radius:5px; overflow:hidden; position:relative;
+    background:linear-gradient(90deg,#1f7a55 0%, var(--amber-dim) 60%, #7a2c2c 100%);
+    opacity:.55;}
+  .risk-needle{position:absolute; top:-3px; width:2px; height:15px; background:var(--ink);
+    box-shadow:0 0 6px rgba(255,255,255,.6); transition:left .8s ease;}
+  .risk-row{display:flex; justify-content:space-between; margin-top:7px;
+    font-size:9px; color:var(--ink-faint); letter-spacing:.4px;}
+  .shield-foot{font-size:9.5px; color:var(--ink-faint); margin-top:9px; line-height:1.5;}
+  .shield-foot b{color:var(--amber);}
+
+  /* ===== EVENT LOG (bottom) ===== */
+  .log{grid-column:1 / span 2; grid-row:2;}
+  .log .panel-b{padding:8px 12px; overflow:hidden;}
+  .log-lines{font-size:11px; line-height:1.55; display:flex; flex-direction:column; gap:1px;}
+  .log-line{display:flex; gap:11px; white-space:nowrap;}
+  .log-line .t{color:var(--ink-faint); flex:0 0 78px; font-variant-numeric:tabular-nums;}
+  .log-line .tagx{flex:0 0 56px; letter-spacing:.5px;}
+  .log-line .tagx.k{color:var(--teal);}      /* kernel/ring0 */
+  .log-line .tagx.ai{color:var(--amber);}     /* ai/inference */
+  .log-line .tagx.io{color:var(--ink-dim);}   /* drivers/io */
+  .log-line .tagx.sh{color:var(--green);}     /* shield */
+  .log-line .m{color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis;}
+  .log-line.fresh{animation:fadein .5s ease;}
+  @keyframes fadein{from{opacity:0; transform:translateY(3px);}to{opacity:1;}}
+
+  /* sparkline strip in IPC card */
+  .spark{display:flex; align-items:flex-end; gap:2px; height:26px; margin-top:8px;}
+  .spark i{flex:1; background:var(--teal-dim); border-radius:1px; transition:height .5s ease; opacity:.8;}
+</style>
+</head>
+<body>
+  <div class="bezel">
+    <div class="screen">
+
+      <!-- ===================== TOP STATUS STRIP ===================== -->
+      <div class="topbar">
+        <div class="brand">
+          <span class="logo">JARVIS</span>
+          <span class="sub">AI-OS · MISSION CONTROL</span>
+        </div>
+        <div class="divider"></div>
+        <div class="seg"><span class="dot pulse"></span>seL4 microkernel <b>· Ring 0</b></div>
+        <div class="divider"></div>
+        <div class="seg">AI engine <b>Ring 3</b></div>
+        <div class="divider"></div>
+        <div class="seg">PROC A <b>rootserver</b> · PROC B <b>inference</b></div>
+        <div class="spacer"></div>
+        <div class="pill ok"><span class="dot"></span>NOMINAL</div>
+        <div class="seg">UPTIME <b id="uptime">04:12:38</b></div>
+        <div class="divider"></div>
+        <div class="clock" id="clock">--:--:--</div>
+      </div>
+
+      <!-- ===================== MAIN GRID ===================== -->
+      <div class="grid">
+
+        <!-- ----- CONVERSATION (center-left) ----- -->
+        <section class="panel conv">
+          <div class="panel-h">
+            <span class="tick">▮</span>
+            <span class="ttl">Conversation</span>
+            <span class="right">Gemma 4 E2B · Process B · ctx 4096</span>
+          </div>
+          <div class="panel-b">
+            <div class="chat" id="chat">
+
+              <div class="msg user">
+                <div class="who user">USER</div>
+                <div class="bubble">
+                  NVMe latency on the model partition spiked twice this hour — is the drive healthy, and should I be worried?
+                  <div class="meta"><span>14:08:50</span><span class="route cache">↳ routed: DECISION CACHE · miss → LLM</span></div>
+                </div>
+              </div>
+
+              <div class="msg ai">
+                <div class="who ai">JARVIS</div>
+                <div class="bubble">
+                  <span id="stream"></span><span class="cursor" id="cursor"></span>
+                  <div class="meta" id="aimeta" style="visibility:hidden">
+                    <span>Process B · 5 threads</span>
+                    <span class="route">gen 5.2 tok/s</span>
+                    <span>Device + Filesystem agents consulted</span>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+            <div class="prompt">
+              <span class="ps1">›</span>
+              <div class="field"><span class="typed" id="typed"></span><span class="caret"></span></div>
+              <span class="hint">SHIELD pre-screen <span class="kbd">on</span> · <span class="kbd">⏎</span> send</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- ----- RIGHT COLUMN: STAT CARDS ----- -->
+        <div class="col-right">
+
+          <!-- MODEL -->
+          <section class="panel card">
+            <div class="panel-h"><span class="ttl">Active Model</span><span class="right">NVMe-resident</span></div>
+            <div class="panel-b" style="padding:11px 12px 13px">
+              <div class="model-name">Gemma 4 E2B</div>
+              <div class="stat-row" style="margin-top:7px">
+                <span class="lab">Q4_K_M · 2.89 GiB</span>
+                <span class="val teal">LOADED</span>
+              </div>
+              <div class="model-tags">
+                <span class="tag teal">6 families</span>
+                <span class="tag">PLE</span>
+                <span class="tag">SWA</span>
+                <span class="tag">KV-share</span>
+              </div>
+            </div>
+          </section>
+
+          <!-- TOK/S GAUGE + CACHE -->
+          <section class="panel card">
+            <div class="panel-h"><span class="ttl">Inference</span><span class="right">5 / 8 cores</span></div>
+            <div class="panel-b" style="padding:12px">
+              <div class="gauge-wrap">
+                <div class="gauge-c">
+                  <div class="gauge" id="gauge"></div>
+                  <div class="gauge-num"><b id="toks">5.2</b><span>TOK/S</span></div>
+                </div>
+                <div class="gauge-info">
+                  <div class="big">single-thread <b>~1.5</b> t/s</div>
+                  <div class="big">multi-core <b id="toks2">5.2</b> t/s</div>
+                  <div class="big" style="color:var(--ink-faint)">threadpool · 5 workers</div>
+                </div>
+              </div>
+              <div class="stat-row" style="margin-top:13px; padding-top:11px; border-top:1px solid var(--line-soft)">
+                <span class="lab">Decision cache hit</span>
+                <span class="val teal" id="hit">85.7%</span>
+              </div>
+              <div class="stat-row">
+                <span class="lab">Lookup · patterns</span>
+                <span class="val">&lt;1ms · 308</span>
+              </div>
+            </div>
+          </section>
+
+          <!-- CORES -->
+          <section class="panel card">
+            <div class="panel-h"><span class="ttl">CPU · Ryzen 7 2700X</span><span class="right">8C / 16T</span></div>
+            <div class="panel-b" style="padding:11px 12px 12px">
+              <div class="cores" id="cores"></div>
+              <div class="cores-legend"><span>core 0 → 7</span><span id="cpuload">avg 41%</span></div>
+            </div>
+          </section>
+
+          <!-- MEMORY / NVMe -->
+          <section class="panel card">
+            <div class="panel-h"><span class="ttl">Memory · Storage</span><span class="right">32 GB · 2 TB</span></div>
+            <div class="panel-b" style="padding:11px 12px 13px">
+              <div class="bar-block">
+                <div class="bar-head"><span>RAM</span><b id="ramtxt">9.8 / 32 GB</b></div>
+                <div class="bar"><div class="fg" id="rambar" style="width:31%"></div></div>
+              </div>
+              <div class="bar-block">
+                <div class="bar-head"><span>NVMe · Lexar NM790</span><b>1.21 / 1.82 TB</b></div>
+                <div class="bar"><div class="fg warm" style="width:66%"></div></div>
+              </div>
+            </div>
+          </section>
+
+          <!-- AGENTS -->
+          <section class="panel card grow">
+            <div class="panel-h"><span class="ttl">Specialist Agents</span><span class="right">Ring 3</span></div>
+            <div class="panel-b" style="padding:6px 12px 8px">
+              <div class="agent">
+                <span class="adot" style="background:var(--teal);box-shadow:0 0 7px var(--teal)"></span>
+                <span class="aname">Device</span><span class="astat" id="ag-dev">probing NVMe SMART</span><span class="acount">128</span>
+              </div>
+              <div class="agent">
+                <span class="adot" style="background:var(--ink-faint)"></span>
+                <span class="aname">Network</span><span class="astat">idle · I211 link up</span><span class="acount">41</span>
+              </div>
+              <div class="agent">
+                <span class="adot" style="background:var(--teal);box-shadow:0 0 7px var(--teal)"></span>
+                <span class="aname">Filesystem</span><span class="astat" id="ag-fs">reading FAT32 chain</span><span class="acount">via 73</span>
+              </div>
+              <div class="agent">
+                <span class="adot" style="background:var(--amber);box-shadow:0 0 7px var(--amber)"></span>
+                <span class="aname">User</span><span class="astat">awaiting reply · streaming</span><span class="acount">12</span>
+              </div>
+            </div>
+          </section>
+
+          <!-- SHIELD -->
+          <section class="panel card">
+            <div class="panel-h"><span class="ttl">SHIELD · Safety Monitor</span><span class="right">advisory</span></div>
+            <div class="panel-b" style="padding:11px 12px 12px">
+              <div class="shield-h">
+                <span class="shield-state" id="shieldstate">● MONITORING</span>
+                <span class="val" id="riskval" style="font-size:11px;color:var(--green)">RISK 0.06</span>
+              </div>
+              <div class="risk-scale"><div class="risk-needle" id="needle" style="left:6%"></div></div>
+              <div class="risk-row"><span>low</span><span>elevated</span><span>high</span></div>
+              <div class="shield-foot">Continuous risk scoring on all queries. <b>Advisory only</b> in this build — flags, does not yet block.</div>
+            </div>
+          </section>
+
+        </div><!-- /col-right -->
+
+        <!-- ----- EVENT LOG (bottom, full width) ----- -->
+        <section class="panel log">
+          <div class="panel-h">
+            <span class="tick">▮</span>
+            <span class="ttl">System Event Log</span>
+            <span class="right">shared-memory IPC · CRC-32 · <span id="ipcrate" style="color:var(--teal)">23.7K</span> msg/s</span>
+          </div>
+          <div class="panel-b">
+            <div class="log-lines" id="log"></div>
+          </div>
+        </section>
+
+      </div><!-- /grid -->
+    </div><!-- /screen -->
+  </div><!-- /bezel -->
+
+<script>
+(function(){
+  "use strict";
+  const $ = id => document.getElementById(id);
+
+  /* ---------- live clock + uptime ---------- */
+  let up = 4*3600 + 12*60 + 38;
+  function two(n){return String(n).padStart(2,'0');}
+  function tick(){
+    const d=new Date();
+    $('clock').textContent = two(d.getHours())+":"+two(d.getMinutes())+":"+two(d.getSeconds())+" UTC";
+    up++;
+    $('uptime').textContent = two(Math.floor(up/3600))+":"+two(Math.floor(up/60)%60)+":"+two(up%60);
+  }
+  tick(); setInterval(tick,1000);
+
+  /* ---------- per-core meters ---------- */
+  const coresEl = $('cores');
+  const NCORE=8, busy=[0,1,2,4,6]; // ~5 of 8 busy during inference
+  const coreState=[];
+  for(let i=0;i<NCORE;i++){
+    const hot = busy.includes(i);
+    const c=document.createElement('div');
+    c.className='core'+(hot?' hot':'');
+    c.innerHTML='<span class="id">'+i+'</span><div class="fill"></div>';
+    coresEl.appendChild(c);
+    coreState.push({el:c.querySelector('.fill'), base: hot? 70 : 10, hot});
+  }
+  function driftCores(){
+    let sum=0;
+    coreState.forEach(s=>{
+      const jit = (Math.random()-0.5)* (s.hot?26:14);
+      let v = Math.max(3, Math.min(98, s.base + jit));
+      s.el.style.height = v+'%';
+      sum += v;
+    });
+    $('cpuload').textContent = 'avg '+Math.round(sum/NCORE)+'%';
+  }
+  driftCores(); setInterval(driftCores,900);
+
+  /* ---------- tok/s gauge jitter ---------- */
+  function jitToks(){
+    const t = (5.2 + (Math.random()-0.5)*0.6);
+    $('toks').textContent = t.toFixed(1);
+    $('toks2').textContent = t.toFixed(1);
+    const pct = Math.round((t/8)*100); // gauge full-scale ~8 t/s
+    $('gauge').style.setProperty('--pct', pct);
+  }
+  jitToks(); setInterval(jitToks,1400);
+
+  /* ---------- RAM drift ---------- */
+  function driftRam(){
+    const gb = (9.8 + (Math.random()-0.5)*0.8);
+    $('ramtxt').textContent = gb.toFixed(1)+' / 32 GB';
+    $('rambar').style.width = ((gb/32)*100).toFixed(1)+'%';
+  }
+  setInterval(driftRam,2600);
+
+  /* ---------- IPC sparkline rate ---------- */
+  function jitIpc(){
+    const r = (23.7 + (Math.random()-0.5)*3.2);
+    $('ipcrate').textContent = r.toFixed(1)+'K';
+  }
+  setInterval(jitIpc,1600);
+
+  /* ---------- SHIELD needle subtle drift ---------- */
+  function driftShield(){
+    const r = Math.max(0.02, Math.min(0.18, 0.06 + (Math.random()-0.5)*0.06));
+    $('riskval').textContent = 'RISK '+r.toFixed(2);
+    $('needle').style.left = (r*100*1.6+2).toFixed(0)+'%';
+  }
+  setInterval(driftShield,3000);
+
+  /* ---------- streaming AI response ---------- */
+  const response =
+    "Drive health looks fine. The two latency spikes correlate with Process B "+
+    "paging the 2.89 GiB Gemma weights back through the NVMe FAT32 path after a "+
+    "cache-cold query — not a hardware fault. SMART on the Lexar NM790 reports 0 "+
+    "media errors, 0 reallocated sectors, 41°C. Recommendation: keep the model "+
+    "resident in the morecore heap so it isn't re-read on a cache miss. I've asked "+
+    "the Device agent to pin a SMART poll every 5 min and alert if read latency "+
+    "exceeds 2 ms. No action needed from you.";
+
+  const words = response.split(' ');
+  let wi=0;
+  const streamEl=$('stream'), cursorEl=$('cursor'), aimeta=$('aimeta');
+  function stream(){
+    if(wi<words.length){
+      streamEl.textContent += (wi? ' ':'') + words[wi];
+      wi++;
+      // ~5.2 tok/s feel: ~190ms/word with slight jitter
+      setTimeout(stream, 150 + Math.random()*120);
+    } else {
+      cursorEl.style.display='none';
+      aimeta.style.visibility='visible';
+      pushLog('14:09:'+two(10+Math.floor(Math.random()*9)), 'ai', 'AI', 'response complete · 96 tokens · 5.2 tok/s · Process B idle');
+    }
+  }
+  setTimeout(stream, 900);
+
+  /* ---------- prompt line: ghost-typing next query ---------- */
+  const draft = "show me which agents touched the last 10 queries";
+  let di=0; const typedEl=$('typed');
+  function typeDraft(){
+    if(di<=draft.length){
+      typedEl.textContent = draft.slice(0,di); di++;
+      setTimeout(typeDraft, 70+Math.random()*90);
+    } else {
+      setTimeout(()=>{ di=0; typedEl.textContent=''; setTimeout(typeDraft,1400); }, 4200);
+    }
+  }
+  setTimeout(typeDraft, 2600);
+
+  /* ---------- event log ---------- */
+  const logEl=$('log');
+  const seed=[
+    ['14:08:50','k','RING0','seL4 IPC: PROC_A → PROC_B  query frame  crc ok  87 B'],
+    ['14:08:50','io','DRV','nvme0: FAT32 chain read  cluster 0x4a1f  block 12  ok'],
+    ['14:08:51','ai','INFER','Process B: cache miss → LLM  ctx build 412 tok'],
+    ['14:08:51','sh','SHIELD','pre-screen query  risk=0.06  verdict=ALLOW (advisory)'],
+    ['14:08:52','ai','INFER','threadpool: dispatch 5 workers  cores {0,1,2,4,6}'],
+    ['14:08:53','k','RING0','sched: PROC_B @ MaxPrio  AVX2 ctx-switch ok'],
+    ['14:08:55','io','DRV','device-agent: NVMe SMART poll  41°C  media_err=0'],
+  ];
+  const pool=[
+    ['k','RING0','seL4 notify: resp ring slot freed  r=3 w=3  depth 0'],
+    ['ai','INFER','token stream → shmem ring  crc-32 verified'],
+    ['io','DRV','i211: link 1000baseT  rx=0  tx=2  no drops'],
+    ['sh','SHIELD','continuous score  risk=0.05  ALLOW'],
+    ['k','RING0','cache: pattern hit  85.7%  lookup 0.4ms'],
+    ['ai','INFER','filesystem-agent: cluster chain resolved  3 hops'],
+    ['io','DRV','nvme0: queue depth 1  lat 0.9ms  p99 1.4ms'],
+    ['k','RING0','IPC throughput 23.7K msg/s  0 retransmit'],
+  ];
+  function line(t,cls,tag,m,fresh){
+    const row=document.createElement('div');
+    row.className='log-line'+(fresh?' fresh':'');
+    row.innerHTML='<span class="t">'+t+'</span><span class="tagx '+cls+'">'+tag+'</span><span class="m">'+m+'</span>';
+    return row;
+  }
+  seed.forEach(s=>logEl.appendChild(line(s[0],s[1],s[2],s[3],false)));
+  function pushLog(t,cls,tag,m){
+    logEl.appendChild(line(t,cls,tag,m,true));
+    while(logEl.children.length>7) logEl.removeChild(logEl.firstChild);
+  }
+  function clk(){const d=new Date();return two(d.getHours())+":"+two(d.getMinutes())+":"+two(d.getSeconds());}
+  setInterval(()=>{
+    const p=pool[Math.floor(Math.random()*pool.length)];
+    pushLog(clk(), p[0], p[1], p[2]);
+  }, 2200);
+
+  /* ---------- agent micro-activity flips ---------- */
+  const devStates=['probing NVMe SMART','reading temp sensor','queue depth 1','poll scheduled'];
+  const fsStates=['reading FAT32 chain','resolving clusters','mmap weights','heap pin ok'];
+  let ai=0;
+  setInterval(()=>{
+    ai++;
+    $('ag-dev').textContent = devStates[ai%devStates.length];
+    $('ag-fs').textContent  = fsStates[ai%fsStates.length];
+  }, 2800);
+
+})();
+</script>
+</body>
+</html>

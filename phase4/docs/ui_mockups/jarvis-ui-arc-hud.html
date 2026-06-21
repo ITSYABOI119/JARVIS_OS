@@ -1,0 +1,862 @@
+<!DOCTYPE html>
+<!--
+  CONCEPT: ARC HUD — JARVIS AI-OS heads-up display
+
+  RATIONALE: A tactical, near-black HUD built around a central "arc reactor" AI CORE
+  whose concentric rings rotate and whose center pulses brighter while the LLM is
+  generating. Everything orbits the core: per-core arc meters, a live token-stream
+  console, system vitals (left), AI engine + specialist agents + SHIELD risk meter
+  (right), a thin top status bar and a scrolling IPC ticker. The goal is "I want to
+  use that OS": dense and sci-fi but readable, monospace throughout, hairline borders
+  and corner brackets, electric cyan on #05080d.
+
+  FRAMEBUFFER REALITY (target: R9 280X @ 1280x720, simple 2D primitives):
+    Maps cleanly to real framebuffer primitives:
+      - All panels, hairline borders, corner brackets        -> filled rects + lines
+      - Monospace labels, clock, token stream, IPC ticker     -> bitmap-font text blits
+      - Per-core arc/ring meters, SHIELD risk bar             -> arcs + filled bars
+      - Core concentric rings, tick marks, vitals bars        -> stroked circles + rects
+      - Scanline overlay                                       -> 1px horizontal lines
+    Aspirational (framebuffer would only APPROXIMATE these — flatten to solid fills /
+    dithered bands if not available):
+      - Soft glow / box-shadow bloom around the core + text   -> approximate w/ a few
+        concentric translucent rings or skip entirely
+      - Radial/linear gradients                               -> dither or solid color
+      - blur() backdrop, opacity easing                       -> step opacity or drop
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JARVIS AI-OS · ARC HUD</title>
+<style>
+  :root{
+    --bg:#05080d;
+    --panel:#070d16;
+    --panel-2:#091420;
+    --line:#13384a;
+    --line-soft:#0d2433;
+    --cyan:#22d3ee;
+    --cyan-bright:#00e5ff;
+    --cyan-dim:#0e7d92;
+    --ink:#cfeefa;
+    --ink-dim:#5e8597;
+    --ink-faint:#37576a;
+    --amber:#ffb454;
+    --green:#46e8a0;
+    --red:#ff5d6c;
+    --violet:#9b8cff;
+    --glow:0 0 6px rgba(34,211,238,.55);
+  }
+
+  *{ box-sizing:border-box; margin:0; padding:0; }
+
+  html,body{
+    height:100%;
+    background:#000;
+    color:var(--ink);
+    font-family:ui-monospace,'Cascadia Code','Consolas','Courier New',monospace;
+    -webkit-font-smoothing:antialiased;
+    overflow:hidden;
+  }
+
+  /* ---- letterbox / bezel so it reads as a screen ---- */
+  .stage{
+    position:fixed; inset:0;
+    display:flex; align-items:center; justify-content:center;
+    background:
+      radial-gradient(ellipse at 50% 40%, #0a1018 0%, #04060a 60%, #000 100%);
+  }
+  .bezel{
+    position:relative;
+    width:1280px; height:720px;
+    background:var(--bg);
+    border:1px solid #16384a;
+    border-radius:10px;
+    box-shadow:
+      0 0 0 6px #02040700,
+      0 0 0 1px #0c2230,
+      0 30px 80px rgba(0,0,0,.8),
+      inset 0 0 90px rgba(0,0,0,.65);
+    overflow:hidden;
+  }
+  /* faint screen vignette + scanlines */
+  .bezel::after{
+    content:""; position:absolute; inset:0; pointer-events:none; z-index:60;
+    background:
+      repeating-linear-gradient(to bottom, rgba(0,0,0,0) 0 2px, rgba(0,0,0,.16) 2px 3px),
+      radial-gradient(ellipse at 50% 50%, rgba(0,0,0,0) 55%, rgba(0,0,0,.45) 100%);
+    mix-blend-mode:multiply;
+  }
+
+  /* fit-to-window scaler */
+  @media (max-width:1320px), (max-height:760px){
+    .bezel{ transform:scale(var(--fit,1)); }
+  }
+
+  /* ---------- layout grid ---------- */
+  .hud{
+    position:absolute; inset:0;
+    display:grid;
+    grid-template-columns:268px 1fr 286px;
+    grid-template-rows:30px 1fr 24px;
+    grid-template-areas:
+      "top top top"
+      "left center right"
+      "tick tick tick";
+    gap:10px;
+    padding:10px;
+  }
+
+  /* ---------- top status bar ---------- */
+  .topbar{
+    grid-area:top;
+    display:flex; align-items:center; gap:14px;
+    padding:0 12px;
+    background:linear-gradient(180deg,var(--panel-2),var(--panel));
+    border:1px solid var(--line);
+    border-radius:4px;
+    font-size:11px; letter-spacing:.06em;
+    position:relative;
+  }
+  .brand{ display:flex; align-items:baseline; gap:8px; }
+  .brand b{
+    color:var(--cyan-bright); font-weight:700; letter-spacing:.22em;
+    text-shadow:var(--glow);
+  }
+  .brand .ver{ color:var(--ink-faint); font-size:9px; letter-spacing:.18em; }
+  .topbar .sep{ width:1px; height:14px; background:var(--line); }
+  .topbar .kv{ color:var(--ink-dim); text-transform:uppercase; font-size:10px; }
+  .topbar .kv b{ color:var(--ink); font-weight:600; }
+  .topbar .grow{ flex:1; }
+  .ring-status{ display:flex; gap:10px; align-items:center; }
+  .pill{
+    display:inline-flex; align-items:center; gap:6px;
+    padding:2px 8px; border:1px solid var(--line);
+    border-radius:10px; font-size:9.5px; letter-spacing:.12em;
+    color:var(--ink-dim); text-transform:uppercase;
+  }
+  .dot{ width:6px; height:6px; border-radius:50%; background:var(--green); box-shadow:0 0 6px var(--green); }
+  .dot.r0{ background:var(--cyan-bright); box-shadow:0 0 6px var(--cyan-bright); }
+  .clock{ color:var(--cyan-bright); font-variant-numeric:tabular-nums; text-shadow:var(--glow); letter-spacing:.08em; }
+
+  /* small-caps label helper */
+  .lab{
+    font-size:9px; letter-spacing:.24em; text-transform:uppercase;
+    color:var(--ink-dim);
+  }
+
+  /* ---------- generic panel w/ corner brackets ---------- */
+  .panel{
+    position:relative;
+    background:linear-gradient(180deg, rgba(13,30,42,.35), rgba(6,12,20,.55));
+    border:1px solid var(--line-soft);
+    border-radius:4px;
+    padding:9px 10px 10px;
+  }
+  .panel > .lab{ margin-bottom:7px; display:flex; justify-content:space-between; align-items:center;}
+  .panel .lab .v{ color:var(--cyan); letter-spacing:.1em; }
+  .panel::before,.panel::after,
+  .panel .bk1,.panel .bk2{
+    content:""; position:absolute; width:9px; height:9px; pointer-events:none;
+    border-color:var(--cyan-dim); border-style:solid; border-width:0;
+  }
+  .panel::before{ top:-1px; left:-1px; border-top-width:1px; border-left-width:1px; }
+  .panel::after{ top:-1px; right:-1px; border-top-width:1px; border-right-width:1px; }
+  .panel .bk1{ bottom:-1px; left:-1px; border-bottom-width:1px; border-left-width:1px; }
+  .panel .bk2{ bottom:-1px; right:-1px; border-bottom-width:1px; border-right-width:1px; }
+
+  /* ---------- left rail ---------- */
+  .left{ grid-area:left; display:flex; flex-direction:column; gap:10px; min-height:0; }
+
+  .vital{ margin-bottom:9px; }
+  .vital:last-child{ margin-bottom:0; }
+  .vital .row{ display:flex; justify-content:space-between; font-size:10.5px; margin-bottom:4px; }
+  .vital .row .name{ color:var(--ink-dim); letter-spacing:.06em; text-transform:uppercase; font-size:9.5px;}
+  .vital .row .num{ color:var(--ink); font-variant-numeric:tabular-nums; }
+  .vital .row .num b{ color:var(--cyan-bright); }
+  .bar{
+    height:6px; background:#0a1722; border:1px solid var(--line-soft);
+    border-radius:3px; overflow:hidden; position:relative;
+  }
+  .bar > i{
+    position:absolute; left:0; top:0; bottom:0; display:block;
+    background:linear-gradient(90deg,var(--cyan-dim),var(--cyan-bright));
+    box-shadow:0 0 8px rgba(34,211,238,.5);
+  }
+  .bar.warn > i{ background:linear-gradient(90deg,#7a5a16,var(--amber)); box-shadow:0 0 8px rgba(255,180,84,.4);}
+
+  /* cores grid (mini) */
+  .coregrid{ display:grid; grid-template-columns:repeat(4,1fr); gap:7px 6px; }
+  .corecell{ text-align:center; }
+  .corecell svg{ display:block; margin:0 auto; }
+  .corecell .cl{ font-size:8px; color:var(--ink-faint); letter-spacing:.08em; margin-top:1px; }
+  .corecell .cv{ font-size:8.5px; color:var(--ink-dim); font-variant-numeric:tabular-nums; }
+  .corecell.busy .cv{ color:var(--cyan-bright); }
+
+  .storage{ display:flex; flex-direction:column; gap:6px; font-size:10px; }
+  .storage .srow{ display:flex; justify-content:space-between; color:var(--ink-dim); }
+  .storage .srow b{ color:var(--ink); font-variant-numeric:tabular-nums; }
+
+  /* ---------- center column ---------- */
+  .center{ grid-area:center; display:grid; grid-template-rows:1fr 232px; gap:10px; min-height:0; }
+
+  .coreWrap{
+    position:relative;
+    border:1px solid var(--line-soft); border-radius:4px;
+    background:
+      radial-gradient(ellipse at 50% 46%, rgba(11,40,56,.5) 0%, rgba(5,9,14,.2) 55%, rgba(5,9,14,0) 75%);
+    overflow:hidden;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .coreWrap::before{ /* corner bracket TL */
+    content:""; position:absolute; top:8px; left:8px; width:18px; height:18px;
+    border-top:1px solid var(--cyan-dim); border-left:1px solid var(--cyan-dim);
+  }
+  .coreWrap .brk-tr,.coreWrap .brk-bl,.coreWrap .brk-br{ position:absolute; width:18px; height:18px; }
+  .coreWrap .brk-tr{ top:8px; right:8px; border-top:1px solid var(--cyan-dim); border-right:1px solid var(--cyan-dim); }
+  .coreWrap .brk-bl{ bottom:8px; left:8px; border-bottom:1px solid var(--cyan-dim); border-left:1px solid var(--cyan-dim); }
+  .coreWrap .brk-br{ bottom:8px; right:8px; border-bottom:1px solid var(--cyan-dim); border-right:1px solid var(--cyan-dim); }
+
+  .coreLabel{
+    position:absolute; top:10px; left:0; right:0; text-align:center;
+    font-size:9px; letter-spacing:.34em; color:var(--ink-dim); text-transform:uppercase;
+  }
+  .coreState{
+    position:absolute; bottom:12px; left:0; right:0; text-align:center;
+    font-size:10px; letter-spacing:.2em; text-transform:uppercase; color:var(--cyan);
+  }
+  .coreState b{ color:var(--cyan-bright); text-shadow:var(--glow); }
+
+  /* ring rotation animations */
+  @keyframes spin{ to{ transform:rotate(360deg);} }
+  @keyframes spinR{ to{ transform:rotate(-360deg);} }
+  @keyframes pulse{ 0%,100%{ opacity:.5; } 50%{ opacity:1; } }
+  .rot-slow{ transform-origin:240px 240px; animation:spin 26s linear infinite; }
+  .rot-med { transform-origin:240px 240px; animation:spinR 14s linear infinite; }
+  .rot-fast{ transform-origin:240px 240px; animation:spin 7s  linear infinite; }
+  .rot-ticks{ transform-origin:240px 240px; animation:spinR 40s linear infinite; }
+
+  #coreSvg .pulseCenter{ animation:pulse 2.6s ease-in-out infinite; transform-origin:240px 240px; }
+  .coreWrap.thinking #coreSvg .pulseCenter{ animation-duration:1s; }
+
+  /* token console */
+  .console{
+    position:relative;
+    border:1px solid var(--line-soft); border-radius:4px;
+    background:linear-gradient(180deg, rgba(9,20,32,.55), rgba(5,9,14,.6));
+    display:flex; flex-direction:column; min-height:0;
+    padding:8px 10px 8px;
+  }
+  .console .chead{
+    display:flex; align-items:center; gap:10px; margin-bottom:6px;
+    font-size:9px; letter-spacing:.2em; text-transform:uppercase; color:var(--ink-dim);
+  }
+  .console .chead .gpath{ color:var(--ink-faint); letter-spacing:.1em; }
+  .console .chead .live{ margin-left:auto; color:var(--green); display:flex; align-items:center; gap:6px; }
+  .console .chead .live .dot{ width:5px; height:5px; }
+  .stream{
+    flex:1; min-height:0; overflow:hidden;
+    font-size:12px; line-height:1.5; letter-spacing:.01em;
+  }
+  .stream .qline{ color:var(--ink-dim); margin-bottom:5px; }
+  .stream .qline .u{ color:var(--amber); }
+  .stream .qline .q{ color:var(--ink); }
+  .stream .aline{ color:var(--ink-faint); margin-bottom:2px; }
+  .stream .aline .j{ color:var(--cyan-bright); text-shadow:var(--glow); letter-spacing:.08em;}
+  .stream .resp{ color:var(--ink); }
+  .stream .resp .tok-new{ color:var(--cyan-bright); }
+  .caret{ display:inline-block; width:7px; height:13px; background:var(--cyan-bright);
+    vertical-align:-2px; box-shadow:var(--glow); animation:pulse 1s steps(2) infinite; }
+  .promptbar{
+    display:flex; align-items:center; gap:8px; margin-top:7px;
+    border-top:1px solid var(--line-soft); padding-top:7px;
+    font-size:11px; color:var(--ink-dim);
+  }
+  .promptbar .pfx{ color:var(--cyan); }
+  .promptbar .hint{ margin-left:auto; font-size:9px; letter-spacing:.16em; color:var(--ink-faint); text-transform:uppercase; }
+
+  /* ---------- right rail ---------- */
+  .right{ grid-area:right; display:flex; flex-direction:column; gap:10px; min-height:0; }
+
+  .enginekv{ display:flex; flex-direction:column; gap:5px; font-size:10px; }
+  .enginekv .er{ display:flex; justify-content:space-between; align-items:center; }
+  .enginekv .er .k{ color:var(--ink-dim); letter-spacing:.05em; text-transform:uppercase; font-size:9px; }
+  .enginekv .er .vv{ color:var(--ink); font-variant-numeric:tabular-nums; }
+  .enginekv .er .vv b{ color:var(--cyan-bright); }
+  .tokrate{ display:flex; align-items:baseline; gap:6px; margin:4px 0 2px; }
+  .tokrate .big{ font-size:26px; color:var(--cyan-bright); text-shadow:var(--glow); font-variant-numeric:tabular-nums; line-height:1;}
+  .tokrate .unit{ font-size:9px; color:var(--ink-dim); letter-spacing:.16em; text-transform:uppercase; }
+  .sparks{ display:flex; align-items:flex-end; gap:2px; height:22px; margin-top:5px; }
+  .sparks i{ flex:1; background:linear-gradient(180deg,var(--cyan-bright),var(--cyan-dim)); border-radius:1px; min-height:2px; opacity:.85; }
+
+  /* agents */
+  .agents{ display:flex; flex-direction:column; gap:7px; }
+  .agent{ display:flex; align-items:center; gap:9px; font-size:10.5px; }
+  .agent .ico{
+    width:22px; height:22px; flex:0 0 22px; border:1px solid var(--line);
+    border-radius:3px; display:flex; align-items:center; justify-content:center;
+    color:var(--cyan); font-size:10px; letter-spacing:.04em;
+    background:rgba(13,40,56,.35);
+  }
+  .agent .meta{ flex:1; min-width:0; }
+  .agent .meta .an{ color:var(--ink); letter-spacing:.04em; }
+  .agent .meta .as{ font-size:8.5px; color:var(--ink-faint); letter-spacing:.06em; text-transform:uppercase; }
+  .agent .stat{ font-size:8.5px; letter-spacing:.12em; text-transform:uppercase; padding:1px 6px; border-radius:9px; border:1px solid var(--line); color:var(--ink-dim); }
+  .agent .stat.act{ color:var(--green); border-color:#1d6b4f; }
+  .agent .stat.idle{ color:var(--ink-faint); }
+  .agent .abar{ width:34px; height:4px; background:#0a1722; border-radius:2px; overflow:hidden; }
+  .agent .abar > i{ display:block; height:100%; background:var(--cyan); box-shadow:0 0 5px var(--cyan); }
+
+  /* shield */
+  .shield .stitle{ display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;}
+  .shield .mode{ font-size:8.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--amber); border:1px solid #5d4417; border-radius:9px; padding:1px 7px;}
+  .riskmeter{ position:relative; height:8px; border-radius:4px; overflow:hidden;
+    background:linear-gradient(90deg,#14633f 0%, #3a6a18 38%, #7a6516 62%, #7a2a18 100%);
+    border:1px solid var(--line-soft); }
+  .riskmeter .mk{ position:absolute; top:-3px; width:2px; height:14px; background:var(--ink); box-shadow:0 0 6px var(--cyan-bright);}
+  .shield .srow2{ display:flex; justify-content:space-between; font-size:9px; color:var(--ink-faint); margin-top:5px; letter-spacing:.04em;}
+  .shield .scur{ display:flex; justify-content:space-between; align-items:center; margin-top:7px; font-size:10px;}
+  .shield .scur .lvl{ color:var(--green); letter-spacing:.1em; text-transform:uppercase; }
+  .shield .note{ font-size:8.5px; color:var(--ink-faint); margin-top:6px; line-height:1.4; letter-spacing:.02em;}
+
+  /* ---------- bottom ticker ---------- */
+  .ticker{
+    grid-area:tick;
+    display:flex; align-items:center; gap:12px;
+    border:1px solid var(--line-soft); border-radius:4px;
+    background:linear-gradient(180deg,var(--panel-2),var(--panel));
+    overflow:hidden; font-size:10px; padding-left:10px;
+  }
+  .ticker .tlabel{
+    flex:0 0 auto; color:var(--bg); background:var(--cyan-dim);
+    padding:3px 9px; font-size:8.5px; letter-spacing:.18em; text-transform:uppercase;
+    border-radius:3px; color:#04111a; font-weight:700;
+  }
+  .ticker .track{ flex:1; overflow:hidden; white-space:nowrap; position:relative; height:100%; }
+  .ticker .move{
+    position:absolute; left:0; top:50%; transform:translateY(-50%);
+    white-space:nowrap; animation:tick 34s linear infinite; will-change:transform;
+  }
+  @keyframes tick{ from{ transform:translate(0,-50%);} to{ transform:translate(-50%,-50%);} }
+  .ticker .ev{ color:var(--ink-dim); letter-spacing:.03em; }
+  .ticker .ev b{ color:var(--cyan); }
+  .ticker .ev .ok{ color:var(--green); }
+  .ticker .ev .warn{ color:var(--amber); }
+  .ticker .ev .sep{ color:var(--ink-faint); margin:0 14px; }
+
+  .num{ font-variant-numeric:tabular-nums; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="bezel" id="bezel">
+    <div class="hud">
+
+      <!-- ============ TOP STATUS BAR ============ -->
+      <div class="topbar">
+        <div class="brand"><b>JARVIS</b><span class="ver">AI-OS v0.2.1</span></div>
+        <div class="sep"></div>
+        <div class="ring-status">
+          <span class="pill"><span class="dot r0"></span>seL4 · Ring 0</span>
+          <span class="pill"><span class="dot"></span>Engine · Ring 3</span>
+        </div>
+        <div class="sep"></div>
+        <div class="kv">MODEL <b>Gemma 4 E2B</b> · Q4_K_M</div>
+        <div class="kv">TOK/S <b id="topTok">5.2</b></div>
+        <div class="grow"></div>
+        <div class="kv">UPTIME <b id="upt">00:00:00</b></div>
+        <div class="sep"></div>
+        <div class="kv">QUERIES <b id="qcount" class="num">12,840</b></div>
+        <div class="sep"></div>
+        <div class="clock" id="clock">--:--:--</div>
+      </div>
+
+      <!-- ============ LEFT RAIL — SYSTEM VITALS ============ -->
+      <div class="left">
+        <div class="panel" style="flex:0 0 auto;">
+          <span class="bk1"></span><span class="bk2"></span>
+          <div class="lab">System Vitals <span class="v">2700X · 8C/16T</span></div>
+
+          <div class="vital">
+            <div class="row"><span class="name">CPU Aggregate</span><span class="num"><b id="cpuPct">58</b>%</span></div>
+            <div class="bar"><i id="cpuBar" style="width:58%"></i></div>
+          </div>
+          <div class="vital">
+            <div class="row"><span class="name">Memory</span><span class="num"><b id="memUsed">9.4</b> / 32 GB</span></div>
+            <div class="bar"><i id="memBar" style="width:29%"></i></div>
+          </div>
+          <div class="vital">
+            <div class="row"><span class="name">Pkg Temp</span><span class="num"><b id="temp">61</b> °C</span></div>
+            <div class="bar warn"><i id="tempBar" style="width:55%"></i></div>
+          </div>
+        </div>
+
+        <div class="panel" style="flex:0 0 auto;">
+          <span class="bk1"></span><span class="bk2"></span>
+          <div class="lab">Per-Core Load <span class="v" id="coreSummary">5 / 8 busy</span></div>
+          <div class="coregrid" id="coregrid"><!-- 8 cells injected --></div>
+        </div>
+
+        <div class="panel" style="flex:1 1 auto; min-height:0; display:flex; flex-direction:column;">
+          <span class="bk1"></span><span class="bk2"></span>
+          <div class="lab">Storage / IO</div>
+          <div class="storage">
+            <div class="srow"><span>NVMe — Lexar NM790</span><b>1907 GiB</b></div>
+            <div class="vital" style="margin:2px 0 5px;">
+              <div class="bar"><i style="width:14%"></i></div>
+            </div>
+            <div class="srow"><span>Model resident</span><b>2.89 GiB</b></div>
+            <div class="srow"><span>NVMe read</span><b id="nvmeRd" class="num">412 MB/s</b></div>
+            <div class="srow"><span>IPC msgs/sec</span><b id="ipcRate" class="num">18.2k</b></div>
+            <div class="srow"><span>IPC ring CRC-32</span><b style="color:var(--green)">OK</b></div>
+            <div class="srow"><span>Boot time</span><b>2.0 s</b></div>
+          </div>
+          <div style="flex:1"></div>
+          <div class="lab" style="margin-top:8px;">Decision Cache</div>
+          <div class="storage" style="margin-top:6px;">
+            <div class="srow"><span>Hit rate</span><b style="color:var(--cyan-bright)" id="hit">85.7%</b></div>
+            <div class="vital" style="margin:2px 0 4px;">
+              <div class="bar"><i id="hitBar" style="width:85.7%"></i></div>
+            </div>
+            <div class="srow"><span>Patterns</span><b>308</b></div>
+            <div class="srow"><span>Lookup</span><b>&lt;1 ms</b></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ CENTER — CORE + CONSOLE ============ -->
+      <div class="center">
+        <div class="coreWrap" id="coreWrap">
+          <span class="brk-tr"></span><span class="brk-bl"></span><span class="brk-br"></span>
+          <div class="coreLabel">AI Core · Decision Engine</div>
+
+          <svg id="coreSvg" width="480" height="480" viewBox="0 0 480 480" aria-hidden="true">
+            <defs>
+              <radialGradient id="centerGlow" cx="50%" cy="50%" r="50%">
+                <stop offset="0%"  stop-color="#9bf6ff" stop-opacity="1"/>
+                <stop offset="35%" stop-color="#22d3ee" stop-opacity=".9"/>
+                <stop offset="70%" stop-color="#0b6b80" stop-opacity=".35"/>
+                <stop offset="100%" stop-color="#0b6b80" stop-opacity="0"/>
+              </radialGradient>
+            </defs>
+
+            <!-- faint outer field -->
+            <circle cx="240" cy="240" r="228" fill="none" stroke="#0e2a3a" stroke-width="1"/>
+
+            <!-- rotating tick ring -->
+            <g class="rot-ticks" id="ticks"></g>
+
+            <!-- slow outer ring w/ gaps -->
+            <g class="rot-slow">
+              <circle cx="240" cy="240" r="200" fill="none" stroke="#0f5a6e" stroke-width="2"
+                      stroke-dasharray="60 26" stroke-linecap="round"/>
+              <circle cx="240" cy="240" r="200" fill="none" stroke="#22d3ee" stroke-width="2"
+                      stroke-dasharray="6 280" stroke-linecap="round" opacity=".9"/>
+            </g>
+
+            <!-- medium counter-rotating ring -->
+            <g class="rot-med">
+              <circle cx="240" cy="240" r="166" fill="none" stroke="#0c455a" stroke-width="6"
+                      stroke-dasharray="2 16" opacity=".8"/>
+              <circle cx="240" cy="240" r="150" fill="none" stroke="#137e96" stroke-width="1"/>
+            </g>
+
+            <!-- fast inner ring -->
+            <g class="rot-fast">
+              <circle cx="240" cy="240" r="120" fill="none" stroke="#0f6076" stroke-width="3"
+                      stroke-dasharray="40 18 8 18" stroke-linecap="round"/>
+            </g>
+
+            <!-- static inner hairlines -->
+            <circle cx="240" cy="240" r="96" fill="none" stroke="#10384a" stroke-width="1"/>
+            <circle cx="240" cy="240" r="78" fill="none" stroke="#11586c" stroke-width="1" opacity=".7"/>
+
+            <!-- crosshair ticks -->
+            <g stroke="#1a6076" stroke-width="1" opacity=".6">
+              <line x1="240" y1="20"  x2="240" y2="40"/>
+              <line x1="240" y1="440" x2="240" y2="460"/>
+              <line x1="20"  y1="240" x2="40"  y2="240"/>
+              <line x1="440" y1="240" x2="460" y2="240"/>
+            </g>
+
+            <!-- pulsing center -->
+            <g class="pulseCenter">
+              <circle cx="240" cy="240" r="70" fill="url(#centerGlow)"/>
+              <circle cx="240" cy="240" r="40" fill="none" stroke="#9bf6ff" stroke-width="1.5" opacity=".8"/>
+              <circle cx="240" cy="240" r="24" fill="#22d3ee" opacity=".22"/>
+            </g>
+            <circle cx="240" cy="240" r="8" fill="#d6fbff"/>
+          </svg>
+
+          <div class="coreState" id="coreState">STATUS · <b>GENERATING</b> · 5 THREADS</div>
+        </div>
+
+        <!-- TOKEN STREAM CONSOLE -->
+        <div class="console" id="console">
+          <div class="chead">
+            <span>Conversation</span>
+            <span class="gpath">// process B · in-process inference · shmem ring 0x1</span>
+            <span class="live"><span class="dot"></span>streaming</span>
+          </div>
+          <div class="stream" id="stream">
+            <div class="qline"><span class="u">user@jarvis ▸</span> <span class="q" id="qText"></span></div>
+            <div class="aline"><span class="j">JARVIS ▸</span> <span id="route"></span></div>
+            <div class="resp"><span id="resp"></span><span class="caret" id="caret"></span></div>
+          </div>
+          <div class="promptbar">
+            <span class="pfx">user@jarvis ▸</span>
+            <span style="color:var(--ink-faint)">_ awaiting input</span>
+            <span class="hint">cache &lt;1ms · llm ~5.2 tok/s</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ RIGHT RAIL — ENGINE / AGENTS / SHIELD ============ -->
+      <div class="right">
+        <div class="panel" style="flex:0 0 auto;">
+          <span class="bk1"></span><span class="bk2"></span>
+          <div class="lab">AI Engine <span class="v">GEMMA 4 E2B</span></div>
+          <div class="tokrate">
+            <span class="big" id="bigTok">5.2</span>
+            <span class="unit">tok / s</span>
+          </div>
+          <div class="sparks" id="sparks"></div>
+          <div class="enginekv" style="margin-top:8px;">
+            <div class="er"><span class="k">Threads</span><span class="vv"><b id="thr">5</b> / 8 cores</span></div>
+            <div class="er"><span class="k">Baseline 1T</span><span class="vv">1.5 tok/s</span></div>
+            <div class="er"><span class="k">Context</span><span class="vv"><b id="ctx">214</b> / 4096</span></div>
+            <div class="er"><span class="k">Quant</span><span class="vv">Q4_K_M · 2.89 GiB</span></div>
+            <div class="er"><span class="k">Families</span><span class="vv">6 supported</span></div>
+          </div>
+        </div>
+
+        <div class="panel" style="flex:0 0 auto;">
+          <span class="bk1"></span><span class="bk2"></span>
+          <div class="lab">Specialist Agents</div>
+          <div class="agents" id="agents"><!-- injected --></div>
+        </div>
+
+        <div class="panel shield" style="flex:1 1 auto;">
+          <span class="bk1"></span><span class="bk2"></span>
+          <div class="stitle">
+            <span class="lab" style="margin:0;">SHIELD Safety</span>
+            <span class="mode">Monitoring</span>
+          </div>
+          <div class="riskmeter"><span class="mk" id="riskMk" style="left:18%"></span></div>
+          <div class="srow2"><span>LOW</span><span>ELEVATED</span><span>HIGH</span></div>
+          <div class="scur">
+            <span>Current risk</span>
+            <span class="lvl" id="riskLvl">0.18 · NOMINAL</span>
+          </div>
+          <div class="scur" style="margin-top:4px;">
+            <span style="color:var(--ink-dim)">Last action</span>
+            <span style="color:var(--ink)" id="lastAct">ALLOW · cache hit</span>
+          </div>
+          <div class="note">
+            Continuous risk scoring on every query. Risk meter + shadow-exec monitoring
+            are advisory in this build — not a hard block guarantee.
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ BOTTOM TICKER ============ -->
+      <div class="ticker">
+        <span class="tlabel">IPC ▸ shmem</span>
+        <div class="track">
+          <div class="move" id="tickerMove"></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  const $ = id => document.getElementById(id);
+
+  /* ---------- fit bezel to window ---------- */
+  function fit(){
+    const sx = window.innerWidth/1300, sy = window.innerHeight/740;
+    const s = Math.min(1, sx, sy);
+    document.documentElement.style.setProperty('--fit', s.toFixed(3));
+  }
+  window.addEventListener('resize', fit); fit();
+
+  /* ---------- clock + uptime ---------- */
+  const bootMs = Date.now() - (3*3600+27*60+11)*1000; // fake ~3.5h uptime
+  function pad(n){ return String(n).padStart(2,'0'); }
+  function tickClock(){
+    const d = new Date();
+    $('clock').textContent = pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());
+    let u = Math.floor((Date.now()-bootMs)/1000);
+    const h=Math.floor(u/3600); u%=3600; const m=Math.floor(u/60); const s=u%60;
+    $('upt').textContent = pad(h)+':'+pad(m)+':'+pad(s);
+  }
+  setInterval(tickClock, 1000); tickClock();
+
+  /* ---------- core SVG: tick ring ---------- */
+  (function buildTicks(){
+    const g = $('ticks'); const cx=240, cy=240, r=216;
+    let html='';
+    for(let i=0;i<72;i++){
+      const a = (i/72)*Math.PI*2;
+      const long = (i%6===0);
+      const r1 = r, r2 = r - (long?12:6);
+      const x1=cx+Math.cos(a)*r1, y1=cy+Math.sin(a)*r1;
+      const x2=cx+Math.cos(a)*r2, y2=cy+Math.sin(a)*r2;
+      html += `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${long?'#1f7e96':'#114050'}" stroke-width="${long?1.4:1}" />`;
+    }
+    g.innerHTML = html;
+  })();
+
+  /* ---------- per-core arc meters (left rail) ---------- */
+  const NCORE = 8;
+  // ~5 of 8 cores busy during inference
+  const coreState = [];
+  for(let i=0;i<NCORE;i++){
+    const busy = i < 5;
+    coreState.push({ busy, load: busy ? 60+Math.random()*30 : 4+Math.random()*8 });
+  }
+  function arcPath(cx,cy,r,frac){
+    const a0=-Math.PI/2, a1=a0+frac*Math.PI*2;
+    const x0=cx+Math.cos(a0)*r, y0=cy+Math.sin(a0)*r;
+    const x1=cx+Math.cos(a1)*r, y1=cy+Math.sin(a1)*r;
+    const large = frac>0.5?1:0;
+    return `M ${x0.toFixed(1)} ${y0.toFixed(1)} A ${r} ${r} 0 ${large} 1 ${x1.toFixed(1)} ${y1.toFixed(1)}`;
+  }
+  (function buildCores(){
+    const grid = $('coregrid'); let html='';
+    for(let i=0;i<NCORE;i++){
+      html += `<div class="corecell ${coreState[i].busy?'busy':''}" id="cc${i}">
+        <svg width="40" height="40" viewBox="0 0 40 40">
+          <circle cx="20" cy="20" r="15" fill="none" stroke="#10303f" stroke-width="3"/>
+          <path id="ca${i}" d="" fill="none" stroke="#22d3ee" stroke-width="3" stroke-linecap="round"/>
+          <circle id="cd${i}" cx="20" cy="20" r="3" fill="#0e2a37"/>
+        </svg>
+        <div class="cl">C${i}</div>
+        <div class="cv" id="cv${i}">0%</div>
+      </div>`;
+    }
+    grid.innerHTML = html;
+  })();
+  function renderCores(){
+    let busyCount=0;
+    for(let i=0;i<NCORE;i++){
+      const c = coreState[i];
+      const frac = Math.max(0.02, c.load/100);
+      $('ca'+i).setAttribute('d', arcPath(20,20,15,frac));
+      const col = c.busy ? (c.load>80?'#9bf6ff':'#22d3ee') : '#16586c';
+      $('ca'+i).setAttribute('stroke', col);
+      $('cd'+i).setAttribute('fill', c.busy ? '#22d3ee' : '#0e2a37');
+      $('cv'+i).textContent = Math.round(c.load)+'%';
+      if(c.busy) busyCount++;
+    }
+    $('coreSummary').textContent = busyCount+' / 8 busy';
+    $('coreState').innerHTML = 'STATUS · <b>GENERATING</b> · '+busyCount+' THREADS';
+    $('thr').textContent = busyCount;
+  }
+  renderCores();
+
+  /* ---------- vitals drift ---------- */
+  function drift(v, lo, hi, step){
+    v += (Math.random()-0.5)*step;
+    return Math.max(lo, Math.min(hi, v));
+  }
+  let cpu=58, mem=9.4, temp=61, ipc=18.2, nvme=412, ctx=214, tok=5.2;
+  function tickVitals(){
+    // cores drift
+    for(const c of coreState){
+      if(c.busy) c.load = drift(c.load, 42, 97, 14);
+      else       c.load = drift(c.load, 2, 16, 5);
+    }
+    renderCores();
+    const agg = coreState.reduce((a,c)=>a+c.load,0)/NCORE;
+    cpu = Math.round(agg);
+    $('cpuPct').textContent = cpu; $('cpuBar').style.width = cpu+'%';
+
+    mem = drift(mem, 8.9, 10.4, .25);
+    $('memUsed').textContent = mem.toFixed(1);
+    $('memBar').style.width = (mem/32*100).toFixed(0)+'%';
+
+    temp = drift(temp, 56, 70, 1.2);
+    $('temp').textContent = Math.round(temp);
+    $('tempBar').style.width = ((temp-40)/45*100).toFixed(0)+'%';
+
+    ipc = drift(ipc, 14, 23, 1.6);
+    $('ipcRate').textContent = ipc.toFixed(1)+'k';
+    nvme = drift(nvme, 280, 540, 40);
+    $('nvmeRd').textContent = Math.round(nvme)+' MB/s';
+
+    // tok/s drift around 5.2
+    tok = drift(tok, 4.6, 5.8, .28);
+    $('topTok').textContent = tok.toFixed(1);
+    $('bigTok').textContent = tok.toFixed(1);
+    pushSpark(tok);
+  }
+  setInterval(tickVitals, 900);
+
+  /* ---------- tok/s sparkline ---------- */
+  const SPK=26; const spkData=[];
+  (function buildSpark(){
+    const wrap=$('sparks'); let html='';
+    for(let i=0;i<SPK;i++){ html+='<i style="height:6px"></i>'; spkData.push(5.2); }
+    wrap.innerHTML=html;
+  })();
+  function pushSpark(v){
+    spkData.push(v); spkData.shift();
+    const bars = $('sparks').children;
+    for(let i=0;i<SPK;i++){
+      const h = 3 + (spkData[i]-4.2)/(6-4.2)*19;
+      bars[i].style.height = Math.max(2,Math.min(22,h)).toFixed(0)+'px';
+      bars[i].style.opacity = (0.4 + i/SPK*0.6).toFixed(2);
+    }
+  }
+
+  /* ---------- agents ---------- */
+  const agents = [
+    { id:'DEV', name:'Device',     sub:'NVMe · PCI · xHCI',  act:true,  load:.62 },
+    { id:'NET', name:'Network',    sub:'I211 · shmem ring',  act:false, load:.12 },
+    { id:'FS',  name:'Filesystem', sub:'FAT32 · GGUF map',   act:true,  load:.40 },
+    { id:'USR', name:'User',       sub:'intent · routing',   act:true,  load:.78 },
+  ];
+  (function buildAgents(){
+    const wrap=$('agents'); let html='';
+    agents.forEach((a,i)=>{
+      html += `<div class="agent">
+        <div class="ico">${a.id}</div>
+        <div class="meta"><div class="an">${a.name}</div><div class="as">${a.sub}</div></div>
+        <div class="abar"><i id="ag${i}" style="width:${(a.load*100)|0}%"></i></div>
+        <div class="stat ${a.act?'act':'idle'}" id="as${i}">${a.act?'active':'idle'}</div>
+      </div>`;
+    });
+    wrap.innerHTML=html;
+  })();
+  function tickAgents(){
+    agents.forEach((a,i)=>{
+      if(Math.random()<0.18) a.act = !a.act;
+      a.load = drift(a.load, a.act?0.3:0.04, a.act?0.92:0.2, 0.18);
+      $('ag'+i).style.width = (a.load*100|0)+'%';
+      const s=$('as'+i); s.textContent = a.act?'active':'idle';
+      s.className = 'stat '+(a.act?'act':'idle');
+    });
+  }
+  setInterval(tickAgents, 1400);
+
+  /* ---------- SHIELD risk drift ---------- */
+  let risk=0.18;
+  function tickShield(){
+    risk = drift(risk, 0.06, 0.46, 0.08);
+    $('riskMk').style.left = (8+risk*70).toFixed(0)+'%';
+    let lvl, col;
+    if(risk<0.25){ lvl='NOMINAL'; col='var(--green)'; }
+    else if(risk<0.4){ lvl='ELEVATED'; col='var(--amber)'; }
+    else { lvl='WATCH'; col='var(--red)'; }
+    const el=$('riskLvl'); el.textContent = risk.toFixed(2)+' · '+lvl; el.style.color=col;
+  }
+  setInterval(tickShield, 1700);
+
+  /* ---------- bottom IPC ticker ---------- */
+  const tickEvents = [
+    ['CACHE', 'hit', 'q#12841 "increase cpu budget" → BYTECODE 0x2A <span class="ok">&lt;1ms</span>'],
+    ['IPC',   '',    'ring0 tx <b>frame 0x7f3a</b> · crc32 <span class="ok">OK</span> · 18.2k msg/s'],
+    ['NVMe',  '',    'read 4096 sectors · model page-in <b>2.89 GiB</b> resident'],
+    ['AGENT', '',    '<b>Device</b> claimed PCI 1d97:1602 (NM790) · BAR0 mapped'],
+    ['LLM',   '',    'process B token <b>#214</b> sampled · greedy top-k'],
+    ['SHIELD','',    'risk 0.18 <span class="ok">NOMINAL</span> · ALLOW route → cache'],
+    ['CACHE', 'miss','q#12842 → forward to LLM · <span class="warn">50–500ms</span>'],
+    ['IPC',   '',    'shmem ring0 watermark 11/15 · backpressure nominal'],
+    ['SCHED', '',    'seL4 Ring0 ctx-switch <b>0.4µs</b> · TCB affinity set core3'],
+    ['NET',   '',    'I211 link <b>1000baseT</b> full-duplex · 0 rx-err'],
+  ];
+  (function buildTicker(){
+    let row='';
+    const seg = () => tickEvents.map(e =>
+      `<span class="ev">[<b>${e[0]}</b>] ${e[2]}</span><span class="sep">◇</span>`).join('');
+    $('tickerMove').innerHTML = seg()+seg(); // doubled for seamless loop
+  })();
+
+  /* ---------- conversational token stream ---------- */
+  const convos = [
+    {
+      q:'jarvis, the inference feels slow — can you speed up token generation?',
+      route:'route ▸ <span style="color:var(--ink)">cache miss</span> · dispatch to LLM (process B)',
+      a:'Spinning up the multi-core threadpool. I have placed 5 of 8 cores on the matmul path and pinned them via seL4_TCB_SetAffinity, leaving cores 0–1 for Ring 0 interrupts. That lifts Gemma 4 E2B from the 1.5 tok/s single-thread baseline to ~5.2 tok/s right now. The decision cache still answers 85.7% of routine queries in under a millisecond, so the LLM only wakes for novel requests like this one.'
+    },
+    {
+      q:'what is actually running at ring 0 versus ring 3?',
+      route:'route ▸ <span style="color:var(--green)">cache hit</span> · BYTECODE 0x11 · &lt;1ms',
+      a:'Ring 0 is the seL4 microkernel: interrupt handling, memory, and the lock-free IPC primitives, all under a millisecond. Ring 3 holds the AI decision engine and user-space services as two isolated processes — Process A (rootserver: cache, x86 drivers, SHIELD) and Process B (this LLM). They only talk over CRC-32 checked shared-memory rings, so a fault in inference can never take down the kernel.'
+    },
+    {
+      q:'open the NVMe device and confirm the model is resident.',
+      route:'route ▸ <span style="color:var(--ink)">agent ▸ Device + Filesystem</span>',
+      a:'Device agent has the Lexar NM790 on PCI bus 1; Filesystem mapped the GGUF over FAT32. Gemma 4 E2B is fully resident at 2.89 GiB and serving tokens. NVMe read is holding around 412 MB/s with zero CRC errors on the IPC ring — everything is nominal.'
+    }
+  ];
+
+  let ci=0;
+  const qEl=$('qText'), routeEl=$('route'), respEl=$('resp'), caret=$('caret'), wrap=$('coreWrap');
+
+  function typeQuery(text, done){
+    qEl.textContent=''; routeEl.innerHTML=''; respEl.innerHTML='';
+    wrap.classList.remove('thinking');
+    $('lastAct').textContent='typing…';
+    let i=0;
+    (function step(){
+      if(i<=text.length){ qEl.textContent=text.slice(0,i); i++; setTimeout(step, 26+Math.random()*30); }
+      else setTimeout(done, 480);
+    })();
+  }
+
+  function showRoute(html, done){
+    routeEl.innerHTML=html;
+    $('lastAct').innerHTML = html.indexOf('hit')>-1 ? 'ALLOW · cache hit' : 'ALLOW · LLM route';
+    setTimeout(done, 620);
+  }
+
+  // stream tokens word-by-word to mimic ~5 tok/s decode
+  function streamResp(text, done){
+    wrap.classList.add('thinking');
+    const words = text.split(/(\s+)/); // keep spaces
+    let i=0, ctxBase=ctx;
+    $('lastAct').textContent='generating…';
+    (function step(){
+      if(i<words.length){
+        // append previous token (now "old"), add new highlighted token
+        const old = respEl.querySelector('.tok-new');
+        if(old) old.className='';
+        const span=document.createElement('span');
+        span.className='tok-new'; span.textContent=words[i];
+        respEl.appendChild(span);
+        i++;
+        // context counter ticks up
+        if(words[i-1].trim().length){ ctx = ctxBase + Math.floor(i*1.3); $('ctx').textContent=ctx; }
+        // ~5.2 tok/s => ~190ms/token; spaces fast
+        const delay = words[i-1] && words[i-1].trim()==='' ? 30 : 150+Math.random()*90;
+        setTimeout(step, delay);
+      } else {
+        const old = respEl.querySelector('.tok-new'); if(old) old.className='';
+        wrap.classList.remove('thinking');
+        $('lastAct').innerHTML = 'ALLOW · '+ (Math.random()<0.5?'completed':'response sent');
+        setTimeout(done, 2600);
+      }
+    })();
+  }
+
+  function runConvo(){
+    const c = convos[ci % convos.length]; ci++;
+    typeQuery(c.q, ()=> showRoute(c.route, ()=> streamResp(c.a, runConvo)));
+  }
+  setTimeout(runConvo, 700);
+
+  /* ---------- query counter creep ---------- */
+  let qn = 12840;
+  setInterval(()=>{ qn += 1 + (Math.random()*3|0); $('qcount').textContent = qn.toLocaleString(); }, 2200);
+
+})();
+</script>
+</body>
+</html>

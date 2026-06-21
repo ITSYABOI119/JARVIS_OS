@@ -88,3 +88,8 @@ wikitext-2-raw/
 bash.exe.stackdump
 *.stackdump
 .codex/
+
+# Phase 4 goal #2b: the "Jarvis OS" web design-system is the Remote Telemetry Console's UI seed —
+# kept local-only (~5.9 MB: React Command Center + component library + rendered HTML + .zip bundle),
+# the UI seed for a WEB console that does NOT run on the bare-metal box; never committed (ADR 2026-06-21).
+phase4/docs/ui_mockups/design-system/
