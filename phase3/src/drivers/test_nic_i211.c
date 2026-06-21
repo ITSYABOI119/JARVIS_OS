@@ -178,10 +178,10 @@ static void setup_mock_nic(void)
     memcpy(&mock_mmio[I211_RAL0], &ral, sizeof(ral));
     memcpy(&mock_mmio[I211_RAH0], &rah, sizeof(rah));
 
-    /* STATUS: link up, 1000 Mbps, full duplex */
+    /* STATUS: link up, 1000 Mbps, full duplex, PF reset done (B3 settle poll) */
     {
         uint32_t status = I211_STATUS_LU | I211_STATUS_SPEED_1000 |
-                          I211_STATUS_FD;
+                          I211_STATUS_FD | I211_STATUS_PF_RST_DONE;
         memcpy(&mock_mmio[I211_STATUS], &status, sizeof(status));
     }
 }
@@ -285,6 +285,9 @@ static void test_mac_read(void)
     EXPECT(mac[3] == 0x44, "mac[3] != 0x44");
     EXPECT(mac[4] == 0x55, "mac[4] != 0x55");
     EXPECT(mac[5] == 0x66, "mac[5] != 0x66");
+
+    /* B3: mock RAH0 has AV set + a non-zero/non-FF MAC -> mac_valid must be 1 */
+    EXPECT(nic.mac_valid == 1, "mac_valid should be 1 (AV set + valid MAC)");
 
     TEST_PASS();
 }
@@ -391,6 +394,13 @@ static void test_init_tx_enabled(void)
     EXPECT(tctl & I211_TCTL_EN, "TCTL missing EN");
     EXPECT(tctl & I211_TCTL_PSP, "TCTL missing PSP");
 
+    /* B2: the per-queue TX enable (TXDCTL.ENABLE) must be written — #1 silent-TX cause */
+    {
+        uint32_t txdctl;
+        memcpy(&txdctl, &mock_mmio[I211_TXDCTL], sizeof(txdctl));
+        EXPECT(txdctl & I211_TXDCTL_ENABLE, "TXDCTL missing ENABLE (B2)");
+    }
+
     TEST_PASS();
 }
 
@@ -428,9 +438,13 @@ static void test_init_interrupts_disabled(void)
 static void test_tx_descriptor(void)
 {
     i211_nic_t nic;
+    uint8_t txbuf[64];
     uint8_t frame[64];
+    /* A PHYSICAL address distinct from any virtual address — proves the descriptor
+     * carries the supplied PHYSICAL addr, not the vaddr of the buffer (B1). */
+    const uint64_t FAKE_PADDR = 0x00000000DEAD0000ULL;
 
-    TEST_START("TX descriptor -- send 64 bytes, verify fields");
+    TEST_START("TX descriptor (phys) -- desc.addr == PHYSICAL addr (B1)");
 
     setup_mock_nic();
 
@@ -441,14 +455,17 @@ static void test_tx_descriptor(void)
     int rc = i211_nic_init(&nic, MOCK_MMIO_BASE);
     EXPECT(rc == 0, "i211_nic_init failed");
 
-    /* Send a 64-byte frame */
+    /* Send a 64-byte frame via the paddr-aware path */
     memset(frame, 0xAA, sizeof(frame));
-    rc = i211_nic_send(&nic, frame, 64);
-    EXPECT(rc == 0, "i211_nic_send failed");
+    memset(txbuf, 0, sizeof(txbuf));
+    rc = i211_send_phys(&nic, txbuf, FAKE_PADDR, frame, 64);
+    EXPECT(rc == 0, "i211_send_phys should return desc idx 0");
 
-    /* Check descriptor 0 */
-    EXPECT(tx_ring[0].addr == (uint64_t)(uintptr_t)frame,
-           "TX desc addr mismatch");
+    /* B1: descriptor addr must be the PHYSICAL address, NOT the vaddr of the buffer */
+    EXPECT(tx_ring[0].addr == FAKE_PADDR, "TX desc addr must be the PHYSICAL addr");
+    EXPECT(tx_ring[0].addr != (uint64_t)(uintptr_t)txbuf,
+           "TX desc addr must NOT be the vaddr");
+    EXPECT(memcmp(txbuf, frame, 64) == 0, "frame must be copied into the DMA TX buffer");
     EXPECT(tx_ring[0].length == 64, "TX desc length != 64");
     EXPECT(tx_ring[0].cmd & I211_TX_CMD_EOP, "TX desc missing EOP");
     EXPECT(tx_ring[0].cmd & I211_TX_CMD_IFCS, "TX desc missing IFCS");

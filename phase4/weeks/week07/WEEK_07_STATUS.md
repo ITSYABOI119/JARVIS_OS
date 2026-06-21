@@ -72,11 +72,19 @@ A goal-#2 backlog item — boot-speed + an honest load %.
 - **Verified:** host **10/10** (new `test_fat_sector_cached` = 1 FAT read not 2; `test_read_file_progress` = done==file_size; multi-cluster read still passes *with* the cache); **3× adversarial review GO** (cross-FAT-sector-boundary reload proven correct — no chain corruption); box build clean (NN=6); QEMU smoke coherent inference (cache non-corrupting); **physical boot (real Gemma, boot_id=1 log):** `Model … [loading 96%→100%] → [loaded]` exact, `"MB read"` ~2929 / ~2962 (down from ~3125), GGUF OK, 5/5, FB 1024×768×32 pages=768, M3 NN=6, `[STATS] q=100 err=0`, 0 faults, 421 entries checksum OK.
 - **Noted (not done here):** a pre-existing 512-byte-sector-only assumption in `fat32_next_cluster` — LOW-pri hardening to reject `bytes_per_sector != 512` in `fat32_init` (SEC-029-guarded, never fires on the box).
 
-## Next — goal #2 backlog (optional) → goals #3–7
+## goal #2b N-a — Intel I211 NIC TX first-light (DONE 2026-06-21) 🎉
 
-Goal #2 display is **v1-complete**; the fat32 cache + exact % shipped. Remaining goal-#2 items are all optional/deferred:
-1. **Optional** NVMe progress bar (on the new exact %), true-WC mapping (raw `seL4_X86_Page_Map`), 1920×1080 GRUB `gfxmode`.
-2. **LOW-pri** hardening: reject `bytes_per_sector != 512` in `fat32_init`.
+The riskiest step of the Remote Telemetry Console plan — bringing the dormant I211 to life on bare metal (it had never run on hardware). Step 1/3 of telemetry-OUT.
+- **Driver fixes (`nic_i211.c/h`):** (B1) `i211_send_phys` writes the TX buffer's **PHYSICAL** address into the descriptor (KernelIOMMU=OFF → the NIC DMAs physical), fixing the v→phys bug; (B2) **TXDCTL.ENABLE** (the I210/I211 per-queue TX gate — the #1 silent-TX cause) written + polled; (B3) post-reset ~3 ms settle + `STATUS.PF_RST_DONE` poll + MAC-validity (`RAH.AV` + non-zero/non-FF → `mac_valid`); plus a DD completion poll (UC ring + `volatile`).
+- **Rootserver bring-up (`main_x86.c` `[NET]` block):** finds 8086:1539 in `pci_devs[64]`, enables bus-master/mem-space, maps BAR0 **32 pages UC**, allocs **2 DMA frames** (TX ring + TX buffer), `i211_nic_init`, builds a broadcast frame (dst=bcast, src=MAC, type=0x88b5, "JARVIS-I211-FIRSTLIGHT", ≥60B), sends **5×** with DD polling. **Fully NON-FATAL** — own `i211_nic_t` + own DMA frames, never touches nvme/shmem/model state, no `goto idle`, every poll bounded. Runs after nvme_log_init + model-load (durable `[NET]` lines), before PB spawn.
+- **Build (`build_jarvis_x86.sh`):** copies nic_i211.c/h + grep-guarded sed adds `src/drivers/nic_i211.c` to the sel4test-driver (Process A) source list only.
+- **Verified:** host **11/11** (`-Wall -Werror`; B1 phys-addr + B2 TXDCTL asserts); **3× adversarial review GO** (non-fatal posture, paddr correctness, build hygiene); box build clean (nic_i211.c compiled, config gate green); **QEMU smoke** = `[NET] I211 not found (non-fatal)` + 5/5 + model + NN=6 + err=0 (rollback proven); **physical boot (real Gemma, boot_id=1 log):** `[NET]` probe 8086:1539 @ bus 7 → BAR0=0xfca00000 → CTRL=0x081c0241 (alive) → **MAC=0c:9d:92:0e:39:9a AV=1** → **link 1000 Mbps** → **TX 0..4 DD=1** → **first-light OK**; zero regression (5/5, Gemma 2962 MB, M3 NN=6, `[STATS] q=100 err=0`, no faults, 499 entries). (Wireshark capture was empty — a one-shot-burst-on-just-up-link STP/timing miss; DD=1 is the on-box gate; continuous telemetry at N-b is trivially capturable.)
+
+## Next — goal #2b telemetry-OUT (N-b, N-c) + goal #2 backlog → goals #3–7
+
+1. **goal #2b N-b** — minimal Eth/IP/UDP framing on top of `i211_send_phys`.
+2. **goal #2b N-c** — telemetry hook at the `[STATS]` site + a keepalive; the browser console (UI seed = git-ignored `design-system/`) then renders live, honest box state.
+3. **Optional goal #2 backlog** — NVMe progress bar, true-WC mapping, 1920×1080 gfxmode; **LOW-pri** reject `bytes_per_sector != 512` in `fat32_init`.
 
 Then Phase 4 **goals #3–7**: xHCI USB keyboard input, one-script installer, 90-day soak, docs, `v1.0.0` MIT release.
 

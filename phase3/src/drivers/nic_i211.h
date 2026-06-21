@@ -62,6 +62,7 @@
 /* --- Receive Address (MAC) --- */
 #define I211_RAL0               0x5400  /* Receive Address Low 0 (32-bit) */
 #define I211_RAH0               0x5404  /* Receive Address High 0 (32-bit) */
+#define I211_RAH_AV             (1U << 31)  /* Address Valid (RAH0 bit 31) */
 
 /* --- RX Descriptor Ring (Queue 0) --- */
 #define I211_RDBAL              0xC000  /* RX Desc Base Address Low (32-bit) */
@@ -99,6 +100,7 @@
 #define I211_STATUS_SPEED_10    (0U << 6)   /* 10 Mbps */
 #define I211_STATUS_SPEED_100   (1U << 6)   /* 100 Mbps */
 #define I211_STATUS_SPEED_1000  (2U << 6)   /* 1000 Mbps */
+#define I211_STATUS_PF_RST_DONE (1U << 21)  /* PF reset done (poll after CTRL.RST clears) */
 
 /* ========================================================================
  * Receive Control Register (I211_RCTL, offset 0x0100) Bit Definitions
@@ -117,6 +119,11 @@
 #define I211_TCTL_PSP           (1U << 3)   /* Pad Short Packets */
 #define I211_TCTL_CT_SHIFT      4           /* Collision Threshold (bits 11:4) */
 #define I211_TCTL_COLD_SHIFT    12          /* Collision Distance (bits 21:12) */
+
+/* TX Descriptor Control (I211_TXDCTL, offset 0xE028) — per-queue TX enable.
+ * The I210/I211 silently accepts descriptors but never transmits unless this
+ * queue-enable bit is set (the #1 silent-TX cause). */
+#define I211_TXDCTL_ENABLE      (1U << 25)  /* TX queue 0 enable */
 
 /* ========================================================================
  * Legacy TX Descriptor (16 bytes)
@@ -186,6 +193,7 @@ typedef struct {
 
     /* MAC address */
     uint8_t             mac[6];
+    int                 mac_valid;          /* 1 if RAH0.AV set + MAC non-zero/non-FF */
 
     /* TX ring */
     i211_tx_desc_t     *tx_ring;            /* 256-entry TX descriptor ring */
@@ -258,6 +266,22 @@ void i211_nic_get_mac(i211_nic_t *nic, uint8_t mac[6]);
  * Returns 0 on success, -1 if ring full or len invalid.
  */
 int i211_nic_send(i211_nic_t *nic, const void *buf, uint32_t len);
+
+/**
+ * i211_send_phys - Transmit a frame from a known-PHYSICAL TX buffer (IOMMU-off path)
+ * @nic:         Initialized driver state
+ * @txbuf_vaddr: Virtual address of a DMA TX buffer (memcpy destination)
+ * @txbuf_paddr: PHYSICAL address of that buffer (written to the descriptor — the NIC
+ *               DMAs the physical address; under KernelIOMMU=OFF there is no IOMMU
+ *               translation, so the descriptor addr MUST be physical)
+ * @frame:       Frame bytes to copy into the TX buffer
+ * @len:         Frame length (1..1536)
+ *
+ * Returns the TX descriptor index used (>=0) on success, -1 on error. Poll
+ * nic->tx_ring[idx].sta & I211_TX_STA_DD to confirm hardware consumed it.
+ */
+int i211_send_phys(i211_nic_t *nic, void *txbuf_vaddr, uint64_t txbuf_paddr,
+                   const void *frame, uint32_t len);
 
 /**
  * i211_nic_recv - Receive a frame (polled) using legacy RX descriptors

@@ -46,6 +46,28 @@ extern uint32_t nic_read32(uint64_t base, uint32_t reg);
 extern void     nic_write32(uint64_t base, uint32_t reg, uint32_t val);
 #endif
 
+/* Coarse delay for the post-reset settle (B3). On real hardware the I210/I211
+ * needs a few ms after CTRL.RST auto-clears before the register file (incl. the
+ * RAL/RAH MAC, loaded from NVM) is stable. Bounded — never blocks indefinitely. */
+#ifndef JARVIS_TEST_MOCK
+static inline uint64_t i211_rdtsc(void)
+{
+    uint32_t lo, hi;
+    __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+}
+static void i211_delay_ms(uint32_t ms)
+{
+    /* ~3.7 GHz invariant TSC on the box; approximate is fine for a settle. */
+    uint64_t target = (uint64_t)ms * 3700000ULL;
+    uint64_t start = i211_rdtsc();
+    while ((i211_rdtsc() - start) < target)
+        __asm__ __volatile__("pause");
+}
+#else
+static void i211_delay_ms(uint32_t ms) { (void)ms; }  /* no-op in unit tests */
+#endif
+
 /* ========================================================================
  * Internal Helpers
  * ======================================================================== */
@@ -80,7 +102,7 @@ static int i211_device_reset(i211_nic_t *nic)
  * Read the hardware MAC address from RAL0/RAH0 registers.
  * RAL0 contains bytes 0-3, RAH0 bits 15:0 contain bytes 4-5.
  */
-static void i211_read_mac(i211_nic_t *nic)
+static int i211_read_mac(i211_nic_t *nic)
 {
     uint32_t ral = nic_read32(nic->mmio_base, I211_RAL0);
     uint32_t rah = nic_read32(nic->mmio_base, I211_RAH0);
@@ -91,6 +113,18 @@ static void i211_read_mac(i211_nic_t *nic)
     nic->mac[3] = (uint8_t)((ral >> 24) & 0xFF);
     nic->mac[4] = (uint8_t)(rah & 0xFF);
     nic->mac[5] = (uint8_t)((rah >> 8) & 0xFF);
+
+    /* B3: a valid MAC requires RAH0.AV set AND a non-zero, non-broadcast address.
+     * MAC=0 (or all-FF) means the reset settle was too short / NVM not yet loaded. */
+    {
+        int all_zero = 1, all_ff = 1;
+        for (int i = 0; i < 6; i++) {
+            if (nic->mac[i] != 0x00) all_zero = 0;
+            if (nic->mac[i] != 0xFF) all_ff = 0;
+        }
+        nic->mac_valid = ((rah & I211_RAH_AV) && !all_zero && !all_ff) ? 1 : 0;
+    }
+    return nic->mac_valid ? 0 : -1;
 }
 
 /* ========================================================================
@@ -127,11 +161,22 @@ int i211_nic_init(i211_nic_t *nic, uint64_t mmio_base)
     if (i211_device_reset(nic) < 0)
         return -1;
 
+    /* B3: post-reset settle + wait for STATUS.PF_RST_DONE before touching the
+     * register file. Both bounded — a missing PF_RST_DONE logs late, never hangs. */
+    i211_delay_ms(3);
+    {
+        int t = I211_RESET_TIMEOUT;
+        while (t-- > 0) {
+            if (nic_read32(mmio_base, I211_STATUS) & I211_STATUS_PF_RST_DONE)
+                break;
+        }
+    }
+
     /* 3. Disable interrupts again (reset may re-enable) */
     nic_write32(mmio_base, I211_IMC, 0xFFFFFFFF);
 
-    /* 4. Read MAC address from hardware registers */
-    i211_read_mac(nic);
+    /* 4. Read MAC address from hardware registers (sets nic->mac_valid) */
+    (void)i211_read_mac(nic);
 
     /* 5. Set link up: CTRL |= SLU | ASDE */
     {
@@ -190,6 +235,18 @@ int i211_nic_init(i211_nic_t *nic, uint64_t mmio_base)
                 I211_TCTL_EN | I211_TCTL_PSP |
                 (0x0F << I211_TCTL_CT_SHIFT) |
                 (0x040 << I211_TCTL_COLD_SHIFT));
+
+    /* B2: enable the TX queue (TXDCTL.ENABLE, bit 25) and poll it back. Without
+     * this the I210/I211 silently never transmits. Bounded poll — log-late, never hang. */
+    if (nic->tx_ring) {
+        uint32_t txdctl = nic_read32(mmio_base, I211_TXDCTL);
+        nic_write32(mmio_base, I211_TXDCTL, txdctl | I211_TXDCTL_ENABLE);
+        int t = I211_RESET_TIMEOUT;
+        while (t-- > 0) {
+            if (nic_read32(mmio_base, I211_TXDCTL) & I211_TXDCTL_ENABLE)
+                break;
+        }
+    }
 
     /* 10. Read initial link status */
     i211_nic_link_status(nic);
@@ -256,7 +313,11 @@ int i211_nic_send(i211_nic_t *nic, const void *buf, uint32_t len)
     /* Check if descriptor is available (DD must be set or desc must be clear) */
     /* For first use after init, sta==0 is fine (host owns it) */
 
-    /* Build legacy TX descriptor */
+    /* Build legacy TX descriptor.
+     * NOTE: this stores the buffer's VIRTUAL address — correct ONLY when the buffer
+     * is identity-mapped (or in the mock test). Under KernelIOMMU=OFF seL4 the NIC
+     * DMAs physical addresses, so the deployed path MUST use i211_send_phys() (below),
+     * which writes the buffer's physical address into the descriptor. */
     desc->addr    = (uint64_t)(uintptr_t)buf;
     desc->length  = (uint16_t)len;
     desc->cso     = 0;
@@ -275,6 +336,43 @@ int i211_nic_send(i211_nic_t *nic, const void *buf, uint32_t len)
     nic->tx_bytes += len;
 
     return 0;
+}
+
+int i211_send_phys(i211_nic_t *nic, void *txbuf_vaddr, uint64_t txbuf_paddr,
+                   const void *frame, uint32_t len)
+{
+    i211_tx_desc_t *desc;
+    uint32_t idx;
+
+    if (!nic || !txbuf_vaddr || !frame || len == 0 || len > I211_MAX_FRAME_SIZE)
+        return -1;
+    if (!nic->tx_ring)
+        return -1;
+
+    /* Copy the frame into the known-physical DMA TX buffer (the DMA source). */
+    memcpy(txbuf_vaddr, frame, len);
+
+    idx  = nic->tx_head;
+    desc = &nic->tx_ring[idx];
+
+    /* PHYSICAL address — IOMMU is off, so the NIC DMAs exactly what we write here. */
+    desc->addr    = txbuf_paddr;
+    desc->length  = (uint16_t)len;
+    desc->cso     = 0;
+    desc->cmd     = I211_TX_CMD_EOP | I211_TX_CMD_IFCS | I211_TX_CMD_RS;
+    desc->sta     = 0;
+    desc->css     = 0;
+    desc->special = 0;
+
+    nic->tx_head = (idx + 1) % I211_TX_RING_SIZE;
+
+    /* Doorbell: advance TDT to the new head so the NIC fetches this descriptor. */
+    nic_write32(nic->mmio_base, I211_TDT, nic->tx_head);
+
+    nic->tx_packets++;
+    nic->tx_bytes += len;
+
+    return (int)idx;   /* caller polls tx_ring[idx].sta & I211_TX_STA_DD */
 }
 
 int i211_nic_recv(i211_nic_t *nic, void *buf, uint32_t max_len)

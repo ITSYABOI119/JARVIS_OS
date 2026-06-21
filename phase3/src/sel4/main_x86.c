@@ -53,6 +53,7 @@
 #include "nvme_log.h"
 #include "fat32.h"
 #include "framebuffer.h"
+#include "nic_i211.h"
 #include "jarvis_debug.h"
 #include "jarvis_ui_tokens.h"   /* Step 2c-2b: FBP_ and JUI_ palette + geometry (single source) */
 
@@ -1586,8 +1587,8 @@ static void *main_continued(void *arg UNUSED)
         pci_set_ioport_ops(sel4_pci_outl, sel4_pci_inl);
         puts_serial("[JARVIS] PCI IOPort cap acquired\n");
 
-        pci_device_t pci_devs[32];
-        int n_pci = pci_scan(pci_devs, 32);
+        pci_device_t pci_devs[64];   /* goal #2b: 64 (was 32) so a bus-7 device (I211) isn't truncated */
+        int n_pci = pci_scan(pci_devs, 64);
         puts_serial("[JARVIS] PCI scan: "); put_dec((uint32_t)n_pci);
         puts_serial(" devices\n");
 
@@ -1955,6 +1956,185 @@ static void *main_continued(void *arg UNUSED)
             }
         } else {
             puts_serial("[JARVIS] No NVMe controller found\n");
+        }
+
+        /* ================================================================
+         * goal #2b N-a: Intel I211 NIC TX first-light (NON-FATAL).
+         * Brings up the dormant I211 (8086:1539) and emits one broadcast
+         * Ethernet frame as proof-of-life for the Remote Telemetry Console
+         * (ADR 2026-06-21). Self-contained: its OWN i211_nic_t + its OWN DMA
+         * frames — NEVER touches nvme_ctrl / shmem rings / model frames. Every
+         * poll is bounded (log + continue). NO goto idle. A NIC failure leaves
+         * self-test / model-load / inference byte-identical. Runs after
+         * nvme_log_init + model-load (so [NET] lines are durable) and before
+         * Process B spawn (fully independent of PB). QEMU has no I211 -> the
+         * "not found" path is the proven non-fatal rollback.
+         * ================================================================ */
+        {
+            static i211_nic_t nic;   /* static: i211_nic_t is ~4 KB, keep off the stack */
+            pci_device_t *nic_pci = NULL;
+            for (int i = 0; i < n_pci; i++) {
+                if (pci_devs[i].vendor_id == I211_VENDOR_ID &&
+                    pci_devs[i].device_id == I211_DEVICE_ID) {
+                    nic_pci = &pci_devs[i];
+                    break;
+                }
+            }
+
+            if (!nic_pci) {
+                puts_serial("[NET] I211 not found (non-fatal)\n");
+            } else {
+                int nic_ok = 1;
+                puts_serial("[NET] I211 probe: 8086:1539 @ bus ");
+                put_dec(nic_pci->bus); puts_serial(" dev ");
+                put_dec(nic_pci->device); puts_serial("\n");
+
+                /* Enable bus-master + memory-space (clone the NVMe CMD-reg block) */
+                pci_enable_bus_master(nic_pci);
+                {
+                    uint32_t cmd = pci_config_read(nic_pci->bus, nic_pci->device,
+                                                   nic_pci->function, 0x04);
+                    if (!(cmd & 0x02))
+                        pci_config_write(nic_pci->bus, nic_pci->device,
+                                         nic_pci->function, 0x04, cmd | 0x06);
+                    puts_serial("[NET] busmaster+memspace CMD=");
+                    put_hex(pci_config_read(nic_pci->bus, nic_pci->device,
+                                            nic_pci->function, 0x04));
+                    puts_serial("\n");
+                }
+
+                uint64_t nic_bar0 = pci_get_bar_address(nic_pci, 0);
+                puts_serial("[NET] BAR0=");
+                put_hex((uint32_t)nic_bar0);   /* I211 BAR0 is a 32-bit MMIO BAR (high word 0) */
+                puts_serial(" (expect 0xfca00000)\n");
+                if (nic_bar0 == 0) nic_ok = 0;
+
+                /* Map BAR0: 32 pages (128 KB) UNCACHEABLE (clone NVMe BAR0 loop) */
+                void *nic_bar_vaddr = NULL;
+                if (nic_ok) {
+                    static seL4_CPtr nic_bar_caps[32];
+                    int map_ok = 1;
+                    for (int i = 0; i < 32; i++) {
+                        vka_object_t frame;
+                        int err = vka_alloc_frame_at(&vka, seL4_PageBits,
+                            (uintptr_t)(nic_bar0 + i * 4096), &frame);
+                        if (err) { puts_serial("[NET] BAR0 frame alloc failed (non-fatal)\n");
+                                   map_ok = 0; break; }
+                        nic_bar_caps[i] = frame.cptr;
+                    }
+                    if (map_ok)
+                        nic_bar_vaddr = vspace_map_pages(&vspace, nic_bar_caps, NULL,
+                            seL4_AllRights, 32, seL4_PageBits, 0);
+                    if (!nic_bar_vaddr) { puts_serial("[NET] BAR0 map failed (non-fatal)\n");
+                                          nic_ok = 0; }
+                }
+
+                /* CTRL readback — a dead/unmapped MMIO reads 0xFFFFFFFF */
+                if (nic_ok) {
+                    uint32_t ctrl0 = *(volatile uint32_t *)(uintptr_t)
+                        ((uint64_t)(uintptr_t)nic_bar_vaddr + I211_CTRL);
+                    puts_serial("[NET] CTRL readback="); put_hex(ctrl0); puts_serial("\n");
+                    if (ctrl0 == 0xFFFFFFFF) { puts_serial("[NET] MMIO dead (non-fatal)\n");
+                                               nic_ok = 0; }
+                }
+
+                /* Alloc 2 DMA frames UC: TX ring (256*16 = 1 page) + TX buffer (1 page) */
+                void *tx_ring_v = NULL, *tx_buf_v = NULL;
+                uint64_t tx_ring_p = 0, tx_buf_p = 0;
+                if (nic_ok) {
+                    vka_object_t ring_obj, buf_obj;
+                    if (vka_alloc_frame(&vka, seL4_PageBits, &ring_obj) == 0 &&
+                        vka_alloc_frame(&vka, seL4_PageBits, &buf_obj) == 0) {
+                        tx_ring_v = vspace_map_pages(&vspace, &ring_obj.cptr, NULL,
+                            seL4_AllRights, 1, seL4_PageBits, 0);
+                        tx_buf_v = vspace_map_pages(&vspace, &buf_obj.cptr, NULL,
+                            seL4_AllRights, 1, seL4_PageBits, 0);
+                        if (tx_ring_v && tx_buf_v) {
+                            seL4_X86_Page_GetAddress_t rp = seL4_X86_Page_GetAddress(ring_obj.cptr);
+                            seL4_X86_Page_GetAddress_t bp = seL4_X86_Page_GetAddress(buf_obj.cptr);
+                            tx_ring_p = rp.paddr;
+                            tx_buf_p  = bp.paddr;
+                        } else { puts_serial("[NET] DMA map failed (non-fatal)\n"); nic_ok = 0; }
+                    } else { puts_serial("[NET] DMA alloc failed (non-fatal)\n"); nic_ok = 0; }
+                }
+
+                /* Init the NIC (B2/B3 fixes inside) */
+                if (nic_ok) {
+                    memset(&nic, 0, sizeof(nic));
+                    nic.tx_ring      = (i211_tx_desc_t *)tx_ring_v;
+                    nic.tx_ring_phys = tx_ring_p;
+                    nic.rx_ring      = NULL;   /* TX-only first-light */
+                    if (i211_nic_init(&nic, (uint64_t)(uintptr_t)nic_bar_vaddr) != 0) {
+                        puts_serial("[NET] i211_nic_init failed (reset timeout, non-fatal)\n");
+                        nic_ok = 0;
+                    }
+                }
+
+                if (nic_ok) {
+                    /* MAC + AV */
+                    char macs[18]; const char *hx = "0123456789abcdef";
+                    for (int b = 0; b < 6; b++) {
+                        macs[b*3]   = hx[(nic.mac[b] >> 4) & 0xF];
+                        macs[b*3+1] = hx[nic.mac[b] & 0xF];
+                        macs[b*3+2] = (b < 5) ? ':' : '\0';
+                    }
+                    puts_serial("[NET] MAC="); puts_serial(macs);
+                    puts_serial(" AV="); put_dec((uint32_t)nic.mac_valid); puts_serial("\n");
+
+                    /* Link */
+                    int lu = i211_nic_link_status(&nic);
+                    puts_serial("[NET] link LU="); put_dec((uint32_t)lu);
+                    puts_serial(" speed="); put_dec(nic.link_speed); puts_serial("\n");
+
+                    /* Broadcast first-light frame (dst=bcast, src=MAC, type=0x88b5, >=60B) */
+                    static uint8_t fl_frame[64];
+                    memset(fl_frame, 0, sizeof(fl_frame));
+                    for (int i = 0; i < 6; i++) fl_frame[i]     = 0xFF;
+                    for (int i = 0; i < 6; i++) fl_frame[6 + i] = nic.mac[i];
+                    fl_frame[12] = 0x88; fl_frame[13] = 0xB5;
+                    {
+                        const char *p = "JARVIS-I211-FIRSTLIGHT";
+                        int j = 14;
+                        while (*p && j < 60) fl_frame[j++] = (uint8_t)*p++;
+                    }
+
+                    /* Send 5x; poll DD (descriptor is UC + read volatile) each time */
+                    int any_dd = 0;
+                    for (int s = 0; s < 5; s++) {
+                        int idx = i211_send_phys(&nic, tx_buf_v, tx_buf_p, fl_frame, 60);
+                        int dd = 0;
+                        if (idx >= 0) {
+                            volatile uint8_t *sta = &nic.tx_ring[idx].sta;
+                            for (int t = 0; t < 2000000; t++) {
+                                if (*sta & I211_TX_STA_DD) { dd = 1; break; }
+                            }
+                        }
+                        if (dd) any_dd = 1;
+                        puts_serial("[NET] TX frame "); put_dec((uint32_t)s);
+                        puts_serial(": DD="); put_dec((uint32_t)dd); puts_serial("\n");
+                    }
+
+                    if (nic.mac_valid && any_dd) {
+                        puts_serial("[NET] first-light OK\n");
+                        if (g_nvme_ptr)
+                            nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr,
+                                           g_nvme_bounce_paddr, LOG_BOOT,
+                                           "[NET] first-light OK");
+                    } else {
+                        puts_serial("[NET] first-light PARTIAL (mac_valid+DD not both set)\n");
+                        if (g_nvme_ptr)
+                            nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr,
+                                           g_nvme_bounce_paddr, LOG_ERROR,
+                                           "[NET] first-light PARTIAL");
+                    }
+                } else {
+                    puts_serial("[NET] first-light SKIPPED (bring-up failed, non-fatal)\n");
+                    if (g_nvme_ptr)
+                        nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr,
+                                       g_nvme_bounce_paddr, LOG_ERROR,
+                                       "[NET] first-light FAILED");
+                }
+            }
         }
     }
 #endif
