@@ -211,6 +211,9 @@ copy_file "$JARVIS_DIR/phase3/src/sel4/jarvis_ui_tokens.h" "$DRV_DST/jarvis_ui_t
 # goal #2b N-a: Intel I211 NIC driver (TX first-light)
 copy_file "$DRV_SRC/nic_i211.c" "$DRV_DST/nic_i211.c"
 copy_file "$DRV_SRC/nic_i211.h" "$DRV_DST/nic_i211.h"
+# goal #2b N-b: Eth/IPv4/UDP broadcast frame builder
+copy_file "$DRV_SRC/net_udp.c" "$DRV_DST/net_udp.c"
+copy_file "$DRV_SRC/net_udp.h" "$DRV_DST/net_udp.h"
 
 # Inference server (Process B — lives in jarvis-inference app, NOT sel4test-driver)
 PROC_B_DIR="$SEL4_DIR/projects/jarvis-x86/apps/jarvis-inference/src"
@@ -337,6 +340,19 @@ if [ -f "$CMAKE_FILE" ]; then
         fi
     else
         echo -e "  ${CYAN}OK${NC}  src/drivers/nic_i211.c already in source list"
+    fi
+
+    # goal #2b N-b: add src/drivers/net_udp.c to source list if missing
+    if ! grep -q "src/drivers/net_udp.c" "$CMAKE_FILE"; then
+        sed -i '/src\/drivers\/nic_i211.c/a\    src/drivers/net_udp.c' "$CMAKE_FILE" 2>/dev/null
+        if grep -q "src/drivers/net_udp.c" "$CMAKE_FILE"; then
+            echo -e "  ${GREEN}ADDED${NC}  src/drivers/net_udp.c to source list"
+            PATCHED=1
+        else
+            echo -e "  ${RED}FAILED${NC}  Could not add net_udp.c — edit CMakeLists.txt manually"
+        fi
+    else
+        echo -e "  ${CYAN}OK${NC}  src/drivers/net_udp.c already in source list"
     fi
 
     # Add JARVIS_SEL4 compile definition (needed for pci.c IOPort backend)

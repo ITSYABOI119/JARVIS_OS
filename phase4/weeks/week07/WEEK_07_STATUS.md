@@ -80,11 +80,18 @@ The riskiest step of the Remote Telemetry Console plan — bringing the dormant 
 - **Build (`build_jarvis_x86.sh`):** copies nic_i211.c/h + grep-guarded sed adds `src/drivers/nic_i211.c` to the sel4test-driver (Process A) source list only.
 - **Verified:** host **11/11** (`-Wall -Werror`; B1 phys-addr + B2 TXDCTL asserts); **3× adversarial review GO** (non-fatal posture, paddr correctness, build hygiene); box build clean (nic_i211.c compiled, config gate green); **QEMU smoke** = `[NET] I211 not found (non-fatal)` + 5/5 + model + NN=6 + err=0 (rollback proven); **physical boot (real Gemma, boot_id=1 log):** `[NET]` probe 8086:1539 @ bus 7 → BAR0=0xfca00000 → CTRL=0x081c0241 (alive) → **MAC=0c:9d:92:0e:39:9a AV=1** → **link 1000 Mbps** → **TX 0..4 DD=1** → **first-light OK**; zero regression (5/5, Gemma 2962 MB, M3 NN=6, `[STATS] q=100 err=0`, no faults, 499 entries). (Wireshark capture was empty — a one-shot-burst-on-just-up-link STP/timing miss; DD=1 is the on-box gate; continuous telemetry at N-b is trivially capturable.)
 
-## Next — goal #2b telemetry-OUT (N-b, N-c) + goal #2 backlog → goals #3–7
+## goal #2b N-b — Eth/IPv4/UDP emit (DONE 2026-06-21) 🎉
 
-1. **goal #2b N-b** — minimal Eth/IP/UDP framing on top of `i211_send_phys`.
-2. **goal #2b N-c** — telemetry hook at the `[STATS]` site + a keepalive; the browser console (UI seed = git-ignored `design-system/`) then renders live, honest box state.
-3. **Optional goal #2 backlog** — NVMe progress bar, true-WC mapping, 1920×1080 gfxmode; **LOW-pri** reject `bytes_per_sector != 512` in `fat32_init`.
+Telemetry-OUT step 2/3 — wrap a valid, Wireshark-decodable UDP frame around the now-working I211 TX path.
+- **New module (`net_udp.c/h`, dependency-free, host-testable):** `net_build_udp_broadcast` builds Eth(bcast)+IPv4+UDP+payload with all headers in **big-endian**; `net_ip_checksum` is the RFC1071 ones-complement (the IPv4 header checksum IS computed; the UDP checksum is 0, legal for IPv4); frames < 60 B are zero-padded to the Ethernet minimum (the NIC's IFCS appends the FCS).
+- **Rootserver (`main_x86.c` `[NET]` block):** now sends a **UDP limited-broadcast** to **255.255.255.255:51000** (no ARP needed — the box has no IP stack), src **192.168.100.143**, payload **"JARVIS-TELEMETRY-HELLO"**, **10×** with ~50 ms gaps (~0.5 s capture window; the real telemetry + keepalive is N-c), DD-polled, **fully NON-FATAL** (own DMA frames, bounded polls, no `goto idle`).
+- **Build/CI:** `build_jarvis_x86.sh` copies net_udp.c/h + grep-guarded sed adds it to the sel4test-driver (Process A) source list; new `Phase 3: Net UDP Builder (C)` CI step.
+- **Verified:** host **test_net_udp 24/24** (RFC1071 `0xb861` known vector + completed-header-sums-to-0 + every decoded field) + nic_i211 **11/11**, `-Wall -Werror`; **3× adversarial review GO** (framing/checksum, bounds ASan-fuzz 0..1480 clean, non-fatal posture); box build clean (net_udp.c compiled); **QEMU** non-fatal rollback (`[NET] I211 not found`) intact; **physical boot + Wireshark (Main PC, tshark + forced IP-checksum validation):** exactly **10 UDP frames**, eth `0c:9d:92:0e:39:9a → ff:ff:ff:ff:ff:ff`, IP `192.168.100.143 → 255.255.255.255`, UDP `51000→51000`, IP total_len 50, **IP checksum 0x5584 status=VALID**, payload "JARVIS-TELEMETRY-HELLO" ×10, ~66 ms spacing; **on-box boot_id=1 log:** `[NET] UDP TX 0..9 DD=1` + `[NET] UDP first-light OK`, self-test 5/5, Gemma 2962 MB GGUF=0x46554747, M3 NN=6, `[STATS]/[SNAP] err=0` through q=200, 0 faults, 689 entries.
+
+## Next — goal #2b N-c + goal #2 backlog → goals #3–7
+
+1. **goal #2b N-c** — hook the live `[STATS]`/`[SNAP]` telemetry into the UDP emit + a ~1 Hz keepalive (continuous, trivially capturable); the browser console (UI seed = git-ignored `design-system/`) then renders live, honest box state. **This completes telemetry-OUT.**
+2. **Optional goal #2 backlog** — NVMe progress bar, true-WC mapping, 1920×1080 gfxmode; **LOW-pri** reject `bytes_per_sector != 512` in `fat32_init`.
 
 Then Phase 4 **goals #3–7**: xHCI USB keyboard input, one-script installer, 90-day soak, docs, `v1.0.0` MIT release.
 

@@ -54,6 +54,7 @@
 #include "fat32.h"
 #include "framebuffer.h"
 #include "nic_i211.h"
+#include "net_udp.h"
 #include "jarvis_debug.h"
 #include "jarvis_ui_tokens.h"   /* Step 2c-2b: FBP_ and JUI_ palette + geometry (single source) */
 
@@ -2086,53 +2087,62 @@ static void *main_continued(void *arg UNUSED)
                     puts_serial("[NET] link LU="); put_dec((uint32_t)lu);
                     puts_serial(" speed="); put_dec(nic.link_speed); puts_serial("\n");
 
-                    /* Broadcast first-light frame (dst=bcast, src=MAC, type=0x88b5, >=60B) */
-                    static uint8_t fl_frame[64];
-                    memset(fl_frame, 0, sizeof(fl_frame));
-                    for (int i = 0; i < 6; i++) fl_frame[i]     = 0xFF;
-                    for (int i = 0; i < 6; i++) fl_frame[6 + i] = nic.mac[i];
-                    fl_frame[12] = 0x88; fl_frame[13] = 0xB5;
-                    {
-                        const char *p = "JARVIS-I211-FIRSTLIGHT";
-                        int j = 14;
-                        while (*p && j < 60) fl_frame[j++] = (uint8_t)*p++;
-                    }
+                    /* N-b: a valid UDP broadcast frame (Eth/IPv4/UDP) around the TX path.
+                     * 255.255.255.255:51000 — limited broadcast, no ARP needed. The L2 proof
+                     * (raw 0x88b5) was banked at N-a; this is Wireshark-decodable UDP. The real
+                     * telemetry packet is N-c; this is a recognizable hello. */
+                    static uint8_t udp_frame[256];
+                    const char *fl_payload = "JARVIS-TELEMETRY-HELLO";
+                    uint16_t fl_plen = 0;
+                    while (fl_payload[fl_plen]) fl_plen++;
+                    int flen = net_build_udp_broadcast(udp_frame, sizeof udp_frame,
+                        nic.mac, JARVIS_BOX_IP, JARVIS_TELEMETRY_PORT,
+                        JARVIS_TELEMETRY_PORT, fl_payload, fl_plen);
 
-                    /* Send 5x; poll DD (descriptor is UC + read volatile) each time */
                     int any_dd = 0;
-                    for (int s = 0; s < 5; s++) {
-                        int idx = i211_send_phys(&nic, tx_buf_v, tx_buf_p, fl_frame, 60);
-                        int dd = 0;
-                        if (idx >= 0) {
-                            volatile uint8_t *sta = &nic.tx_ring[idx].sta;
-                            for (int t = 0; t < 2000000; t++) {
-                                if (*sta & I211_TX_STA_DD) { dd = 1; break; }
+                    if (flen < 0) {
+                        puts_serial("[NET] UDP frame build failed (non-fatal)\n");
+                    } else {
+                        /* Send ~10x with a ~50 ms gap -> ~0.5 s capture window (still a boot
+                         * burst; the continuous keepalive is N-c). Poll DD each time. */
+                        for (int s = 0; s < 10; s++) {
+                            int idx = i211_send_phys(&nic, tx_buf_v, tx_buf_p,
+                                                     udp_frame, (uint32_t)flen);
+                            int dd = 0;
+                            if (idx >= 0) {
+                                volatile uint8_t *sta = &nic.tx_ring[idx].sta;
+                                for (int t = 0; t < 2000000; t++) {
+                                    if (*sta & I211_TX_STA_DD) { dd = 1; break; }
+                                }
                             }
+                            if (dd) any_dd = 1;
+                            puts_serial("[NET] UDP TX "); put_dec((uint32_t)s);
+                            puts_serial(": DD="); put_dec((uint32_t)dd); puts_serial("\n");
+                            /* ~50 ms inter-send gap (bounded TSC spin; TSC_PER_MS ticks/ms) */
+                            { uint64_t t0 = jarvis_rdtsc();
+                              while (jarvis_rdtsc() - t0 < 50ULL * TSC_PER_MS) { } }
                         }
-                        if (dd) any_dd = 1;
-                        puts_serial("[NET] TX frame "); put_dec((uint32_t)s);
-                        puts_serial(": DD="); put_dec((uint32_t)dd); puts_serial("\n");
                     }
 
                     if (nic.mac_valid && any_dd) {
-                        puts_serial("[NET] first-light OK\n");
+                        puts_serial("[NET] UDP first-light OK\n");
                         if (g_nvme_ptr)
                             nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr,
                                            g_nvme_bounce_paddr, LOG_BOOT,
-                                           "[NET] first-light OK");
+                                           "[NET] UDP first-light OK");
                     } else {
-                        puts_serial("[NET] first-light PARTIAL (mac_valid+DD not both set)\n");
+                        puts_serial("[NET] UDP first-light PARTIAL (mac_valid+DD not both set)\n");
                         if (g_nvme_ptr)
                             nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr,
                                            g_nvme_bounce_paddr, LOG_ERROR,
-                                           "[NET] first-light PARTIAL");
+                                           "[NET] UDP first-light PARTIAL");
                     }
                 } else {
-                    puts_serial("[NET] first-light SKIPPED (bring-up failed, non-fatal)\n");
+                    puts_serial("[NET] UDP first-light SKIPPED (bring-up failed, non-fatal)\n");
                     if (g_nvme_ptr)
                         nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr,
                                        g_nvme_bounce_paddr, LOG_ERROR,
-                                       "[NET] first-light FAILED");
+                                       "[NET] UDP first-light FAILED");
                 }
             }
         }

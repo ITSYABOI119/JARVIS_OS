@@ -195,6 +195,14 @@ jobs:
           -o /tmp/test_nic_i211
         /tmp/test_nic_i211
 
+    - name: "Phase 3: Net UDP Builder (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 \
+          -I phase3/src/drivers \
+          phase3/src/drivers/test_net_udp.c phase3/src/drivers/net_udp.c \
+          -o /tmp/test_net_udp
+        /tmp/test_net_udp
+
     - name: "Phase 3: x86 Timer (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 -DJARVIS_TEST_MOCK \
