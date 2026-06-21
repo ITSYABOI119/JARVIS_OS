@@ -19,6 +19,11 @@ typedef struct {
     uint32_t      root_cluster;
     uint64_t      data_lba;          /* Absolute LBA of cluster 2 */
     uint64_t      fat_lba;           /* Absolute LBA of first FAT */
+    uint8_t       fat_cache[512];    /* one cached FAT sector (512-only; matches the SEC-029 constraint) */
+    uint64_t      fat_cache_lba;     /* absolute LBA currently in fat_cache */
+    int           fat_cache_valid;   /* 0 until the first FAT read (read-only FS: never invalidated) */
+    /* Optional load-progress hook (NULL by default): exact cumulative DATA bytes read. */
+    void (*progress)(uint32_t done_bytes, uint32_t total_bytes);
 } fat32_fs_t;
 
 /* Initialize from partition at given LBA. Reads BPB (sector 0 of partition). */

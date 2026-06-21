@@ -64,11 +64,19 @@ The styled HUD with a real terminal-style scroll — **goal #2 display is v1-com
 - **Honesty:** no faked widgets — no CPU meter / agent grid / SHIELD bar / tok/s / queue depth / progress bar (no live source). SHIELD is passive (PB ALLOWs; `shield.c` not linked) → `shield=` is a count, not "blocked."
 - **Verified:** host **35/35** (`-Wall -Werror`); adversarial review (7 lenses) GO no-fixes; box build clean; QEMU no-regression + banner `v0.2.1-beta`; **physical boot PASS** (photos + boot_id=1 log) — natural scroll, BOOTING→READY badge, ROUTE+COUNTERS in the free bands with no overlap, no faked widgets; log: 5/5, FB 1024×768×32 @0xe0000000 UC pages=768, Gemma 2962 MB, M3 NN=6, **`[STATS] err=0` through q=1200**, 0 faults, 2376 entries checksum OK.
 
+## fat32 FAT-sector cache + exact data-only load % (DONE 2026-06-21)
+
+A goal-#2 backlog item — boot-speed + an honest load %.
+- **FAT-sector cache (`fat32.c/h`):** `fat32_fs_t.fat_cache` caches the last FAT sector; `fat32_next_cluster` now reads each FAT sector once instead of up to ~128× per chain (read-only FS → never invalidated). ~160 MB less redundant NVMe I/O on the Gemma load.
+- **Exact data-only % (`fat32.c` + `main_x86.c`):** a `fat32_read_file` progress hook (`fat32_fs_t.progress`) reports cumulative DATA bytes; `model_load_progress` (throttled on pct-change, ≤101 `[PANEL]` lines) drives the Model field. Reaches **exactly 100%** at completion instead of clamping early off the all-sectors NVMe counter. The dead `g_model_total_sectors` was removed; the "NNN MB read" throughput telemetry is kept (honest).
+- **Verified:** host **10/10** (new `test_fat_sector_cached` = 1 FAT read not 2; `test_read_file_progress` = done==file_size; multi-cluster read still passes *with* the cache); **3× adversarial review GO** (cross-FAT-sector-boundary reload proven correct — no chain corruption); box build clean (NN=6); QEMU smoke coherent inference (cache non-corrupting); **physical boot (real Gemma, boot_id=1 log):** `Model … [loading 96%→100%] → [loaded]` exact, `"MB read"` ~2929 / ~2962 (down from ~3125), GGUF OK, 5/5, FB 1024×768×32 pages=768, M3 NN=6, `[STATS] q=100 err=0`, 0 faults, 421 entries checksum OK.
+- **Noted (not done here):** a pre-existing 512-byte-sector-only assumption in `fat32_next_cluster` — LOW-pri hardening to reject `bytes_per_sector != 512` in `fat32_init` (SEC-029-guarded, never fires on the box).
+
 ## Next — goal #2 backlog (optional) → goals #3–7
 
-Goal #2 display is **v1-complete**. Remaining goal-#2 items are all optional/deferred:
-1. **fat32 FAT-sector cache** (boot-speed; ~160 MB redundant FAT reads → read counter overshoots ~3125 MB for a 2962 MB file) + exact data-only `%` via a fat32 progress callback; optional NVMe progress bar.
-2. **Optional** true-WC mapping (raw `seL4_X86_Page_Map`) and 1920×1080 GRUB `gfxmode` for more UI room.
+Goal #2 display is **v1-complete**; the fat32 cache + exact % shipped. Remaining goal-#2 items are all optional/deferred:
+1. **Optional** NVMe progress bar (on the new exact %), true-WC mapping (raw `seL4_X86_Page_Map`), 1920×1080 GRUB `gfxmode`.
+2. **LOW-pri** hardening: reject `bytes_per_sector != 512` in `fat32_init`.
 
 Then Phase 4 **goals #3–7**: xHCI USB keyboard input, one-script installer, 90-day soak, docs, `v1.0.0` MIT release.
 

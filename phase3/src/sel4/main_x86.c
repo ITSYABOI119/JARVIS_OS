@@ -117,10 +117,6 @@ static nvme_controller_t *g_nvme_ptr = NULL;
 static void *g_nvme_bounce_vaddr = NULL;
 static uint64_t g_nvme_bounce_paddr = 0;
 static uint64_t g_nvme_read_count = 0;
-static uint32_t g_model_total_sectors = 0;   /* GGUF size in 512B sectors — drives the load %% */
-/* fwd decl: defined just after fb_status_line; called from the read callback below so the
- * Model field %% tracks the SLOW NVMe read, not the fast frame-alloc loop. */
-static void fb_model_pct(uint32_t done, uint32_t total);
 
 static int fat32_nvme_read(uint64_t lba, uint32_t count, void *buf)
 {
@@ -132,13 +128,13 @@ static int fat32_nvme_read(uint64_t lba, uint32_t count, void *buf)
         if (err) return err;
         memcpy(out + (size_t)i * 512, g_nvme_bounce_vaddr, 512);
         g_nvme_read_count++;
-        /* Progress every 100K sectors (~50MB) */
+        /* Progress every 100K sectors (~50MB) — throughput telemetry only (the honest "NNN MB read"
+         * total that feeds [SNAP]). The load %% is driven separately by the exact data-only fat32
+         * progress hook (model_load_progress), not this all-sectors counter. */
         if (g_nvme_read_count % 100000 == 0) {
             puts_serial("  ");
             put_dec((uint32_t)(g_nvme_read_count * 512 / (1024 * 1024)));
             puts_serial("MB read\n");
-            /* Step 2c-1: live load %% off the SLOW read (clamped — counter includes FAT-lookup sectors). */
-            fb_model_pct((uint32_t)g_nvme_read_count, g_model_total_sectors);
         }
     }
     return 0;
@@ -1266,9 +1262,9 @@ static void fb_status_line(uint32_t y, const char *text, uint32_t fg) {
     puts_serial("[PANEL] "); puts_serial(text); puts_serial("\n");
 }
 
-/* Live model-load %% in the Model field, driven by the NVMe read counter (the slow phase the
- * user actually waits on). g_nvme_read_count includes FAT-lookup sectors, so done can exceed
- * total -> clamp to 100. Emits a [PANEL] line each step via fb_status_line. */
+/* Live model-load %% in the Model field. Fed by the EXACT data-only fat32 progress hook
+ * (real bytes read via model_load_progress), so it reaches 100%% exactly at completion; the
+ * clamp is retained defensively. Emits a [PANEL] line each step via fb_status_line. */
 static void fb_model_pct(uint32_t done, uint32_t total) {
     if (!fb_ready() || total == 0) return;
     uint32_t pct = (uint32_t)((uint64_t)done * 100u / total);
@@ -1277,6 +1273,17 @@ static void fb_model_pct(uint32_t done, uint32_t total) {
     mp = fbp_str(mp, "Model   : Gemma 4 E2B (2962 MB)  [loading ");
     mp = fbp_u32(mp, pct); mp = fbp_str(mp, "%]"); *mp = '\0';
     fb_status_line(FBP_Y_MODEL, ml, FBP_FG);
+}
+
+/* Step 2c-2c backlog: throttled, EXACT data-only load %% — fed by the fat32_read_file progress
+ * hook (real bytes, not the all-sectors NVMe counter), so it reaches 100%% exactly at completion.
+ * Throttle on pct-change so it draws <=101 [PANEL] lines, not one per cluster (~92K) which would
+ * flood the no-wrap NVMe log + hammer the UC FB. */
+static void model_load_progress(uint32_t done, uint32_t total) {
+    static int last = -1;
+    int pct = total ? (int)((uint64_t)done * 100u / total) : 0;
+    if (pct > 100) pct = 100;
+    if (pct != last) { last = pct; fb_model_pct(done, total); }
 }
 
 /* Draw-only twin of fb_status_line — NO [PANEL] log mirror. Used for the per-query Queries
@@ -1884,7 +1891,7 @@ static void *main_continued(void *arg UNUSED)
 
                                                     /* Read model from FAT32 */
                                                     g_nvme_read_count = 0;
-                                                    g_model_total_sectors = (uint32_t)((model_size + 511) / 512);
+                                                    fs.progress = model_load_progress;   /* exact data-only load %% */
                                                     puts_serial("[JARVIS] Reading model from NVMe...\n");
 #if JARVIS_DBG_BOOT_LOG
                                                     nvme_log_write(&nvme_ctrl, dma_vaddrs[4], dma_paddrs[4],

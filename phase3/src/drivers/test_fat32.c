@@ -4,7 +4,7 @@
  * Builds a synthetic FAT32 filesystem in a 1MB memory buffer and
  * exercises BPB parsing, root directory scan, and cluster-chain read.
  *
- * 8 tests, all using mock block I/O (no hardware needed).
+ * 10 tests, all using mock block I/O (no hardware needed).
  *
  * Compile:
  *   gcc -Wall -Werror -O2 -std=c11 -DJARVIS_TEST_MOCK \
@@ -28,6 +28,11 @@ static uint8_t mock_disk[MOCK_SECTORS * SECTOR_SIZE];
 
 static int pass_count = 0;
 static int fail_count = 0;
+static int g_fat_sector_reads = 0;   /* counts mock reads of the FAT sector (LBA RESERVED_SECTS = 2) */
+
+/* progress-hook capture for test_read_file_progress */
+static uint32_t g_pd = 0, g_pt = 0, g_pc = 0;
+static void tprog(uint32_t d, uint32_t t) { g_pd = d; g_pt = t; g_pc++; }
 
 #define TEST(name) static void name(void)
 #define ASSERT(cond, msg) do { \
@@ -59,6 +64,7 @@ static int mock_read(uint64_t lba, uint32_t count, void *buf)
 {
     if (lba + count > MOCK_SECTORS)
         return -1;
+    if (lba == 2) g_fat_sector_reads++;  /* FAT #1 lives at LBA RESERVED_SECTS (=2); count cache misses */
     memcpy(buf, mock_disk + lba * SECTOR_SIZE, count * SECTOR_SIZE);
     return 0;
 }
@@ -348,6 +354,74 @@ TEST(test_read_file_multi_cluster)
     PASS();
 }
 
+TEST(test_fat_sector_cached)
+{
+    /* cluster 3 -> cluster 4 -> EOC (same shape as the multi-cluster test) */
+    uint8_t *fat = mock_disk + RESERVED_SECTS * SECTOR_SIZE;
+    write_le32(fat + 12, 4);           /* cluster 3 -> cluster 4 */
+    write_le32(fat + 16, 0x0FFFFFFF);  /* cluster 4 -> EOC */
+    memcpy(mock_disk + (RESERVED_SECTS + FAT_SIZE_SECTS) * SECTOR_SIZE,
+           fat, SECTOR_SIZE);
+
+    uint8_t *cluster4_data = mock_disk +
+        (DATA_START_SECT + 2 * SECTS_PER_CLUST) * SECTOR_SIZE;
+    memset(cluster4_data, 0xCD, SECTS_PER_CLUST * SECTOR_SIZE);
+
+    fat32_fs_t fs;
+    fat32_init(&fs, mock_read, PART_LBA);
+
+    uint8_t buf[8192];
+    memset(buf, 0, sizeof(buf));
+    g_fat_sector_reads = 0;
+    int err = fat32_read_file(&fs, 3, 8192, buf);
+    ASSERT(err == 0, "cached multi-cluster read should succeed");
+    /* Cluster 3 and 4 FAT entries share one FAT sector, so the cache serves the
+     * second lookup -> exactly 1 FAT-sector read (would be 2 without the cache). */
+    ASSERT(g_fat_sector_reads == 1, "FAT sector read once - cached across the 3->4 chain");
+    /* Cache must not corrupt the chain: data is still correct. */
+    ASSERT(memcmp(buf, "GGUF", 4) == 0, "cluster 3 data intact");
+    ASSERT(buf[4096] == 0xCD, "cluster 4 data intact via cached chain");
+
+    /* Restore: cluster 3 -> EOC */
+    write_le32(fat + 12, 0x0FFFFFFF);
+    memcpy(mock_disk + (RESERVED_SECTS + FAT_SIZE_SECTS) * SECTOR_SIZE,
+           fat, SECTOR_SIZE);
+    PASS();
+}
+
+TEST(test_read_file_progress)
+{
+    /* cluster 3 -> cluster 4 -> EOC, file = 2 clusters = 8192 bytes */
+    uint8_t *fat = mock_disk + RESERVED_SECTS * SECTOR_SIZE;
+    write_le32(fat + 12, 4);
+    write_le32(fat + 16, 0x0FFFFFFF);
+    memcpy(mock_disk + (RESERVED_SECTS + FAT_SIZE_SECTS) * SECTOR_SIZE,
+           fat, SECTOR_SIZE);
+
+    uint8_t *cluster4_data = mock_disk +
+        (DATA_START_SECT + 2 * SECTS_PER_CLUST) * SECTOR_SIZE;
+    memset(cluster4_data, 0xCD, SECTS_PER_CLUST * SECTOR_SIZE);
+
+    fat32_fs_t fs;
+    fat32_init(&fs, mock_read, PART_LBA);
+    fs.progress = tprog;
+
+    uint8_t buf[8192];
+    memset(buf, 0, sizeof(buf));
+    g_pd = g_pt = g_pc = 0;
+    int err = fat32_read_file(&fs, 3, 8192, buf);
+    ASSERT(err == 0, "progress read should succeed");
+    ASSERT(g_pc >= 2, "progress called per cluster (>=2)");
+    ASSERT(g_pt == 8192, "progress total == file_size");
+    ASSERT(g_pd == 8192, "progress reaches 100%: done == file_size");
+
+    /* Restore: cluster 3 -> EOC */
+    write_le32(fat + 12, 0x0FFFFFFF);
+    memcpy(mock_disk + (RESERVED_SECTS + FAT_SIZE_SECTS) * SECTOR_SIZE,
+           fat, SECTOR_SIZE);
+    PASS();
+}
+
 /* ================================================================
  * Main
  * ================================================================ */
@@ -366,6 +440,8 @@ int main(void)
     test_find_file_skips_lfn();
     test_read_file_data();
     test_read_file_multi_cluster();
+    test_fat_sector_cached();
+    test_read_file_progress();
 
     printf("\nResults: %d PASS, %d FAIL (of %d)\n",
            pass_count, fail_count, pass_count + fail_count);

@@ -63,18 +63,24 @@ static int fat32_next_cluster(fat32_fs_t *fs, uint32_t cluster, uint32_t *next)
     uint32_t fat_sector  = fat_offset / fs->bytes_per_sector;
     uint32_t entry_offset = fat_offset % fs->bytes_per_sector;
 
-    uint8_t sector_buf[512];
-
-    /* SEC-029: entry_offset + 4 must fit in the 512-byte stack buffer.
-     * For bytes_per_sector > 512 the modulus could exceed sizeof(sector_buf). */
-    if (entry_offset + 4 > sizeof(sector_buf))
+    /* SEC-029: entry_offset + 4 must fit in the 512-byte cache buffer.
+     * For bytes_per_sector > 512 the modulus could exceed sizeof(fat_cache). */
+    if (entry_offset + 4 > sizeof(fs->fat_cache))
         return -1;
 
-    int err = fs->read(fs->fat_lba + fat_sector, 1, sector_buf);
-    if (err)
-        return err;
+    /* FAT-sector cache: the read-only FS never changes the FAT mid-session, so one
+     * cached sector collapses the ~128x redundant re-reads when a cluster chain stays
+     * within the same FAT sector (512/4 = 128 entries per sector). */
+    uint64_t target_lba = fs->fat_lba + fat_sector;
+    if (!fs->fat_cache_valid || fs->fat_cache_lba != target_lba) {
+        int err = fs->read(target_lba, 1, fs->fat_cache);
+        if (err)
+            return err;
+        fs->fat_cache_lba = target_lba;
+        fs->fat_cache_valid = 1;
+    }
 
-    uint32_t val = read_le32(sector_buf + entry_offset);
+    uint32_t val = read_le32(fs->fat_cache + entry_offset);
     *next = val & FAT32_ENTRY_MASK;
     return 0;
 }
@@ -102,6 +108,8 @@ int fat32_init(fat32_fs_t *fs, fat32_read_fn read, uint64_t part_lba)
 
     fs->read = read;
     fs->part_lba = part_lba;
+    fs->fat_cache_valid = 0;   /* read-only FS: FAT cache filled lazily, never invalidated */
+    fs->progress = 0;          /* optional load-%% hook, off unless a caller sets it */
 
     int err = read(part_lba, 1, bpb);
     if (err)
@@ -210,6 +218,9 @@ int fat32_read_file(fat32_fs_t *fs, uint32_t first_cluster,
 
         out += to_read;
         remaining -= to_read;
+
+        if (fs->progress)
+            fs->progress(file_size - remaining, file_size);  /* exact cumulative DATA bytes */
 
         /* Follow cluster chain */
         uint32_t next;
