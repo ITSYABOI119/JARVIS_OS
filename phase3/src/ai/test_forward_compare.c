@@ -254,6 +254,7 @@ int main(void)
         FILE *f = fopen(MODEL_PATH, "rb");
         if (!f) {
             printf("SKIP: model not found (%s)\n", MODEL_PATH);
+            printf("::warning::test_forward_compare SKIPPED on CI (model not found) — assertions not run\n");
             return 0;
         }
         fclose(f);
