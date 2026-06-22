@@ -221,6 +221,7 @@ Before giving a prompt to the user, verify it includes:
 - [ ] Agent strategy — sized for best quality, parallel when independent
 - [ ] CLAUDE.MD RULES footer block (the 5-rule enforcement section)
 - [ ] UI–feature parity: if the work adds/changes a user-visible feature, the prompt updates the Remote Telemetry Console (`phase4/console/`) — its real live signal on the relevant screen or the auto-populated Capabilities/Features section, kept honest (only real/live state)
+- [ ] Frontend correctness: if the work touches `phase4/console/` or the telemetry record shape, the prompt keeps the layered frontend tests green (honesty gate + key-contract + Playwright-Python logic + e2e smoke) and uses **vendored** libs (never re-introduce a live CDN); a wire-shape change updates the one golden fixture both tests read
 
 ## Common Commands (for reference)
 

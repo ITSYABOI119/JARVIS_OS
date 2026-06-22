@@ -690,6 +690,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - After every `git push`, check the GitHub Actions workflow status with `gh run list --limit 1` and `gh run view` to verify CI passed. If any step failed, investigate with `gh run view --log-failed` and fix before continuing.
 - Phase 2 is C-only on Pi 4 (no Python runtime on seL4)
 - **UI–feature parity:** when shipping a user-visible feature, update the Remote Telemetry Console (`phase4/console/`) **in the same change** — add its real live signal to the relevant screen or its auto-populated Capabilities/Features section (never hardcoded). The UI shows only real/live state: a real feature missing from the UI is a gap; UI showing anything without a live source is fiction. Enforced by `phase4/console/test_console_honesty.py`.
+- **Frontend (`phase4/console/`) stays correct:** runtime libs (React/Babel/Lucide) are **vendored** under `phase4/console/vendor/` (pinned — no live CDN) so CI is hermetic. Layered tests, all Python (Playwright's **Python** binding — `pip`, no Node): the honesty grep gate + a **key-contract** test (`jarvis_telemetry.h`→`packet_to_record`→`telemetry.js` shape, against one golden fixture) + a **logic** test (`telemetry.js` connState/CRC/stale-watchdog via Playwright `page.clock`) + a real-SSE **e2e smoke** (page boots / no console errors / `simulated==false` / **every live `flags_list` flag renders a Capabilities row**). Keep them green; one visual confirm per visual change (the e2e covers the rest).
 
 ### Codebase Metrics
 
