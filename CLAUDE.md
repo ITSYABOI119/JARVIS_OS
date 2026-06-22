@@ -614,6 +614,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **NIC Intel I211:** `phase3/src/drivers/nic_i211.c/h` — **LIVE (goal #2b N-a)**: TX-only first-light on bare metal. `i211_nic_init` (reset settle + STATUS.PF_RST_DONE + MAC-validity via RAH.AV + TXDCTL.ENABLE), `i211_send_phys` (writes the TX buffer's PHYSICAL addr — IOMMU off). Rootserver brings it up NON-FATAL (BAR0 32pp UC + 2 DMA frames, DD-polled) in the `main_x86.c` `[NET]` block. Host `test_nic_i211.c` 11/11 (B1 phys-addr + B2 TXDCTL).
 - **Net UDP Builder:** `phase3/src/drivers/net_udp.c/h` — dependency-free Eth/IPv4/UDP limited-broadcast frame builder (`net_build_udp_broadcast` + RFC1071 `net_ip_checksum`; big-endian headers; UDP cksum=0 per IPv4; pad ≥60) wrapped around `i211_send_phys`; goal #2b N-b telemetry-OUT framing — the `[NET]` block emits a UDP broadcast to 255.255.255.255:51000. Host `test_net_udp.c` 24/24 (Wireshark-verified valid IP checksum on the box).
 - **Telemetry Packet:** `phase3/src/drivers/jarvis_telemetry.c/h` — 200-byte packed versioned `telemetry_packet_t` + zlib/IEEE CRC-32 (`jarvis_tlm_crc32`/`jarvis_tlm_finalize`); the `main_x86.c` workload loop fills it from live state and emits it over the I211 (`net_udp` + `i211_send_phys`, fire-and-forget) at the `[STATS]` cadence + a 1 Hz keepalive (also ticked from the inference response-poll → true ~1 Hz). goal #2b N-c-1 telemetry-OUT. Host `test_jarvis_telemetry.c` 22/22.
+- **Telemetry Receiver:** `phase3/scripts/telemetry_receiver.py` — Main-PC Python UDP receiver for the N-c-1 telemetry_packet_t (decode + zlib CRC-32 validate + seq-gap drop detection; --once/--follow/--json; honest fields only). Test `test_telemetry_receiver.py` (C↔Python wire-compat). goal #2b N-c-2.
 - **Tensor Ops:** `phase3/src/ai/tensor_ops.c/h`
 - **Dequantization:** `phase3/src/ai/dequant.c/h`
 - **BPE Tokenizer:** `phase3/src/ai/tokenizer.c/h`
@@ -689,13 +690,13 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 
 ### Codebase Metrics
 
-Tracked `.c/.h/.py` files and their `wc -l` LOC via `git ls-files` (measured 2026-06-14; Phase 3 + totals recounted 2026-06-22 for N-c-1):
+Tracked `.c/.h/.py` files and their `wc -l` LOC via `git ls-files` (measured 2026-06-14; Phase 3 + totals recounted 2026-06-22 for N-c-1/N-c-2):
 
 - **Phase 0:** 4,919 LOC, 11 code files (COMPLETE)
 - **Phase 1:** 40,837 LOC, 102 code files, 41 test files (COMPLETE)
 - **Phase 2:** 27,236 LOC, 65 code files, 8 test files (COMPLETE)
-- **Phase 3:** 39,013 LOC, 135 code files, 44 test files (IN PROGRESS — **11/11 models, 6 families, qdot + seL4 threadpool M3; +framebuffer font/panel/event-log; +goal #2b NIC I211 first-light + net_udp Eth/IPv4/UDP emit + jarvis_telemetry telemetry_packet over I211 + test_net_udp.c + test_jarvis_telemetry.c**)
-- **Total (phases):** 112,005 LOC, 305 code files, 92 test files (654 tracked files repo-wide)
+- **Phase 3:** 39,320 LOC, 137 code files, 45 test files (IN PROGRESS — **11/11 models, 6 families, qdot + seL4 threadpool M3; +framebuffer font/panel/event-log; +goal #2b NIC I211 first-light + net_udp Eth/IPv4/UDP emit + jarvis_telemetry telemetry_packet over I211 + telemetry_receiver.py (Python consumer) + test_net_udp.c + test_jarvis_telemetry.c + test_telemetry_receiver.py**)
+- **Total (phases):** 112,312 LOC, 307 code files, 93 test files (656 tracked files repo-wide)
 - Per-assertion PASS counts run higher than file counts (self-reported ~383+ Phase 3 / ~635+ total).
 - **Security:** March 2026 adversarial audit — 26 findings, all resolved (phase2+phase3 C). April 2026 Phase 3c audit — 25 findings (all 5 HIGH + 5 MEDIUM fixed, 7 LOW/INFO accepted). Phase 2's own audit: 6 C findings (4 fixed) + Snyk. SHIELD: host harness only (test_shield.c exercises shield.c — keyword + model-assisted scoring); the LIVE PA↔PB path is passive — Process B returns ALLOW, shield.c not linked (SEC-039), so the deployed system is NOT a live blocker.
 - **Inference:** 11 GGUF models across 6 model families on JARVIS engine. Gemma 4 E2B (8.40/10 quality) is the single deployed model. Qwen3.5 DeltaNet SSM hybrid working. 3.22 tok/s (1T), 19.79 tok/s (16T) — NATIVE dev engine (Llama 1B), NOT the deployed seL4 build; deployed = Gemma 4 E2B **5.46 tok/s @ NUM_NODES=6**.

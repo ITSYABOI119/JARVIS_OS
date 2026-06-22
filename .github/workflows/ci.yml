@@ -211,6 +211,9 @@ jobs:
           -o /tmp/test_jarvis_telemetry
         /tmp/test_jarvis_telemetry
 
+    - name: "Phase 3: Telemetry Receiver (Python)"
+      run: python3 phase3/scripts/test_telemetry_receiver.py
+
     - name: "Phase 3: x86 Timer (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 -DJARVIS_TEST_MOCK \
