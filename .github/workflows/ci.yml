@@ -203,6 +203,14 @@ jobs:
           -o /tmp/test_net_udp
         /tmp/test_net_udp
 
+    - name: "Phase 3: Telemetry Packet (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 \
+          -I phase3/src/drivers \
+          phase3/src/drivers/test_jarvis_telemetry.c phase3/src/drivers/jarvis_telemetry.c \
+          -o /tmp/test_jarvis_telemetry
+        /tmp/test_jarvis_telemetry
+
     - name: "Phase 3: x86 Timer (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 -DJARVIS_TEST_MOCK \

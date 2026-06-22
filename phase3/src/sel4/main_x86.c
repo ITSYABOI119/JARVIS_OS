@@ -55,6 +55,7 @@
 #include "framebuffer.h"
 #include "nic_i211.h"
 #include "net_udp.h"
+#include "jarvis_telemetry.h"
 #include "jarvis_debug.h"
 #include "jarvis_ui_tokens.h"   /* Step 2c-2b: FBP_ and JUI_ palette + geometry (single source) */
 
@@ -189,6 +190,20 @@ static int nvme_model_loaded = 0;
 static int g_num_nodes = 1;  /* bootinfo->numNodes (SMP); set in main(), used at PB spawn for the M3 worker count */
 static uint32_t nvme_model_size = 0;
 static uint32_t nvme_model_n_pages = 0;
+static uint8_t  g_model_load_pct = 0;   /* N-c-1: 0..100, set by model_load_progress(); for telemetry */
+
+/* N-c-1: hoisted NIC for the workload-loop telemetry emitter. The [NET] bring-up fills
+ * this on the "first-light OK" path (mac_valid && a DD); ready stays 0 on QEMU / NIC-absent
+ * so the emitter is a strict no-op. */
+static struct { i211_nic_t nic; void *tx_buf_v; uint64_t tx_buf_p; int ready; } g_net;
+
+/* N-c-1 cadence: hoisted 1 Hz gate + last-known counter snapshot, so the keepalive can tick
+ * from BOTH the loop top AND the inference response-poll. A single inference blocks the
+ * single-threaded loop ~12 s; ticking from the poll keeps the UDP stream ~1 Hz throughout. */
+static uint64_t g_tlm_last_tsc = 0;
+static uint64_t g_tlm_q_total = 0, g_tlm_q_hits = 0, g_tlm_q_infer = 0,
+                g_tlm_q_heartbeat = 0, g_tlm_q_shield = 0, g_tlm_q_errors = 0;
+static void jarvis_telemetry_tick(void);   /* fwd decl: called from wait_for_response (defined later) */
 
 /* ---- Serial output via seL4 debug syscall ---- */
 
@@ -1231,6 +1246,11 @@ static int wait_for_response(shmem_ring_t *ring, uint8_t expected_type)
             if (msg_type == expected_type) return 0;
             /* stale / non-matching (MSG_DEBUG, leftover MSG_RESPONSE, ...) — discard */
         }
+        /* N-c-1 cadence: tick here too — but this is the hb/shield response poll (sub-ms), so
+         * the 1 Hz gate rarely fires here; the LOAD-BEARING tick is in the inline inference
+         * poll loop (the ~12 s spin). Self-gated + fire-and-forget (own I211 TX, never the
+         * shmem ring) -> cannot perturb this IPC or err=. */
+        jarvis_telemetry_tick();
         polls++;
         seL4_Yield();
     }
@@ -1285,6 +1305,7 @@ static void model_load_progress(uint32_t done, uint32_t total) {
     static int last = -1;
     int pct = total ? (int)((uint64_t)done * 100u / total) : 0;
     if (pct > 100) pct = 100;
+    g_model_load_pct = (uint8_t)pct;   /* N-c-1: latest load % for the telemetry packet */
     if (pct != last) { last = pct; fb_model_pct(done, total); }
 }
 
@@ -1340,6 +1361,72 @@ static void jarvis_log_snapshot(uint64_t q_total, uint64_t q_errors) {
     p = fbp_str(p, " last=\""); p = fbp_str(p, g_fb_last_resp); *p++ = '"'; *p = '\0';
     puts_serial(ln); puts_serial("\n");
     nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr, g_nvme_bounce_paddr, LOG_IPC_STATS, ln);
+}
+
+/* N-c-1: emit a 200-byte binary telemetry packet over UDP broadcast (:51000) via the I211.
+ * Single-threaded — only PA's workload loop calls it; no locking. Strict NO-OP until the NIC
+ * came up (g_net.ready) so QEMU / NIC-absent is unaffected. Fire-and-forget: NO DD poll
+ * (protects err=0/throughput). Reuses the N-b net_udp framing. */
+static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hits, uint64_t q_infer,
+                                  uint64_t q_heartbeat, uint64_t q_shield, uint64_t q_errors) {
+    if (!g_net.ready) return;                       /* no NIC -> silently skip (QEMU/non-fatal) */
+    static uint32_t g_tlm_seq = 0;
+    telemetry_packet_t pkt;
+    memset(&pkt, 0, sizeof pkt);
+    pkt.kind  = kind;
+    pkt.seq   = g_tlm_seq++;
+    pkt.flags = (uint16_t)((nvme_model_loaded   ? TLM_F_MODEL_LOADED : 0)
+                         | (g_fb_desc_drawable  ? TLM_F_FB_DRAWABLE  : 0)
+                         | (g_fb_desc_mapped    ? TLM_F_FB_MAPPED    : 0)
+                         | (q_errors            ? TLM_F_HAS_ERROR    : 0)
+                         | TLM_F_SELFTEST_PASS);
+    pkt.boot_id   = nvme_log_boot_id();
+    pkt.uptime_ms = jarvis_uptime_ms();
+    pkt.q_total = q_total; pkt.q_hits = q_hits; pkt.q_infer = q_infer;
+    pkt.q_heartbeat = q_heartbeat; pkt.q_shield = q_shield; pkt.q_errors = q_errors;
+    pkt.num_nodes      = (uint8_t)g_num_nodes;
+    pkt.model_load_pct = g_model_load_pct;
+    pkt.fb_bpp         = g_fb_desc_bpp;
+    pkt.selftest_score = 5;   /* HONESTY: 5 self-test slots; 2 are vacuous — console must not overclaim */
+    pkt.fb_w = (uint16_t)g_fb_desc_w;
+    pkt.fb_h = (uint16_t)g_fb_desc_h;
+    pkt.model_size_mb = (uint32_t)(nvme_model_size >> 20);  /* nvme_model_size is BYTES -> MB (== panel "2962") */
+    pkt.total_ram_mb  = 0;     /* no file-scope total-RAM global in deploy; left 0 (console shows "-") */
+    pkt.infer_gen_tokens = 0;  /* M1_MEASURE off in deploy — no live token count */
+    /* model display name (matches the on-screen panel) + last response, NUL-bounded (pkt is zeroed) */
+    { const char *mn = "Gemma 4 E2B";
+      for (int i = 0; i < (int)sizeof(pkt.model_name) - 1 && mn[i]; i++) pkt.model_name[i] = mn[i]; }
+    for (int i = 0; i < (int)sizeof(pkt.last_text) - 1 && g_fb_last_resp[i]; i++)
+        pkt.last_text[i] = g_fb_last_resp[i];
+    jarvis_tlm_finalize(&pkt);
+    /* wrap as a UDP broadcast to :51000 and fire-and-forget (no DD poll) */
+    static uint8_t tlm_frame[256];   /* 14+20+8+200 = 242 <= 256 */
+    int flen = net_build_udp_broadcast(tlm_frame, sizeof tlm_frame, g_net.nic.mac, JARVIS_BOX_IP,
+                   JARVIS_TELEMETRY_PORT, JARVIS_TELEMETRY_PORT, &pkt, (uint16_t)sizeof pkt);
+    if (flen > 0)
+        (void)i211_send_phys(&g_net.nic, g_net.tx_buf_v, g_net.tx_buf_p, tlm_frame, (uint32_t)flen);
+}
+
+/* N-c-1 cadence: latch the latest counters so jarvis_telemetry_tick() (which may fire from the
+ * inference poll, where the loop locals are out of scope) emits a correct snapshot. */
+static void jarvis_telemetry_set_counters(uint64_t qt, uint64_t qh, uint64_t qi,
+                                          uint64_t qhb, uint64_t qsh, uint64_t qe) {
+    g_tlm_q_total = qt; g_tlm_q_hits = qh; g_tlm_q_infer = qi;
+    g_tlm_q_heartbeat = qhb; g_tlm_q_shield = qsh; g_tlm_q_errors = qe;
+}
+
+/* 1 Hz self-gated keepalive using the last-known counter snapshot. Safe to call from anywhere
+ * in the workload path (loop top AND the inference response-poll); no-op until the NIC is up.
+ * During an inference the loop is blocked so the counters are frozen — emitting here with the
+ * frozen snapshot + advancing uptime_ms is a correct live heartbeat, not a bug. */
+static void jarvis_telemetry_tick(void) {
+    if (!g_net.ready) return;
+    uint64_t now = jarvis_rdtsc();
+    if (now - g_tlm_last_tsc >= 1000ULL * TSC_PER_MS) {
+        g_tlm_last_tsc = now;
+        jarvis_telemetry_emit(TLM_K_STATS, g_tlm_q_total, g_tlm_q_hits, g_tlm_q_infer,
+                              g_tlm_q_heartbeat, g_tlm_q_shield, g_tlm_q_errors);
+    }
 }
 
 /* ---- Main continuation (runs on vspace-managed stack) ---- */
@@ -2130,6 +2217,14 @@ static void *main_continued(void *arg UNUSED)
                             nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr,
                                            g_nvme_bounce_paddr, LOG_BOOT,
                                            "[NET] UDP first-light OK");
+                        /* N-c-1: hand the live NIC + TX buffer to the workload-loop telemetry
+                         * emitter. ready=1 ONLY here (mac_valid && a DD) so the emitter is a
+                         * strict no-op on QEMU / NIC-not-found. The struct copy captures
+                         * tx_ring/mmio_base/tx_head/mac; the DMA frame + BAR mapping stay live. */
+                        g_net.nic      = nic;
+                        g_net.tx_buf_v = tx_buf_v;
+                        g_net.tx_buf_p = tx_buf_p;
+                        g_net.ready    = 1;
                     } else {
                         puts_serial("[NET] UDP first-light PARTIAL (mac_valid+DD not both set)\n");
                         if (g_nvme_ptr)
@@ -2266,6 +2361,12 @@ static void *main_continued(void *arg UNUSED)
 
     while (1) {
         q_total++;
+
+        /* N-c-1: ~1 Hz telemetry keepalive (organic [STATS] is ~1 per 48 min). Latch the current
+         * counters, then self-gated tick. Also ticked from the inference response-poll so the
+         * ~12 s inference spin doesn't starve the stream. No-op until the NIC is up. */
+        jarvis_telemetry_set_counters(q_total, q_hits, q_infer, q_heartbeat, q_shield, q_errors);
+        jarvis_telemetry_tick();
 #if JARVIS_AVX2_PROBE
         /* M0: dirty YMM in PA each iteration so the kernel's lazy per-TCB FPU
          * path exercises cross-thread YMM save/restore against PB's probe. */
@@ -2423,6 +2524,12 @@ static void *main_continued(void *arg UNUSED)
                         }
                     }
                     if (got_response) break;
+                    /* N-c-1 cadence (the load-bearing tick): THIS inline loop is PA's ~12 s
+                     * inference spin (wait_for_response is only the sub-ms hb/shield path).
+                     * Self-gated ~1 Hz, fire-and-forget (own I211 TX); runs after the drain
+                     * `while` above and never touches the shmem ring -> cannot perturb the
+                     * PA<->PB IPC, lose a response, or bump err=. */
+                    jarvis_telemetry_tick();
                     timeout_polls++;
                     if (timeout_polls % LOG_INTERVAL == 0) {
                         puts_serial("[PA] Waiting for PB... ");
@@ -2594,6 +2701,8 @@ static void *main_continued(void *arg UNUSED)
             puts_serial(" err="); put_dec(q_errors);
             puts_serial("\n");
             jarvis_log_snapshot(q_total, q_errors);   /* Step 2c-2a: full-state [SNAP] at the [STATS] cadence */
+            jarvis_telemetry_emit(TLM_K_STATS, q_total, q_hits, q_infer, q_heartbeat, q_shield, q_errors);  /* N-c-1 */
+            g_tlm_last_tsc = jarvis_rdtsc();   /* N-c-1: re-base the 1 Hz gate so the next tick isn't a near-dup */
 
             /* Step 2c-2c: per-state chrome at the [STATS] cadence only (quiet/draw-only — no
              * [PANEL] flood; reconstructable from [SNAP] model=+err= and [STATS] hits/infer/err).

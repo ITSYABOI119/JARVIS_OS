@@ -214,6 +214,9 @@ copy_file "$DRV_SRC/nic_i211.h" "$DRV_DST/nic_i211.h"
 # goal #2b N-b: Eth/IPv4/UDP broadcast frame builder
 copy_file "$DRV_SRC/net_udp.c" "$DRV_DST/net_udp.c"
 copy_file "$DRV_SRC/net_udp.h" "$DRV_DST/net_udp.h"
+# goal #2b N-c: binary telemetry packet (CRC-32 + finalize)
+copy_file "$DRV_SRC/jarvis_telemetry.c" "$DRV_DST/jarvis_telemetry.c"
+copy_file "$DRV_SRC/jarvis_telemetry.h" "$DRV_DST/jarvis_telemetry.h"
 
 # Inference server (Process B — lives in jarvis-inference app, NOT sel4test-driver)
 PROC_B_DIR="$SEL4_DIR/projects/jarvis-x86/apps/jarvis-inference/src"
@@ -353,6 +356,19 @@ if [ -f "$CMAKE_FILE" ]; then
         fi
     else
         echo -e "  ${CYAN}OK${NC}  src/drivers/net_udp.c already in source list"
+    fi
+
+    # goal #2b N-c: add src/drivers/jarvis_telemetry.c to source list if missing
+    if ! grep -q "src/drivers/jarvis_telemetry.c" "$CMAKE_FILE"; then
+        sed -i '/src\/drivers\/net_udp.c/a\    src/drivers/jarvis_telemetry.c' "$CMAKE_FILE" 2>/dev/null
+        if grep -q "src/drivers/jarvis_telemetry.c" "$CMAKE_FILE"; then
+            echo -e "  ${GREEN}ADDED${NC}  src/drivers/jarvis_telemetry.c to source list"
+            PATCHED=1
+        else
+            echo -e "  ${RED}FAILED${NC}  Could not add jarvis_telemetry.c — edit CMakeLists.txt manually"
+        fi
+    else
+        echo -e "  ${CYAN}OK${NC}  src/drivers/jarvis_telemetry.c already in source list"
     fi
 
     # Add JARVIS_SEL4 compile definition (needed for pci.c IOPort backend)
