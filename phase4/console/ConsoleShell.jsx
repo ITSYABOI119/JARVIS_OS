@@ -73,6 +73,7 @@ const RAIL_ITEMS = [
   { id: 'routing', icon: 'split',            label: 'Routing' },
   { id: 'shield',  icon: 'shield',           label: 'SHIELD' },   // neutral icon — passive
   { id: 'models',  icon: 'cpu',              label: 'Models' },
+  { id: 'capabilities', icon: 'list-checks', label: 'Capabilities' }, // auto-populated from flags_list
 ];
 
 function Rail({ view, setView }) {

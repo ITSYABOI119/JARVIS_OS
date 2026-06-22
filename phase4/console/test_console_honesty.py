@@ -101,6 +101,18 @@ def main():
     else:
         check(True, "'19.7' absent (caveat conditional vacuously satisfied)")
 
+    # --- N-c-3d: Capabilities surface (UI-feature parity, auto-populated) ---
+    # It must derive rows from the LIVE telemetry flags_list (a new feature =>
+    # a new flag => a new row), never a hardcoded capability array.
+    check('ConsoleCapabilities.jsx' in files, "Capabilities view exists (ConsoleCapabilities.jsx)")
+    cap = blobs.get('ConsoleCapabilities.jsx', '')
+    check('flags_list' in cap, "Capabilities iterates flags_list (auto-pull from telemetry)")
+    check('flags.map(' in cap, "Capabilities maps over the live flags (not a static array)")
+    check('new capability' in cap.lower(), "Capabilities surfaces UNKNOWN flags (no static known-only list)")
+    cap_banned = [b for b in BANNED if b.lower() in cap.lower()]
+    check(not cap_banned, "ConsoleCapabilities.jsx banned-free%s" % ("" if not cap_banned else "  <-- %s" % cap_banned))
+    check('ConsoleCapabilities.jsx' in blobs.get('index.html', ''), "Capabilities view wired into index.html")
+
     print("\n== Results: %d PASS, %d FAIL ==" % (_PASS, _FAIL))
     return 1 if _FAIL else 0
 

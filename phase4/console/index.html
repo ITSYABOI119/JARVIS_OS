@@ -43,6 +43,7 @@
   <script type="text/babel" src="LastResponse.jsx"></script>
   <script type="text/babel" src="ConsoleModels.jsx"></script>
   <script type="text/babel" src="ConsoleShield.jsx"></script>
+  <script type="text/babel" src="ConsoleCapabilities.jsx"></script>
   <script type="text/babel">
     const { Rail, Sidebar, Topbar } = window.JarvisShell;
 
@@ -52,6 +53,7 @@
       routing: { title: 'Routing',        render: (s) => <window.Routing store={s} /> },
       shield:  { title: 'SHIELD',         render: (s) => <window.Shield store={s} /> },
       models:  { title: 'Models',         render: (s) => <window.Models store={s} /> },
+      capabilities: { title: 'Capabilities', render: (s) => <window.Capabilities store={s} /> },
     };
 
     function App() {
