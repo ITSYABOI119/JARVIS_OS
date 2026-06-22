@@ -28,10 +28,16 @@ uptime is from an uncalibrated TSC, shown with "≈".
 
 import argparse
 import json
+import mimetypes
+import os
+import queue
 import socket
 import struct
 import sys
+import threading
+import time
 import zlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MAGIC = 0x4A54454C            # "JTEL" (LE on the wire: 4C 45 54 4A)
 FMT = '<IBBHIIII6QBBBBHHIIHH56s40s2II'
@@ -132,16 +138,285 @@ def format_human(d: dict) -> str:
     return line
 
 
-def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(
-        description="JARVIS telemetry UDP receiver (decode + CRC validate the N-c-1 telemetry_packet_t).")
-    ap.add_argument('--bind', default='', help="interface address to bind (default: all)")
-    ap.add_argument('--port', type=int, default=DEFAULT_PORT, help="UDP port (default: %d)" % DEFAULT_PORT)
-    ap.add_argument('--once', action='store_true', help="print one valid packet, then exit")
-    ap.add_argument('--follow', action='store_true', help="stream continuously (default)")
-    ap.add_argument('--json', action='store_true', help="emit one JSON object per line")
-    args = ap.parse_args(argv)
+# ---------------------------------------------------------------------------
+# N-c-3a: SSE bridge (UDP -> HTTP/SSE) + pcap replay, so a browser console can
+# consume the live telemetry (browsers can't read UDP). Pure-logic helpers
+# (packet_to_record, iter_pcap_telemetry) are host-tested; the server/producer
+# are exercised by the box-free replay smoke.
+# ---------------------------------------------------------------------------
 
+# Keys that must NEVER appear in a streamed record (no fabricated telemetry).
+BANNED_RECORD_KEYS = ('tok_s', 'tokps', 'gpu', 'tier', 'agents', 'shield_blocked')
+
+
+def packet_to_record(d: dict, recv_ts: float = 0) -> dict:
+    """Decoded-packet dict -> JSON-serializable record for /events.
+
+    ONLY real fields (+ crc_ok, kind_name, flags_list, recv_ts). No fabricated
+    keys (no tok/s, GPU, tier, agent grid, "SHIELD blocked"). 'q_shield' is the
+    raw check COUNT, not a block count.
+    """
+    return {
+        'recv_ts': recv_ts,
+        'version': d['version'],
+        'kind': d['kind'],
+        'kind_name': d['kind_name'],
+        'flags': d['flags'],
+        'flags_list': list(d['flags_list']),
+        'boot_id': d['boot_id'],
+        'seq': d['seq'],
+        'uptime_ms': d['uptime_ms'],
+        'q_total': d['q_total'],
+        'q_hits': d['q_hits'],
+        'q_infer': d['q_infer'],
+        'q_heartbeat': d['q_heartbeat'],
+        'q_shield': d['q_shield'],
+        'q_errors': d['q_errors'],
+        'num_nodes': d['num_nodes'],
+        'model_load_pct': d['model_load_pct'],
+        'fb_w': d['fb_w'],
+        'fb_h': d['fb_h'],
+        'fb_bpp': d['fb_bpp'],
+        'selftest_score': d['selftest_score'],
+        'model_size_mb': d['model_size_mb'],
+        'total_ram_mb': d['total_ram_mb'],
+        'infer_gen_tokens': d['infer_gen_tokens'],
+        'model_name': d['model_name'],
+        'last_text': d['last_text'],
+        'crc_ok': d['crc_ok'],
+    }
+
+
+# legacy pcap global-header magic -> (struct endian prefix, nanosecond timestamps)
+_PCAP_MAGICS = {
+    b'\xd4\xc3\xb2\xa1': ('<', False),
+    b'\xa1\xb2\xc3\xd4': ('>', False),
+    b'\x4d\x3c\xb2\xa1': ('<', True),
+    b'\xa1\xb2\x3c\x4d': ('>', True),
+}
+_ETH_IP_UDP_HDR = 42  # Ethernet(14) + IPv4(20) + UDP(8) before the payload
+_MAGIC_BYTES = struct.pack('<I', MAGIC)  # JTEL on the wire (b'LETJ')
+
+
+def iter_pcap_telemetry(path):
+    """Yield (recv_ts, decoded_dict) for each telemetry datagram in a legacy pcap.
+
+    Parses the classic pcap format (24-byte global header + 16-byte per-record
+    header + frame). Keeps only frames whose UDP payload (frame[42:]) starts
+    with the JTEL magic and is >= 200 bytes, then decode_packet()s the first 200
+    bytes. For box-free development against a captured stream.
+    """
+    with open(path, 'rb') as f:
+        data = f.read()
+    if len(data) < 24:
+        raise ValueError("not a pcap (too short)")
+    endian_nano = _PCAP_MAGICS.get(data[:4])
+    if endian_nano is None:
+        raise ValueError("not a pcap (bad global magic)")
+    endian, nano = endian_nano
+    divisor = 1e9 if nano else 1e6
+    rec_hdr = endian + 'IIII'
+    off, n = 24, len(data)
+    while off + 16 <= n:
+        ts_s, ts_frac, incl, _orig = struct.unpack_from(rec_hdr, data, off)
+        off += 16
+        frame = data[off:off + incl]
+        off += incl
+        if len(frame) < incl:
+            break  # truncated capture
+        payload = frame[_ETH_IP_UDP_HDR:]
+        if len(payload) >= PKT_SIZE and payload[:4] == _MAGIC_BYTES:
+            try:
+                d = decode_packet(payload[:PKT_SIZE])
+            except ValueError:
+                continue
+            yield (ts_s + ts_frac / divisor, d)
+
+
+class TelemetryHub:
+    """Thread-safe latest-record store + SSE client fan-out."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.latest = None
+        self._clients = []  # list[queue.Queue]
+
+    def subscribe(self):
+        q = queue.Queue(maxsize=256)
+        with self._lock:
+            self._clients.append(q)
+            return q, self.latest
+
+    def unsubscribe(self, q):
+        with self._lock:
+            if q in self._clients:
+                self._clients.remove(q)
+
+    def publish(self, record):
+        with self._lock:
+            self.latest = record
+            for q in self._clients:
+                try:
+                    q.put_nowait(record)
+                except queue.Full:
+                    pass  # slow client: drop rather than block the producer
+
+
+def _udp_producer(hub, sock):
+    while True:
+        try:
+            data, _addr = sock.recvfrom(2048)
+        except OSError:
+            return
+        try:
+            d = decode_packet(data)
+        except ValueError:
+            continue
+        if d['crc_ok']:
+            hub.publish(packet_to_record(d, recv_ts=time.time()))
+
+
+def _replay_producer(hub, path, rate):
+    while True:
+        emitted = False
+        for recv_ts, d in iter_pcap_telemetry(path):
+            emitted = True
+            if d['crc_ok']:
+                hub.publish(packet_to_record(d, recv_ts=recv_ts))
+            time.sleep(max(0.0, rate))
+        if not emitted:
+            time.sleep(1.0)  # empty / non-telemetry pcap: don't busy-loop
+
+
+class _SSEHandler(BaseHTTPRequestHandler):
+    hub = None
+    web_dir = 'phase4/console'
+
+    def log_message(self, *args):  # silence default request logging
+        pass
+
+    def do_GET(self):
+        path = self.path.split('?', 1)[0]
+        if path == '/events':
+            self._serve_sse()
+        else:
+            self._serve_static(path)
+
+    def _serve_sse(self):
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream')
+        self.send_header('Cache-Control', 'no-cache')
+        self.send_header('Connection', 'keep-alive')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        q, latest = self.hub.subscribe()
+        last_keepalive = time.time()
+        try:
+            if latest is not None:
+                self._send_record(latest)
+            while True:
+                try:
+                    self._send_record(q.get(timeout=1.0))
+                except queue.Empty:
+                    pass
+                if time.time() - last_keepalive >= 15.0:
+                    self.wfile.write(b': keepalive\n\n')
+                    self.wfile.flush()
+                    last_keepalive = time.time()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass  # client went away
+        finally:
+            self.hub.unsubscribe(q)
+
+    def _send_record(self, rec):
+        self.wfile.write(b'data: ' + json.dumps(rec).encode('utf-8') + b'\n\n')
+        self.wfile.flush()
+
+    def _serve_static(self, path):
+        rel = path.lstrip('/') or 'index.html'
+        if '..' in rel.split('/'):
+            self.send_error(403, 'forbidden')
+            return
+        base = os.path.abspath(self.web_dir)
+        full = os.path.abspath(os.path.join(base, rel))
+        if full != base and not full.startswith(base + os.sep):
+            self.send_error(403, 'forbidden')
+            return
+        if not os.path.isdir(base):
+            body = ("web-dir '%s' not found (phase4/console arrives in N-c-3b); "
+                    "the /events SSE stream is live.\n" % self.web_dir).encode('utf-8')
+            self.send_response(404)
+            self.send_header('Content-Type', 'text/plain; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if not os.path.isfile(full):
+            self.send_error(404, 'not found')
+            return
+        ctype = mimetypes.guess_type(full)[0] or 'application/octet-stream'
+        with open(full, 'rb') as fh:
+            body = fh.read()
+        self.send_response(200)
+        self.send_header('Content-Type', ctype)
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def _run_sse(args) -> int:
+    hub = TelemetryHub()
+    if args.replay:
+        producer = threading.Thread(target=_replay_producer,
+                                    args=(hub, args.replay, args.replay_rate), daemon=True)
+        source = "replay %s @ %.2fs" % (args.replay, args.replay_rate)
+    else:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind((args.bind, args.port))
+        producer = threading.Thread(target=_udp_producer, args=(hub, sock), daemon=True)
+        source = "live UDP :%d" % args.port
+    producer.start()
+    _SSEHandler.hub = hub
+    _SSEHandler.web_dir = args.web_dir
+    httpd = ThreadingHTTPServer((args.bind, args.http_port), _SSEHandler)
+    print("SSE bridge: http://%s:%d  (/events stream; static from '%s'; source: %s)"
+          % (args.bind or '0.0.0.0', args.http_port, args.web_dir, source), flush=True)
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        httpd.server_close()
+    return 0
+
+
+def _run_replay_stdout(args) -> int:
+    last_seq = {}
+    while True:
+        emitted = False
+        for recv_ts, d in iter_pcap_telemetry(args.replay):
+            emitted = True
+            if not d['crc_ok']:
+                print("[CRC-FAIL] seq=%d (replay)" % d['seq'], flush=True)
+                continue
+            prev = last_seq.get(d['boot_id'])
+            if prev is not None and d['seq'] > prev + 1:
+                print("[drop] %d packets (seq %d->%d)" % (d['seq'] - prev - 1, prev, d['seq']), flush=True)
+            last_seq[d['boot_id']] = d['seq']
+            if args.json:
+                print(json.dumps(packet_to_record(d, recv_ts)), flush=True)
+            else:
+                print(format_human(d), flush=True)
+            if args.once:
+                return 0
+            time.sleep(max(0.0, args.replay_rate))
+        if not emitted:
+            print("[replay] no telemetry packets in %s" % args.replay, flush=True)
+            return 1
+
+
+def _run_live_stdout(args) -> int:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((args.bind, args.port))
@@ -178,6 +453,28 @@ def main(argv=None) -> int:
     finally:
         sock.close()
     return 0
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(
+        description="JARVIS telemetry UDP receiver + SSE bridge (decode/CRC-validate the N-c-1 telemetry_packet_t).")
+    ap.add_argument('--bind', default='', help="interface address to bind (default: all)")
+    ap.add_argument('--port', type=int, default=DEFAULT_PORT, help="UDP port (default: %d)" % DEFAULT_PORT)
+    ap.add_argument('--once', action='store_true', help="print one valid packet, then exit")
+    ap.add_argument('--follow', action='store_true', help="stream continuously (default)")
+    ap.add_argument('--json', action='store_true', help="emit one JSON object per line")
+    ap.add_argument('--sse', action='store_true', help="run the HTTP/SSE bridge for the browser console")
+    ap.add_argument('--http-port', type=int, default=8800, help="SSE/HTTP port (default: 8800)")
+    ap.add_argument('--web-dir', default='phase4/console', help="static web root (default: phase4/console)")
+    ap.add_argument('--replay', metavar='PCAP', help="replay a captured pcap instead of live UDP (box-free dev)")
+    ap.add_argument('--replay-rate', type=float, default=1.0, help="seconds between replayed packets (default: 1.0)")
+    args = ap.parse_args(argv)
+
+    if args.sse:
+        return _run_sse(args)
+    if args.replay:
+        return _run_replay_stdout(args)
+    return _run_live_stdout(args)
 
 
 if __name__ == '__main__':

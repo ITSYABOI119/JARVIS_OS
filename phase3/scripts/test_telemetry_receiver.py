@@ -11,13 +11,16 @@ input the right way (crc_ok=False vs ValueError).
 Run: python3 phase3/scripts/test_telemetry_receiver.py  (exit nonzero on FAIL)
 """
 
+import json
 import os
 import struct
 import sys
+import tempfile
 import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from telemetry_receiver import decode_packet, FMT, MAGIC, PKT_SIZE  # noqa: E402
+from telemetry_receiver import (  # noqa: E402
+    decode_packet, packet_to_record, iter_pcap_telemetry, FMT, MAGIC, PKT_SIZE)
 
 _PASS = 0
 _FAIL = 0
@@ -72,6 +75,15 @@ def build_packet(finalize=True, **overrides):
     return body
 
 
+def _build_pcap_one(payload, ts_s=1700000001, ts_frac=0):
+    """A 1-record legacy pcap (little-endian, microsecond): 42-byte zero
+    L2/L3/L4 header + the telemetry payload, for iter_pcap_telemetry."""
+    glob = struct.pack('<IHHiIII', 0xA1B2C3D4, 2, 4, 0, 0, 65535, 1)
+    frame = b'\x00' * 42 + payload
+    rec = struct.pack('<IIII', ts_s, ts_frac, len(frame), len(frame)) + frame
+    return glob + rec
+
+
 def main():
     print("== telemetry receiver wire-compat ==")
 
@@ -114,6 +126,37 @@ def main():
     # Wrong length -> ValueError
     check(raises_valueerror(lambda: decode_packet(pkt[:199]), ), "199-byte input raises ValueError")
     check(raises_valueerror(lambda: decode_packet(pkt + b'\x00')), "201-byte input raises ValueError")
+
+    # --- N-c-3a: packet_to_record (the /events SSE record) ---
+    rec = packet_to_record(decode_packet(pkt))
+    json.dumps(rec)  # must be JSON-serializable (raises on failure)
+    check(rec['crc_ok'] is True, "record crc_ok True")
+    check(rec['kind_name'] == 'STATS', "record kind_name == STATS")
+    check(rec['num_nodes'] == 6, "record num_nodes == 6")
+    check(rec['model_name'] == 'Gemma 4 E2B', "record model_name round-trips")
+    check(rec.get('recv_ts') == 0, "record recv_ts defaults to 0")
+    check(not any(k in rec for k in ('tok_s', 'tokps', 'gpu', 'tier', 'agents', 'shield_blocked')),
+          "record has NO fabricated keys")
+
+    rec_bad = packet_to_record(decode_packet(bytes(ba)))  # ba = corrupted packet from above
+    json.dumps(rec_bad)
+    check(rec_bad['crc_ok'] is False, "corrupt-packet record crc_ok False (still serializes)")
+
+    # --- N-c-3a: iter_pcap_telemetry on a synthetic 1-packet pcap ---
+    pcap = _build_pcap_one(pkt, ts_s=1700000001)
+    tf = tempfile.NamedTemporaryFile(suffix='.pcap', delete=False)
+    try:
+        tf.write(pcap)
+        tf.close()
+        got = list(iter_pcap_telemetry(tf.name))
+    finally:
+        os.unlink(tf.name)
+    check(len(got) == 1, "iter_pcap_telemetry yields exactly 1 packet")
+    if got:
+        ts, dp = got[0]
+        check(dp['magic'] == MAGIC and dp['seq'] == 42, "replayed packet magic + seq correct")
+        check(dp['model_name'] == 'Gemma 4 E2B', "replayed packet model_name correct")
+        check(ts == 1700000001.0, "replayed recv_ts correct")
 
     print("\n== Results: %d PASS, %d FAIL ==" % (_PASS, _FAIL))
     return 1 if _FAIL else 0
