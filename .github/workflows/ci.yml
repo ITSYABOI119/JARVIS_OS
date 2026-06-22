@@ -222,6 +222,18 @@ jobs:
         python3 phase3/scripts/gen_golden_pcap.py
         git diff --exit-code phase4/console/fixtures/golden.pcap || (echo "golden.pcap stale — regenerate & commit" && exit 1)
 
+    - name: "Phase 4: Install Playwright (Chromium headless-shell)"
+      run: |
+        python -m pip install --upgrade pip
+        pip install playwright==1.60.0
+        python -m playwright install --with-deps --only-shell chromium
+
+    - name: "Phase 4: Console logic unit test (Playwright, deterministic clock)"
+      run: python3 phase4/console/test_console_logic.py
+
+    - name: "Phase 4: Console E2E (Playwright, real SSE via --replay)"
+      run: python3 phase4/console/test_console_e2e.py
+
     - name: "Phase 3: x86 Timer (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 -DJARVIS_TEST_MOCK \

@@ -138,9 +138,16 @@ The console now ships with hermetic deps + a key-contract regression net (the lo
 - **Key-contract Layer A (`test_telemetry_receiver.py`, existing CI step):** for every golden frame, `build_packet → decode_packet → packet_to_record` round-trips value-exactly, `set(record.keys()) == meta.keys`, `kind_name`/`flags_list`/`crc_ok` derived correctly, corrupt → `crc_ok=False`, and no internal keys (`magic`/`crc32`/`reserved*`) leak. **31 → 81 asserts.**
 - **CI:** new `Phase 4: Golden telemetry fixture up-to-date (Python)` step regenerates `golden.pcap` and fails on `git diff` drift.
 
-## Next — goal #2 backlog + console logic/e2e layers → Phase 4 goals #3–7
+## goal #2b hardening — frontend test stack COMPLETE (Layers B + C, 2026-06-22)
 
-**goal #2b (Remote Telemetry Console) is COMPLETE** — box-side telemetry-OUT (N-a→N-b→N-c-1) + the receiver/SSE bridge (N-c-2/3a) + the honest console (N-c-3b/c) + the auto-populated Capabilities surface (N-c-3d) + the frontend-test foundation (vendored libs + golden fixture + key-contract Layer A). Next on the console: the **logic** layer (`telemetry.js` connState/CRC/stale-watchdog via Playwright `page.clock`) + a real-SSE **e2e** smoke (Playwright-Python). Remaining:
+The console's test pyramid is now whole — honesty grep + key-contract (foundation) + the two Playwright-Python browser layers. Headless Chromium, `playwright==1.60.0`, no Node/npm; `test_*.py` self-running (raw `sync_api`, nonzero-exit on FAIL).
+- **Layer B — `test_console_logic.py` (13/13):** drives the real `telemetry.js` in headless Chromium with a **stubbed `EventSource` + `page.clock`** (no real SSE) — deterministically asserts connState **live → stale** (the 2800 ms watchdog, via `clock.run_for(2500)` then `+600`), **crcfail** (crc_ok:false), **seq-gap** `droppedPackets==2` (seq 3→6), **new-boot reset** (droppedPackets→0), and **cold-start** `queriesPerSec()` (None with <2 samples → >0 after two 1s-apart samples), all via `getState()`; zero console errors. The clock steps are pinned to `STALE_MS=2800` (commented — a watchdog change must update them).
+- **Layer C — `test_console_e2e.py` (11/11):** boots the real `telemetry_receiver.py --sse --replay golden.pcap`, loads the page over real HTTP, asserts it mounts (Babel+React, **0 console errors** — confirms Lucide 1.21.0 renders), pill `link OK · live`, `Gemma 4 E2B`/`num_nodes==6`/INFER `last_text` render, **`simulated==false` + no `SIMULATED · replay` badge** (false-pass guard: it consumed REAL `/events`, not the fallback), and the **flag-parity invariant** — every live `flags_list` flag renders a Capabilities row (a reported feature the UI drops = hard FAIL). A final no-`/events` phase asserts the SIMULATED fallback badge **does** appear.
+- **CI:** new `Phase 4: Install Playwright (Chromium headless-shell)` step (`--with-deps --only-shell chromium`) + the two test steps. Honesty gate unchanged (40/40 — the new `.py` aren't scanned).
+
+## Next — goal #2 backlog → Phase 4 goals #3–7
+
+**goal #2b (Remote Telemetry Console) is COMPLETE** — box-side telemetry-OUT (N-a→N-b→N-c-1) + the receiver/SSE bridge (N-c-2/3a) + the honest console (N-c-3b/c) + the auto-populated Capabilities surface (N-c-3d) + the full frontend test stack (honesty + key-contract + Playwright logic + e2e, incl. flag-parity). Remaining:
 1. **Optional goal #2 backlog** — NVMe progress bar, true-WC mapping, 1920×1080 gfxmode; **LOW-pri** reject `bytes_per_sector != 512` in `fat32_init`.
 2. Phase 4 **goals #3–7**: xHCI USB keyboard input (down-ranked/optional), one-script installer, 90-day soak, docs, `v1.0.0` MIT release.
 
