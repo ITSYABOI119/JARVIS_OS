@@ -1,0 +1,89 @@
+<!-- @dsCard group="Telemetry Console" viewport="1280x800" name="Remote Telemetry Console" subtitle="Read-only live box telemetry — honest, no fabricated metrics" -->
+<!-- @startingPoint section="Telemetry Console" subtitle="Read-only SSE telemetry dashboard for the bare-metal seL4 box" viewport="1280x800" -->
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>JARVIS OS — Remote Telemetry Console</title>
+<link rel="stylesheet" href="./styles.css" />
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--bg-canvas); color: var(--text-primary);
+         font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
+  #root { height: 100vh; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: var(--gray-4); border-radius: 999px; border: 2px solid transparent; background-clip: content-box; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  [data-lucide] svg { width: 100%; height: 100%; stroke-width: 1.75; }
+</style>
+</head>
+<body data-screen-label="Telemetry Console">
+  <template id="__bundler_thumbnail" data-bg-color="#0A0B0E">
+    <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+      <rect width="1200" height="800" fill="#0A0B0E"/>
+      <rect x="470" y="300" width="260" height="200" rx="14" fill="none" stroke="#272D39" stroke-width="3"/>
+      <circle cx="520" cy="350" r="10" fill="#3FB950"/>
+      <rect x="545" y="343" width="150" height="14" rx="4" fill="#4F7CFF"/>
+      <rect x="500" y="400" width="200" height="10" rx="3" fill="#272D39"/>
+      <rect x="500" y="430" width="140" height="10" rx="3" fill="#272D39"/>
+    </svg>
+  </template>
+  <div id="root"></div>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <script src="./_ds_bundle.js"></script>
+  <script src="telemetry.js"></script>
+  <script type="text/babel" src="ConsoleShell.jsx"></script>
+  <script type="text/babel" src="ConsoleCommandCenter.jsx"></script>
+  <script type="text/babel" src="Routing.jsx"></script>
+  <script type="text/babel" src="LastResponse.jsx"></script>
+  <script type="text/babel" src="ConsoleModels.jsx"></script>
+  <script type="text/babel" src="ConsoleShield.jsx"></script>
+  <script type="text/babel">
+    const { Rail, Sidebar, Topbar } = window.JarvisShell;
+
+    const VIEWS = {
+      command: { title: 'Command Center', render: (s) => <window.CommandCenter store={s} /> },
+      last:    { title: 'Last response',  render: (s) => <window.LastResponse store={s} /> },
+      routing: { title: 'Routing',        render: (s) => <window.Routing store={s} /> },
+      shield:  { title: 'SHIELD',         render: (s) => <window.Shield store={s} /> },
+      models:  { title: 'Models',         render: (s) => <window.Models store={s} /> },
+    };
+
+    function App() {
+      const [view, setView] = React.useState('command');
+      const [store, setStore] = React.useState(() => window.JarvisTelemetry.getState());
+
+      React.useEffect(() => {
+        const unsub = window.JarvisTelemetry.subscribe(setStore);
+        // connect to the receiver's /events; falls back to a labelled simulator for box-free preview
+        window.JarvisTelemetry.connect('/events');
+        return unsub;
+      }, []);
+
+      React.useEffect(() => { if (window.lucide) window.lucide.createIcons(); });
+
+      const active = VIEWS[view] || VIEWS.command;
+      const storeWithNav = { ...store, _setView: setView };
+
+      return (
+        <div style={{ display: 'flex', height: '100vh', background: 'var(--bg-app)' }}>
+          <Rail view={view} setView={setView} />
+          <Sidebar view={view} store={storeWithNav} />
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, background: 'var(--bg-app)' }}>
+            <Topbar title={active.title} store={storeWithNav} />
+            <main style={{ flex: 1, minHeight: 0, background: 'var(--bg-canvas)' }}>
+              {active.render(storeWithNav)}
+            </main>
+          </div>
+        </div>
+      );
+    }
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

@@ -214,6 +214,9 @@ jobs:
     - name: "Phase 3: Telemetry Receiver (Python)"
       run: python3 phase3/scripts/test_telemetry_receiver.py
 
+    - name: "Phase 4: Console honesty gate (Python)"
+      run: python3 phase4/console/test_console_honesty.py
+
     - name: "Phase 3: x86 Timer (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 -DJARVIS_TEST_MOCK \

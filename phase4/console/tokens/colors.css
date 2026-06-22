@@ -1,0 +1,87 @@
+/* Jarvis OS — Color tokens
+ * Dark-first technical OS palette. Cool near-black neutrals, one electric-blue
+ * signal accent, GitHub-grade semantic status colors. Flat fills, no gradients.
+ */
+:root {
+  /* ── Neutral scale (cool, near-black → near-white) ───────────────── */
+  --gray-0:  #0A0B0E;   /* deepest canvas / desktop bg */
+  --gray-1:  #101319;   /* app background */
+  --gray-2:  #161A22;   /* raised surface / panel */
+  --gray-3:  #1D222C;   /* card surface */
+  --gray-4:  #272D39;   /* hover surface / inset */
+  --gray-5:  #353C4B;   /* border-strong / control bg */
+  --gray-6:  #4A5263;   /* hairline on raised */
+  --gray-7:  #6B7589;   /* muted icon / disabled text */
+  --gray-8:  #98A2B6;   /* secondary text */
+  --gray-9:  #C4CBD8;   /* primary text (soft) */
+  --gray-10: #E8ECF3;   /* primary text (high) */
+  --white:   #F7F9FC;
+
+  /* ── Brand / signal accent (electric blue, flat) ─────────────────── */
+  --blue-400: #6E9BFF;
+  --blue-500: #4F7CFF;  /* primary accent */
+  --blue-600: #3A63E0;
+  --blue-700: #2C4DB8;
+  --blue-tint: rgba(79, 124, 255, 0.14);  /* accent wash */
+
+  /* ── Semantic status ─────────────────────────────────────────────── */
+  --green-500:  #3FB950;
+  --green-tint: rgba(63, 185, 80, 0.14);
+  --amber-500:  #D6A02A;
+  --amber-tint: rgba(214, 160, 42, 0.14);
+  --red-500:    #F2564B;
+  --red-tint:   rgba(242, 86, 75, 0.14);
+  --cyan-500:   #46C7C7;  /* live / streaming indicator */
+
+  /* ══ Semantic aliases (dark — default) ══════════════════════════════ */
+  --bg-canvas:      var(--gray-0);
+  --bg-app:         var(--gray-1);
+  --surface-raised: var(--gray-2);
+  --surface-card:   var(--gray-3);
+  --surface-inset:  var(--gray-4);
+  --surface-hover:  var(--gray-4);
+
+  --text-primary:   var(--gray-10);
+  --text-secondary: var(--gray-8);
+  --text-muted:     var(--gray-7);
+  --text-inverse:   var(--gray-0);
+  --text-accent:    var(--blue-400);
+
+  --border-hairline: rgba(255, 255, 255, 0.07);
+  --border-default:  rgba(255, 255, 255, 0.11);
+  --border-strong:   var(--gray-5);
+  --border-focus:    var(--blue-500);
+
+  --accent:        var(--blue-500);
+  --accent-hover:  var(--blue-400);
+  --accent-press:  var(--blue-600);
+  --accent-text:   var(--white);
+
+  --status-ok:    var(--green-500);
+  --status-warn:  var(--amber-500);
+  --status-err:   var(--red-500);
+  --status-live:  var(--cyan-500);
+}
+
+/* ══ Light theme scope — opt in with [data-theme="light"] ════════════ */
+[data-theme="light"] {
+  --bg-canvas:      #EEF1F6;
+  --bg-app:         #F7F9FC;
+  --surface-raised: #FFFFFF;
+  --surface-card:   #FFFFFF;
+  --surface-inset:  #F0F3F8;
+  --surface-hover:  #EAEEF5;
+
+  --text-primary:   #11151C;
+  --text-secondary: #4A5263;
+  --text-muted:     #6B7589;
+  --text-inverse:   #F7F9FC;
+  --text-accent:    var(--blue-600);
+
+  --border-hairline: rgba(16, 19, 25, 0.07);
+  --border-default:  rgba(16, 19, 25, 0.12);
+  --border-strong:   #C4CBD8;
+  --border-focus:    var(--blue-500);
+
+  --accent-hover:  var(--blue-600);
+}

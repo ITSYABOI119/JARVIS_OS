@@ -1,0 +1,51 @@
+/* Jarvis OS — Spacing, radii, borders, shadows, motion
+ * 4px base grid. Small radii (Swiss/technical). Subtle dark elevation.
+ */
+:root {
+  /* ── Spacing scale (4px base) ────────────────────────────────────── */
+  --space-0:  0;
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  20px;
+  --space-6:  24px;
+  --space-8:  32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-20: 80px;
+
+  /* ── Radii (tight, technical) ────────────────────────────────────── */
+  --radius-xs:   3px;
+  --radius-sm:   5px;
+  --radius-md:   8px;
+  --radius-lg:   12px;
+  --radius-xl:   16px;
+  --radius-full: 999px;
+
+  /* ── Borders ─────────────────────────────────────────────────────── */
+  --border-width: 1px;
+  --border:        var(--border-width) solid var(--border-default);
+  --border-faint:  var(--border-width) solid var(--border-hairline);
+
+  /* ── Elevation (dark UI: low-alpha black + faint top light) ──────── */
+  --shadow-sm:  0 1px 2px rgba(0,0,0,0.40);
+  --shadow-md:  0 4px 12px rgba(0,0,0,0.45);
+  --shadow-lg:  0 12px 32px rgba(0,0,0,0.55);
+  --shadow-pop: 0 16px 48px rgba(0,0,0,0.60);
+  --ring-focus: 0 0 0 3px var(--blue-tint);
+  --glow-accent: 0 0 0 1px var(--accent), 0 0 16px var(--blue-tint);
+
+  /* ── Motion (Swiss: quick, precise, no bounce) ───────────────────── */
+  --ease-out:   cubic-bezier(0.22, 1, 0.36, 1);  /* @kind other */
+  --ease-inout: cubic-bezier(0.65, 0, 0.35, 1);  /* @kind other */
+  --dur-fast:   120ms;  /* @kind other */
+  --dur-base:   180ms;  /* @kind other */
+  --dur-slow:   280ms;  /* @kind other */
+
+  /* ── Layout ──────────────────────────────────────────────────────── */
+  --topbar-h:   44px;
+  --sidebar-w:  248px;
+  --rail-w:     56px;
+}
