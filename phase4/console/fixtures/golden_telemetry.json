@@ -1,0 +1,72 @@
+{
+  "meta": {
+    "comment": "Golden /events contract for phase4/console. 'keys' MUST equal set(packet_to_record(...).keys()); the key-contract test (test_telemetry_receiver.py) enforces it. Regenerate golden.pcap via phase3/scripts/gen_golden_pcap.py (CI gates drift). 'flags' are names (telemetry_fixture.FLAG_BITS); other fields are build_packet overrides; label/ts_s/ts_frac/corrupt are fixture-only.",
+    "fmt": "<IBBHIIII6QBBBBHHIIHH56s40s2II",
+    "size": 200,
+    "keys": [
+      "recv_ts", "version", "kind", "kind_name", "flags", "flags_list",
+      "boot_id", "seq", "uptime_ms", "q_total", "q_hits", "q_infer",
+      "q_heartbeat", "q_shield", "q_errors", "num_nodes", "model_load_pct",
+      "fb_w", "fb_h", "fb_bpp", "selftest_score", "model_size_mb",
+      "total_ram_mb", "infer_gen_tokens", "model_name", "last_text", "crc_ok"
+    ]
+  },
+  "frames": [
+    {
+      "label": "loading-1", "ts_s": 1700000000, "ts_frac": 0,
+      "kind": 1, "flags": ["SELFTEST_PASS", "FB_DRAWABLE", "FB_MAPPED"],
+      "boot_id": 1, "seq": 1, "uptime_ms": 1000, "model_load_pct": 40,
+      "q_total": 0, "q_hits": 0, "q_infer": 0, "q_heartbeat": 0, "q_shield": 0, "q_errors": 0,
+      "last_text": "", "infer_gen_tokens": 0
+    },
+    {
+      "label": "loading-2", "ts_s": 1700000001, "ts_frac": 0,
+      "kind": 1, "flags": ["SELFTEST_PASS", "FB_DRAWABLE", "FB_MAPPED"],
+      "boot_id": 1, "seq": 2, "uptime_ms": 2000, "model_load_pct": 80,
+      "q_total": 0, "q_hits": 0, "q_infer": 0, "q_heartbeat": 0, "q_shield": 0, "q_errors": 0,
+      "last_text": "", "infer_gen_tokens": 0
+    },
+    {
+      "label": "stats", "ts_s": 1700000002, "ts_frac": 0,
+      "kind": 1, "flags": ["MODEL_LOADED", "SELFTEST_PASS", "FB_DRAWABLE", "FB_MAPPED"],
+      "boot_id": 1, "seq": 3, "uptime_ms": 3000, "model_load_pct": 100,
+      "q_total": 50, "q_hits": 35, "q_infer": 8, "q_heartbeat": 5, "q_shield": 2, "q_errors": 0,
+      "last_text": "", "infer_gen_tokens": 0
+    },
+    {
+      "label": "infer", "ts_s": 1700000003, "ts_frac": 0,
+      "kind": 2, "flags": ["MODEL_LOADED", "SELFTEST_PASS", "FB_DRAWABLE", "FB_MAPPED"],
+      "boot_id": 1, "seq": 4, "uptime_ms": 4000, "model_load_pct": 100,
+      "q_total": 70, "q_hits": 49, "q_infer": 11, "q_heartbeat": 7, "q_shield": 3, "q_errors": 0,
+      "last_text": "the capital of France is Paris.", "infer_gen_tokens": 12
+    },
+    {
+      "label": "state", "ts_s": 1700000004, "ts_frac": 0,
+      "kind": 3, "flags": ["MODEL_LOADED", "SELFTEST_PASS", "FB_DRAWABLE", "FB_MAPPED"],
+      "boot_id": 1, "seq": 5, "uptime_ms": 5000, "model_load_pct": 100,
+      "q_total": 90, "q_hits": 63, "q_infer": 14, "q_heartbeat": 9, "q_shield": 4, "q_errors": 0,
+      "last_text": "", "infer_gen_tokens": 0
+    },
+    {
+      "label": "error", "ts_s": 1700000005, "ts_frac": 0,
+      "kind": 1, "flags": ["MODEL_LOADED", "SELFTEST_PASS", "FB_DRAWABLE", "FB_MAPPED", "HAS_ERROR"],
+      "boot_id": 1, "seq": 6, "uptime_ms": 6000, "model_load_pct": 100,
+      "q_total": 110, "q_hits": 77, "q_infer": 17, "q_heartbeat": 11, "q_shield": 5, "q_errors": 2,
+      "last_text": "", "infer_gen_tokens": 0
+    },
+    {
+      "label": "after-seq-gap", "ts_s": 1700000006, "ts_frac": 0,
+      "kind": 1, "flags": ["MODEL_LOADED", "SELFTEST_PASS", "FB_DRAWABLE", "FB_MAPPED"],
+      "boot_id": 1, "seq": 9, "uptime_ms": 9000, "model_load_pct": 100,
+      "q_total": 130, "q_hits": 91, "q_infer": 20, "q_heartbeat": 13, "q_shield": 6, "q_errors": 2,
+      "last_text": "", "infer_gen_tokens": 0
+    },
+    {
+      "label": "corrupt", "ts_s": 1700000007, "ts_frac": 0, "corrupt": true,
+      "kind": 1, "flags": ["MODEL_LOADED", "SELFTEST_PASS", "FB_DRAWABLE", "FB_MAPPED"],
+      "boot_id": 1, "seq": 10, "uptime_ms": 10000, "model_load_pct": 100,
+      "q_total": 150, "q_hits": 105, "q_infer": 23, "q_heartbeat": 15, "q_shield": 7, "q_errors": 2,
+      "last_text": "", "infer_gen_tokens": 0
+    }
+  ]
+}

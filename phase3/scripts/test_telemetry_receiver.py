@@ -21,6 +21,9 @@ import zlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from telemetry_receiver import (  # noqa: E402
     decode_packet, packet_to_record, iter_pcap_telemetry, FMT, MAGIC, PKT_SIZE)
+from telemetry_fixture import (  # noqa: E402  -- shared packer (moved out of this file)
+    _DEFAULTS, build_packet, _build_pcap_one, build_pcap_many, REQUIRED_RECORD_KEYS,
+    frame_to_packet)
 
 _PASS = 0
 _FAIL = 0
@@ -42,46 +45,6 @@ def raises_valueerror(fn):
         return False
     except ValueError:
         return True
-
-
-# Field order matches FMT / jarvis_telemetry.h exactly.
-_DEFAULTS = dict(
-    magic=MAGIC, version=1, kind=1, flags=0x01 | 0x10, boot_id=1, seq=42,
-    uptime_ms=120000, reserved_t=0,
-    q_total=289, q_hits=211, q_infer=29, q_heartbeat=40, q_shield=9, q_errors=0,
-    num_nodes=6, model_load_pct=100, fb_bpp=32, selftest_score=5,
-    fb_w=1024, fb_h=768, model_size_mb=2962, total_ram_mb=0,
-    infer_gen_tokens=0, reserved_i=0,
-    last_text=b"hello", model_name=b"Gemma 4 E2B",
-    reserved2_0=0, reserved2_1=0, crc32=0,
-)
-
-
-def build_packet(finalize=True, **overrides):
-    """Pack a packet; when finalize, stamp a valid zlib CRC over [:196]."""
-    v = dict(_DEFAULTS)
-    v.update(overrides)
-    body = struct.pack(
-        FMT, v['magic'], v['version'], v['kind'], v['flags'], v['boot_id'], v['seq'],
-        v['uptime_ms'], v['reserved_t'],
-        v['q_total'], v['q_hits'], v['q_infer'], v['q_heartbeat'], v['q_shield'], v['q_errors'],
-        v['num_nodes'], v['model_load_pct'], v['fb_bpp'], v['selftest_score'],
-        v['fb_w'], v['fb_h'], v['model_size_mb'], v['total_ram_mb'],
-        v['infer_gen_tokens'], v['reserved_i'], v['last_text'], v['model_name'],
-        v['reserved2_0'], v['reserved2_1'], v['crc32'])
-    if finalize:
-        crc = zlib.crc32(body[:196]) & 0xFFFFFFFF
-        body = body[:196] + struct.pack('<I', crc)
-    return body
-
-
-def _build_pcap_one(payload, ts_s=1700000001, ts_frac=0):
-    """A 1-record legacy pcap (little-endian, microsecond): 42-byte zero
-    L2/L3/L4 header + the telemetry payload, for iter_pcap_telemetry."""
-    glob = struct.pack('<IHHiIII', 0xA1B2C3D4, 2, 4, 0, 0, 65535, 1)
-    frame = b'\x00' * 42 + payload
-    rec = struct.pack('<IIII', ts_s, ts_frac, len(frame), len(frame)) + frame
-    return glob + rec
 
 
 def main():
@@ -157,6 +120,36 @@ def main():
         check(dp['magic'] == MAGIC and dp['seq'] == 42, "replayed packet magic + seq correct")
         check(dp['model_name'] == 'Gemma 4 E2B', "replayed packet model_name correct")
         check(ts == 1700000001.0, "replayed recv_ts correct")
+
+    # --- Layer A: golden key-contract (every frame round-trips; key set locked) ---
+    golden_path = os.path.normpath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), '..', '..',
+        'phase4', 'console', 'fixtures', 'golden_telemetry.json'))
+    with open(golden_path, 'r', encoding='utf-8') as gf:
+        golden = json.load(gf)
+    meta_keys = set(golden['meta']['keys'])
+    check(meta_keys == set(REQUIRED_RECORD_KEYS),
+          "golden meta.keys == REQUIRED_RECORD_KEYS (fixture matches receiver output)")
+    check(golden['meta']['size'] == 200 and golden['meta']['fmt'] == FMT,
+          "golden meta fmt/size match the wire format")
+
+    kind_expect = {1: 'STATS', 2: 'INFER', 3: 'STATE'}
+    internal = ('magic', 'crc32', 'crc_calc', 'reserved_t', 'reserved_i', 'reserved2_0', 'reserved2_1')
+    for fr in golden['frames']:
+        label = fr.get('label', '?')
+        payload, corrupt = frame_to_packet(fr)
+        rec = packet_to_record(decode_packet(payload))
+        json.dumps(rec)  # must be JSON-serializable
+        check(set(rec.keys()) == meta_keys, "[%s] record keys == meta.keys" % label)
+        check(rec['crc_ok'] is (not corrupt), "[%s] crc_ok == %s" % (label, not corrupt))
+        check(rec['kind_name'] == kind_expect.get(fr['kind'], '?'),
+              "[%s] kind_name derived (%s)" % (label, rec['kind_name']))
+        check(set(rec['flags_list']) == set(fr.get('flags', [])),
+              "[%s] flags_list derived" % label)
+        rt_ok = all(rec[k] == v for k, v in fr.items()
+                    if k not in ('label', 'ts_s', 'ts_frac', 'corrupt', 'flags') and k in rec)
+        check(rt_ok, "[%s] scalar fields round-trip value-exactly" % label)
+        check(not any(k in rec for k in internal), "[%s] no internal keys leak into record" % label)
 
     print("\n== Results: %d PASS, %d FAIL ==" % (_PASS, _FAIL))
     return 1 if _FAIL else 0

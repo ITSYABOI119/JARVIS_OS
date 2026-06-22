@@ -129,9 +129,18 @@ Satisfies the new CLAUDE.md **UI–feature-parity** rule — every real feature 
 - **Honesty:** shows ONLY reported flags + real fields; no aspirational capability is listed as present (the "Not reported" note avoids even *naming* absent fictions, since the honesty gate bans those substrings outright). Wired into `index.html` (script tag + VIEWS entry).
 - **Verified (box-free):** honesty gate **40/40** (the 34 prior + 6 new: view exists, iterates `flags_list`, maps the live flags, surfaces unknown flags, banned-free, wired into index.html); **serve smoke** — `GET /ConsoleCapabilities.jsx` → HTTP 200 (defines `window.Capabilities`, iterates `flags_list`), and `GET /` carries the new script tag + VIEWS entry.
 
-## Next — goal #2 backlog → Phase 4 goals #3–7
+## goal #2b hardening — frontend-test foundation (DONE 2026-06-22)
 
-**goal #2b (Remote Telemetry Console) is COMPLETE** — box-side telemetry-OUT (N-a→N-b→N-c-1) + the receiver/SSE bridge (N-c-2/3a) + the honest console (N-c-3b/c) + the auto-populated Capabilities surface (N-c-3d). Remaining:
+The console now ships with hermetic deps + a key-contract regression net (the logic + e2e layers follow). Pure Main-PC, no Node/npm.
+- **Vendored runtime libs (`phase4/console/vendor/`):** React 18.3.1 + ReactDOM (dev builds), `@babel/standalone` 7.29.0, **Lucide pinned 1.21.0** (replacing `lucide@latest` — a supply-chain bug). `index.html` repointed to `./vendor/*.js`, SRI/`crossorigin` dropped (local files). Offline serve smoke: `GET /` has **0 `unpkg.com` refs**, all four `/vendor/*.js` → **200**.
+- **Golden fixture (`phase4/console/fixtures/`):** `golden_telemetry.json` is the single source for the `/events` key contract — `meta.keys` (the 27 `packet_to_record` keys) + `fmt`/`size` + a deliberate 8-frame sequence (loading×2, STATS, INFER, STATE, HAS_ERROR, seq-gap 6→9, corrupt). `gen_golden_pcap.py` packs it to `golden.pcap` (committed; deterministic — guards `calcsize==200` + the 0xCBF43926 CRC vector). Parses back to exactly the designed sequence (corrupt → `crc_ok=False`).
+- **Shared packer (`phase3/scripts/telemetry_fixture.py`):** `build_packet`/`build_pcap_many`/`frame_to_packet` + `REQUIRED_RECORD_KEYS` (derived from `packet_to_record`, not hardcoded), moved out of the receiver test (which stayed green at 31 across the refactor — Step-2 checkpoint).
+- **Key-contract Layer A (`test_telemetry_receiver.py`, existing CI step):** for every golden frame, `build_packet → decode_packet → packet_to_record` round-trips value-exactly, `set(record.keys()) == meta.keys`, `kind_name`/`flags_list`/`crc_ok` derived correctly, corrupt → `crc_ok=False`, and no internal keys (`magic`/`crc32`/`reserved*`) leak. **31 → 81 asserts.**
+- **CI:** new `Phase 4: Golden telemetry fixture up-to-date (Python)` step regenerates `golden.pcap` and fails on `git diff` drift.
+
+## Next — goal #2 backlog + console logic/e2e layers → Phase 4 goals #3–7
+
+**goal #2b (Remote Telemetry Console) is COMPLETE** — box-side telemetry-OUT (N-a→N-b→N-c-1) + the receiver/SSE bridge (N-c-2/3a) + the honest console (N-c-3b/c) + the auto-populated Capabilities surface (N-c-3d) + the frontend-test foundation (vendored libs + golden fixture + key-contract Layer A). Next on the console: the **logic** layer (`telemetry.js` connState/CRC/stale-watchdog via Playwright `page.clock`) + a real-SSE **e2e** smoke (Playwright-Python). Remaining:
 1. **Optional goal #2 backlog** — NVMe progress bar, true-WC mapping, 1920×1080 gfxmode; **LOW-pri** reject `bytes_per_sector != 512` in `fat32_init`.
 2. Phase 4 **goals #3–7**: xHCI USB keyboard input (down-ranked/optional), one-script installer, 90-day soak, docs, `v1.0.0` MIT release.
 
