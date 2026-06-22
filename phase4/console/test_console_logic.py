@@ -7,8 +7,8 @@ EventSource (NO real SSE), asserting connState live/stale/crcfail, seq-gap
 droppedPackets, new-boot reset, and cold-start queriesPerSec() purely via
 window.JarvisTelemetry.getState(). Zero console errors.
 
-The 2500 / 600 ms clock steps are pinned to telemetry.js STALE_MS = 2800 — a
-deliberate change to the watchdog MUST update them (otherwise this fails loudly).
+The 2500 / 1500 ms clock steps bracket telemetry.js STALE_MS = 2800 (2500 < 2800
+< 4000) — a deliberate watchdog change that crosses those bounds fails loudly.
 
 Run: python3 phase4/console/test_console_logic.py   (nonzero exit on FAIL)
 Requires: pip install playwright==1.60.0 ; playwright install --only-shell chromium
@@ -28,14 +28,18 @@ BASE = 'http://127.0.0.1:%d/' % PORT
 
 # Stub EventSource installed BEFORE page scripts run: stores the instance on
 # window.__es and exposes window.__push(rec) to feed a record into onmessage.
-# onopen is scheduled via setTimeout(0) so it fires under the faked clock.
+# onopen fires via a MICROTASK (not setTimeout) so it runs right after
+# telemetry.js assigns es.onopen and BEFORE the faked-clock 1500ms failTimer —
+# otherwise the failTimer wins and telemetry.js falls back to its simulator,
+# which keeps pushing fresh records and the stale-watchdog never trips. (This
+# was a real CI-vs-local flake: setTimeout(0) onopen lost the race on CI.)
 STUB = r"""
 window.__esCount = 0;
 class StubES {
   constructor(url) {
     this.url = url; this.onopen = null; this.onmessage = null; this.onerror = null;
     window.__es = this; window.__esCount++;
-    setTimeout(() => { if (this.onopen) this.onopen(); }, 0);
+    Promise.resolve().then(() => { if (this.onopen) this.onopen(); });
   }
   close() {}
 }
@@ -101,14 +105,15 @@ def main():
         with sync_playwright() as pw:
             browser = pw.chromium.launch()
 
-            # LIVE + STALE (watchdog pinned to STALE_MS = 2800)
+            # LIVE + STALE (steps bracket the STALE_MS = 2800 watchdog: 2500 < 2800 < 4000)
             page = fresh_page(browser, errors)
             page.evaluate("window.__push({crc_ok:true, boot_id:1, seq:1, q_total:0, recv_ts:0})")
             check(state(page)['connState'] == 'live', "connState 'live' after a CRC-valid packet")
+            check(state(page)['simulated'] is False, "on the stubbed stream, NOT the simulator fallback")
             page.clock.run_for(2500)
             check(state(page)['connState'] == 'live', "still 'live' at 2500ms (< STALE_MS 2800)")
-            page.clock.run_for(600)
-            check(state(page)['connState'] == 'stale', "'stale' at 3100ms (> STALE_MS 2800)")
+            page.clock.run_for(1500)
+            check(state(page)['connState'] == 'stale', "'stale' at 4000ms (> STALE_MS 2800)")
             page.close()
 
             # CRCFAIL
