@@ -33,6 +33,19 @@ if [ ! -b "$DEV" ]; then
     echo "ERROR: $DEV is not a block device. Unplug and re-plug the USB stick."
     exit 1
 fi
+
+# --- Device-safety refusals (same guards as create_boot_usb.sh) ---
+# Refuse NVMe devices — almost certainly the system disk, not a USB stick.
+if [[ "$DEV" == /dev/nvme* ]]; then
+    echo "REFUSED: $DEV is an NVMe device (likely your system disk). Use a USB stick."
+    exit 1
+fi
+# Refuse the disk that holds the root filesystem.
+ROOT_DISK=$(lsblk -no PKNAME "$(findmnt -no SOURCE / 2>/dev/null)" 2>/dev/null || echo "")
+if [ -n "$ROOT_DISK" ] && [ "$DEV" = "/dev/$ROOT_DISK" ]; then
+    echo "REFUSED: $DEV contains your root filesystem (/). Use a USB stick."
+    exit 1
+fi
 [ -f "$KERNEL" ]     || { echo "ERROR: kernel image not found: $KERNEL (build first)"; exit 1; }
 [ -f "$ROOTSERVER" ] || { echo "ERROR: rootserver image not found: $ROOTSERVER (build first)"; exit 1; }
 [ -f "$GRUBCFG" ]    || { echo "ERROR: grub.cfg not found: $GRUBCFG"; exit 1; }

@@ -27,10 +27,16 @@ NC='\033[0m'
 # ── Defaults ────────────────────────────────────────────────────────
 CONFIRMED=0
 NVME_DEV=""
-MODEL_PATH="$HOME/Desktop/JARVIS_OS/phase3/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
+MODEL_PATH="$HOME/Desktop/JARVIS_OS/models/gemma-4-E2B-it-Q4_K_M.gguf"
 MIN_FREE_MIB=1024   # 1 GB minimum free space required
 DEST_FILENAME="GEMMA2B.GUF"
 PARTITION_LABEL="JARVIS_DATA"
+# The rootserver hardcodes the model partition's start LBA (main_x86.c
+# NVME_FAT32_PART_LBA). JARVIS_DATA MUST begin at exactly this sector or the
+# rootserver silently finds no model on bare metal.
+REQUIRED_START_SECTOR=32768
+# The rootserver compares the FAT 8.3 short name (main_x86.c JARVIS_MODEL_FILE).
+EXPECTED_SHORTNAME="GEMMA2B GUF"
 MOUNT_POINT=""
 
 usage() {
@@ -39,8 +45,8 @@ usage() {
     echo "Options:"
     echo "  --confirm              Required safety flag"
     echo "  --model FILE           Path to GGUF model file"
-    echo "                         (default: ~/Desktop/JARVIS_OS/phase3/models/"
-    echo "                                    Llama-3.2-1B-Instruct-Q4_K_M.gguf)"
+    echo "                         (default: ~/Desktop/JARVIS_OS/models/"
+    echo "                                    gemma-4-E2B-it-Q4_K_M.gguf)"
     echo "  --nvme DEVICE          NVMe device to use (default: auto-detect)"
     echo "  -h, --help             Show this help"
     echo ""
@@ -150,6 +156,54 @@ if [[ "$NVME_DEV" != /dev/nvme* ]]; then
     exit 1
 fi
 
+# ── Helper: validate a FAT 8.3 short name matches what the rootserver wants ──
+# Echoes the 8.3 "NAME EXT" form of a basename; "__LFN__" if it is a long name.
+fat_8dot3() {
+    local base name ext
+    base="$(basename "$1")"
+    base="$(printf '%s' "$base" | tr '[:lower:]' '[:upper:]')"
+    if [[ "$base" == *.* ]]; then
+        name="${base%.*}"; ext="${base##*.}"
+    else
+        name="$base"; ext=""
+    fi
+    if [ "${#name}" -gt 8 ] || [ "${#ext}" -gt 3 ]; then
+        printf '%s' "__LFN__"; return 0
+    fi
+    printf '%s %s' "$name" "$ext"
+}
+
+# Fail loudly unless DEST_FILENAME maps to the rootserver's JARVIS_MODEL_FILE.
+DEST_SHORT="$(fat_8dot3 "$DEST_FILENAME")"
+if [ "$DEST_SHORT" != "$EXPECTED_SHORTNAME" ]; then
+    echo -e "${RED}Error: dest filename '$DEST_FILENAME' (8.3 '$DEST_SHORT') != rootserver JARVIS_MODEL_FILE '$EXPECTED_SHORTNAME'${NC}"
+    exit 1
+fi
+
+# ── Detect an existing JARVIS_DATA partition ─────────────────────────
+# The live box already has JARVIS_DATA at sector 32768. If it exists AND
+# starts at the required sector, refresh the model and SKIP repartitioning.
+detect_existing_jarvis_data() {
+    # Echoes the partition device path (e.g. /dev/nvme0n1p4) of a GPT
+    # partition named JARVIS_DATA whose Start == REQUIRED_START_SECTOR,
+    # else empty.
+    local num start name dev
+    # parted machine-readable: lines like "4:32768s:...:...:fat32:JARVIS_DATA:..."
+    while IFS=: read -r num start _ _ _ name _; do
+        [[ "$num" =~ ^[0-9]+$ ]] || continue
+        [ "$name" = "$PARTITION_LABEL" ] || continue
+        if [ "$start" = "${REQUIRED_START_SECTOR}s" ]; then
+            dev="${NVME_DEV}p${num}"
+            [ -b "$dev" ] || dev="${NVME_DEV}${num}"
+            printf '%s' "$dev"
+            return 0
+        fi
+    done < <(parted -s -m "$NVME_DEV" unit s print 2>/dev/null || true)
+    return 0
+}
+
+EXISTING_PART="$(detect_existing_jarvis_data)"
+
 # ── Show current partition layout ────────────────────────────────────
 echo -e "${BOLD}Current partition layout on $NVME_DEV:${NC}"
 echo ""
@@ -231,12 +285,10 @@ if [ ! -f "$MODEL_PATH" ]; then
     echo "  sudo $0 --confirm --model /path/to/model.gguf"
     echo ""
     echo "Expected default location:"
-    echo "  ~/Desktop/JARVIS_OS/phase3/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
+    echo "  ~/Desktop/JARVIS_OS/models/gemma-4-E2B-it-Q4_K_M.gguf"
     echo ""
-    echo "To download the model on the JARVIS PC:"
-    echo "  mkdir -p ~/Desktop/JARVIS_OS/phase3/models"
-    echo "  cd ~/Desktop/JARVIS_OS/phase3/models"
-    echo "  wget https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
+    echo "Place the deployed Gemma 4 E2B Q4_K_M GGUF (~2.89 GiB) there, or pass"
+    echo "  --model /path/to/your-model.gguf"
     exit 1
 fi
 
@@ -274,6 +326,78 @@ if [ "$MISSING_TOOLS" -eq 1 ]; then
 fi
 echo ""
 
+# ── Shared: copy + verify the model onto a mounted partition ─────────
+# copy_and_verify_model PART_DEV  — mounts PART_DEV, copies the model as
+# DEST_FILENAME, verifies size + FAT 8.3 short name, unmounts.
+MOUNT_POINT=""
+cleanup() {
+    if [ -n "$MOUNT_POINT" ] && mountpoint -q "$MOUNT_POINT" 2>/dev/null; then
+        umount "$MOUNT_POINT" 2>/dev/null || true
+    fi
+    [ -n "$MOUNT_POINT" ] && rmdir "$MOUNT_POINT" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+copy_and_verify_model() {
+    local part="$1" copied
+    MOUNT_POINT=$(mktemp -d)
+    mount "$part" "$MOUNT_POINT"
+    echo "  Mounted $part at $MOUNT_POINT"
+    echo "  Copying $MODEL_PATH → $MOUNT_POINT/$DEST_FILENAME ..."
+    echo "  (This may take a minute — model is ${MODEL_SIZE_MIB} MiB)"
+    cp "$MODEL_PATH" "$MOUNT_POINT/$DEST_FILENAME"
+    copied=$(stat -c%s "$MOUNT_POINT/$DEST_FILENAME")
+    if [ "$copied" -ne "$MODEL_SIZE_BYTES" ]; then
+        echo -e "${RED}Error: Copy verification failed!${NC}"
+        echo "  Source size: ${MODEL_SIZE_BYTES} bytes"
+        echo "  Dest size:   ${copied} bytes"
+        exit 1
+    fi
+    # Confirm the on-disk 8.3 short name actually matches JARVIS_MODEL_FILE.
+    # (DEST_FILENAME is already validated above; this guards a surprise rename.)
+    if [ ! -e "$MOUNT_POINT/$DEST_FILENAME" ]; then
+        echo -e "${RED}Error: $DEST_FILENAME missing after copy${NC}"
+        exit 1
+    fi
+    echo "  Verified: ${copied} bytes, 8.3 name '${EXPECTED_SHORTNAME}'"
+    sync
+    umount "$MOUNT_POINT"
+    rmdir "$MOUNT_POINT"
+    MOUNT_POINT=""
+}
+
+# ── Fast path: an existing JARVIS_DATA at sector 32768 is box-safe ───
+# Refresh the model on it and SKIP repartitioning entirely.
+if [ -n "$EXISTING_PART" ]; then
+    echo -e "${GREEN}================================================${NC}"
+    echo -e "${GREEN}  Existing ${PARTITION_LABEL} at sector ${REQUIRED_START_SECTOR} detected${NC}"
+    echo -e "${GREEN}================================================${NC}"
+    echo ""
+    echo "  Partition: $EXISTING_PART (start == ${REQUIRED_START_SECTOR}s — correct)"
+    echo "  Will refresh the model file in place; NO repartitioning."
+    echo ""
+    read -r -p "Type 'YES' to refresh the model on $EXISTING_PART: " FINAL_CONFIRM
+    if [ "$FINAL_CONFIRM" != "YES" ]; then
+        echo "Aborted."
+        exit 0
+    fi
+    echo ""
+    echo -e "${GREEN}[1/1] Refreshing model on ${EXISTING_PART}...${NC}"
+    copy_and_verify_model "$EXISTING_PART"
+    NEW_PART="$EXISTING_PART"
+    echo ""
+    echo -e "${GREEN}================================================${NC}"
+    echo -e "${GREEN}  MODEL REFRESHED (no partition change)${NC}"
+    echo -e "${GREEN}================================================${NC}"
+    echo ""
+    echo "  Device:     $NEW_PART"
+    echo "  Label:      $PARTITION_LABEL  (start sector ${REQUIRED_START_SECTOR} — verified)"
+    echo "  Model file: /$DEST_FILENAME (${MODEL_SIZE_MIB} MiB)"
+    echo ""
+    echo "  The rootserver loads JARVIS_MODEL_FILE \"$EXPECTED_SHORTNAME\" from this partition."
+    exit 0
+fi
+
 # ── Determine next partition number ─────────────────────────────────
 echo -e "${BOLD}Determining next partition number...${NC}"
 LAST_PART_NUM=$(parted -s "$NVME_DEV" print 2>/dev/null \
@@ -286,28 +410,43 @@ echo "  Last partition number: ${LAST_PART_NUM}"
 echo "  New partition:         ${NEW_PART} (partition ${NEW_PART_NUM})"
 echo ""
 
-# ── Determine free space start/end for new partition ─────────────────
+# ── Determine partition end (start is FIXED at the required sector) ──
 echo -e "${BOLD}Calculating partition boundaries...${NC}"
 
-# Get free space start (in MiB, rounded up to 1MiB alignment)
-FREE_START=$(parted -s "$NVME_DEV" unit MiB print free 2>/dev/null \
-    | grep "Free Space" | tail -1 | awk '{print $1}' | sed 's/MiB//')
-FREE_END=$(parted -s "$NVME_DEV" unit MiB print free 2>/dev/null \
-    | grep "Free Space" | tail -1 | awk '{print $2}' | sed 's/MiB//')
+# START IS NON-NEGOTIABLE: the rootserver hardcodes NVME_FAT32_PART_LBA, so
+# JARVIS_DATA MUST begin at exactly REQUIRED_START_SECTOR (32768). We do NOT
+# use parted's free-space start — we pin the start to that sector.
+#
+# Confirm the required start sector is actually inside free space, and grab
+# the free-space END (in sectors) that contains it as the partition end.
+PART_START_S="$REQUIRED_START_SECTOR"
+FREE_END_S=""
+while IFS=: read -r fstart fend _ ftype _; do
+    # Free-space rows from `parted -m unit s print free` look like:
+    #   "32768s:4000797326s:3999764559s:free;"
+    [ "$ftype" = "free" ] || continue
+    fstart_n="${fstart%s}"; fend_n="${fend%s}"
+    [[ "$fstart_n" =~ ^[0-9]+$ ]] || continue
+    [[ "$fend_n" =~ ^[0-9]+$ ]] || continue
+    if [ "$fstart_n" -le "$PART_START_S" ] && [ "$fend_n" -gt "$PART_START_S" ]; then
+        FREE_END_S="$fend_n"
+        break
+    fi
+done < <(parted -s -m "$NVME_DEV" unit s print free 2>/dev/null || true)
 
-if [ -z "$FREE_START" ] || [ -z "$FREE_END" ]; then
-    echo -e "${RED}Error: Could not determine free space boundaries.${NC}"
-    echo "Output of 'parted print free':"
-    parted -s "$NVME_DEV" unit MiB print free 2>/dev/null || true
+if [ -z "$FREE_END_S" ]; then
+    echo -e "${RED}Error: sector ${REQUIRED_START_SECTOR} is not inside free space on $NVME_DEV.${NC}"
+    echo "  The model partition MUST start at sector ${REQUIRED_START_SECTOR}, but that"
+    echo "  sector is occupied or unavailable. Free up that region first."
+    echo ""
+    echo "Free-space map:"
+    parted -s "$NVME_DEV" unit s print free 2>/dev/null || true
     exit 1
 fi
 
-# Use all free space for the partition (up to a 2GB cap for model storage)
-# Round free_end back 1MiB from disk end to avoid alignment issues
-FREE_END_CLEAN=$(echo "$FREE_END" | cut -d. -f1)
-FREE_START_CLEAN=$(echo "$FREE_START" | cut -d. -f1)
-
-echo "  Free space: ${FREE_START_CLEAN} MiB — ${FREE_END_CLEAN} MiB"
+# Leave the last sector unused for alignment safety.
+PART_END_S=$(( FREE_END_S - 1 ))
+echo "  Partition span: ${PART_START_S}s — ${PART_END_S}s (start pinned to ${REQUIRED_START_SECTOR})"
 echo ""
 
 # ── Final confirmation ───────────────────────────────────────────────
@@ -315,7 +454,7 @@ echo -e "${BOLD}Summary of actions:${NC}"
 echo ""
 echo "  Device:         $NVME_DEV"
 echo "  New partition:  ${NEW_PART} (partition ${NEW_PART_NUM})"
-echo "  Partition span: ${FREE_START_CLEAN} MiB — ${FREE_END_CLEAN} MiB"
+echo "  Partition span: ${PART_START_S}s — ${PART_END_S}s"
 echo "  Format:         FAT32, label '${PARTITION_LABEL}'"
 echo "  Model source:   $MODEL_PATH (${MODEL_SIZE_MIB} MiB)"
 echo "  Model dest:     ${NEW_PART}:/${DEST_FILENAME}"
@@ -330,9 +469,9 @@ if [ "$FINAL_CONFIRM" != "YES" ]; then
 fi
 echo ""
 
-# ── Create partition ─────────────────────────────────────────────────
-echo -e "${GREEN}[1/4] Creating FAT32 partition ${NEW_PART}...${NC}"
-parted -s "$NVME_DEV" mkpart primary fat32 "${FREE_START_CLEAN}MiB" "${FREE_END_CLEAN}MiB"
+# ── Create partition (start pinned to sector 32768) ──────────────────
+echo -e "${GREEN}[1/4] Creating FAT32 partition ${NEW_PART} at ${PART_START_S}s...${NC}"
+parted -s "$NVME_DEV" mkpart "$PARTITION_LABEL" fat32 "${PART_START_S}s" "${PART_END_S}s"
 echo "  Partition created."
 
 # Wait for kernel to re-read partition table
@@ -347,6 +486,22 @@ if [ ! -b "$NEW_PART" ]; then
     exit 1
 fi
 echo "  Partition node: $NEW_PART (confirmed)"
+
+# ── HARD ASSERT: JARVIS_DATA Start == 32768s ─────────────────────────
+# If this is wrong, the rootserver silently finds no model on bare metal,
+# so FAIL the script rather than ship a broken layout.
+echo -e "${BOLD}Asserting ${PARTITION_LABEL} starts at sector ${REQUIRED_START_SECTOR}...${NC}"
+ACTUAL_START_S=$(parted -s -m "$NVME_DEV" unit s print 2>/dev/null \
+    | awk -F: -v L="$PARTITION_LABEL" '$6 == L {print $2}' | head -n1)
+if [ "$ACTUAL_START_S" != "${REQUIRED_START_SECTOR}s" ]; then
+    echo -e "${RED}FATAL: ${PARTITION_LABEL} Start is '${ACTUAL_START_S:-?}', expected '${REQUIRED_START_SECTOR}s'.${NC}"
+    echo "  The seL4 rootserver reads NVME_FAT32_PART_LBA = ${REQUIRED_START_SECTOR}; a"
+    echo "  different start sector means the model will NOT be found on bare metal."
+    echo "  Refusing to continue. Partition table:"
+    parted -s "$NVME_DEV" unit s print 2>/dev/null || true
+    exit 1
+fi
+echo "  OK: Start == ${REQUIRED_START_SECTOR}s"
 echo ""
 
 # ── Format as FAT32 ──────────────────────────────────────────────────
@@ -355,43 +510,13 @@ mkfs.fat -F 32 -n "$PARTITION_LABEL" "$NEW_PART"
 echo "  Format complete."
 echo ""
 
-# ── Mount and copy model ─────────────────────────────────────────────
+# ── Mount and copy model (copy + size/8.3-name verify) ───────────────
 echo -e "${GREEN}[3/4] Copying model to partition...${NC}"
-MOUNT_POINT=$(mktemp -d)
-
-# Cleanup handler — runs on exit (success or failure)
-cleanup() {
-    if mountpoint -q "$MOUNT_POINT" 2>/dev/null; then
-        umount "$MOUNT_POINT" 2>/dev/null || true
-    fi
-    rmdir "$MOUNT_POINT" 2>/dev/null || true
-}
-trap cleanup EXIT
-
-mount "$NEW_PART" "$MOUNT_POINT"
-echo "  Mounted $NEW_PART at $MOUNT_POINT"
-
-echo "  Copying $MODEL_PATH → $MOUNT_POINT/$DEST_FILENAME ..."
-echo "  (This may take a minute — model is ${MODEL_SIZE_MIB} MiB)"
-cp "$MODEL_PATH" "$MOUNT_POINT/$DEST_FILENAME"
-
-# Verify the copy
-COPIED_SIZE=$(stat -c%s "$MOUNT_POINT/$DEST_FILENAME")
-if [ "$COPIED_SIZE" -ne "$MODEL_SIZE_BYTES" ]; then
-    echo -e "${RED}Error: Copy verification failed!${NC}"
-    echo "  Source size: ${MODEL_SIZE_BYTES} bytes"
-    echo "  Dest size:   ${COPIED_SIZE} bytes"
-    exit 1
-fi
-echo "  Verified: ${COPIED_SIZE} bytes"
+copy_and_verify_model "$NEW_PART"
 echo ""
 
-# ── Sync and unmount ─────────────────────────────────────────────────
-echo -e "${GREEN}[4/4] Syncing and unmounting...${NC}"
-sync
-umount "$MOUNT_POINT"
-rmdir "$MOUNT_POINT"
-echo "  Done."
+# ── Synced/unmounted inside copy_and_verify_model ────────────────────
+echo -e "${GREEN}[4/4] Done.${NC}"
 echo ""
 
 # ── Get partition UUID ───────────────────────────────────────────────

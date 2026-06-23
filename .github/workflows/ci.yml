@@ -234,6 +234,17 @@ jobs:
     - name: "Phase 4: Console E2E (Playwright, real SSE via --replay)"
       run: python3 phase4/console/test_console_e2e.py
 
+    - name: "Phase 4: Installer shellcheck"
+      run: |
+        sudo apt-get update && sudo apt-get install -y shellcheck
+        shellcheck phase3/scripts/install_jarvis_x86.sh phase3/scripts/test_install_jarvis_x86.sh
+        shellcheck -S error phase3/scripts/setup_nvme_partition.sh phase3/scripts/reflash_usb.sh
+
+    - name: "Phase 4: Installer dry-run + helper tests"
+      run: |
+        chmod +x phase3/scripts/install_jarvis_x86.sh phase3/scripts/test_install_jarvis_x86.sh
+        bash phase3/scripts/test_install_jarvis_x86.sh
+
     - name: "Phase 3: x86 Timer (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 -DJARVIS_TEST_MOCK \

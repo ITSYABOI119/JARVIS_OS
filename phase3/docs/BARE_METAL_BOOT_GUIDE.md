@@ -24,11 +24,11 @@ seL4's x86-64 kernel is multiboot-compliant. GRUB loads the kernel and rootserve
 
 | Item | Details |
 |------|---------|
-| JARVIS Project PC | Ryzen 7 2700X, ASUS X470-F Gaming, 16GB DDR4, RTX 3060 |
+| JARVIS Project PC | Ryzen 7 2700X, ASUS X470-F Gaming, 32GB DDR4, R9 280X (display only) |
 | USB stick | 2GB+ (FAT32, will be erased) |
 | Monitor | Connected to GPU or motherboard video output |
 | Keyboard | USB keyboard for BIOS setup |
-| USB-to-serial adapter | Optional, for COM1 serial console (see Section 8) |
+| USB-to-serial adapter | Optional, for COM1 serial console (see Section 9) |
 
 ### Software (on JARVIS PC running Ubuntu)
 
@@ -53,7 +53,7 @@ The seL4 build tree must be set up and the JARVIS rootserver must build successf
 # Verify build tree exists
 ls ~/sel4-x86/jbuild/images/
 #   kernel-x86_64-pc99              -- seL4 kernel
-#   jarvis-x86-image-x86_64-pc99   -- JARVIS rootserver (+ CPIO)
+#   sel4test-driver-image-x86_64-pc99   -- JARVIS rootserver (+ CPIO)
 ```
 
 ---
@@ -112,7 +112,7 @@ After a successful build, verify the output images exist:
 ```bash
 ls -lh ~/sel4-x86/jbuild/images/
 #   kernel-x86_64-pc99              -- seL4 kernel (~9 MB)
-#   jarvis-x86-image-x86_64-pc99   -- JARVIS rootserver (~4 MB)
+#   sel4test-driver-image-x86_64-pc99   -- JARVIS rootserver (~4 MB)
 ```
 
 ---
@@ -154,7 +154,7 @@ sudo mount /dev/sdX1 /mnt/usb
 sudo mkdir -p /mnt/usb/boot/grub
 
 sudo cp ~/sel4-x86/jbuild/images/kernel-x86_64-pc99 /mnt/usb/boot/
-sudo cp ~/sel4-x86/jbuild/images/jarvis-x86-image-x86_64-pc99 /mnt/usb/boot/
+sudo cp ~/sel4-x86/jbuild/images/sel4test-driver-image-x86_64-pc99 /mnt/usb/boot/
 sudo cp ~/Desktop/JARVIS_OS/phase3/firmware/grub/grub.cfg /mnt/usb/boot/grub/
 
 # 3. Install GRUB (BIOS)
@@ -170,7 +170,7 @@ sudo umount /mnt/usb
 ```
 /boot/
   kernel-x86_64-pc99              -- seL4 microkernel
-  jarvis-x86-image-x86_64-pc99   -- JARVIS rootserver
+  sel4test-driver-image-x86_64-pc99   -- JARVIS rootserver
   grub/
     grub.cfg                      -- GRUB menu configuration
     i386-pc/                      -- GRUB BIOS modules
@@ -178,17 +178,37 @@ sudo umount /mnt/usb
 
 ---
 
-## 5. Booting (UEFI)
+## 5. NVMe Model Provisioning
+
+Before first boot, the deployed model must be present on the NVMe drive (`/dev/nvme0n1`) in a FAT32 partition the rootserver can find. The rootserver (`phase3/src/sel4/main_x86.c`) **hardcodes** both the partition location and the model filename:
+
+- **Partition start LBA:** `NVME_FAT32_PART_LBA = 32768`. The JARVIS_DATA FAT32 partition **MUST** start at sector **32768**. If it starts anywhere else, the rootserver silently finds no model and skips inference — there is no error message.
+- **Model file:** `JARVIS_MODEL_FILE = "GEMMA2B GUF"` — the FAT 8.3 short name for `GEMMA2B.GUF`. The deployed model is **Gemma 4 E2B Q4_K_M GGUF (~2.89 GiB)**.
+
+The installer (`phase3/scripts/install_jarvis_x86.sh`) and `phase3/scripts/setup_nvme_partition.sh` create the partition with the correct 32768-sector start and place the model file there, so normally you do not partition by hand.
+
+Verify the partition starts at the expected LBA:
+
+```bash
+sudo parted /dev/nvme0n1 unit s print
+#   the JARVIS_DATA partition's Start must read 32768s
+```
+
+If the Start is not `32768s`, re-run `phase3/scripts/setup_nvme_partition.sh` (or the installer) — do not attempt to "fix" the LBA in `main_x86.c`.
+
+---
+
+## 6. Booting (UEFI)
 
 1. Insert the boot USB into the JARVIS Project PC
 2. Power on (or reboot); press **F8** during POST (X470-F) for the one-time boot menu and select the **`UEFI: <stick>`** entry
 3. The GRUB menu appears on the monitor (~10s) and auto-selects **"JARVIS seL4 x86-64 (UEFI)"** (the multiboot2 entry, grub `default=1`)
 4. seL4 boots via multiboot2 → loads the rootserver → self-test → loads Gemma from NVMe → starts inference
-5. **The monitor goes dark / freezes on the last GRUB frame when seL4 takes over — this is EXPECTED.** There is no on-screen output until the goal #2 Step 2 framebuffer UI exists. **Validate via the NVMe telemetry log** (Section 6) or the COM1 serial console (Section 8).
+5. **The monitor goes dark / freezes on the last GRUB frame when seL4 takes over — this is EXPECTED.** There is no on-screen output until the goal #2 Step 2 framebuffer UI exists. **Validate via the NVMe telemetry log** (Section 7) or the COM1 serial console (Section 9).
 
 ---
 
-## 6. Expected Output (serial / NVMe log — monitor is dark under UEFI)
+## 7. Expected Output (serial / NVMe log — monitor is dark under UEFI)
 
 Under UEFI the monitor is **dark** (VGA text mode needs CSM). The rootserver output below is what appears on the **COM1 serial console** and, with `JARVIS_DBG_BOOT_LOG=1`, in the **NVMe telemetry log** (read back via `sudo dd if=/dev/nvme0n1 bs=512 skip=4000794624 count=2700 | python3 phase3/scripts/parse_nvme_log.py`):
 
@@ -219,16 +239,24 @@ Under UEFI the monitor is **dark** (VGA text mode needs CSM). The rootserver out
 [JARVIS] System idle.
 ```
 
+### Validation channels
+
+Two independent off-box validation channels confirm the boot succeeded without needing on-screen output:
+
+- **NVMe telemetry log (durable):** read back the durable boot log with
+  `sudo dd if=/dev/nvme0n1 bs=512 skip=4000794624 count=2700 | python3 phase3/scripts/parse_nvme_log.py`.
+- **Network telemetry (live, UDP):** run `python3 phase3/scripts/telemetry_receiver.py` on another machine to receive the box's UDP telemetry on port 51000 over the Intel I211 NIC. Pass `--sse` (`python3 phase3/scripts/telemetry_receiver.py --sse`) to also serve the browser console at `phase4/console/`.
+
 Key differences on real hardware compared to QEMU:
-- More untypeds reported (16GB RAM vs 4-8GB QEMU)
+- More untypeds reported (32GB RAM vs 4-8GB QEMU)
 - Real ACPI tables (may show multiple CPUs / threads for Ryzen 7)
 - Real IOAPIC/LAPIC addresses
-- PCI devices visible (NVMe, RTX 3060, NIC, USB controllers)
+- PCI devices visible (NVMe, R9 280X, NIC, USB controllers)
 - HPET timer available
 
 ---
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
@@ -238,7 +266,7 @@ Key differences on real hardware compared to QEMU:
 | Triple fault after GRUB | IOAPIC/LAPIC issue | Try the "Serial Only" GRUB entry; disable IOMMU in BIOS |
 | Hang after seL4 kernel banner | Timer source issue | Check PIT/HPET/TSC config; try rebuilding without `-DSIMULATION=1` |
 | Monitor dark after GRUB | Expected under UEFI | Not a fault — no framebuffer UI until goal #2 Step 2. Validate via NVMe log / serial. |
-| Works on QEMU, fails on real HW | ACPI or memory map differences | Debug with serial console (Section 8); check IOMMU/VT-d setting |
+| Works on QEMU, fails on real HW | ACPI or memory map differences | Debug with serial console (Section 9); check IOMMU/VT-d setting |
 | "No valid untypeds" | Memory map / IOMMU | UEFI memory map validated in Step 1; if it recurs, confirm IOMMU/AMD-Vi is Disabled. |
 | Kernel assertion failure | IOMMU/AMD-Vi enabled | Disable AMD-Vi in BIOS for first boot |
 | GRUB rescue prompt | grub.cfg not found on USB | Verify grub.cfg is at `/boot/grub/grub.cfg` on the USB partition |
@@ -246,7 +274,7 @@ Key differences on real hardware compared to QEMU:
 
 ---
 
-## 8. Serial Console (Optional)
+## 9. Serial Console (Optional)
 
 The seL4 kernel outputs to COM1 (I/O port 0x3F8) at 115200 baud. Serial provides kernel-level output that the VGA driver cannot display (the VGA driver only shows rootserver output).
 
@@ -269,7 +297,7 @@ On Windows (PuTTY): Connection type Serial, COM port matching the adapter, 11520
 
 ---
 
-## 9. Note About VGA vs Serial Output
+## 10. Note About VGA vs Serial Output
 
 seL4 x86-64 has two independent output paths:
 
@@ -281,7 +309,7 @@ Both outputs run simultaneously when available. For initial bring-up, VGA alone 
 
 ---
 
-## 10. Updating After Code Changes
+## 11. Updating After Code Changes
 
 The development workflow is: edit source, sync, build, copy to USB, reboot.
 
@@ -294,7 +322,7 @@ The development workflow is: edit source, sync, build, copy to USB, reboot.
 # 3. Update the USB
 sudo mount /dev/sdX1 /mnt/usb
 sudo cp ~/sel4-x86/jbuild/images/kernel-x86_64-pc99 /mnt/usb/boot/
-sudo cp ~/sel4-x86/jbuild/images/jarvis-x86-image-x86_64-pc99 /mnt/usb/boot/
+sudo cp ~/sel4-x86/jbuild/images/sel4test-driver-image-x86_64-pc99 /mnt/usb/boot/
 sudo umount /mnt/usb
 
 # 4. Reboot JARVIS PC from USB
@@ -304,7 +332,7 @@ Later (after NVMe boot is implemented), the USB step goes away and iteration bec
 
 ---
 
-## 11. Reference
+## 12. Reference
 
 | Resource | Location |
 |----------|----------|
