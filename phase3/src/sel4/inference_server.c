@@ -167,11 +167,13 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
     prompt_ids[n_prompt++] = 107;           /* \n */
     prompt_ids[n_prompt++] = 98;            /* <|think|> */
 
+#if JARVIS_DBG_PB
     /* DEBUG: print token IDs for comparison against llama.cpp reference */
     printf("[PB] tokens (%d):", n_prompt);
     for (int i = 0; i < n_prompt && i < 20; i++)
         printf(" %d", prompt_ids[i]);
     printf("\n");
+#endif
 
     /* Reset state for new generation */
     state->pos = 0;

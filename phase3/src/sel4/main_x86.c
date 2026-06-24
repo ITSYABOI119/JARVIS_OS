@@ -112,6 +112,7 @@ static uint32_t g_nvme_total_mb = 0;
 static uint8_t  g_infer_active = 0;
 static uint64_t g_infer_cycles = 0;
 static uint64_t g_infer_t0 = 0;   /* TSC at the start of the current inference window */
+static int      g_selftest_pass = 0;  /* real self-test tally (set in main(), logged durably in main_continued) */
 
 /* seL4 IOPort wrappers for PCI config space (0xCF8/0xCFC).
  * Cap acquired at runtime, stored here for the wrapper functions. */
@@ -1860,8 +1861,10 @@ static void *main_continued(void *arg UNUSED)
                                         puts_serial(")\n");
                                         nvme_log_write(&nvme_ctrl, dma_vaddrs[4], dma_paddrs[4],
                                                        LOG_BOOT, "JARVIS boot started");
-                                        nvme_log_write(&nvme_ctrl, dma_vaddrs[4], dma_paddrs[4],
-                                                       LOG_SELFTEST, "Self-test 5/5 PASS");
+                                        { char sl[48];
+                                          snprintf(sl, sizeof sl, "Self-test %d/5 (3 real, 2 vacuous)", g_selftest_pass);
+                                          nvme_log_write(&nvme_ctrl, dma_vaddrs[4], dma_paddrs[4],
+                                                         LOG_SELFTEST, sl); }
                                         {   /* Step 2c-1: the FB block ran before this, so its
                                              * [JARVIS] FB: lines were serial-only — relog the
                                              * descriptor + map outcome durably here. */
@@ -2927,6 +2930,7 @@ int main(void)
     if (selftest_tensor_ops()) tests_pass++;
     if (selftest_dequant()) tests_pass++;
     if (selftest_tokenizer_sampling()) tests_pass++;
+    g_selftest_pass = tests_pass;   /* publish the real tally for the durable NVMe-log line */
 
     puts_serial("\n=== Self-Test: ");
     put_dec((uint32_t)tests_pass); puts_serial("/"); put_dec((uint32_t)tests_total);

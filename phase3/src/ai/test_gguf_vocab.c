@@ -217,6 +217,7 @@ int main(void)
     if (!model_buf) {
         printf("SKIP: Cannot read model file: %s\n", MODEL_PATH);
         printf("(This test requires the real Llama 3.2 1B GGUF model)\n");
+        printf("::warning::test_gguf_vocab SKIPPED on CI (model not found) — assertions not run\n");
         return 0;
     }
     printf("Loaded model: %zu bytes (%.1f MB)\n\n", model_len, model_len / (1024.0 * 1024.0));

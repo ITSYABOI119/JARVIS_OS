@@ -381,6 +381,19 @@ class _SSEHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+class _QuietThreadingHTTPServer(ThreadingHTTPServer):
+    """Swallow benign client-disconnect tracebacks (browser closed the page/SSE
+    mid request-read — WinError 10053 etc.). Every other error still propagates
+    to the default handler."""
+
+    def handle_error(self, request, client_address):
+        import sys
+        if isinstance(sys.exc_info()[1],
+                      (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)):
+            return   # benign: client (browser) closed the connection
+        super().handle_error(request, client_address)
+
+
 def _run_sse(args) -> int:
     hub = TelemetryHub()
     if args.replay:
@@ -396,7 +409,7 @@ def _run_sse(args) -> int:
     producer.start()
     _SSEHandler.hub = hub
     _SSEHandler.web_dir = args.web_dir
-    httpd = ThreadingHTTPServer((args.bind, args.http_port), _SSEHandler)
+    httpd = _QuietThreadingHTTPServer((args.bind, args.http_port), _SSEHandler)
     print("SSE bridge: http://%s:%d  (/events stream; static from '%s'; source: %s)"
           % (args.bind or '0.0.0.0', args.http_port, args.web_dir, source), flush=True)
     try:
