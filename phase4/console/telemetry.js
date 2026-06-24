@@ -3,9 +3,10 @@
  * Read-only. Connects to the receiver's /events SSE stream. Each message is one
  * JSON record per ~1 Hz packet, shape = telemetry_receiver.py packet_to_record:
  *   recv_ts, version, kind, kind_name, flags, flags_list, boot_id, seq,
- *   uptime_ms, q_total, q_hits, q_infer, q_heartbeat, q_shield, q_errors,
- *   num_nodes, model_load_pct, fb_w, fb_h, fb_bpp, selftest_score,
- *   model_size_mb, total_ram_mb, infer_gen_tokens, model_name, last_text, crc_ok
+ *   uptime_ms, infer_active, infer_duty_pct, q_total, q_hits, q_infer,
+ *   q_heartbeat, q_shield, q_errors, num_nodes, model_load_pct, fb_w, fb_h,
+ *   fb_bpp, selftest_score, model_size_mb, total_ram_mb, nvme_total_mb,
+ *   log_cursor, infer_gen_tokens, model_name, last_text, crc_ok
  *
  * Liveness is genuine: a record is "live" only while a fresh CRC-valid packet
  * arrived within STALE_MS. seq gaps => dropped packets. No fabricated fields.
@@ -191,7 +192,11 @@
         fb_w: 1024, fb_h: 768, fb_bpp: 32,
         selftest_score: 5,
         model_size_mb: 2962,
-        total_ram_mb: 0,             // honest: no source
+        total_ram_mb: 30000,         // preview value (badged SIMULATED) — real source on the box
+        nvme_total_mb: 1953892,      // preview value (badged SIMULATED)
+        log_cursor: seq,             // preview value (badged SIMULATED)
+        infer_active: kind === 2 ? 1 : 0,
+        infer_duty_pct: loading ? 0 : 12,  // preview workload duty cycle (badged SIMULATED)
         infer_gen_tokens: 0,         // honest: not measured in deploy
         model_name: 'Gemma 4 E2B',
         last_text: lastText,

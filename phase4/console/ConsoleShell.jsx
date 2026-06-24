@@ -74,6 +74,7 @@ const RAIL_ITEMS = [
   { id: 'shield',  icon: 'shield',           label: 'SHIELD' },   // neutral icon — passive
   { id: 'models',  icon: 'cpu',              label: 'Models' },
   { id: 'capabilities', icon: 'list-checks', label: 'Capabilities' }, // auto-populated from flags_list
+  { id: 'system',  icon: 'server',           label: 'System' },   // real RAM/inference-state/storage telemetry
 ];
 
 function Rail({ view, setView }) {

@@ -10,7 +10,7 @@ binds the port, decodes each datagram, validates the zlib CRC-32 over the first
 196 bytes, and pretty-prints honest live box state.
 
 Wire format (little-endian, packed, no padding):
-    struct format = '<IBBHIIII6QBBBBHHIIHH56s40s2II'  (struct.calcsize == 200)
+    struct format = '<IBBHIIIBBH6QBBBBHHIIHH56s40s2II'  (struct.calcsize == 200)
     crc32 is the last 4 bytes; valid iff zlib.crc32(pkt[:196]) == pkt.crc32.
 
 Usage:
@@ -40,8 +40,9 @@ import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MAGIC = 0x4A54454C            # "JTEL" (LE on the wire: 4C 45 54 4A)
-FMT = '<IBBHIIII6QBBBBHHIIHH56s40s2II'
+FMT = '<IBBHIIIBBH6QBBBBHHIIHH56s40s2II'
 PKT_SIZE = 200
+LOG_MAX_ENTRIES = 2700        # NVME_LOG_MAX_ENTRIES (no-wrap durable telemetry log)
 
 FLAG_NAMES = {
     0x01: 'MODEL_LOADED',
@@ -77,12 +78,12 @@ def decode_packet(data: bytes) -> dict:
         raise ValueError("bad length %d (expected %d)" % (len(data), PKT_SIZE))
 
     (magic, version, kind, flags, boot_id, seq,
-     uptime_ms, reserved_t,
+     uptime_ms, infer_active, infer_duty_pct, log_cursor,
      q_total, q_hits, q_infer, q_heartbeat, q_shield, q_errors,
      num_nodes, model_load_pct, fb_bpp, selftest_score,
      fb_w, fb_h, model_size_mb, total_ram_mb,
      infer_gen_tokens, reserved_i, last_text_raw, model_name_raw,
-     reserved2_0, reserved2_1, crc32_field) = struct.unpack(FMT, data)
+     nvme_total_mb, reserved2, crc32_field) = struct.unpack(FMT, data)
 
     if magic != MAGIC:
         raise ValueError("bad magic 0x%08X (expected 0x%08X)" % (magic, MAGIC))
@@ -100,6 +101,8 @@ def decode_packet(data: bytes) -> dict:
         'boot_id': boot_id,
         'seq': seq,
         'uptime_ms': uptime_ms,
+        'infer_active': infer_active,
+        'infer_duty_pct': infer_duty_pct,
         'q_total': q_total,
         'q_hits': q_hits,
         'q_infer': q_infer,
@@ -114,6 +117,8 @@ def decode_packet(data: bytes) -> dict:
         'fb_h': fb_h,
         'model_size_mb': model_size_mb,
         'total_ram_mb': total_ram_mb,
+        'nvme_total_mb': nvme_total_mb,
+        'log_cursor': log_cursor,
         'infer_gen_tokens': infer_gen_tokens,
         'last_text': _cstr(last_text_raw),
         'model_name': _cstr(model_name_raw),
@@ -138,6 +143,9 @@ def format_human(d: dict) -> str:
             'OK' if d['crc_ok'] else 'FAIL',
         )
     )
+    line += ("  RAM=%dMB NVMe=%dMB log=%d/%d  infer=%s duty=%d%%"
+             % (d['total_ram_mb'], d['nvme_total_mb'], d['log_cursor'], LOG_MAX_ENTRIES,
+                'ACTIVE' if d['infer_active'] else 'idle', d['infer_duty_pct']))
     if d['last_text']:
         line += '  last="%s"' % d['last_text']
     return line
@@ -171,6 +179,8 @@ def packet_to_record(d: dict, recv_ts: float = 0) -> dict:
         'boot_id': d['boot_id'],
         'seq': d['seq'],
         'uptime_ms': d['uptime_ms'],
+        'infer_active': d['infer_active'],
+        'infer_duty_pct': d['infer_duty_pct'],
         'q_total': d['q_total'],
         'q_hits': d['q_hits'],
         'q_infer': d['q_infer'],
@@ -185,6 +195,8 @@ def packet_to_record(d: dict, recv_ts: float = 0) -> dict:
         'selftest_score': d['selftest_score'],
         'model_size_mb': d['model_size_mb'],
         'total_ram_mb': d['total_ram_mb'],
+        'nvme_total_mb': d['nvme_total_mb'],
+        'log_cursor': d['log_cursor'],
         'infer_gen_tokens': d['infer_gen_tokens'],
         'model_name': d['model_name'],
         'last_text': d['last_text'],

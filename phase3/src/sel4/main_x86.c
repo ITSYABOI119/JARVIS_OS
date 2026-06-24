@@ -101,6 +101,18 @@ static uint32_t jarvis_uptime_ms(void) {
     return (uint32_t)((jarvis_rdtsc() - g_boot_tsc) / TSC_PER_MS);
 }
 
+/* System-telemetry source globals (real values only — no fabrication). Set during
+ * boot/workload, consumed by jarvis_telemetry_emit():
+ *  - g_total_ram_mb : RAM available to JARVIS = sum of non-device untypeds (Tier 0).
+ *  - g_nvme_total_mb: NVMe namespace size = ns_lba_count*ns_block_size, MB (after IDENTIFY).
+ *  - g_infer_active / g_infer_cycles: inference WORKLOAD duty cycle (cycles inferring /
+ *    uptime). NOT a CPU-load gauge — PA busy-polls, so a literal load would read ~100%. */
+static uint32_t g_total_ram_mb = 0;
+static uint32_t g_nvme_total_mb = 0;
+static uint8_t  g_infer_active = 0;
+static uint64_t g_infer_cycles = 0;
+static uint64_t g_infer_t0 = 0;   /* TSC at the start of the current inference window */
+
 /* seL4 IOPort wrappers for PCI config space (0xCF8/0xCFC).
  * Cap acquired at runtime, stored here for the wrapper functions. */
 static seL4_CPtr g_pci_ioport_cap = 0;
@@ -985,6 +997,7 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
 #if JARVIS_DBG_BOOT_LOG
         g_nvme_ptr = saved_nvme;
 #endif
+        g_total_ram_mb = (uint32_t)(total_bytes >> 20);   /* Tier 0: RAM available to JARVIS (telemetry) */
         /* This summary line goes to NVMe log */
         puts_serial("  RAM>=1MB: "); put_dec((uint32_t)ram_large_count);
         puts_serial(" of "); put_dec((uint32_t)ut_count);
@@ -1398,8 +1411,16 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
     pkt.fb_w = (uint16_t)g_fb_desc_w;
     pkt.fb_h = (uint16_t)g_fb_desc_h;
     pkt.model_size_mb = (uint32_t)(nvme_model_size >> 20);  /* nvme_model_size is BYTES -> MB (== panel "2962") */
-    pkt.total_ram_mb  = 0;     /* no file-scope total-RAM global in deploy; left 0 (console shows "-") */
+    pkt.total_ram_mb  = g_total_ram_mb;   /* Tier 0: real RAM available to JARVIS (sum of non-device untypeds) */
     pkt.infer_gen_tokens = 0;  /* M1_MEASURE off in deploy — no live token count */
+    /* Tier 1: real system fields packed into former reserved space (packet stays 200 B, CRC[:196] unchanged).
+     * infer_duty_pct = inference cycles / uptime — a WORKLOAD duty cycle, NOT a CPU-load gauge (PA busy-polls). */
+    pkt.infer_active = g_infer_active;
+    { uint64_t up = g_boot_tsc ? (jarvis_rdtsc() - g_boot_tsc) : 0;
+      uint32_t duty = up ? (uint32_t)((g_infer_cycles * 100ULL) / up) : 0;
+      pkt.infer_duty_pct = (uint8_t)(duty > 100 ? 100 : duty); }
+    pkt.nvme_total_mb = g_nvme_total_mb;
+    pkt.log_cursor    = nvme_log_cursor();
     /* model display name (matches the on-screen panel) + last response, NUL-bounded (pkt is zeroed) */
     { const char *mn = "Gemma 4 E2B";
       for (int i = 0; i < (int)sizeof(pkt.model_name) - 1 && mn[i]; i++) pkt.model_name[i] = mn[i]; }
@@ -1826,6 +1847,11 @@ static void *main_continued(void *arg UNUSED)
                                     g_nvme_ptr = &nvme_ctrl;
                                     g_nvme_bounce_vaddr = dma_vaddrs[4];
                                     g_nvme_bounce_paddr = dma_paddrs[4];
+
+                                    /* Real NVMe namespace size (MB) for the System telemetry page */
+                                    { uint64_t tlba = 0; uint32_t bsz = 0;
+                                      if (nvme_get_info(&nvme_ctrl, &tlba, &bsz) == 0)
+                                          g_nvme_total_mb = (uint32_t)((tlba * bsz) >> 20); }
 
                                     /* Initialize NVMe log (raw sector telemetry) */
                                     if (nvme_log_init(&nvme_ctrl, dma_vaddrs[4], dma_paddrs[4]) == 0) {
@@ -2472,6 +2498,8 @@ static void *main_continued(void *arg UNUSED)
             puts_serial(query);
             puts_serial("\n");
 #endif
+            g_infer_active = 1;                 /* System telemetry: open the inference duty-cycle window */
+            g_infer_t0 = jarvis_rdtsc();
             shmem_ipc_send(shared_request_ring, MSG_QUERY, seq++,
                            query, (uint16_t)strlen(query));
 #if JARVIS_DBG_IPC
@@ -2782,6 +2810,12 @@ static void *main_continued(void *arg UNUSED)
 #endif
 
     next_query:
+        /* System telemetry: close the inference duty-cycle window. Reached by every path
+         * (incl. the inference-timeout goto); guarded so non-inference iterations skip it. */
+        if (g_infer_active) {
+            g_infer_cycles += jarvis_rdtsc() - g_infer_t0;
+            g_infer_active = 0;
+        }
         /* Step 2c-1: live per-query counter — END of every iteration (reached by all
          * paths incl. the inference-timeout goto). One ~field-line UC write (~0.2ms),
          * NOT per-token; q_total/q_errors are final here. */

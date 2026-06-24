@@ -146,6 +146,18 @@ def main():
             check(parity_ok,
                   "flag-parity: every live flags_list flag renders a Capabilities row (flags=%s)" % seen)
 
+            # --- System screen: real system fields only (Tier 0 RAM + Tier 1 inference/storage) ---
+            page.get_by_title('System', exact=True).click()
+            expect(page.get_by_text('RAM available to JARVIS')).to_be_visible(timeout=10000)
+            check(True, "System screen renders 'RAM available to JARVIS' (Tier 0 total_ram_mb)")
+            expect(page.get_by_text('Workload duty cycle')).to_be_visible(timeout=10000)
+            check(True, "System screen renders the inference duty cycle (honest, not a load gauge)")
+            sys_text = page.evaluate("() => { const m = document.querySelector('main'); return m ? m.innerText : ''; }")
+            check(('ACTIVE' in sys_text) or ('IDLE' in sys_text),
+                  "System screen shows the inference state pill (ACTIVE | IDLE)")
+            check(page.evaluate("(window.JarvisTelemetry.getState().latest||{}).infer_active") in (0, 1),
+                  "System: infer_active is a real 0/1 field on /events")
+
             check(errors == [], "no console errors / pageerrors (saw %d)" % len(errors))
             for e in errors[:10]:
                 print("    ERR:", e)

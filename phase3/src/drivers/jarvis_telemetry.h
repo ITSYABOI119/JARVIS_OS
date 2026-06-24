@@ -34,15 +34,21 @@
 #define TLM_K_INFER 2
 #define TLM_K_STATE 3
 
+/* System-page fields (infer_active/infer_duty_pct/log_cursor/nvme_total_mb, and the
+ * now-real total_ram_mb) carry ONLY values with a live box source. infer_duty_pct is a
+ * WORKLOAD duty cycle (inference cycles / uptime), NOT a CPU-load gauge (the rootserver
+ * busy-polls). They consume former reserved bytes, so the packet stays 200 B and the
+ * CRC offset (196) is unchanged. */
 typedef struct __attribute__((packed)) {
     uint32_t magic; uint8_t version; uint8_t kind; uint16_t flags; uint32_t boot_id; uint32_t seq;  /* 16 */
-    uint32_t uptime_ms; uint32_t reserved_t;                                                         /*  8 */
+    uint32_t uptime_ms;                                                                              /*  4 */
+    uint8_t infer_active; uint8_t infer_duty_pct; uint16_t log_cursor;                               /*  4 */
     uint64_t q_total, q_hits, q_infer, q_heartbeat, q_shield, q_errors;                              /* 48 */
     uint8_t num_nodes; uint8_t model_load_pct; uint8_t fb_bpp; uint8_t selftest_score;
     uint16_t fb_w; uint16_t fb_h; uint32_t model_size_mb; uint32_t total_ram_mb;                     /* 16 */
     uint16_t infer_gen_tokens; uint16_t reserved_i; char last_text[56];                              /* 60 */
     char model_name[40];                                                                             /* 40 */
-    uint32_t reserved2[2];   /* reserved for future tok/s, queue_depth (rounds the packet to 200) */ /*  8 */
+    uint32_t nvme_total_mb; uint32_t reserved2;   /* NVMe namespace MB + 1 reserved (rounds to 200) */ /* 8 */
     uint32_t crc32;          /* zlib CRC-32 over the first 196 bytes [0 .. offsetof(crc32)) */       /*  4 */
 } telemetry_packet_t;
 

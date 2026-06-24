@@ -23,13 +23,13 @@ from telemetry_receiver import (  # noqa: E402
 # Field order matches FMT / jarvis_telemetry.h exactly.
 _DEFAULTS = dict(
     magic=MAGIC, version=1, kind=1, flags=0x01 | 0x10, boot_id=1, seq=42,
-    uptime_ms=120000, reserved_t=0,
+    uptime_ms=120000, infer_active=0, infer_duty_pct=18, log_cursor=137,
     q_total=289, q_hits=211, q_infer=29, q_heartbeat=40, q_shield=9, q_errors=0,
     num_nodes=6, model_load_pct=100, fb_bpp=32, selftest_score=5,
-    fb_w=1024, fb_h=768, model_size_mb=2962, total_ram_mb=0,
+    fb_w=1024, fb_h=768, model_size_mb=2962, total_ram_mb=30000,
     infer_gen_tokens=0, reserved_i=0,
     last_text=b"hello", model_name=b"Gemma 4 E2B",
-    reserved2_0=0, reserved2_1=0, crc32=0,
+    nvme_total_mb=1953892, reserved2=0, crc32=0,
 )
 
 
@@ -46,12 +46,12 @@ def build_packet(finalize=True, **overrides):
             v[k] = v[k].encode('ascii', 'replace')
     body = struct.pack(
         FMT, v['magic'], v['version'], v['kind'], v['flags'], v['boot_id'], v['seq'],
-        v['uptime_ms'], v['reserved_t'],
+        v['uptime_ms'], v['infer_active'], v['infer_duty_pct'], v['log_cursor'],
         v['q_total'], v['q_hits'], v['q_infer'], v['q_heartbeat'], v['q_shield'], v['q_errors'],
         v['num_nodes'], v['model_load_pct'], v['fb_bpp'], v['selftest_score'],
         v['fb_w'], v['fb_h'], v['model_size_mb'], v['total_ram_mb'],
         v['infer_gen_tokens'], v['reserved_i'], v['last_text'], v['model_name'],
-        v['reserved2_0'], v['reserved2_1'], v['crc32'])
+        v['nvme_total_mb'], v['reserved2'], v['crc32'])
     if finalize:
         crc = zlib.crc32(body[:196]) & 0xFFFFFFFF
         body = body[:196] + struct.pack('<I', crc)

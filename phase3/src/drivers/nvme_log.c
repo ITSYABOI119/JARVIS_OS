@@ -147,3 +147,21 @@ uint32_t nvme_log_boot_id(void)
 {
     return log_initialized ? log_hdr.boot_id : 0;
 }
+
+/* ================================================================
+ * nvme_log_cursor
+ *
+ * Returns the number of log entries written (clamped to the cap;
+ * 0 if not initialized). Feeds the System telemetry "log fullness"
+ * field (cursor / NVME_LOG_MAX_ENTRIES).
+ * ================================================================ */
+
+uint16_t nvme_log_cursor(void)
+{
+    if (!log_initialized)
+        return 0;
+    uint32_t c = log_hdr.cursor;
+    if (c > NVME_LOG_MAX_ENTRIES)
+        c = NVME_LOG_MAX_ENTRIES;
+    return (uint16_t)c;
+}

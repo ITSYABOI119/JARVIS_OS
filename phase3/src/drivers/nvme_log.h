@@ -70,5 +70,6 @@ int  nvme_log_write(nvme_controller_t *ctrl, void *dma_buf, uint64_t dma_phys,
                     uint16_t type, const char *msg);
 int  nvme_log_flush(nvme_controller_t *ctrl, void *dma_buf, uint64_t dma_phys);
 uint32_t nvme_log_boot_id(void);
+uint16_t nvme_log_cursor(void);   /* telemetry-log entries used, clamped to NVME_LOG_MAX_ENTRIES */
 
 #endif /* NVME_LOG_H */

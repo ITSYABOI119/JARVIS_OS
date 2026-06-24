@@ -38,13 +38,17 @@ static void test_layout(void)
     OFF(boot_id, 8);
     OFF(seq, 12);
     OFF(uptime_ms, 16);
+    OFF(infer_active, 20);     /* System fields packed into former reserved_t */
+    OFF(infer_duty_pct, 21);
+    OFF(log_cursor, 22);
     OFF(q_total, 24);
     OFF(q_errors, 64);
     OFF(num_nodes, 72);
     OFF(model_size_mb, 80);
+    OFF(total_ram_mb, 84);
     OFF(last_text, 92);
     OFF(model_name, 148);
-    OFF(reserved2, 188);
+    OFF(nvme_total_mb, 188);   /* System field packed into former reserved2[0] */
     OFF(crc32, 196);
 }
 
@@ -70,11 +74,20 @@ static void test_finalize_roundtrip(void)
     pkt.model_size_mb = 2962;
     memcpy(pkt.model_name, "Gemma 4 E2B", 11);
     memcpy(pkt.last_text, "hello world", 11);
+    /* System fields (real, in former reserved space) */
+    pkt.infer_active = 1;
+    pkt.infer_duty_pct = 42;
+    pkt.log_cursor = 137;
+    pkt.nvme_total_mb = 1953892;
+    pkt.total_ram_mb = 30000;
 
     jarvis_tlm_finalize(&pkt);
 
     CHECK(pkt.magic == JARVIS_TLM_MAGIC, "finalize sets magic == JTEL");
     CHECK(pkt.version == JARVIS_TLM_VERSION, "finalize sets version == 1");
+    CHECK(pkt.infer_active == 1 && pkt.infer_duty_pct == 42, "infer_active/infer_duty_pct survive finalize");
+    CHECK(pkt.log_cursor == 137 && pkt.nvme_total_mb == 1953892u, "log_cursor/nvme_total_mb survive finalize");
+    CHECK(pkt.total_ram_mb == 30000u, "total_ram_mb survives finalize");
 
     /* The stored crc matches a recompute over the first 196 bytes. */
     uint32_t recomputed = jarvis_tlm_crc32(&pkt, offsetof(telemetry_packet_t, crc32));
