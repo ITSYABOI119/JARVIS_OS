@@ -20,7 +20,7 @@
  * Mock NVMe storage -- 1024 sectors of 512 bytes
  * ================================================================ */
 
-#define MOCK_SECTORS 1024
+#define MOCK_SECTORS (NVME_LOG_MAX_ENTRIES + 1)   /* header + all 2700 slots, so the wrap test fits */
 static uint8_t mock_disk[MOCK_SECTORS * 512];
 
 /* Fake controller -- only .initialized is checked */
@@ -222,35 +222,76 @@ static void test_checksum_corruption(void)
 }
 
 /* ================================================================
- * Test 5: Log full detection
+ * Test 5: Circular / rolling buffer (wrap) + stale-cursor migration
  * ================================================================ */
 
-static void test_log_full(void)
+static void test_log_wrap(void)
 {
     memset(mock_disk, 0, sizeof(mock_disk));
     memset(dma_buf, 0, sizeof(dma_buf));
 
-    /* Write a header with cursor at MAX_ENTRIES (simulating a full log) */
-    nvme_log_header_t hdr;
-    memset(&hdr, 0, sizeof(hdr));
-    hdr.magic   = NVME_LOG_MAGIC;
-    hdr.version = NVME_LOG_VERSION;
-    hdr.cursor  = NVME_LOG_MAX_ENTRIES;
-    hdr.total_entries = NVME_LOG_MAX_ENTRIES;
-    hdr.boot_id = 5;
-    hdr.checksum = test_compute_checksum(&hdr);
-    memcpy(mock_disk, &hdr, sizeof(hdr));
-
-    /* Init reads the valid full header, increments boot_id */
     int rc = nvme_log_init(&mock_ctrl, dma_buf, 0x1000);
-    ASSERT(rc == 0, "init with full log should succeed");
-    ASSERT(nvme_log_boot_id() == 6, "boot_id should be 6");
+    ASSERT(rc == 0, "init should succeed");
 
-    /* Write should fail with -2 (log full) */
-    rc = nvme_log_write(&mock_ctrl, dma_buf, 0x1000, LOG_ERROR, "overflow");
-    ASSERT(rc == -2, "write to full log should return -2");
+    /* Write MAX_ENTRIES + K entries; the payload encodes the lifetime index. */
+    const int K = 5;
+    char msg[32];
+    for (int i = 0; i < NVME_LOG_MAX_ENTRIES + K; i++) {
+        snprintf(msg, sizeof msg, "e%d", i);
+        rc = nvme_log_write(&mock_ctrl, dma_buf, 0x1000, LOG_IPC_STATS, msg);
+        ASSERT(rc == 0, "(a) circular write never returns -2 (no 'log full')");
+    }
 
-    PASS("test_log_full");
+    nvme_log_header_t hdr;
+    memcpy(&hdr, mock_disk, sizeof(hdr));
+
+    /* (c) total_entries is the monotonic lifetime count, past MAX */
+    ASSERT(hdr.total_entries == (uint32_t)(NVME_LOG_MAX_ENTRIES + K),
+           "(c) total_entries monotonic past MAX");
+    /* (b) cursor cycles: stays in [0, MAX) and equals total mod MAX */
+    ASSERT(hdr.cursor < NVME_LOG_MAX_ENTRIES, "(b) cursor stays in [0, MAX)");
+    ASSERT(hdr.cursor == hdr.total_entries % NVME_LOG_MAX_ENTRIES, "(b) cursor == total mod MAX");
+    /* (d) nvme_log_cursor() caps at MAX once total >= MAX (rolling-full) */
+    ASSERT(nvme_log_cursor() == NVME_LOG_MAX_ENTRIES, "(d) nvme_log_cursor caps at MAX");
+
+    /* (e) the latest writes overwrote the oldest slots: slot 0 (LBA BASE+1) now
+     * holds lifetime entry MAX (seq == MAX, "eMAX"), not the original seq 0 "e0". */
+    nvme_log_entry_t entry;
+    memcpy(&entry, mock_disk + 512, sizeof(entry));    /* slot 0 */
+    ASSERT(entry.seq == (uint32_t)NVME_LOG_MAX_ENTRIES, "(e) slot 0 overwritten by the wrap writer (seq == MAX)");
+    {
+        char want[32];
+        snprintf(want, sizeof want, "e%d", NVME_LOG_MAX_ENTRIES);
+        ASSERT(entry.length == (uint16_t)strlen(want), "(e) slot 0 length is the new entry's");
+        ASSERT(memcmp(entry.payload, want, strlen(want)) == 0, "(e) slot 0 payload is newest, not oldest");
+    }
+
+    /* Migration: a stale pre-wrap header (cursor == MAX from the old no-wrap build)
+     * must be clamped on init so the next write lands in slot 0, not out of range. */
+    {
+        nvme_log_header_t stale;
+        memset(&stale, 0, sizeof(stale));
+        stale.magic = NVME_LOG_MAGIC;
+        stale.version = NVME_LOG_VERSION;
+        stale.cursor = NVME_LOG_MAX_ENTRIES;          /* old "full" cursor */
+        stale.total_entries = NVME_LOG_MAX_ENTRIES;
+        stale.boot_id = 5;
+        stale.checksum = test_compute_checksum(&stale);
+        memset(mock_disk, 0, sizeof(mock_disk));
+        memcpy(mock_disk, &stale, sizeof(stale));
+
+        rc = nvme_log_init(&mock_ctrl, dma_buf, 0x1000);
+        ASSERT(rc == 0, "init with a stale full header should succeed");
+        memcpy(&hdr, mock_disk, sizeof(hdr));
+        ASSERT(hdr.cursor == 0, "stale cursor == MAX clamped to 0 on init");
+
+        rc = nvme_log_write(&mock_ctrl, dma_buf, 0x1000, LOG_ERROR, "post-migration");
+        ASSERT(rc == 0, "post-migration write succeeds (no -2)");
+        memcpy(&entry, mock_disk + 512, sizeof(entry));   /* slot 0 */
+        ASSERT(memcmp(entry.payload, "post-migration", 14) == 0, "post-migration write lands in slot 0");
+    }
+
+    PASS("test_log_wrap");
 }
 
 /* ================================================================
@@ -265,7 +306,7 @@ int main(void)
     test_write_entry();
     test_boot_id_increment();
     test_checksum_corruption();
-    test_log_full();
+    test_log_wrap();
 
     printf("\nResults: %d PASS, %d FAIL\n", tests_passed, tests_failed);
     return tests_failed > 0 ? 1 : 0;

@@ -61,6 +61,7 @@ int nvme_log_init(nvme_controller_t *ctrl, void *dma_buf, uint64_t dma_phys)
             log_hdr.checksum == compute_checksum(&log_hdr)) {
             /* Valid header -- increment boot_id, continue from cursor */
             log_hdr.boot_id++;
+            log_hdr.cursor %= NVME_LOG_MAX_ENTRIES;  /* circular: tolerate a stale pre-wrap cursor (== MAX from the old no-wrap build) */
             log_initialized = 1;
             return nvme_log_flush(ctrl, dma_buf, dma_phys);
         }
@@ -80,8 +81,10 @@ int nvme_log_init(nvme_controller_t *ctrl, void *dma_buf, uint64_t dma_phys)
 /* ================================================================
  * nvme_log_write
  *
- * Append one log entry at the current cursor position.
- * Returns 0 on success, -1 if not initialized, -2 if log full.
+ * Append one log entry at the current write slot (circular / rolling).
+ * Returns 0 on success, -1 if not initialized. The log never "fills":
+ * once total_entries reaches NVME_LOG_MAX_ENTRIES the buffer wraps,
+ * overwriting the oldest entry (keeps the latest NVME_LOG_MAX_ENTRIES).
  * ================================================================ */
 
 int nvme_log_write(nvme_controller_t *ctrl, void *dma_buf, uint64_t dma_phys,
@@ -89,8 +92,6 @@ int nvme_log_write(nvme_controller_t *ctrl, void *dma_buf, uint64_t dma_phys,
 {
     if (!log_initialized || !ctrl || !ctrl->initialized)
         return -1;
-    if (log_hdr.cursor >= NVME_LOG_MAX_ENTRIES)
-        return -2;  /* log full */
 
     /* Build entry in DMA buffer */
     nvme_log_entry_t *entry = (nvme_log_entry_t *)dma_buf;
@@ -111,7 +112,9 @@ int nvme_log_write(nvme_controller_t *ctrl, void *dma_buf, uint64_t dma_phys,
     if (rc != 0)
         return rc;
 
-    log_hdr.cursor++;
+    /* Circular: cursor is the write SLOT (always 0..MAX-1); total_entries is the
+     * monotonic lifetime count. Once total >= MAX the buffer rolls (oldest overwritten). */
+    log_hdr.cursor = (log_hdr.cursor + 1) % NVME_LOG_MAX_ENTRIES;
     log_hdr.total_entries++;
 
     /* Always flush header so cursor is durable on disk.
@@ -151,17 +154,17 @@ uint32_t nvme_log_boot_id(void)
 /* ================================================================
  * nvme_log_cursor
  *
- * Returns the number of log entries written (clamped to the cap;
- * 0 if not initialized). Feeds the System telemetry "log fullness"
- * field (cursor / NVME_LOG_MAX_ENTRIES).
+ * Returns entries STORED, capped at NVME_LOG_MAX_ENTRIES (rolling-full once
+ * total_entries >= MAX). NOT the cycling write position — this keeps the System
+ * telemetry "fullness" honest + monotonic, and identical across the no-wrap ->
+ * circular switch (same value until the first wrap, so the wire contract is
+ * unchanged). 0 if not initialized.
  * ================================================================ */
 
 uint16_t nvme_log_cursor(void)
 {
     if (!log_initialized)
         return 0;
-    uint32_t c = log_hdr.cursor;
-    if (c > NVME_LOG_MAX_ENTRIES)
-        c = NVME_LOG_MAX_ENTRIES;
-    return (uint16_t)c;
+    return (uint16_t)(log_hdr.total_entries < NVME_LOG_MAX_ENTRIES
+                      ? log_hdr.total_entries : NVME_LOG_MAX_ENTRIES);
 }

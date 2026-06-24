@@ -98,7 +98,7 @@ function SystemView({ store }) {
             <span style={{ font: 'var(--type-eyebrow)', letterSpacing: 'var(--tracking-wide)', textTransform: 'uppercase',
               color: 'var(--text-muted)' }}>Telemetry log</span>
             <span style={{ font: '400 var(--text-xs)/1 var(--font-mono)', color: 'var(--text-secondary)' }}>
-              {rec ? cursor.toLocaleString('en-US') + ' / ' + LOG_CAP.toLocaleString('en-US') + ' entries' : '—'}
+              {rec ? cursor.toLocaleString('en-US') + ' / ' + LOG_CAP.toLocaleString('en-US') + ' entries · rolling (keeps latest)' : '—'}
             </span>
           </div>
           <div style={{ height: 8, background: 'var(--surface-inset)', border: '1px solid var(--border-strong)',
@@ -107,7 +107,7 @@ function SystemView({ store }) {
               background: 'var(--accent)' }} />
           </div>
         </div>
-        {note('Used/free, throughput, and drive-health are not reported by the box, so they are not shown. The telemetry log does not wrap — it stops at the cap.')}
+        {note('Used/free, throughput, and drive-health are not reported by the box, so they are not shown. The telemetry log is a rolling 2700-entry buffer — it keeps the most recent entries (no longer stops at the cap).')}
       </Card>
     </div>
   );

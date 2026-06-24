@@ -45,16 +45,27 @@ def main():
     print(f"  Sectors:   {len(data) // 512} read")
     print()
 
-    # Parse entries
-    n_entries = min(cursor, (len(data) // 512) - 1)
-    if n_entries == 0:
+    # Parse entries (wrap-aware): the log is a circular/rolling buffer.
+    # cursor = the write SLOT; total = the monotonic lifetime count.
+    slots = (len(data) // 512) - 1   # entry slots captured in this dump
+    if slots <= 0 or total == 0:
         print("(no log entries)")
+        order = []
+    elif total > slots:
+        # WRAPPED: the buffer holds the latest `slots` entries; the OLDEST is at
+        # slot `cursor`. Read circularly cursor, cursor+1, …, (cursor-1 mod slots)
+        # so output is oldest -> newest.
+        print(f"--- {slots} entries (rolling: wrapped, showing latest {slots} of {total} lifetime) ---")
+        order = [(cursor + i) % slots for i in range(slots)]
     else:
-        print(f"--- {n_entries} entries ---")
-    for i in range(n_entries):
+        # Not wrapped: entries 0..total-1 in slot order (oldest -> newest).
+        n = min(total, slots)
+        print(f"--- {n} entries ---")
+        order = list(range(n))
+    for i in order:
         off = (i + 1) * 512
         if off + 512 > len(data):
-            break
+            continue
         e_boot, e_seq, e_type, e_len = struct.unpack_from('<IIHH', data, off)
         # Payload starts at offset 16 (after boot_id:4, seq:4, type:2, length:2, reserved:4)
         payload = data[off+16:off+16+e_len].decode('utf-8', errors='replace').rstrip('\x00')
