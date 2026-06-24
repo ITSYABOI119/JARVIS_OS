@@ -90,6 +90,11 @@ def main():
             expect(page.get_by_text('Gemma 4 E2B').first).to_be_visible(timeout=10000)
             check(True, "model_name 'Gemma 4 E2B' renders")
 
+            # UI-feature parity: the console surfaces the live model_load_pct (a 'Model load' bar)
+            # mirroring the new on-box HUD progress bar (sourced from the same /events field).
+            expect(page.get_by_text('Model load').first).to_be_visible(timeout=10000)
+            check(True, "console surfaces live model_load_pct ('Model load' bar) — UI-feature parity")
+
             # real query count flows (cold-start 'no queries yet' clears at least transiently)
             saw_q = False
             deadline = time.time() + 10

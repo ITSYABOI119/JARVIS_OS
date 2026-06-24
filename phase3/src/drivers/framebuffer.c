@@ -72,6 +72,24 @@ void fb_clear(uint32_t rgb)
     fb_fill_rect(0, 0, g_width, g_height, rgb);
 }
 
+void fb_progress_bar(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+                     uint8_t pct, uint32_t fill_rgb, uint32_t track_rgb, uint32_t border_rgb)
+{
+    if (!g_fb || w < 2u || h < 2u) return;        /* need room for the 1px border */
+    if (pct > 100u) pct = 100u;                   /* clamp (defensive) */
+
+    fb_fill_rect(x, y, w, h, track_rgb);          /* track (full background) */
+
+    uint32_t inner_w = w - 2u;                    /* fill, inset 1px, proportional */
+    uint32_t fill_w  = (uint32_t)((uint64_t)inner_w * pct / 100u);
+    if (fill_w) fb_fill_rect(x + 1u, y + 1u, fill_w, h - 2u, fill_rgb);
+
+    fb_fill_rect(x, y,          w, 1u, border_rgb);   /* top    (same 4-edge */
+    fb_fill_rect(x, y + h - 1u, w, 1u, border_rgb);   /* bottom  pattern as  */
+    fb_fill_rect(x, y,          1u, h, border_rgb);   /* left    fb_log_frame)*/
+    fb_fill_rect(x + w - 1u, y, 1u, h, border_rgb);   /* right  */
+}
+
 void fb_flush(void)
 {
 #if defined(__x86_64__) || defined(__i386__)

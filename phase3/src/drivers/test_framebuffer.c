@@ -190,6 +190,40 @@ int main(void)
         EXPECT(LB2[G2] == 0xDEADBEEFu, "T9b guard word untouched (no OOB)");
     }
 
+    /* T10 — fb_progress_bar: fill width / clamp / 4-edge border / track / no OOB */
+    {
+        const uint32_t BX = 2u, BY = 2u, BW = 40u, BH = 10u;
+        const uint32_t FILL = 0x00AA00BBu, TRACK = 0x00112233u, BORDER = 0x00445566u;
+        const uint32_t midy = BY + BH / 2u;            /* an interior scanline (y=7) */
+        const uint32_t ix0  = BX + 1u;                 /* first interior column (x=3) */
+
+        sentinel(); fb_init(buf, FBPITCH, FBW, FBH, 32); fb_set_rb_swap(0);
+        fb_progress_bar(BX, BY, BW, BH, 0, FILL, TRACK, BORDER);
+        EXPECT(buf[midy * STRIDE + ix0] == TRACK,           "T10 pct=0: zero fill (interior is track)");
+
+        sentinel(); fb_init(buf, FBPITCH, FBW, FBH, 32); fb_set_rb_swap(0);
+        fb_progress_bar(BX, BY, BW, BH, 50, FILL, TRACK, BORDER);   /* fill = (40-2)*50/100 = 19 */
+        EXPECT(buf[midy * STRIDE + ix0] == FILL,            "T10 pct=50: fill starts at inner edge");
+        EXPECT(buf[midy * STRIDE + ix0 + 18u] == FILL,      "T10 pct=50: fill spans ~(w-2)/2 (last filled px)");
+        EXPECT(buf[midy * STRIDE + ix0 + 19u] == TRACK,     "T10 pct=50: unfilled region is track");
+
+        sentinel(); fb_init(buf, FBPITCH, FBW, FBH, 32); fb_set_rb_swap(0);
+        fb_progress_bar(BX, BY, BW, BH, 100, FILL, TRACK, BORDER);  /* fill = w-2 = 38 */
+        EXPECT(buf[midy * STRIDE + (BX + BW - 2u)] == FILL, "T10 pct=100: fill reaches last interior col");
+
+        sentinel(); fb_init(buf, FBPITCH, FBW, FBH, 32); fb_set_rb_swap(0);
+        fb_progress_bar(BX, BY, BW, BH, 200, FILL, TRACK, BORDER);  /* clamps to 100 */
+        EXPECT(buf[midy * STRIDE + (BX + BW - 2u)] == FILL, "T10 pct=200: clamps to 100 (interior full)");
+
+        sentinel(); fb_init(buf, FBPITCH, FBW, FBH, 32); fb_set_rb_swap(0);
+        fb_progress_bar(BX, BY, BW, BH, 50, FILL, TRACK, BORDER);
+        EXPECT(buf[BY * STRIDE + (BX + BW / 2u)] == BORDER,           "T10 top border set");
+        EXPECT(buf[(BY + BH - 1u) * STRIDE + (BX + BW / 2u)] == BORDER, "T10 bottom border set");
+        EXPECT(buf[midy * STRIDE + BX] == BORDER,                     "T10 left border set");
+        EXPECT(buf[midy * STRIDE + (BX + BW - 1u)] == BORDER,         "T10 right border set");
+        EXPECT(buf[GUARD] == 0xDEADBEEFu,                             "T10 progress_bar: guard untouched (no OOB)");
+    }
+
     printf("Framebuffer tests: %d PASS, %d FAIL\n", pass, fail);
     return fail ? 1 : 0;
 }

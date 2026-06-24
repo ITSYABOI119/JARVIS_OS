@@ -64,6 +64,18 @@
 /* self-test line ("Self-test 5/5 PASS", FBP_OK) is live-backed; place it on a
  * free row below FBP_Y_LAST when adding it as a persistent field.            */
 
+/* ---- Live model-load progress bar (goal #2 display-polish) -----------------
+ * [LIVE] horizontal bar drawn by model_load_progress() in lockstep with the
+ * "Model ... [loading N%]" text; source = g_model_load_pct. Placed on row 10
+ * (y160) — the free gap between FBP_Y_LAST (y144) and JUI_ROUTE_ROW (row 11, y176).
+ * Layout-checked: the ROUTE (row 11) and COUNTERS (row 41) full-row quiet draws do
+ * NOT touch row 10, and the 12px bar (y160..172) clears ROUTE's y176 by 4px.
+ * Colors: track=JCLR_HOVER, fill=FBP_ACCENT (loading) / FBP_OK (100%), border=JCLR_LINE. */
+#define JUI_PBAR_X     16u        /* [LIVE] aligned with the panel left margin (FBP_X)   */
+#define JUI_PBAR_Y     160u       /* [LIVE] row 10 free gap (LAST y144 .. ROUTE y176)    */
+#define JUI_PBAR_W     320u       /* [LIVE] bar width                                    */
+#define JUI_PBAR_H     12u        /* [LIVE] bar height (y160..172, 4px above ROUTE y176) */
+
 /* ---- 2c-2 LIVE region geometry (col,row; px = col*8, row*16) ---------------
  * The event-log region (JUI_LOG_*) is drawn since 2c-2b; the header band /
  * route / counters positions are drawn since 2c-2c. Two collisions were resolved:

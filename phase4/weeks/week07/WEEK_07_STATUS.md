@@ -70,7 +70,7 @@ A goal-#2 backlog item — boot-speed + an honest load %.
 - **FAT-sector cache (`fat32.c/h`):** `fat32_fs_t.fat_cache` caches the last FAT sector; `fat32_next_cluster` now reads each FAT sector once instead of up to ~128× per chain (read-only FS → never invalidated). ~160 MB less redundant NVMe I/O on the Gemma load.
 - **Exact data-only % (`fat32.c` + `main_x86.c`):** a `fat32_read_file` progress hook (`fat32_fs_t.progress`) reports cumulative DATA bytes; `model_load_progress` (throttled on pct-change, ≤101 `[PANEL]` lines) drives the Model field. Reaches **exactly 100%** at completion instead of clamping early off the all-sectors NVMe counter. The dead `g_model_total_sectors` was removed; the "NNN MB read" throughput telemetry is kept (honest).
 - **Verified:** host **10/10** (new `test_fat_sector_cached` = 1 FAT read not 2; `test_read_file_progress` = done==file_size; multi-cluster read still passes *with* the cache); **3× adversarial review GO** (cross-FAT-sector-boundary reload proven correct — no chain corruption); box build clean (NN=6); QEMU smoke coherent inference (cache non-corrupting); **physical boot (real Gemma, boot_id=1 log):** `Model … [loading 96%→100%] → [loaded]` exact, `"MB read"` ~2929 / ~2962 (down from ~3125), GGUF OK, 5/5, FB 1024×768×32 pages=768, M3 NN=6, `[STATS] q=100 err=0`, 0 faults, 421 entries checksum OK.
-- **Noted (not done here):** a pre-existing 512-byte-sector-only assumption in `fat32_next_cluster` — LOW-pri hardening to reject `bytes_per_sector != 512` in `fat32_init` (SEC-029-guarded, never fires on the box).
+- **Noted (corrected framing):** `fat32_init` already rejects sizes outside {512,1024,2048,4096} (SEC-028); the only residual is that 1024/2048/4096 are accepted but unsupported by the 512-byte `fat_cache` — they fail safely (SEC-029 returns -1 at the first FAT read). Optional tightening: reject `!= 512` outright. Never fires on the box's 512B-sector NVMe.
 
 ## goal #2b N-a — Intel I211 NIC TX first-light (DONE 2026-06-21) 🎉
 
@@ -148,8 +148,8 @@ The console's test pyramid is now whole — honesty grep + key-contract (foundat
 ## Next — goal #2 backlog → Phase 4 goals #3–7
 
 **goal #2b (Remote Telemetry Console) is COMPLETE** — box-side telemetry-OUT (N-a→N-b→N-c-1) + the receiver/SSE bridge (N-c-2/3a) + the honest console (N-c-3b/c) + the auto-populated Capabilities surface (N-c-3d) + the full frontend test stack (honesty + key-contract + Playwright logic + e2e, incl. flag-parity). Remaining:
-1. **Optional goal #2 backlog** — NVMe progress bar, true-WC mapping, 1920×1080 gfxmode; **LOW-pri** reject `bytes_per_sector != 512` in `fat32_init`.
-2. Phase 4 **goals #3–7**: xHCI USB keyboard input (down-ranked/optional), one-script installer, 90-day soak, docs, `v1.0.0` MIT release.
+1. **goal #2 display-polish (2026-06-24, this slice):** model-load progress bar SHIPPED — HUD `fb_progress_bar` (lockstep with `[loading N%]`) + console `model_load_pct` parity (4 layers green, golden unchanged); 1920×1080 `gfxmode` REQUESTED in grub.cfg (best-effort, on-box confirm pending); true-WC evaluated + DEFERRED (not worth it for the static HUD); fat32 sector-size framing corrected (SEC-028 already rejects, SEC-029 backstops). On-box visual + resolution confirm = the separate box-verify session.
+2. **goal #4 installer DONE** (separate slice). Remaining Phase 4 **goals #3,#5–7**: xHCI USB keyboard input (down-ranked/optional), 90-day soak, docs, `v1.0.0` MIT release.
 
 ---
 

@@ -43,6 +43,13 @@ void fb_draw_text(uint32_t x, uint32_t y, const char *s, uint32_t fg, uint32_t b
  * Exposed for the host test. Each byte = one scanline, bit 0x80 = leftmost pixel. */
 const uint8_t *fb_font_glyph(char c);
 
+/* Horizontal progress bar (goal #2 backlog: live model-load %). A track rect with
+ * a 1px border (all 4 edges) and a left-anchored fill spanning (w-2)*pct/100 of the
+ * inner width. pct is clamped to [0,100]. Pure / UC-safe / edge-clipped (built only
+ * from fb_fill_rect). No-op if the FB is not ready or w<2/h<2 (no room for border). */
+void fb_progress_bar(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+                     uint8_t pct, uint32_t fill_rgb, uint32_t track_rgb, uint32_t border_rgb);
+
 /* ---- Step 2c-2b/2c-2c: scrolling event-log region (natural chronological order) ----
  * A ring of the last JUI_LOG_H_ROWS completed serial lines (geometry/colors from
  * jarvis_ui_tokens.h). The UC framebuffer is never memmove'd: each append repaints

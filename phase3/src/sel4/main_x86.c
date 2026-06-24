@@ -1306,7 +1306,14 @@ static void model_load_progress(uint32_t done, uint32_t total) {
     int pct = total ? (int)((uint64_t)done * 100u / total) : 0;
     if (pct > 100) pct = 100;
     g_model_load_pct = (uint8_t)pct;   /* N-c-1: latest load % for the telemetry packet */
-    if (pct != last) { last = pct; fb_model_pct(done, total); }
+    if (pct != last) {
+        last = pct;
+        fb_model_pct(done, total);
+        /* Draw the bar in lockstep with the [loading N%] text (same throttle, no extra
+         * [PANEL] line — the text line already log-mirrors the state). */
+        fb_progress_bar(JUI_PBAR_X, JUI_PBAR_Y, JUI_PBAR_W, JUI_PBAR_H, (uint8_t)pct,
+                        (pct >= 100 ? FBP_OK : FBP_ACCENT), JCLR_HOVER, JCLR_LINE);
+    }
 }
 
 /* Draw-only twin of fb_status_line — NO [PANEL] log mirror. Used for the per-query Queries
@@ -1625,6 +1632,8 @@ static void *main_continued(void *arg UNUSED)
                     fb_status_line(FBP_Y_DISPLAY, dl, FBP_FG);
                 }
                 fb_status_line(FBP_Y_MODEL, "Model   : Gemma 4 E2B (2962 MB)  [loading...]", FBP_FG);
+                fb_progress_bar(JUI_PBAR_X, JUI_PBAR_Y, JUI_PBAR_W, JUI_PBAR_H, 0,
+                                FBP_ACCENT, JCLR_HOVER, JCLR_LINE);   /* seed the load bar at 0% */
                 {   /* Threads : NUM_NODES=N  (M3 worker pool) */
                     char tl[64]; char *tp = tl;
                     tp = fbp_str(tp, "Threads : NUM_NODES=");
@@ -2000,9 +2009,12 @@ static void *main_continued(void *arg UNUSED)
                                                             nvme_model_n_pages = n_pages;
                                                             nvme_log_write(&nvme_ctrl, dma_vaddrs[4], dma_paddrs[4],
                                                                            LOG_MODEL_LOAD, "GGUF loaded OK");
-                                                            if (fb_ready())   /* Step 2c-1: panel update */
+                                                            if (fb_ready()) { /* Step 2c-1: panel update */
                                                                 fb_status_line(FBP_Y_MODEL,
                                                                     "Model   : Gemma 4 E2B (2962 MB)  [loaded]", FBP_OK);
+                                                                fb_progress_bar(JUI_PBAR_X, JUI_PBAR_Y, JUI_PBAR_W,
+                                                                    JUI_PBAR_H, 100, FBP_OK, JCLR_HOVER, JCLR_LINE);
+                                                            }
                                                         }
                                                     } else {
                                                         puts_serial("[JARVIS] Model read failed\n");

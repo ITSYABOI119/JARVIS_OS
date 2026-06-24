@@ -87,6 +87,28 @@ function CommandCenter({ store }) {
         </a>
       </div>
 
+      {/* Live model-load bar — UI-feature parity with the on-box HUD progress bar.
+          Sourced ONLY from the live record's model_load_pct (already on /events). */}
+      {rec && (() => {
+        const lp = Math.max(0, Math.min(100, Number(rec.model_load_pct) || 0));
+        const done = lp >= 100;
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span style={{ font: 'var(--type-eyebrow)', letterSpacing: 'var(--tracking-wide)', textTransform: 'uppercase',
+              color: 'var(--text-muted)', minWidth: 78 }}>Model load</span>
+            <div style={{ flex: 1, maxWidth: 360, height: 8, background: 'var(--surface-inset)',
+              border: '1px solid var(--border-strong)', borderRadius: 'var(--radius-full)', overflow: 'hidden' }}>
+              <div style={{ width: lp + '%', height: '100%',
+                background: done ? 'var(--status-ok)' : 'var(--accent)' }} />
+            </div>
+            <span style={{ font: '400 var(--text-xs)/1 var(--font-mono)',
+              color: done ? 'var(--status-ok)' : 'var(--text-secondary)' }}>
+              {done ? 'loaded' : lp + '%'}
+            </span>
+          </div>
+        );
+      })()}
+
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 'var(--space-4)' }}>
         <Tile label="Queries" foot={qps == null ? 'rate: collecting…' : qps.toFixed(1) + ' q/s (rolling)'}>
           <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
