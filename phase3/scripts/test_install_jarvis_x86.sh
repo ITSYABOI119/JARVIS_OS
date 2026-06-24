@@ -57,11 +57,7 @@ assert_contains "T1 --help shows --model"    "$HELP_OUT" "--model"
 assert_contains "T1 --help shows --target"   "$HELP_OUT" "--target"
 assert_contains "T1 --help shows --dry-run"  "$HELP_OUT" "--dry-run"
 
-# ---- T2: --target esp / disk not implemented ----
-ESP_OUT="$(bash "$INSTALLER" --target esp --usb /dev/sdz --skip-build --skip-model 2>&1)"; ESP_RC=$?
-if [ "$ESP_RC" -ne 0 ]; then ok "T2 --target esp exits nonzero"; else bad "T2 --target esp exits nonzero (got 0)"; fi
-assert_contains "T2 --target esp says not yet implemented" "$ESP_OUT" "not yet implemented"
-
+# ---- T2: --target disk still not implemented (esp IS now implemented — see T8) ----
 DISK_OUT="$(bash "$INSTALLER" --target disk --usb /dev/sdz --skip-build --skip-model 2>&1)"; DISK_RC=$?
 if [ "$DISK_RC" -ne 0 ]; then ok "T2 --target disk exits nonzero"; else bad "T2 --target disk exits nonzero (got 0)"; fi
 assert_contains "T2 --target disk says not yet implemented" "$DISK_OUT" "not yet implemented"
@@ -133,6 +129,44 @@ else
     bad "T7 --dry-run executed a destructive tool ($SENTINELS_FOUND sentinel(s) found)"
 fi
 rm -rf "$STUB_DIR" "$SENTINEL_DIR"
+
+# ---- T8: --target esp dry-run (implemented; reversible dual-boot; touches nothing) ----
+ESP_DRY="$(bash "$INSTALLER" --target esp --esp /dev/nvme0n1p4 --dry-run --skip-build --skip-model 2>&1)"; ESP_DRY_RC=$?
+if [ "$ESP_DRY_RC" -eq 0 ]; then ok "T8 --target esp --dry-run exits 0"; else bad "T8 --target esp --dry-run exits 0 (got $ESP_DRY_RC)"; fi
+assert_contains "T8 esp dry-run: copies to EFI/jarvis"      "$ESP_DRY" "EFI/jarvis"
+assert_contains "T8 esp dry-run: grub-mkstandalone"         "$ESP_DRY" "grub-mkstandalone"
+assert_contains "T8 esp dry-run: efibootmgr --create"       "$ESP_DRY" "efibootmgr --create"
+assert_contains "T8 esp dry-run: keeps Ubuntu default"      "$ESP_DRY" "Ubuntu"
+# esp is implemented now — it must NOT print the disk 'not yet implemented' message.
+if printf '%s' "$ESP_DRY" | grep -qF "not yet implemented"; then
+    bad "T8 esp dry-run must NOT say 'not yet implemented'"
+else
+    ok "T8 esp dry-run does not say 'not yet implemented'"
+fi
+
+# T8c: esp dry-run executes NOTHING destructive (stub esp + usb tools; assert no sentinel).
+STUB2="$(mktemp -d)"; SENT2="$(mktemp -d)"
+for tool in grub-mkstandalone efibootmgr mount rm parted mkfs.fat grub-install; do
+    cat > "$STUB2/$tool" <<EOF
+#!/bin/bash
+touch "$SENT2/${tool}_was_called"
+exit 0
+EOF
+    chmod +x "$STUB2/$tool"
+done
+PATH="$STUB2:$PATH" bash "$INSTALLER" --target esp --esp /dev/nvme0n1p4 --dry-run --skip-build --skip-model >/dev/null 2>&1 || true
+SENT2_FOUND="$(find "$SENT2" -type f 2>/dev/null | wc -l | tr -d ' ')"
+if [ "$SENT2_FOUND" -eq 0 ]; then
+    ok "T8 esp dry-run ran no destructive tool (no sentinels)"
+else
+    bad "T8 esp dry-run executed a destructive tool ($SENT2_FOUND sentinel(s) found)"
+fi
+rm -rf "$STUB2" "$SENT2"
+
+# T8d: --target esp with NO --esp errors clearly.
+NOESP_OUT="$(bash "$INSTALLER" --target esp --dry-run --skip-build --skip-model 2>&1)"; NOESP_RC=$?
+if [ "$NOESP_RC" -ne 0 ]; then ok "T8 --target esp without --esp exits nonzero"; else bad "T8 --target esp without --esp exits nonzero (got 0)"; fi
+assert_contains "T8 --target esp without --esp says --esp required" "$NOESP_OUT" "requires --esp"
 
 # ---- Results ----
 echo ""

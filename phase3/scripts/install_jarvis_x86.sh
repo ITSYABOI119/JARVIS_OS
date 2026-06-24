@@ -71,6 +71,7 @@ SKIP_BUILD=false
 SKIP_USB=false
 SKIP_MODEL=false
 TARGET="usb"
+ESP_PART=""         # --esp <partition> (e.g. /dev/nvme0n1p4) for --target esp; never a whole disk
 DRY_RUN=false
 WANT_BUILD=false    # set by --build
 
@@ -218,7 +219,10 @@ ${BOLD}Options:${NC}
                          (default: <repo>/models/gemma-4-E2B-it-Q4_K_M.gguf).
     --nvme /dev/nvme0n1  NVMe device for the JARVIS_DATA model partition (default).
     --repo <path>        Repo root (default: \$HOME/Desktop/JARVIS_OS).
-    --target {usb|esp|disk}  Install target (default: usb). esp/disk not yet implemented.
+    --target {usb|esp|disk}  Install target (default: usb). 'esp' = reversible dual-boot
+                         on the internal ESP (adds JARVIS alongside Ubuntu; never
+                         repartitions/formats). 'disk' (full on-SSD) not yet implemented.
+    --esp /dev/nvme0n1p4 Existing ESP PARTITION for --target esp (never a whole disk).
     --skip-build         Do not build; use existing images.
     --skip-usb           Do not write the boot USB.
     --skip-model         Do not touch the NVMe model partition.
@@ -228,7 +232,13 @@ ${BOLD}Options:${NC}
 ${BOLD}Examples:${NC}
     sudo $SCRIPT_NAME --build --usb /dev/sdb
     sudo $SCRIPT_NAME --usb /dev/sdb --model ~/models/gemma-4-E2B-it-Q4_K_M.gguf
+    sudo $SCRIPT_NAME --target esp --esp /dev/nvme0n1p4   # reversible dual-boot, keeps Ubuntu
     $SCRIPT_NAME --dry-run --usb /dev/sdb --skip-build --skip-model
+
+${BOLD}Dual-boot (--target esp):${NC}
+    Adds a "JARVIS seL4" UEFI entry + an EFI/jarvis/ payload to the EXISTING internal
+    ESP. Ubuntu stays the default; never repartitions, never touches EFI/ubuntu. Validate
+    with a one-shot \`efibootmgr --bootnext\`; rollback by deleting EFI/jarvis + the entry.
 
 ${BOLD}Boot flow:${NC}
     UEFI firmware -> GRUB (multiboot2) -> seL4 kernel -> JARVIS rootserver
@@ -249,6 +259,7 @@ parse_args() {
             --nvme)        shift; NVME_DEV="${1:-}" ;;
             --repo)        shift; REPO_PATH="${1:-}" ;;
             --target)      shift; TARGET="${1:-}" ;;
+            --esp)         shift; ESP_PART="${1:-}" ;;
             --skip-build)  SKIP_BUILD=true ;;
             --skip-usb)    SKIP_USB=true ;;
             --skip-model)  SKIP_MODEL=true ;;
@@ -286,8 +297,12 @@ check_target() {
     case "$TARGET" in
         usb)
             ;;
-        esp|disk)
-            error "on-SSD install not yet implemented — see memory installer-on-ssd-goal / ROADMAP; only --target usb is supported in v1.0"
+        esp)
+            # Implemented: reversible dual-boot on the existing internal ESP
+            # (additive; never repartitions). See guard_esp_device + write_boot_esp.
+            ;;
+        disk)
+            error "on-SSD full install not yet implemented — only --target usb / esp supported in v1.0 (see memory installer-on-ssd-goal / ROADMAP)"
             exit 2
             ;;
         *)
@@ -318,10 +333,17 @@ preflight() {
         exit 1
     fi
 
-    # Required host tools.
+    # Required host tools (target-aware: esp uses grub-mkstandalone + efibootmgr and
+    # NEVER parted/mkfs — it adds to the EXISTING ESP, no repartition/format).
     local missing=()
     local cmd
-    for cmd in parted mkfs.fat grub-install lsblk; do
+    local tools=(lsblk)
+    if [ "$TARGET" = "esp" ]; then
+        tools+=(grub-mkstandalone efibootmgr mount)
+    else
+        tools+=(parted mkfs.fat grub-install)
+    fi
+    for cmd in "${tools[@]}"; do
         command -v "$cmd" &>/dev/null || missing+=("$cmd")
     done
     if [ "${#missing[@]}" -gt 0 ]; then
@@ -379,8 +401,8 @@ preflight() {
         fi
     fi
 
-    # USB device validation (only when we intend to write it).
-    if [ "$SKIP_USB" = false ]; then
+    # USB device validation (only for the usb target, when we intend to write it).
+    if [ "$TARGET" = "usb" ] && [ "$SKIP_USB" = false ]; then
         if [ -z "$USB_DEV" ]; then
             if [ "$soft" = true ]; then
                 warn "No --usb device given (dry-run)."
@@ -406,7 +428,11 @@ preflight() {
 
     info "Repo:        $REPO_PATH"
     info "Build dir:   $BUILD_DIR"
-    info "Boot USB:    ${USB_DEV:-<none>} (target=$TARGET)"
+    if [ "$TARGET" = "esp" ]; then
+        info "ESP (dual): ${ESP_PART:-<none>}  (target=$TARGET)"
+    else
+        info "Boot USB:    ${USB_DEV:-<none>} (target=$TARGET)"
+    fi
     info "NVMe:        $NVME_DEV"
     info "Model:       $MODEL_PATH"
     info "Dry run:     $DRY_RUN"
@@ -425,6 +451,57 @@ guard_usb_device() {
         error "Use a removable USB stick (e.g. /dev/sdb)."
         exit 1
     fi
+}
+
+# ---------------------------------------------------------------------------
+# ESP dual-boot safety — runs even in --dry-run. The hard string checks (set?
+# partition-not-whole-disk?) run always; the block-device / vfat reads and the
+# operator double-confirm are real-run-only (CI/dry-run has no device or stdin).
+# Unlike guard_usb_device, this DELIBERATELY accepts an NVMe path — but only a
+# PARTITION, never a whole disk (we never repartition the internal drive).
+# ---------------------------------------------------------------------------
+guard_esp_device() {
+    if [ -z "$ESP_PART" ]; then
+        error "REFUSED: --target esp requires --esp <partition> (e.g. --esp /dev/nvme0n1p4)."
+        exit 1
+    fi
+
+    # Must be a PARTITION path, never a whole disk — prevents any whole-disk op.
+    if ! [[ "$ESP_PART" =~ ^/dev/(nvme[0-9]+n[0-9]+p[0-9]+|sd[a-z]+[0-9]+|mmcblk[0-9]+p[0-9]+)$ ]]; then
+        error "REFUSED: --esp '$ESP_PART' is not a partition path (expected e.g. /dev/nvme0n1p4 or /dev/sdb1)."
+        error "Pass the ESP PARTITION, never a whole disk — JARVIS never repartitions the internal drive."
+        exit 1
+    fi
+
+    if [ "$DRY_RUN" = true ]; then
+        dry_would "verify $ESP_PART is a vfat ESP (lsblk -no FSTYPE == vfat; best-effort esp-flag)"
+        dry_would "DOUBLE-CONFIRM: operator re-types '$ESP_PART', then types 'ADD-JARVIS'"
+        return 0
+    fi
+
+    [ -b "$ESP_PART" ] || { error "REFUSED: $ESP_PART is not a block device."; exit 1; }
+
+    local fstype
+    fstype="$(lsblk -no FSTYPE "$ESP_PART" 2>/dev/null | head -n1 | tr -d '[:space:]')"
+    if [ "$fstype" != "vfat" ]; then
+        error "REFUSED: $ESP_PART FSTYPE is '${fstype:-unknown}', not vfat — refusing to treat it as an ESP."
+        exit 1
+    fi
+    # Best-effort esp/boot flag surfacing (PARTFLAGS is a raw GPT attr bitmask; the
+    # hard gate is vfat + the operator confirm, since we never repartition).
+    local pflags
+    pflags="$(lsblk -no PARTFLAGS "$ESP_PART" 2>/dev/null | head -n1 || true)"
+    [ -n "$pflags" ] && info "ESP $ESP_PART partition flags: $pflags"
+
+    warn "About to ADD a JARVIS boot entry to the EXISTING ESP $ESP_PART."
+    warn "This writes ONLY EFI/jarvis/* + one additive efibootmgr entry. It NEVER"
+    warn "repartitions, NEVER formats, and NEVER touches EFI/BOOT or EFI/ubuntu. Ubuntu"
+    warn "stays the default boot entry."
+    local c1 c2
+    read -r -p "Re-type the ESP partition to confirm ($ESP_PART): " c1
+    [ "$c1" = "$ESP_PART" ] || { error "Confirmation mismatch — aborting."; exit 1; }
+    read -r -p "Type ADD-JARVIS to proceed: " c2
+    [ "$c2" = "ADD-JARVIS" ] || { error "Not confirmed — aborting."; exit 1; }
 }
 
 # ---------------------------------------------------------------------------
@@ -545,6 +622,129 @@ write_boot_usb() {
 }
 
 # ---------------------------------------------------------------------------
+# add_jarvis_boot_entry DISK PARTNUM — create an ADDITIVE "JARVIS seL4" UEFI
+# entry pointing at \EFI\jarvis\grubx64.efi, idempotently, then restore Ubuntu
+# as BootOrder[0]. NEVER leaves JARVIS as the default. Real-run only.
+# ---------------------------------------------------------------------------
+JARVIS_BOOT_LABEL="JARVIS seL4"
+add_jarvis_boot_entry() {
+    local disk="$1" partnum="$2"
+
+    # Idempotency: remove any existing JARVIS entry first.
+    local id existing
+    existing="$(efibootmgr 2>/dev/null | sed -n "s/^Boot\([0-9A-Fa-f]\{4\}\)\*\? .*${JARVIS_BOOT_LABEL}.*/\1/p")"
+    local exarr=()
+    if [ -n "$existing" ]; then read -ra exarr <<< "$existing"; fi
+    for id in "${exarr[@]}"; do
+        info "Removing existing boot entry Boot$id ($JARVIS_BOOT_LABEL)"
+        efibootmgr -b "$id" -B >/dev/null 2>&1 || true
+    done
+
+    # Create (efibootmgr -c PREPENDS the new entry to BootOrder).
+    if ! efibootmgr --create --disk "$disk" --part "$partnum" \
+            --label "$JARVIS_BOOT_LABEL" --loader '\EFI\jarvis\grubx64.efi' >/dev/null 2>&1; then
+        error "efibootmgr --create failed for '$JARVIS_BOOT_LABEL'"
+        exit 1
+    fi
+
+    # Restore Ubuntu to the FRONT of BootOrder — JARVIS must never be the default.
+    local ubuntu_id jarvis_id order rest neworder
+    ubuntu_id="$(efibootmgr 2>/dev/null | sed -n 's/^Boot\([0-9A-Fa-f]\{4\}\)\*\? .*ubuntu.*/\1/p' | head -n1)"
+    jarvis_id="$(efibootmgr 2>/dev/null | sed -n "s/^Boot\([0-9A-Fa-f]\{4\}\)\*\? .*${JARVIS_BOOT_LABEL}.*/\1/p" | head -n1)"
+    order="$(efibootmgr 2>/dev/null | sed -n 's/^BootOrder: //p' | head -n1)"
+    if [ -n "$ubuntu_id" ] && [ -n "$jarvis_id" ]; then
+        rest="$(printf '%s' "$order" | tr ',' '\n' | grep -viE "^(${ubuntu_id}|${jarvis_id})$" | paste -sd, -)"
+        neworder="${ubuntu_id},${jarvis_id}"
+        [ -n "$rest" ] && neworder="${neworder},${rest}"
+        efibootmgr -o "$neworder" >/dev/null 2>&1 || warn "Could not set BootOrder — check 'efibootmgr -v'."
+        info "BootOrder = $neworder (Ubuntu first, JARVIS second — Ubuntu stays default)"
+    else
+        warn "Could not resolve ubuntu/JARVIS entry ids — BootOrder left as-is. VERIFY Ubuntu is still default ('efibootmgr -v')!"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# write_boot_esp — Option-A reversible DUAL-BOOT: add JARVIS to the EXISTING
+# internal ESP. NO repartition, NO format, NO --removable, NO whole-disk
+# grub-install. Writes ONLY EFI/jarvis/* + one additive efibootmgr entry;
+# never touches EFI/BOOT or EFI/ubuntu (Ubuntu's shim/loaders).
+# ---------------------------------------------------------------------------
+ESP_MNT=""
+write_boot_esp() {
+    step "Adding JARVIS to the internal ESP $ESP_PART (dual-boot; Ubuntu untouched)"
+
+    # Derive the whole disk + 1-based partition number from the ESP partition path.
+    local esp_disk esp_partnum
+    if [[ "$ESP_PART" =~ ^(/dev/nvme[0-9]+n[0-9]+)p([0-9]+)$ ]]; then
+        esp_disk="${BASH_REMATCH[1]}"; esp_partnum="${BASH_REMATCH[2]}"
+    elif [[ "$ESP_PART" =~ ^(/dev/mmcblk[0-9]+)p([0-9]+)$ ]]; then
+        esp_disk="${BASH_REMATCH[1]}"; esp_partnum="${BASH_REMATCH[2]}"
+    elif [[ "$ESP_PART" =~ ^(/dev/sd[a-z]+)([0-9]+)$ ]]; then
+        esp_disk="${BASH_REMATCH[1]}"; esp_partnum="${BASH_REMATCH[2]}"
+    else
+        error "Could not derive disk/part number from $ESP_PART"; exit 1
+    fi
+
+    # The stale ESP-root model copy (a truncated 8.3 'GEMMA2B.GUF' that fills the ESP).
+    # The REAL model lives on JARVIS_DATA (a DIFFERENT partition) and is never touched here.
+    local stale_model="GEMMA2B.GUF"
+
+    if [ "$DRY_RUN" = true ]; then
+        dry_would "mount $ESP_PART <tmp> (EXISTING ESP — NO format, NO repartition)"
+        dry_would "mkdir -p <esp>/EFI/jarvis/boot/grub"
+        dry_would "cp $KERNEL_PATH -> <esp>/EFI/jarvis/boot/$KERNEL_IMAGE"
+        dry_would "cp $ROOTSERVER_PATH -> <esp>/EFI/jarvis/boot/${ROOTSERVER_IMAGE:-<rootserver>}"
+        dry_would "sed 's#/boot/#/EFI/jarvis/boot/#g' $GRUB_CFG -> <esp>/EFI/jarvis/boot/grub/grub.cfg"
+        dry_would "grub-mkstandalone --format=x86_64-efi --output <esp>/EFI/jarvis/grubx64.efi (ONE JARVIS-owned file; never EFI/BOOT, never --removable, never whole-disk)"
+        dry_would "if present, remove the STALE ESP-root copy <esp>/$stale_model (ESP copy ONLY — the real model on JARVIS_DATA is untouched)"
+        dry_would "efibootmgr --create --disk $esp_disk --part $esp_partnum --label '$JARVIS_BOOT_LABEL' --loader '\\EFI\\jarvis\\grubx64.efi' (ADDITIVE)"
+        dry_would "efibootmgr -o <ubuntu>,<jarvis>,<rest> — restore Ubuntu as BootOrder[0] (JARVIS never the default)"
+        dry_would "sync && umount <tmp>"
+        return 0
+    fi
+
+    # --- Real run ---
+    ESP_MNT="$(mktemp -d)"
+    mount "$ESP_PART" "$ESP_MNT"
+
+    mkdir -p "$ESP_MNT/EFI/jarvis/boot/grub"
+    cp "$KERNEL_PATH" "$ESP_MNT/EFI/jarvis/boot/$KERNEL_IMAGE"
+    cp "$ROOTSERVER_PATH" "$ESP_MNT/EFI/jarvis/boot/$ROOTSERVER_IMAGE"
+    # The committed grub.cfg uses ESP-root-relative /boot/... ; JARVIS lives under
+    # /EFI/jarvis/boot/, so rewrite the image paths.
+    sed 's#/boot/#/EFI/jarvis/boot/#g' "$GRUB_CFG" > "$ESP_MNT/EFI/jarvis/boot/grub/grub.cfg"
+    info "Staged EFI/jarvis/boot/{$KERNEL_IMAGE, $ROOTSERVER_IMAGE, grub/grub.cfg}"
+
+    # Stale ESP-root model cleanup (frees the otherwise-full ESP). ESP copy ONLY —
+    # the real model on JARVIS_DATA (a different partition) is untouched.
+    if [ -f "$ESP_MNT/$stale_model" ]; then
+        warn "Removing the STALE ESP-root model copy /$stale_model ($(du -h "$ESP_MNT/$stale_model" 2>/dev/null | cut -f1)) — the real model on JARVIS_DATA is untouched."
+        rm -f "$ESP_MNT/$stale_model"
+    fi
+
+    # Standalone JARVIS GRUB EFI — exactly ONE JARVIS-owned file. The embedded cfg
+    # finds this ESP by the cfg file and chains to the real grub.cfg.
+    local embcfg; embcfg="$(mktemp)"
+    cat > "$embcfg" <<'EMBED'
+search --no-floppy --file --set=root /EFI/jarvis/boot/grub/grub.cfg
+configfile /EFI/jarvis/boot/grub/grub.cfg
+EMBED
+    grub-mkstandalone \
+        --format=x86_64-efi \
+        --output="$ESP_MNT/EFI/jarvis/grubx64.efi" \
+        --modules="multiboot multiboot2 part_gpt fat normal echo all_video efi_gop efi_uga ls test configfile search search_fs_file" \
+        "boot/grub/grub.cfg=$embcfg" 2>&1 | sed 's/^/    /'
+    rm -f "$embcfg"
+    info "Wrote EFI/jarvis/grubx64.efi (standalone; SHIMX64.EFI / EFI/ubuntu untouched)"
+
+    sync
+    umount "$ESP_MNT"; rmdir "$ESP_MNT"; ESP_MNT=""
+
+    add_jarvis_boot_entry "$esp_disk" "$esp_partnum"
+    info "JARVIS added to the ESP. Ubuntu remains the default boot entry."
+}
+
+# ---------------------------------------------------------------------------
 # Model provisioning — delegate to setup_nvme_partition.sh (handles the
 # detect-existing-JARVIS_DATA / sector-32768 / 8.3-name logic).
 # ---------------------------------------------------------------------------
@@ -572,6 +772,43 @@ provision_model() {
 # ---------------------------------------------------------------------------
 verify() {
     step "Verifying"
+
+    # --- ESP dual-boot verify ---
+    if [ "$TARGET" = "esp" ]; then
+        if [ "$DRY_RUN" = true ]; then
+            dry_would "re-mount $ESP_PART read-only and confirm EFI/jarvis/grubx64.efi + boot images + grub.cfg"
+            dry_would "confirm efibootmgr lists '$JARVIS_BOOT_LABEL' AND ubuntu is BootOrder[0]"
+            return 0
+        fi
+        local vmnt f
+        vmnt="$(mktemp -d)"
+        if mount -o ro "$ESP_PART" "$vmnt" 2>/dev/null; then
+            for f in "EFI/jarvis/grubx64.efi" "EFI/jarvis/boot/$KERNEL_IMAGE" "EFI/jarvis/boot/grub/grub.cfg"; do
+                if [ -f "$vmnt/$f" ]; then info "OK: $f"; else error "MISSING: $f"; fi
+            done
+            if [ -n "$ROOTSERVER_IMAGE" ]; then
+                if [ -f "$vmnt/EFI/jarvis/boot/$ROOTSERVER_IMAGE" ]; then
+                    info "OK: EFI/jarvis/boot/$ROOTSERVER_IMAGE"
+                else
+                    error "MISSING: rootserver image on ESP"
+                fi
+            fi
+            umount "$vmnt" 2>/dev/null || true
+        fi
+        rmdir "$vmnt" 2>/dev/null || true
+        if command -v efibootmgr >/dev/null 2>&1; then
+            local order0 uid
+            order0="$(efibootmgr 2>/dev/null | sed -n 's/^BootOrder: //p' | head -n1 | cut -d, -f1)"
+            uid="$(efibootmgr 2>/dev/null | sed -n 's/^Boot\([0-9A-Fa-f]\{4\}\)\*\? .*ubuntu.*/\1/p' | head -n1)"
+            if [ -n "$uid" ] && [ "$order0" = "$uid" ]; then
+                info "OK: ubuntu remains BootOrder[0] ($order0)"
+            else
+                warn "Ubuntu is NOT BootOrder[0] (first=$order0, ubuntu=$uid) — FIX before reboot!"
+            fi
+        fi
+        return 0
+    fi
+
     if [ "$DRY_RUN" = true ]; then
         dry_would "re-mount the boot USB read-only and confirm kernel + rootserver + grub.cfg present"
         dry_would "confirm JARVIS_DATA Start == 32768s via 'parted $NVME_DEV unit s print'"
@@ -628,6 +865,33 @@ print_checklist() {
     fi
     echo -e "${GREEN}================================================${NC}"
     echo ""
+
+    if [ "$TARGET" = "esp" ]; then
+        echo -e "${BOLD}Dual-boot — JARVIS added to the internal ESP; Ubuntu kept as default:${NC}"
+        echo "  1. Secure Boot -> 'Other OS' / non-enforcing (the JARVIS grubx64.efi is UNSIGNED)."
+        echo "  2. Ubuntu remains BootOrder[0]; JARVIS was ADDED, never made the default."
+        echo ""
+        echo -e "${BOLD}Validate JARVIS once (does NOT change the default):${NC}"
+        echo "  3. Find the entry id:   sudo efibootmgr | grep 'JARVIS seL4'"
+        echo "  4. One-shot next boot:  sudo efibootmgr --bootnext <JARVIS_id> && sudo reboot"
+        echo "     (boots JARVIS ONCE; the next reboot returns to Ubuntu automatically.)"
+        echo "  5. Confirm boot + model load + queries from the NVMe telemetry log:"
+        echo "       sudo dd if=${NVME_DEV} bs=512 skip=4000794624 count=2701 \\"
+        echo "         | python3 phase3/scripts/parse_nvme_log.py"
+        echo "  6. Confirm network telemetry on a LAN host:"
+        echo "       python3 phase3/scripts/telemetry_receiver.py"
+        echo "     (The model still loads from NVMe JARVIS_DATA @ sector 32768 — unchanged.)"
+        echo ""
+        echo -e "${BOLD}Rollback (removes JARVIS, leaves Ubuntu fully intact):${NC}"
+        echo "       sudo efibootmgr -b <JARVIS_id> -B"
+        echo "       sudo mount ${ESP_PART:-/dev/nvme0n1p4} /mnt && sudo rm -rf /mnt/EFI/jarvis && sudo umount /mnt"
+        echo "       sudo efibootmgr -v | grep -i ubuntu     # ubuntu must remain BootOrder[0]"
+        echo ""
+        echo "See: phase3/docs/BARE_METAL_BOOT_GUIDE.md"
+        echo ""
+        return 0
+    fi
+
     echo -e "${BOLD}BIOS / firmware setup (JARVIS PC):${NC}"
     echo "  1. Disable CSM (boot UEFI-only; CSM is sunset for v1.0)."
     echo "  2. Secure Boot -> set OS Type to 'Other OS' (disables Secure Boot enforcement)."
@@ -652,12 +916,12 @@ print_checklist() {
 # Cleanup on exit
 # ---------------------------------------------------------------------------
 cleanup() {
-    if [ -n "$USB_MNT" ] && mountpoint -q "$USB_MNT" 2>/dev/null; then
-        umount "$USB_MNT" 2>/dev/null || true
-    fi
-    if [ -n "$USB_MNT" ] && [ -d "$USB_MNT" ]; then
-        rmdir "$USB_MNT" 2>/dev/null || true
-    fi
+    local m
+    for m in "${USB_MNT:-}" "${ESP_MNT:-}"; do
+        [ -n "$m" ] || continue
+        if mountpoint -q "$m" 2>/dev/null; then umount "$m" 2>/dev/null || true; fi
+        if [ -d "$m" ]; then rmdir "$m" 2>/dev/null || true; fi
+    done
 }
 
 # ---------------------------------------------------------------------------
@@ -672,11 +936,17 @@ main() {
     echo ""
 
     parse_args "$@"
-    check_target          # exits "not implemented" for esp/disk BEFORE device guards
+    check_target          # gate target (disk still "not yet implemented") BEFORE device guards
     preflight
-    guard_usb_device      # device-safety refusals (runs in dry-run too)
-    run_build
-    write_boot_usb        # uses stage_boot_payload()
+    if [ "$TARGET" = "esp" ]; then
+        guard_esp_device  # ESP partition + ADD-JARVIS double-confirm (an NVMe PARTITION is allowed here)
+        run_build
+        write_boot_esp    # additive dual-boot on the EXISTING ESP; Ubuntu kept default
+    else
+        guard_usb_device  # device-safety refusals (runs in dry-run too)
+        run_build
+        write_boot_usb    # repartition + format USB, then stage_boot_payload()
+    fi
     provision_model
     verify
     print_checklist
