@@ -204,13 +204,13 @@ If the Start is not `32768s`, re-run `phase3/scripts/setup_nvme_partition.sh` (o
 2. Power on (or reboot); press **F8** during POST (X470-F) for the one-time boot menu and select the **`UEFI: <stick>`** entry
 3. The GRUB menu appears on the monitor (~10s) and auto-selects **"JARVIS seL4 x86-64 (UEFI)"** (the multiboot2 entry, grub `default=1`)
 4. seL4 boots via multiboot2 → loads the rootserver → self-test → loads Gemma from NVMe → starts inference
-5. **The monitor goes dark / freezes on the last GRUB frame when seL4 takes over — this is EXPECTED.** There is no on-screen output until the goal #2 Step 2 framebuffer UI exists. **Validate via the NVMe telemetry log** (Section 7) or the COM1 serial console (Section 9).
+5. **The monitor shows the JARVIS GOP framebuffer HUD at 1024×768×32** once seL4 takes over (~2s) — status panel, STATE badge, the live model-load progress bar, and the scrolling event log (goal #2; box-day confirmed 2026-06-24). Legacy VGA text (`0xB8000`) is unavailable under UEFI — that map fails gracefully (non-fatal); the on-screen UI is the GOP framebuffer, not VGA text. For headless/scripted validation use the **network telemetry console** (Section 9) or the NVMe telemetry log (Section 7). (1080p is not available bare-metal — the firmware GOP only offers 1024×768.)
 
 ---
 
-## 7. Expected Output (serial / NVMe log — monitor is dark under UEFI)
+## 7. Expected Output (serial / NVMe log — headless validation)
 
-Under UEFI the monitor is **dark** (VGA text mode needs CSM). The rootserver output below is what appears on the **COM1 serial console** and, with `JARVIS_DBG_BOOT_LOG=1`, in the **NVMe telemetry log** (read back via `sudo dd if=/dev/nvme0n1 bs=512 skip=4000794624 count=2700 | python3 phase3/scripts/parse_nvme_log.py`):
+On-screen the monitor shows the **GOP framebuffer HUD at 1024×768×32** (status panel + STATE badge + live model-load progress bar + scrolling event log; goal #2, box-day confirmed). Legacy VGA text (`0xB8000`) is unavailable under UEFI and maps non-fatally. For headless/scripted validation, the rootserver output below is what appears on the **COM1 serial console** and, with `JARVIS_DBG_BOOT_LOG=1`, in the **NVMe telemetry log** (read back via `sudo dd if=/dev/nvme0n1 bs=512 skip=4000794624 count=2700 | python3 phase3/scripts/parse_nvme_log.py`):
 
 ```
 ==================================================
@@ -265,7 +265,7 @@ Key differences on real hardware compared to QEMU:
 | GRUB menu appears, but no kernel | Module line in grub.cfg wrong | Check `ls ~/sel4-x86/jbuild/images/` and update grub.cfg image names |
 | Triple fault after GRUB | IOAPIC/LAPIC issue | Try the "Serial Only" GRUB entry; disable IOMMU in BIOS |
 | Hang after seL4 kernel banner | Timer source issue | Check PIT/HPET/TSC config; try rebuilding without `-DSIMULATION=1` |
-| Monitor dark after GRUB | Expected under UEFI | Not a fault — no framebuffer UI until goal #2 Step 2. Validate via NVMe log / serial. |
+| Monitor dark after GRUB | No GOP framebuffer mapped (or a pre-goal-#2-Step-2 build) | The GOP HUD renders at 1024×768 since goal #2 Step 2 (box-day confirmed). If still dark: check the monitor is on the active video output and the firmware GOP is active (not legacy/CSM); validate the box is alive via the network telemetry console / NVMe log. |
 | Works on QEMU, fails on real HW | ACPI or memory map differences | Debug with serial console (Section 9); check IOMMU/VT-d setting |
 | "No valid untypeds" | Memory map / IOMMU | UEFI memory map validated in Step 1; if it recurs, confirm IOMMU/AMD-Vi is Disabled. |
 | Kernel assertion failure | IOMMU/AMD-Vi enabled | Disable AMD-Vi in BIOS for first boot |
@@ -303,7 +303,7 @@ seL4 x86-64 has two independent output paths:
 
 - **Serial (COM1 at 0x3F8):** The seL4 kernel writes boot messages, ELF loading status, and assertion failures here. The rootserver also writes here via `puts_serial()` / `seL4_DebugPutChar()`.
 
-- **VGA text (0xB8000):** The JARVIS VGA driver (`vga_text.c`) writes to VGA text-mode memory, available **only under legacy BIOS/CSM**. Under UEFI there is no VGA text window — the `0xB8000` map fails gracefully (non-fatal, `vga_ready=0`) and the monitor stays dark until the goal #2 Step 2 framebuffer (GOP) UI exists. Use serial / the NVMe log for UEFI validation.
+- **VGA text (0xB8000):** The JARVIS VGA driver (`vga_text.c`) writes to VGA text-mode memory, available **only under legacy BIOS/CSM**. Under UEFI there is no VGA text window — the `0xB8000` map fails gracefully (non-fatal, `vga_ready=0`); the on-screen UI is instead the **GOP framebuffer HUD** (goal #2 Step 2, 1024×768×32, box-day confirmed). Use the network telemetry console / serial / NVMe log for headless validation.
 
 Both outputs run simultaneously when available. For initial bring-up, VGA alone is sufficient. Add serial later for kernel-level debugging if needed.
 

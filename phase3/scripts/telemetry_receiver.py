@@ -54,6 +54,11 @@ KIND_NAMES = {1: 'STATS', 2: 'INFER', 3: 'STATE'}
 
 DEFAULT_PORT = 51000
 
+# Script-relative default so the console serves from ANY working directory
+# (repo/phase4/console). An explicit --web-dir is honored as-is.
+_DEFAULT_WEB_DIR = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), '..', '..', 'phase4', 'console'))
+
 
 def _cstr(raw: bytes) -> str:
     """Decode a NUL-terminated fixed-width field to a stripped ASCII string."""
@@ -290,7 +295,7 @@ def _replay_producer(hub, path, rate):
 
 class _SSEHandler(BaseHTTPRequestHandler):
     hub = None
-    web_dir = 'phase4/console'
+    web_dir = _DEFAULT_WEB_DIR
 
     def log_message(self, *args):  # silence default request logging
         pass
@@ -343,8 +348,8 @@ class _SSEHandler(BaseHTTPRequestHandler):
             self.send_error(403, 'forbidden')
             return
         if not os.path.isdir(base):
-            body = ("web-dir '%s' not found (phase4/console arrives in N-c-3b); "
-                    "the /events SSE stream is live.\n" % self.web_dir).encode('utf-8')
+            body = ("[web] web root not found: %s -- pass --web-dir <dir>; "
+                    "the /events SSE stream still works.\n" % self.web_dir).encode('utf-8')
             self.send_response(404)
             self.send_header('Content-Type', 'text/plain; charset=utf-8')
             self.send_header('Content-Length', str(len(body)))
@@ -465,7 +470,8 @@ def main(argv=None) -> int:
     ap.add_argument('--json', action='store_true', help="emit one JSON object per line")
     ap.add_argument('--sse', action='store_true', help="run the HTTP/SSE bridge for the browser console")
     ap.add_argument('--http-port', type=int, default=8800, help="SSE/HTTP port (default: 8800)")
-    ap.add_argument('--web-dir', default='phase4/console', help="static web root (default: phase4/console)")
+    ap.add_argument('--web-dir', default=_DEFAULT_WEB_DIR,
+                    help="static web root (default: the repo's phase4/console, script-relative)")
     ap.add_argument('--replay', metavar='PCAP', help="replay a captured pcap instead of live UDP (box-free dev)")
     ap.add_argument('--replay-rate', type=float, default=1.0, help="seconds between replayed packets (default: 1.0)")
     args = ap.parse_args(argv)
