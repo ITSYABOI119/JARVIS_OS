@@ -156,7 +156,9 @@ From `phase4/docs/ROADMAP.md` — sequential, each with explicit "done when" cri
 
 ## License
 
-No license is applied yet. **MIT** is planned for the public **`v1.0.0`** release in Phase 4. Until then this is a personal research repository.
+Licensed under the **MIT License** — see [`LICENSE`](LICENSE). Copyright (c) 2026 ITSYABOI119.
+
+Bundled and depended-on third-party components (the vendored browser libs, seL4, and the Gemma model) are attributed in [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).
 
 ---
 
