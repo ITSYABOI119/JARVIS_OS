@@ -82,7 +82,7 @@ info()     { echo -e "${GREEN}[INFO]${NC}  $*"; }
 warn()     { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 error()    { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 step()     { echo -e "${CYAN}[STEP]${NC}  ${BOLD}$*${NC}"; }
-dry_would(){ echo -e "${YELLOW}[dry-run] would:${NC} $*"; }
+dry_would(){ printf '%b[dry-run] would:%b %s\n' "$YELLOW" "$NC" "$*"; }  # %s message: no echo -e escape mangling (\EFI stays \EFI)
 
 # ---------------------------------------------------------------------------
 # Pure / sourceable helpers (exercised directly by the host test)
@@ -653,7 +653,10 @@ add_jarvis_boot_entry() {
     jarvis_id="$(efibootmgr 2>/dev/null | sed -n "s/^Boot\([0-9A-Fa-f]\{4\}\)\*\? .*${JARVIS_BOOT_LABEL}.*/\1/p" | head -n1)"
     order="$(efibootmgr 2>/dev/null | sed -n 's/^BootOrder: //p' | head -n1)"
     if [ -n "$ubuntu_id" ] && [ -n "$jarvis_id" ]; then
-        rest="$(printf '%s' "$order" | tr ',' '\n' | grep -viE "^(${ubuntu_id}|${jarvis_id})$" | paste -sd, -)"
+        # `|| true`: when BootOrder is just ubuntu+jarvis, grep -v matches everything -> no output
+        # -> grep exits 1 -> under `set -euo pipefail` the assignment would ABORT before the
+        # `efibootmgr -o` below, leaving JARVIS the default (hit live on-box 2026-06-25). Tolerate it.
+        rest="$(printf '%s' "$order" | tr ',' '\n' | grep -viE "^(${ubuntu_id}|${jarvis_id})$" | paste -sd, - || true)"
         neworder="${ubuntu_id},${jarvis_id}"
         [ -n "$rest" ] && neworder="${neworder},${rest}"
         efibootmgr -o "$neworder" >/dev/null 2>&1 || warn "Could not set BootOrder — check 'efibootmgr -v'."

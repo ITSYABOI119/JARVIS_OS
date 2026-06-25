@@ -169,6 +169,35 @@ NOESP_OUT="$(bash "$INSTALLER" --target esp --dry-run --skip-build --skip-model 
 if [ "$NOESP_RC" -ne 0 ]; then ok "T8 --target esp without --esp exits nonzero"; else bad "T8 --target esp without --esp exits nonzero (got 0)"; fi
 assert_contains "T8 --target esp without --esp says --esp required" "$NOESP_OUT" "requires --esp"
 
+# ---- T9: add_jarvis_boot_entry keeps Ubuntu default when it's the ONLY prior UEFI entry (F3 regression) ----
+# F3 (shipped in d57a793, hit live on-box 2026-06-25): when BootOrder is just ubuntu+jarvis, grep -v
+# matched all ids -> rest empty -> grep exit 1 -> under `set -euo pipefail` the rest= assignment ABORTED
+# before `efibootmgr -o`, leaving JARVIS the default. The function calls the real efibootmgr (stub it),
+# and the bug only aborts under errexit (the test body runs with set +e), so drive it in a set -e subshell.
+STUB9="$(mktemp -d)"; SENT9="$(mktemp -d)"
+cat > "$STUB9/efibootmgr" <<EOF
+#!/bin/bash
+case "\$1" in
+  --create) exit 0 ;;
+  -o)       printf '%s' "\$2" > "$SENT9/order"; exit 0 ;;
+  -b)       exit 0 ;;
+  *)        printf 'Boot0000* JARVIS seL4\n'
+            printf 'Boot0001* ubuntu\n'
+            printf 'BootOrder: 0000,0001\n'
+            exit 0 ;;
+esac
+EOF
+chmod +x "$STUB9/efibootmgr"
+# JARVIS_BOOT_LABEL is already set by sourcing the installer (inherited here); add_jarvis_boot_entry
+# does not read DRY_RUN — so neither is re-set (avoids a spurious SC2034 unused warning).
+( set -euo pipefail; PATH="$STUB9:$PATH"
+  add_jarvis_boot_entry /dev/nvme0n1 4 ) >/dev/null 2>&1
+T9_RC=$?
+if [ "$T9_RC" -eq 0 ]; then ok "T9 add_jarvis_boot_entry did not abort under set -e (F3 fixed)"; else bad "T9 add_jarvis_boot_entry aborted under set -e (F3 regression, rc=$T9_RC)"; fi
+T9_ORDER="$(cat "$SENT9/order" 2>/dev/null || echo MISSING)"
+if [ "$T9_ORDER" = "0001,0000" ]; then ok "T9 BootOrder set Ubuntu-first (0001,0000)"; else bad "T9 BootOrder = '$T9_ORDER' (expected 0001,0000 = ubuntu first)"; fi
+rm -rf "$STUB9" "$SENT9"
+
 # ---- Results ----
 echo ""
 echo "== Results: $PASS PASS, $FAIL FAIL =="

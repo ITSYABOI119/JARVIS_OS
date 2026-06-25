@@ -189,7 +189,7 @@ JARVIS AI-OS: AI-controlled operating system on seL4 microkernel.
 | Phase 1 | COMPLETE — PoC on x86 QEMU |
 | Phase 2 | COMPLETE — Alpha on Pi 4 bare metal |
 | Phase 3 | COMPLETE (beta) — **v0.2.1-beta TAGGED @ 06de75c (2026-06-16).** Engine: 11/11 models, 6 families, fused qdot (native 19.79 tok/s @16T — NATIVE bench, NOT the seL4 build). Bare-metal NVMe inference verified. Dynamic scaling removed (ADR 2026-04-17); single-model Gemma 4 E2B. 30-day x86 soak DEFERRED (ADR 2026-06-15, not gating). |
-| Phase 4 | IN PROGRESS — Production v1.0. **Goal #1 reframed to CPU "Inference performance"** (AVX2 + a seL4-native threadpool; GPU inference DEFERRED — no usable GPU, ADR 2026-06-16). Other goals: framebuffer/HDMI UI, xHCI keyboard, installer, 90-day stability, v1.0.0 (MIT). See phase4/docs/ROADMAP.md + PHASE_4_GOAL1_INFERENCE_PERF.md. |
+| Phase 4 | IN PROGRESS — Production v1.0. **Goal #1 reframed to CPU "Inference performance"** (AVX2 + a seL4-native threadpool; GPU inference DEFERRED — no usable GPU, ADR 2026-06-16). **Goal #4 installer DONE — incl. on-SSD dual-boot (`--target esp`) VERIFIED on-box 2026-06-25 (boot_id=5; Ubuntu kept BootOrder[0]; the boot USB is now recovery/re-flash only).** Other goals: framebuffer/HDMI UI, xHCI keyboard, 90-day stability, v1.0.0 (MIT). See phase4/docs/ROADMAP.md + PHASE_4_GOAL1_INFERENCE_PERF.md. |
 
 Current milestone: do NOT hardcode here (it moves) — read the latest `phase4/weeks/weekNN/WEEK_NN_STATUS.md`.
 
@@ -200,7 +200,7 @@ These rules apply to the prompts you generate — the coding session must follow
 - Always update CLAUDE.md after completing work
 - Use parallel agents when tasks are independent; drive hardware-in-the-loop work directly
 - Aim for 100% test pass rate
-- **Always test in QEMU/KVM before flashing USB** — `phase3/scripts/qemu_test.sh`; AVX2 needs KVM `-cpu host` (the committed TCG Nehalem sim cannot run AVX2)
+- **Always test in QEMU/KVM before flashing USB or running the on-SSD install** — `phase3/scripts/qemu_test.sh`; AVX2 needs KVM `-cpu host` (the committed TCG Nehalem sim cannot run AVX2)
 - **Build over ssh needs a LOGIN shell** — `ssh jarvis 'bash -lc "..."'` (cmake/ninja are on the login-PATH only); plain `ssh jarvis '...'` silently fails with command-not-found
 - **seL4 kernel config is set in build_jarvis_x86.sh** — KernelIOMMU=OFF + (since M0) SIMULATION=OFF + KernelFPU=XSAVE / feature-set 7 / size 832 (two-pass cmake); reproducible from the repo, NOT a manual ~/sel4-x86 edit
 - **Build without embedded model for fast iteration** — NVMe runtime loading is the live path; embedded model is fallback only
@@ -231,8 +231,12 @@ Before giving a prompt to the user, verify it includes:
 #   ssh jarvis 'bash -lc "<cmds>"'   (plain ssh jarvis "<cmds>" fails: command not found)
 ssh jarvis 'bash -lc "cd ~/Desktop/JARVIS_OS && git stash && git pull && chmod +x phase3/scripts/*.sh && ./phase3/scripts/build_jarvis_x86.sh ~/Desktop/JARVIS_OS"'   # sync + build (kernel: IOMMU=OFF + SIMULATION=OFF + XSAVE)
 ssh jarvis 'bash -lc "cd ~/sel4-x86 && bash ~/Desktop/JARVIS_OS/phase3/scripts/qemu_test.sh [/path/to/model.gguf]"'   # QEMU/KVM test (KVM -cpu host → real AVX2)
-sudo HOME=/home/jarvis bash phase3/scripts/reflash_usb.sh  # flash USB for bare metal (run on the box)
-sudo reboot                                                 # boot from USB (on the box)
+# DEPLOY — on-SSD dual-boot (PREFERRED; VERIFIED on-box 2026-06-25, boot_id=5). Run ON THE BOX:
+sudo HOME=/home/jarvis ./phase3/scripts/install_jarvis_x86.sh --target esp --esp /dev/nvme0n1p4 --skip-build --skip-model
+#   adds EFI/jarvis to the internal ESP (p4) + additive efibootmgr; Ubuntu kept BootOrder[0].
+#   boot JARVIS once: sudo efibootmgr --bootnext <JARVIS_id> && sudo reboot   (auto-back to Ubuntu next boot)
+# RECOVERY / re-flash — boot USB (no longer needed for normal boot):
+sudo HOME=/home/jarvis bash phase3/scripts/reflash_usb.sh && sudo reboot
 ```
 
 ### Build config
