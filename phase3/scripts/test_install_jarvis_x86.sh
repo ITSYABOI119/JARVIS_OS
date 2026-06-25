@@ -57,10 +57,10 @@ assert_contains "T1 --help shows --model"    "$HELP_OUT" "--model"
 assert_contains "T1 --help shows --target"   "$HELP_OUT" "--target"
 assert_contains "T1 --help shows --dry-run"  "$HELP_OUT" "--dry-run"
 
-# ---- T2: --target disk still not implemented (esp IS now implemented — see T8) ----
-DISK_OUT="$(bash "$INSTALLER" --target disk --usb /dev/sdz --skip-build --skip-model 2>&1)"; DISK_RC=$?
-if [ "$DISK_RC" -ne 0 ]; then ok "T2 --target disk exits nonzero"; else bad "T2 --target disk exits nonzero (got 0)"; fi
-assert_contains "T2 --target disk says not yet implemented" "$DISK_OUT" "not yet implemented"
+# ---- T2: an UNKNOWN --target errors (usb/esp/disk are ALL implemented now) ----
+BOGUS_OUT="$(bash "$INSTALLER" --target bogus --dry-run --skip-build --skip-model 2>&1)"; BOGUS_RC=$?
+if [ "$BOGUS_RC" -ne 0 ]; then ok "T2 --target bogus exits nonzero"; else bad "T2 --target bogus exits nonzero (got 0)"; fi
+assert_contains "T2 --target bogus says Unknown --target" "$BOGUS_OUT" "Unknown --target"
 
 # ---- T3: jarvis_is_unsafe_usb_target ----
 assert_rc0 "T3 /dev/nvme0n1 is unsafe"        jarvis_is_unsafe_usb_target /dev/nvme0n1
@@ -190,13 +190,65 @@ EOF
 chmod +x "$STUB9/efibootmgr"
 # JARVIS_BOOT_LABEL is already set by sourcing the installer (inherited here); add_jarvis_boot_entry
 # does not read DRY_RUN — so neither is re-set (avoids a spurious SC2034 unused warning).
-( set -euo pipefail; PATH="$STUB9:$PATH"
-  add_jarvis_boot_entry /dev/nvme0n1 4 ) >/dev/null 2>&1
+( set -euo pipefail
+  PATH="$STUB9:$PATH" add_jarvis_boot_entry /dev/nvme0n1 4 ) >/dev/null 2>&1
 T9_RC=$?
 if [ "$T9_RC" -eq 0 ]; then ok "T9 add_jarvis_boot_entry did not abort under set -e (F3 fixed)"; else bad "T9 add_jarvis_boot_entry aborted under set -e (F3 regression, rc=$T9_RC)"; fi
 T9_ORDER="$(cat "$SENT9/order" 2>/dev/null || echo MISSING)"
 if [ "$T9_ORDER" = "0001,0000" ]; then ok "T9 BootOrder set Ubuntu-first (0001,0000)"; else bad "T9 BootOrder = '$T9_ORDER' (expected 0001,0000 = ubuntu first)"; fi
 rm -rf "$STUB9" "$SENT9"
+
+# ---- T10: --target disk dry-run (full single-OS wipe; implemented; touches nothing) ----
+DISK_DRY="$(bash "$INSTALLER" --target disk --disk /dev/sdz --dry-run --skip-build --skip-model 2>&1)"; DISK_DRY_RC=$?
+if [ "$DISK_DRY_RC" -eq 0 ]; then ok "T10 --target disk --dry-run exits 0"; else bad "T10 --target disk --dry-run exits 0 (got $DISK_DRY_RC)"; fi
+assert_contains "T10 disk dry-run: JARVIS_DATA"             "$DISK_DRY" "JARVIS_DATA"
+assert_contains "T10 disk dry-run: start sector 32768s"     "$DISK_DRY" "32768s"
+assert_contains "T10 disk dry-run: WIPE-AND-INSTALL-JARVIS" "$DISK_DRY" "WIPE-AND-INSTALL-JARVIS"
+assert_contains "T10 disk dry-run: mklabel gpt"             "$DISK_DRY" "mklabel gpt"
+if printf '%s' "$DISK_DRY" | grep -qF "not yet implemented"; then
+    bad "T10 disk dry-run must NOT say 'not yet implemented'"
+else
+    ok "T10 disk dry-run does not say 'not yet implemented'"
+fi
+
+# T10c: disk dry-run executes NOTHING destructive (stub every wipe/partition tool; assert no sentinel).
+STUB10="$(mktemp -d)"; SENT10="$(mktemp -d)"
+for tool in parted mkfs.fat grub-install sgdisk wipefs mount rm partprobe; do
+    cat > "$STUB10/$tool" <<EOF
+#!/bin/bash
+touch "$SENT10/${tool}_was_called"
+exit 0
+EOF
+    chmod +x "$STUB10/$tool"
+done
+PATH="$STUB10:$PATH" bash "$INSTALLER" --target disk --disk /dev/sdz --dry-run --skip-build --skip-model >/dev/null 2>&1 || true
+SENT10_FOUND="$(find "$SENT10" -type f 2>/dev/null | wc -l | tr -d ' ')"
+if [ "$SENT10_FOUND" -eq 0 ]; then
+    ok "T10 disk dry-run ran no destructive tool (no sentinels)"
+else
+    bad "T10 disk dry-run executed a destructive tool ($SENT10_FOUND sentinel(s) found)"
+fi
+rm -rf "$STUB10" "$SENT10"
+
+# T10d: --target disk with NO --disk errors clearly.
+NODISK_OUT="$(bash "$INSTALLER" --target disk --dry-run --skip-build --skip-model 2>&1)"; NODISK_RC=$?
+if [ "$NODISK_RC" -ne 0 ]; then ok "T10 --target disk without --disk exits nonzero"; else bad "T10 --target disk without --disk exits nonzero (got 0)"; fi
+assert_contains "T10 --target disk without --disk says --disk required" "$NODISK_OUT" "requires --disk"
+
+# T10e: guard refuses a PARTITION path (must be a WHOLE disk).
+PART_OUT="$(bash "$INSTALLER" --target disk --disk /dev/sdz1 --dry-run --skip-build --skip-model 2>&1)"; PART_RC=$?
+if [ "$PART_RC" -ne 0 ]; then ok "T10 --target disk refuses a partition path (/dev/sdz1)"; else bad "T10 --target disk accepted a partition path (should refuse)"; fi
+assert_contains "T10 partition-path refusal is a REFUSED guard" "$PART_OUT" "REFUSED"
+
+# T10f: guard refuses the booted/root disk (if derivable in this env).
+ROOTDISK="$(root_fs_disk)"
+if [ -n "$ROOTDISK" ]; then
+    ROOT_OUT="$(bash "$INSTALLER" --target disk --disk "$ROOTDISK" --dry-run --skip-build --skip-model 2>&1)"; ROOT_RC=$?
+    if [ "$ROOT_RC" -ne 0 ]; then ok "T10 --target disk refuses the booted/root disk ($ROOTDISK)"; else bad "T10 --target disk accepted the root disk $ROOTDISK (should refuse)"; fi
+    assert_contains "T10 root-disk refusal is a REFUSED guard" "$ROOT_OUT" "REFUSED"
+else
+    ok "T10 root-disk refusal skipped (root_fs_disk empty in this env)"
+fi
 
 # ---- Results ----
 echo ""

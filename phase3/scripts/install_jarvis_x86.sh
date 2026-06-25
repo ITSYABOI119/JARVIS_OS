@@ -20,8 +20,9 @@
 #            rootserver -> loads the model from NVMe FAT32 (JARVIS_DATA) at
 #            runtime. The model is NOT on the boot USB.
 #
-# Only --target usb is implemented in v1.0. --target esp / --target disk
-# (on-SSD install) are placeholders that exit "not yet implemented".
+# All three targets are implemented: --target usb (boot stick), --target esp
+# (reversible dual-boot on the internal ESP; verified on-box), and --target disk
+# (full single-OS wipe of the whole NVMe; CODE + DRY-RUN ONLY, never run on the dev box).
 #
 # Usage:
 #   sudo ./install_jarvis_x86.sh --usb /dev/sdb
@@ -59,6 +60,13 @@ REPO_DEFAULT="${JARVIS_REPO:-$HOME/Desktop/JARVIS_OS}"
 # runtime from the build output (see derive_rootserver_image).
 readonly KERNEL_IMAGE="kernel-x86_64-pc99"
 
+# --target disk full-wipe layout (sectors are 512 B). JARVIS_DATA start is PINNED to 32768
+# (main_x86.c NVME_FAT32_PART_LBA / setup_nvme_partition.sh REQUIRED_START_SECTOR); the
+# telemetry-log tail at the disk end (nvme_log.h, ~2 TB drive) stays UNPARTITIONED.
+readonly DISK_DATA_START_S=32768    # MUST equal the rootserver's NVME_FAT32_PART_LBA
+readonly DISK_DATA_SIZE_MIB=10240   # JARVIS_DATA ~10 GiB (one model + headroom; FAT32 4 GiB/file cap)
+readonly DISK_ESP_SIZE_MIB=512      # ESP ~512 MiB
+
 # ---------------------------------------------------------------------------
 # Default options
 # ---------------------------------------------------------------------------
@@ -72,6 +80,7 @@ SKIP_USB=false
 SKIP_MODEL=false
 TARGET="usb"
 ESP_PART=""         # --esp <partition> (e.g. /dev/nvme0n1p4) for --target esp; never a whole disk
+DISK_DEV=""         # --disk <wholedisk> (e.g. /dev/nvme0n1) for --target disk; never a partition
 DRY_RUN=false
 WANT_BUILD=false    # set by --build
 
@@ -221,8 +230,10 @@ ${BOLD}Options:${NC}
     --repo <path>        Repo root (default: \$HOME/Desktop/JARVIS_OS).
     --target {usb|esp|disk}  Install target (default: usb). 'esp' = reversible dual-boot
                          on the internal ESP (adds JARVIS alongside Ubuntu; never
-                         repartitions/formats). 'disk' (full on-SSD) not yet implemented.
+                         repartitions/formats). 'disk' = full single-OS install that WIPES
+                         the whole disk (no Ubuntu) — runs from a live USB, NEVER the booted disk.
     --esp /dev/nvme0n1p4 Existing ESP PARTITION for --target esp (never a whole disk).
+    --disk /dev/nvme0n1  WHOLE disk to WIPE for --target disk (never a partition).
     --skip-build         Do not build; use existing images.
     --skip-usb           Do not write the boot USB.
     --skip-model         Do not touch the NVMe model partition.
@@ -233,12 +244,18 @@ ${BOLD}Examples:${NC}
     sudo $SCRIPT_NAME --build --usb /dev/sdb
     sudo $SCRIPT_NAME --usb /dev/sdb --model ~/models/gemma-4-E2B-it-Q4_K_M.gguf
     sudo $SCRIPT_NAME --target esp --esp /dev/nvme0n1p4   # reversible dual-boot, keeps Ubuntu
+    sudo $SCRIPT_NAME --target disk --disk /dev/nvme0n1   # FULL WIPE, single-OS (live USB only!)
     $SCRIPT_NAME --dry-run --usb /dev/sdb --skip-build --skip-model
 
 ${BOLD}Dual-boot (--target esp):${NC}
     Adds a "JARVIS seL4" UEFI entry + an EFI/jarvis/ payload to the EXISTING internal
     ESP. Ubuntu stays the default; never repartitions, never touches EFI/ubuntu. Validate
     with a one-shot \`efibootmgr --bootnext\`; rollback by deleting EFI/jarvis + the entry.
+
+${BOLD}Full single-OS (--target disk):${NC}
+    WIPES the whole disk -> JARVIS only (no Ubuntu). Run it from a live USB targeting a
+    DEDICATED internal disk; it refuses the booted/root disk + partition paths and triple-confirms.
+    CODE + DRY-RUN proven; NEVER run on the dev box (Ubuntu is the build/ssh env).
 
 ${BOLD}Boot flow:${NC}
     UEFI firmware -> GRUB (multiboot2) -> seL4 kernel -> JARVIS rootserver
@@ -260,6 +277,7 @@ parse_args() {
             --repo)        shift; REPO_PATH="${1:-}" ;;
             --target)      shift; TARGET="${1:-}" ;;
             --esp)         shift; ESP_PART="${1:-}" ;;
+            --disk)        shift; DISK_DEV="${1:-}" ;;
             --skip-build)  SKIP_BUILD=true ;;
             --skip-usb)    SKIP_USB=true ;;
             --skip-model)  SKIP_MODEL=true ;;
@@ -302,8 +320,9 @@ check_target() {
             # (additive; never repartitions). See guard_esp_device + write_boot_esp.
             ;;
         disk)
-            error "on-SSD full install not yet implemented — only --target usb / esp supported in v1.0 (see memory installer-on-ssd-goal / ROADMAP)"
-            exit 2
+            # Implemented: full single-OS wipe of the whole internal NVMe (no Ubuntu).
+            # CODE + DRY-RUN ONLY; NEVER run on the dev box. See guard_disk_device +
+            # write_boot_disk + docs/decisions/2026-06-25-target-disk-full-ssd-install.md.
             ;;
         *)
             error "Unknown --target '$TARGET' (expected usb|esp|disk)"
@@ -340,6 +359,8 @@ preflight() {
     local tools=(lsblk)
     if [ "$TARGET" = "esp" ]; then
         tools+=(grub-mkstandalone efibootmgr mount)
+    elif [ "$TARGET" = "disk" ]; then
+        tools+=(parted mkfs.fat grub-install sgdisk wipefs findmnt mount)
     else
         tools+=(parted mkfs.fat grub-install)
     fi
@@ -430,6 +451,8 @@ preflight() {
     info "Build dir:   $BUILD_DIR"
     if [ "$TARGET" = "esp" ]; then
         info "ESP (dual): ${ESP_PART:-<none>}  (target=$TARGET)"
+    elif [ "$TARGET" = "disk" ]; then
+        info "Disk (WIPE): ${DISK_DEV:-<none>}  (target=$TARGET — full single-OS, no Ubuntu)"
     else
         info "Boot USB:    ${USB_DEV:-<none>} (target=$TARGET)"
     fi
@@ -502,6 +525,60 @@ guard_esp_device() {
     [ "$c1" = "$ESP_PART" ] || { error "Confirmation mismatch — aborting."; exit 1; }
     read -r -p "Type ADD-JARVIS to proceed: " c2
     [ "$c2" = "ADD-JARVIS" ] || { error "Not confirmed — aborting."; exit 1; }
+}
+
+# ---------------------------------------------------------------------------
+# Full-disk wipe safety — the HEAVIEST gate (runs in dry-run too, reporting
+# without touching). The inverse of guard_esp_device: require a WHOLE DISK,
+# REFUSE a partition; and refuse the booted/root disk + any disk with a mounted
+# partition. Real run triple-confirms. NEVER run on the dev box (Ubuntu host).
+# ---------------------------------------------------------------------------
+guard_disk_device() {
+    if [ -z "$DISK_DEV" ]; then
+        error "REFUSED: --target disk requires --disk <wholedisk> (e.g. --disk /dev/nvme0n1)."
+        exit 1
+    fi
+    # Must be a WHOLE-DISK path, never a partition (prevents wiping the wrong thing).
+    if ! [[ "$DISK_DEV" =~ ^/dev/(nvme[0-9]+n[0-9]+|sd[a-z]+|mmcblk[0-9]+)$ ]]; then
+        error "REFUSED: --disk '$DISK_DEV' is not a whole-disk path (expected e.g. /dev/nvme0n1 or /dev/sdb)."
+        error "Pass the WHOLE DISK to wipe, never a partition."
+        exit 1
+    fi
+    # NEVER the disk we are booted from.
+    local rootdisk
+    rootdisk="$(root_fs_disk)"
+    if [ -n "$rootdisk" ] && [ "$DISK_DEV" = "$rootdisk" ]; then
+        error "REFUSED: $DISK_DEV backs the running '/' (the booted OS). --target disk must run from a"
+        error "live USB against a DIFFERENT internal disk — it wipes everything, including Ubuntu."
+        exit 1
+    fi
+    # NEVER a disk with a mounted partition (covers the live/system disk).
+    local mounted
+    mounted="$(lsblk -nro MOUNTPOINT "$DISK_DEV" 2>/dev/null | grep -c . || true)"
+    if [ "${mounted:-0}" -gt 0 ]; then
+        error "REFUSED: $DISK_DEV has a mounted partition — unmount everything on it first (or it is the live/system disk)."
+        lsblk "$DISK_DEV" 2>/dev/null || true
+        exit 1
+    fi
+
+    if [ "$DRY_RUN" = true ]; then
+        dry_would "verify $DISK_DEV is the intended WHOLE disk to WIPE (lsblk model/size)"
+        dry_would "TRIPLE-CONFIRM: operator re-types '$DISK_DEV', then 'WIPE-AND-INSTALL-JARVIS', then 'DESTROY-ALL-DATA-ON-$DISK_DEV'"
+        return 0
+    fi
+
+    [ -b "$DISK_DEV" ] || { error "REFUSED: $DISK_DEV is not a block device."; exit 1; }
+
+    warn "FULL WIPE: $DISK_DEV will be ENTIRELY ERASED and reformatted as a single-OS JARVIS disk (NO Ubuntu)."
+    warn "This is for a DEDICATED box only. NEVER run it against the disk that hosts your Ubuntu build/ssh env."
+    lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINT "$DISK_DEV" 2>/dev/null || true
+    local c1 c2 c3
+    read -r -p "Re-type the whole disk to confirm ($DISK_DEV): " c1
+    [ "$c1" = "$DISK_DEV" ] || { error "Confirmation mismatch — aborting."; exit 1; }
+    read -r -p "Type WIPE-AND-INSTALL-JARVIS to proceed: " c2
+    [ "$c2" = "WIPE-AND-INSTALL-JARVIS" ] || { error "Not confirmed — aborting."; exit 1; }
+    read -r -p "Type DESTROY-ALL-DATA-ON-$DISK_DEV to finally confirm: " c3
+    [ "$c3" = "DESTROY-ALL-DATA-ON-$DISK_DEV" ] || { error "Not confirmed — aborting."; exit 1; }
 }
 
 # ---------------------------------------------------------------------------
@@ -758,6 +835,81 @@ EMBED
 }
 
 # ---------------------------------------------------------------------------
+# write_boot_disk — --target disk: WIPE the whole NVMe -> single-OS JARVIS (no
+# Ubuntu). New GPT: JARVIS_DATA pinned at sector 32768 (~10 GiB) + ESP (~512 MiB,
+# --removable BOOTX64.EFI). The telemetry-log tail is left UNPARTITIONED. Mirrors
+# write_boot_usb's parted/mkfs + reuses stage_boot_payload("disk"). NEVER on the
+# dev box; the model is provisioned afterward by setup_nvme (detect-existing).
+# ---------------------------------------------------------------------------
+ESP_DISK_MNT=""
+write_boot_disk() {
+    step "Wiping $DISK_DEV and installing JARVIS as the only OS (no Ubuntu)"
+
+    # Layout (512 B sectors): JARVIS_DATA pinned at 32768s, then the ESP. The tail stays free.
+    local data_start_s=$DISK_DATA_START_S
+    local data_end_s=$(( data_start_s + DISK_DATA_SIZE_MIB * 2048 - 1 ))
+    local esp_start_s=$(( data_end_s + 1 ))
+    local esp_end_s=$(( esp_start_s + DISK_ESP_SIZE_MIB * 2048 - 1 ))
+
+    if [ "$DRY_RUN" = true ]; then
+        dry_would "umount ${DISK_DEV}* (any mounted partitions)"
+        dry_would "wipefs -a $DISK_DEV && sgdisk --zap-all $DISK_DEV (destroy ALL existing partitions/signatures)"
+        dry_would "parted -s $DISK_DEV mklabel gpt"
+        dry_would "parted -s $DISK_DEV mkpart JARVIS_DATA fat32 ${data_start_s}s ${data_end_s}s   (~${DISK_DATA_SIZE_MIB} MiB; start pinned to sector 32768)"
+        dry_would "parted -s $DISK_DEV mkpart JARVIS_ESP fat32 ${esp_start_s}s ${esp_end_s}s   (~${DISK_ESP_SIZE_MIB} MiB) + set 2 esp on"
+        dry_would "mkfs.fat -F 32 -n JARVIS_DATA ${DISK_DEV}p1"
+        dry_would "mkfs.fat -F 32 -n JARVIS_ESP ${DISK_DEV}p2"
+        dry_would "mount ${DISK_DEV}p2 <tmp> (the new ESP)"
+        stage_boot_payload "<tmp mount>" "disk" "$DISK_DEV"
+        dry_would "leave the telemetry-log tail (LBA 4000794624, 2701 sectors @ disk end) UNPARTITIONED"
+        dry_would "sync && umount <tmp>"
+        dry_would "provision the model into JARVIS_DATA (setup_nvme detects the new JARVIS_DATA @ 32768)"
+        return 0
+    fi
+
+    # --- Real run (NEVER on the dev box; from a live USB targeting a dedicated disk) ---
+    for p in $(lsblk -no PATH "$DISK_DEV" 2>/dev/null | tail -n +2); do
+        umount "$p" 2>/dev/null || true
+    done
+    wipefs -a "$DISK_DEV" 2>&1 | sed 's/^/    /' || true
+    sgdisk --zap-all "$DISK_DEV" 2>&1 | sed 's/^/    /' || true
+    parted -s "$DISK_DEV" mklabel gpt
+    parted -s "$DISK_DEV" mkpart JARVIS_DATA fat32 "${data_start_s}s" "${data_end_s}s"
+    parted -s "$DISK_DEV" mkpart JARVIS_ESP  fat32 "${esp_start_s}s" "${esp_end_s}s"
+    parted -s "$DISK_DEV" set 2 esp on
+    partprobe "$DISK_DEV" 2>/dev/null || true
+    sleep 2
+
+    local data_part="${DISK_DEV}p1" esp_part="${DISK_DEV}p2"
+    [ -b "$data_part" ] || data_part="${DISK_DEV}1"
+    [ -b "$esp_part" ]  || esp_part="${DISK_DEV}2"
+    if [ ! -b "$data_part" ] || [ ! -b "$esp_part" ]; then
+        error "Partitions did not appear after partprobe ($data_part / $esp_part)"; lsblk "$DISK_DEV"; exit 1
+    fi
+
+    # HARD ASSERT: JARVIS_DATA Start == 32768s (else the rootserver finds no model on bare metal).
+    local ptext
+    ptext="$(parted -s "$DISK_DEV" unit s print 2>/dev/null || true)"
+    if ! jarvis_partition_start_ok "$ptext"; then
+        error "FATAL: JARVIS_DATA did not land at sector 32768 on $DISK_DEV — refusing to continue."
+        parted -s "$DISK_DEV" unit s print 2>/dev/null || true
+        exit 1
+    fi
+
+    mkfs.fat -F 32 -n JARVIS_DATA "$data_part"
+    mkfs.fat -F 32 -n JARVIS_ESP  "$esp_part"
+
+    ESP_DISK_MNT="$(mktemp -d)"
+    mount "$esp_part" "$ESP_DISK_MNT"
+    stage_boot_payload "$ESP_DISK_MNT" "disk" "$DISK_DEV"
+    sync
+    umount "$ESP_DISK_MNT"; rmdir "$ESP_DISK_MNT"; ESP_DISK_MNT=""
+
+    info "Disk wiped + JARVIS staged. Telemetry-log tail (LBA 4000794624) left unpartitioned."
+    warn "NOTE: the telemetry-log LBA is HARDCODED in nvme_log.h for a ~2 TB drive — recompute it for a different-size disk."
+}
+
+# ---------------------------------------------------------------------------
 # Model provisioning — delegate to setup_nvme_partition.sh (handles the
 # detect-existing-JARVIS_DATA / sector-32768 / 8.3-name logic).
 # ---------------------------------------------------------------------------
@@ -818,6 +970,37 @@ verify() {
             else
                 warn "Ubuntu is NOT BootOrder[0] (first=$order0, ubuntu=$uid) — FIX before reboot!"
             fi
+        fi
+        return 0
+    fi
+
+    # --- Full-disk verify ---
+    if [ "$TARGET" = "disk" ]; then
+        if [ "$DRY_RUN" = true ]; then
+            dry_would "re-mount the new ESP (${DISK_DEV}p2) read-only and confirm EFI/BOOT/BOOTX64.EFI + boot/{kernel,rootserver,grub.cfg}"
+            dry_would "confirm JARVIS_DATA Start == 32768s via 'parted $DISK_DEV unit s print'"
+            return 0
+        fi
+        local esp_part="${DISK_DEV}p2" f
+        [ -b "$esp_part" ] || esp_part="${DISK_DEV}2"
+        local vmnt
+        vmnt="$(mktemp -d)"
+        if mount -o ro "$esp_part" "$vmnt" 2>/dev/null; then
+            for f in "EFI/BOOT/BOOTX64.EFI" "boot/$KERNEL_IMAGE" "boot/grub/grub.cfg"; do
+                if [ -f "$vmnt/$f" ]; then info "OK: $f"; else error "MISSING: $f"; fi
+            done
+            if [ -n "$ROOTSERVER_IMAGE" ]; then
+                if [ -f "$vmnt/boot/$ROOTSERVER_IMAGE" ]; then info "OK: boot/$ROOTSERVER_IMAGE"; else error "MISSING: rootserver image on ESP"; fi
+            fi
+            umount "$vmnt" 2>/dev/null || true
+        fi
+        rmdir "$vmnt" 2>/dev/null || true
+        local ptext
+        ptext="$(parted -s "$DISK_DEV" unit s print 2>/dev/null || true)"
+        if jarvis_partition_start_ok "$ptext"; then
+            info "OK: JARVIS_DATA starts at sector 32768"
+        else
+            warn "Could not confirm JARVIS_DATA Start == 32768s on $DISK_DEV"
         fi
         return 0
     fi
@@ -905,6 +1088,26 @@ print_checklist() {
         return 0
     fi
 
+    if [ "$TARGET" = "disk" ]; then
+        echo -e "${BOLD}Full single-OS on-SSD install (JARVIS is the ONLY OS — no Ubuntu):${NC}"
+        echo "  1. Run this from a LIVE USB, targeting the DEDICATED internal disk — NEVER the dev box."
+        echo "  2. Disable CSM (UEFI-only); Secure Boot -> 'Other OS' (the JARVIS grubx64.efi is UNSIGNED)."
+        echo "  3. JARVIS boots via the firmware-fallback loader (EFI/BOOT/BOOTX64.EFI) — no NVRAM entry needed."
+        echo ""
+        echo -e "${BOLD}Boot validation (headless-except-monitor — verify from the log):${NC}"
+        echo "  4. The rootserver loads the model from NVMe FAT32 JARVIS_DATA @ sector 32768."
+        echo "  5. Read the NVMe telemetry log to confirm boot + model load + queries:"
+        echo "       sudo dd if=${DISK_DEV:-/dev/nvme0n1} bs=512 skip=4000794624 count=2701 \\"
+        echo "         | python3 phase3/scripts/parse_nvme_log.py"
+        echo "  6. Confirm network telemetry (UDP broadcast) on a host on the LAN:"
+        echo "       python3 phase3/scripts/telemetry_receiver.py"
+        echo ""
+        echo "  NOTE: the telemetry-log LBA (4000794624) is hardcoded for a ~2 TB drive — recompute for other sizes."
+        echo "See: phase3/docs/BARE_METAL_BOOT_GUIDE.md + docs/decisions/2026-06-25-target-disk-full-ssd-install.md"
+        echo ""
+        return 0
+    fi
+
     echo -e "${BOLD}BIOS / firmware setup (JARVIS PC):${NC}"
     echo "  1. Disable CSM (boot UEFI-only; CSM is sunset for v1.0)."
     echo "  2. Secure Boot -> set OS Type to 'Other OS' (disables Secure Boot enforcement)."
@@ -930,7 +1133,7 @@ print_checklist() {
 # ---------------------------------------------------------------------------
 cleanup() {
     local m
-    for m in "${USB_MNT:-}" "${ESP_MNT:-}"; do
+    for m in "${USB_MNT:-}" "${ESP_MNT:-}" "${ESP_DISK_MNT:-}"; do
         [ -n "$m" ] || continue
         if mountpoint -q "$m" 2>/dev/null; then umount "$m" 2>/dev/null || true; fi
         if [ -d "$m" ]; then rmdir "$m" 2>/dev/null || true; fi
@@ -949,12 +1152,17 @@ main() {
     echo ""
 
     parse_args "$@"
-    check_target          # gate target (disk still "not yet implemented") BEFORE device guards
+    check_target          # gate target (unknown -> error); usb/esp/disk all implemented
     preflight
     if [ "$TARGET" = "esp" ]; then
         guard_esp_device  # ESP partition + ADD-JARVIS double-confirm (an NVMe PARTITION is allowed here)
         run_build
         write_boot_esp    # additive dual-boot on the EXISTING ESP; Ubuntu kept default
+    elif [ "$TARGET" = "disk" ]; then
+        guard_disk_device # whole-disk only; refuses booted/root + mounted; WIPE-AND-INSTALL triple-confirm
+        run_build
+        write_boot_disk   # WIPE -> single-OS JARVIS (NEVER the dev box)
+        NVME_DEV="$DISK_DEV"  # model provisioning + verify target the wiped disk
     else
         guard_usb_device  # device-safety refusals (runs in dry-run too)
         run_build
