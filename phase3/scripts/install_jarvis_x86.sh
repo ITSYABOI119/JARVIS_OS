@@ -691,12 +691,12 @@ write_boot_esp() {
 
     if [ "$DRY_RUN" = true ]; then
         dry_would "mount $ESP_PART <tmp> (EXISTING ESP — NO format, NO repartition)"
+        dry_would "if present, remove the STALE ESP-root copy <esp>/$stale_model FIRST (after a DELETE-STALE-ESP-MODEL confirm; frees the full ESP; ESP copy ONLY — JARVIS_DATA untouched)"
         dry_would "mkdir -p <esp>/EFI/jarvis/boot/grub"
         dry_would "cp $KERNEL_PATH -> <esp>/EFI/jarvis/boot/$KERNEL_IMAGE"
         dry_would "cp $ROOTSERVER_PATH -> <esp>/EFI/jarvis/boot/${ROOTSERVER_IMAGE:-<rootserver>}"
         dry_would "sed 's#/boot/#/EFI/jarvis/boot/#g' $GRUB_CFG -> <esp>/EFI/jarvis/boot/grub/grub.cfg"
         dry_would "grub-mkstandalone --format=x86_64-efi --output <esp>/EFI/jarvis/grubx64.efi (ONE JARVIS-owned file; never EFI/BOOT, never --removable, never whole-disk)"
-        dry_would "if present, remove the STALE ESP-root copy <esp>/$stale_model (ESP copy ONLY — the real model on JARVIS_DATA is untouched)"
         dry_would "efibootmgr --create --disk $esp_disk --part $esp_partnum --label '$JARVIS_BOOT_LABEL' --loader '\\EFI\\jarvis\\grubx64.efi' (ADDITIVE)"
         dry_would "efibootmgr -o <ubuntu>,<jarvis>,<rest> — restore Ubuntu as BootOrder[0] (JARVIS never the default)"
         dry_would "sync && umount <tmp>"
@@ -707,22 +707,32 @@ write_boot_esp() {
     ESP_MNT="$(mktemp -d)"
     mount "$ESP_PART" "$ESP_MNT"
 
+    # 1) FREE SPACE FIRST. The ESP is (near) full because of a STALE model copy; it must be
+    #    removed BEFORE staging or the cp's below ENOSPC-fail on a full ESP. ESP copy ONLY —
+    #    the real model on JARVIS_DATA (sector 32768, a DIFFERENT partition) is NOT touched.
+    if [ -f "$ESP_MNT/$stale_model" ]; then
+        warn "ESP $ESP_PART holds a STALE model copy /$stale_model ($(du -h "$ESP_MNT/$stale_model" 2>/dev/null | cut -f1)) that fills it."
+        warn "It must be deleted to stage JARVIS. The REAL model on JARVIS_DATA (sector 32768, a different partition) is NOT touched."
+        local delc
+        read -r -p "Type DELETE-STALE-ESP-MODEL to remove the ESP copy (anything else aborts): " delc
+        if [ "$delc" != "DELETE-STALE-ESP-MODEL" ]; then
+            error "Stale-model deletion not confirmed — cannot stage on a full ESP. Aborting; nothing written."
+            umount "$ESP_MNT" 2>/dev/null || true; rmdir "$ESP_MNT" 2>/dev/null || true; ESP_MNT=""
+            exit 1
+        fi
+        rm -f "$ESP_MNT/$stale_model"
+        info "Removed stale ESP model copy (freed space). JARVIS_DATA untouched."
+    fi
+
+    # 2) Stage JARVIS payload under EFI/jarvis ONLY (guard the cp's so a still-full ESP fails loud).
     mkdir -p "$ESP_MNT/EFI/jarvis/boot/grub"
-    cp "$KERNEL_PATH" "$ESP_MNT/EFI/jarvis/boot/$KERNEL_IMAGE"
-    cp "$ROOTSERVER_PATH" "$ESP_MNT/EFI/jarvis/boot/$ROOTSERVER_IMAGE"
-    # The committed grub.cfg uses ESP-root-relative /boot/... ; JARVIS lives under
-    # /EFI/jarvis/boot/, so rewrite the image paths.
+    cp "$KERNEL_PATH"     "$ESP_MNT/EFI/jarvis/boot/$KERNEL_IMAGE"     || { error "cp kernel to ESP failed (full? df -h $ESP_MNT)"; umount "$ESP_MNT" 2>/dev/null || true; rmdir "$ESP_MNT" 2>/dev/null || true; ESP_MNT=""; exit 1; }
+    cp "$ROOTSERVER_PATH" "$ESP_MNT/EFI/jarvis/boot/$ROOTSERVER_IMAGE" || { error "cp rootserver to ESP failed (full?)"; umount "$ESP_MNT" 2>/dev/null || true; rmdir "$ESP_MNT" 2>/dev/null || true; ESP_MNT=""; exit 1; }
+    # The committed grub.cfg uses ESP-root-relative /boot/... ; JARVIS lives under /EFI/jarvis/boot/.
     sed 's#/boot/#/EFI/jarvis/boot/#g' "$GRUB_CFG" > "$ESP_MNT/EFI/jarvis/boot/grub/grub.cfg"
     info "Staged EFI/jarvis/boot/{$KERNEL_IMAGE, $ROOTSERVER_IMAGE, grub/grub.cfg}"
 
-    # Stale ESP-root model cleanup (frees the otherwise-full ESP). ESP copy ONLY —
-    # the real model on JARVIS_DATA (a different partition) is untouched.
-    if [ -f "$ESP_MNT/$stale_model" ]; then
-        warn "Removing the STALE ESP-root model copy /$stale_model ($(du -h "$ESP_MNT/$stale_model" 2>/dev/null | cut -f1)) — the real model on JARVIS_DATA is untouched."
-        rm -f "$ESP_MNT/$stale_model"
-    fi
-
-    # Standalone JARVIS GRUB EFI — exactly ONE JARVIS-owned file. The embedded cfg
+    # 3) Standalone JARVIS GRUB EFI — exactly ONE JARVIS-owned file. The embedded cfg
     # finds this ESP by the cfg file and chains to the real grub.cfg.
     local embcfg; embcfg="$(mktemp)"
     cat > "$embcfg" <<'EMBED'

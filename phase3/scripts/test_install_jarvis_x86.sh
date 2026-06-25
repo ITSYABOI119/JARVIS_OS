@@ -137,6 +137,7 @@ assert_contains "T8 esp dry-run: copies to EFI/jarvis"      "$ESP_DRY" "EFI/jarv
 assert_contains "T8 esp dry-run: grub-mkstandalone"         "$ESP_DRY" "grub-mkstandalone"
 assert_contains "T8 esp dry-run: efibootmgr --create"       "$ESP_DRY" "efibootmgr --create"
 assert_contains "T8 esp dry-run: keeps Ubuntu default"      "$ESP_DRY" "Ubuntu"
+assert_contains "T8 esp dry-run: stale-delete is confirmed" "$ESP_DRY" "DELETE-STALE-ESP-MODEL"
 # esp is implemented now — it must NOT print the disk 'not yet implemented' message.
 if printf '%s' "$ESP_DRY" | grep -qF "not yet implemented"; then
     bad "T8 esp dry-run must NOT say 'not yet implemented'"
