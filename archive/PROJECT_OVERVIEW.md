@@ -1,3 +1,5 @@
+> **HISTORICAL — original Phase 0/1 design vision** (GPU-mandatory, 558 ms Phi-3, 6-layer SHIELD). **This does NOT reflect the current system.** For current reality see [README.md](../README.md) and [CLAUDE.md](../CLAUDE.md).
+
 # JARVIS AI-OS: Complete Project Overview
 
 > **A comprehensive guide to understanding the JARVIS AI-Operating System project**

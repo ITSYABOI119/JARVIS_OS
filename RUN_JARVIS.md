@@ -100,6 +100,8 @@ architecture. It is designed to be a lightweight alternative..."
 [JARVIS] System idle.
 ```
 
+> **Note on the `[SHIELD] … -> BLOCKED` lines above:** that is a **boot-only demo** — Process A's local `strstr` keyword check, run once at startup. It is **not** the live PA↔PB safety path, which is **passive**: Process B returns ALLOW and the SHIELD scoring module is not linked (SEC-039). JARVIS does **not** block operations at runtime in v1.0.
+
 ---
 
 ## Build Without Model (fast, for testing build system)
