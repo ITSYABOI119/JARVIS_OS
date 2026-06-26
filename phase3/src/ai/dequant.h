@@ -63,4 +63,8 @@ int    dequant_type_block_size(ggml_type_t type);
 size_t dequant_row_bytes(int n_values, ggml_type_t type);
 const char *dequant_type_name(ggml_type_t type);
 
+/* Is this quant type supported end-to-end by the forward path (dequant_row / qdot_row)?
+ * 1 for F32/F16/BF16/Q4_0/Q8_0/Q4_K/Q5_K/Q6_K, 0 for everything else. */
+int dequant_type_supported(ggml_type_t type);
+
 #endif /* DEQUANT_H */

@@ -635,6 +635,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Sampling:** `phase3/src/ai/sampling.c/h`
 - **Inference API:** `phase3/src/ai/inference.c/h`
 - **Quantized Inference:** `phase3/src/ai/llama_quant.c/h`
+- **Load-time quant-type gate (H2):** `qmodel_load` now HARD-REJECTS unsupported quant tensor types at load (whitelist F32/F16/BF16/Q4_0/Q8_0/Q4_K/Q5_K/Q6_K via `dequant_type_supported` = `dequant_type_block_size != 0`); a post-resolve sweep over every non-NULL `qtensor_t` (the 6 globals + all 25 per-layer fields, incl. inline-assigned w_gate/wq) `goto fail`s on the first unsupported type — no more silent all-zero activations → coherent-looking garbage. Hot path untouched. Regression in `test_llama_quant.c` (predicate truth table + F32 positive control + Q2_K token_embd/ffn_gate negatives).
 - **GGUF Vocab Extraction:** `phase3/src/ai/gguf_vocab.c/h`
 - **SHIELD Safety Module:** `phase3/src/ai/shield.c/h`
 - **SSM / Gated DeltaNet:** `phase3/src/ai/ssm.c/h` — Qwen3.5 hybrid recurrent layers

@@ -266,6 +266,13 @@ int dequant_type_block_size(ggml_type_t type)
     }
 }
 
+/* Single source of truth for "supported end-to-end by the forward path": a type has a
+ * known block size iff dequant_row / qdot_row implement it (the 8-type whitelist). */
+int dequant_type_supported(ggml_type_t type)
+{
+    return dequant_type_block_size(type) != 0;
+}
+
 size_t dequant_row_bytes(int n_values, ggml_type_t type)
 {
     int bs = dequant_type_block_size(type);

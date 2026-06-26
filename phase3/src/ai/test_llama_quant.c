@@ -274,6 +274,127 @@ static void test_qdot_q4k_vs_ref(void) {
     }
 }
 
+/* ---- H2: load-time quant-type whitelist gate (qmodel_load hard-rejects unsupported types) ---- */
+
+/* Test 13: the dequant_type_supported() truth table — catches a botched whitelist (the bug
+ * that would silently break the box: rejecting a real type, or accepting one the forward can't do). */
+static void test_dequant_type_supported_table(void) {
+    TEST("dequant_type_supported whitelist truth table");
+    int ok = 1;
+    const ggml_type_t supported[] = {
+        GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q4_0,
+        GGML_TYPE_Q8_0, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K,
+    };
+    for (size_t i = 0; i < sizeof(supported) / sizeof(supported[0]); i++)
+        if (dequant_type_supported(supported[i]) != 1) { ok = 0; printf("[supported %d->0] ", (int)supported[i]); }
+    const int unsupported[] = { GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, GGML_TYPE_Q8_K, GGML_TYPE_F64, 99 };
+    for (size_t i = 0; i < sizeof(unsupported) / sizeof(unsupported[0]); i++)
+        if (dequant_type_supported((ggml_type_t)unsupported[i]) != 0) { ok = 0; printf("[unsupported %d->1] ", unsupported[i]); }
+    if (ok) PASS(); else FAIL("dequant_type_supported truth table mismatch");
+}
+
+/* ---- minimal complete in-memory "llama" GGUF so qmodel_load runs end-to-end ---- */
+static size_t h2_put_str(uint8_t *b, const char *s) {
+    uint64_t n = (uint64_t)strlen(s);
+    memcpy(b, &n, 8); memcpy(b + 8, s, (size_t)n);
+    return 8 + (size_t)n;
+}
+static size_t h2_put_u32kv(uint8_t *b, const char *k, uint32_t v) {
+    uint8_t *p = b;
+    p += h2_put_str(p, k);
+    uint32_t t = GGUF_TYPE_UINT32; memcpy(p, &t, 4); p += 4;
+    memcpy(p, &v, 4); p += 4;
+    return (size_t)(p - b);
+}
+/* Build a complete, loadable 1-layer all-F32 "llama" model (separate Q/K/V + separate gate/up,
+ * no SWA/SSM/PLE so the shape-derivation block is skipped and qmodel_load resolves every
+ * mandatory tensor and reaches the type gate). buf must be >= 8 KB. Returns blob length. */
+static size_t h2_build_gguf(uint8_t *buf) {
+    struct { const char *name; uint32_t nd; uint64_t d0, d1, nel; } T[] = {
+        { "token_embd.weight",        2, 8, 4, 32 }, { "output_norm.weight",       1, 8, 0, 8 },
+        { "blk.0.attn_norm.weight",   1, 8, 0, 8 },  { "blk.0.attn_q.weight",      2, 8, 8, 64 },
+        { "blk.0.attn_k.weight",      2, 8, 8, 64 }, { "blk.0.attn_v.weight",      2, 8, 8, 64 },
+        { "blk.0.attn_output.weight", 2, 8, 8, 64 }, { "blk.0.ffn_norm.weight",    1, 8, 0, 8 },
+        { "blk.0.ffn_gate.weight",    2, 8, 16, 128 }, { "blk.0.ffn_up.weight",    2, 8, 16, 128 },
+        { "blk.0.ffn_down.weight",    2, 16, 8, 128 },
+    };
+    int nt = (int)(sizeof(T) / sizeof(T[0]));
+    uint8_t *p = buf;
+    uint32_t magic = GGUF_MAGIC, ver = 3;
+    uint64_t ntt = (uint64_t)nt, nkv = 6;
+    memcpy(p, &magic, 4); p += 4; memcpy(p, &ver, 4); p += 4;
+    memcpy(p, &ntt, 8); p += 8; memcpy(p, &nkv, 8); p += 8;
+    p += h2_put_str(p, "general.architecture");
+    uint32_t ts = GGUF_TYPE_STRING; memcpy(p, &ts, 4); p += 4; p += h2_put_str(p, "llama");
+    p += h2_put_u32kv(p, "llama.embedding_length", 8);
+    p += h2_put_u32kv(p, "llama.block_count", 1);
+    p += h2_put_u32kv(p, "llama.attention.head_count", 2);
+    p += h2_put_u32kv(p, "llama.feed_forward_length", 16);
+    p += h2_put_u32kv(p, "llama.vocab_size", 4);
+    uint64_t off = 0;
+    for (int i = 0; i < nt; i++) {
+        p += h2_put_str(p, T[i].name);
+        memcpy(p, &T[i].nd, 4); p += 4;
+        memcpy(p, &T[i].d0, 8); p += 8;
+        if (T[i].nd == 2) { memcpy(p, &T[i].d1, 8); p += 8; }
+        uint32_t ty = GGML_TYPE_F32; memcpy(p, &ty, 4); p += 4;
+        memcpy(p, &off, 8); p += 8;
+        off += T[i].nel * 4;                     /* F32 bytes; every tensor is a 32-multiple */
+    }
+    size_t hdr = (size_t)(p - buf);
+    size_t dstart = (hdr + 31) & ~(size_t)31;    /* 32-align the data section */
+    memset(buf + dstart, 0, (size_t)off);        /* tensor data is unread at load time — zeros */
+    return dstart + (size_t)off;
+}
+/* Parse the blob, optionally override one tensor's type (to drive the gate), then qmodel_load.
+ * Returns qmodel_load's rc; -99/-98 mark a harness failure (parse / tensor-not-found). */
+static int h2_try_load(uint8_t *buf, size_t len, const char *override_name, uint32_t override_type) {
+    gguf_ctx_t ctx;
+    if (gguf_open_memory(&ctx, buf, len) != GGUF_OK) return -99;
+    if (override_name) {
+        gguf_tensor_info_t *ti = (gguf_tensor_info_t *)gguf_find_tensor(&ctx, override_name);
+        if (!ti) { gguf_close(&ctx); return -98; }
+        ti->type = override_type;                /* keeps the blob valid; isolates the type gate */
+    }
+    qmodel_t qm;
+    int rc = qmodel_load(&qm, &ctx, buf);
+    if (rc == 0) qmodel_free(&qm);
+    gguf_close(&ctx);
+    return rc;
+}
+
+/* Test 14: POSITIVE CONTROL — a complete all-F32 model must load (proves the model is otherwise
+ * valid, so the negatives below fail on the type gate and not on a config/tensor error). */
+static void test_qmodel_load_f32_positive(void) {
+    TEST("qmodel_load accepts a complete all-F32 model (false-pass guard)");
+    uint8_t buf[8192];
+    size_t len = h2_build_gguf(buf);
+    int rc = h2_try_load(buf, len, NULL, 0);
+    if (rc == 0) { PASS(); }
+    else { char m[64]; snprintf(m, sizeof m, "F32 model should load (rc=%d)", rc); FAIL(m); }
+}
+
+/* Test 15: NEGATIVE — token_embd.weight as Q2_K (assigned via resolve_qtensor) must be rejected. */
+static void test_qmodel_load_rejects_token_embd(void) {
+    TEST("qmodel_load rejects unsupported token_embd type (Q2_K, resolve_qtensor path)");
+    uint8_t buf[8192];
+    size_t len = h2_build_gguf(buf);
+    int rc = h2_try_load(buf, len, "token_embd.weight", GGML_TYPE_Q2_K);
+    if (rc < 0) { PASS(); }
+    else { char m[64]; snprintf(m, sizeof m, "Q2_K token_embd should fail load (rc=%d)", rc); FAIL(m); }
+}
+
+/* Test 16: NEGATIVE — blk.0.ffn_gate.weight as Q2_K (assigned INLINE, not via resolve_qtensor)
+ * must be rejected. Guards against a partial fix that only patched resolve_qtensor. */
+static void test_qmodel_load_rejects_ffn_gate(void) {
+    TEST("qmodel_load rejects unsupported ffn_gate type (Q2_K, inline-assigned path)");
+    uint8_t buf[8192];
+    size_t len = h2_build_gguf(buf);
+    int rc = h2_try_load(buf, len, "blk.0.ffn_gate.weight", GGML_TYPE_Q2_K);
+    if (rc < 0) { PASS(); }
+    else { char m[64]; snprintf(m, sizeof m, "Q2_K ffn_gate should fail load (rc=%d)", rc); FAIL(m); }
+}
+
 int main(void)
 {
     printf("=== JARVIS Quantized Model (llama_quant) Test Suite ===\n\n");
@@ -290,6 +411,10 @@ int main(void)
     test_forward_bad_token();
     test_qdot_q8_0_vs_ref();
     test_qdot_q4k_vs_ref();
+    test_dequant_type_supported_table();
+    test_qmodel_load_f32_positive();
+    test_qmodel_load_rejects_token_embd();
+    test_qmodel_load_rejects_ffn_gate();
 
     printf("\n=== Results: %d/%d PASS, %d FAIL ===\n",
            tests_pass, tests_pass + tests_fail, tests_fail);

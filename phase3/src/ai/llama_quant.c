@@ -101,6 +101,22 @@ static int resolve_qtensor(qtensor_t *qt, const gguf_ctx_t *ctx,
     return 0;
 }
 
+/* ---- H2: load-time quant-type whitelist gate ----
+ * Reject a resolved tensor whose quant type the forward path cannot dequantize. Returns -1
+ * (after a diagnostic) for an unsupported type, else 0. Absent tensors (data == NULL) are
+ * valid — many qtensor_t fields are legitimately NULL (wo on DeltaNet layers, wk/wv under
+ * shared-KV, q_norm/k_norm/post-norms/PLE/SSM all optional), so they are skipped. Without this
+ * gate an unsupported type fell through to qmatmul_vec/qdot_row's all-zero path. */
+static int qmodel_check_type(const qtensor_t *qt, const char *label)
+{
+    if (!qt->data) return 0;                                    /* absent is valid */
+    if (dequant_type_supported((ggml_type_t)qt->type)) return 0;
+    printf("[qmodel] UNSUPPORTED quant type %u (%s) for tensor '%s' — load rejected "
+           "(would silently produce all-zero activations)\n",
+           (unsigned)qt->type, dequant_type_name((ggml_type_t)qt->type), label);
+    return -1;
+}
+
 /* ---- Quantized matrix-vector multiply ----
  *
  * W is [M x K] in quantized form, x is [K] F32, out is [M] F32.
@@ -859,7 +875,7 @@ int qmodel_load(qmodel_t *qm, const gguf_ctx_t *ctx, const void *gguf_base)
         printf("[qmodel] Hybrid layers: %d DeltaNet, %d full-attention\n", n_dn, n_attn);
     }
 
-    /* Tensor type summary — detect any unsupported quant types */
+    /* Tensor type summary (diagnostic print only; the real reject sweep runs below) */
     printf("[qmodel] Tensor types (layer 0):\n");
     {
         qlayer_t *L0 = &qm->layers[0];
@@ -960,6 +976,38 @@ int qmodel_load(qmodel_t *qm, const gguf_ctx_t *ctx, const void *gguf_base)
         }
 
         printf("=== END AUDIT ===\n\n");
+    }
+
+    /* H2: hard-reject any resolved tensor whose quant type the forward path cannot handle,
+     * BEFORE marking the model loaded — turns the old silent all-zero garbage into a clean
+     * load failure. Sweeps every qtensor_t: the qmodel_t globals + every qlayer_t field. */
+    if (qmodel_check_type(&qm->token_embed,   "token_embed")   ||
+        qmodel_check_type(&qm->output_norm,   "output_norm")   ||
+        qmodel_check_type(&qm->output_weight, "output_weight") ||
+        qmodel_check_type(&qm->ple_embed,     "ple_embed")     ||
+        qmodel_check_type(&qm->ple_proj,      "ple_proj")      ||
+        qmodel_check_type(&qm->ple_norm,      "ple_norm"))
+        goto fail;
+    for (int vi = 0; vi < qm->config.n_layers; vi++) {
+        const qlayer_t *L = &qm->layers[vi];
+        struct { const qtensor_t *t; const char *name; } lf[] = {
+            { &L->attn_norm, "attn_norm" }, { &L->wq, "wq" }, { &L->wk, "wk" },
+            { &L->wv, "wv" }, { &L->wo, "wo" }, { &L->ffn_norm, "ffn_norm" },
+            { &L->w_gate, "w_gate" }, { &L->w_up, "w_up" }, { &L->w_down, "w_down" },
+            { &L->q_norm, "q_norm" }, { &L->k_norm, "k_norm" },
+            { &L->post_attn_norm, "post_attn_norm" }, { &L->post_ffw_norm, "post_ffw_norm" },
+            { &L->layer_output_scale, "layer_output_scale" }, { &L->ple_gate, "ple_gate" },
+            { &L->ple_proj, "ple_proj" }, { &L->post_norm, "post_norm" },
+            { &L->ssm_conv1d, "ssm_conv1d" }, { &L->ssm_alpha, "ssm_alpha" },
+            { &L->ssm_beta, "ssm_beta" }, { &L->ssm_a, "ssm_a" },
+            { &L->ssm_dt_bias, "ssm_dt_bias" }, { &L->ssm_norm, "ssm_norm" },
+            { &L->ssm_out, "ssm_out" }, { &L->attn_out_gate, "attn_out_gate" },
+        };
+        for (size_t vf = 0; vf < sizeof(lf) / sizeof(lf[0]); vf++) {
+            char lbl[48];
+            snprintf(lbl, sizeof lbl, "blk.%d.%s", vi, lf[vf].name);
+            if (qmodel_check_type(lf[vf].t, lbl)) goto fail;
+        }
     }
 
     qm->loaded = true;
