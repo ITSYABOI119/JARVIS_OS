@@ -53,6 +53,8 @@ This document is the simple forward roadmap. Each phase has specific goals and a
 
 **Goal:** JARVIS stops forgetting. It remembers what happened, what you prefer, and what failed — without slowing down routine requests.
 
+**Status:** IN PROGRESS (started 2026-06-26) — detailed plan: `phase5/docs/PHASE_5_PLAN.md`; keystone goal: `phase5/docs/PHASE_5_GOAL1_EPISODIC_STORE.md`. Shipping keystone-first as an "it-remembers" MVP arc (#1, #2, #3, #6) then #4, #5, #7. Storage = a carved raw-LBA region in the ~1.66 TiB free gap after JARVIS_DATA (verified on-box 2026-06-26).
+
 ### Goals
 
 1. **Episodic store** — Structured interaction log on NVMe: timestamp, query, action, outcome, optional feedback. Survives reboot.
