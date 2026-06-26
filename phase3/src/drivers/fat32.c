@@ -210,11 +210,25 @@ int fat32_read_file(fat32_fs_t *fs, uint32_t first_cluster,
     while (remaining > 0 && cluster >= 2 && cluster < FAT32_EOC_MIN && max_clusters-- > 0) {
         uint64_t lba = cluster_to_lba(fs, cluster);
         uint32_t to_read = remaining < cluster_bytes ? remaining : cluster_bytes;
-        uint32_t sectors = (to_read + fs->bytes_per_sector - 1) / fs->bytes_per_sector;
+        uint32_t full_sectors = to_read / fs->bytes_per_sector;          /* whole sectors -> direct */
+        uint32_t tail = to_read - full_sectors * fs->bytes_per_sector;   /* trailing partial-sector bytes */
+        int err = 0;
 
-        int err = fs->read(lba, sectors, out);
-        if (err)
-            return err;
+        if (full_sectors) {
+            err = fs->read(lba, full_sectors, out);
+            if (err)
+                return err;
+        }
+        if (tail) {
+            /* H3: final partial sector — read one whole sector into scratch, copy only `tail`
+             * bytes, so we never write up to bytes_per_sector-1 bytes past buf+file_size. scratch
+             * sized for the max SEC-028 whitelisted sector (4096). */
+            uint8_t scratch[4096];
+            err = fs->read(lba + full_sectors, 1, scratch);
+            if (err)
+                return err;
+            memcpy(out + (size_t)full_sectors * fs->bytes_per_sector, scratch, tail);
+        }
 
         out += to_read;
         remaining -= to_read;

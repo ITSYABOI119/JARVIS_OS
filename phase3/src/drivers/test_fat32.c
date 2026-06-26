@@ -426,6 +426,65 @@ TEST(test_read_file_progress)
  * Main
  * ================================================================ */
 
+TEST(test_read_file_partial_final_sector)
+{
+    /* H3: single cluster, file_size=100 (NOT a 512-multiple) -> exercises the final partial-sector
+     * tail. The 0xAA canary right after file_size differs from the cluster-3 fill (0xAB), so the
+     * pre-fix whole-sector over-read (which writes cluster-3 bytes 100..511 = 0xAB) is observable.
+     * buf is exactly one sector, so that over-read lands inside buf (canary), never truly OOB. */
+    fat32_fs_t fs;
+    fat32_init(&fs, mock_read, PART_LBA);
+
+    uint8_t buf[512];
+    memset(buf, 0, sizeof(buf));
+    for (int i = 0; i < 16; i++) buf[100 + i] = 0xAA;
+
+    int err = fat32_read_file(&fs, 3, 100, buf);   /* file_size=100, not sector-aligned */
+    ASSERT(err == 0, "partial-sector read should succeed");
+    ASSERT(memcmp(buf, "GGUF", 4) == 0, "first 4 bytes should be GGUF");
+    ASSERT(buf[4] == 0x03, "version byte 0x03");
+    ASSERT(buf[99] == 0xAB, "last in-range byte is cluster-3 fill 0xAB");
+    for (int i = 0; i < 16; i++)
+        ASSERT(buf[100 + i] == 0xAA, "canary clobbered — overflow past file_size");
+    PASS();
+}
+
+TEST(test_read_file_partial_multi_cluster)
+{
+    /* H3: final partial tail on the LAST of several clusters (the deployed Gemma shape — a big file
+     * whose size is not sector-aligned). cluster3 (full, 0xAB) -> cluster4 (partial tail, 0xCD). The
+     * 0xAA canary differs from 0xCD, so the pre-fix final-cluster over-read (cluster-4 bytes
+     * 4096..4607 = 0xCD) is observable. Restore the FAT afterward so later tests see the default. */
+    uint8_t *fat = mock_disk + RESERVED_SECTS * SECTOR_SIZE;
+    write_le32(fat + 12, 4);           /* cluster 3 -> cluster 4 */
+    write_le32(fat + 16, 0x0FFFFFFF);  /* cluster 4 -> EOC */
+    memcpy(mock_disk + (RESERVED_SECTS + FAT_SIZE_SECTS) * SECTOR_SIZE, fat, SECTOR_SIZE);
+
+    uint8_t *cluster4_data = mock_disk +
+        (DATA_START_SECT + 2 * SECTS_PER_CLUST) * SECTOR_SIZE;
+    memset(cluster4_data, 0xCD, SECTS_PER_CLUST * SECTOR_SIZE);
+
+    fat32_fs_t fs;
+    fat32_init(&fs, mock_read, PART_LBA);
+
+    uint8_t buf[8192];
+    memset(buf, 0, sizeof(buf));
+    for (int i = 0; i < 16; i++) buf[4196 + i] = 0xAA;
+
+    int err = fat32_read_file(&fs, 3, 4196, buf);   /* 4096 + 100: final tail lands in cluster 4 */
+    ASSERT(err == 0, "multi-cluster partial read should succeed");
+    ASSERT(memcmp(buf, "GGUF", 4) == 0, "cluster 3 should have GGUF");
+    ASSERT(buf[4096] == 0xCD, "cluster 4 start should be 0xCD");
+    ASSERT(buf[4195] == 0xCD, "last in-range byte is cluster-4 fill 0xCD");
+    for (int i = 0; i < 16; i++)
+        ASSERT(buf[4196 + i] == 0xAA, "canary clobbered — multi-cluster overflow");
+
+    /* Restore FAT: cluster 3 -> EOC */
+    write_le32(fat + 12, 0x0FFFFFFF);
+    memcpy(mock_disk + (RESERVED_SECTS + FAT_SIZE_SECTS) * SECTOR_SIZE, fat, SECTOR_SIZE);
+    PASS();
+}
+
 int main(void)
 {
     printf("=== FAT32 Read-Only Parser Tests ===\n");
@@ -442,6 +501,8 @@ int main(void)
     test_read_file_multi_cluster();
     test_fat_sector_cached();
     test_read_file_progress();
+    test_read_file_partial_final_sector();
+    test_read_file_partial_multi_cluster();
 
     printf("\nResults: %d PASS, %d FAIL (of %d)\n",
            pass_count, fail_count, pass_count + fail_count);
