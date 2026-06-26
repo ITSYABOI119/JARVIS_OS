@@ -73,6 +73,9 @@ temp_sd_backup/**/*.elf
 # Test binaries
 phase3/src/*/test_*
 !phase3/src/*/test_*.c
+# H1: host-only fake seL4 headers (a source dir, not a test binary) — re-include past the rule above
+!phase3/src/ai/test_sel4_stubs/
+!phase3/src/ai/test_sel4_stubs/**
 
 # System files
 Thumbs.db

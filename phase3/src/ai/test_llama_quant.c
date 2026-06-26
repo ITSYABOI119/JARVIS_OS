@@ -8,7 +8,9 @@
 #include "llama_quant.h"
 #include "llama_model.h"
 #include "dequant.h"
+#include "qdot.h"      /* qdot_row — the public per-row quantized dot that qmatmul_vec uses */
 #include "tensor_ops.h"
+#include <stdint.h>
 #include "sampling.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -205,6 +207,73 @@ static void test_forward_bad_token(void) {
     llama_free_state(&s);
 }
 
+/* ---- Part 2 (AVX2 coverage): quantized qdot vs an independent dequant+dot reference ----
+ * The tests above drive qmodel_forward with F32 weights only, so the quantized qdot kernels
+ * that dominate the deployed forward are never exercised here. qdot_row is the public per-row
+ * primitive that qmatmul_vec calls; compiled with -mavx2 it dispatches to the AVX2 kernels
+ * (qdot_q8_0_avx2 / qdot_q4_k_avx2), which we check against dequant_row + a double-accumulated
+ * dot (the scalar truth). Synthetic blocks use finite f16 scales + a deterministic LCG byte
+ * pattern; magnitudes are kept small so the float-vs-double accumulation gap stays far under the
+ * absolute tolerance (measured ~3e-8 Q8_0 / ~3e-7 Q4_K, vs 1e-3 / 1e-2). These also run in the
+ * existing (scalar) build, validating qdot_row_scalar the same way. */
+static uint8_t qd_lcg(uint32_t *s) { *s = *s * 1664525u + 1013904223u; return (uint8_t)(*s >> 23); }
+
+static double qd_ref_dot(const void *qrow, const float *x, int K, ggml_type_t type) {
+    float deq[256];
+    dequant_row(qrow, deq, K, type);
+    double acc = 0.0;
+    for (int i = 0; i < K; i++) acc += (double)deq[i] * (double)x[i];
+    return acc;
+}
+
+/* ---- Test 11: Q8_0 qdot matches dequant+dot reference ---- */
+static void test_qdot_q8_0_vs_ref(void) {
+    TEST("qdot Q8_0 matches dequant+dot reference (AVX2 build exercises qdot_q8_0_avx2)");
+    const int K = 256;                       /* 8 Q8_0 blocks of 32 */
+    q8_0_block_t blk[8];
+    uint32_t s = 0x8badf00du;
+    for (int b = 0; b < 8; b++) {
+        blk[b].d = 0x3000;                   /* f16 0.125 */
+        for (int i = 0; i < 32; i++) blk[b].qs[i] = (int8_t)((qd_lcg(&s) % 9) - 4);
+    }
+    float x[256];
+    for (int i = 0; i < K; i++) x[i] = (float)((i % 7) - 3) * 0.1f;
+    float got = qdot_row(blk, x, K, GGML_TYPE_Q8_0);
+    double ref = qd_ref_dot(blk, x, K, GGML_TYPE_Q8_0);
+    double err = fabs((double)got - ref);
+    if (err < 1e-3) {
+        PASS();
+    } else {
+        char m[96];
+        snprintf(m, sizeof m, "Q8_0 err=%.3e (got=%.6f ref=%.6f)", err, got, ref);
+        FAIL(m);
+    }
+}
+
+/* ---- Test 12: Q4_K qdot matches dequant+dot reference ---- */
+static void test_qdot_q4k_vs_ref(void) {
+    TEST("qdot Q4_K matches dequant+dot reference (AVX2 build exercises qdot_q4_k_avx2)");
+    const int K = 256;                       /* 1 Q4_K super-block */
+    q4_k_block_t blk;
+    blk.d = 0x3000;                          /* f16 0.125 */
+    blk.dmin = 0x2C00;                       /* f16 0.0625 */
+    uint32_t s = 0x00c0ffeeu;
+    for (int i = 0; i < 12; i++) blk.scales[i] = (uint8_t)(qd_lcg(&s) & 0x0F);
+    for (int i = 0; i < 128; i++) blk.qs[i] = qd_lcg(&s);
+    float x[256];
+    for (int i = 0; i < K; i++) x[i] = (float)((i % 5) - 2) * 0.02f;
+    float got = qdot_row(&blk, x, K, GGML_TYPE_Q4_K);
+    double ref = qd_ref_dot(&blk, x, K, GGML_TYPE_Q4_K);
+    double err = fabs((double)got - ref);
+    if (err < 1e-2) {
+        PASS();
+    } else {
+        char m[96];
+        snprintf(m, sizeof m, "Q4_K err=%.3e (got=%.6f ref=%.6f)", err, got, ref);
+        FAIL(m);
+    }
+}
+
 int main(void)
 {
     printf("=== JARVIS Quantized Model (llama_quant) Test Suite ===\n\n");
@@ -219,6 +288,8 @@ int main(void)
     test_config_fields();
     test_alloc_state_small();
     test_forward_bad_token();
+    test_qdot_q8_0_vs_ref();
+    test_qdot_q4k_vs_ref();
 
     printf("\n=== Results: %d/%d PASS, %d FAIL ===\n",
            tests_pass, tests_pass + tests_fail, tests_fail);
