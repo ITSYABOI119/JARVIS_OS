@@ -52,6 +52,7 @@
 #include "nvme.h"
 #include "nvme_log.h"
 #include "fat32.h"
+#include "episodic_store.h"
 #include "framebuffer.h"
 #include "nic_i211.h"
 #include "net_udp.h"
@@ -154,6 +155,66 @@ static int fat32_nvme_read(uint64_t lba, uint32_t count, void *buf)
         }
     }
     return 0;
+}
+
+/* ---- Phase 5 G1/M1: episodic memory store wiring (additive; gated on g_episodic_ready) ----
+ * A RAM batch is filled per cache/inference query (epi_batch_add) and committed to NVMe at the
+ * [STATS] cadence (epi_commit) — NOT per query (a per-query NVMe write would blow the <1 ms
+ * cache-hit target and add wear). Device I/O bounces through the NVMe DMA buffer, exactly like
+ * fat32_nvme_read above. Everything is a strict no-op until epi_store_init succeeds. */
+#define EPI_BATCH_MAX 128
+static epi_store_t  g_episodic;
+static int          g_episodic_ready = 0;
+static epi_record_t g_epi_batch[EPI_BATCH_MAX];
+static int          g_epi_batch_n = 0;
+
+static int epi_nvme_read(uint64_t lba, uint32_t count, void *buf)
+{
+    if (!g_nvme_ptr || !g_nvme_bounce_vaddr) return -1;
+    uint8_t *out = (uint8_t *)buf;
+    for (uint32_t i = 0; i < count; i++) {
+        int err = nvme_read_sectors(g_nvme_ptr, lba + i, 1,
+                                    g_nvme_bounce_vaddr, g_nvme_bounce_paddr);
+        if (err) return err;
+        memcpy(out + (size_t)i * 512, g_nvme_bounce_vaddr, 512);
+    }
+    return 0;
+}
+
+static int epi_nvme_write(uint64_t lba, uint32_t count, const void *buf)
+{
+    if (!g_nvme_ptr || !g_nvme_bounce_vaddr) return -1;
+    const uint8_t *in = (const uint8_t *)buf;
+    for (uint32_t i = 0; i < count; i++) {
+        memcpy(g_nvme_bounce_vaddr, in + (size_t)i * 512, 512);
+        int err = nvme_write_sectors(g_nvme_ptr, lba + i, 1,
+                                     g_nvme_bounce_vaddr, g_nvme_bounce_paddr);
+        if (err) return err;
+    }
+    return 0;
+}
+
+/* Commit the RAM batch to NVMe (append stamps boot_id/seq + flushes the header per record). */
+static void epi_commit(void)
+{
+    if (!g_episodic_ready || g_epi_batch_n == 0) return;
+    for (int i = 0; i < g_epi_batch_n; i++)
+        epi_store_append(&g_episodic, &g_epi_batch[i]);
+    puts_serial("[EPI] committed="); put_dec((uint32_t)g_epi_batch_n);
+    puts_serial(" count=");          put_dec(epi_store_count(&g_episodic));
+    puts_serial(" total=");          put_dec(g_episodic.hdr.total_entries);
+    puts_serial("\n");
+    g_epi_batch_n = 0;
+}
+
+/* Fill one episodic record into the RAM batch (no NVMe write here). Self-flushes if the batch
+ * fills before the cadence commit. Strict no-op until the store is ready. */
+static void epi_batch_add(const char *query, uint16_t action, uint8_t outcome, const char *resp)
+{
+    if (!g_episodic_ready) return;
+    if (g_epi_batch_n >= EPI_BATCH_MAX) epi_commit();
+    episodic_fill(&g_epi_batch[g_epi_batch_n], jarvis_uptime_ms(), query, action, outcome, 0, resp);
+    g_epi_batch_n++;
 }
 
 static void nvme_timeout_debug(uint32_t cq_raw, uint32_t csts_val, uint8_t sq_op) {
@@ -1859,6 +1920,20 @@ static void *main_continued(void *arg UNUSED)
                                         puts_serial("[JARVIS] NVMe log initialized (boot ");
                                         put_dec(nvme_log_boot_id());
                                         puts_serial(")\n");
+                                        /* Phase 5 G1/M1: bring up the episodic memory store on the
+                                         * same NVMe (its own raw-LBA region; uses the bounce buffer
+                                         * via epi_nvme_read/write). Non-fatal — gates the workload
+                                         * batch path on g_episodic_ready. */
+                                        if (epi_store_init(&g_episodic, epi_nvme_read, epi_nvme_write,
+                                                           EPI_STORE_BASE_LBA, EPI_STORE_MAX_ENTRIES) == 0) {
+                                            g_episodic_ready = 1;
+                                            puts_serial("[EPI] episodic store ready (boot ");
+                                            put_dec(epi_store_boot_id(&g_episodic));
+                                            puts_serial(" count="); put_dec(epi_store_count(&g_episodic));
+                                            puts_serial(")\n");
+                                        } else {
+                                            puts_serial("[EPI] episodic store init FAILED (non-fatal)\n");
+                                        }
                                         nvme_log_write(&nvme_ctrl, dma_vaddrs[4], dma_paddrs[4],
                                                        LOG_BOOT, "JARVIS boot started");
                                         { char sl[48];
@@ -2448,7 +2523,8 @@ static void *main_continued(void *arg UNUSED)
             cache_normalize_query(query, normalized, sizeof(normalized));
             char action[256];
             trust_level_t trust;
-            if (cache_lookup(&g_cache, normalized, action, sizeof(action), &trust)) {
+            int cache_hit = cache_lookup(&g_cache, normalized, action, sizeof(action), &trust);
+            if (cache_hit) {
                 q_hits++;
                 /* Rolling miss window: cache hit = 0 */
                 if (cache_miss_window_total >= CACHE_MISS_WINDOW)
@@ -2470,6 +2546,10 @@ static void *main_continued(void *arg UNUSED)
                 cache_miss_window_idx = (cache_miss_window_idx + 1) % CACHE_MISS_WINDOW;
                 if (cache_miss_window_total < CACHE_MISS_WINDOW) cache_miss_window_total++;
             }
+
+            /* Phase 5 G1/M1: record this cache decision into the episodic batch. */
+            epi_batch_add(query, EPI_ACT_CACHE, cache_hit ? EPI_OUT_OK : EPI_OUT_ERROR,
+                          cache_hit ? action : NULL);
 
         } else if (slot < 17) {
             /* --- Inference (15%) --- */
@@ -2680,6 +2760,13 @@ static void *main_continued(void *arg UNUSED)
             cache_miss_window_idx = (cache_miss_window_idx + 1) % CACHE_MISS_WINDOW;
             if (cache_miss_window_total < CACHE_MISS_WINDOW) cache_miss_window_total++;
 
+            /* Phase 5 G1/M1: record this inference into the episodic batch (NUL-terminate the
+             * response tail first — full_response is bounded to sizeof-1 by the drain above). */
+            full_response[resp_offset] = '\0';
+            epi_batch_add(query, EPI_ACT_INFER,
+                          resp_offset > 0 ? EPI_OUT_OK : EPI_OUT_ERROR,
+                          resp_offset > 0 ? full_response : NULL);
+
         } else if (slot < 19) {
             /* --- Heartbeat (10%) --- */
             q_heartbeat++;
@@ -2746,6 +2833,7 @@ static void *main_continued(void *arg UNUSED)
             jarvis_log_snapshot(q_total, q_errors);   /* Step 2c-2a: full-state [SNAP] at the [STATS] cadence */
             jarvis_telemetry_emit(TLM_K_STATS, q_total, q_hits, q_infer, q_heartbeat, q_shield, q_errors);  /* N-c-1 */
             g_tlm_last_tsc = jarvis_rdtsc();   /* N-c-1: re-base the 1 Hz gate so the next tick isn't a near-dup */
+            epi_commit();   /* Phase 5 G1/M1: flush the episodic batch to NVMe at the [STATS] cadence (~100 q) */
 
             /* Step 2c-2c: per-state chrome at the [STATS] cadence only (quiet/draw-only — no
              * [PANEL] flood; reconstructable from [SNAP] model=+err= and [STATS] hits/infer/err).

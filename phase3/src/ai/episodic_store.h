@@ -56,10 +56,14 @@ typedef struct __attribute__((packed)) {
 
 _Static_assert(sizeof(epi_store_header_t) <= 512, "episodic header must fit one sector");
 
+/* Action / route codes — the routes that produce a memory */
+#define EPI_ACT_CACHE  1
+#define EPI_ACT_INFER  2
+
 /* Outcome codes */
-#define EPI_OUTCOME_OK       0
-#define EPI_OUTCOME_ERROR    1
-#define EPI_OUTCOME_BLOCKED  2
+#define EPI_OUT_OK       0
+#define EPI_OUT_ERROR    1
+#define EPI_OUT_BLOCKED  2
 
 /* Episodic record (exactly 512 bytes = 1 sector), packed — the episodic schema. */
 #define EPI_QUERY_MAX  200
@@ -70,7 +74,7 @@ typedef struct __attribute__((packed)) {
     uint64_t t_ms;           /* boot-relative TSC->ms timestamp (caller-filled; 0 on host) */
     uint64_t query_key;      /* cache_hash(cache_normalize_query(query)) — decision-cache parity */
     uint16_t action;         /* route/action code */
-    uint8_t  outcome;        /* EPI_OUTCOME_* */
+    uint8_t  outcome;        /* EPI_OUT_* */
     uint8_t  feedback;       /* optional user feedback byte (0 = none) */
     uint16_t query_len;      /* bytes used in query[] */
     uint16_t resp_len;       /* bytes used in resp[] */
@@ -100,7 +104,9 @@ int epi_store_init(epi_store_t *s, epi_read_fn rd, epi_write_fn wr,
                    uint64_t base_lba, uint32_t max_entries);
 
 /* Write a 512-byte record at the current cursor slot, advance cursor %= max,
- * total_entries++, flush the header. Circular: never fills, overwrites oldest. */
+ * total_entries++, flush the header. Circular: never fills, overwrites oldest.
+ * STAMPS the written record's boot_id (= header boot_id) and seq (= header
+ * total_entries) at write time, so callers (e.g. episodic_fill) leave them 0. */
 int epi_store_append(epi_store_t *s, const void *rec512);
 
 /* Read the logical_index-th STORED record in wrap order oldest->newest
@@ -113,9 +119,17 @@ int epi_store_flush(epi_store_t *s);
 uint32_t epi_store_boot_id(const epi_store_t *s);
 uint32_t epi_store_count(const epi_store_t *s);   /* entries stored, capped at max (rolling-full) */
 
-/* ---- Episodic-typed helper: fills an epi_record_t (incl. the FNV query key) then appends ---- */
-int episodic_log(epi_store_t *s, uint32_t boot_id, uint32_t t_ms,
-                 const char *query, uint16_t action, uint8_t outcome, uint8_t feedback,
-                 const char *resp);
+/* ---- Episodic-typed helpers ---- */
+
+/* Fill an epi_record_t from the given fields: zeroes it; query_key =
+ * cache_hash(cache_normalize_query(query)); copies the truncated query (<=200) and
+ * resp (<=256, may be NULL) with their *_len. Leaves boot_id/seq = 0 — epi_store_append
+ * stamps those at write time. Lets a caller batch records in RAM, then commit the batch. */
+void episodic_fill(epi_record_t *rec, uint32_t t_ms, const char *query, uint16_t action,
+                   uint8_t outcome, uint8_t feedback, const char *resp);
+
+/* Convenience: episodic_fill(...) into a local record, then epi_store_append(...). */
+int episodic_log(epi_store_t *s, uint32_t t_ms, const char *query, uint16_t action,
+                 uint8_t outcome, uint8_t feedback, const char *resp);
 
 #endif /* EPISODIC_STORE_H */

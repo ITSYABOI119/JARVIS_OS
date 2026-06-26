@@ -151,6 +151,7 @@ AI_FILES=(
     "qdot.c"              "qdot.h"
     "threadpool.h"
     "threadpool_sel4.c"
+    "episodic_store.c"    "episodic_store.h"
 )
 
 for f in "${AI_FILES[@]}"; do
@@ -369,6 +370,19 @@ if [ -f "$CMAKE_FILE" ]; then
         fi
     else
         echo -e "  ${CYAN}OK${NC}  src/drivers/jarvis_telemetry.c already in source list"
+    fi
+
+    # Phase 5 G1/M1: add src/ai/episodic_store.c to the Process A source list if missing
+    if ! grep -q "src/ai/episodic_store.c" "$CMAKE_FILE"; then
+        sed -i '/src\/ai\/decision_cache.c/a\    src/ai/episodic_store.c' "$CMAKE_FILE" 2>/dev/null
+        if grep -q "src/ai/episodic_store.c" "$CMAKE_FILE"; then
+            echo -e "  ${GREEN}ADDED${NC}  src/ai/episodic_store.c to source list"
+            PATCHED=1
+        else
+            echo -e "  ${RED}FAILED${NC}  Could not add episodic_store.c — edit CMakeLists.txt manually"
+        fi
+    else
+        echo -e "  ${CYAN}OK${NC}  src/ai/episodic_store.c already in source list"
     fi
 
     # Add JARVIS_SEL4 compile definition (needed for pci.c IOPort backend)

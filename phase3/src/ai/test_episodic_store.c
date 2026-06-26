@@ -112,7 +112,7 @@ static void test_append_readback(void)
     const char *resps[5]   = { "hi there", "ok", "noon", "blocked", "pong" };
 
     for (int i = 0; i < 5; i++) {
-        rc = episodic_log(&s, 1, (uint32_t)(1000 + i), queries[i], (uint16_t)(10 + i),
+        rc = episodic_log(&s, (uint32_t)(1000 + i), queries[i], (uint16_t)(10 + i),
                           (uint8_t)(i % 3), (uint8_t)i, resps[i]);
         ASSERT(rc == 0, "episodic_log should succeed");
     }
@@ -123,7 +123,7 @@ static void test_append_readback(void)
         rc = epi_store_read(&s, (uint32_t)i, &r);   /* logical i = oldest->newest = write order */
         ASSERT(rc == 0, "epi_store_read should succeed");
         ASSERT(r.seq == (uint32_t)i, "seq matches write order");
-        ASSERT(r.boot_id == 1, "boot_id should be 1");
+        ASSERT(r.boot_id == epi_store_boot_id(&s), "boot_id stamped == store boot_id");
         ASSERT(r.t_ms == (uint64_t)(1000 + i), "t_ms field-exact");
         ASSERT(r.action == (uint16_t)(10 + i), "action field-exact");
         ASSERT(r.outcome == (uint8_t)(i % 3), "outcome field-exact");
@@ -153,7 +153,7 @@ static void test_boot_id_increment(void)
     ASSERT(rc == 0, "first init should succeed");
     ASSERT(epi_store_boot_id(&s) == 1, "first boot_id should be 1");
 
-    rc = episodic_log(&s, 1, 0, "boot 1", 1, EPI_OUTCOME_OK, 0, NULL);
+    rc = episodic_log(&s, 0, "boot 1", 1, EPI_OUT_OK, 0, NULL);
     ASSERT(rc == 0, "write should succeed");
 
     rc = epi_store_init(&s, mock_read, mock_write, EPI_STORE_BASE_LBA, EPI_STORE_MAX_ENTRIES);
@@ -207,7 +207,7 @@ static void test_wrap_and_migration(void)
     const uint32_t MAX = EPI_STORE_MAX_ENTRIES;
     const uint32_t K = 5;
     for (uint32_t i = 0; i < MAX + K; i++) {
-        rc = episodic_log(&s, 1, 0, NULL, (uint16_t)(i & 0xFFFF), EPI_OUTCOME_OK, 0, NULL);
+        rc = episodic_log(&s, 0, NULL, (uint16_t)(i & 0xFFFF), EPI_OUT_OK, 0, NULL);
         ASSERT(rc == 0, "(a) circular write never fails / never 'full'");
     }
 
@@ -249,7 +249,7 @@ static void test_wrap_and_migration(void)
     ASSERT(hdr.cursor == 0, "stale cursor == MAX clamped to 0 on init");
     ASSERT(epi_store_boot_id(&s) == 6, "boot_id incremented from stale 5 -> 6");
 
-    rc = episodic_log(&s, 6, 0, "post-migration", 1, EPI_OUTCOME_OK, 0, NULL);
+    rc = episodic_log(&s, 0, "post-migration", 1, EPI_OUT_OK, 0, NULL);
     ASSERT(rc == 0, "post-migration write succeeds (no 'full')");
     memcpy(&r, mock_disk + 512, sizeof(r));   /* slot 0 */
     ASSERT(r.query_len == 14 && memcmp(r.query, "post-migration", 14) == 0,
@@ -270,9 +270,9 @@ static void test_key_parity(void)
     ASSERT(rc == 0, "init should succeed");
 
     /* "Hello   World" and "  hello world  " both normalize to "hello world". */
-    rc = episodic_log(&s, 1, 0, "Hello   World", 1, EPI_OUTCOME_OK, 0, NULL);
+    rc = episodic_log(&s, 0, "Hello   World", 1, EPI_OUT_OK, 0, NULL);
     ASSERT(rc == 0, "log variant A");
-    rc = episodic_log(&s, 1, 0, "  hello world  ", 1, EPI_OUTCOME_OK, 0, NULL);
+    rc = episodic_log(&s, 0, "  hello world  ", 1, EPI_OUT_OK, 0, NULL);
     ASSERT(rc == 0, "log variant B");
 
     epi_record_t a, b;
@@ -288,9 +288,60 @@ static void test_key_parity(void)
     PASS("test_key_parity");
 }
 
+/* ================================================================
+ * T7: batched fill — episodic_fill() into a RAM batch, then epi_store_append()
+ *     each (the M1 commit path). append stamps seq (0,1,2) + boot_id at write time.
+ * ================================================================ */
+static void test_batched_fill(void)
+{
+    memset(mock_disk, 0, sizeof(mock_disk));
+
+    epi_store_t s;
+    int rc = epi_store_init(&s, mock_read, mock_write, EPI_STORE_BASE_LBA, EPI_STORE_MAX_ENTRIES);
+    ASSERT(rc == 0, "init should succeed");
+
+    const char *q[3]   = { "alpha query", "Beta   Query", "gamma" };
+    const char *rsp[3] = { "a-resp", NULL, "g-resp" };
+
+    /* Fill into a RAM batch — episodic_fill leaves boot_id/seq = 0 (stamped at append). */
+    epi_record_t batch[3];
+    for (int i = 0; i < 3; i++) {
+        episodic_fill(&batch[i], (uint32_t)(100 + i), q[i], EPI_ACT_CACHE, EPI_OUT_OK, 0, rsp[i]);
+        ASSERT(batch[i].boot_id == 0 && batch[i].seq == 0, "fill leaves boot_id/seq = 0");
+    }
+
+    /* Commit the batch. */
+    for (int i = 0; i < 3; i++)
+        ASSERT(epi_store_append(&s, &batch[i]) == 0, "append batch record");
+    ASSERT(epi_store_count(&s) == 3, "count should be 3");
+
+    for (int i = 0; i < 3; i++) {
+        epi_record_t r;
+        ASSERT(epi_store_read(&s, (uint32_t)i, &r) == 0, "read back");
+        ASSERT(r.seq == (uint32_t)i, "append stamped seq 0,1,2");
+        ASSERT(r.boot_id == epi_store_boot_id(&s), "append stamped boot_id == store boot_id");
+        ASSERT(r.t_ms == (uint64_t)(100 + i), "t_ms field-exact");
+        ASSERT(r.action == EPI_ACT_CACHE, "action field-exact");
+        ASSERT(r.outcome == EPI_OUT_OK, "outcome field-exact");
+        ASSERT(r.query_len == (uint16_t)strlen(q[i]), "query_len field-exact");
+        ASSERT(memcmp(r.query, q[i], strlen(q[i])) == 0, "query bytes field-exact");
+        if (rsp[i]) {
+            ASSERT(r.resp_len == (uint16_t)strlen(rsp[i]), "resp_len field-exact");
+            ASSERT(memcmp(r.resp, rsp[i], strlen(rsp[i])) == 0, "resp bytes field-exact");
+        } else {
+            ASSERT(r.resp_len == 0, "NULL resp -> resp_len 0");
+        }
+        char norm[MAX_QUERY_LEN];
+        ASSERT(cache_normalize_query(q[i], norm, sizeof norm), "normalize");
+        ASSERT(r.query_key == cache_hash(norm), "query_key parity (decision-cache FNV-1a)");
+    }
+
+    PASS("test_batched_fill");
+}
+
 int main(void)
 {
-    printf("=== Episodic Store Tests (Phase 5 G1/M0) ===\n");
+    printf("=== Episodic Store Tests (Phase 5 G1/M1) ===\n");
 
     test_fresh_init();
     test_append_readback();
@@ -298,6 +349,7 @@ int main(void)
     test_checksum_corruption();
     test_wrap_and_migration();
     test_key_parity();
+    test_batched_fill();
 
     printf("\nResults: %d PASS, %d FAIL\n", tests_passed, tests_failed);
     return tests_failed > 0 ? 1 : 0;

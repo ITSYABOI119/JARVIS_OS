@@ -86,9 +86,17 @@ int epi_store_append(epi_store_t *s, const void *rec512)
     if (!s || !s->initialized || !rec512)
         return -1;
 
+    /* Stamp the record's identity at write time: boot_id = the current boot, seq = the
+     * monotonic lifetime index. Copy into a local so the caller's record stays const
+     * (lets a caller batch pre-filled records in RAM and append them later). */
+    epi_record_t rec;
+    memcpy(&rec, rec512, sizeof(rec));   /* sizeof(epi_record_t) == 512 */
+    rec.boot_id = s->hdr.boot_id;
+    rec.seq     = s->hdr.total_entries;
+
     /* Record sector (cursor + 1 because slot 0 of the region is the header). */
     uint64_t lba = s->base_lba + 1 + s->hdr.cursor;
-    int rc = s->write(lba, 1, rec512);
+    int rc = s->write(lba, 1, &rec);
     if (rc != 0)
         return rc;
 
@@ -133,40 +141,45 @@ uint32_t epi_store_count(const epi_store_t *s)
     return s->hdr.total_entries < s->max_entries ? s->hdr.total_entries : s->max_entries;
 }
 
-int episodic_log(epi_store_t *s, uint32_t boot_id, uint32_t t_ms,
-                 const char *query, uint16_t action, uint8_t outcome, uint8_t feedback,
-                 const char *resp)
+void episodic_fill(epi_record_t *rec, uint32_t t_ms, const char *query, uint16_t action,
+                   uint8_t outcome, uint8_t feedback, const char *resp)
 {
-    if (!s)
-        return -1;
+    if (!rec)
+        return;
 
-    epi_record_t rec;
-    memset(&rec, 0, sizeof(rec));
-    rec.boot_id  = boot_id;
-    rec.seq      = s->hdr.total_entries;   /* the lifetime index this record will take */
-    rec.t_ms     = (uint64_t)t_ms;
-    rec.action   = action;
-    rec.outcome  = outcome;
-    rec.feedback = feedback;
+    memset(rec, 0, sizeof(*rec));
+    rec->t_ms     = (uint64_t)t_ms;
+    rec->action   = action;
+    rec->outcome  = outcome;
+    rec->feedback = feedback;
+    /* boot_id and seq are left 0 — epi_store_append stamps them at write time. */
 
     if (query) {
         /* query_key = cache_hash(cache_normalize_query(query)) — identical normalization
          * to the decision cache so #6 cache-growth matches without divergence. */
         char norm[MAX_QUERY_LEN];
         if (cache_normalize_query(query, norm, sizeof norm))
-            rec.query_key = cache_hash(norm);
+            rec->query_key = cache_hash(norm);
 
         size_t ql = strlen(query);
         if (ql > EPI_QUERY_MAX) ql = EPI_QUERY_MAX;
-        memcpy(rec.query, query, ql);
-        rec.query_len = (uint16_t)ql;
+        memcpy(rec->query, query, ql);
+        rec->query_len = (uint16_t)ql;
     }
     if (resp) {
         size_t rl = strlen(resp);
         if (rl > EPI_RESP_MAX) rl = EPI_RESP_MAX;
-        memcpy(rec.resp, resp, rl);
-        rec.resp_len = (uint16_t)rl;
+        memcpy(rec->resp, resp, rl);
+        rec->resp_len = (uint16_t)rl;
     }
+}
 
+int episodic_log(epi_store_t *s, uint32_t t_ms, const char *query, uint16_t action,
+                 uint8_t outcome, uint8_t feedback, const char *resp)
+{
+    if (!s)
+        return -1;
+    epi_record_t rec;
+    episodic_fill(&rec, t_ms, query, action, outcome, feedback, resp);
     return epi_store_append(s, &rec);
 }
