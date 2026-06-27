@@ -1,7 +1,7 @@
 # Phase 5: Memory — Plan
 
 **Status:** IN PROGRESS (started 2026-06-26). Plan committed; no code yet.
-**Prerequisite:** Phase 4 (Production / v1.0) — engineering complete, `v1.0.0` release in prep. Phase 5 builds on the deployed bare-metal seL4 x86-64 stack (Process A rootserver + Process B quantized engine, shared-memory IPC, NVMe runtime model load, the rolling `nvme_log` raw-sector telemetry log, the decision cache, and the read-only Remote Telemetry Console).
+**Prerequisite:** Phase 4 (Production / v1.0) — COMPLETE; `v1.0.0` SHIPPED 2026-06-26 (tag bdf0951). Phase 5 builds on the deployed bare-metal seL4 x86-64 stack (Process A rootserver + Process B quantized engine, shared-memory IPC, NVMe runtime model load, the rolling `nvme_log` raw-sector telemetry log, the decision cache, and the read-only Remote Telemetry Console).
 **Estimated effort:** 4–8 months.
 **Sources:** `phase4/docs/ROADMAP.md` §Phase 5 (the locked goals + done-when, canon); the on-box NVMe partition map read read-only via `ssh jarvis` (2026-06-26); the proven `nvme_log.{c,h}` raw-LBA pattern. **Where a recon claim conflicts with the box read, the box read wins** (the building-blocks recon claimed free space was scarce; the direct read disproved it — see §5).
 

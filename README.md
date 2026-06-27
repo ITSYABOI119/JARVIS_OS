@@ -2,7 +2,7 @@
 
 **An AI-controlled operating system on the seL4 microkernel — the LLM makes the decisions; the microkernel keeps it isolated.**
 
-> **Status:** Phase 3 (Beta) `v0.2.1-beta` complete; **Phase 4 in progress** — CPU inference performance, the on-box HUD + read-only remote console, and the installer are all done; `v1.0.0` MIT release in prep · solo, bootstrapped research project · last updated 2026-06-25
+> **Status:** Phase 3 (Beta) `v0.2.1-beta` complete; **Phase 4 complete** — CPU inference performance, the on-box HUD + read-only remote console, and the installer are all done; `v1.0.0` SHIPPED 2026-06-26 (MIT, public) · solo, bootstrapped research project · last updated 2026-06-27
 
 JARVIS runs a large language model as the primary control layer of an operating system. It boots standalone on bare-metal **seL4 x86-64** (no Linux, no VM, no hypervisor), loads a quantized LLM from NVMe at runtime, and serves it from a **process-isolated** inference engine over lock-free shared-memory IPC.
 
@@ -26,7 +26,7 @@ Today that is real, not a plan. On a Ryzen 7 2700X, JARVIS boots seL4 to a self-
 | **1** | ✅ Proof of concept | seL4 x86 (QEMU) | — | 26/26 weeks; cache + IPC + AI proven |
 | **2** | ✅ Alpha | Raspberry Pi 4 bare metal | `v0.2.0-alpha` | 21 drivers; **30.6-day** stability run (0 crashes) |
 | **3** | ✅ **Beta** | **x86-64 bare metal** | **`v0.2.1-beta`** | process-isolated LLM inference on real hardware |
-| **4** | ⏳ In progress | x86-64 (CPU) | `v1.0.0` (in prep) | Production: CPU perf ✅, HUD + remote console ✅, installer ✅, MIT release in prep |
+| **4** | ✅ Complete | x86-64 (CPU) | `v1.0.0` | Production: CPU perf ✅, HUD + remote console ✅, installer ✅, MIT release shipped 2026-06-26 |
 
 ---
 

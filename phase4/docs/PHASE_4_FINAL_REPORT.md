@@ -3,7 +3,7 @@
 **Version:** 1.0
 **Date:** 2026-06-26
 **Phase:** Phase 4 — Production → v1.0 (Months 36+)
-**Status:** **Phase 4 engineering complete; `v1.0.0` MIT release in preparation (not yet tagged)**
+**Status:** **Phase 4 complete; `v1.0.0` SHIPPED 2026-06-26 (tag bdf0951, MIT, public)**
 **Author:** JARVIS Development Team (Solo Developer)
 **Hardware:** JARVIS PC — Ryzen 7 2700X, 32 GB DDR4, 2 TB NVMe (Lexar NM790), R9 280X (display only), ASUS X470-F
 
@@ -88,9 +88,9 @@ Against the Phase 4 goals (`phase4/docs/ROADMAP.md` §Phase 4 / "Done when"):
 | 4 | Installer | ✅ DONE — usb / esp (on-box verified) / disk (dry-run-only) |
 | 5 | 90-day stability soak | ❌ NOT DONE — owner-scheduled, not run |
 | 6 | Documentation | ✅ DONE — USER_GUIDE + public-doc honesty pass |
-| 7 | Release (`v1.0.0`, MIT, public) | ⏳ IN PROGRESS — MIT licensing + doc honesty done; tag not cut |
+| 7 | Release (`v1.0.0`, MIT, public) | ✅ DONE — v1.0.0 tagged bdf0951 2026-06-26, MIT, public, GitHub Release live |
 
-**Net:** goals #1, #2, #2b, #4, #6 met; #3 cut and #5 not run (both honestly carved out, **not** marked done); #7 (the release) is in progress — the `v1.0.0` tag is the remaining step.
+**Net:** goals #1, #2, #2b, #4, #6 met; #3 cut and #5 not run (both honestly carved out, **not** marked done); #7 (the release) DONE — `v1.0.0` tagged bdf0951 (2026-06-26, MIT, public, GitHub Release live).
 
 ---
 

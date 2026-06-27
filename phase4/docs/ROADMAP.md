@@ -185,4 +185,4 @@ Beyond               — research directions
 ---
 
 **Last updated:** June 2026  
-**Status:** Phase 4 engineering COMPLETE — v1.0 scope FROZEN 2026-06-26. Goals #1 (inference perf, CPU) / #2 (graphical output) / #2b (Remote Telemetry Console) / #4 (installer) / #6 (docs) DONE; **#3 (USB keyboard) CUT** (interactive input is Phase 6 console control-IN, not a local keyboard); #5 (90-day soak) NOT run — owner-scheduled; **#7 (v1.0.0 MIT release) IN PROGRESS** (LICENSE + doc-honesty pass + final report done; tag not yet cut). See `phase4/docs/PHASE_4_FINAL_REPORT.md`.
+**Status:** Phase 4 engineering COMPLETE — v1.0 scope FROZEN 2026-06-26. Goals #1 (inference perf, CPU) / #2 (graphical output) / #2b (Remote Telemetry Console) / #4 (installer) / #6 (docs) DONE; **#3 (USB keyboard) CUT** (interactive input is Phase 6 console control-IN, not a local keyboard); #5 (90-day soak) NOT run — owner-scheduled; **#7 (v1.0.0 MIT release) ✅ DONE** (tagged bdf0951, 2026-06-26; LICENSE + doc-honesty pass + final report done). See `phase4/docs/PHASE_4_FINAL_REPORT.md`.
