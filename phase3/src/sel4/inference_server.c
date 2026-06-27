@@ -76,6 +76,9 @@ static void put_dec(uint32_t val)
 /* ---- Debug log helper: serial + IPC to Process A for NVMe logging ---- */
 
 static shmem_ring_t *g_resp_ring = NULL;  /* set in main(), used by pb_log */
+/* Phase 5 G2/M3: the live context pool (mapped frame 3), set once in main() at the M1 derive.
+ * handle_query reads it per inference (READ-ONLY — G2 never injects; injection is G3). */
+static shared_context_t *g_sctx_pb = NULL;
 
 /* Check if response ring has room for debug messages.
  * Reserve at least 3 slots for MSG_RESPONSE chunks.
@@ -128,6 +131,26 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
                           qmodel_t *qm, llama_state_t *state, tokenizer_t *tok,
                           int bos_id)
 {
+    /* Phase 5 G2/M3: read the LIVE context pool per inference, from the mapped page, small-stack
+     * only (the <8 KB PB-stack rule — never copy the 4 KB pool / rings onto the stack). This is the
+     * exact cross-process read path G3 (retrieval) will use. READ-ONLY: `ps`/`recent` are NOT used to
+     * change the prompt, tokens, or any downstream state — G2 never injects (that is G3), so generation
+     * stays byte-identical. A one-shot [SCTX-PB] proof shows PB read PA's LIVE writes (q_total>0/seq>2). */
+    if (g_sctx_pb) {
+        sctx_system_state_t ps;
+        int retries = sctx_read_state(g_sctx_pb, &ps);      /* seqlock snapshot-retry (~64 B stack) */
+        sctx_decision_t recent[4];
+        int nrec = sctx_recent(g_sctx_pb, 4, recent, 4);    /* tiny ring read (~128 B) — G3's read path */
+        static int sctx_pb_logged = 0;
+        if (!sctx_pb_logged) {
+            sctx_pb_logged = 1;
+            pb_log_num("[SCTX-PB] live read q_total=", (uint32_t)ps.q_total, "");
+            pb_log_num("[SCTX-PB]   seq=",     __atomic_load_n(&g_sctx_pb->seq, __ATOMIC_ACQUIRE), "");
+            pb_log_num("[SCTX-PB]   recent=",  (uint32_t)nrec, "");
+            pb_log_num("[SCTX-PB]   retries=", (uint32_t)retries, "");
+        }
+    }
+
     /* Build Gemma 4 chat template prompt with direct control token IDs:
      *   <bos> <|turn> user \n {query} <turn|> \n <|turn> model \n <|think|>
      * Tokens: bos=2, <|turn>=105, user=2364, \n=107, <turn|>=106, model=4368, <|think|>=98
@@ -376,6 +399,7 @@ int main(int argc, char **argv)
     shmem_ring_t *response_ring = (shmem_ring_t *)(shmem_vaddr + SHMEM_PAGE_SIZE);
     /* Phase 5 G2/M1: the shared context pool is the 3rd frame (after the 2 IPC rings). */
     shared_context_t *sctx = (shared_context_t *)(shmem_vaddr + 2 * SHMEM_PAGE_SIZE);
+    g_sctx_pb = sctx;   /* M3: expose to handle_query for the per-inference read */
 
     if (request_ring->header.magic != SHMEM_MAGIC ||
         response_ring->header.magic != SHMEM_MAGIC) {
