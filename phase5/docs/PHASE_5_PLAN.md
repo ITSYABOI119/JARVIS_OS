@@ -124,4 +124,4 @@ Like Phase 4, most logic is host/CI-testable up front; only reboot-survival, liv
 
 ---
 
-*Phase 5 cadence: weekly status at `phase5/weeks/weekN/WEEK_N_STATUS.md` (resumes the Phase 2/4 weekly pattern). Keystone goal detail: `phase5/docs/PHASE_5_GOAL1_EPISODIC_STORE.md`. This plan mirrors `phase4/docs/ROADMAP.md` + `phase4/docs/PHASE_4_GOAL1_INFERENCE_PERF.md`.*
+*Phase 5 cadence: weekly status at `phase5/weeks/weekN/WEEK_N_STATUS.md` (resumes the Phase 2/4 weekly pattern). Keystone goal detail: `phase5/docs/PHASE_5_GOAL1_EPISODIC_STORE.md`; goal #2 (shared context pool) detail: `phase5/docs/PHASE_5_GOAL2_SHARED_CONTEXT_POOL.md`. This plan mirrors `phase4/docs/ROADMAP.md` + `phase4/docs/PHASE_4_GOAL1_INFERENCE_PERF.md`.*
