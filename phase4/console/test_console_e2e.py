@@ -147,6 +147,20 @@ def main():
             check(parity_ok,
                   "flag-parity: every live flags_list flag renders a Capabilities row (flags=%s)" % seen)
 
+            # (G2) PIN the MEMORY capability row explicitly (parity above is opportunistic — it
+            # passes on any frame; here we WAIT for a MEMORY-bearing frame, then require the row).
+            mem_seen = False
+            deadline = time.time() + 10
+            while time.time() < deadline:
+                fl = page.evaluate("(window.JarvisTelemetry.getState().latest||{}).flags_list || []")
+                if 'MEMORY' in fl:
+                    mem_seen = True
+                    break
+                time.sleep(0.1)
+            check(mem_seen, "(G2) live record carries MEMORY (episodic store up) within 10s")
+            expect(page.get_by_text('Episodic memory store')).to_be_visible(timeout=10000)
+            check(True, "(G2) MEMORY -> 'Episodic memory store' Capabilities row renders")
+
             # --- System screen: real system fields only (Tier 0 RAM + Tier 1 inference/storage) ---
             page.get_by_title('System', exact=True).click()
             expect(page.get_by_text('RAM available to JARVIS')).to_be_visible(timeout=10000)
@@ -158,6 +172,41 @@ def main():
                   "System screen shows the inference state pill (ACTIVE | IDLE)")
             check(page.evaluate("(window.JarvisTelemetry.getState().latest||{}).infer_active") in (0, 1),
                   "System: infer_active is a real 0/1 field on /events")
+
+            # (G1) PIN the System 'Episodic records' VALUE — must equal the live episodic_count on a
+            # MEMORY-bearing frame (flag-gated; shows '—' otherwise). TEETH: fails if the episodic_count
+            # rendering breaks (wrong value, '—', or removed). Store value + rendered DOM are read in ONE
+            # evaluate (atomic vs the page), then polled until they agree on a real MEMORY frame.
+            epi_ok = False
+            epi_dbg = None
+            deadline = time.time() + 12
+            while time.time() < deadline:
+                snap = page.evaluate(
+                    "() => {"
+                    " const rec = (window.JarvisTelemetry.getState().latest) || {};"
+                    " const flags = rec.flags_list || [];"
+                    " const lab = Array.from(document.querySelectorAll('div'))"
+                    "   .find(d => d.textContent.trim() === 'Episodic records');"
+                    " let rendered = null;"
+                    " if (lab && lab.parentElement) {"
+                    "   const kids = Array.from(lab.parentElement.children);"
+                    "   const i = kids.indexOf(lab);"
+                    "   rendered = kids[i + 1] ? kids[i + 1].textContent.trim() : null;"
+                    " }"
+                    " return { mem: flags.indexOf('MEMORY') >= 0, count: rec.episodic_count, rendered };"
+                    "}")
+                epi_dbg = snap
+                if snap['mem'] and snap['rendered'] not in (None, '—'):
+                    try:
+                        rendered_num = int(str(snap['rendered']).replace(',', ''))
+                    except (ValueError, TypeError):
+                        rendered_num = None
+                    if rendered_num is not None and rendered_num == snap['count'] and rendered_num > 0:
+                        epi_ok = True
+                        break
+                time.sleep(0.1)
+            check(epi_ok,
+                  "(G1) System 'Episodic records' renders == live episodic_count (snap=%r)" % (epi_dbg,))
 
             check(errors == [], "no console errors / pageerrors (saw %d)" % len(errors))
             for e in errors[:10]:

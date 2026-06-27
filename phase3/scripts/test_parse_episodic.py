@@ -11,6 +11,7 @@ check.
 Usage: python3 test_parse_episodic.py <fixture.bin>
 """
 import os
+import struct
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -65,6 +66,26 @@ def fnv1a64(data):
     return h
 
 
+# ---- synthetic raw-region builders for the wrap-order + bad-checksum tests (G4/G5) ----
+def _build_header(cursor, total, boot_id, magic=EPI_STORE_MAGIC, version=1):
+    """A 512-byte JEPI header sector with a correct XOR checksum over words 0..14
+    (mirrors parse_header's check: struct.unpack_from('<15I', ...) XOR == checksum@60)."""
+    words = [magic, version, cursor, total, boot_id] + [0] * 10  # 15 checksummed words
+    cks = 0
+    for w in words:
+        cks ^= w
+    return struct.pack('<16I', *(words + [cks])) + b'\x00' * (512 - 64)
+
+
+def _build_record(seq, boot_id, query=b''):
+    """A 512-byte epi_record_t (REC_FMT) with a distinguishable seq/boot_id."""
+    rec = bytearray(512)
+    struct.pack_into('<IIQQHBBHH', rec, 0,
+                     boot_id, seq, 1000 + seq, 0, 1, 0, 0, len(query), 0)
+    rec[32:32 + len(query)] = query
+    return bytes(rec)
+
+
 _passed = 0
 _failed = 0
 
@@ -113,6 +134,27 @@ def main():
             check(r['query_key'] == expect_key,
                   f"rec{i} query_key == fnv1a(normalize(query)) "
                   f"(got 0x{r['query_key']:016X}, want 0x{expect_key:016X})")
+
+    # ---- G4: wrapped region decodes oldest->newest (NOT raw slot order) ----
+    # 4 record slots, total=6 (ring rolled twice), cursor=2 -> oldest is slot 2. A real store
+    # writing seqs 0..5 round-robin lands [slot0=4, slot1=5, slot2=2, slot3=3]; the parser must
+    # reconstruct oldest->newest = [2, 3, 4, 5] (raw slot order would be [4, 5, 2, 3]).
+    region = _build_header(cursor=2, total=6, boot_id=2)
+    region += b''.join(_build_record(s, boot_id=2) for s in (4, 5, 2, 3))
+    wh = parse_episodic.parse_header(region)
+    check(wh['checksum_ok'], "G4: wrapped header checksum OK")
+    check(wh['cursor'] == 2 and wh['total'] == 6, "G4: wrapped header cursor/total parsed")
+    wseqs = [r['seq'] for r in parse_episodic.iter_records(region)]
+    check(wseqs == [2, 3, 4, 5],
+          f"G4: wrapped region decodes oldest->newest (got {wseqs}, want [2, 3, 4, 5])")
+
+    # ---- G5: a corrupted header byte -> checksum_ok False (no crash) ----
+    valid = _build_header(cursor=0, total=2, boot_id=1) + _build_record(0, 1) + _build_record(1, 1)
+    check(parse_episodic.parse_header(valid)['checksum_ok'], "G5: valid synthetic header checksum OK")
+    bad = bytearray(valid)
+    bad[16] ^= 0xFF  # flip a boot_id byte (inside words 0..14, not the checksum field @60)
+    check(parse_episodic.parse_header(bytes(bad))['checksum_ok'] is False,
+          "G5: corrupted header byte -> checksum_ok False")
 
     total = _passed + _failed
     print(f"{_passed}/{total} PASS")
