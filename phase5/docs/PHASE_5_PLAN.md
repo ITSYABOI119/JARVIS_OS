@@ -1,6 +1,6 @@
 # Phase 5: Memory — Plan
 
-**Status:** IN PROGRESS (started 2026-06-26). G1 episodic store M0–M4 shipped + box-verified; G2 (shared context pool) doc authored + M0 engine landed (host/CI); M1 (box mapping) next.
+**Status:** IN PROGRESS (started 2026-06-26). G1 episodic store + G2 shared context pool both M0–M4 COMPLETE + box-verified; G3 (retrieval before inference) doc authored, M0 next.
 **Prerequisite:** Phase 4 (Production / v1.0) — COMPLETE; `v1.0.0` SHIPPED 2026-06-26 (tag bdf0951). Phase 5 builds on the deployed bare-metal seL4 x86-64 stack (Process A rootserver + Process B quantized engine, shared-memory IPC, NVMe runtime model load, the rolling `nvme_log` raw-sector telemetry log, the decision cache, and the read-only Remote Telemetry Console).
 **Estimated effort:** 4–8 months.
 **Sources:** `phase4/docs/ROADMAP.md` §Phase 5 (the locked goals + done-when, canon); the on-box NVMe partition map read read-only via `ssh jarvis` (2026-06-26); the proven `nvme_log.{c,h}` raw-LBA pattern. **Where a recon claim conflicts with the box read, the box read wins** (the building-blocks recon claimed free space was scarce; the direct read disproved it — see §5).
@@ -83,7 +83,7 @@ Ubuntu sits at the **far end** of the disk, so there is a **~1.66 TiB contiguous
 |-------|------|-----|------------|------------------------------|
 | MVP-1 | **#1 Episodic store on NVMe** ⭐ KEYSTONE | MVP | — | schema / keying / serialize / circular logic / parser → **host+CI now**; reboot-survival → **box** |
 | MVP-2 | **#2 Shared context pool (C)** | MVP | #1 | struct + lock-free read port → **host now**; live wiring → **box** |
-| MVP-3 | **#3 Retrieval before inference** | MVP | #1, #2 | keyword + recency + FNV-1a retrieval + preamble pack → **host+CI now**; prompt inject in PB → **box/KVM** |
+| MVP-3 | **#3 Retrieval before inference** — `phase5/docs/PHASE_5_GOAL3_RETRIEVAL.md` | MVP | #1, #2 | scorer (exact-key + recency; keyword = net-new) + preamble assembler → **host+CI now**; PA-pack + PB inject → **box/KVM** |
 | MVP-4 | **#6 Cache growth** | MVP | #1 | promotion logic (the dormant SEC-024 LRU goes **live** — host-test first) → **host+CI now**; box |
 | — | **"it-remembers" MVP / `memory` tag** | — | MVP-1..4 | the early milestone tag once #1/#2/#3/#6 are green |
 | A2-1 | **#4 Semantic memory** | Arc 2 | #1, #7 | deterministic distill rules + separate store → **host+CI now**; box |
