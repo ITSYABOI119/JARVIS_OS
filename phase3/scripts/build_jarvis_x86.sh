@@ -152,6 +152,7 @@ AI_FILES=(
     "threadpool.h"
     "threadpool_sel4.c"
     "episodic_store.c"    "episodic_store.h"
+    "shared_context.c"    "shared_context.h"
 )
 
 for f in "${AI_FILES[@]}"; do
@@ -385,6 +386,19 @@ if [ -f "$CMAKE_FILE" ]; then
         echo -e "  ${CYAN}OK${NC}  src/ai/episodic_store.c already in source list"
     fi
 
+    # Phase 5 G2/M1: add src/ai/shared_context.c to the Process A source list if missing
+    if ! grep -q "src/ai/shared_context.c" "$CMAKE_FILE"; then
+        sed -i '/src\/ai\/episodic_store.c/a\    src/ai/shared_context.c' "$CMAKE_FILE" 2>/dev/null
+        if grep -q "src/ai/shared_context.c" "$CMAKE_FILE"; then
+            echo -e "  ${GREEN}ADDED${NC}  src/ai/shared_context.c to source list"
+            PATCHED=1
+        else
+            echo -e "  ${RED}FAILED${NC}  Could not add shared_context.c — edit CMakeLists.txt manually"
+        fi
+    else
+        echo -e "  ${CYAN}OK${NC}  src/ai/shared_context.c already in source list"
+    fi
+
     # Add JARVIS_SEL4 compile definition (needed for pci.c IOPort backend)
     if ! grep -q "JARVIS_SEL4" "$CMAKE_FILE"; then
         sed -i '/target_compile_options/a\target_compile_definitions(sel4test-driver PRIVATE JARVIS_SEL4)' "$CMAKE_FILE" 2>/dev/null
@@ -476,6 +490,28 @@ if [ -f "$PB_CMAKE" ]; then
         fi
     else
         echo -e "  ${CYAN}OK${NC}  JARVIS_SEL4_SMP already defined"
+    fi
+else
+    echo -e "  ${YELLOW}SKIP${NC}  jarvis-inference CMakeLists not found ($PB_CMAKE)"
+fi
+echo ""
+
+# ── [6c/6] G2/M1 shared context pool (Process B reads it) ────────────
+# shared_context.c is used by BOTH Process A (sctx_init) and Process B (sctx_read_state
+# smoke; M3 reads it in handle_query), so it must be in BOTH source lists. AI_FILES already
+# copies it to both ai/ dirs; Process A's list is patched in [5/5] above — add it to the
+# jarvis-inference source list here (anchored on qdot.c, like the M3 threadpool).
+echo -e "${GREEN}[6c/6] Shared context pool (Process B)${NC}"
+if [ -f "$PB_CMAKE" ]; then
+    if ! grep -q "src/ai/shared_context.c" "$PB_CMAKE"; then
+        sed -i '/src\/ai\/qdot.c/a\    src/ai/shared_context.c' "$PB_CMAKE"
+        if grep -q "src/ai/shared_context.c" "$PB_CMAKE"; then
+            echo -e "  ${GREEN}ADDED${NC}  src/ai/shared_context.c to jarvis-inference sources"
+        else
+            echo -e "  ${RED}FAILED${NC}  could not add shared_context.c — edit PB CMakeLists manually"
+        fi
+    else
+        echo -e "  ${CYAN}OK${NC}  src/ai/shared_context.c already in jarvis-inference sources"
     fi
 else
     echo -e "  ${YELLOW}SKIP${NC}  jarvis-inference CMakeLists not found ($PB_CMAKE)"

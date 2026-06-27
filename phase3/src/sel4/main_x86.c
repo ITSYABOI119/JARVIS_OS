@@ -53,6 +53,7 @@
 #include "nvme_log.h"
 #include "fat32.h"
 #include "episodic_store.h"
+#include "shared_context.h"
 #include "framebuffer.h"
 #include "nic_i211.h"
 #include "net_udp.h"
@@ -966,6 +967,10 @@ static int find_model_untypeds(uintptr_t *model_paddr_out,
 #define SHMEM_VADDR_A  0x10000000UL  /* In Process A */
 #define SHMEM_VADDR_B  0x50000000UL  /* In Process B */
 
+/* Phase 5 G2/M1: the shared context pool is the 3rd shared frame (after the 2 IPC rings). */
+#define SCTX_VADDR_A   (SHMEM_VADDR_A + 2UL * 4096UL)  /* Process A view */
+#define SCTX_VADDR_B   (SHMEM_VADDR_B + 2UL * 4096UL)  /* Process B view (= shmem_base + 2*PAGE) */
+
 /* Model loading via GRUB multiboot module.
  * GRUB loads model.gguf into RAM. seL4 exposes it as untypeds.
  * We map those frames into Process B's vspace at this address. */
@@ -1095,9 +1100,9 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
     }
     puts_serial("[JARVIS] Inference process configured\n");
 
-    /* Allocate 2 physical frames for shared memory */
-    vka_object_t shmem_frames[2];
-    for (int i = 0; i < 2; i++) {
+    /* Allocate 3 physical frames: 2 IPC rings + 1 shared context pool (Phase 5 G2/M1) */
+    vka_object_t shmem_frames[3];
+    for (int i = 0; i < 3; i++) {
         error = vka_alloc_frame(&vka, seL4_PageBits, &shmem_frames[i]);
         if (error) {
             puts_serial("[JARVIS] Failed to alloc shared frame\n");
@@ -1107,7 +1112,7 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
 
     /* Map frames into Process A at fixed address using direct seL4 syscalls */
     seL4_CPtr pd_a = simple_get_pd(&simple);
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 3; i++) {   /* frame 2 -> SCTX_VADDR_A (the context pool) */
         error = map_frame_direct(shmem_frames[i].cptr, pd_a,
             SHMEM_VADDR_A + i * 4096, seL4_AllRights);
         if (error) {
@@ -1124,7 +1129,7 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
     /* Map SAME physical pages into Process B's VSpace.
      * seL4 requires a separate cap per mapping — duplicate the frame caps. */
     seL4_CPtr pd_b = inference_process.pd.cptr;
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 3; i++) {   /* frame 2 -> SCTX_VADDR_B (the context pool) */
         /* Duplicate the frame cap (can't map same cap in two VSpaces) */
         cspacepath_t src, dest;
         vka_cspace_make_path(&vka, shmem_frames[i].cptr, &src);
@@ -1147,6 +1152,13 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
         }
     }
     puts_serial("[JARVIS] Shared memory mapped in Process B\n");
+
+    /* Phase 5 G2/M1: the 3rd shared frame is the context pool — now mapped in BOTH
+     * PA (@ SCTX_VADDR_A) and PB (@ SCTX_VADDR_B). Init it PA-side (M1a hardens the
+     * init-decoupling; M1 just inits after the map). PB derives + reads it. */
+    sctx_init((shared_context_t *)SCTX_VADDR_A, nvme_log_boot_id());
+    puts_serial("[JARVIS] Shared context pool initialized (frame 3)\n");
+
     void *remote_vaddr = (void *)SHMEM_VADDR_B;
 
     /* Map model frames into Process B */

@@ -49,6 +49,7 @@ static inline uint64_t m1_rdtsc(void) {
 #include "tokenizer.h"
 #include "sampling.h"
 #include "threadpool.h"
+#include "shared_context.h"
 
 #ifdef JARVIS_HAS_MODEL
 extern const unsigned char _binary_model_gguf_start[];
@@ -373,6 +374,8 @@ int main(int argc, char **argv)
      * messages from Process A (race condition). */
     shmem_ring_t *request_ring  = (shmem_ring_t *)shmem_vaddr;
     shmem_ring_t *response_ring = (shmem_ring_t *)(shmem_vaddr + SHMEM_PAGE_SIZE);
+    /* Phase 5 G2/M1: the shared context pool is the 3rd frame (after the 2 IPC rings). */
+    shared_context_t *sctx = (shared_context_t *)(shmem_vaddr + 2 * SHMEM_PAGE_SIZE);
 
     if (request_ring->header.magic != SHMEM_MAGIC ||
         response_ring->header.magic != SHMEM_MAGIC) {
@@ -622,6 +625,17 @@ int main(int argc, char **argv)
     /* M0: confirm the kernel enabled AVX state-saving (XCR0.AVX) at PB startup. */
     avx2_probe_init("PB");
 #endif
+
+    /* Phase 5 G2/M1 smoke: prove the 3rd shared frame (context pool) maps + reads
+     * non-faulting from Process B. A real read in handle_query is M3 — this only proves
+     * the page mapping. seq>=2 + the boot_id means Process A's sctx_init crossed the page. */
+    {
+        sctx_system_state_t scs;
+        (void)sctx_read_state(sctx, &scs);
+        uint32_t scq = __atomic_load_n(&sctx->seq, __ATOMIC_ACQUIRE);
+        pb_log_num("[SCTX] read ok seq=", scq, "");
+        pb_log_num("[SCTX] boot_id=", scs.boot_id, "");
+    }
 
     /* ---- Main IPC loop ---- */
     uint32_t pb_query_count = 0;

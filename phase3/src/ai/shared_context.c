@@ -63,8 +63,13 @@ int sctx_read_state(const shared_context_t *c, sctx_system_state_t *out) {
         out->last_query_key = __atomic_load_n(&c->st.last_query_key, __ATOMIC_RELAXED);
         out->consistency    = __atomic_load_n(&c->st.consistency,    __ATOMIC_RELAXED);
 
-        /* ACQUIRE re-load (not a standalone fence — TSan-clean): if `seq` is unchanged and
-         * even, no publish overlapped the field reads, so the snapshot is consistent. */
+        /* ACQUIRE re-load (not a standalone fence — TSan can't model atomic_thread_fence,
+         * -Wtsan). PORTABILITY: torn-read detection here relies on x86 TSO (loads are not
+         * reordered with loads), which holds for the deployment target (seL4 x86-64) and CI.
+         * A weak-memory port (e.g. ARM/Pi) MUST restore a standalone
+         * atomic_thread_fence(__ATOMIC_ACQUIRE) BEFORE this load — otherwise a relaxed
+         * field-load above could sink past the check and yield an undetected torn read.
+         * If `seq` is unchanged and even, no publish overlapped the reads — snapshot consistent. */
         uint32_t v2 = __atomic_load_n(&c->seq, __ATOMIC_ACQUIRE);
         if (v1 == v2) return retries;            /* stable across the read — consistent */
         retries++;                                /* a write landed mid-read — retry */
