@@ -1915,25 +1915,24 @@ static void *main_continued(void *arg UNUSED)
                                       if (nvme_get_info(&nvme_ctrl, &tlba, &bsz) == 0)
                                           g_nvme_total_mb = (uint32_t)((tlba * bsz) >> 20); }
 
+                                    /* Phase 5 G1/M1a: init episodic store here — INDEPENDENT of nvme_log (which fails in the 12 G
+                                     * QEMU image and is a separate store); needs only g_nvme_ptr + the bounce wired just above. */
+                                    if (epi_store_init(&g_episodic, epi_nvme_read, epi_nvme_write,
+                                                       EPI_STORE_BASE_LBA, EPI_STORE_MAX_ENTRIES) == 0) {
+                                        g_episodic_ready = 1;
+                                        puts_serial("[EPI] episodic store ready (boot ");
+                                        put_dec(epi_store_boot_id(&g_episodic));
+                                        puts_serial(" count="); put_dec(epi_store_count(&g_episodic));
+                                        puts_serial(")\n");
+                                    } else {
+                                        puts_serial("[EPI] episodic store init FAILED (non-fatal)\n");
+                                    }
+
                                     /* Initialize NVMe log (raw sector telemetry) */
                                     if (nvme_log_init(&nvme_ctrl, dma_vaddrs[4], dma_paddrs[4]) == 0) {
                                         puts_serial("[JARVIS] NVMe log initialized (boot ");
                                         put_dec(nvme_log_boot_id());
                                         puts_serial(")\n");
-                                        /* Phase 5 G1/M1: bring up the episodic memory store on the
-                                         * same NVMe (its own raw-LBA region; uses the bounce buffer
-                                         * via epi_nvme_read/write). Non-fatal — gates the workload
-                                         * batch path on g_episodic_ready. */
-                                        if (epi_store_init(&g_episodic, epi_nvme_read, epi_nvme_write,
-                                                           EPI_STORE_BASE_LBA, EPI_STORE_MAX_ENTRIES) == 0) {
-                                            g_episodic_ready = 1;
-                                            puts_serial("[EPI] episodic store ready (boot ");
-                                            put_dec(epi_store_boot_id(&g_episodic));
-                                            puts_serial(" count="); put_dec(epi_store_count(&g_episodic));
-                                            puts_serial(")\n");
-                                        } else {
-                                            puts_serial("[EPI] episodic store init FAILED (non-fatal)\n");
-                                        }
                                         nvme_log_write(&nvme_ctrl, dma_vaddrs[4], dma_paddrs[4],
                                                        LOG_BOOT, "JARVIS boot started");
                                         { char sl[48];
