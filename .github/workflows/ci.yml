@@ -294,6 +294,20 @@ jobs:
         /tmp/test_episodic_store --dump /tmp/epi_fixture.bin
         python3 phase3/scripts/test_parse_episodic.py /tmp/epi_fixture.bin
 
+    - name: "Phase 5: Shared Context Pool (TSan)"
+      run: |
+        gcc -D_POSIX_C_SOURCE=200809L -fsanitize=thread -O1 -g -pthread -I phase3/src/ai \
+          phase3/src/ai/test_shared_context.c phase3/src/ai/shared_context.c phase3/src/ai/decision_cache.c \
+          -o /tmp/test_shared_context_tsan
+        /tmp/test_shared_context_tsan
+
+    - name: "Phase 5: Shared Context Pool (O2)"
+      run: |
+        gcc -D_POSIX_C_SOURCE=200809L -O2 -pthread -I phase3/src/ai \
+          phase3/src/ai/test_shared_context.c phase3/src/ai/shared_context.c phase3/src/ai/decision_cache.c \
+          -o /tmp/test_shared_context_o2
+        /tmp/test_shared_context_o2
+
     - name: "Phase 3: FAT32 Reader (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 -DJARVIS_TEST_MOCK \
