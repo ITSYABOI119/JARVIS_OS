@@ -339,8 +339,56 @@ static void test_batched_fill(void)
     PASS("test_batched_fill");
 }
 
-int main(void)
+/* ================================================================
+ * --dump <path>: write a FIXED, documented fixture to a raw region file
+ *   (header sector + record sectors) for the C->Python round-trip
+ *   (phase3/scripts/test_parse_episodic.py). This MUST stay byte-identical
+ *   to that script's FIXTURE table. Runs INSTEAD of the test suite.
+ *
+ *   Fixture (5 records) covers: both actions (CACHE + INFER), an OK and an
+ *   ERROR outcome, a NULL resp (rec2) and non-NULL resps, a mixed-case +
+ *   extra-spaces query (rec0) to exercise key normalization, and a known
+ *   nonzero t_ms per record (100..500).
+ * ================================================================ */
+static int dump_fixture(const char *path)
 {
+    memset(mock_disk, 0, sizeof(mock_disk));   /* fresh region -> boot_id = 1 */
+
+    epi_store_t s;
+    if (epi_store_init(&s, mock_read, mock_write, EPI_STORE_BASE_LBA, EPI_STORE_MAX_ENTRIES) != 0) {
+        printf("dump: epi_store_init failed\n");
+        return 1;
+    }
+
+    episodic_log(&s, 100, "  Hello   World  ", EPI_ACT_CACHE, EPI_OUT_OK,    0, "hi there");
+    episodic_log(&s, 200, "status check",      EPI_ACT_INFER, EPI_OUT_OK,    0, "all systems nominal");
+    episodic_log(&s, 300, "DELETE everything", EPI_ACT_CACHE, EPI_OUT_ERROR, 1, NULL);
+    episodic_log(&s, 400, "what time is it",   EPI_ACT_INFER, EPI_OUT_OK,    0, "noon");
+    episodic_log(&s, 500, "PING",              EPI_ACT_CACHE, EPI_OUT_OK,    2, "pong");
+
+    uint32_t total = s.hdr.total_entries;
+    size_t region = (size_t)(1 + total) * 512;   /* header sector + `total` record sectors */
+
+    FILE *f = fopen(path, "wb");
+    if (!f) {
+        printf("dump: cannot open %s\n", path);
+        return 1;
+    }
+    size_t wrote = fwrite(mock_disk, 1, region, f);
+    fclose(f);
+    if (wrote != region) {
+        printf("dump: short write (%zu of %zu)\n", wrote, region);
+        return 1;
+    }
+    printf("dumped %u records to %s\n", total, path);
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    if (argc >= 3 && strcmp(argv[1], "--dump") == 0)
+        return dump_fixture(argv[2]);
+
     printf("=== Episodic Store Tests (Phase 5 G1/M1) ===\n");
 
     test_fresh_init();
