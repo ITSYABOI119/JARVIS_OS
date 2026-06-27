@@ -35,6 +35,10 @@ function SystemView({ store }) {
   // so a not-ready 0 never reads as "0 records". Real live field, flag-gated.
   const epiReported = !!(rec && rec.flags_list && rec.flags_list.indexOf('MEMORY') >= 0);
   const epiCount = rec ? Number(rec.episodic_count) || 0 : null;
+  // Shared context pool (G2): live working-memory counts, flag-gated on TLM_F_CONTEXT.
+  const ctxReported = !!(rec && rec.flags_list && rec.flags_list.indexOf('CONTEXT') >= 0);
+  const poolEvents = rec ? Number(rec.pool_events) || 0 : null;
+  const poolDecisions = rec ? Number(rec.pool_decisions) || 0 : null;
 
   const stat = (label, value, sub) => (
     <div>
@@ -76,6 +80,8 @@ function SystemView({ store }) {
             'floor — excludes live heap')}
           {stat('Episodic records', epiReported ? numMb(epiCount) : '—',
             epiReported ? 'persisted to the NVMe memory region' : 'store not reported')}
+          {stat('Context pool', ctxReported ? numMb(poolDecisions) : '—',
+            ctxReported ? numMb(poolEvents) + ' events · live working memory (decisions tracked)' : 'pool not reported')}
         </div>
         {note('Live heap used/free is not tracked on the box, so it is not shown. The floor above (model + a fixed static pool) is the only real lower bound.')}
       </Card>

@@ -1504,6 +1504,7 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
                          | (g_fb_desc_mapped    ? TLM_F_FB_MAPPED    : 0)
                          | (q_errors            ? TLM_F_HAS_ERROR    : 0)
                          | (g_episodic_ready    ? TLM_F_MEMORY       : 0)
+                         | (g_sctx_ready        ? TLM_F_CONTEXT      : 0)
                          | TLM_F_SELFTEST_PASS);
     pkt.boot_id   = nvme_log_boot_id();
     pkt.uptime_ms = jarvis_uptime_ms();
@@ -1527,6 +1528,8 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
     pkt.nvme_total_mb = g_nvme_total_mb;
     pkt.log_cursor    = nvme_log_cursor();
     pkt.episodic_count = g_episodic_ready ? epi_store_count(&g_episodic) : 0;  /* P5 G1/M4: honest 0 + no flag until ready */
+    pkt.pool_events    = g_sctx_ready ? sctx_event_count(g_sctx)    : 0;       /* P5 G2/M4: live context-pool counts */
+    pkt.pool_decisions = g_sctx_ready ? sctx_decision_count(g_sctx) : 0;
     /* model display name (matches the on-screen panel) + last response, NUL-bounded (pkt is zeroed) */
     { const char *mn = "Gemma 4 E2B";
       for (int i = 0; i < (int)sizeof(pkt.model_name) - 1 && mn[i]; i++) pkt.model_name[i] = mn[i]; }

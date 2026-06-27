@@ -51,8 +51,8 @@ def main():
     print("== telemetry receiver wire-compat ==")
 
     # Layout
-    check(struct.calcsize(FMT) == 200, "struct.calcsize(FMT) == 200")
-    check(PKT_SIZE == 200, "PKT_SIZE == 200")
+    check(struct.calcsize(FMT) == 208, "struct.calcsize(FMT) == 208 (v2)")
+    check(PKT_SIZE == 208, "PKT_SIZE == 208 (v2)")
 
     # Canonical zlib CRC vector — same CRC the C side proved (jarvis_telemetry.c)
     check(zlib.crc32(b"123456789") & 0xFFFFFFFF == 0xCBF43926,
@@ -60,7 +60,7 @@ def main():
 
     # Valid packet round-trips
     pkt = build_packet()
-    check(len(pkt) == 200, "built packet is 200 bytes")
+    check(len(pkt) == 208, "built packet is 208 bytes (v2)")
     d = decode_packet(pkt)
     check(d['crc_ok'] is True, "valid packet crc_ok True")
     check(d['kind_name'] == 'STATS', "kind_name == STATS")
@@ -76,7 +76,7 @@ def main():
     check(d['fb_w'] == 1024 and d['fb_h'] == 768 and d['fb_bpp'] == 32, "fb geometry round-trips")
     check(d['selftest_score'] == 5, "selftest_score round-trips")
 
-    # Corrupt one byte in [0:196] -> crc_ok False (NOT a crash, NOT ValueError)
+    # Corrupt one byte in [0:204] -> crc_ok False (NOT a crash, NOT ValueError)
     ba = bytearray(pkt)
     ba[50] ^= 0xFF
     dc = decode_packet(bytes(ba))
@@ -88,7 +88,7 @@ def main():
 
     # Wrong length -> ValueError
     check(raises_valueerror(lambda: decode_packet(pkt[:199]), ), "199-byte input raises ValueError")
-    check(raises_valueerror(lambda: decode_packet(pkt + b'\x00')), "201-byte input raises ValueError")
+    check(raises_valueerror(lambda: decode_packet(pkt + b'\x00')), "209-byte input raises ValueError")
 
     # --- N-c-3a: packet_to_record (the /events SSE record) ---
     rec = packet_to_record(decode_packet(pkt))
@@ -115,6 +115,19 @@ def main():
     check(rec_mem['episodic_count'] == 4242, "record carries episodic_count (contract key)")
     check('episodic_count' in REQUIRED_RECORD_KEYS, "episodic_count is a REQUIRED_RECORD_KEY")
 
+    # --- G2/M4: pool_events/pool_decisions + TLM_F_CONTEXT (the v2 200->208 size-bump) ---
+    check(PKT_SIZE == 208, "v2 size-bump: PKT_SIZE == 208")
+    pkt_ctx = build_packet(pool_events=314, pool_decisions=159, flags=0x01 | 0x10 | 0x40)
+    dctx = decode_packet(pkt_ctx)
+    check(dctx['crc_ok'] is True, "v2 context packet crc_ok True (CRC over [:204] — the gotcha)")
+    check(dctx['version'] == 2, "v2 packet version == 2")
+    check(dctx['pool_events'] == 314 and dctx['pool_decisions'] == 159, "pool_events/pool_decisions decode")
+    check('CONTEXT' in dctx['flags_list'], "TLM_F_CONTEXT 0x40 -> 'CONTEXT' in flags_list")
+    rec_ctx = packet_to_record(dctx)
+    check(rec_ctx['pool_events'] == 314 and rec_ctx['pool_decisions'] == 159, "record carries pool fields")
+    check('pool_events' in REQUIRED_RECORD_KEYS and 'pool_decisions' in REQUIRED_RECORD_KEYS,
+          "pool_events/pool_decisions are REQUIRED_RECORD_KEYs")
+
     # --- N-c-3a: iter_pcap_telemetry on a synthetic 1-packet pcap ---
     pcap = _build_pcap_one(pkt, ts_s=1700000001)
     tf = tempfile.NamedTemporaryFile(suffix='.pcap', delete=False)
@@ -140,7 +153,7 @@ def main():
     meta_keys = set(golden['meta']['keys'])
     check(meta_keys == set(REQUIRED_RECORD_KEYS),
           "golden meta.keys == REQUIRED_RECORD_KEYS (fixture matches receiver output)")
-    check(golden['meta']['size'] == 200 and golden['meta']['fmt'] == FMT,
+    check(golden['meta']['size'] == 208 and golden['meta']['fmt'] == FMT,
           "golden meta fmt/size match the wire format")
 
     kind_expect = {1: 'STATS', 2: 'INFER', 3: 'STATE'}

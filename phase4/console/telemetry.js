@@ -6,7 +6,7 @@
  *   uptime_ms, infer_active, infer_duty_pct, q_total, q_hits, q_infer,
  *   q_heartbeat, q_shield, q_errors, num_nodes, model_load_pct, fb_w, fb_h,
  *   fb_bpp, selftest_score, model_size_mb, total_ram_mb, nvme_total_mb,
- *   episodic_count, log_cursor, infer_gen_tokens, model_name, last_text, crc_ok
+ *   episodic_count, pool_events, pool_decisions, log_cursor, infer_gen_tokens, model_name, last_text, crc_ok
  *
  * Liveness is genuine: a record is "live" only while a fresh CRC-valid packet
  * arrived within STALE_MS. seq gaps => dropped packets. No fabricated fields.
@@ -157,7 +157,7 @@
       const loadPct = loading ? Math.min(100, 35 + seq * 18) : 100;
       const flags = [];
       if (!loading) flags.push('MODEL_LOADED');
-      flags.push('SELFTEST_PASS', 'FB_DRAWABLE', 'FB_MAPPED', 'MEMORY');
+      flags.push('SELFTEST_PASS', 'FB_DRAWABLE', 'FB_MAPPED', 'MEMORY', 'CONTEXT');
 
       let kind = 1, kindName = 'STATS';
       if (!loading) {
@@ -179,7 +179,7 @@
 
       return {
         recv_ts: Date.now() / 1000,
-        version: 1,
+        version: 2,
         kind, kind_name: kindName,
         flags: 0, flags_list: flags,
         boot_id: BOOT_ID,
@@ -196,6 +196,8 @@
         nvme_total_mb: 1953892,      // preview value (badged SIMULATED)
         log_cursor: seq,             // preview value (badged SIMULATED)
         episodic_count: loading ? 0 : Math.max(0, seq - 4),  // preview value (badged SIMULATED)
+        pool_events: loading ? 0 : (qHits + qInfer),         // preview value (badged SIMULATED)
+        pool_decisions: loading ? 0 : (qHits + qInfer),      // preview value (badged SIMULATED)
         infer_active: kind === 2 ? 1 : 0,
         infer_duty_pct: loading ? 0 : 12,  // preview workload duty cycle (badged SIMULATED)
         infer_gen_tokens: 0,         // honest: not measured in deploy

@@ -2,7 +2,7 @@
 """
 telemetry_fixture.py - shared packer for the telemetry_packet_t (jarvis_telemetry.h).
 
-Single source for building 200-byte telemetry packets and legacy-pcap captures,
+Single source for building 208-byte (v2) telemetry packets and legacy-pcap captures,
 used by both test_telemetry_receiver.py (host wire-compat) and gen_golden_pcap.py
 (the golden fixture). Stdlib only.
 
@@ -22,19 +22,19 @@ from telemetry_receiver import (  # noqa: E402
 
 # Field order matches FMT / jarvis_telemetry.h exactly.
 _DEFAULTS = dict(
-    magic=MAGIC, version=1, kind=1, flags=0x01 | 0x10, boot_id=1, seq=42,
+    magic=MAGIC, version=2, kind=1, flags=0x01 | 0x10, boot_id=1, seq=42,
     uptime_ms=120000, infer_active=0, infer_duty_pct=18, log_cursor=137,
     q_total=289, q_hits=211, q_infer=29, q_heartbeat=40, q_shield=9, q_errors=0,
     num_nodes=6, model_load_pct=100, fb_bpp=32, selftest_score=5,
     fb_w=1024, fb_h=768, model_size_mb=2962, total_ram_mb=30000,
     infer_gen_tokens=0, reserved_i=0,
     last_text=b"hello", model_name=b"Gemma 4 E2B",
-    nvme_total_mb=1953892, episodic_count=0, crc32=0,
+    nvme_total_mb=1953892, episodic_count=0, pool_events=0, pool_decisions=0, crc32=0,
 )
 
 
 def build_packet(finalize=True, **overrides):
-    """Pack a 200-byte packet; when finalize, stamp a valid zlib CRC over [:196].
+    """Pack a 208-byte (v2) packet; when finalize, stamp a valid zlib CRC over [:PKT_SIZE-4].
 
     Pass finalize=False (with an explicit crc32=...) to forge a corrupt packet.
     String fields (last_text/model_name) accept bytes or str.
@@ -51,10 +51,10 @@ def build_packet(finalize=True, **overrides):
         v['num_nodes'], v['model_load_pct'], v['fb_bpp'], v['selftest_score'],
         v['fb_w'], v['fb_h'], v['model_size_mb'], v['total_ram_mb'],
         v['infer_gen_tokens'], v['reserved_i'], v['last_text'], v['model_name'],
-        v['nvme_total_mb'], v['episodic_count'], v['crc32'])
+        v['nvme_total_mb'], v['episodic_count'], v['pool_events'], v['pool_decisions'], v['crc32'])
     if finalize:
-        crc = zlib.crc32(body[:196]) & 0xFFFFFFFF
-        body = body[:196] + struct.pack('<I', crc)
+        crc = zlib.crc32(body[:PKT_SIZE - 4]) & 0xFFFFFFFF   # v2: 204
+        body = body[:PKT_SIZE - 4] + struct.pack('<I', crc)
     return body
 
 
@@ -84,7 +84,7 @@ def build_pcap_many(frames, ts_start=1700000000):
 # flag name -> bit (mirrors jarvis_telemetry.h TLM_F_*).
 FLAG_BITS = {
     'MODEL_LOADED': 0x01, 'FB_DRAWABLE': 0x02, 'FB_MAPPED': 0x04,
-    'HAS_ERROR': 0x08, 'SELFTEST_PASS': 0x10, 'MEMORY': 0x20,
+    'HAS_ERROR': 0x08, 'SELFTEST_PASS': 0x10, 'MEMORY': 0x20, 'CONTEXT': 0x40,
 }
 _CORRUPT_CRC = 0xDEADBEEF  # deliberately wrong CRC for "corrupt" golden frames
 

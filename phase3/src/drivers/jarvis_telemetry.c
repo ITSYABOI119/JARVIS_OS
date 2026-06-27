@@ -3,7 +3,7 @@
  *
  * Self-contained (no string.h needed): a bitwise zlib/IEEE CRC-32 (must equal
  * Python zlib.crc32 so the N-c-2 receiver validates trivially) and the packet
- * finalizer. Bitwise (no table) is plenty fast for a 196-byte packet at ~1 Hz.
+ * finalizer. Bitwise (no table) is plenty fast for the 204-byte CRC region at ~1 Hz.
  *
  * JARVIS AI-OS - Phase 4 (goal #2b N-c)
  */

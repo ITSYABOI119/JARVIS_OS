@@ -40,8 +40,8 @@ import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MAGIC = 0x4A54454C            # "JTEL" (LE on the wire: 4C 45 54 4A)
-FMT = '<IBBHIIIBBH6QBBBBHHIIHH56s40s2II'
-PKT_SIZE = 200
+FMT = '<IBBHIIIBBH6QBBBBHHIIHH56s40s4II'
+PKT_SIZE = struct.calcsize(FMT)   # v2: 208 (derived — never hardcode a wire size)
 LOG_MAX_ENTRIES = 2700        # NVME_LOG_MAX_ENTRIES (no-wrap durable telemetry log)
 
 FLAG_NAMES = {
@@ -51,6 +51,7 @@ FLAG_NAMES = {
     0x08: 'HAS_ERROR',
     0x10: 'SELFTEST_PASS',
     0x20: 'MEMORY',
+    0x40: 'CONTEXT',
 }
 KIND_NAMES = {1: 'STATS', 2: 'INFER', 3: 'STATE'}
 
@@ -84,12 +85,12 @@ def decode_packet(data: bytes) -> dict:
      num_nodes, model_load_pct, fb_bpp, selftest_score,
      fb_w, fb_h, model_size_mb, total_ram_mb,
      infer_gen_tokens, reserved_i, last_text_raw, model_name_raw,
-     nvme_total_mb, episodic_count, crc32_field) = struct.unpack(FMT, data)
+     nvme_total_mb, episodic_count, pool_events, pool_decisions, crc32_field) = struct.unpack(FMT, data)
 
     if magic != MAGIC:
         raise ValueError("bad magic 0x%08X (expected 0x%08X)" % (magic, MAGIC))
 
-    crc_calc = zlib.crc32(data[:196]) & 0xFFFFFFFF
+    crc_calc = zlib.crc32(data[:PKT_SIZE - 4]) & 0xFFFFFFFF   # v2: 204 (= offsetof(crc32))
     flags_list = [name for bit, name in FLAG_NAMES.items() if flags & bit]
 
     return {
@@ -120,6 +121,8 @@ def decode_packet(data: bytes) -> dict:
         'total_ram_mb': total_ram_mb,
         'nvme_total_mb': nvme_total_mb,
         'episodic_count': episodic_count,
+        'pool_events': pool_events,
+        'pool_decisions': pool_decisions,
         'log_cursor': log_cursor,
         'infer_gen_tokens': infer_gen_tokens,
         'last_text': _cstr(last_text_raw),
@@ -199,6 +202,8 @@ def packet_to_record(d: dict, recv_ts: float = 0) -> dict:
         'total_ram_mb': d['total_ram_mb'],
         'nvme_total_mb': d['nvme_total_mb'],
         'episodic_count': d['episodic_count'],
+        'pool_events': d['pool_events'],
+        'pool_decisions': d['pool_decisions'],
         'log_cursor': d['log_cursor'],
         'infer_gen_tokens': d['infer_gen_tokens'],
         'model_name': d['model_name'],

@@ -37,6 +37,7 @@ FLAG_LABEL = {
     'FB_MAPPED': 'Framebuffer mapped (on-box HUD)',
     'HAS_ERROR': 'Error state',
     'MEMORY': 'Episodic memory store',
+    'CONTEXT': 'Shared context pool',
 }
 
 _P = 0
@@ -207,6 +208,41 @@ def main():
                 time.sleep(0.1)
             check(epi_ok,
                   "(G1) System 'Episodic records' renders == live episodic_count (snap=%r)" % (epi_dbg,))
+
+            # (G2/M4) PIN the System 'Context pool' VALUE — must equal the live pool_decisions on a
+            # CONTEXT-bearing frame (flag-gated; '—' otherwise). TEETH: fails if the v2 pool rendering
+            # breaks (wrong value, '—', or removed). Same atomic store+DOM read + poll-until-agree.
+            ctx_ok = False
+            ctx_dbg = None
+            deadline = time.time() + 12
+            while time.time() < deadline:
+                snap = page.evaluate(
+                    "() => {"
+                    " const rec = (window.JarvisTelemetry.getState().latest) || {};"
+                    " const flags = rec.flags_list || [];"
+                    " const lab = Array.from(document.querySelectorAll('div'))"
+                    "   .find(d => d.textContent.trim() === 'Context pool');"
+                    " let rendered = null;"
+                    " if (lab && lab.parentElement) {"
+                    "   const kids = Array.from(lab.parentElement.children);"
+                    "   const i = kids.indexOf(lab);"
+                    "   rendered = kids[i + 1] ? kids[i + 1].textContent.trim() : null;"
+                    " }"
+                    " return { ctx: flags.indexOf('CONTEXT') >= 0, dec: rec.pool_decisions,"
+                    "          ev: rec.pool_events, rendered };"
+                    "}")
+                ctx_dbg = snap
+                if snap['ctx'] and snap['rendered'] not in (None, '—'):
+                    try:
+                        rendered_num = int(str(snap['rendered']).replace(',', ''))
+                    except (ValueError, TypeError):
+                        rendered_num = None
+                    if rendered_num is not None and rendered_num == snap['dec'] and rendered_num > 0:
+                        ctx_ok = True
+                        break
+                time.sleep(0.1)
+            check(ctx_ok,
+                  "(G2/M4) System 'Context pool' renders == live pool_decisions (snap=%r)" % (ctx_dbg,))
 
             check(errors == [], "no console errors / pageerrors (saw %d)" % len(errors))
             for e in errors[:10]:

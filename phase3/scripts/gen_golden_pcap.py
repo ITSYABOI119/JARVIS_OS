@@ -35,9 +35,9 @@ def main():
     meta = spec['meta']
 
     # guards: the packet shape can't have drifted under us
-    assert struct.calcsize(FMT) == 200, "FMT no longer 200 bytes"
-    assert struct.calcsize(meta['fmt']) == 200, "meta.fmt no longer 200 bytes"
-    assert meta['size'] == 200, "meta.size != 200"
+    assert struct.calcsize(FMT) == 208, "FMT no longer 208 bytes (v2)"
+    assert struct.calcsize(meta['fmt']) == 208, "meta.fmt no longer 208 bytes (v2)"
+    assert meta['size'] == 208, "meta.size != 208"
     assert zlib.crc32(b"123456789") & 0xFFFFFFFF == 0xCBF43926, "zlib CRC vector mismatch"
 
     frames = []

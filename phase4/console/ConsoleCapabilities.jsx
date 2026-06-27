@@ -27,6 +27,7 @@ function Capabilities({ store }) {
     FB_MAPPED:     { label: 'Framebuffer mapped (on-box HUD)', tone: 'ok' },
     HAS_ERROR:     { label: 'Error state', tone: 'err' },
     MEMORY:        { label: 'Episodic memory store', tone: 'ok' },
+    CONTEXT:       { label: 'Shared context pool', tone: 'ok' },
   };
 
   // The live capability set IS the record's flags_list — iterate it, never a
