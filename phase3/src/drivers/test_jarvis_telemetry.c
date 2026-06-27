@@ -49,6 +49,7 @@ static void test_layout(void)
     OFF(last_text, 92);
     OFF(model_name, 148);
     OFF(nvme_total_mb, 188);   /* System field packed into former reserved2[0] */
+    OFF(episodic_count, 192);  /* P5 G1/M4: renamed from reserved2 (same offset/size) */
     OFF(crc32, 196);
 }
 
@@ -80,6 +81,7 @@ static void test_finalize_roundtrip(void)
     pkt.log_cursor = 137;
     pkt.nvme_total_mb = 1953892;
     pkt.total_ram_mb = 30000;
+    pkt.episodic_count = 1234;   /* P5 G1/M4: renamed from reserved2 — CRC[:196] now covers 192-195 */
 
     jarvis_tlm_finalize(&pkt);
 
@@ -88,6 +90,7 @@ static void test_finalize_roundtrip(void)
     CHECK(pkt.infer_active == 1 && pkt.infer_duty_pct == 42, "infer_active/infer_duty_pct survive finalize");
     CHECK(pkt.log_cursor == 137 && pkt.nvme_total_mb == 1953892u, "log_cursor/nvme_total_mb survive finalize");
     CHECK(pkt.total_ram_mb == 30000u, "total_ram_mb survives finalize");
+    CHECK(pkt.episodic_count == 1234u, "episodic_count survives finalize (CRC covers 192-195)");
 
     /* The stored crc matches a recompute over the first 196 bytes. */
     uint32_t recomputed = jarvis_tlm_crc32(&pkt, offsetof(telemetry_packet_t, crc32));

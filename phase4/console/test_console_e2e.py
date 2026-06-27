@@ -36,6 +36,7 @@ FLAG_LABEL = {
     'FB_DRAWABLE': 'Framebuffer drawable',
     'FB_MAPPED': 'Framebuffer mapped (on-box HUD)',
     'HAS_ERROR': 'Error state',
+    'MEMORY': 'Episodic memory store',
 }
 
 _P = 0

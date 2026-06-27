@@ -1,8 +1,10 @@
 /* JARVIS OS — Telemetry Console · System
  * Real box system telemetry only. Every value here has a live /events source:
  *   - Memory:  RAM available to JARVIS (total_ram_mb), model resident (model_size_mb),
- *              and a fixed-floor estimate (model + static pool). Live heap is NOT tracked,
- *              so there is no used/free figure — only the floor, which is real.
+ *              a fixed-floor estimate (model + static pool), and the episodic record
+ *              count (episodic_count, shown only when the box reports TLM_F_MEMORY).
+ *              Live heap is NOT tracked, so there is no used/free figure — only the
+ *              floor, which is real.
  *   - Inference: a real ACTIVE / IDLE state (infer_active) + a WORKLOAD duty cycle
  *              (infer_duty_pct = inference time / uptime). This is NOT a CPU-load gauge —
  *              the rootserver busy-polls, so a literal load would read ~100% and mean nothing.
@@ -29,6 +31,10 @@ function SystemView({ store }) {
   const duty = rec ? Math.max(0, Math.min(100, Number(rec.infer_duty_pct) || 0)) : 0;
   const cursor = rec ? Number(rec.log_cursor) || 0 : 0;
   const cores = rec ? Number(rec.num_nodes) || 0 : 0;
+  // Episodic store: show the count ONLY when the box reports TLM_F_MEMORY (store up),
+  // so a not-ready 0 never reads as "0 records". Real live field, flag-gated.
+  const epiReported = !!(rec && rec.flags_list && rec.flags_list.indexOf('MEMORY') >= 0);
+  const epiCount = rec ? Number(rec.episodic_count) || 0 : null;
 
   const stat = (label, value, sub) => (
     <div>
@@ -68,6 +74,8 @@ function SystemView({ store }) {
             has(modelMb) ? '~2.89 GiB in RAM' : null)}
           {stat('Model + fixed (floor)', has(floorMb) ? numMb(floorMb) + ' MB' : '—',
             'floor — excludes live heap')}
+          {stat('Episodic records', epiReported ? numMb(epiCount) : '—',
+            epiReported ? 'persisted to the NVMe memory region' : 'store not reported')}
         </div>
         {note('Live heap used/free is not tracked on the box, so it is not shown. The floor above (model + a fixed static pool) is the only real lower bound.')}
       </Card>

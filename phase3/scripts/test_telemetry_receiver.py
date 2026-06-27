@@ -105,6 +105,16 @@ def main():
     json.dumps(rec_bad)
     check(rec_bad['crc_ok'] is False, "corrupt-packet record crc_ok False (still serializes)")
 
+    # --- M4: episodic_count + TLM_F_MEMORY (reserved2 repurposed, no size bump) ---
+    pkt_mem = build_packet(episodic_count=4242, flags=0x01 | 0x10 | 0x20)
+    dmem = decode_packet(pkt_mem)
+    check(dmem['crc_ok'] is True, "episodic packet crc_ok True")
+    check(dmem['episodic_count'] == 4242, "episodic_count decodes (== 4242)")
+    check('MEMORY' in dmem['flags_list'], "TLM_F_MEMORY 0x20 -> 'MEMORY' in flags_list")
+    rec_mem = packet_to_record(dmem)
+    check(rec_mem['episodic_count'] == 4242, "record carries episodic_count (contract key)")
+    check('episodic_count' in REQUIRED_RECORD_KEYS, "episodic_count is a REQUIRED_RECORD_KEY")
+
     # --- N-c-3a: iter_pcap_telemetry on a synthetic 1-packet pcap ---
     pcap = _build_pcap_one(pkt, ts_s=1700000001)
     tf = tempfile.NamedTemporaryFile(suffix='.pcap', delete=False)
@@ -134,7 +144,7 @@ def main():
           "golden meta fmt/size match the wire format")
 
     kind_expect = {1: 'STATS', 2: 'INFER', 3: 'STATE'}
-    internal = ('magic', 'crc32', 'crc_calc', 'reserved_i', 'reserved2')
+    internal = ('magic', 'crc32', 'crc_calc', 'reserved_i')
     for fr in golden['frames']:
         label = fr.get('label', '?')
         payload, corrupt = frame_to_packet(fr)

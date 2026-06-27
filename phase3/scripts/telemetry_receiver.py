@@ -50,6 +50,7 @@ FLAG_NAMES = {
     0x04: 'FB_MAPPED',
     0x08: 'HAS_ERROR',
     0x10: 'SELFTEST_PASS',
+    0x20: 'MEMORY',
 }
 KIND_NAMES = {1: 'STATS', 2: 'INFER', 3: 'STATE'}
 
@@ -83,7 +84,7 @@ def decode_packet(data: bytes) -> dict:
      num_nodes, model_load_pct, fb_bpp, selftest_score,
      fb_w, fb_h, model_size_mb, total_ram_mb,
      infer_gen_tokens, reserved_i, last_text_raw, model_name_raw,
-     nvme_total_mb, reserved2, crc32_field) = struct.unpack(FMT, data)
+     nvme_total_mb, episodic_count, crc32_field) = struct.unpack(FMT, data)
 
     if magic != MAGIC:
         raise ValueError("bad magic 0x%08X (expected 0x%08X)" % (magic, MAGIC))
@@ -118,6 +119,7 @@ def decode_packet(data: bytes) -> dict:
         'model_size_mb': model_size_mb,
         'total_ram_mb': total_ram_mb,
         'nvme_total_mb': nvme_total_mb,
+        'episodic_count': episodic_count,
         'log_cursor': log_cursor,
         'infer_gen_tokens': infer_gen_tokens,
         'last_text': _cstr(last_text_raw),
@@ -196,6 +198,7 @@ def packet_to_record(d: dict, recv_ts: float = 0) -> dict:
         'model_size_mb': d['model_size_mb'],
         'total_ram_mb': d['total_ram_mb'],
         'nvme_total_mb': d['nvme_total_mb'],
+        'episodic_count': d['episodic_count'],
         'log_cursor': d['log_cursor'],
         'infer_gen_tokens': d['infer_gen_tokens'],
         'model_name': d['model_name'],
