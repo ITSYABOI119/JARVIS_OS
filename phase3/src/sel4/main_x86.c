@@ -59,6 +59,9 @@
 #include "net_udp.h"
 #include "jarvis_telemetry.h"
 #include "jarvis_debug.h"
+#if JARVIS_G3_RETRIEVAL
+#include "g3_retrieval.h"       /* Phase 5 G3/M1: PA-side retrieval scorer + preamble assembler (flag-gated) */
+#endif
 #include "jarvis_ui_tokens.h"   /* Step 2c-2b: FBP_ and JUI_ palette + geometry (single source) */
 
 #if JARVIS_AVX2_PROBE
@@ -2601,6 +2604,54 @@ static void *main_continued(void *arg UNUSED)
             /* --- Inference (15%) --- */
             const char *query = inference_queries[r % N_INFERENCE_QUERIES];
             q_infer++;
+
+#if JARVIS_G3_RETRIEVAL
+            /* Phase 5 G3/M1: score the recent episodic batch + PACK a retrieval preamble into the
+             * context-pool staging buffer BEFORE the query goes to PB. M1 only PACKS — PB reads +
+             * injects at M2 — so generation stays BYTE-IDENTICAL even with the flag ON. Candidates
+             * are the recent-RAM (uncommitted) batch; those records carry seq=0 (epi_store_append
+             * stamps seq only at NVMe commit), so the batch INDEX is the recency key (higher =
+             * newer). Older/committed text is M5's NVMe-backed fetch. */
+            if (g_sctx_ready) {
+                static g3_candidate_t g3cands[EPI_BATCH_MAX];   /* static: PA workload loop is single-threaded */
+                uint64_t qkey = 0;
+                char g3norm[MAX_QUERY_LEN];
+                if (cache_normalize_query(query, g3norm, sizeof g3norm))
+                    qkey = cache_hash(g3norm);
+
+                int g3n = g_epi_batch_n;
+                if (g3n > EPI_BATCH_MAX) g3n = EPI_BATCH_MAX;
+                for (int gi = 0; gi < g3n; gi++) {
+                    g3cands[gi].query_key = g_epi_batch[gi].query_key;
+                    g3cands[gi].seq       = (uint32_t)gi;        /* batch index = recency (uncommitted seq=0) */
+                    g3cands[gi].action    = g_epi_batch[gi].action;
+                    g3cands[gi].outcome   = g_epi_batch[gi].outcome;
+                    g3cands[gi].query     = g_epi_batch[gi].query;
+                    g3cands[gi].query_len = g_epi_batch[gi].query_len;
+                    g3cands[gi].resp      = g_epi_batch[gi].resp;
+                    g3cands[gi].resp_len  = g_epi_batch[gi].resp_len;
+                }
+
+                g3_candidate_t g3sel[G3_MAX_FACTS];
+                int ns   = g3_select(g3cands, g3n, qkey, G3_MAX_FACTS, g3sel);
+                int exact = (ns > 0 && g3sel[0].query_key == qkey);   /* exact match lands at slot 0 */
+                char g3pre[SCTX_PREAMBLE_MAX];
+                int plen = g3_build_preamble(g3sel, ns, g3pre, sizeof g3pre);
+                sctx_pack_preamble(g_sctx, g3pre, (uint32_t)plen);     /* M1: PACK only — PB ignores until M2 */
+
+                /* [RETR] pack proof (log-mirrored). key is the full 64-bit FNV-1a (put_hex is 32-bit). */
+                puts_serial("[RETR] hit="); put_dec(exact ? 1u : 0u);
+                puts_serial(" facts=");     put_dec((uint32_t)ns);
+                puts_serial(" len=");       put_dec((uint32_t)plen);
+                puts_serial(" key=0x");
+                {
+                    static const char g3hx[] = "0123456789abcdef";
+                    for (int sh = 60; sh >= 0; sh -= 4) putc_serial(g3hx[(qkey >> sh) & 0xFu]);
+                }
+                puts_serial("\n");
+            }
+#endif
+
 #if JARVIS_DBG_BOOT_LOG
             {
                 char qb[96] = "infer q=";

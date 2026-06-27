@@ -22,6 +22,7 @@
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 
 static int g_pass = 0, g_fail = 0;
@@ -183,14 +184,156 @@ static void test_uncommitted_visible(void) {
           "T5 uncommitted decision visible to recent (D4 — newest memories before flush)");
 }
 
+/* ================================================================
+ * T6a — G3/M1 pack/get preamble: the single-threaded contract
+ *   (copy-by-length, NUL-terminate, len==0 clears, over-long clamp, cap truncation,
+ *    never writes past the buffer — 0xAA canary)
+ * ================================================================ */
+static void test_pack_preamble_basic(void) {
+    shared_context_t c;
+    sctx_init(&c, 1);
+    char out[SCTX_PREAMBLE_MAX];
+
+    /* fresh pool => empty preamble */
+    CHECK(sctx_get_preamble(&c, out, sizeof out) == 0 && out[0] == '\0', "T6a fresh pool: empty preamble");
+
+    /* basic round-trip */
+    const char *s = "Known context:\n- foo: bar\n";
+    uint32_t sl = (uint32_t)strlen(s);
+    sctx_pack_preamble(&c, s, sl);
+    uint32_t r = sctx_get_preamble(&c, out, sizeof out);
+    CHECK(r == sl && memcmp(out, s, r) == 0 && out[r] == '\0', "T6a pack/get round-trip");
+
+    /* len==0 clears */
+    sctx_pack_preamble(&c, s, 0);
+    CHECK(sctx_get_preamble(&c, out, sizeof out) == 0 && out[0] == '\0', "T6a len=0 clears the staging buffer");
+
+    /* src==NULL clears (defensive) */
+    sctx_pack_preamble(&c, s, sl);
+    sctx_pack_preamble(&c, NULL, 99);
+    CHECK(sctx_get_preamble(&c, out, sizeof out) == 0, "T6a src=NULL clears (no copy from NULL)");
+
+    /* copy-by-length, NOT strlen: an embedded NUL is preserved up to len */
+    char emb[8] = { 'a', 'b', '\0', 'c', 'd', 0, 0, 0 };
+    sctx_pack_preamble(&c, emb, 5);
+    r = sctx_get_preamble(&c, out, sizeof out);
+    CHECK(r == 5 && out[0] == 'a' && out[1] == 'b' && out[2] == '\0' && out[3] == 'c' &&
+          out[4] == 'd' && out[5] == '\0',
+          "T6a copies by length (embedded NUL kept), NUL-terminates at len");
+
+    /* over-long input clamps to SCTX_PREAMBLE_MAX-1; canary proves no write past the buffer */
+    {
+        struct { shared_context_t cc; unsigned char canary[64]; } w;
+        memset(w.canary, 0xAA, sizeof w.canary);
+        sctx_init(&w.cc, 1);
+        static char big[4096];
+        memset(big, 'X', sizeof big);
+        sctx_pack_preamble(&w.cc, big, sizeof big);
+        r = sctx_get_preamble(&w.cc, out, sizeof out);
+        int canary_ok = 1;
+        for (int i = 0; i < 64; i++) if (w.canary[i] != 0xAA) canary_ok = 0;
+        CHECK(r == SCTX_PREAMBLE_MAX - 1u && out[r] == '\0', "T6a over-long input clamps to MAX-1");
+        CHECK(canary_ok, "T6a over-long pack never writes past the preamble buffer (0xAA canary)");
+    }
+
+    /* get into a smaller cap truncates to cap-1 and NUL-terminates */
+    sctx_pack_preamble(&c, "abcdefghij", 10);
+    char small[4];
+    r = sctx_get_preamble(&c, small, sizeof small);
+    CHECK(r == 3 && small[0] == 'a' && small[1] == 'b' && small[2] == 'c' && small[3] == '\0',
+          "T6a get respects cap-1 (truncate + NUL-terminate)");
+    CHECK(sctx_get_preamble(&c, out, 0) == 0, "T6a get cap=0 returns 0");
+}
+
+/* ================================================================
+ * T6 — G3/M1 pack/get under TSan (writer + K readers, round-synchronized).
+ *   The writer packs a fresh self-describing preamble each round; a barrier releases K
+ *   readers to sctx_get_preamble the STABLE buffer and verify every byte matches the
+ *   returned length; a second barrier gates the next pack so bytes are never overwritten
+ *   mid-read. This mirrors the LIVE ordering (PA packs -> IPC -> PB reads; no concurrent
+ *   overlap) and is ThreadSanitizer-clean.
+ * ================================================================ */
+static shared_context_t g_p3ctx;
+static pthread_barrier_t g_p3bar;
+static atomic_long g_p3bad;     /* must stay 0 — any (len,bytes) inconsistency increments */
+static atomic_long g_p3gets;
+
+#define P3_ROUNDS 300
+
+/* byte j of a length-L preamble — a deterministic function of (L, j), so a reader that
+ * knows the returned length can recompute and verify every byte. */
+static unsigned char p3_byte(uint32_t L, uint32_t j) {
+    return (unsigned char)((L * 2654435761u + j * 40503u + 7u) & 0xFFu);
+}
+
+/* round lengths: 0 clears; values > MAX-1 (1024, 4000) clamp to MAX-1 */
+static const uint32_t P3_LENS[] = { 0u, 1u, 17u, 200u, 511u, 1000u, 1023u, 1024u, 4000u };
+#define P3_NLEN ((int)(sizeof P3_LENS / sizeof P3_LENS[0]))
+
+static uint32_t p3_effective(uint32_t L) {
+    return L > SCTX_PREAMBLE_MAX - 1u ? SCTX_PREAMBLE_MAX - 1u : L;
+}
+
+static void *p3_writer_fn(void *arg) {
+    (void)arg;
+    static char src[8192];
+    for (int round = 0; round < P3_ROUNDS; round++) {
+        uint32_t L = P3_LENS[round % P3_NLEN];
+        uint32_t e = p3_effective(L);
+        for (uint32_t j = 0; j < e; j++) src[j] = (char)p3_byte(e, j);   /* fill by EFFECTIVE len */
+        sctx_pack_preamble(&g_p3ctx, src, L);
+        pthread_barrier_wait(&g_p3bar);   /* (A) pack published -> readers may read the stable buffer */
+        pthread_barrier_wait(&g_p3bar);   /* (B) readers done   -> safe to repack next round */
+    }
+    return NULL;
+}
+
+static void *p3_reader_fn(void *arg) {
+    (void)arg;
+    char out[SCTX_PREAMBLE_MAX];
+    for (int round = 0; round < P3_ROUNDS; round++) {
+        pthread_barrier_wait(&g_p3bar);   /* (A) wait for the round's pack */
+        uint32_t r = sctx_get_preamble(&g_p3ctx, out, sizeof out);
+        atomic_fetch_add_explicit(&g_p3gets, 1, memory_order_relaxed);
+        int ok = (r <= SCTX_PREAMBLE_MAX - 1u) && (out[r] == '\0');
+        for (uint32_t j = 0; ok && j < r; j++)
+            if ((unsigned char)out[j] != p3_byte(r, j)) ok = 0;   /* len/bytes must agree */
+        if (!ok) atomic_fetch_add_explicit(&g_p3bad, 1, memory_order_relaxed);
+        pthread_barrier_wait(&g_p3bar);   /* (B) signal read complete */
+    }
+    return NULL;
+}
+
+static void test_pack_preamble_concurrent(int k) {
+    sctx_init(&g_p3ctx, 1);
+    atomic_store(&g_p3bad, 0);
+    atomic_store(&g_p3gets, 0);
+    pthread_barrier_init(&g_p3bar, NULL, (unsigned)(k + 1));   /* k readers + 1 writer */
+
+    pthread_t w, r[4];
+    pthread_create(&w, NULL, p3_writer_fn, NULL);
+    for (int i = 0; i < k; i++) pthread_create(&r[i], NULL, p3_reader_fn, NULL);
+    pthread_join(w, NULL);
+    for (int i = 0; i < k; i++) pthread_join(r[i], NULL);
+    pthread_barrier_destroy(&g_p3bar);
+
+    char msg[96];
+    snprintf(msg, sizeof msg, "T6 pack/get consistent K=%d (gets=%ld)", k, (long)atomic_load(&g_p3gets));
+    CHECK(atomic_load(&g_p3bad) == 0, msg);
+    CHECK(atomic_load(&g_p3gets) == (long)k * P3_ROUNDS, "T6 readers ran every round");
+}
+
 int main(void) {
-    printf("=== Shared Context Pool Tests (Phase 5 G2/M0) ===\n");
+    printf("=== Shared Context Pool Tests (Phase 5 G2/M0 + G3/M1) ===\n");
     const int ks[] = { 1, 2, 4, 8 };
     for (int i = 0; i < 4; i++) test_torn_read(ks[i]);
     test_exact_key();
     test_recency();
     test_event_ring();
     test_uncommitted_visible();
+    test_pack_preamble_basic();
+    const int p3ks[] = { 1, 2, 4 };
+    for (int i = 0; i < 3; i++) test_pack_preamble_concurrent(p3ks[i]);
     printf("\n== Results: %d PASS, %d FAIL ==\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

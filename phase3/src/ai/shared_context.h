@@ -106,4 +106,20 @@ int  sctx_recent(const shared_context_t *c, int n, sctx_decision_t *out, int max
 uint32_t sctx_event_count(const shared_context_t *c);
 uint32_t sctx_decision_count(const shared_context_t *c);
 
+/* ---- G3/M1: retrieval-preamble staging (single writer = PA; reader = PB at M2) ----
+ * PA packs the assembled preamble here BEFORE shmem_ipc_send; PB reads it AFTER recv, so the
+ * IPC release/acquire already orders bytes->read in the live flow. The preamble_len
+ * release/acquire below is the belt-and-suspenders ordering primitive — bytes are written
+ * BEFORE the length is published (and read AFTER the length is observed), so a reader that
+ * sees a length never sees a half-written buffer. NO separate seqlock. */
+
+/* Copy min(len, SCTX_PREAMBLE_MAX-1) bytes of src into the staging buffer (by length — NEVER
+ * strlen), NUL-terminate, then RELEASE-store preamble_len LAST. len==0 (or src==NULL) clears it. */
+void sctx_pack_preamble(shared_context_t *c, const char *src, uint32_t len);
+
+/* ACQUIRE-load preamble_len, copy min(len, cap-1) bytes into out, NUL-terminate; returns the
+ * number of preamble bytes placed in out (== the stored length when cap is large enough).
+ * out==NULL / cap==0 -> 0. */
+uint32_t sctx_get_preamble(const shared_context_t *c, char *out, uint32_t cap);
+
 #endif /* SHARED_CONTEXT_H */

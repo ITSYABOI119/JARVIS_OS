@@ -52,6 +52,16 @@
  * build sets it = 1; the deployed image rebuilds with it = 0. */
 #define JARVIS_SMP_PROBE  0
 
+/* Phase 5 G3/M1 (Retrieval Before Inference): master switch for the PA-side retrieval path.
+ * When 1, Process A — on the inference route, BEFORE MSG_QUERY — scores the recent episodic
+ * batch (g3_select) and PACKS an assembled preamble into the shared context pool's staging
+ * buffer (sctx_pack_preamble), logging one [RETR] line per inference. M1 only PACKS: Process B
+ * does NOT read or inject the preamble until M2, so generation stays BYTE-IDENTICAL even with
+ * this ON. When 0 (the committed default + deploy), the whole block + its g3_retrieval.h
+ * include compile out — no new dependency, deploy byte-identical. The flag-ON build also needs
+ * g3_retrieval.c/.h added to the Process A build (build_jarvis_x86.sh) — wired at box-smoke time. */
+#define JARVIS_G3_RETRIEVAL  0
+
 /* Serial [STATS] prints every 100 queries; NVMe LOG_IPC_STATS is written every
  * JARVIS_STATS_NVME_INTERVAL. Measured bare-metal rate is ~3k queries/day (single
  * core, scalar) -> interval=100 gives ~870 entries over 30 days, well under the

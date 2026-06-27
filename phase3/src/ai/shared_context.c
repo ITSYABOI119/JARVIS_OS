@@ -136,3 +136,27 @@ uint32_t sctx_event_count(const shared_context_t *c) {
 uint32_t sctx_decision_count(const shared_context_t *c) {
     return __atomic_load_n(&c->dec_head, __ATOMIC_ACQUIRE);  /* lifetime decisions recorded */
 }
+
+/* ---- G3/M1: retrieval-preamble staging ---- */
+
+void sctx_pack_preamble(shared_context_t *c, const char *src, uint32_t len) {
+    /* Single writer (PA). Clamp to the buffer (reserve 1 byte for the NUL); src==NULL clears. */
+    uint32_t n = src ? len : 0u;
+    if (n > SCTX_PREAMBLE_MAX - 1u) n = SCTX_PREAMBLE_MAX - 1u;
+    if (n) memcpy(c->preamble, src, n);        /* copy by LENGTH — never strlen */
+    c->preamble[n] = '\0';
+    /* Publish the length LAST with RELEASE: the byte writes above are ordered before it, so a
+     * reader that ACQUIRE-loads this length is guaranteed to see the full, settled bytes. */
+    __atomic_store_n(&c->preamble_len, n, __ATOMIC_RELEASE);
+}
+
+uint32_t sctx_get_preamble(const shared_context_t *c, char *out, uint32_t cap) {
+    if (!out || cap == 0u) return 0;
+    /* ACQUIRE the published length (pairs with the RELEASE in pack) before reading the bytes. */
+    uint32_t len = __atomic_load_n(&c->preamble_len, __ATOMIC_ACQUIRE);
+    uint32_t n = len;
+    if (n > cap - 1u) n = cap - 1u;            /* truncate to the caller's buffer */
+    if (n) memcpy(out, c->preamble, n);
+    out[n] = '\0';
+    return n;
+}
