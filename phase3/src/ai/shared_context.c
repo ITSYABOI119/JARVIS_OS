@@ -128,3 +128,11 @@ int sctx_recent(const shared_context_t *c, int n, sctx_decision_t *out, int max)
         out[i] = c->decisions[(h - 1u - (uint32_t)i) % SCTX_DECISION_RING];
     return want;
 }
+
+uint32_t sctx_event_count(const shared_context_t *c) {
+    return __atomic_load_n(&c->ev_head, __ATOMIC_ACQUIRE);   /* lifetime events pushed */
+}
+
+uint32_t sctx_decision_count(const shared_context_t *c) {
+    return __atomic_load_n(&c->dec_head, __ATOMIC_ACQUIRE);  /* lifetime decisions recorded */
+}

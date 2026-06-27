@@ -130,8 +130,10 @@ static void test_exact_key(void) {
 static void test_recency(void) {
     shared_context_t c;
     sctx_init(&c, 1);
+    CHECK(sctx_event_count(&c) == 0 && sctx_decision_count(&c) == 0, "T3 fresh pool: zero counts");
     for (int i = 0; i < 5; i++)
         sctx_record_decision(&c, (uint64_t)(1000 + i), (uint16_t)i, 0, 1);
+    CHECK(sctx_decision_count(&c) == 5u, "T3 sctx_decision_count == lifetime records");
 
     sctx_decision_t out[3];
     int n = sctx_recent(&c, 10, out, 3);   /* want 10, capped at max=3 */
@@ -162,6 +164,7 @@ static void test_event_ring(void) {
     CHECK(h == N + 5u, "T4 ev_head monotonic past ring size");
     CHECK(ring_ok, "T4 event ring holds the latest-N in order (wrap correct)");
     CHECK(c.events[0].query_key == 9000u + N, "T4 slot 0 overwritten by the wrap (i=N)");
+    CHECK(sctx_event_count(&c) == N + 5u, "T4 sctx_event_count == lifetime pushes");
 }
 
 /* ================================================================

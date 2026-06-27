@@ -102,4 +102,8 @@ int  sctx_lookup_key(const shared_context_t *c, uint64_t query_key, sctx_decisio
 /* Copy up to min(n, max, stored) recent decisions newest→oldest into out[]; returns count. */
 int  sctx_recent(const shared_context_t *c, int n, sctx_decision_t *out, int max);
 
+/* Lifetime counts (monotonic ring head) — for live-population telemetry / the box smoke proof. */
+uint32_t sctx_event_count(const shared_context_t *c);
+uint32_t sctx_decision_count(const shared_context_t *c);
+
 #endif /* SHARED_CONTEXT_H */

@@ -169,6 +169,15 @@ static int          g_episodic_ready = 0;
 static epi_record_t g_epi_batch[EPI_BATCH_MAX];
 static int          g_epi_batch_n = 0;
 
+/* ---- Phase 5 G2/M2: live shared context pool (additive; gated on g_sctx_ready) ----
+ * PA writes the pool every query via the seqlock — a system_state snapshot + an event + a
+ * recent_decision keyed by the SAME episodic FNV-1a (committed=0 = still in g_epi_batch, D4).
+ * Ready is set right after the M1 sctx_init (nvme_log-independent). READ-ONLY into inference:
+ * PB reads it at M3, so generation MUST stay byte-identical. */
+static shared_context_t *g_sctx = NULL;
+static int               g_sctx_ready = 0;
+static uint64_t          g_sctx_last_key = 0;   /* key of the last keyed (cache/infer) query */
+
 static int epi_nvme_read(uint64_t lba, uint32_t count, void *buf)
 {
     if (!g_nvme_ptr || !g_nvme_bounce_vaddr) return -1;
@@ -212,10 +221,29 @@ static void epi_commit(void)
  * fills before the cadence commit. Strict no-op until the store is ready. */
 static void epi_batch_add(const char *query, uint16_t action, uint8_t outcome, const char *resp)
 {
-    if (!g_episodic_ready) return;
-    if (g_epi_batch_n >= EPI_BATCH_MAX) epi_commit();
-    episodic_fill(&g_epi_batch[g_epi_batch_n], jarvis_uptime_ms(), query, action, outcome, 0, resp);
-    g_epi_batch_n++;
+    uint64_t key = 0;
+    int have_key = 0;
+
+    if (g_episodic_ready) {
+        if (g_epi_batch_n >= EPI_BATCH_MAX) epi_commit();
+        episodic_fill(&g_epi_batch[g_epi_batch_n], jarvis_uptime_ms(), query, action, outcome, 0, resp);
+        key = g_epi_batch[g_epi_batch_n].query_key;   /* reuse the FNV-1a episodic_fill just computed */
+        have_key = 1;
+        g_epi_batch_n++;
+    }
+
+    /* Phase 5 G2/M2: mirror this decision into the live context pool. Gated independently on
+     * g_sctx_ready; reuses the episodic key (or derives it once if the episodic store is down)
+     * so the FNV-1a is computed at most once. committed=0 — still in the RAM batch (D4). */
+    if (g_sctx_ready) {
+        if (!have_key) {
+            char norm[MAX_QUERY_LEN];
+            if (cache_normalize_query(query, norm, sizeof norm)) key = cache_hash(norm);
+        }
+        g_sctx_last_key = key;
+        sctx_push_event(g_sctx, jarvis_uptime_ms(), key, action);
+        sctx_record_decision(g_sctx, key, action, outcome, /*committed=*/0);
+    }
 }
 
 static void nvme_timeout_debug(uint32_t cq_raw, uint32_t csts_val, uint8_t sq_op) {
@@ -1157,6 +1185,8 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
      * PA (@ SCTX_VADDR_A) and PB (@ SCTX_VADDR_B). Init it PA-side (M1a hardens the
      * init-decoupling; M1 just inits after the map). PB derives + reads it. */
     sctx_init((shared_context_t *)SCTX_VADDR_A, nvme_log_boot_id());
+    g_sctx = (shared_context_t *)SCTX_VADDR_A;
+    g_sctx_ready = 1;   /* M2: enable live population — set right after the proven init (nvme_log-independent) */
     puts_serial("[JARVIS] Shared context pool initialized (frame 3)\n");
 
     void *remote_vaddr = (void *)SHMEM_VADDR_B;
@@ -2832,6 +2862,33 @@ static void *main_continued(void *arg UNUSED)
             }
         }
 
+        /* Phase 5 G2/M2: publish the live system_state snapshot ONCE PER QUERY (same counters
+         * telemetry uses; the engine stamps `consistency`). READ-ONLY into inference (PB reads
+         * the pool at M3) — generation stays byte-identical. */
+        if (g_sctx_ready) {
+            sctx_system_state_t scs;
+            scs.boot_id        = nvme_log_boot_id();
+            scs._pad0          = 0;
+            scs.uptime_ms      = jarvis_uptime_ms();
+            scs.q_total        = q_total;
+            scs.q_hits         = q_hits;
+            scs.q_infer        = q_infer;
+            scs.last_query_key = g_sctx_last_key;
+            scs.consistency    = 0;   /* publish stamps it */
+            sctx_publish_state(g_sctx, &scs);
+
+            /* One-shot proof on the first query (QEMU reaches only ~q16 at NN=1, so don't wait
+             * for the q%100 [STATS] cadence). */
+            static int sctx_logged_once = 0;
+            if (!sctx_logged_once) {
+                sctx_logged_once = 1;
+                puts_serial("[SCTX] live seq="); put_dec(__atomic_load_n(&g_sctx->seq, __ATOMIC_ACQUIRE));
+                puts_serial(" ev=");  put_dec(sctx_event_count(g_sctx));
+                puts_serial(" dec="); put_dec(sctx_decision_count(g_sctx));
+                puts_serial("\n");
+            }
+        }
+
         /* Stats every 100 queries */
 #if JARVIS_DBG_STATS
         if (q_total % 100 == 0) {
@@ -2847,6 +2904,12 @@ static void *main_continued(void *arg UNUSED)
             jarvis_telemetry_emit(TLM_K_STATS, q_total, q_hits, q_infer, q_heartbeat, q_shield, q_errors);  /* N-c-1 */
             g_tlm_last_tsc = jarvis_rdtsc();   /* N-c-1: re-base the 1 Hz gate so the next tick isn't a near-dup */
             epi_commit();   /* Phase 5 G1/M1: flush the episodic batch to NVMe at the [STATS] cadence (~100 q) */
+            if (g_sctx_ready) {   /* Phase 5 G2/M2: live-pool proof at the [STATS] cadence (climbing seq/ev/dec) */
+                puts_serial("[SCTX] live seq="); put_dec(__atomic_load_n(&g_sctx->seq, __ATOMIC_ACQUIRE));
+                puts_serial(" ev=");  put_dec(sctx_event_count(g_sctx));
+                puts_serial(" dec="); put_dec(sctx_decision_count(g_sctx));
+                puts_serial("\n");
+            }
 
             /* Step 2c-2c: per-state chrome at the [STATS] cadence only (quiet/draw-only — no
              * [PANEL] flood; reconstructable from [SNAP] model=+err= and [STATS] hits/infer/err).
