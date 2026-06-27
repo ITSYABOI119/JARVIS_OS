@@ -308,6 +308,13 @@ jobs:
           -o /tmp/test_shared_context_o2
         /tmp/test_shared_context_o2
 
+    - name: "Phase 5: G3 Retrieval scorer+assembler"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
+          phase3/src/ai/test_g3_retrieval.c phase3/src/ai/g3_retrieval.c \
+          -o /tmp/tg3
+        /tmp/tg3
+
     - name: "Phase 3: FAT32 Reader (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 -DJARVIS_TEST_MOCK \
