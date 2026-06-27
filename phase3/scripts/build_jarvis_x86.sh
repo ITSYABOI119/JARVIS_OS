@@ -153,6 +153,7 @@ AI_FILES=(
     "threadpool_sel4.c"
     "episodic_store.c"    "episodic_store.h"
     "shared_context.c"    "shared_context.h"
+    "g3_retrieval.c"      "g3_retrieval.h"
 )
 
 for f in "${AI_FILES[@]}"; do
@@ -397,6 +398,20 @@ if [ -f "$CMAKE_FILE" ]; then
         fi
     else
         echo -e "  ${CYAN}OK${NC}  src/ai/shared_context.c already in source list"
+    fi
+
+    # Phase 5 G3/M1: add src/ai/g3_retrieval.c to the Process A source list if missing
+    # (PA-only: PA packs the retrieval preamble; PB injects at M2, so no PB patch yet.)
+    if ! grep -q "src/ai/g3_retrieval.c" "$CMAKE_FILE"; then
+        sed -i '/src\/ai\/shared_context.c/a\    src/ai/g3_retrieval.c' "$CMAKE_FILE" 2>/dev/null
+        if grep -q "src/ai/g3_retrieval.c" "$CMAKE_FILE"; then
+            echo -e "  ${GREEN}ADDED${NC}  src/ai/g3_retrieval.c to source list"
+            PATCHED=1
+        else
+            echo -e "  ${RED}FAILED${NC}  Could not add g3_retrieval.c — edit CMakeLists.txt manually"
+        fi
+    else
+        echo -e "  ${CYAN}OK${NC}  src/ai/g3_retrieval.c already in source list"
     fi
 
     # Add JARVIS_SEL4 compile definition (needed for pci.c IOPort backend)
