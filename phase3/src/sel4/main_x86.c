@@ -2619,17 +2619,26 @@ static void *main_continued(void *arg UNUSED)
                 if (cache_normalize_query(query, g3norm, sizeof g3norm))
                     qkey = cache_hash(g3norm);
 
-                int g3n = g_epi_batch_n;
-                if (g3n > EPI_BATCH_MAX) g3n = EPI_BATCH_MAX;
-                for (int gi = 0; gi < g3n; gi++) {
-                    g3cands[gi].query_key = g_epi_batch[gi].query_key;
-                    g3cands[gi].seq       = (uint32_t)gi;        /* batch index = recency (uncommitted seq=0) */
-                    g3cands[gi].action    = g_epi_batch[gi].action;
-                    g3cands[gi].outcome   = g_epi_batch[gi].outcome;
-                    g3cands[gi].query     = g_epi_batch[gi].query;
-                    g3cands[gi].query_len = g_epi_batch[gi].query_len;
-                    g3cands[gi].resp      = g_epi_batch[gi].resp;
-                    g3cands[gi].resp_len  = g_epi_batch[gi].resp_len;
+                int g3cap = g_epi_batch_n;
+                if (g3cap > EPI_BATCH_MAX) g3cap = EPI_BATCH_MAX;
+                int g3n = 0;
+                for (int gi = 0; gi < g3cap; gi++) {
+                    /* G3/M3: only SUCCESSFUL inference records are usable context. Cache-action
+                     * records pollute the preamble -> <|channel> thought restatement (box-observed
+                     * 2026-06-28). Recency = original batch index gi (uncommitted seq=0), preserved
+                     * across the filter (compacting copy: g3n advances only for kept records). */
+                    if (!g3_candidate_usable(g_epi_batch[gi].action, g_epi_batch[gi].outcome,
+                                             g_epi_batch[gi].resp_len, EPI_ACT_INFER, EPI_OUT_OK))
+                        continue;
+                    g3cands[g3n].query_key = g_epi_batch[gi].query_key;
+                    g3cands[g3n].seq       = (uint32_t)gi;        /* original batch index = recency */
+                    g3cands[g3n].action    = g_epi_batch[gi].action;
+                    g3cands[g3n].outcome   = g_epi_batch[gi].outcome;
+                    g3cands[g3n].query     = g_epi_batch[gi].query;
+                    g3cands[g3n].query_len = g_epi_batch[gi].query_len;
+                    g3cands[g3n].resp      = g_epi_batch[gi].resp;
+                    g3cands[g3n].resp_len  = g_epi_batch[gi].resp_len;
+                    g3n++;
                 }
 
                 g3_candidate_t g3sel[G3_MAX_FACTS];

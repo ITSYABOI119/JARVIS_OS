@@ -144,15 +144,30 @@ static void test_budget(void)
     CHECK(G3_PREAMBLE_TOK_CAP == 160, "T6 G3_PREAMBLE_TOK_CAP == 160 (deployed cap)");
 }
 
+/* ================================================================
+ * T7 — G3/M3 usability predicate: only SUCCESSFUL inference records are retrievable.
+ *      (cache-action records polluted the preamble -> <|channel> thought restatement,
+ *       box-observed 2026-06-28.)  args: (action, outcome, resp_len, infer_action, ok_outcome)
+ * ================================================================ */
+static void test_usable(void)
+{
+    CHECK(g3_candidate_usable(2, 0, 50, 2, 0) == 1, "T7 INFER + OK + text -> usable");
+    CHECK(g3_candidate_usable(1, 0, 50, 2, 0) == 0, "T7 CACHE action -> excluded");
+    CHECK(g3_candidate_usable(2, 1, 50, 2, 0) == 0, "T7 INFER but ERROR outcome -> excluded");
+    CHECK(g3_candidate_usable(2, 2, 50, 2, 0) == 0, "T7 INFER but BLOCKED outcome -> excluded");
+    CHECK(g3_candidate_usable(2, 0,  0, 2, 0) == 0, "T7 INFER + OK but empty resp -> excluded");
+}
+
 int main(void)
 {
-    printf("=== G3 Retrieval Tests (Phase 5 G3/M0 + M2 budget) ===\n");
+    printf("=== G3 Retrieval Tests (Phase 5 G3/M0 + M2 budget + M3 filter) ===\n");
     test_scorer();
     test_preamble_exact();
     test_empty();
     test_truncation();
     test_nul_safety();
     test_budget();
+    test_usable();
     printf("\n== Results: %d PASS, %d FAIL ==\n", pass, fail);
     return fail ? 1 : 0;
 }

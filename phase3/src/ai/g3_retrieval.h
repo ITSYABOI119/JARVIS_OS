@@ -67,4 +67,17 @@ static inline int g3_prompt_budget(int n_prompt, int cap, int query_floor, int s
     return room;
 }
 
+/* ---- G3/M3: retrieval candidate usability filter (pure, host-testable) ---- */
+
+/* A record is a usable retrieval candidate ONLY if it is a SUCCESSFUL inference with real response
+ * text. Cache-action records carry canned/bytecode-ish "responses" that pollute the preamble and
+ * push the model into <|channel> thought restatement (box-observed 2026-06-28); errored/empty
+ * records add no context. Pure — host-tested. The caller passes the episodic action/outcome codes
+ * (EPI_ACT_INFER / EPI_OUT_OK live in episodic_store.h) so this header stays decoupled from
+ * epi_record_t. */
+static inline int g3_candidate_usable(uint16_t action, uint8_t outcome, uint16_t resp_len,
+                                      uint16_t infer_action, uint8_t ok_outcome) {
+    return (action == infer_action) && (outcome == ok_outcome) && (resp_len > 0);
+}
+
 #endif /* G3_RETRIEVAL_H */
