@@ -62,6 +62,15 @@
  * g3_retrieval.c/.h added to the Process A build (build_jarvis_x86.sh) — wired at box-smoke time. */
 #define JARVIS_G3_RETRIEVAL  0
 
+/* Phase 5 G3/M4c: synthetic-fact PROBE harness (box-only). When 1 (alongside JARVIS_G3_RETRIEVAL=1),
+ * Process A seeds ONE known INFER fact (marker SYNTHPROBEZX9Q7) whose query matches an inference
+ * query, then self-checks (case-insensitive contains) whether the model echoes the marker after
+ * retrieval injects it — proving the injected memory is PRESENT-AND-USABLE (NOT "memory helped",
+ * which stays an offline A/B question). Default 0 → the seed + self-check compile out, deploy
+ * byte-identical. The operator confirms `[PROBE] … hit=1` (+ `[RETR] lat_us=` < 50 ms) in a
+ * flag-ON QEMU smoke. */
+#define JARVIS_G3_PROBE  0
+
 /* Serial [STATS] prints every 100 queries; NVMe LOG_IPC_STATS is written every
  * JARVIS_STATS_NVME_INTERVAL. Measured bare-metal rate is ~3k queries/day (single
  * core, scalar) -> interval=100 gives ~870 entries over 30 days, well under the

@@ -2533,6 +2533,16 @@ static void *main_continued(void *arg UNUSED)
     int cache_miss_window_count = 0;
     int cache_miss_window_total = 0;
 
+#if JARVIS_G3_PROBE
+    /* G3/M4c: seed ONE synthetic fact BEFORE the loop so it is live in the recent-RAM episodic batch
+     * when the matching inference query is asked (before the first [STATS] epi_commit clears it). Its
+     * response carries a distinctive marker; G3 retrieval injects it exact-key, and the self-check at
+     * the [INFER] site tests whether the model echoes it. (Needs JARVIS_G3_RETRIEVAL=1 to inject.) */
+    epi_batch_add("What is a page fault and how is it handled", EPI_ACT_INFER, EPI_OUT_OK,
+                  "A page fault is resolved by SYNTHPROBEZX9Q7 mapping the missing page.");
+    puts_serial("[PROBE] seeded synthetic fact (marker SYNTHPROBEZX9Q7)\n");
+#endif
+
     while (1) {
         q_total++;
 
@@ -2672,6 +2682,7 @@ static void *main_continued(void *arg UNUSED)
                     static const char g3hx[] = "0123456789abcdef";
                     for (int sh = 60; sh >= 0; sh -= 4) putc_serial(g3hx[(qkey >> sh) & 0xFu]);
                 }
+                puts_serial(" lat_us="); put_dec(g_retrieval_latency_us);   /* G3/M4: in-RAM retrieval latency (µs) — QEMU smoke confirms < 50 ms */
                 puts_serial("\n");
             }
 #endif
@@ -2887,6 +2898,25 @@ static void *main_continued(void *arg UNUSED)
             epi_batch_add(query, EPI_ACT_INFER,
                           resp_offset > 0 ? EPI_OUT_OK : EPI_OUT_ERROR,
                           resp_offset > 0 ? full_response : NULL);
+
+#if JARVIS_G3_PROBE
+            /* G3/M4c: synthetic-fact self-check — when the probe query is asked, test (case-insensitive)
+             * whether the model's full response echoes the seeded marker. [PROBE] hit=1 proves the
+             * injected memory was PRESENT-AND-USABLE; it is NOT a "memory helped" claim (offline A/B). */
+            if (strcmp(query, "What is a page fault and how is it handled") == 0) {
+                static const char MARK[] = "SYNTHPROBEZX9Q7";
+                int mhit = 0;
+                for (const char *p = full_response; *p && !mhit; p++) {
+                    int k = 0;
+                    while (MARK[k] && p[k] && ((p[k] | 0x20) == (MARK[k] | 0x20))) k++;
+                    if (MARK[k] == '\0') mhit = 1;   /* whole marker matched (case-insensitive) */
+                }
+                puts_serial("[PROBE] marker=SYNTHPROBEZX9Q7 hit="); put_dec((uint32_t)mhit);
+                puts_serial(" resp=\"");
+                for (int i = 0; i < resp_offset && i < 200; i++) putc_serial(full_response[i]);
+                puts_serial("\"\n");
+            }
+#endif
 
         } else if (slot < 19) {
             /* --- Heartbeat (10%) --- */

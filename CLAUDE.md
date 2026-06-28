@@ -679,6 +679,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
   - `JARVIS_DBG_STATS` — Periodic stats every 100 queries (default: ON)
   - `JARVIS_DBG_INFER_SUMMARY` — Per-inference summary line (default: ON)
   - `JARVIS_DBG_BOOT_LOG` — NVMe log at every boot stage + auto-capture serial output (default: OFF)
+  - `JARVIS_G3_PROBE` — **P5 G3/M4c synthetic-fact probe (default: OFF, box-only):** with `JARVIS_G3_RETRIEVAL=1`, PA seeds ONE known INFER fact (marker `SYNTHPROBEZX9Q7`) whose query matches an inference query, then self-checks (case-insensitive contains) whether the model echoes the marker after retrieval injects it → `[PROBE] marker=… hit=<0|1>`. Proves the injected memory is **present-and-usable**, NOT "memory helped" (offline A/B). Gated → deploy byte-identical. (The `[RETR]` line also now carries `lat_us=` — the M4a-measured in-RAM retrieval latency in µs; the smoke confirms < 50 ms.)
   - Committed defaults ARE the stability config: STATS + INFER_SUMMARY on, IPC/PB/RING/BOOT_LOG off (BOOT_LOG off avoids NVMe write wear over 30 days)
 - **NVMe Driver:** `phase3/src/drivers/nvme.c/h`
 - **NVMe Log:** `phase3/src/drivers/nvme_log.c/h` — raw sector logging for bare-metal telemetry
