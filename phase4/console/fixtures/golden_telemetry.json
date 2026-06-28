@@ -1,15 +1,15 @@
 {
   "meta": {
     "comment": "Golden /events contract for phase4/console. 'keys' MUST equal set(packet_to_record(...).keys()); the key-contract test (test_telemetry_receiver.py) enforces it. Regenerate golden.pcap via phase3/scripts/gen_golden_pcap.py (CI gates drift). 'flags' are names (telemetry_fixture.FLAG_BITS); other fields are build_packet overrides; label/ts_s/ts_frac/corrupt are fixture-only.",
-    "fmt": "<IBBHIIIBBH6QBBBBHHIIHH56s40s4II",
-    "size": 208,
+    "fmt": "<IBBHIIIBBH6QBBBBHHIIHH56s40s6II",
+    "size": 216,
     "keys": [
       "recv_ts", "version", "kind", "kind_name", "flags", "flags_list",
       "boot_id", "seq", "uptime_ms", "infer_active", "infer_duty_pct",
       "q_total", "q_hits", "q_infer",
       "q_heartbeat", "q_shield", "q_errors", "num_nodes", "model_load_pct",
       "fb_w", "fb_h", "fb_bpp", "selftest_score", "model_size_mb",
-      "total_ram_mb", "nvme_total_mb", "episodic_count", "pool_events", "pool_decisions", "log_cursor",
+      "total_ram_mb", "nvme_total_mb", "episodic_count", "pool_events", "pool_decisions", "retrieval_hits", "retrieval_latency_us", "log_cursor",
       "infer_gen_tokens", "model_name", "last_text", "crc_ok"
     ]
   },
@@ -37,11 +37,11 @@
     },
     {
       "label": "infer", "ts_s": 1700000003, "ts_frac": 0,
-      "kind": 2, "flags": ["MODEL_LOADED", "SELFTEST_PASS", "FB_DRAWABLE", "FB_MAPPED", "MEMORY", "CONTEXT"],
+      "kind": 2, "flags": ["MODEL_LOADED", "SELFTEST_PASS", "FB_DRAWABLE", "FB_MAPPED", "MEMORY", "CONTEXT", "RETRIEVAL"],
       "boot_id": 1, "seq": 4, "uptime_ms": 4000, "model_load_pct": 100,
       "q_total": 70, "q_hits": 49, "q_infer": 11, "q_heartbeat": 7, "q_shield": 3, "q_errors": 0,
       "infer_active": 1,
-      "last_text": "the capital of France is Paris.", "infer_gen_tokens": 12, "episodic_count": 7, "pool_events": 18, "pool_decisions": 13
+      "last_text": "the capital of France is Paris.", "infer_gen_tokens": 12, "episodic_count": 7, "pool_events": 18, "pool_decisions": 13, "retrieval_hits": 3, "retrieval_latency_us": 40
     },
     {
       "label": "state", "ts_s": 1700000004, "ts_frac": 0,

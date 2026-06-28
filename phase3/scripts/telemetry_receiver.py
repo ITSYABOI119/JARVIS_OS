@@ -3,14 +3,14 @@
 telemetry_receiver.py - JARVIS Remote Telemetry Console receiver (goal #2b N-c-2)
 
 Main-PC Python UDP receiver for the box-side telemetry stream. The JARVIS box
-(headless appliance) broadcasts a 200-byte binary `telemetry_packet_t` over UDP
+(headless appliance) broadcasts a 216-byte binary `telemetry_packet_t` over UDP
 to 255.255.255.255:51000 at ~1 Hz (see phase3/src/drivers/jarvis_telemetry.h and
 the N-c-1 emit site in phase3/src/sel4/main_x86.c, shipped at b9d689a). This tool
 binds the port, decodes each datagram, validates the zlib CRC-32 over the first
 196 bytes, and pretty-prints honest live box state.
 
 Wire format (little-endian, packed, no padding):
-    struct format = '<IBBHIIIBBH6QBBBBHHIIHH56s40s2II'  (struct.calcsize == 200)
+    struct format = '<IBBHIIIBBH6QBBBBHHIIHH56s40s6II'  (struct.calcsize == 216)
     crc32 is the last 4 bytes; valid iff zlib.crc32(pkt[:196]) == pkt.crc32.
 
 Usage:
@@ -40,8 +40,8 @@ import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MAGIC = 0x4A54454C            # "JTEL" (LE on the wire: 4C 45 54 4A)
-FMT = '<IBBHIIIBBH6QBBBBHHIIHH56s40s4II'
-PKT_SIZE = struct.calcsize(FMT)   # v2: 208 (derived — never hardcode a wire size)
+FMT = '<IBBHIIIBBH6QBBBBHHIIHH56s40s6II'
+PKT_SIZE = struct.calcsize(FMT)   # v3: 216 (derived — never hardcode a wire size)
 LOG_MAX_ENTRIES = 2700        # NVME_LOG_MAX_ENTRIES (no-wrap durable telemetry log)
 
 FLAG_NAMES = {
@@ -52,6 +52,7 @@ FLAG_NAMES = {
     0x10: 'SELFTEST_PASS',
     0x20: 'MEMORY',
     0x40: 'CONTEXT',
+    0x80: 'RETRIEVAL',
 }
 KIND_NAMES = {1: 'STATS', 2: 'INFER', 3: 'STATE'}
 
@@ -85,12 +86,13 @@ def decode_packet(data: bytes) -> dict:
      num_nodes, model_load_pct, fb_bpp, selftest_score,
      fb_w, fb_h, model_size_mb, total_ram_mb,
      infer_gen_tokens, reserved_i, last_text_raw, model_name_raw,
-     nvme_total_mb, episodic_count, pool_events, pool_decisions, crc32_field) = struct.unpack(FMT, data)
+     nvme_total_mb, episodic_count, pool_events, pool_decisions,
+     retrieval_hits, retrieval_latency_us, crc32_field) = struct.unpack(FMT, data)
 
     if magic != MAGIC:
         raise ValueError("bad magic 0x%08X (expected 0x%08X)" % (magic, MAGIC))
 
-    crc_calc = zlib.crc32(data[:PKT_SIZE - 4]) & 0xFFFFFFFF   # v2: 204 (= offsetof(crc32))
+    crc_calc = zlib.crc32(data[:PKT_SIZE - 4]) & 0xFFFFFFFF   # v3: 212 (= offsetof(crc32))
     flags_list = [name for bit, name in FLAG_NAMES.items() if flags & bit]
 
     return {
@@ -123,6 +125,8 @@ def decode_packet(data: bytes) -> dict:
         'episodic_count': episodic_count,
         'pool_events': pool_events,
         'pool_decisions': pool_decisions,
+        'retrieval_hits': retrieval_hits,
+        'retrieval_latency_us': retrieval_latency_us,
         'log_cursor': log_cursor,
         'infer_gen_tokens': infer_gen_tokens,
         'last_text': _cstr(last_text_raw),
@@ -204,6 +208,8 @@ def packet_to_record(d: dict, recv_ts: float = 0) -> dict:
         'episodic_count': d['episodic_count'],
         'pool_events': d['pool_events'],
         'pool_decisions': d['pool_decisions'],
+        'retrieval_hits': d['retrieval_hits'],
+        'retrieval_latency_us': d['retrieval_latency_us'],
         'log_cursor': d['log_cursor'],
         'infer_gen_tokens': d['infer_gen_tokens'],
         'model_name': d['model_name'],
@@ -228,7 +234,7 @@ def iter_pcap_telemetry(path):
 
     Parses the classic pcap format (24-byte global header + 16-byte per-record
     header + frame). Keeps only frames whose UDP payload (frame[42:]) starts
-    with the JTEL magic and is >= 200 bytes, then decode_packet()s the first 200
+    with the JTEL magic and is >= 216 bytes, then decode_packet()s the first 216
     bytes. For box-free development against a captured stream.
     """
     with open(path, 'rb') as f:

@@ -181,6 +181,12 @@ static shared_context_t *g_sctx = NULL;
 static int               g_sctx_ready = 0;
 static uint64_t          g_sctx_last_key = 0;   /* key of the last keyed (cache/infer) query */
 
+/* ---- Phase 5 G3/M4: retrieval telemetry counters (UNCONDITIONAL file-scope so the emit fill
+ * compiles flag-OFF). Only WRITTEN inside the gated LANE B, so in the flag-OFF deploy they stay 0
+ * and TLM_F_RETRIEVAL is never set — honest "retrieval not live". ---- */
+static uint32_t          g_retrieval_hits = 0;        /* count of non-empty preambles packed */
+static uint32_t          g_retrieval_latency_us = 0;  /* last in-RAM retrieval latency (µs) */
+
 static int epi_nvme_read(uint64_t lba, uint32_t count, void *buf)
 {
     if (!g_nvme_ptr || !g_nvme_bounce_vaddr) return -1;
@@ -1490,7 +1496,7 @@ static void jarvis_log_snapshot(uint64_t q_total, uint64_t q_errors) {
     nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr, g_nvme_bounce_paddr, LOG_IPC_STATS, ln);
 }
 
-/* N-c-1: emit a 200-byte binary telemetry packet over UDP broadcast (:51000) via the I211.
+/* N-c-1: emit a 216-byte (v3) binary telemetry packet over UDP broadcast (:51000) via the I211.
  * Single-threaded — only PA's workload loop calls it; no locking. Strict NO-OP until the NIC
  * came up (g_net.ready) so QEMU / NIC-absent is unaffected. Fire-and-forget: NO DD poll
  * (protects err=0/throughput). Reuses the N-b net_udp framing. */
@@ -1508,6 +1514,7 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
                          | (q_errors            ? TLM_F_HAS_ERROR    : 0)
                          | (g_episodic_ready    ? TLM_F_MEMORY       : 0)
                          | (g_sctx_ready        ? TLM_F_CONTEXT      : 0)
+                         | (g_retrieval_hits>0  ? TLM_F_RETRIEVAL    : 0)
                          | TLM_F_SELFTEST_PASS);
     pkt.boot_id   = nvme_log_boot_id();
     pkt.uptime_ms = jarvis_uptime_ms();
@@ -1522,7 +1529,7 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
     pkt.model_size_mb = (uint32_t)(nvme_model_size >> 20);  /* nvme_model_size is BYTES -> MB (== panel "2962") */
     pkt.total_ram_mb  = g_total_ram_mb;   /* Tier 0: real RAM available to JARVIS (sum of non-device untypeds) */
     pkt.infer_gen_tokens = 0;  /* M1_MEASURE off in deploy — no live token count */
-    /* Tier 1: real system fields packed into former reserved space (packet stays 200 B, CRC[:196] unchanged).
+    /* Tier 1: real system fields packed into former reserved space (packet is 216 B v3, CRC[:212]).
      * infer_duty_pct = inference cycles / uptime — a WORKLOAD duty cycle, NOT a CPU-load gauge (PA busy-polls). */
     pkt.infer_active = g_infer_active;
     { uint64_t up = g_boot_tsc ? (jarvis_rdtsc() - g_boot_tsc) : 0;
@@ -1533,6 +1540,8 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
     pkt.episodic_count = g_episodic_ready ? epi_store_count(&g_episodic) : 0;  /* P5 G1/M4: honest 0 + no flag until ready */
     pkt.pool_events    = g_sctx_ready ? sctx_event_count(g_sctx)    : 0;       /* P5 G2/M4: live context-pool counts */
     pkt.pool_decisions = g_sctx_ready ? sctx_decision_count(g_sctx) : 0;
+    pkt.retrieval_hits       = g_retrieval_hits;         /* P5 G3/M4: non-empty preambles packed (0 + no flag flag-OFF) */
+    pkt.retrieval_latency_us = g_retrieval_latency_us;   /* P5 G3/M4: last in-RAM retrieval latency (µs) */
     /* model display name (matches the on-screen panel) + last response, NUL-bounded (pkt is zeroed) */
     { const char *mn = "Gemma 4 E2B";
       for (int i = 0; i < (int)sizeof(pkt.model_name) - 1 && mn[i]; i++) pkt.model_name[i] = mn[i]; }
@@ -1540,7 +1549,7 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
         pkt.last_text[i] = g_fb_last_resp[i];
     jarvis_tlm_finalize(&pkt);
     /* wrap as a UDP broadcast to :51000 and fire-and-forget (no DD poll) */
-    static uint8_t tlm_frame[256];   /* 14+20+8+200 = 242 <= 256 */
+    static uint8_t tlm_frame[288];   /* 14+20+8+216 = 258 <= 288 */
     int flen = net_build_udp_broadcast(tlm_frame, sizeof tlm_frame, g_net.nic.mac, JARVIS_BOX_IP,
                    JARVIS_TELEMETRY_PORT, JARVIS_TELEMETRY_PORT, &pkt, (uint16_t)sizeof pkt);
     if (flen > 0)
@@ -2619,6 +2628,7 @@ static void *main_continued(void *arg UNUSED)
                 if (cache_normalize_query(query, g3norm, sizeof g3norm))
                     qkey = cache_hash(g3norm);
 
+                uint64_t g3_t0 = jarvis_rdtsc();   /* G3/M4: time the in-RAM retrieval path (µs) */
                 int g3cap = g_epi_batch_n;
                 if (g3cap > EPI_BATCH_MAX) g3cap = EPI_BATCH_MAX;
                 int g3n = 0;
@@ -2647,6 +2657,11 @@ static void *main_continued(void *arg UNUSED)
                 char g3pre[SCTX_PREAMBLE_MAX];
                 int plen = g3_build_preamble(g3sel, ns, g3pre, sizeof g3pre);
                 sctx_pack_preamble(g_sctx, g3pre, (uint32_t)plen);     /* M1: PACK only — PB ignores until M2 */
+
+                /* G3/M4: retrieval telemetry — in-RAM latency (µs; *1000 before /TSC_PER_MS to keep
+                 * the sub-ms delta; never an NVMe scan) + a hit count (a non-empty preamble packed). */
+                g_retrieval_latency_us = (uint32_t)(((jarvis_rdtsc() - g3_t0) * 1000ULL) / TSC_PER_MS);
+                if (plen > 0) g_retrieval_hits++;
 
                 /* [RETR] pack proof (log-mirrored). key is the full 64-bit FNV-1a (put_hex is 32-bit). */
                 puts_serial("[RETR] hit="); put_dec(exact ? 1u : 0u);

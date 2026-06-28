@@ -20,10 +20,10 @@ import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from telemetry_receiver import (  # noqa: E402
-    decode_packet, packet_to_record, iter_pcap_telemetry, FMT, MAGIC, PKT_SIZE)
+    decode_packet, packet_to_record, iter_pcap_telemetry, FMT, MAGIC, PKT_SIZE, FLAG_NAMES)
 from telemetry_fixture import (  # noqa: E402  -- shared packer (moved out of this file)
     _DEFAULTS, build_packet, _build_pcap_one, build_pcap_many, REQUIRED_RECORD_KEYS,
-    frame_to_packet)
+    frame_to_packet, FLAG_BITS)
 
 _PASS = 0
 _FAIL = 0
@@ -51,8 +51,8 @@ def main():
     print("== telemetry receiver wire-compat ==")
 
     # Layout
-    check(struct.calcsize(FMT) == 208, "struct.calcsize(FMT) == 208 (v2)")
-    check(PKT_SIZE == 208, "PKT_SIZE == 208 (v2)")
+    check(struct.calcsize(FMT) == 216, "struct.calcsize(FMT) == 216 (v3)")
+    check(PKT_SIZE == 216, "PKT_SIZE == 216 (v3)")
 
     # Canonical zlib CRC vector — same CRC the C side proved (jarvis_telemetry.c)
     check(zlib.crc32(b"123456789") & 0xFFFFFFFF == 0xCBF43926,
@@ -60,7 +60,7 @@ def main():
 
     # Valid packet round-trips
     pkt = build_packet()
-    check(len(pkt) == 208, "built packet is 208 bytes (v2)")
+    check(len(pkt) == 216, "built packet is 216 bytes (v3)")
     d = decode_packet(pkt)
     check(d['crc_ok'] is True, "valid packet crc_ok True")
     check(d['kind_name'] == 'STATS', "kind_name == STATS")
@@ -76,7 +76,7 @@ def main():
     check(d['fb_w'] == 1024 and d['fb_h'] == 768 and d['fb_bpp'] == 32, "fb geometry round-trips")
     check(d['selftest_score'] == 5, "selftest_score round-trips")
 
-    # Corrupt one byte in [0:204] -> crc_ok False (NOT a crash, NOT ValueError)
+    # Corrupt one byte in [0:212] -> crc_ok False (NOT a crash, NOT ValueError)
     ba = bytearray(pkt)
     ba[50] ^= 0xFF
     dc = decode_packet(bytes(ba))
@@ -87,8 +87,8 @@ def main():
           "wrong magic raises ValueError")
 
     # Wrong length -> ValueError
-    check(raises_valueerror(lambda: decode_packet(pkt[:199]), ), "199-byte input raises ValueError")
-    check(raises_valueerror(lambda: decode_packet(pkt + b'\x00')), "209-byte input raises ValueError")
+    check(raises_valueerror(lambda: decode_packet(pkt[:207]), ), "207-byte input raises ValueError")
+    check(raises_valueerror(lambda: decode_packet(pkt + b'\x00')), "217-byte input raises ValueError")
 
     # --- N-c-3a: packet_to_record (the /events SSE record) ---
     rec = packet_to_record(decode_packet(pkt))
@@ -116,17 +116,32 @@ def main():
     check('episodic_count' in REQUIRED_RECORD_KEYS, "episodic_count is a REQUIRED_RECORD_KEY")
 
     # --- G2/M4: pool_events/pool_decisions + TLM_F_CONTEXT (the v2 200->208 size-bump) ---
-    check(PKT_SIZE == 208, "v2 size-bump: PKT_SIZE == 208")
     pkt_ctx = build_packet(pool_events=314, pool_decisions=159, flags=0x01 | 0x10 | 0x40)
     dctx = decode_packet(pkt_ctx)
-    check(dctx['crc_ok'] is True, "v2 context packet crc_ok True (CRC over [:204] — the gotcha)")
-    check(dctx['version'] == 2, "v2 packet version == 2")
+    check(dctx['crc_ok'] is True, "context packet crc_ok True (CRC over [:212] — the gotcha)")
     check(dctx['pool_events'] == 314 and dctx['pool_decisions'] == 159, "pool_events/pool_decisions decode")
     check('CONTEXT' in dctx['flags_list'], "TLM_F_CONTEXT 0x40 -> 'CONTEXT' in flags_list")
     rec_ctx = packet_to_record(dctx)
     check(rec_ctx['pool_events'] == 314 and rec_ctx['pool_decisions'] == 159, "record carries pool fields")
     check('pool_events' in REQUIRED_RECORD_KEYS and 'pool_decisions' in REQUIRED_RECORD_KEYS,
           "pool_events/pool_decisions are REQUIRED_RECORD_KEYs")
+
+    # --- G3/M4: retrieval_hits/retrieval_latency_us + TLM_F_RETRIEVAL (the v3 208->216 size-bump) ---
+    check(PKT_SIZE == 216, "v3 size-bump: PKT_SIZE == 216")
+    pkt_retr = build_packet(retrieval_hits=3, retrieval_latency_us=40, flags=0x01 | 0x10 | 0x80)
+    dretr = decode_packet(pkt_retr)
+    check(dretr['crc_ok'] is True, "v3 retrieval packet crc_ok True (CRC over [:212])")
+    check(dretr['version'] == 3, "v3 packet version == 3")
+    check(dretr['retrieval_hits'] == 3 and dretr['retrieval_latency_us'] == 40,
+          "retrieval_hits/retrieval_latency_us decode")
+    check('RETRIEVAL' in dretr['flags_list'], "TLM_F_RETRIEVAL 0x80 -> 'RETRIEVAL' in flags_list")
+    rec_retr = packet_to_record(dretr)
+    check(rec_retr['retrieval_hits'] == 3 and rec_retr['retrieval_latency_us'] == 40,
+          "record carries retrieval fields")
+    check('retrieval_hits' in REQUIRED_RECORD_KEYS and 'retrieval_latency_us' in REQUIRED_RECORD_KEYS,
+          "retrieval_hits/retrieval_latency_us are REQUIRED_RECORD_KEYs")
+    check(FLAG_NAMES.get(0x80) == 'RETRIEVAL' and FLAG_BITS.get('RETRIEVAL') == 0x80,
+          "FLAG_NAMES/FLAG_BITS both carry 0x80 RETRIEVAL")
 
     # --- N-c-3a: iter_pcap_telemetry on a synthetic 1-packet pcap ---
     pcap = _build_pcap_one(pkt, ts_s=1700000001)
@@ -153,7 +168,7 @@ def main():
     meta_keys = set(golden['meta']['keys'])
     check(meta_keys == set(REQUIRED_RECORD_KEYS),
           "golden meta.keys == REQUIRED_RECORD_KEYS (fixture matches receiver output)")
-    check(golden['meta']['size'] == 208 and golden['meta']['fmt'] == FMT,
+    check(golden['meta']['size'] == 216 and golden['meta']['fmt'] == FMT,
           "golden meta fmt/size match the wire format")
 
     kind_expect = {1: 'STATS', 2: 'INFER', 3: 'STATE'}
