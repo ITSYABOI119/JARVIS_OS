@@ -1,6 +1,6 @@
 # Phase 5 — Goal #3: Retrieval Before Inference
 
-**Status:** 🚧 IN PROGRESS — M0 ✅ (scorer + assembler, host/CI 19 PASS) · M1 ✅ **BOX-VERIFIED 2026-06-28** (PA packs the preamble into the pool; flag-ON build links, `[RETR]` packs preambles, generation byte-identical OFF↔ON) · **M2 (PB-side injection) next**.
+**Status:** 🚧 IN PROGRESS — M0 ✅ (scorer + assembler, host/CI **30 PASS**) · M1 ✅ **BOX-VERIFIED** (PA packs the preamble; flag-ON links, `[RETR]` packs, OFF↔ON byte-identical) · M2 ✅ **BOX-VERIFIED** (PB injects between the user `\n` and the question, `prompt_ids[256]`, OFF byte-identical) · M3 ✅ **BOX-VERIFIED 2026-06-28** (coherent prose via the `g3_candidate_usable` inference-record filter, commit `e4e4a56`) · **M4 (latency + v3 telemetry + console row) next**.
 **Date:** 2026-06-28
 **Prereqs:** G1 episodic store ✅ (M0–M4, box-verified) + G2 shared context pool ✅ (M0–M4, box-verified). G3 consumes both: G2's in-RAM keyed index (`sctx_lookup_key`/`sctx_recent`) and G1's durable text records.
 **Scope:** ROADMAP goal #3 — Process A retrieves relevant past entries and injects them into Process B's prompt **before** generation. This is the consumer that finally *uses* the memory G1/G2 built; it closes the "it-remembers" MVP arc's recall half.
@@ -93,10 +93,10 @@ G1/G2 leaned on **byte-identical generation** as the safety net. **G3 breaks tha
 
 ## 6. Milestones — M0 → M6 (mirror G1/G2; host vs box marked)
 
-- **M0 (HOST/CI)** — retrieval **scorer** (exact-key + recency selection over known records) + preamble **assembler** (`char[]`→`char[]` with truncation + `*_len` honoring); `test_g3_retrieval.c` (deterministic selection + byte-exact assembly) + a prompt-**structure** test with a stub tokenizer (OFF == today; ON places preamble before the query). CI-greenable.
-- **M1 (HOST TSan + BOX)** — PA-side `sctx_pack_preamble()` + the **cache-miss-path** scoring/pack, gated. Host: pack/seqlock under TSan. Box: pack runs, no regression.
-- **M2 (BOX)** — PB-side **injection** (read preamble from `g_sctx_pb`, encode after `:163`, `prompt_ids[256]`); **OFF = byte-identical** to the recorded baseline. *(box-gated — generation never runs in CI.)*
-- **M3 (BOX)** — the **injection proof**: `[RETR]` + `[PB]`-token dump against a **controlled store fixture**; ON = preamble-in-prompt + coherent + differs from OFF (the dual two-boot log diff).
+- **M0 (HOST/CI)** ✅ DONE — retrieval **scorer** (exact-key + recency selection over known records) + preamble **assembler** (`char[]`→`char[]` with truncation + `*_len` honoring); `test_g3_retrieval.c` (deterministic selection + byte-exact assembly) + a prompt-**structure** test with a stub tokenizer (OFF == today; ON places preamble before the query). CI-greenable.
+- **M1 (HOST TSan + BOX)** ✅ DONE 2026-06-28 — PA-side `sctx_pack_preamble()` + the **cache-miss-path** scoring/pack, gated. Host: pack/seqlock under TSan. Box: pack runs, no regression.
+- **M2 (BOX)** ✅ DONE 2026-06-28 — PB-side **injection** (read preamble from `g_sctx_pb`, encode after `:163`, `prompt_ids[256]`); **OFF = byte-identical** to the recorded baseline. *(box-gated — generation never runs in CI.)*
+- **M3 (BOX)** ✅ DONE 2026-06-28 — the **injection proof**: `[RETR]` + `[PB]`-token dump against a **controlled store fixture**; ON = preamble-in-prompt + coherent + differs from OFF (the dual two-boot log diff).
 - **M4 (BOX + CI)** — **latency <50 ms** on a cache miss + the **v3 telemetry slice** (D-a, co-landing #6's metric) + console retrieval row + the **synthetic-fact probe**.
 - **M5 (BOX)** — **NVMe-backed post-reboot recall**: a **bounded** key→record fetch (NOT an O(N) sector scan) so ≥10 items recall after a power-cycle — closes done-when #1's recall half.
 - **M6** — flip the `JARVIS_G3_RETRIEVAL` default ON + console honesty pass + final doc/week status.
