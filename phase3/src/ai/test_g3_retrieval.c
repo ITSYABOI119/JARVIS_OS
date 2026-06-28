@@ -130,14 +130,29 @@ static void test_nul_safety(void)
           "T5 assembled by *_len, not strlen (no GARBAGE/EXTRA leak)");
 }
 
+/* ================================================================
+ * T6 — G3/M2 prompt budget: preamble token room, clamped to [0, cap]
+ *      room = cap - n_prompt - suffix - query_floor, clamped to [0, G3_PREAMBLE_TOK_CAP]
+ * ================================================================ */
+static void test_budget(void)
+{
+    CHECK(g3_prompt_budget(0,   256, 48, 6) == 160, "T6 fresh: 256-0-6-48=202 -> clamp to cap 160");
+    CHECK(g3_prompt_budget(4,   256, 48, 6) == 160, "T6 after prefix: 256-4-6-48=198 -> clamp to cap 160");
+    CHECK(g3_prompt_budget(200, 256, 48, 6) == 2,   "T6 nearly full: 256-200-6-48 = 2");
+    CHECK(g3_prompt_budget(250, 256, 48, 6) == 0,   "T6 query_floor wins: 256-250-6-48=-48 -> clamp 0");
+    CHECK(g3_prompt_budget(300, 256, 48, 6) == 0,   "T6 n_prompt > cap -> clamp 0");
+    CHECK(G3_PREAMBLE_TOK_CAP == 160, "T6 G3_PREAMBLE_TOK_CAP == 160 (deployed cap)");
+}
+
 int main(void)
 {
-    printf("=== G3 Retrieval Tests (Phase 5 G3/M0) ===\n");
+    printf("=== G3 Retrieval Tests (Phase 5 G3/M0 + M2 budget) ===\n");
     test_scorer();
     test_preamble_exact();
     test_empty();
     test_truncation();
     test_nul_safety();
+    test_budget();
     printf("\n== Results: %d PASS, %d FAIL ==\n", pass, fail);
     return fail ? 1 : 0;
 }

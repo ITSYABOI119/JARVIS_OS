@@ -50,6 +50,9 @@ static inline uint64_t m1_rdtsc(void) {
 #include "sampling.h"
 #include "threadpool.h"
 #include "shared_context.h"
+#if JARVIS_G3_RETRIEVAL
+#include "g3_retrieval.h"       /* G3/M2: budget helper + macros (flag-gated; OFF pulls in nothing new) */
+#endif
 
 #ifdef JARVIS_HAS_MODEL
 extern const unsigned char _binary_model_gguf_start[];
@@ -155,12 +158,41 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
      *   <bos> <|turn> user \n {query} <turn|> \n <|turn> model \n <|think|>
      * Tokens: bos=2, <|turn>=105, user=2364, \n=107, <turn|>=106, model=4368, <|think|>=98
      * Stop on <eos>=1, NOT eos_id=106 (that's <turn|> which model emits first). */
-    int prompt_ids[128];
+    int prompt_ids[256];          /* G3/M2: was [128]; room for preamble+query. KV stays 512. */
     int n_prompt = 0;
     prompt_ids[n_prompt++] = bos_id;        /* <bos> */
     prompt_ids[n_prompt++] = 105;           /* <|turn> */
     prompt_ids[n_prompt++] = 2364;          /* user */
     prompt_ids[n_prompt++] = 107;           /* \n */
+
+#if JARVIS_G3_RETRIEVAL
+    /* G3/M2: inject the PA-packed retrieval preamble inside the user turn, AFTER the \n and
+     * BEFORE the question. PB tokenizes the assembled text blob (PA has no tokenizer). Bounded
+     * by g3_prompt_budget so the query is never starved and prompt_ids never overflows. Flag
+     * OFF compiles this out -> generation byte-identical. */
+    if (g_sctx_pb) {
+        char pre_buf[512];   /* g3 caps the preamble at 512 B; keeps handle_query stack < 8 KB */
+        uint32_t pre_len = sctx_get_preamble(g_sctx_pb, pre_buf, sizeof(pre_buf));
+        int n_pre = 0;
+        if (pre_len > 0) {
+            int budget = g3_prompt_budget(n_prompt,
+                             (int)(sizeof(prompt_ids) / sizeof(prompt_ids[0])),
+                             G3_QUERY_FLOOR_TOKS, G3_SUFFIX_TOKS);
+            if (budget > 0) {
+                n_pre = tokenizer_encode(tok, pre_buf, prompt_ids + n_prompt, budget);
+                if (n_pre > 0) n_prompt += n_pre;
+            }
+        }
+        /* one-shot injection proof — mirrors [SCTX-PB] so it shows in the box smoke log without
+         * JARVIS_DBG_PB (the full token dump at the [PB] tokens line still needs DBG_PB for M3). */
+        static int retr_pb_logged = 0;
+        if (!retr_pb_logged) {
+            retr_pb_logged = 1;
+            pb_log_num("[RETR-PB] preamble_len=",  pre_len, "");
+            pb_log_num("[RETR-PB] preamble_toks=", (uint32_t)(n_pre > 0 ? n_pre : 0), "");
+        }
+    }
+#endif
 
     /* Null-terminate the query */
     char query_buf[241];
@@ -181,7 +213,7 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
 
     /* Encode user text */
     n_prompt += tokenizer_encode(tok, query_buf, prompt_ids + n_prompt,
-                                  128 - n_prompt - 6);
+                                  (int)(sizeof(prompt_ids) / sizeof(prompt_ids[0])) - n_prompt - 6);
 
     /* Close user turn + open model turn + think */
     prompt_ids[n_prompt++] = 106;           /* <turn|> */

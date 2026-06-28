@@ -50,4 +50,21 @@ int g3_select(const g3_candidate_t *cands, int n, uint64_t query_key, int max, g
  * (0 when n<=0 — the "no relevant memory => no preamble" path). */
 int g3_build_preamble(const g3_candidate_t *sel, int n, char *out, int cap);
 
+/* ---- G3/M2: prompt-injection token budget (pure, host-testable) ---- */
+
+#define G3_PREAMBLE_TOK_CAP  160   /* hard cap on injected preamble tokens */
+#define G3_QUERY_FLOOR_TOKS   48   /* tokens always kept free for the question */
+#define G3_SUFFIX_TOKS         6   /* trailing template tokens (<turn|> \n <|turn> model \n <|think|>) */
+
+/* Max preamble tokens that may be encoded into prompt_ids[] given the current fill `n_prompt`,
+ * the array capacity `cap`, a `query_floor` (tokens reserved for the question), and `suffix`
+ * (trailing template tokens). room = cap - n_prompt - suffix - query_floor, clamped to
+ * [0, G3_PREAMBLE_TOK_CAP] — so the query is never starved and prompt_ids never overflows. */
+static inline int g3_prompt_budget(int n_prompt, int cap, int query_floor, int suffix) {
+    int room = cap - n_prompt - suffix - query_floor;
+    if (room < 0) room = 0;
+    if (room > G3_PREAMBLE_TOK_CAP) room = G3_PREAMBLE_TOK_CAP;
+    return room;
+}
+
 #endif /* G3_RETRIEVAL_H */
