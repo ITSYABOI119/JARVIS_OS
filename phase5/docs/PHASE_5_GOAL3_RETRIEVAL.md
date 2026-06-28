@@ -1,6 +1,6 @@
 # Phase 5 — Goal #3: Retrieval Before Inference
 
-**Status:** 🔜 PLANNED (M0 next). No code yet.
+**Status:** 🚧 IN PROGRESS — M0 ✅ (scorer + assembler, host/CI 19 PASS) · M1 ✅ **BOX-VERIFIED 2026-06-28** (PA packs the preamble into the pool; flag-ON build links, `[RETR]` packs preambles, generation byte-identical OFF↔ON) · **M2 (PB-side injection) next**.
 **Date:** 2026-06-28
 **Prereqs:** G1 episodic store ✅ (M0–M4, box-verified) + G2 shared context pool ✅ (M0–M4, box-verified). G3 consumes both: G2's in-RAM keyed index (`sctx_lookup_key`/`sctx_recent`) and G1's durable text records.
 **Scope:** ROADMAP goal #3 — Process A retrieves relevant past entries and injects them into Process B's prompt **before** generation. This is the consumer that finally *uses* the memory G1/G2 built; it closes the "it-remembers" MVP arc's recall half.

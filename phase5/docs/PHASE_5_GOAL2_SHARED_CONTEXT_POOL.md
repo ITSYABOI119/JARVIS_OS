@@ -1,6 +1,6 @@
 # Phase 5 — Goal #2: Shared Context Pool (C)
 
-**Status:** 🔜 PLANNED (M0 next). No code yet.
+**Status:** ✅ COMPLETE — M0–M4, **box-verified 2026-06-28** (seqlock pool + 3rd PA↔PB page + live PA population + PB read + telemetry v2 200→208 / `TLM_F_CONTEXT`; on-box boot_id=10, pool_events=48/pool_decisions=48, NN=6, err=0).
 **Date:** 2026-06-27
 **Prerequisite:** G1 (episodic store) ✅ COMPLETE / box-verified 2026-06-27 (`phase5/docs/PHASE_5_GOAL1_EPISODIC_STORE.md`). G2 reads from the deployed two-process stack (PA rootserver + PB quantized engine, shared-memory IPC, the committed episodic store + its uncommitted RAM batch).
 **Scope:** ROADMAP goal #2 — a bare-metal **working-memory** layer (system state, event stream, recent decisions) that the inference path and the G3 retrieval path read **without serialization**. Build-order: MVP-2, **depends on #1** (`PHASE_5_PLAN.md` §6). This goal ships the **container + index + plumbing**; the consumer logic (relevance scoring, preamble assembly, prompt injection) is **#3 (retrieval)** and stays **unmerged**.
