@@ -38,6 +38,7 @@ FLAG_LABEL = {
     'HAS_ERROR': 'Error state',
     'MEMORY': 'Episodic memory store',
     'CONTEXT': 'Shared context pool',
+    'RETRIEVAL': 'Retrieval before inference',
 }
 
 _P = 0
@@ -243,6 +244,41 @@ def main():
                 time.sleep(0.1)
             check(ctx_ok,
                   "(G2/M4) System 'Context pool' renders == live pool_decisions (snap=%r)" % (ctx_dbg,))
+
+            # (G3/M4b) PIN the System 'Preambles packed' VALUE — must equal the live retrieval_hits on
+            # a RETRIEVAL-flagged frame (flag-gated; '—' otherwise). The golden 'infer' frame carries
+            # hits=3. TEETH: fails if the retrieval rendering breaks (wrong value, '—', or removed).
+            # Same atomic store+DOM read + poll-until-agree.
+            retr_ok = False
+            retr_dbg = None
+            deadline = time.time() + 12
+            while time.time() < deadline:
+                snap = page.evaluate(
+                    "() => {"
+                    " const rec = (window.JarvisTelemetry.getState().latest) || {};"
+                    " const flags = rec.flags_list || [];"
+                    " const lab = Array.from(document.querySelectorAll('div'))"
+                    "   .find(d => d.textContent.trim() === 'Preambles packed');"
+                    " let rendered = null;"
+                    " if (lab && lab.parentElement) {"
+                    "   const kids = Array.from(lab.parentElement.children);"
+                    "   const i = kids.indexOf(lab);"
+                    "   rendered = kids[i + 1] ? kids[i + 1].textContent.trim() : null;"
+                    " }"
+                    " return { retr: flags.indexOf('RETRIEVAL') >= 0, hits: rec.retrieval_hits, rendered };"
+                    "}")
+                retr_dbg = snap
+                if snap['retr'] and snap['rendered'] not in (None, '—'):
+                    try:
+                        rendered_num = int(str(snap['rendered']).replace(',', ''))
+                    except (ValueError, TypeError):
+                        rendered_num = None
+                    if rendered_num is not None and rendered_num == snap['hits'] and rendered_num > 0:
+                        retr_ok = True
+                        break
+                time.sleep(0.1)
+            check(retr_ok,
+                  "(G3/M4b) System 'Preambles packed' renders == live retrieval_hits (snap=%r)" % (retr_dbg,))
 
             check(errors == [], "no console errors / pageerrors (saw %d)" % len(errors))
             for e in errors[:10]:

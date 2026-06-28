@@ -28,6 +28,7 @@ function Capabilities({ store }) {
     HAS_ERROR:     { label: 'Error state', tone: 'err' },
     MEMORY:        { label: 'Episodic memory store', tone: 'ok' },
     CONTEXT:       { label: 'Shared context pool', tone: 'ok' },
+    RETRIEVAL:     { label: 'Retrieval before inference', tone: 'ok' },
   };
 
   // The live capability set IS the record's flags_list — iterate it, never a

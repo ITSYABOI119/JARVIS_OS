@@ -39,6 +39,12 @@ function SystemView({ store }) {
   const ctxReported = !!(rec && rec.flags_list && rec.flags_list.indexOf('CONTEXT') >= 0);
   const poolEvents = rec ? Number(rec.pool_events) || 0 : null;
   const poolDecisions = rec ? Number(rec.pool_decisions) || 0 : null;
+  // Retrieval before inference (G3): hit count + last in-RAM latency (µs), flag-gated on
+  // TLM_F_RETRIEVAL (set only once retrieval has fired). Real fields — hit/latency only, never a
+  // "memory helped" claim.
+  const retrReported = !!(rec && rec.flags_list && rec.flags_list.indexOf('RETRIEVAL') >= 0);
+  const retrHits = rec ? Number(rec.retrieval_hits) || 0 : null;
+  const retrLatencyUs = rec ? Number(rec.retrieval_latency_us) || 0 : null;
 
   const stat = (label, value, sub) => (
     <div>
@@ -82,6 +88,10 @@ function SystemView({ store }) {
             epiReported ? 'persisted to the NVMe memory region' : 'store not reported')}
           {stat('Context pool', ctxReported ? numMb(poolDecisions) : '—',
             ctxReported ? numMb(poolEvents) + ' events · live working memory (decisions tracked)' : 'pool not reported')}
+          {stat('Preambles packed', retrReported ? numMb(retrHits) : '—',
+            retrReported ? 'retrieval before inference (non-empty preambles)' : 'retrieval not reported')}
+          {stat('Last retrieval', retrReported ? (numMb(retrLatencyUs) + ' µs') : '—',
+            retrReported ? 'in-RAM select + assemble + pack' : 'retrieval not reported')}
         </div>
         {note('Live heap used/free is not tracked on the box, so it is not shown. The floor above (model + a fixed static pool) is the only real lower bound.')}
       </Card>
