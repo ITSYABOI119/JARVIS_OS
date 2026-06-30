@@ -97,8 +97,8 @@ G1/G2 leaned on **byte-identical generation** as the safety net. **G3 breaks tha
 - **M1 (HOST TSan + BOX)** ✅ DONE 2026-06-28 — PA-side `sctx_pack_preamble()` + the **cache-miss-path** scoring/pack, gated. Host: pack/seqlock under TSan. Box: pack runs, no regression.
 - **M2 (BOX)** ✅ DONE 2026-06-28 — PB-side **injection** (read preamble from `g_sctx_pb`, encode after `:163`, `prompt_ids[256]`); **OFF = byte-identical** to the recorded baseline. *(box-gated — generation never runs in CI.)*
 - **M3 (BOX)** ✅ DONE 2026-06-28 — the **injection proof**: `[RETR]` + `[PB]`-token dump against a **controlled store fixture**; ON = preamble-in-prompt + coherent + differs from OFF (the dual two-boot log diff).
-- **M4 (BOX + CI)** — **latency <50 ms** on a cache miss + the **v3 telemetry slice** (D-a, co-landing #6's metric) + console retrieval row + the **synthetic-fact probe**.
-- **M5 (BOX)** — **NVMe-backed post-reboot recall**: a **bounded** key→record fetch (NOT an O(N) sector scan) so ≥10 items recall after a power-cycle — closes done-when #1's recall half.
+- **M4 (BOX + CI)** ✅ DONE 2026-06-30 — **latency <50 ms** on a cache miss + the **v3 telemetry slice** (D-a, co-landing #6's metric) + console retrieval row + the **synthetic-fact probe**. (Box-proven: `lat_us`=0/1 ≪ 50 ms; `[PROBE] hit=1` present-AND-used; v3 telemetry + console row CI-green.)
+- **M5 (BOX)** ✅ DONE 2026-06-30 — **NVMe-backed post-reboot recall**: a **bounded** key→record fetch (NOT an O(N) sector scan) so ≥10 items recall after a power-cycle — closes done-when #1's recall half. (Box-proven: `[RECALL] index n=330`, 6 distinct `recall=1`, ~0.5 ms bounded fetch.)
 - **M6** — flip the `JARVIS_G3_RETRIEVAL` default ON + console honesty pass + final doc/week status.
 
 *(M0–M1 are CI-greenable; M2/M3/M5 are inherently box-gated — generation never runs in CI.)*

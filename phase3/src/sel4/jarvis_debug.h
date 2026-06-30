@@ -71,6 +71,14 @@
  * flag-ON QEMU smoke. */
 #define JARVIS_G3_PROBE  0
 
+/* Phase 5 #6a (decision-cache learning): route the workload's INFERENCE queries through the decision
+ * cache (g_cache). A previously-learned answer is a fast cache HIT (the 50ms→~1ms intent, skips the
+ * PB send+poll); a MISS LEARNS the (greedy-identical) inference response so the cache GROWS and
+ * repeats speed up. A learned-hit counts as q_hits (not q_infer) — telemetry honestly shows the
+ * infer→hit migration. Default 0 → the routing block compiles out, deploy byte-identical; box-only.
+ * Telemetry (cache_growth_count) + console row are #6b. */
+#define JARVIS_CACHE_GROWTH 0
+
 /* Serial [STATS] prints every 100 queries; NVMe LOG_IPC_STATS is written every
  * JARVIS_STATS_NVME_INTERVAL. Measured bare-metal rate is ~3k queries/day (single
  * core, scalar) -> interval=100 gives ~870 entries over 30 days, well under the
