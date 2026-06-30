@@ -384,12 +384,31 @@ static int dump_fixture(const char *path)
     return 0;
 }
 
+/* G3/M5a: the pure in-RAM key→logical_index lookup (newest-wins, miss/empty -> -1). */
+static void test_index_lookup(void)
+{
+    epi_index_entry_t idx[5] = {
+        { 0xAAAAu, 3u },
+        { 0xBBBBu, 7u },
+        { 0xAAAAu, 9u },   /* dup key 0xAAAA, HIGHER logical_index (newer) */
+        { 0xCCCCu, 5u },
+        { 0xAAAAu, 1u },   /* dup key 0xAAAA, lower logical_index (older) */
+    };
+    ASSERT(epi_index_lookup(idx, 0, 0xAAAAu) == -1, "empty index (n=0) -> -1");
+    ASSERT(epi_index_lookup(NULL, 5, 0xAAAAu) == -1, "NULL index -> -1");
+    ASSERT(epi_index_lookup(idx, 5, 0xDEADu) == -1, "miss -> -1");
+    ASSERT(epi_index_lookup(idx, 5, 0xBBBBu) == 7, "single hit -> its logical_index");
+    ASSERT(epi_index_lookup(idx, 5, 0xCCCCu) == 5, "single hit (other key) -> its logical_index");
+    ASSERT(epi_index_lookup(idx, 5, 0xAAAAu) == 9, "DUP keys -> the HIGHER (newest) logical_index");
+    PASS("epi_index_lookup: empty/-1, miss/-1, single hit, dup -> newest");
+}
+
 int main(int argc, char **argv)
 {
     if (argc >= 3 && strcmp(argv[1], "--dump") == 0)
         return dump_fixture(argv[2]);
 
-    printf("=== Episodic Store Tests (Phase 5 G1/M1) ===\n");
+    printf("=== Episodic Store Tests (Phase 5 G1/M1 + G3/M5a) ===\n");
 
     test_fresh_init();
     test_append_readback();
@@ -398,6 +417,7 @@ int main(int argc, char **argv)
     test_wrap_and_migration();
     test_key_parity();
     test_batched_fill();
+    test_index_lookup();
 
     printf("\nResults: %d PASS, %d FAIL\n", tests_passed, tests_failed);
     return tests_failed > 0 ? 1 : 0;

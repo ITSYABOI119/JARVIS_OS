@@ -132,4 +132,15 @@ void episodic_fill(epi_record_t *rec, uint32_t t_ms, const char *query, uint16_t
 int episodic_log(epi_store_t *s, uint32_t t_ms, const char *query, uint16_t action,
                  uint8_t outcome, uint8_t feedback, const char *resp);
 
+/* ---- G3/M5: in-RAM key→record index (post-reboot recall) ---- */
+
+/* One index entry: a record's decision-cache key + its logical_index in the store. */
+typedef struct { uint64_t key; uint32_t logical_index; } epi_index_entry_t;
+
+/* Newest (highest logical_index) entry whose key == `key` → its logical_index; -1 on miss.
+ * Pure in-RAM linear scan — host-testable, no device dependency. The caller builds `idx` once at
+ * boot (one epi_store_read per stored record), then per query does an O(1)-ish lookup + ONE bounded
+ * epi_store_read of the matched record — NEVER a per-query O(N) NVMe scan. */
+int epi_index_lookup(const epi_index_entry_t *idx, int n, uint64_t key);
+
 #endif /* EPISODIC_STORE_H */

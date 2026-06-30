@@ -183,3 +183,20 @@ int episodic_log(epi_store_t *s, uint32_t t_ms, const char *query, uint16_t acti
     episodic_fill(&rec, t_ms, query, action, outcome, feedback, resp);
     return epi_store_append(s, &rec);
 }
+
+/* ---- G3/M5: in-RAM key→record index ---- */
+
+int epi_index_lookup(const epi_index_entry_t *idx, int n, uint64_t key)
+{
+    if (!idx || n <= 0)
+        return -1;
+    int found = 0;
+    uint32_t best_li = 0;
+    for (int i = 0; i < n; i++) {
+        if (idx[i].key == key && (!found || idx[i].logical_index > best_li)) {
+            found = 1;
+            best_li = idx[i].logical_index;
+        }
+    }
+    return found ? (int)best_li : -1;
+}

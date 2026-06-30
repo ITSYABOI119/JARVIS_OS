@@ -172,6 +172,15 @@ static int          g_episodic_ready = 0;
 static epi_record_t g_epi_batch[EPI_BATCH_MAX];
 static int          g_epi_batch_n = 0;
 
+#if JARVIS_G3_RETRIEVAL
+/* G3/M5a: in-RAM key→record index of the PERSISTED episodic store, built ONCE at boot, for
+ * post-reboot recall — an O(1)-ish lookup + ONE bounded epi_store_read per query (never a per-query
+ * NVMe scan). Gated → the ~128 KB index BSS + the recall path exist only in the flag-ON build. */
+static epi_index_entry_t g_epi_index[EPI_STORE_MAX_ENTRIES];
+static int               g_epi_index_n = 0;
+static epi_record_t      g_epi_recall_rec;     /* single-record fetch buffer (one recall per query) */
+#endif
+
 /* ---- Phase 5 G2/M2: live shared context pool (additive; gated on g_sctx_ready) ----
  * PA writes the pool every query via the seqlock — a system_state snapshot + an event + a
  * recent_decision keyed by the SAME episodic FNV-1a (committed=0 = still in g_epi_batch, D4).
@@ -1990,6 +1999,25 @@ static void *main_continued(void *arg UNUSED)
                                         put_dec(epi_store_boot_id(&g_episodic));
                                         puts_serial(" count="); put_dec(epi_store_count(&g_episodic));
                                         puts_serial(")\n");
+#if JARVIS_G3_RETRIEVAL
+                                        /* G3/M5a: one-time boot scan → in-RAM key→logical_index map of the
+                                         * persisted store, so retrieval can recall facts from PRIOR boots
+                                         * (survives power-cycle). NOT per-query — built once, here at boot. */
+                                        {
+                                            uint32_t _cnt = epi_store_count(&g_episodic);
+                                            if (_cnt > EPI_STORE_MAX_ENTRIES) _cnt = EPI_STORE_MAX_ENTRIES;
+                                            g_epi_index_n = 0;
+                                            for (uint32_t _li = 0; _li < _cnt; _li++) {
+                                                if (epi_store_read(&g_episodic, _li, &g_epi_recall_rec) == 0) {
+                                                    g_epi_index[g_epi_index_n].key = g_epi_recall_rec.query_key;
+                                                    g_epi_index[g_epi_index_n].logical_index = _li;
+                                                    g_epi_index_n++;
+                                                }
+                                            }
+                                            puts_serial("[RECALL] index built n="); put_dec((uint32_t)g_epi_index_n);
+                                            puts_serial("\n");
+                                        }
+#endif
                                     } else {
                                         puts_serial("[EPI] episodic store init FAILED (non-fatal)\n");
                                     }
@@ -2675,6 +2703,33 @@ static void *main_continued(void *arg UNUSED)
                     g3n++;
                 }
 
+                /* G3/M5a: post-reboot recall. If this-boot's batch doesn't already carry the key,
+                 * look it up in the boot-built index (O(1)-ish) and fetch ONE persisted record (bounded
+                 * read — never a per-query NVMe scan). Verify the read record's key actually == qkey
+                 * (so a stale logical_index after a commit can't recall the wrong record) AND that it
+                 * passes the usable filter (so a persisted CACHE record can't pollute the preamble). */
+                int recall = 0;
+                int g3_in_batch = 0;
+                for (int gi2 = 0; gi2 < g3n; gi2++)
+                    if (g3cands[gi2].query_key == qkey) { g3_in_batch = 1; break; }
+                if (!g3_in_batch && g3n < EPI_BATCH_MAX) {
+                    int rli = epi_index_lookup(g_epi_index, g_epi_index_n, qkey);
+                    if (rli >= 0 && epi_store_read(&g_episodic, (uint32_t)rli, &g_epi_recall_rec) == 0
+                        && g_epi_recall_rec.query_key == qkey
+                        && g3_candidate_usable(g_epi_recall_rec.action, g_epi_recall_rec.outcome,
+                                               g_epi_recall_rec.resp_len, EPI_ACT_INFER, EPI_OUT_OK)) {
+                        g3cands[g3n].query_key = g_epi_recall_rec.query_key;
+                        g3cands[g3n].seq       = 0;     /* persisted = older than any this-boot batch record */
+                        g3cands[g3n].action    = g_epi_recall_rec.action;
+                        g3cands[g3n].outcome   = g_epi_recall_rec.outcome;
+                        g3cands[g3n].query     = g_epi_recall_rec.query;
+                        g3cands[g3n].query_len = g_epi_recall_rec.query_len;
+                        g3cands[g3n].resp      = g_epi_recall_rec.resp;
+                        g3cands[g3n].resp_len  = g_epi_recall_rec.resp_len;
+                        g3n++; recall = 1;
+                    }
+                }
+
                 g3_candidate_t g3sel[G3_MAX_FACTS];
                 int ns   = g3_select(g3cands, g3n, qkey, G3_MAX_FACTS, g3sel);
                 int exact = (ns > 0 && g3sel[0].query_key == qkey);   /* exact match lands at slot 0 */
@@ -2697,6 +2752,7 @@ static void *main_continued(void *arg UNUSED)
                     for (int sh = 60; sh >= 0; sh -= 4) putc_serial(g3hx[(qkey >> sh) & 0xFu]);
                 }
                 puts_serial(" lat_us="); put_dec(g_retrieval_latency_us);   /* G3/M4: in-RAM retrieval latency (µs) — QEMU smoke confirms < 50 ms */
+                puts_serial(" recall="); put_dec((uint32_t)recall);          /* G3/M5a: 1 = preamble fact recalled from the persisted store (post-reboot) */
                 puts_serial("\n");
             }
 #endif
