@@ -71,12 +71,10 @@
  * flag-ON QEMU smoke. */
 #define JARVIS_G3_PROBE  0
 
-/* Phase 5 #6a (decision-cache learning): route the workload's INFERENCE queries through the decision
- * cache (g_cache). A previously-learned answer is a fast cache HIT (the 50ms→~1ms intent, skips the
- * PB send+poll); a MISS LEARNS the (greedy-identical) inference response so the cache GROWS and
- * repeats speed up. A learned-hit counts as q_hits (not q_infer) — telemetry honestly shows the
- * infer→hit migration. Default 0 → the routing block compiles out, deploy byte-identical; box-only.
- * Telemetry (cache_growth_count) + console row are #6b. */
+/* Phase 5 #6 cache-growth — canon = promote repeated query→action patterns from the EPISODIC LOG
+ * into the decision cache (see phase5/docs/PHASE_5_GOAL6_CACHE_GROWTH.md). The route-through-cache
+ * impl (commit 7e8c30f) was REVERTED (wrong design vs canon); this flag is RETAINED — the canon
+ * promotion pass reuses it (default 0 → compiles out, deploy byte-identical; box-only). */
 #define JARVIS_CACHE_GROWTH 0
 
 /* Serial [STATS] prints every 100 queries; NVMe LOG_IPC_STATS is written every

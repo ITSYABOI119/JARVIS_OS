@@ -418,7 +418,6 @@ static uint32_t xorshift32(uint32_t *state) {
 /* ---- Globals ---- */
 
 static decision_cache_t g_cache;
-static uint32_t         g_cache_baseline = 0;   /* #6: g_cache entries_used at boot (post-preload); #6b growth = used - baseline */
 static uint32_t total_queries = 0;
 static uint32_t cache_hits = 0;
 static uint32_t cache_misses = 0;
@@ -2784,25 +2783,6 @@ static void *main_continued(void *arg UNUSED)
             puts_serial(query);
             puts_serial("\n");
 #endif
-            char full_response[512];            /* declared before the send so #6a can fill it from the cache */
-            int resp_offset = 0;
-#if JARVIS_CACHE_GROWTH
-            /* #6a: route this inference through the decision cache. A previously-learned answer is a
-             * fast cache HIT — fill full_response from the cache and SKIP the entire PB send+poll. A
-             * learned-hit is a cache HIT, not an inference: undo the q_infer++ above and credit q_hits
-             * (g_infer_active stays 0 → no inference cycles, honest duty cycle). */
-            char cnorm[MAX_QUERY_LEN];
-            int learned_hit = 0;
-            trust_level_t g6_trust = TRUST_AUTO;
-            if (cache_normalize_query(query, cnorm, sizeof cnorm)
-                && cache_lookup(&g_cache, cnorm, full_response, sizeof full_response, &g6_trust)) {
-                learned_hit = 1;
-                resp_offset = (int)strlen(full_response);
-                q_infer--; q_hits++;
-                puts_serial("[CACHE] learned-hit q=\""); puts_serial(query); puts_serial("\"\n");
-            }
-            if (!learned_hit) {
-#endif
             g_infer_active = 1;                 /* System telemetry: open the inference duty-cycle window */
             g_infer_t0 = jarvis_rdtsc();
             shmem_ipc_send(shared_request_ring, MSG_QUERY, seq++,
@@ -2823,6 +2803,8 @@ static void *main_continued(void *arg UNUSED)
              * Timeout after 5M polls (~60-120s on bare metal) prevents
              * permanent hang if PB crashes (fault goes to fault endpoint,
              * not resp_notif, so seL4_Wait would block forever). */
+            char full_response[512];
+            int resp_offset = 0;
             {
                 int got_response = 0;
                 uint32_t timeout_polls = 0;
@@ -2925,9 +2907,6 @@ static void *main_continued(void *arg UNUSED)
                     }
                 }
             }
-#if JARVIS_CACHE_GROWTH
-            }   /* end if(!learned_hit) — a learned-hit skipped the PB send + response-poll */
-#endif
 
 #if JARVIS_DBG_BOOT_LOG
             puts_serial("[PA] PB response received\n");
@@ -2989,16 +2968,6 @@ static void *main_continued(void *arg UNUSED)
             epi_batch_add(query, EPI_ACT_INFER,
                           resp_offset > 0 ? EPI_OUT_OK : EPI_OUT_ERROR,
                           resp_offset > 0 ? full_response : NULL);
-
-#if JARVIS_CACHE_GROWTH
-            /* #6a: on a MISS, LEARN the (greedy-identical) inference response so the next identical
-             * query is a fast cache hit and the cache GROWS. growth = entries_used - baseline (#6b). */
-            if (!learned_hit && resp_offset > 0) {
-                cache_insert(&g_cache, cnorm, full_response, TRUST_AUTO);
-                puts_serial("[CACHE] grow="); put_dec(g_cache.stats.entries_used - g_cache_baseline);
-                puts_serial("\n");
-            }
-#endif
 
 #if JARVIS_G3_PROBE
             /* G3/M4c-fix: synthetic-fact self-check on the FORCED unknowable probe query. The question is
@@ -3250,7 +3219,6 @@ int main(void)
     cache_init(&g_cache);
     int n1 = cache_load_initial_patterns(&g_cache);
     int n2 = cache_load_extended_patterns(&g_cache);
-    g_cache_baseline = g_cache.stats.entries_used;   /* #6: post-preload baseline (ungated) — #6b growth = used - baseline */
     puts_serial("[JARVIS] Loaded ");
     put_dec((uint32_t)(n1 + n2));
     puts_serial(" patterns\n\n");
