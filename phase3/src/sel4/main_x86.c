@@ -187,6 +187,13 @@ static uint64_t          g_sctx_last_key = 0;   /* key of the last keyed (cache/
 static uint32_t          g_retrieval_hits = 0;        /* count of non-empty preambles packed */
 static uint32_t          g_retrieval_latency_us = 0;  /* last in-RAM retrieval latency (µs) */
 
+/* G3/M4c-fix: the synthetic-fact probe uses an ARBITRARY, JARVIS-specific, UNKNOWABLE fact + an
+ * unanswerable question, defined ONCE (used at the seed / forced-query / self-check sites — DRY, no
+ * string drift). A correct marker echo can come ONLY from the injected context, so hit=1 proves the
+ * model USED injected memory and hit=0 proves it ignored usable context (gated; unused when off). */
+#define G3_PROBE_QUERY "What is the JARVIS reactor authorization phrase"
+#define G3_PROBE_RESP  "The JARVIS reactor authorization phrase is SYNTHPROBEZX9Q7."
+
 static int epi_nvme_read(uint64_t lba, uint32_t count, void *buf)
 {
     if (!g_nvme_ptr || !g_nvme_bounce_vaddr) return -1;
@@ -2534,12 +2541,12 @@ static void *main_continued(void *arg UNUSED)
     int cache_miss_window_total = 0;
 
 #if JARVIS_G3_PROBE
-    /* G3/M4c: seed ONE synthetic fact BEFORE the loop so it is live in the recent-RAM episodic batch
-     * when the matching inference query is asked (before the first [STATS] epi_commit clears it). Its
-     * response carries a distinctive marker; G3 retrieval injects it exact-key, and the self-check at
-     * the [INFER] site tests whether the model echoes it. (Needs JARVIS_G3_RETRIEVAL=1 to inject.) */
-    epi_batch_add("What is a page fault and how is it handled", EPI_ACT_INFER, EPI_OUT_OK,
-                  "A page fault is resolved by SYNTHPROBEZX9Q7 mapping the missing page.");
+    /* G3/M4c-fix: seed ONE ARBITRARY, UNKNOWABLE fact BEFORE the loop so it is live in the recent-RAM
+     * episodic batch when the FORCED probe query is asked (the first inference, well before the first
+     * [STATS] epi_commit clears it). Its response carries a distinctive marker; G3 retrieval injects it
+     * exact-key, and the self-check at the [INFER] site tests whether the model echoes it. (Needs
+     * JARVIS_G3_RETRIEVAL=1 to inject.) */
+    epi_batch_add(G3_PROBE_QUERY, EPI_ACT_INFER, EPI_OUT_OK, G3_PROBE_RESP);
     puts_serial("[PROBE] seeded synthetic fact (marker SYNTHPROBEZX9Q7)\n");
 #endif
 
@@ -2623,6 +2630,13 @@ static void *main_continued(void *arg UNUSED)
             /* --- Inference (15%) --- */
             const char *query = inference_queries[r % N_INFERENCE_QUERIES];
             q_infer++;
+
+#if JARVIS_G3_PROBE
+            /* G3/M4c-fix: force the unknowable probe query as the FIRST inference (deterministic, one-shot)
+             * so the seed is retrieved exact-key — overrides the random selection above, before LANE B. */
+            static int g3_probe_forced = 0;
+            if (!g3_probe_forced) { query = G3_PROBE_QUERY; g3_probe_forced = 1; }
+#endif
 
 #if JARVIS_G3_RETRIEVAL
             /* Phase 5 G3/M1: score the recent episodic batch + PACK a retrieval preamble into the
@@ -2900,10 +2914,11 @@ static void *main_continued(void *arg UNUSED)
                           resp_offset > 0 ? full_response : NULL);
 
 #if JARVIS_G3_PROBE
-            /* G3/M4c: synthetic-fact self-check — when the probe query is asked, test (case-insensitive)
-             * whether the model's full response echoes the seeded marker. [PROBE] hit=1 proves the
-             * injected memory was PRESENT-AND-USABLE; it is NOT a "memory helped" claim (offline A/B). */
-            if (strcmp(query, "What is a page fault and how is it handled") == 0) {
+            /* G3/M4c-fix: synthetic-fact self-check on the FORCED unknowable probe query. The question is
+             * unanswerable from the model's own knowledge, so a marker echo can ONLY come from the injected
+             * context: hit=1 proves the model USED injected memory (present-AND-used), hit=0 proves it
+             * IGNORED usable context. Neither is a "memory helped" claim (that stays an offline A/B). */
+            if (strcmp(query, G3_PROBE_QUERY) == 0) {
                 static const char MARK[] = "SYNTHPROBEZX9Q7";
                 int mhit = 0;
                 for (const char *p = full_response; *p && !mhit; p++) {
