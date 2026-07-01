@@ -1,0 +1,231 @@
+=== Official Google QAT q4_0 (gemma-4-E2B_q4_0-it.gguf, 3.12 GiB) — 10-prompt responses ===
+Engine: JARVIS qmodel_forward (native, Ryzen 5 5600, greedy temp=0, 100 tok/prompt, 6T).
+PLE types: inp_gate=Q4_0 (F32 expected), per_layer_model_proj=F16, embed/output=Q6_K, weights=Q4_0.
+Verdict: NOT usable — degraded/corrupted (better than UD-Q4_K_XL's total spam, but pervasive token corruption; not coherent English).
+
+[config] arch='gemma4' n_kv=43 n_tensors=541
+[config] dim=1536
+[config] n_layers=35
+[config] n_heads=8 n_kv_heads=1
+[config] head_dim=512
+[config] feed_forward_length is array (gemma4), hidden_dim=0 for now
+[config] vocab_size=262144 hidden_dim=0
+[config] extensions: ple=256 swa=512 swa_hd=256 shared_kv=20 softcap=30.0 eps=1e-06 theta_swa=10000
+[config] OK: dim=1536 layers=35 heads=8/1 hd=512/256 ffn=12288 vocab=262144
+[qmodel] Derived per-layer dims from tensor shapes:
+  layer  0: swa=1 ffn= 6144 kv_share=-1
+  layer  1: swa=1 ffn= 6144 kv_share=-1
+  layer  2: swa=1 ffn= 6144 kv_share=-1
+  layer  3: swa=1 ffn= 6144 kv_share=-1
+  layer  4: swa=0 ffn= 6144 kv_share=-1
+  layer  5: swa=1 ffn= 6144 kv_share=-1
+  layer  6: swa=1 ffn= 6144 kv_share=-1
+  layer  7: swa=1 ffn= 6144 kv_share=-1
+  layer  8: swa=1 ffn= 6144 kv_share=-1
+  layer  9: swa=0 ffn= 6144 kv_share=-1
+  layer 10: swa=1 ffn= 6144 kv_share=-1
+  layer 11: swa=1 ffn= 6144 kv_share=-1
+  layer 12: swa=1 ffn= 6144 kv_share=-1
+  layer 13: swa=1 ffn= 6144 kv_share=-1
+  layer 14: swa=0 ffn= 6144 kv_share=-1
+  layer 15: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 16: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 17: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 18: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 19: swa=0 ffn=12288 kv_share=14 (from L14)
+  layer 20: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 21: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 22: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 23: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 24: swa=0 ffn=12288 kv_share=14 (from L14)
+  layer 25: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 26: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 27: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 28: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 29: swa=0 ffn=12288 kv_share=14 (from L14)
+  layer 30: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 31: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 32: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 33: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 34: swa=0 ffn=12288 kv_share=14 (from L14)
+  hidden_dim=12288
+[qmodel] Tensor types (layer 0):
+  wq=Q4_0 wk=Q4_0 wv=Q4_0 wo=Q4_0
+  gate=Q4_0 up=Q4_0 down=Q4_0 norm=F32
+  q_norm=F32 k_norm=F32
+  post_attn=F32 post_ffw=F32 scale=F32
+  embed=Q6_K output=Q6_K
+
+=== AUDIT ===
+[AUDIT] inp_gate.n_elements=393216 (expected dim*ple_dim=393216)
+[AUDIT] inp_gate.type=Q4_0 (F32 expected)
+[AUDIT] per_layer_model_proj LOADED: n_elements=13762560 type=F16
+[AUDIT]   used as context component: BF16 matmul, combine (identity + context) / sqrt(2)
+[AUDIT] rope_neox=1 (Gemma should be 1)
+[AUDIT] attn_scale=1.0 for Gemma 4 (Q/K RMSNorm in use); Llama uses 1/sqrt(256)
+[AUDIT] rms_norm_eps=1e-06 (research says 1e-6)
+[AUDIT] kv_share_map: 15 own, 20 shared (config says shared_kv=20)
+[AUDIT] L0 q_norm.n_elements=256 (SWA head_dim=256)
+[AUDIT] L34 q_norm.n_elements=512 (global head_dim=512)
+[AUDIT] layer_output_scale L0=0.0209 L34=0.1650
+=== END AUDIT ===
+
+[vocab] merges: 514906 total, 514906 matched to tokens
+=== 2B_dequant_qat_it_hf ===
+file: models/gemma-4-E2B_q4_0-it.gguf
+engine: JARVIS qmodel_forward | greedy | 100 tokens/prompt | arch=gemma4
+
+--- Prompt 1: "The seL4 microkernel is" ---
+bag in the context of the seL2 architecture.
+The correct answer is **CPU**.<turn|><turn|>
+The most appropriate answer is **CPU**.<turn|><turn|><turn|>
+preg<turn|><turn|>
+<|channel>thought
+1. **Analyze the Request:**The user is asking for the correct answer to the question: "The most appropriate answer is [blank]." The provided context is: "Them[াংaktKorea] - seL2 architecture: The seL2. The most appropriate answer is CPU[
+
+--- Prompt 2: "Explain how virtual memory works in three sentences." ---
+
+
+**Option 1:**VirtualMemory
+
+**Explanation of the concept:**
+
+VirtualMemory is a fundamental concept in computer that allows a computer to use a larger memory than the physical memory it physically possesses to run. It works by using a portion of the computer's storage (like a hard drive) as if it were additional RAM when the computer is running, allowing the system to run programs muchlarger than the actual physical memory it has installed.
+
+**In simpler form:**
+
+**Option 
+
+--- Prompt 3: "What is the difference between a process and a thread?" ---
+The fundamental difference between a **process** and a **-thread** lies the **level of execution and resource management** they representzoom钣 of a hammerCartoon.
+
+Here is a breakdown is a detailed breakdown.
+
+---
+
+### The Analogy: The Factory vs. The Worker
+
+The core difference is best understood FastAPI the **Process** is like a **Factory** (the entire complex system), while a **Thread** is like a **Worker** (the individual task being performed).
+
+
+
+--- Prompt 4: "Write a C function that reverses a string in place." ---
+The request is to write a function that reverses a string in place.
+
+This means the function should take a string as input and return a new string with the characters in reverse.
+
+```
+
+```
+```
+
+```text
+```
+
+```
+
+```
+
+###bed부에
+
+```
+
+```
+
+```
+
+```
+
+```
+
+```
+
+```
+
+```
+
+```
+
+```
+
+```
+
+```
+
+```
+
+```
+
+```
+
+```
+
+```
+
+```
+
+```
+
+```
+
+```
+
+```
+
+
+
+--- Prompt 5: "The capital of Australia is" ---
+
+The capital of Australia is **Can be** (This is a trick that plays a bit like a riddle itself, but the actual answer is **Can be**).
+
+**(If you are looking for the actual capital, the correct answer is Canberra)**).<turn|><turn|>
+
+
+--- Prompt 6: "What are the key benefits of formally verified software?" ---
+一者 Laravel �czy подразуме eine sehr好, wenn auch einheitRails구나.Nguồn SHEETReact.
+<|channel>thought
+Here's a thinking process for generating the key benefits of formal software:
+
+1. **De-identify the core concept:**The user is asking for the "key settings" or "keyArduino" (which translates Pond-specific context).
+2. **Analyze the request:** The user wants to know the "keyArduino" or "key" (the most
+
+--- Prompt 7: "Describe the TCP three-way handshake step by step." ---
+is a crucial piece, but I need a bit more context to give you a good answer. What kind of "TCP three-way" are you referring the context to?
+
+For example, are you asking about:
+
+1. **The TCP a three-way醤油** (This sounds like a specific type of software you might find in a technical manual or a specific piece of software you're referring to?)
+2. **The TCP a three-way Cuz to the three-way
+
+--- Prompt 8: "What happens when you type a URL into a browser?" ---
+When you type a URL into a browser (like a web page) and hit "EntertainManager" (or just press "Entertaining wall" in the context of a website), a complex web of events happens * Chakra.
+Here're the key areas where things go:
+
+### 1. **The fundamental shift is from a static picture to a dynamic one.**
+
+* **Before you type:**You have a static thing (the URL).
+* **After you type:** You
+
+--- Prompt 9: "Compare RISC and CISC architectures in two sentences." ---
+The comparison between RIS (Reduced instruction) and CIS (Complex) architectures is as follows. **RIS Gine focuses Shader to simpler the instruction is simpler.** This allows for simpler to be more efficient. **Cine to more complex to the instruction of the instruction is more complex.**<turn|>
+
+
+--- Prompt 10: "Write a bash one-liner to find all .c files larger than 1MB." ---
+esseriguputAlb的文件
+``` up to 1MB to find all .c files
+```
+```
+```
+EOF
+```
+```text
+The actual command
+```
+```
+
+### Result:
+
+The actual command
+
+
+=== End 2B_dequant_qat_it_hf ===

@@ -98,6 +98,27 @@ Because llama.cpp won't load the QAT, both models were generated on **our engine
 
 Historical 11-model bench-off files (`ALL_RESPONSES.txt`, `perplexity_results.txt`, per-model quality txts, `bench_results_mainpc_gpu.txt`, `FINAL_SCORES.txt`) were **not** modified — new artifacts use QAT-distinct names.
 
-## Possible next diagnostic (strategist's call — NOT done here)
+## Fallback tested: official Google QAT q4_0 (2026-07-01) — also NOT usable
 
-The task's fallback (`google/gemma-4-E2B-it-qat-q4_0-gguf`, official pure-Q4_0) was gated on the QAT *failing to load*; it *loaded* (but produced garbage), so it was not fetched. If QAT is worth pursuing, that official variant is the next thing to try — with the caveat that it is also pure Q4_0 and may hit the same PLE-tensor incompatibility on our engine.
+`google/gemma-4-E2B-it-qat-q4_0-gguf` → `gemma-4-E2B_q4_0-it.gguf` (3.119 GiB / 3,349,514,112 B) was downloaded and run through the **same our-engine harness**. Result: **loads, generates, but output is degraded/corrupted — not usable coherent English.** It is *better* than the UD variant (which was total `<turn|>`/CJK spam) but still pervasively broken.
+
+### PLE tensor types (the decisive diagnostic)
+| tensor | Baseline Q4_K_M (coherent) | UD-Q4_K_XL (total garbage) | **Google q4_0 (degraded)** |
+|---|---|---|---|
+| `inp_gate` (PLE gate) | **F32** | Q4_0 | **Q4_0** — *"F32 expected" per engine audit; common to BOTH failures* |
+| `per_layer_model_proj` | BF16 | Q4_0 | **F16** (higher precision than UD) |
+| `token_embd` / `output` | Q4_K | Q4_0 | **Q6_K** (higher precision than UD) |
+| attn/ffn weights | Q4_K / Q6_K | Q4_0 | Q4_0 |
+
+The Google file keeps embeddings (Q6_K) and the PLE projection (F16) at higher precision than UD (hence 3.12 GiB > UD's 2.44) — which recovers *some* sentence structure — but **`inp_gate` is still Q4_0**, the one PLE tensor the engine expects as F32. That, plus the all-Q4_0 weights, still corrupts generation.
+
+### Coherence samples (best → worst)
+- **P2 (near-coherent):** "VirtualMemory is a fundamental concept … allows a computer to use a larger memory than the physical memory … using a portion of the computer's storage as if it were additional RAM"
+- **P3 (corrupted):** "The fundamental difference between a process and a -thread lies the level of execution … they represent**zoom钣 of a hammerCartoon**"
+- **P6 (token soup):** "一者 Laravel čzy подразуме eine sehr好, wenn auch einheitRails구나.Nguồn SHEETReact" + `<|channel>thought` leak
+- **P4 / P10 (code):** empty/broken code blocks, `###bed부에`
+
+Full transcript: `models/quality_results/qat_google_q4_0_responses.txt`. Speed/RSS sweep not captured (only warranted for a coherent model).
+
+### Conclusion (fact, not decision)
+**Both** off-the-shelf 4-bit QAT E2B variants (Unsloth UD-Q4_K_XL, official Google q4_0) are **not drop-in-usable on the current JARVIS engine.** The common failure factor is a **Q4_0-quantized `inp_gate` PLE tensor** (F32 in the working baseline); keeping embeddings/proj at higher precision (Google) recovers partial coherence but is not enough. Making QAT work would require **engine changes** to the Gemma-4 PLE path (correctly handle a quantized `inp_gate`, and/or source a QAT GGUF that keeps `inp_gate` at F32) — not a file swap.
