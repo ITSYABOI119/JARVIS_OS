@@ -4,8 +4,8 @@
  * Set to 1 to enable, 0 to disable.
  *
  * For the deployed/stability config: diagnostic flags are 0 except JARVIS_DBG_STATS and
- * JARVIS_DBG_INFER_SUMMARY; feature flags follow their own notes (JARVIS_G3_RETRIEVAL is ON
- * as of G3/M6). Enable individual diagnostics as needed for debugging.
+ * JARVIS_DBG_INFER_SUMMARY; feature flags follow their own notes (JARVIS_G3_RETRIEVAL is OFF /
+ * opt-in — the M6 flip-to-default-ON is pending the offline A/B). Enable diagnostics as needed.
  */
 
 #ifndef JARVIS_DEBUG_H
@@ -54,7 +54,7 @@
 #define JARVIS_SMP_PROBE  0
 
 /* Phase 5 G3 (Retrieval Before Inference): master switch for the retrieval path.
- * DEPLOYED DEFAULT = 1 since G3/M6 (2026-07-01). When 1, Process A — on the inference route,
+ * DEFAULT OFF / opt-in. When 1, Process A — on the inference route,
  * BEFORE MSG_QUERY — scores the recent episodic batch (g3_select), assembles a preamble, and
  * PACKS it into the shared context pool (sctx_pack_preamble), logging one [RETR] line per
  * inference; Process B then INJECTS that preamble into the Gemma prompt between the user turn's
@@ -63,8 +63,11 @@
  * + NVMe-backed post-reboot recall. When 0, the whole PA block + PB injection + their
  * g3_retrieval.h include compile out — deploy byte-identical, no new dependency (OFF==baseline).
  * PA links g3_retrieval.c (build_jarvis_x86.sh); PB uses only the header's static-inline
- * g3_prompt_budget. */
-#define JARVIS_G3_RETRIEVAL  1
+ * g3_prompt_budget.
+ * M6 (flip-to-default-ON) is PENDING the offline OFF-vs-ON A/B: retrieval WORKS + is USED
+ * ([PROBE] hit=1), but M2/M3 showed it broadens/meta-izes answers, so whether it HELPS is
+ * unproven. Flip to 1 only after the A/B shows it helps, not just works. */
+#define JARVIS_G3_RETRIEVAL  0
 
 /* Phase 5 G3/M4c: synthetic-fact PROBE harness (box-only). When 1 (alongside JARVIS_G3_RETRIEVAL=1),
  * Process A seeds ONE known INFER fact (marker SYNTHPROBEZX9Q7) whose query matches an inference

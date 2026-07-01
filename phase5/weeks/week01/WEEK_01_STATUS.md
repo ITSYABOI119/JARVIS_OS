@@ -15,8 +15,8 @@
 
 Phase 5 stood up (2026-06-26, right after v1.0.0 shipped) and drove the MVP recall arc to near-complete:
 **G1 (Episodic Store), G2 (Shared Context Pool), and G3 (Retrieval Before Inference) are all box-verified
-on the real Ryzen 7 2700X.** As of this week's close, **G3/M6 flips retrieval ON by default**, so the
-deployed build now retrieves relevant past interactions and injects them into the prompt before generation.
+on the real Ryzen 7 2700X.** As of this week's close, **G3/M6 (flip retrieval ON by default) is PARKED** pending the offline OFF-vs-ON A/B —
+retrieval stays opt-in (default-OFF): it works and is used (`[PROBE] hit=1`), but whether it *helps* is unproven.
 The only open MVP leg is **#6 (Cache Growth)**, re-scoped this week to the canon "promote-from-the-log"
 design after a first-cut route-through-cache attempt (#6a) was reverted.
 
@@ -38,7 +38,7 @@ design after a first-cut route-through-cache attempt (#6a) was reverted.
 - Telemetry **v2** (200→208 B, CRC@204, `TLM_F_CONTEXT`); on-box `pool_events`/`pool_decisions` == q_hits+q_infer, err=0.
 - Host CI: `test_shared_context.c` (40/40, TSan + O2, incl. T6 preamble-handoff).
 
-### G3 — Retrieval Before Inference — M0–M6 (M6 this session)
+### G3 — Retrieval Before Inference — M0–M5 box-verified; M6 parked pending A/B
 - Scorer + preamble assembler (`phase3/src/ai/g3_retrieval.{c,h}`): exact-key + recency select, `g3_candidate_usable`
   filter (successful INFER records only), `g3_prompt_budget` (cap 160 preamble toks, 48-tok query floor).
 - PA packs the preamble into the pool; PB injects it between the Gemma user-turn `\n` and the question
@@ -48,10 +48,10 @@ design after a first-cut route-through-cache attempt (#6a) was reverted.
   (`[PROBE] hit=1` — present-AND-used).
 - **M5** (2026-06-30): NVMe-backed post-reboot recall — bounded key→record fetch (`epi_index_lookup` + one
   `epi_store_read`, not an O(N) scan); box-proven `[RECALL] index n=330`, 6 distinct `recall=1`, ~0.5 ms.
-- **M6** (2026-07-01, this session): **flipped `JARVIS_G3_RETRIEVAL` `0`→`1`** in `jarvis_debug.h` — retrieval
-  now runs in the deployed build. The flip reproduces the exact build M2–M5 already box-verified (all ran with
-  the flag ON), so ON-behavior is already proven; M6 only makes it the shipped default. Console honesty gate
-  **40/40**; retrieval Capabilities row + System stats now populate from the now-live `TLM_F_RETRIEVAL`.
+- **M6** (2026-07-01, this session): flag flipped `0`→`1` (`d4c58ff`) then **PARKED back to 0** — retrieval stays
+  opt-in (default-OFF). Flip-to-production-default is a product call gated on an offline OFF-vs-ON A/B: retrieval
+  works + is used (`[PROBE] hit=1`), but M2/M3 showed it broadens answers, so whether it *helps* is unproven.
+  Wiring sound (PA pack + PB inject reach it; console honesty gate 40/40). Re-flip only after the A/B.
 - Host CI: `test_g3_retrieval.c` (30/30).
 
 ### #6 — Cache Growth — re-scoped (plan only)
@@ -63,12 +63,12 @@ design after a first-cut route-through-cache attempt (#6a) was reverted.
 ## Tests / verification
 - Host CI green on HEAD `2650253` (run 28446105188, 1m27s): G1 episodic 8/8 + parser round-trip, G2 shared-context
   40/40 (TSan+O2), G3 retrieval 30/30, console honesty 40/40 + key-contract 81 + logic 14 + e2e 20.
-- M6 this session: console honesty gate re-run **40/40**; flag-flip wiring verified by inspection on both processes.
+- M6 this session: flag flipped then **PARKED back to 0** (opt-in); console honesty gate re-run **40/40**; flag-flip wiring verified by inspection on both processes.
 - **Honesty note:** generation never runs in CI, so G3 coherence/latency/recall are box-proven (M2–M5), not CI-proven.
 
 ## Next
-1. **Box-confirm G3/M6** — one boot of the default-ON image to re-observe `[RETR]`/`[RETR-PB]` firing by default,
-   coherent generation, err=0 (behaviorally identical to the M3/M5 box runs; a confirm, not a re-proof).
+1. **G3/M6 offline A/B** — run the OFF-vs-ON helpfulness A/B (Claude-judged); re-flip `JARVIS_G3_RETRIEVAL` to the
+   shipped default only if it shows retrieval *helps*, not just works.
 2. **#6 / M0 (host-first)** — canon promote-from-log frequency scan + light up the dormant SEC-024 LRU eviction
    (host-test that path FIRST — the cache has never filled at ~308/512). Reconcile the `JARVIS_CACHE_GROWTH`
    flag ownership after the #6a revert.
