@@ -248,18 +248,24 @@ static int read_kv_pair(FILE *fp, gguf_kv_t *kv)
         case GGUF_TYPE_FLOAT64: return read_f64(fp, &kv->value.f64);
         case GGUF_TYPE_STRING:
             return read_gguf_string(fp, kv->value.s.str, sizeof(kv->value.s.str), &kv->value.s.len);
-        case GGUF_TYPE_ARRAY:
-            /* Read array header but skip the data */
+        case GGUF_TYPE_ARRAY: {
+            /* Read array header, record where the element data starts, then
+             * skip the data (elements are read on demand via
+             * gguf_get_kv_arr_u32) */
             err = read_u32(fp, &kv->value.arr.elem_type);
             if (err) return err;
             err = read_u64(fp, &kv->value.arr.count);
             if (err) return err;
+            long data_pos = ftell(fp);
+            if (data_pos < 0) return GGUF_ERR_READ;
+            kv->value.arr.data_off = (uint64_t)data_pos;
             /* Skip array elements */
             for (uint64_t i = 0; i < kv->value.arr.count; i++) {
                 err = skip_gguf_value(fp, kv->value.arr.elem_type, 0);
                 if (err) return err;
             }
             return GGUF_OK;
+        }
         default:
             return GGUF_ERR_FORMAT;
     }
@@ -520,6 +526,78 @@ bool gguf_get_kv_u64(const gguf_ctx_t *ctx, const char *key, uint64_t *out)
     const gguf_kv_t *kv = find_kv(ctx, key);
     if (!kv || kv->type != GGUF_TYPE_UINT64) return false;
     *out = kv->value.u64;
+    return true;
+}
+
+bool gguf_get_kv_arr_u32(const gguf_ctx_t *ctx, const char *key,
+                         uint32_t *out, uint64_t max_out, uint64_t *out_count)
+{
+    const gguf_kv_t *kv = find_kv(ctx, key);
+    if (!kv || kv->type != GGUF_TYPE_ARRAY || !ctx->fp) return false;
+
+    uint32_t et = kv->value.arr.elem_type;
+    switch (et) {
+        case GGUF_TYPE_UINT8:
+        case GGUF_TYPE_INT8:
+        case GGUF_TYPE_BOOL:
+        case GGUF_TYPE_UINT16:
+        case GGUF_TYPE_INT16:
+        case GGUF_TYPE_UINT32:
+        case GGUF_TYPE_INT32:
+            break;
+        default:
+            return false;  /* not widenable to u32 (string/float/64-bit/nested) */
+    }
+
+    if (out_count) *out_count = kv->value.arr.count;
+
+    uint64_t n = kv->value.arr.count;
+    if (n > max_out) n = max_out;
+    if (n == 0) return true;
+
+    if (fseek(ctx->fp, (long)kv->value.arr.data_off, SEEK_SET) != 0)
+        return false;
+
+    for (uint64_t i = 0; i < n; i++) {
+        int err = GGUF_ERR_READ;
+        switch (et) {
+            case GGUF_TYPE_UINT8:
+            case GGUF_TYPE_BOOL: {
+                uint8_t v = 0;
+                err = read_u8(ctx->fp, &v);
+                out[i] = v;
+                break;
+            }
+            case GGUF_TYPE_INT8: {
+                int8_t v = 0;
+                err = read_i8(ctx->fp, &v);
+                out[i] = (uint32_t)(int32_t)v;
+                break;
+            }
+            case GGUF_TYPE_UINT16: {
+                uint16_t v = 0;
+                err = read_u16(ctx->fp, &v);
+                out[i] = v;
+                break;
+            }
+            case GGUF_TYPE_INT16: {
+                int16_t v = 0;
+                err = read_i16(ctx->fp, &v);
+                out[i] = (uint32_t)(int32_t)v;
+                break;
+            }
+            case GGUF_TYPE_UINT32:
+                err = read_u32(ctx->fp, &out[i]);
+                break;
+            case GGUF_TYPE_INT32: {
+                int32_t v = 0;
+                err = read_i32(ctx->fp, &v);
+                out[i] = (uint32_t)v;
+                break;
+            }
+        }
+        if (err) return false;
+    }
     return true;
 }
 

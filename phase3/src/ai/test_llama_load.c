@@ -328,6 +328,182 @@ TEST(test_kv_cache_nonshared)
     llama_free_state(&state);
 }
 
+/* ---- Synthetic gemma4 GGUF fixture (KV metadata only, no tensors) ---- */
+
+static size_t fx_put_string(uint8_t *p, const char *s)
+{
+    uint64_t len = strlen(s);
+    memcpy(p, &len, 8);
+    memcpy(p + 8, s, len);
+    return 8 + len;
+}
+
+static size_t fx_put_kv_str(uint8_t *p, const char *key, const char *val)
+{
+    uint8_t *start = p;
+    p += fx_put_string(p, key);
+    uint32_t t = GGUF_TYPE_STRING;
+    memcpy(p, &t, 4); p += 4;
+    p += fx_put_string(p, val);
+    return (size_t)(p - start);
+}
+
+static size_t fx_put_kv_u32(uint8_t *p, const char *key, uint32_t val)
+{
+    uint8_t *start = p;
+    p += fx_put_string(p, key);
+    uint32_t t = GGUF_TYPE_UINT32;
+    memcpy(p, &t, 4); p += 4;
+    memcpy(p, &val, 4); p += 4;
+    return (size_t)(p - start);
+}
+
+static size_t fx_put_kv_arr_u32(uint8_t *p, const char *key,
+                                const uint32_t *vals, uint64_t count)
+{
+    uint8_t *start = p;
+    p += fx_put_string(p, key);
+    uint32_t t = GGUF_TYPE_ARRAY, et = GGUF_TYPE_UINT32;
+    memcpy(p, &t, 4); p += 4;
+    memcpy(p, &et, 4); p += 4;
+    memcpy(p, &count, 8); p += 8;
+    memcpy(p, vals, (size_t)count * 4); p += count * 4;
+    return (size_t)(p - start);
+}
+
+static size_t fx_put_kv_arr_bool(uint8_t *p, const char *key,
+                                 const uint8_t *vals, uint64_t count)
+{
+    uint8_t *start = p;
+    p += fx_put_string(p, key);
+    uint32_t t = GGUF_TYPE_ARRAY, et = GGUF_TYPE_BOOL;
+    memcpy(p, &t, 4); p += 4;
+    memcpy(p, &et, 4); p += 4;
+    memcpy(p, &count, 8); p += 8;
+    memcpy(p, vals, (size_t)count); p += count;
+    return (size_t)(p - start);
+}
+
+/* variant 0: per-layer pattern + FFN arrays present
+ * variant 1: neither present (heuristic fallback)
+ * variant 2: scalar sliding_window_pattern (period), no FFN array */
+static size_t build_gemma4_gguf(uint8_t *buf, size_t buf_size, int variant)
+{
+    memset(buf, 0, buf_size);
+    uint8_t *p = buf;
+
+    uint32_t magic = GGUF_MAGIC, version = 3;
+    uint64_t n_tensors = 0;
+    uint64_t n_kv = (variant == 0) ? 9 : (variant == 2) ? 8 : 7;
+    memcpy(p, &magic, 4);     p += 4;
+    memcpy(p, &version, 4);   p += 4;
+    memcpy(p, &n_tensors, 8); p += 8;
+    memcpy(p, &n_kv, 8);      p += 8;
+
+    p += fx_put_kv_str(p, "general.architecture", "gemma4");
+    p += fx_put_kv_u32(p, "gemma4.embedding_length", 8);
+    p += fx_put_kv_u32(p, "gemma4.block_count", 10);
+    p += fx_put_kv_u32(p, "gemma4.attention.head_count", 2);
+    p += fx_put_kv_u32(p, "gemma4.vocab_size", 32);
+    p += fx_put_kv_u32(p, "gemma4.attention.sliding_window", 4);
+    p += fx_put_kv_u32(p, "gemma4.attention.shared_kv_layers", 4);
+
+    if (variant == 0) {
+        /* Period-3 pattern (differs from the period-5 default) — 3 divides
+         * n_unique=6 so the modular KV-share map stays type-consistent */
+        uint8_t pattern[10] = {1, 1, 0, 1, 1, 0, 1, 1, 0, 1};
+        p += fx_put_kv_arr_bool(p, "gemma4.attention.sliding_window_pattern",
+                                pattern, 10);
+        uint32_t ffn[10];
+        for (int i = 0; i < 10; i++) ffn[i] = 100u * (uint32_t)(i + 1);
+        p += fx_put_kv_arr_u32(p, "gemma4.feed_forward_length", ffn, 10);
+    } else if (variant == 2) {
+        p += fx_put_kv_u32(p, "gemma4.attention.sliding_window_pattern", 2);
+    }
+
+    return (size_t)(p - buf);
+}
+
+/* ---- Test 10: config reads per-layer GGUF arrays (pattern + FFN dims) ---- */
+TEST(test_config_gguf_arrays)
+{
+    uint8_t buf[4096];
+    size_t sz = build_gemma4_gguf(buf, sizeof(buf), 0);
+
+    gguf_ctx_t ctx;
+    ASSERT(gguf_open_memory(&ctx, buf, sz) == GGUF_OK, "gguf_open_memory failed");
+
+    llama_config_t config;
+    int err = llama_load_config(&config, &ctx);
+    ASSERT(err == 0, "llama_load_config should succeed");
+
+    /* SWA pattern from the array: period-3, NOT the period-5 default */
+    ASSERT(config.layer_is_swa != NULL, "layer_is_swa should be allocated");
+    for (int i = 0; i < 10; i++) {
+        bool expect = ((i % 3) != 2);
+        ASSERT(config.layer_is_swa[i] == expect, "SWA pattern should match GGUF array");
+    }
+
+    /* FFN dims from the array; hidden_dim = per-layer max */
+    ASSERT(config.layer_ffn_dim != NULL, "layer_ffn_dim should be allocated");
+    for (int i = 0; i < 10; i++)
+        ASSERT(config.layer_ffn_dim[i] == 100 * (i + 1), "FFN dim should match GGUF array");
+    ASSERT(config.hidden_dim == 1000, "hidden_dim should be per-layer max (1000)");
+
+    llama_free_config(&config);
+    gguf_close(&ctx);
+}
+
+/* ---- Test 11: config falls back to heuristics when arrays absent ---- */
+TEST(test_config_heuristic_fallback)
+{
+    uint8_t buf[4096];
+    size_t sz = build_gemma4_gguf(buf, sizeof(buf), 1);
+
+    gguf_ctx_t ctx;
+    ASSERT(gguf_open_memory(&ctx, buf, sz) == GGUF_OK, "gguf_open_memory failed");
+
+    llama_config_t config;
+    int err = llama_load_config(&config, &ctx);
+    ASSERT(err == 0, "llama_load_config should succeed");
+
+    /* Default period-5 pattern: every 5th layer (i % 5 == 4) is global */
+    ASSERT(config.layer_is_swa != NULL, "layer_is_swa should be allocated");
+    for (int i = 0; i < 10; i++)
+        ASSERT(config.layer_is_swa[i] == ((i % 5) != 4), "default period-5 pattern expected");
+
+    /* Heuristic FFN: n_unique=6 -> layers 0-5 get 6144, 6-9 get 12288 */
+    ASSERT(config.layer_ffn_dim != NULL, "layer_ffn_dim should be allocated");
+    for (int i = 0; i < 10; i++)
+        ASSERT(config.layer_ffn_dim[i] == (i < 6 ? 6144 : 12288), "heuristic FFN dims expected");
+    ASSERT(config.hidden_dim == 12288, "heuristic hidden_dim should be 12288");
+
+    llama_free_config(&config);
+    gguf_close(&ctx);
+}
+
+/* ---- Test 12: scalar sliding_window_pattern acts as period ---- */
+TEST(test_config_scalar_pattern)
+{
+    uint8_t buf[4096];
+    size_t sz = build_gemma4_gguf(buf, sizeof(buf), 2);
+
+    gguf_ctx_t ctx;
+    ASSERT(gguf_open_memory(&ctx, buf, sz) == GGUF_OK, "gguf_open_memory failed");
+
+    llama_config_t config;
+    int err = llama_load_config(&config, &ctx);
+    ASSERT(err == 0, "llama_load_config should succeed");
+
+    /* Scalar period 2: every 2nd layer (i % 2 == 1) is global */
+    ASSERT(config.layer_is_swa != NULL, "layer_is_swa should be allocated");
+    for (int i = 0; i < 10; i++)
+        ASSERT(config.layer_is_swa[i] == ((i % 2) != 1), "period-2 pattern expected");
+
+    llama_free_config(&config);
+    gguf_close(&ctx);
+}
+
 /* ---- Main ---- */
 
 int main(void)
@@ -345,6 +521,9 @@ int main(void)
     prev_fail = fail_count; RUN(test_kv_cache_write);
     prev_fail = fail_count; RUN(test_kv_cache_shared);
     prev_fail = fail_count; RUN(test_kv_cache_nonshared);
+    prev_fail = fail_count; RUN(test_config_gguf_arrays);
+    prev_fail = fail_count; RUN(test_config_heuristic_fallback);
+    prev_fail = fail_count; RUN(test_config_scalar_pattern);
 
     printf("\n--- Results: %d PASS, %d FAIL ---\n", pass_count, fail_count);
     return fail_count > 0 ? 1 : 0;

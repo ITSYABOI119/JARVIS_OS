@@ -621,7 +621,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **seL4 x86 QEMU Setup:** `phase3/docs/SEL4_X86_QEMU_SETUP.md`
 - **x86 Rootserver Notes:** `phase3/docs/SEL4_X86_ROOTSERVER_NOTES.md`
 - **GGML Portability Notes:** `phase3/src/ai/GGML_PORTABILITY_NOTES.md`
-- **GGUF Parser:** `phase3/src/ai/gguf_parser.c/h`
+- **GGUF Parser:** `phase3/src/ai/gguf_parser.c/h` — **KV ARRAY element extraction (2026-07-01):** `gguf_get_kv_arr_u32` reads integer/bool array elements (u32-widened; the array's file offset is recorded at parse, elements read on demand; reports the TRUE count so callers can length-check). `llama_load_config` now reads the real `{arch}.attention.sliding_window_pattern` (per-layer array or scalar period) and per-layer `{arch}.feed_forward_length` array from the GGUF, falling back to the previous Gemma 4 heuristics (period-5 / 6144-12288) when absent — closed the two `llama_load.c` TODOs; also added a load-time shared-KV attention-type mismatch warning (closed the `llama_quant.c` verification TODO). Deployed-path note: `qmodel_load` still re-derives per-layer arrays from tensor shapes (ground truth), so the seL4 build's behavior is unchanged. Tests: `test_gguf_parser.c` 15/15, `test_llama_load.c` 12/12, `test_gemma4_config.c` 11/11.
 - **x86 Rootserver:** `phase3/src/sel4/main_x86.c`
 - **Shared Memory IPC:** `phase3/src/ipc/shmem_ipc.c/h`
 - **USB Boot Creator:** `phase3/scripts/create_boot_usb.sh` — boot USB is now a RECOVERY/re-flash device; the DEPLOYED path is on-SSD dual-boot (`install_jarvis_x86.sh --target esp`, VERIFIED on-box 2026-06-25)

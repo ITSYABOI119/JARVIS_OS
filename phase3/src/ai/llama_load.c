@@ -210,20 +210,41 @@ int llama_load_config(llama_config_t *config, const gguf_ctx_t *ctx)
     if (nl <= 0 || nl > LLAMA_MAX_LAYERS) return -1;
 
     /* SWA layer pattern: mark which layers use sliding-window vs global attention.
-     * TODO: Read actual pattern from gemma4.attention.sliding_window_pattern
-     *       GGUF array once the parser supports array element extraction.
-     * Default pattern: every 5th layer (index % 5 == 4) is global, rest are SWA.
-     * Gemma 4 E2B: layers 4,9,14,19,24,29,34 are global; 28 SWA + 7 global = 35. */
+     * Preferred source: {arch}.attention.sliding_window_pattern from the GGUF —
+     * either a per-layer array (nonzero = SWA layer) or a scalar period P
+     * (every P-th layer, index % P == P-1, is global).
+     * Fallback when the key is absent/malformed: period-5 default — matches
+     * Gemma 4 E2B (layers 4,9,14,19,24,29,34 global; 28 SWA + 7 global = 35). */
     if (config->swa_window > 0) {
         config->layer_is_swa = (bool *)calloc((size_t)nl, sizeof(bool));
         if (!config->layer_is_swa) return -1;
-        for (int i = 0; i < nl; i++)
-            config->layer_is_swa[i] = ((i % 5) != 4);
+
+        uint32_t arr_vals[LLAMA_MAX_LAYERS];
+        uint64_t arr_n = 0;
+        snprintf(key, sizeof(key), "%s.attention.sliding_window_pattern", arch);
+        if (gguf_get_kv_arr_u32(ctx, key, arr_vals, LLAMA_MAX_LAYERS, &arr_n) &&
+            arr_n == (uint64_t)nl) {
+            for (int i = 0; i < nl; i++)
+                config->layer_is_swa[i] = (arr_vals[i] != 0);
+            printf("[config] SWA pattern: per-layer GGUF array (%d entries)\n", nl);
+        } else {
+            uint32_t period = 5;
+            const char *psrc = "default";
+            if (gguf_get_kv_u32(ctx, key, &u32_val) && u32_val > 0) {
+                period = u32_val;
+                psrc = "GGUF scalar";
+            }
+            for (int i = 0; i < nl; i++)
+                config->layer_is_swa[i] = (((uint32_t)i % period) != period - 1);
+            printf("[config] SWA pattern: period %u (%s)\n", period, psrc);
+        }
     }
 
     /* KV share map: first n_unique layers compute own KV, rest share.
-     * TODO: Verify exact sharing pattern against llama.cpp (attention-type
-     *       matching may differ from simple modular index). */
+     * The modular index is an approximation — the quantized path
+     * (llama_quant.c) re-derives the map from actual tensor shapes using
+     * llama.cpp's most-recent-same-SWA-type rule and replaces this one.
+     * The attention-type consistency of THIS map is verified below. */
     if (config->shared_kv_layers > 0) {
         config->kv_share_map = (int *)malloc((size_t)nl * sizeof(int));
         if (!config->kv_share_map) return -1;
@@ -237,25 +258,66 @@ int llama_load_config(llama_config_t *config, const gguf_ctx_t *ctx)
         }
     }
 
+    /* Attention-type matching verification: a shared layer must reference a
+     * source layer of the same attention type (SWA vs global), otherwise Q
+     * and the reused cached K disagree on head_dim / RoPE table. The modular
+     * map preserves this for Gemma 4 E2B (the SWA pattern's period divides
+     * n_unique); warn loudly if a GGUF-provided pattern breaks it. */
+    if (config->kv_share_map && config->layer_is_swa) {
+        for (int i = 0; i < nl; i++) {
+            int src = config->kv_share_map[i];
+            if (src >= 0 && config->layer_is_swa[i] != config->layer_is_swa[src])
+                printf("[config] WARN: layer %d (%s) shares KV with layer %d (%s)"
+                       " — attention-type mismatch\n",
+                       i, config->layer_is_swa[i] ? "SWA" : "global",
+                       src, config->layer_is_swa[src] ? "SWA" : "global");
+        }
+    }
+
     /* Per-layer FFN dim: for models with variable FFN sizes per layer.
-     * TODO: Read actual values from gemma4.feed_forward_length GGUF array
-     *       once the parser supports array element extraction.
-     * Heuristic: first n_unique layers use smaller FFN (6144),
-     *            remaining layers use larger FFN (12288).
-     * Also set hidden_dim to the max for buffer allocation purposes. */
+     * Preferred source: the {arch}.feed_forward_length GGUF per-layer array
+     * (the scalar form was already consumed as hidden_dim above, so reaching
+     * here with hidden_dim == 0 means the key is absent or an array).
+     * Fallback heuristic: first n_unique layers use the smaller Gemma 4 E2B
+     * FFN (6144), remaining layers the larger (12288).
+     * hidden_dim is set to the per-layer max for buffer allocation purposes. */
     if (config->hidden_dim == 0 && config->shared_kv_layers > 0) {
         config->layer_ffn_dim = (int *)malloc((size_t)nl * sizeof(int));
         if (!config->layer_ffn_dim) return -1;
-        int n_unique = nl - config->shared_kv_layers;
-        if (n_unique <= 0) n_unique = 1;
-        for (int i = 0; i < nl; i++) {
-            if (i < n_unique)
-                config->layer_ffn_dim[i] = 6144;   /* smaller FFN for early layers */
-            else
-                config->layer_ffn_dim[i] = 12288;  /* larger FFN for later layers */
+
+        uint32_t arr_vals[LLAMA_MAX_LAYERS];
+        uint64_t arr_n = 0;
+        snprintf(key, sizeof(key), "%s.feed_forward_length", arch);
+        bool from_array = gguf_get_kv_arr_u32(ctx, key, arr_vals, LLAMA_MAX_LAYERS, &arr_n) &&
+                          arr_n == (uint64_t)nl;
+        for (int i = 0; from_array && i < nl; i++) {
+            /* Sanity-bound each entry — fall back on 0 or absurd values */
+            if (arr_vals[i] == 0 || arr_vals[i] > (1u << 20))
+                from_array = false;
+        }
+
+        int max_ffn = 0;
+        if (from_array) {
+            for (int i = 0; i < nl; i++) {
+                config->layer_ffn_dim[i] = (int)arr_vals[i];
+                if (config->layer_ffn_dim[i] > max_ffn)
+                    max_ffn = config->layer_ffn_dim[i];
+            }
+            printf("[config] FFN dims: per-layer GGUF array (max=%d)\n", max_ffn);
+        } else {
+            int n_unique = nl - config->shared_kv_layers;
+            if (n_unique <= 0) n_unique = 1;
+            for (int i = 0; i < nl; i++) {
+                if (i < n_unique)
+                    config->layer_ffn_dim[i] = 6144;   /* smaller FFN for early layers */
+                else
+                    config->layer_ffn_dim[i] = 12288;  /* larger FFN for later layers */
+            }
+            max_ffn = 12288;
+            printf("[config] FFN dims: heuristic 6144/12288 (no per-layer array)\n");
         }
         /* Set hidden_dim to max for buffer allocation */
-        config->hidden_dim = 12288;
+        config->hidden_dim = max_ffn;
     }
 
     printf("[config] OK: dim=%d layers=%d heads=%d/%d hd=%d/%d ffn=%d vocab=%d\n",

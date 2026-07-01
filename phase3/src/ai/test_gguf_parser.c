@@ -383,6 +383,164 @@ static void test_kv_missing_type(void)
     PASS();
 }
 
+/* ---- Array KV extraction tests ---- */
+
+/* Build a GGUF with array KVs (u32, bool, f32, string) + a trailing scalar.
+ * The trailing scalar doubles as a parse-integrity check: it is only found
+ * if the array skip/offset bookkeeping is consistent. */
+static size_t build_array_gguf(uint8_t *buf, size_t buf_size)
+{
+    uint8_t *p = buf;
+    memset(buf, 0, buf_size);
+
+    uint32_t magic = GGUF_MAGIC, version = 3;
+    uint64_t n_tensors = 0, n_kv = 5;
+    memcpy(p, &magic, 4);     p += 4;
+    memcpy(p, &version, 4);   p += 4;
+    memcpy(p, &n_tensors, 8); p += 8;
+    memcpy(p, &n_kv, 8);      p += 8;
+
+    uint32_t type_arr = GGUF_TYPE_ARRAY;
+
+    /* KV 1: "test.arr_u32" = [3, 5, 8, 13] (u32) */
+    p += put_gguf_string(p, "test.arr_u32");
+    memcpy(p, &type_arr, 4); p += 4;
+    uint32_t et_u32 = GGUF_TYPE_UINT32;
+    uint64_t cnt4 = 4;
+    memcpy(p, &et_u32, 4); p += 4;
+    memcpy(p, &cnt4, 8);   p += 8;
+    uint32_t u32_vals[4] = {3, 5, 8, 13};
+    memcpy(p, u32_vals, 16); p += 16;
+
+    /* KV 2: "test.arr_bool" = [true, false, true] (bool, 1 byte each) */
+    p += put_gguf_string(p, "test.arr_bool");
+    memcpy(p, &type_arr, 4); p += 4;
+    uint32_t et_bool = GGUF_TYPE_BOOL;
+    uint64_t cnt3 = 3;
+    memcpy(p, &et_bool, 4); p += 4;
+    memcpy(p, &cnt3, 8);    p += 8;
+    uint8_t bool_vals[3] = {1, 0, 1};
+    memcpy(p, bool_vals, 3); p += 3;
+
+    /* KV 3: "test.arr_f32" = [1.5, 2.5] (f32 — unsupported for u32 getter) */
+    p += put_gguf_string(p, "test.arr_f32");
+    memcpy(p, &type_arr, 4); p += 4;
+    uint32_t et_f32 = GGUF_TYPE_FLOAT32;
+    uint64_t cnt2 = 2;
+    memcpy(p, &et_f32, 4); p += 4;
+    memcpy(p, &cnt2, 8);   p += 8;
+    float f32_vals[2] = {1.5f, 2.5f};
+    memcpy(p, f32_vals, 8); p += 8;
+
+    /* KV 4: "test.arr_str" = ["ab", "c"] (string — unsupported) */
+    p += put_gguf_string(p, "test.arr_str");
+    memcpy(p, &type_arr, 4); p += 4;
+    uint32_t et_str = GGUF_TYPE_STRING;
+    memcpy(p, &et_str, 4); p += 4;
+    memcpy(p, &cnt2, 8);   p += 8;
+    p += put_gguf_string(p, "ab");
+    p += put_gguf_string(p, "c");
+
+    /* KV 5: trailing scalar "test.after" = u32 77 */
+    p += put_gguf_string(p, "test.after");
+    uint32_t type_u32 = GGUF_TYPE_UINT32;
+    memcpy(p, &type_u32, 4); p += 4;
+    uint32_t after_val = 77;
+    memcpy(p, &after_val, 4); p += 4;
+
+    return (size_t)(p - buf);
+}
+
+static void test_kv_array_u32(void)
+{
+    TEST("KV array: u32 element extraction");
+
+    uint8_t data[8192];
+    size_t sz = build_array_gguf(data, sizeof(data));
+    const char *path = write_temp_gguf(data, sz);
+
+    gguf_ctx_t ctx;
+    int err = gguf_open(&ctx, path);
+    ASSERT(err == GGUF_OK, gguf_strerror(err));
+
+    uint32_t vals[8] = {0};
+    uint64_t count = 0;
+    ASSERT(gguf_get_kv_arr_u32(&ctx, "test.arr_u32", vals, 8, &count),
+           "u32 array extraction failed");
+    ASSERT(count == 4, "wrong array count");
+    ASSERT(vals[0] == 3 && vals[1] == 5 && vals[2] == 8 && vals[3] == 13,
+           "wrong u32 array values");
+
+    /* Clamp: max_out smaller than array — true count still reported */
+    uint32_t two[2] = {0};
+    count = 0;
+    ASSERT(gguf_get_kv_arr_u32(&ctx, "test.arr_u32", two, 2, &count),
+           "clamped extraction failed");
+    ASSERT(count == 4, "true count should be 4 even when clamped");
+    ASSERT(two[0] == 3 && two[1] == 5, "wrong clamped values");
+
+    gguf_close(&ctx);
+    PASS();
+}
+
+static void test_kv_array_bool(void)
+{
+    TEST("KV array: bool elements widened to u32");
+
+    uint8_t data[8192];
+    size_t sz = build_array_gguf(data, sizeof(data));
+    const char *path = write_temp_gguf(data, sz);
+
+    gguf_ctx_t ctx;
+    int err = gguf_open(&ctx, path);
+    ASSERT(err == GGUF_OK, gguf_strerror(err));
+
+    uint32_t vals[8] = {99, 99, 99};
+    uint64_t count = 0;
+    ASSERT(gguf_get_kv_arr_u32(&ctx, "test.arr_bool", vals, 8, &count),
+           "bool array extraction failed");
+    ASSERT(count == 3, "wrong bool array count");
+    ASSERT(vals[0] == 1 && vals[1] == 0 && vals[2] == 1, "wrong bool array values");
+
+    gguf_close(&ctx);
+    PASS();
+}
+
+static void test_kv_array_errors(void)
+{
+    TEST("KV array: unsupported types + missing key + parse integrity");
+
+    uint8_t data[8192];
+    size_t sz = build_array_gguf(data, sizeof(data));
+    const char *path = write_temp_gguf(data, sz);
+
+    gguf_ctx_t ctx;
+    int err = gguf_open(&ctx, path);
+    ASSERT(err == GGUF_OK, gguf_strerror(err));
+
+    uint32_t vals[8];
+    uint64_t count;
+    /* f32 / string element types are not u32-widenable */
+    ASSERT(!gguf_get_kv_arr_u32(&ctx, "test.arr_f32", vals, 8, &count),
+           "f32 array should be rejected");
+    ASSERT(!gguf_get_kv_arr_u32(&ctx, "test.arr_str", vals, 8, &count),
+           "string array should be rejected");
+    /* Missing key */
+    ASSERT(!gguf_get_kv_arr_u32(&ctx, "nonexistent.arr", vals, 8, &count),
+           "missing key should fail");
+    /* Non-array KV asked as array */
+    ASSERT(!gguf_get_kv_arr_u32(&ctx, "test.after", vals, 8, &count),
+           "scalar KV should be rejected as array");
+
+    /* Parse integrity: the scalar AFTER all arrays parsed correctly */
+    uint32_t after = 0;
+    ASSERT(gguf_get_kv_u32(&ctx, "test.after", &after), "trailing scalar not found");
+    ASSERT(after == 77, "wrong trailing scalar value");
+
+    gguf_close(&ctx);
+    PASS();
+}
+
 /* SEC-003: Test dimension overflow detection */
 static void test_overflow_detection(void)
 {
@@ -478,6 +636,9 @@ int main(void)
     test_error_handling();
     test_type_names();
     test_kv_missing_type();
+    test_kv_array_u32();
+    test_kv_array_bool();
+    test_kv_array_errors();
     test_overflow_detection();
     test_excessive_kv();
     test_excessive_tensors();
