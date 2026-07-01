@@ -1,6 +1,6 @@
 # Phase 5 — Goal #6: Cache Growth (promote repeated query→action patterns from the episodic log into the decision cache)
 
-**Status:** 🔜 PLANNED (M0 next). *(See D-a: a first-cut live-routing "#6a" already landed under `JARVIS_CACHE_GROWTH` — this doc re-scopes the canonical #6 to promote-from-the-log.)*
+**Status:** 🔜 PLANNED (M0 next). *(D-a: a first-cut live-routing "#6a" landed under `JARVIS_CACHE_GROWTH` and was **REVERTED** (`2650253`); this doc's promote-from-log is the canonical #6.)*
 **Date:** 2026-06-30
 **Prereqs:** #1 episodic store ✅ **box-verified** (M0–M5 — **THE source** #6 promotes from) + the deployed **decision cache** (`g_cache`, ~308 preloaded patterns, `CACHE_SIZE=512`) + decision-cache **FNV-1a key parity** (`cache_hash(cache_normalize_query(...))`, shared with #1/#3 — never re-implemented, so an episodic `query_key` IS a cache key).
 **Scope:** ROADMAP goal #6 — a bounded background pass promotes repeated `query→action` patterns out of the episodic log into the decision cache, so future lookups become fast (~1 ms) cache **HITS**. The cache GROWS past its ~308 baseline; this is the last leg of the "it-remembers" MVP arc (#1/#2/#3/#6) → the early **`memory` milestone tag**.
@@ -69,7 +69,7 @@ The promotion logic + the SEC-024 LRU eviction are **PURE / host-testable** → 
 
 ## 5. Locked decisions (Decision + Rationale)
 
-**D-a — Source = the EPISODIC LOG (#1), NOT live-routing the cache.** Promotion scans the durable episodic log for recurring patterns; it does **not** route every live inference through the cache to learn one answer at a time. *Rationale:* canon is "promote repeated patterns **from the log**" (`ROADMAP:65`) — the log is the system-wide record of what actually recurred, batch-promotable at a low cadence; per-query live-routing is a different mechanism (a fast-path cache wrapper) that this goal does not adopt. *(Rejected alternative explicitly noted — and **already implemented**: a first-cut "#6a" wrapped the inference path with a per-query `cache_lookup`/`cache_insert` under `JARVIS_CACHE_GROWTH` (commit `7e8c30f`, 2026-06-30). D-a **re-scopes** the canonical #6 to promote-from-the-log, so #6a is either superseded by this design or kept as a complementary fast-path — **TO RECONCILE before M1** (incl. whether the promotion pass reuses `JARVIS_CACHE_GROWTH` or gets its own flag).)*
+**D-a — Source = the EPISODIC LOG (#1), NOT live-routing the cache.** Promotion scans the durable episodic log for recurring patterns; it does **not** route every live inference through the cache to learn one answer at a time. *Rationale:* canon is "promote repeated patterns **from the log**" (`ROADMAP:65`) — the log is the system-wide record of what actually recurred, batch-promotable at a low cadence; per-query live-routing is a different mechanism (a fast-path cache wrapper) that this goal does not adopt. *(Rejected alternative explicitly noted — and **already implemented**: a first-cut "#6a" wrapped the inference path with a per-query `cache_lookup`/`cache_insert` under `JARVIS_CACHE_GROWTH` (commit `7e8c30f`, 2026-06-30). D-a **re-scopes** the canonical #6 to promote-from-the-log. **RESOLVED 2026-06-30 (option 3):** #6a was **REVERTED** (`2650253` — `main_x86.c` byte-identical to pre-#6a); promote-from-log is the canonical #6, and the promotion pass **OWNS** `JARVIS_CACHE_GROWTH`.)*
 
 **D-b — "Repeated pattern" = frequency ≥ `PROMOTE_THRESHOLD`** (start 2–3) over the scanned episodic window; promote `query → action` (the record's `resp`/action, truncated to `MAX_ACTION_LEN=256`), `trust = TRUST_AUTO`. *Rationale:* frequency is the canon signal ("repeated"), deterministic and cheap; `TRUST_AUTO` matches a self-derived, non-harmful cached answer.
 
@@ -79,7 +79,7 @@ The promotion logic + the SEC-024 LRU eviction are **PURE / host-testable** → 
 
 **D-e — `cache_growth_count` telemetry is a DELIBERATE, surfaced field** (`PLAN:103` — "not smuggled into reserved bytes") + a `TLM_F_CACHE_GROWTH` flag, landing with the golden-fixture + key-contract + honesty + console tests **together** (the M4 fixture-synced-slice pattern). *Rationale:* `PLAN:103/113` — a wire change is one deliberate, fixture-synced slice. *(Sub-decision at the telemetry milestone: a deliberate vN size-bump OR a deliberately-renamed spare `reserved_i` — settle there; the requirement is "deliberate + surfaced", not hidden.)*
 
-**D-f — Gated `JARVIS_CACHE_GROWTH` compile-default-OFF** until box-proven, then flip ON + the `memory` tag. *Rationale:* keep the new write-path (cache mutation + eviction) dark until the box proves growth + hit-rate + clean eviction. *(Flag-ownership pending D-a's reconciliation.)*
+**D-f — Gated `JARVIS_CACHE_GROWTH` compile-default-OFF** until box-proven, then flip ON + the `memory` tag. *Rationale:* keep the new write-path (cache mutation + eviction) dark until the box proves growth + hit-rate + clean eviction. *(The promotion pass **owns** `JARVIS_CACHE_GROWTH` — D-a resolved 2026-06-30.)*
 
 **D-g — Honest ceiling.** "The cache learns FREQUENTLY-ASKED queries and serves them fast (~50 ms → <1 ms)" — frequency-based promotion, deterministic; a promoted hit returns the logged episodic action (generation-equivalent for that query). **NEVER "the cache understands".** *Rationale:* same honesty discipline as G3 (D-f) — claim only what's mechanically true.
 
@@ -88,7 +88,7 @@ The promotion logic + the SEC-024 LRU eviction are **PURE / host-testable** → 
 ## 6. Milestones — M0 → M4 (host vs box marked)
 
 - **M0 (HOST/CI)** — pure **promotion logic** (frequency scan + threshold → deterministic promote set) + the **SEC-024 LRU eviction** host-test (the dormant path goes live, tested: oldest evicted, `entries_used` semantics, no corruption) + unit tests. CI-greenable.
-- **M1 (BOX)** — wire the **bounded promotion pass** into Process A (scan episodic → `cache_insert` the promoted patterns, gated) + a `[CACHE-GROW]` log; box smoke = the cache **GROWS** (`entries_used` climbs past baseline). *(First: reconcile D-a — promote-pass vs the landed #6a live-routing.)*
+- **M1 (BOX)** — wire the **bounded promotion pass** into Process A (scan episodic → `cache_insert` the promoted patterns, gated) + a `[CACHE-GROW]` log; box smoke = the cache **GROWS** (`entries_used` climbs past baseline).
 - **M2 (CI + BOX)** — **`cache_growth_count`** deliberate telemetry slice + console cache-growth row (auto Capabilities flag + System stat), golden-fixture / key-contract / honesty / e2e green; box-confirm the count live (#6b).
 - **M3 (BOX)** — **hit-rate-improvement proof** (promoted patterns now HIT the cache fast) + the **LRU eviction firing** once the cache fills (≥512, no corruption) + flip `JARVIS_CACHE_GROWTH` default-**ON**.
 - **M4** — the **`memory` milestone tag** (the it-remembers MVP arc #1/#2/#3/#6 complete) + final doc/week status.
@@ -105,7 +105,7 @@ The promotion logic + the SEC-024 LRU eviction are **PURE / host-testable** → 
 - **Telemetry must be deliberate, not smuggled** (`PLAN:103`) — `cache_growth_count` lands as one fixture-synced slice (golden + key-contract + honesty + console together).
 - **`cache_insert` action truncation** — episodic `resp`/action truncated to `MAX_ACTION_LEN=256`; copy by length, never `strlen` (episodic text is not NUL-terminated).
 - **"Learns ≠ understands"** — frequency-based promotion only; a promoted hit returns the logged episodic action (== what was served), generation-equivalent — never claim comprehension.
-- **#6a/#6-promote overlap (D-a)** — a live-routing #6a already ships under `JARVIS_CACHE_GROWTH`; reconcile (supersede vs complementary, flag ownership) before wiring the promote pass at M1.
+- **#6a/#6-promote overlap (D-a)** — **RESOLVED 2026-06-30:** the live-routing #6a was reverted (`2650253`), so there is no overlap; the promote pass owns `JARVIS_CACHE_GROWTH`.
 
 ---
 
