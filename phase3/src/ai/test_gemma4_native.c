@@ -2,6 +2,9 @@
  * Native Gemma 4 inference test — runs on Linux/WSL, no seL4 needed.
  * Loads the real GGUF, tokenizes, runs forward pass, generates text.
  *
+ * NOTE: dev-only — requires the real ~2.89 GiB Gemma 4 GGUF at runtime (argv[1]).
+ * Intentionally NOT in CI (hermetic runners have no model).
+ *
  * Compile:
  *   gcc -O2 -mavx2 -mfma -std=c11 -D_POSIX_C_SOURCE=200809L \
  *       -I phase3/src/ai \

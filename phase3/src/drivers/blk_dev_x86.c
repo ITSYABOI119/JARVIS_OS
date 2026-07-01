@@ -196,7 +196,9 @@ int blk_dev_write(uint64_t lba, uint32_t count, const void *buf)
     return 0;
 #else
     if (g_use_nvme) {
-        /* NVMe write not implemented yet — read-only for model loading */
+        /* This blk_dev abstraction wrapper is read-only for NVMe (model loading only).
+         * NOTE: NVMe writes DO work at the system level — nvme_log + the Phase-5 episodic
+         * store call nvme_write_sectors() directly (nvme.c), bypassing this wrapper. */
         return -1;
     }
     return ahci_write_sectors(g_active_port, lba, count, buf);

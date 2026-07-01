@@ -2,6 +2,9 @@
  * JARVIS AI-OS -- ggml Integration Test
  * Tests that ggml core library links and runs with our POSIX stubs.
  *
+ * NOTE: box/dev-only — requires the external ggml objects (ggml.o/ggml-alloc.o/ggml-quants.o),
+ * which are NOT in-repo (the ggml-backend approach was abandoned). Intentionally not in CI.
+ *
  * What this tests:
  *   1. ggml context creation (ggml_init)
  *   2. Tensor allocation (ggml_new_tensor_1d)

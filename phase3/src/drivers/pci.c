@@ -4,7 +4,7 @@
  * Implements PCI configuration space access via I/O ports 0xCF8/0xCFC,
  * bus enumeration, device discovery, BAR parsing, and bus master enable.
  *
- * Scans bus 0 only (sufficient for single-segment desktop/server boards).
+ * Scans buses 0-15 (pci_scan loops bus 0..15 — the JARVIS PC's NVMe is on bus 1); single-segment.
  * Multifunction devices detected via header type bit 7.
  *
  * JARVIS AI-OS - Phase 3
