@@ -45,7 +45,9 @@ static int buf_read(buf_reader_t *r, void *dst, size_t n)
 
 static int buf_skip(buf_reader_t *r, size_t n)
 {
-    if (r->pos + n > r->len) return -1;
+    /* SEC: overflow-safe — r->pos + n can wrap for an attacker-controlled n
+     * (crafted GGUF array length via skip_value), spuriously passing the bound. */
+    if (r->pos > r->len || n > (size_t)(r->len - r->pos)) return -1;
     r->pos += n;
     return 0;
 }
@@ -86,7 +88,11 @@ static int buf_read_gguf_string_fixed(buf_reader_t *r, char *out, size_t out_siz
 {
     uint64_t len;
     if (buf_read_u64(r, &len)) return -1;
-    if (r->pos + len > r->len) return -1;
+    /* SEC: cap first (mirror buf_read_gguf_string_alloc's 1 MB cap), then use
+     * overflow-safe subtraction — r->pos + len can wrap for an attacker-controlled
+     * u64 len, spuriously passing the bound and driving a ~out_size OOB memcpy read. */
+    if (len > (uint64_t)out_size) return -1;
+    if (r->pos > r->len || len > (uint64_t)(r->len - r->pos)) return -1;
 
     size_t copy = (len < out_size - 1) ? (size_t)len : (out_size - 1);
     memcpy(out, r->data + r->pos, copy);
