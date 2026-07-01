@@ -1531,7 +1531,7 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
                          | (g_episodic_ready    ? TLM_F_MEMORY       : 0)
                          | (g_sctx_ready        ? TLM_F_CONTEXT      : 0)
                          | (g_retrieval_hits>0  ? TLM_F_RETRIEVAL    : 0)
-                         | TLM_F_SELFTEST_PASS);
+                         | (g_selftest_pass == 5 ? TLM_F_SELFTEST_PASS : 0));
     pkt.boot_id   = nvme_log_boot_id();
     pkt.uptime_ms = jarvis_uptime_ms();
     pkt.q_total = q_total; pkt.q_hits = q_hits; pkt.q_infer = q_infer;
@@ -1539,7 +1539,7 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
     pkt.num_nodes      = (uint8_t)g_num_nodes;
     pkt.model_load_pct = g_model_load_pct;
     pkt.fb_bpp         = g_fb_desc_bpp;
-    pkt.selftest_score = 5;   /* HONESTY: 5 self-test slots; 2 are vacuous — console must not overclaim */
+    pkt.selftest_score = (uint8_t)g_selftest_pass;   /* HONESTY: the REAL tally (5 = all pass; 2 of the 5 slots are vacuous). A real-test failure drops this; TLM_F_SELFTEST_PASS above is set only when ==5. */
     pkt.fb_w = (uint16_t)g_fb_desc_w;
     pkt.fb_h = (uint16_t)g_fb_desc_h;
     pkt.model_size_mb = (uint32_t)(nvme_model_size >> 20);  /* nvme_model_size is BYTES -> MB (== panel "2962") */
