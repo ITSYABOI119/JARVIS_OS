@@ -95,6 +95,7 @@ typedef struct {
     float *logits;
     float *key_cache;
     float *value_cache;
+    int    kv_n_layers;    /* # of KV-cache layer-slots actually allocated (n_unique for shared-KV) */
     /* Gemma 4 PLE scratch buffers (heap — too large for seL4 Process B stack) */
     float *ple_all;        /* [n_layers * ple_dim] — per-token PLE inputs */
     float *ple_context;    /* [n_layers * ple_dim] — context-aware projection */

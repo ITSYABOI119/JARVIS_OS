@@ -454,7 +454,7 @@ int main(void)
         /* Reset both states */
         f32_state.pos = 0;
         q_state.pos = 0;
-        size_t kv_bytes = (size_t)f32_model.config.n_layers *
+        size_t kv_bytes = (size_t)f32_state.kv_n_layers *
             f32_state.max_seq_len * kv_dim * sizeof(float);
         memset(f32_state.key_cache, 0, kv_bytes);
         memset(f32_state.value_cache, 0, kv_bytes);

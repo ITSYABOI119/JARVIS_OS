@@ -81,7 +81,7 @@ static int init_tiny_model(llama_model_t *model)
 static void reset_state(llama_state_t *state, const llama_config_t *config)
 {
     int kv_dim = config->n_kv_heads * config->head_dim;
-    int cache_size = config->n_layers * state->max_seq_len * kv_dim;
+    int cache_size = state->kv_n_layers * state->max_seq_len * kv_dim;
     memset(state->key_cache, 0, cache_size * sizeof(float));
     memset(state->value_cache, 0, cache_size * sizeof(float));
     state->pos = 0;

@@ -277,6 +277,57 @@ TEST(test_kv_cache_write)
     llama_free_state(&state);
 }
 
+/* ---- Test 8: shared-KV (Gemma 4) sizes the KV cache by n_unique ---- */
+TEST(test_kv_cache_shared)
+{
+    /* Gemma 4 E2B KV shape: 35 layers, 20 shared -> 15 unique own-KV slots. */
+    llama_config_t config;
+    memset(&config, 0, sizeof(config));
+    config.dim              = 512;
+    config.n_layers         = 35;
+    config.n_heads          = 1;
+    config.n_kv_heads       = 1;
+    config.head_dim         = 512;   /* head_dim_swa == 0 -> max_head_dim == 512 */
+    config.hidden_dim       = 16;
+    config.vocab_size       = 32;
+    config.max_seq_len      = 512;
+    config.shared_kv_layers = 20;    /* -> kv_n_layers = 35 - 20 = 15 */
+
+    llama_state_t state;
+    int err = llama_alloc_state(&state, &config);
+    ASSERT(err == 0, "shared-KV alloc_state should succeed");
+    ASSERT(state.kv_n_layers == 15, "kv_n_layers should be 15 (35 - 20 shared)");
+
+    /* The cache holds exactly kv_n_layers * max_seq * (n_kv_heads*max_head_dim) floats;
+     * the last own-KV slot's final element must be writable (no OOB). */
+    size_t kv_total = (size_t)state.kv_n_layers * (size_t)config.max_seq_len *
+                      (size_t)config.n_kv_heads * (size_t)config.head_dim;
+    ASSERT(kv_total == (size_t)15 * 512 * 512, "kv_total should be 15*512*512");
+    state.key_cache[0]              = 7.0f;
+    state.key_cache[kv_total - 1]   = 11.0f;
+    state.value_cache[kv_total - 1] = 13.0f;
+    ASSERT(state.key_cache[0] == 7.0f, "key_cache[0] writable");
+    ASSERT(state.key_cache[kv_total - 1] == 11.0f, "key_cache[last unique slot] writable");
+    ASSERT(state.value_cache[kv_total - 1] == 13.0f, "value_cache[last unique slot] writable");
+
+    llama_free_state(&state);
+}
+
+/* ---- Test 9: non-shared model allocates full n_layers KV slots (unaffected) ---- */
+TEST(test_kv_cache_nonshared)
+{
+    llama_config_t config;
+    init_tiny_config(&config);   /* shared_kv_layers == 0 (zero-inited) */
+    ASSERT(config.shared_kv_layers == 0, "tiny config is non-shared");
+
+    llama_state_t state;
+    int err = llama_alloc_state(&state, &config);
+    ASSERT(err == 0, "non-shared alloc_state should succeed");
+    ASSERT(state.kv_n_layers == config.n_layers, "non-shared kv_n_layers == n_layers (unaffected)");
+
+    llama_free_state(&state);
+}
+
 /* ---- Main ---- */
 
 int main(void)
@@ -292,6 +343,8 @@ int main(void)
     prev_fail = fail_count; RUN(test_layer_weight_sizes);
     prev_fail = fail_count; RUN(test_embedding_write_read);
     prev_fail = fail_count; RUN(test_kv_cache_write);
+    prev_fail = fail_count; RUN(test_kv_cache_shared);
+    prev_fail = fail_count; RUN(test_kv_cache_nonshared);
 
     printf("\n--- Results: %d PASS, %d FAIL ---\n", pass_count, fail_count);
     return fail_count > 0 ? 1 : 0;

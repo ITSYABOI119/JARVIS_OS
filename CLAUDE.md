@@ -647,7 +647,7 @@ Phase 1 used "mock IPC" - Python and seL4 did NOT communicate in real-time. Sepa
 - **Dequantization:** `phase3/src/ai/dequant.c/h`
 - **BPE Tokenizer:** `phase3/src/ai/tokenizer.c/h`
 - **Llama Model Header:** `phase3/src/ai/llama_model.h`
-- **Llama Weight Loading:** `phase3/src/ai/llama_load.c`
+- **Llama Weight Loading:** `phase3/src/ai/llama_load.c` — **KV cache sized by `n_unique` (`n_layers − shared_kv_layers`) for shared-KV Gemma 4** (`llama_alloc_state`): own-KV layers are the dense first `n_unique` and every `kv_share_map[i]` resolves `< n_unique` (see `llama_quant.c:826-828`), so slots `[n_unique, n_layers)` were `calloc`'d-but-dead — **~40 MiB reclaimed for Gemma 4 E2B (57% of the old KV alloc)**. Allocation-only: the read/write path is unchanged, so generation is **byte-identical by construction (the reads never touched the freed slots)** — the next box smoke confirms Gemma coherent incidentally. `state->kv_n_layers` exposes the allocated slot count; the per-generation KV memsets (deployed PB `inference_server.c` + bench/test `reset_state`s) were swept `n_layers` → `state->kv_n_layers` to match the smaller buffer. Non-shared models + the F32 `llama_forward.c` path get `kv_n_layers == n_layers` (unaffected). Host-tested `test_llama_load.c` (Test 8: 35/20→15-slot alloc + last-slot writable; Test 9: non-shared == n_layers).
 - **Llama Forward Pass:** `phase3/src/ai/llama_forward.c`
 - **Sampling:** `phase3/src/ai/sampling.c/h`
 - **Inference API:** `phase3/src/ai/inference.c/h`

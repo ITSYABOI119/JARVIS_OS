@@ -144,7 +144,7 @@ int main(void)
     printf("]\n\n");
 
     /* KV cache sizes for clearing */
-    size_t kv_size = (size_t)model.config.n_layers * (size_t)state.max_seq_len *
+    size_t kv_size = (size_t)state.kv_n_layers * (size_t)state.max_seq_len *
                      (size_t)model.config.n_kv_heads * (size_t)model.config.head_dim *
                      sizeof(float);
 

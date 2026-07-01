@@ -132,7 +132,7 @@ static void *load_file(const char *path, size_t *out_len)
 static void reset_state(llama_state_t *state, const llama_config_t *config)
 {
     state->pos = 0;
-    size_t kv_size = (size_t)config->n_layers * (size_t)state->max_seq_len *
+    size_t kv_size = (size_t)state->kv_n_layers * (size_t)state->max_seq_len *
                      (size_t)config->n_kv_heads * (size_t)config->head_dim *
                      sizeof(float);
     memset(state->key_cache, 0, kv_size);

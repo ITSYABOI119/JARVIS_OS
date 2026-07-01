@@ -289,7 +289,7 @@ int main(int argc, char **argv)
     fflush(stderr);
 
     /* KV cache size for reset */
-    size_t kv_bytes = (size_t)qm.config.n_layers * (size_t)state.max_seq_len *
+    size_t kv_bytes = (size_t)state.kv_n_layers * (size_t)state.max_seq_len *
                       (size_t)qm.config.n_kv_heads * (size_t)qm.config.head_dim *
                       sizeof(float);
 

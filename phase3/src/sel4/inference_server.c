@@ -233,7 +233,7 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
 
     /* Reset state for new generation */
     state->pos = 0;
-    size_t kv_bytes = (size_t)qm->config.n_layers * state->max_seq_len *
+    size_t kv_bytes = (size_t)state->kv_n_layers * state->max_seq_len *
                       qm->config.n_kv_heads * qm->config.head_dim * sizeof(float);
     memset(state->key_cache, 0, kv_bytes);
     memset(state->value_cache, 0, kv_bytes);
@@ -643,7 +643,7 @@ int main(int argc, char **argv)
     {
         puts_serial("[Process B] Testing single forward pass (token 0)...\n");
         state.pos = 0;
-        size_t kv_bytes = (size_t)qm.config.n_layers * state.max_seq_len *
+        size_t kv_bytes = (size_t)state.kv_n_layers * state.max_seq_len *
                           qm.config.n_kv_heads * qm.config.head_dim * sizeof(float);
         memset(state.key_cache, 0, kv_bytes);
         memset(state.value_cache, 0, kv_bytes);

@@ -219,7 +219,7 @@ int main(int argc, char **argv)
     /* 8. Second prompt */
     printf("\n--- Second prompt ---\n");
     state.pos = 0;
-    size_t kv_bytes = (size_t)qm.config.n_layers * state.max_seq_len *
+    size_t kv_bytes = (size_t)state.kv_n_layers * state.max_seq_len *
                       qm.config.n_kv_heads * qm.config.head_dim * sizeof(float);
     memset(state.key_cache, 0, kv_bytes);
     memset(state.value_cache, 0, kv_bytes);
