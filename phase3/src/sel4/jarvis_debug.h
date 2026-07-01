@@ -3,8 +3,9 @@
  * Compile-time flags to control diagnostic output.
  * Set to 1 to enable, 0 to disable.
  *
- * For 30-day stability test: all 0 except JARVIS_DBG_STATS.
- * For debugging: enable as needed.
+ * For the deployed/stability config: diagnostic flags are 0 except JARVIS_DBG_STATS and
+ * JARVIS_DBG_INFER_SUMMARY; feature flags follow their own notes (JARVIS_G3_RETRIEVAL is ON
+ * as of G3/M6). Enable individual diagnostics as needed for debugging.
  */
 
 #ifndef JARVIS_DEBUG_H
@@ -52,15 +53,18 @@
  * build sets it = 1; the deployed image rebuilds with it = 0. */
 #define JARVIS_SMP_PROBE  0
 
-/* Phase 5 G3/M1 (Retrieval Before Inference): master switch for the PA-side retrieval path.
- * When 1, Process A — on the inference route, BEFORE MSG_QUERY — scores the recent episodic
- * batch (g3_select) and PACKS an assembled preamble into the shared context pool's staging
- * buffer (sctx_pack_preamble), logging one [RETR] line per inference. M1 only PACKS: Process B
- * does NOT read or inject the preamble until M2, so generation stays BYTE-IDENTICAL even with
- * this ON. When 0 (the committed default + deploy), the whole block + its g3_retrieval.h
- * include compile out — no new dependency, deploy byte-identical. The flag-ON build also needs
- * g3_retrieval.c/.h added to the Process A build (build_jarvis_x86.sh) — wired at box-smoke time. */
-#define JARVIS_G3_RETRIEVAL  0
+/* Phase 5 G3 (Retrieval Before Inference): master switch for the retrieval path.
+ * DEPLOYED DEFAULT = 1 since G3/M6 (2026-07-01). When 1, Process A — on the inference route,
+ * BEFORE MSG_QUERY — scores the recent episodic batch (g3_select), assembles a preamble, and
+ * PACKS it into the shared context pool (sctx_pack_preamble), logging one [RETR] line per
+ * inference; Process B then INJECTS that preamble into the Gemma prompt between the user turn's
+ * `\n` and the question (bounded by g3_prompt_budget, prompt_ids[256], KV stays 512). Box-
+ * verified M0–M5: inject + coherent prose (g3_candidate_usable filter) + <50 ms on a cache miss
+ * + NVMe-backed post-reboot recall. When 0, the whole PA block + PB injection + their
+ * g3_retrieval.h include compile out — deploy byte-identical, no new dependency (OFF==baseline).
+ * PA links g3_retrieval.c (build_jarvis_x86.sh); PB uses only the header's static-inline
+ * g3_prompt_budget. */
+#define JARVIS_G3_RETRIEVAL  1
 
 /* Phase 5 G3/M4c: synthetic-fact PROBE harness (box-only). When 1 (alongside JARVIS_G3_RETRIEVAL=1),
  * Process A seeds ONE known INFER fact (marker SYNTHPROBEZX9Q7) whose query matches an inference
