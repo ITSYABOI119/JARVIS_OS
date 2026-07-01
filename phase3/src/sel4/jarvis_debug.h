@@ -78,6 +78,15 @@
  * flag-ON QEMU smoke. */
 #define JARVIS_G3_PROBE  0
 
+/* Phase 5 G3/M6: OFF-vs-ON retrieval A/B harness (box-only). When 1, Process A dumps the FULL query +
+ * FULL response for every inference as one `[AB] q=<n> query="..." resp="..."` serial line (control
+ * chars -> space so the log stays line-oriented), so an offline judge can compare a flag-OFF (baseline)
+ * run against a JARVIS_G3_RETRIEVAL=1 run over the IDENTICAL, deterministic (rng_state=42) query
+ * sequence — the M6 re-flip gate ("does retrieval HELP", not just "work"). Independent of
+ * JARVIS_G3_PROBE (leave PROBE=0 for the A/B so the real inference prompts are used). Default 0 ->
+ * compiles out, deploy byte-identical. */
+#define JARVIS_G3_AB  0
+
 /* Phase 5 #6 cache-growth — canon = promote repeated query→action patterns from the EPISODIC LOG
  * into the decision cache (see phase5/docs/PHASE_5_GOAL6_CACHE_GROWTH.md). The route-through-cache
  * impl (commit 7e8c30f) was REVERTED (wrong design vs canon); this flag is RETAINED — the canon

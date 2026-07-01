@@ -2989,6 +2989,22 @@ static void *main_continued(void *arg UNUSED)
             }
 #endif
 
+#if JARVIS_G3_AB
+            /* Phase 5 G3/M6 A/B harness (box-only, gated, deploy byte-identical): dump the FULL
+             * query + FULL response for every inference so an offline judge can compare a flag-OFF
+             * (baseline) run against a JARVIS_G3_RETRIEVAL=1 run over the identical, deterministic
+             * (rng_state=42) query sequence. Control chars -> space so the serial log stays
+             * line-oriented; q= is q_total for OFF/ON pairing. */
+            puts_serial("[AB] q="); put_dec((uint32_t)q_total);
+            puts_serial(" query=\""); puts_serial(query);
+            puts_serial("\" resp=\"");
+            for (int i = 0; i < resp_offset; i++) {
+                char ch = full_response[i];
+                putc_serial((ch >= 0x20 && ch < 0x7F) ? ch : ' ');
+            }
+            puts_serial("\"\n");
+#endif
+
         } else if (slot < 19) {
             /* --- Heartbeat (10%) --- */
             q_heartbeat++;
