@@ -1,0 +1,253 @@
+=== QAT (UD-Q4_K_XL) vs deployed Q4_K_M — 10-prompt responses ===
+Engine: JARVIS qmodel_forward (native, Ryzen 5 5600, greedy temp=0, 100 tok/prompt) — the DEPLOY engine.
+Why our engine (not llama.cpp): the QAT UD-Q4_K_XL fails to load in llama.cpp build 8728 (missing shared-KV tensor blk.15.attn_k.weight),
+so both models were run on OUR engine for an apples-to-apples, deploy-relevant comparison.
+
+################################################################
+# MODEL A (BASELINE, deployed PTQ): gemma-4-E2B-it-Q4_K_M.gguf
+################################################################
+=== Gemma-4-E2B-It ===
+file: models/gemma-4-E2B-it-Q4_K_M.gguf
+engine: JARVIS qmodel_forward | greedy | 100 tokens/prompt | arch=gemma4
+
+--- Prompt 1: "The seL4 microkernel is" ---
+The seL4 microkernel is a **formally verified, small, and highly secure microkernel**.
+
+Here's a breakdown of what that means and why it's significant:
+
+### Key Characteristics of seL4
+
+1. **Microkernel Architecture:**
+   * **Minimalism:** The kernel itself is extremely small, containing only the absolute essentials (like inter-process communication (IPC), basic memory management, and thread scheduling).
+   * **Separation of Concerns:** Most
+
+--- Prompt 2: "Explain how virtual memory works in three sentences." ---
+Virtual memory allows a computer to run programs larger than the physical RAM by using disk space as an extension of memory. It divides the program's address space into smaller chunks and loads only the necessary parts into physical RAM at any given time. When a program needs data not in RAM, the operating system swaps inactive pages to the hard drive, enabling efficient multitasking.<turn|><turn|><turn|><turn|>
+
+
+--- Prompt 3: "What is the difference between a process and a thread?" ---
+The difference between a **process** and a **thread** is fundamental to understanding how modern operating systems manage and execute programs. The core distinction lies in **resource ownership** and **isolation**.
+
+Here is a detailed breakdown of each concept and a comparison:
+
+---
+
+## 1. Process
+
+A **process** is an independent, running instance of a program. It is the operating system's primary unit of resource allocation.
+
+### Key Characteristics of a Process:
+
+* **Independent Execution
+
+--- Prompt 4: "Write a C function that reverses a string in place." ---
+Here is a C function that reverses a string in place.
+
+This implementation uses two pointers, one starting at the beginning of the string and one at the end, and swaps the characters they point to until they meet in the middle.
+
+### C Implementation
+
+```c
+#include <stdio.h>
+#include <string.h>
+
+/**
+ * reverse_string_inplace
+ * 
+ * Reverses a null-terminated string in place.
+ * 
+ * @
+
+--- Prompt 5: "The capital of Australia is" ---
+The capital of Australia is **Canberra**.<turn|><turn|><turn|>
+
+--- Prompt 6: "What are the key benefits of formally verified software?" ---
+Formally verified software (FS) is a rigorous process of proving that a software system adheres to a precise, mathematical specification. This contrasts with traditional testing, which only shows the presence of bugs, not their absence.
+
+The key benefits of formally verified software are substantial and span across safety, reliability, security, and correctness. Here is a breakdown of the most significant advantages:
+
+---
+
+## 1. Unprecedented Correctness and Reliability
+
+This is the core benefit. Formal verification provides mathematical
+
+--- Prompt 7: "Describe the TCP three-way handshake step by step." ---
+The TCP three-way handshake is a fundamental process used to establish a reliable connection between a client and a server before any actual data is exchanged. It ensures that both parties are ready to communicate and agree on initial sequence numbers.
+
+Here is a step-by-step description of the TCP three-way handshake:
+
+---
+
+## The TCP Three-Way Handshake
+
+The handshake involves three distinct steps, each involving the exchange of specific TCP segments (packets).
+
+### Step 1: SYN
+
+--- Prompt 8: "What happens when you type a URL into a browser?" ---
+When you type a URL (Uniform Resource Locator) into a web browser, a complex, multi-step process begins to fetch and display the requested web page.
+
+Here is a detailed breakdown of what happens, step-by-step:
+
+---
+
+## Phase 1: Parsing the URL and DNS Lookup
+
+### 1. URL Parsing
+The browser first analyzes the URL you typed (e.g., `https://www.example.com/page.html`). It breaks the URL
+
+--- Prompt 9: "Compare RISC and CISC architectures in two sentences." ---
+RISC (Reduced Instruction Set Computing) architectures utilize a small, highly optimized set of simple instructions, leading to faster execution and simpler hardware design. In contrast, CISC (Complex Instruction Set Computing) architectures feature a large, complex set of instructions that can perform multiple operations in a single instruction, often resulting in denser code but more complex hardware.<turn|><turn|>
+
+--- Prompt 10: "Write a bash one-liner to find all .c files larger than 1MB." ---
+Here are a few ways to write that bash one-liner, depending on your preference and what you want to do with the results:
+
+### 1. Using `find` with `-size` (Most standard and efficient)
+
+This is the most idiomatic and efficient way to do this using the `find` command.
+
+```bash
+find . -type f -name "*.c" -size +1M
+```
+
+**Explanation:**
+
+* **`find .`**: Start
+
+=== End Gemma-4-E2B-It ===
+
+
+################################################################
+# MODEL B (QAT): gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf
+################################################################
+=== Gemma-4 E2B IT (smart Q4_0, QAT-lossless) ===
+file: models/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf
+engine: JARVIS qmodel_forward | greedy | 100 tokens/prompt | arch=gemma4
+
+--- Prompt 1: "The seL4 microkernel is" ---
+is a a a unnecessary a a to...<turn|>.<turn|>..)..。。..。。。。。。。<turn|><turn|>。。<turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|>。。。。。。。。。。。<turn|><turn|><turn|><turn|><turn|><turn|>。<turn|><turn|><turn|>。。。。。。。。。。。。。<turn|>。<turn|>。。。。。<turn|>。。。。。。。。。。。意味。。
+
+--- Prompt 2: "Explain how virtual memory works in three sentences." ---
+
+**..<turn|>.
+
+
+
+
+
+
+
+<turn|>
+
+<turn|><turn|>
+
+<turn|>
+
+<turn|><turn|>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+。
+
+<turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|>
+
+--- Prompt 3: "What is the difference between a process and a thread?" ---
+))))<turn|>..........<turn|>...<turn|><turn|>.<turn|><turn|><turn|>...<turn|>. 포..。.。.。....
+
+<turn|>..』.)』。。。』。。。。。。。。。。。。。。。。面。。。。。。。。。。。。。。。。。。。。。。。。。意味。。意味
+
+--- Prompt 4: "Write a C function that reverses a string in place." ---
+<turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|>
+
+<turn|><turn|><turn|>.<turn|>...<turn|>......................<turn|>
+
+
+
+
+
+<turn|>............................................の
+
+--- Prompt 5: "The capital of Australia is" ---
+<turn|>
+
+
+
+
+
+
+
+ **<turn|><turn|>
+
+<turn|>
+
+
+
+
+
+
+
+
+
+<turn|><turn|>
+
+<turn|><turn|>
+
+
+
+
+
+
+
+
+
+
+
+ a..))) 과.来来 ราの。の.のの。。.。。。。。。。。。。。。。。 anlam�na.の的的的的的的的。。。。。。。。。。。。。。。。。。。。。 anlam�na。。。
+
+<turn|><turn|><turn|><turn|>
+
+--- Prompt 6: "What are the key benefits of formally verified software?" ---
+<turn|><turn|>))))))))))))))))).<turn|><turn|><turn|>)<turn|>)分解..)) の.。。..。。。。。。 分.. 分。。。。。 වේ..。。。の.. เรีย... 면...... 면.。。。。。。。。。。。。。 面。。
+
+<turn|>
+
+<turn|><turn|>意味.。 Он.
+
+--- Prompt 7: "Describe the TCP three-way handshake step by step." ---
+<turn|>)<turn|>)))))<turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|>)<turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|>))<turn|><turn|><turn|>
+
+--- Prompt 8: "What happens when you type a URL into a browser?" ---
+://://<turn|>
+
+
+
+<turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|>
+
+--- Prompt 9: "Compare RISC and CISC architectures in two sentences." ---
+( ())<turn|>
+
+.........<turn|>..<turn|>.<turn|>.<turn|><turn|>.<turn|><turn|><turn|><turn|><turn|>.<turn|><turn|><turn|><turn|>.。.<turn|><turn|>。<turn|><turn|><turn|>。.<turn|><turn|><turn|>.<turn|><turn|><turn|>..<turn|>。<turn|>。<turn|><turn|><turn|>。。<turn|><turn|>
+
+。。。<turn|>
+
+..。)<turn|>
+
+.の。。。。。。。。。。。面。。。。。面。。
+
+--- Prompt 10: "Write a bash one-liner to find all .c files larger than 1MB." ---
+<turn|>.).).))...<turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|>的.)<turn|>.。<turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|><turn|>
+
+=== End Gemma-4 E2B IT (smart Q4_0, QAT-lossless) ===

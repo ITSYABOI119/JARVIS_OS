@@ -1,0 +1,19 @@
+=== JARVIS Native Engine Benchmark — thread sweep (main PC) ===
+Host: DESKTOP-J (Ryzen 5 5600, 6c/12t) — WSL gcc 13.3.0, -O2 -mavx2 -mfma -DJARVIS_PTHREAD
+Note: the "threads" column in each row below is a HARDCODED literal 1 in bench_engine.c (printf);
+      the REAL thread count is the JARVIS_THREADS value in the "### <N>T" header above each row.
+Models: gemma-4-E2B-it-Q4_K_M.gguf (2.89 GiB, deployed PTQ)  vs  gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf (2.44 GiB, QAT)
+Metric: tg128 tok/s (greedy)
+
+### 1T  BASELINE
+| Gemma-4-E2B-It                 |     2.89 GiB |     2.71 B | JARVIS     |       1 |           tg128 |              2.93 ± 0.00 |
+### 1T  QAT
+| Gemma-4 E2B IT (smart Q4_0, QAT-lossless) |     2.44 GiB |     2.71 B | JARVIS     |       1 |           tg128 |              2.25 ± 0.00 |
+### 6T  BASELINE (mirrors deployed NN=6)
+| Gemma-4-E2B-It                 |     2.89 GiB |     2.71 B | JARVIS     |       1 |           tg128 |              6.24 ± 0.00 |
+### 6T  QAT
+| Gemma-4 E2B IT (smart Q4_0, QAT-lossless) |     2.44 GiB |     2.71 B | JARVIS     |       1 |           tg128 |              7.09 ± 0.00 |
+### 12T BASELINE
+| Gemma-4-E2B-It                 |     2.89 GiB |     2.71 B | JARVIS     |       1 |           tg128 |              5.77 ± 0.00 |
+### 12T QAT
+| Gemma-4 E2B IT (smart Q4_0, QAT-lossless) |     2.44 GiB |     2.71 B | JARVIS     |       1 |           tg128 |              7.27 ± 0.00 |

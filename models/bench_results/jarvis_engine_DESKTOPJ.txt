@@ -1,0 +1,159 @@
+=== JARVIS Native Engine Benchmark ===
+Date: Wed Jul  1 18:07:49 AEST 2026
+Host: DESKTOPJ
+CPU:  AMD Ryzen 5 5600 6-Core Processor
+RAM:  7.7 GB
+Models: 2
+
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+
+[1/2] gemma-4-E2B-it-Q4_K_M.gguf (2.9G)
+  Loading /mnt/c/Users/jluca/Documents/JARVIS_OS/models/gemma-4-E2B-it-Q4_K_M.gguf (2.89 GiB)...
+  Loaded in 0.2s (gemma4, 35 layers, 1536 dim)
+  Peak RSS: 3023 MB
+[config] arch='gemma4' n_kv=56 n_tensors=601
+[config] dim=1536
+[config] n_layers=35
+[config] n_heads=8 n_kv_heads=1
+[config] head_dim=512
+[config] feed_forward_length is array (gemma4), hidden_dim=0 for now
+[config] vocab_size=262144 hidden_dim=0
+[config] extensions: ple=256 swa=512 swa_hd=256 shared_kv=20 softcap=30.0 eps=1e-06 theta_swa=10000
+[config] OK: dim=1536 layers=35 heads=8/1 hd=512/256 ffn=12288 vocab=262144
+[qmodel] Derived per-layer dims from tensor shapes:
+  layer  0: swa=1 ffn= 6144 kv_share=-1
+  layer  1: swa=1 ffn= 6144 kv_share=-1
+  layer  2: swa=1 ffn= 6144 kv_share=-1
+  layer  3: swa=1 ffn= 6144 kv_share=-1
+  layer  4: swa=0 ffn= 6144 kv_share=-1
+  layer  5: swa=1 ffn= 6144 kv_share=-1
+  layer  6: swa=1 ffn= 6144 kv_share=-1
+  layer  7: swa=1 ffn= 6144 kv_share=-1
+  layer  8: swa=1 ffn= 6144 kv_share=-1
+  layer  9: swa=0 ffn= 6144 kv_share=-1
+  layer 10: swa=1 ffn= 6144 kv_share=-1
+  layer 11: swa=1 ffn= 6144 kv_share=-1
+  layer 12: swa=1 ffn= 6144 kv_share=-1
+  layer 13: swa=1 ffn= 6144 kv_share=-1
+  layer 14: swa=0 ffn= 6144 kv_share=-1
+  layer 15: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 16: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 17: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 18: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 19: swa=0 ffn=12288 kv_share=14 (from L14)
+  layer 20: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 21: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 22: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 23: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 24: swa=0 ffn=12288 kv_share=14 (from L14)
+  layer 25: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 26: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 27: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 28: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 29: swa=0 ffn=12288 kv_share=14 (from L14)
+  layer 30: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 31: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 32: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 33: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 34: swa=0 ffn=12288 kv_share=14 (from L14)
+  hidden_dim=12288
+[qmodel] Tensor types (layer 0):
+  wq=Q4_K wk=Q4_K wv=Q6_K wo=Q4_K
+  gate=Q4_K up=Q4_K down=Q6_K norm=F32
+  q_norm=F32 k_norm=F32
+  post_attn=F32 post_ffw=F32 scale=F32
+  embed=Q4_K output=Q4_K
+
+=== AUDIT ===
+[AUDIT] inp_gate.n_elements=393216 (expected dim*ple_dim=393216)
+[AUDIT] inp_gate.type=F32 (F32 expected)
+[AUDIT] per_layer_model_proj LOADED: n_elements=13762560 type=BF16
+[AUDIT]   used as context component: BF16 matmul, combine (identity + context) / sqrt(2)
+[AUDIT] rope_neox=1 (Gemma should be 1)
+[AUDIT] attn_scale=1.0 for Gemma 4 (Q/K RMSNorm in use); Llama uses 1/sqrt(256)
+[AUDIT] rms_norm_eps=1e-06 (research says 1e-6)
+[AUDIT] kv_share_map: 15 own, 20 shared (config says shared_kv=20)
+[AUDIT] L0 q_norm.n_elements=256 (SWA head_dim=256)
+[AUDIT] L34 q_norm.n_elements=512 (global head_dim=512)
+[AUDIT] layer_output_scale L0=0.0178 L34=0.1670
+=== END AUDIT ===
+
+[vocab] merges: 514906 total, 514906 matched to tokens
+| Gemma-4-E2B-It                 |     2.89 GiB |     2.71 B | JARVIS     |       1 |           tg128 |              5.50 ± 0.00 |
+
+[2/2] gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf (2.5G)
+  Loading /mnt/c/Users/jluca/Documents/JARVIS_OS/models/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf (2.44 GiB)...
+  Loaded in 0.2s (gemma4, 35 layers, 1536 dim)
+  Peak RSS: 2559 MB
+[config] arch='gemma4' n_kv=47 n_tensors=541
+[config] dim=1536
+[config] n_layers=35
+[config] n_heads=8 n_kv_heads=1
+[config] head_dim=512
+[config] feed_forward_length is array (gemma4), hidden_dim=0 for now
+[config] vocab_size=262144 hidden_dim=0
+[config] extensions: ple=256 swa=512 swa_hd=256 shared_kv=20 softcap=30.0 eps=1e-06 theta_swa=10000
+[config] OK: dim=1536 layers=35 heads=8/1 hd=512/256 ffn=12288 vocab=262144
+[qmodel] Derived per-layer dims from tensor shapes:
+  layer  0: swa=1 ffn= 6144 kv_share=-1
+  layer  1: swa=1 ffn= 6144 kv_share=-1
+  layer  2: swa=1 ffn= 6144 kv_share=-1
+  layer  3: swa=1 ffn= 6144 kv_share=-1
+  layer  4: swa=0 ffn= 6144 kv_share=-1
+  layer  5: swa=1 ffn= 6144 kv_share=-1
+  layer  6: swa=1 ffn= 6144 kv_share=-1
+  layer  7: swa=1 ffn= 6144 kv_share=-1
+  layer  8: swa=1 ffn= 6144 kv_share=-1
+  layer  9: swa=0 ffn= 6144 kv_share=-1
+  layer 10: swa=1 ffn= 6144 kv_share=-1
+  layer 11: swa=1 ffn= 6144 kv_share=-1
+  layer 12: swa=1 ffn= 6144 kv_share=-1
+  layer 13: swa=1 ffn= 6144 kv_share=-1
+  layer 14: swa=0 ffn= 6144 kv_share=-1
+  layer 15: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 16: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 17: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 18: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 19: swa=0 ffn=12288 kv_share=14 (from L14)
+  layer 20: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 21: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 22: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 23: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 24: swa=0 ffn=12288 kv_share=14 (from L14)
+  layer 25: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 26: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 27: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 28: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 29: swa=0 ffn=12288 kv_share=14 (from L14)
+  layer 30: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 31: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 32: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 33: swa=1 ffn=12288 kv_share=13 (from L13)
+  layer 34: swa=0 ffn=12288 kv_share=14 (from L14)
+  hidden_dim=12288
+[qmodel] Tensor types (layer 0):
+  wq=Q4_0 wk=Q4_0 wv=Q4_0 wo=Q4_0
+  gate=Q4_0 up=Q4_0 down=Q4_0 norm=F32
+  q_norm=F32 k_norm=F32
+  post_attn=F32 post_ffw=F32 scale=F32
+  embed=Q4_0 output=Q4_0
+
+=== AUDIT ===
+[AUDIT] inp_gate.n_elements=393216 (expected dim*ple_dim=393216)
+[AUDIT] inp_gate.type=Q4_0 (F32 expected)
+[AUDIT] per_layer_model_proj LOADED: n_elements=13762560 type=Q4_0
+[AUDIT]   used as context component: BF16 matmul, combine (identity + context) / sqrt(2)
+[AUDIT] rope_neox=1 (Gemma should be 1)
+[AUDIT] attn_scale=1.0 for Gemma 4 (Q/K RMSNorm in use); Llama uses 1/sqrt(256)
+[AUDIT] rms_norm_eps=1e-06 (research says 1e-6)
+[AUDIT] kv_share_map: 15 own, 20 shared (config says shared_kv=20)
+[AUDIT] L0 q_norm.n_elements=256 (SWA head_dim=256)
+[AUDIT] L34 q_norm.n_elements=512 (global head_dim=512)
+[AUDIT] layer_output_scale L0=0.0209 L34=0.1650
+=== END AUDIT ===
+
+[vocab] merges: 514906 total, 514906 matched to tokens
+| Gemma-4 E2B IT (smart Q4_0, QAT-lossless) |     2.44 GiB |     2.71 B | JARVIS     |       1 |           tg128 |              7.26 ± 0.00 |
+
+=== Done: 2 models tested ===
