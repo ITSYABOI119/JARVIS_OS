@@ -315,6 +315,20 @@ jobs:
           -o /tmp/tg3
         /tmp/tg3
 
+    - name: "Phase 5: Cache-Growth promotion logic (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
+          phase3/src/ai/test_cache_growth.c phase3/src/ai/cache_growth.c \
+          -o /tmp/tcg
+        /tmp/tcg
+
+    - name: "Phase 5: Decision-cache LRU eviction (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
+          phase3/src/ai/test_decision_cache_lru.c phase3/src/ai/decision_cache.c \
+          -o /tmp/tlru
+        /tmp/tlru
+
     - name: "Phase 3: FAT32 Reader (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 -DJARVIS_TEST_MOCK \
