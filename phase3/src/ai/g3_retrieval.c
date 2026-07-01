@@ -93,3 +93,57 @@ int g3_build_preamble(const g3_candidate_t *sel, int n, char *out, int cap)
     out[pos] = '\0';   /* pos <= limit <= cap-1 — never past cap */
     return pos;
 }
+
+/* ---- G3/M6: injection-hygiene variants (fix the A/B P6 cross-topic echo) ---- */
+
+int g3_select_exact_only(const g3_candidate_t *cands, int n, uint64_t query_key, g3_candidate_t *out)
+{
+    if (!cands || !out || n <= 0)
+        return 0;
+
+    /* Newest-seq candidate whose key EXACTLY matches — and ONLY that. No recency fallback:
+     * a newer-but-different-key fact must never be injected into an unrelated query (the A/B P6
+     * leak). Strict '>' makes input order break seq ties (deterministic). */
+    int best = -1;
+    for (int i = 0; i < n; i++) {
+        if (cands[i].query_key == query_key &&
+            (best < 0 || cands[i].seq > cands[best].seq))
+            best = i;
+    }
+    if (best < 0)
+        return 0;   /* no exact key => no injection */
+    out[0] = cands[best];
+    return 1;
+}
+
+int g3_build_preamble_answer_only(const g3_candidate_t *sel, int n, char *out, int cap)
+{
+    if (!out || cap <= 0)
+        return 0;
+    out[0] = '\0';
+    if (!sel || n <= 0)
+        return 0;   /* no relevant memory => no preamble */
+
+    int limit = cap - 1;
+    if (limit > PREAMBLE_MAX_BYTES - 1)
+        limit = PREAMBLE_MAX_BYTES - 1;
+    if (limit < 0)
+        limit = 0;
+
+    int pos = 0;
+    static const char HDR[] = "Known context (your earlier answer to this question):\n";
+    g3_append(out, &pos, limit, HDR, (int)(sizeof HDR - 1));
+
+    /* ANSWER-ONLY: emit each selected record's RESPONSE (never its query). No "- " / question
+     * text, so the prior QUESTION can't read like an instruction and get echoed verbatim. */
+    int facts = n < G3_MAX_FACTS ? n : G3_MAX_FACTS;
+    for (int i = 0; i < facts; i++) {
+        int rn = sel[i].resp_len < G3_R_MAX ? sel[i].resp_len : G3_R_MAX;
+        if (sel[i].resp)
+            g3_append(out, &pos, limit, sel[i].resp, rn);
+        g3_append(out, &pos, limit, "\n", 1);
+    }
+
+    out[pos] = '\0';   /* pos <= limit <= cap-1 — never past cap */
+    return pos;
+}

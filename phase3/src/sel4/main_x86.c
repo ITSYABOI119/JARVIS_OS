@@ -2731,10 +2731,10 @@ static void *main_continued(void *arg UNUSED)
                 }
 
                 g3_candidate_t g3sel[G3_MAX_FACTS];
-                int ns   = g3_select(g3cands, g3n, qkey, G3_MAX_FACTS, g3sel);
+                int ns   = g3_select_exact_only(g3cands, g3n, qkey, g3sel);   /* G3/M6: exact-key ONLY, no recency fallback (fixes A/B P6 leak) */
                 int exact = (ns > 0 && g3sel[0].query_key == qkey);   /* exact match lands at slot 0 */
                 char g3pre[SCTX_PREAMBLE_MAX];
-                int plen = g3_build_preamble(g3sel, ns, g3pre, sizeof g3pre);
+                int plen = g3_build_preamble_answer_only(g3sel, ns, g3pre, sizeof g3pre);   /* G3/M6: fenced answer-only preamble (no embedded prior-question text) */
                 sctx_pack_preamble(g_sctx, g3pre, (uint32_t)plen);     /* M1: PACK only — PB ignores until M2 */
 
                 /* G3/M4: retrieval telemetry — in-RAM latency (µs; *1000 before /TSC_PER_MS to keep

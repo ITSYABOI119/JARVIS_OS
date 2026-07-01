@@ -50,6 +50,22 @@ int g3_select(const g3_candidate_t *cands, int n, uint64_t query_key, int max, g
  * (0 when n<=0 — the "no relevant memory => no preamble" path). */
 int g3_build_preamble(const g3_candidate_t *sel, int n, char *out, int cap);
 
+/* ---- G3/M6: injection-hygiene variants (fix the A/B P6 cross-topic echo) ---- */
+
+/* Like g3_select but EXACT-KEY-ONLY: writes the NEWEST-seq candidate whose query_key == query_key
+ * into out[0] and returns 1; returns 0 when there is NO exact-key match — NO recency fallback, so a
+ * topically-distant newest fact can never be injected into an unrelated query. out must hold 1
+ * entry. Pure/host-testable. */
+int g3_select_exact_only(const g3_candidate_t *cands, int n, uint64_t query_key, g3_candidate_t *out);
+
+/* Assemble a FENCED, ANSWER-ONLY preamble (NO embedded prior-question text — the anti-echo fix for
+ * the G3/M6 A/B P6 leak) into out[0..cap):
+ *   "Known context (your earlier answer to this question):\n" then per fact resp(<=G3_R_MAX) "\n".
+ * Same discipline as g3_build_preamble: copy text by *_len (never strlen), total cap =
+ * min(cap, PREAMBLE_MAX_BYTES)-1, always NUL-terminate, NEVER past cap. Returns the length
+ * (0 when n<=0). */
+int g3_build_preamble_answer_only(const g3_candidate_t *sel, int n, char *out, int cap);
+
 /* ---- G3/M2: prompt-injection token budget (pure, host-testable) ---- */
 
 #define G3_PREAMBLE_TOK_CAP  160   /* hard cap on injected preamble tokens */

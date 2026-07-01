@@ -158,9 +158,70 @@ static void test_usable(void)
     CHECK(g3_candidate_usable(2, 0,  0, 2, 0) == 0, "T7 INFER + OK but empty resp -> excluded");
 }
 
+/* ================================================================
+ * T8 — G3/M6 exact-key-ONLY select: exact hit newest wins; NO recency fallback
+ *      (fixes the A/B P6 leak where a newer, WRONG-key fact was injected).
+ * ================================================================ */
+static void test_exact_only(void)
+{
+    g3_candidate_t cands[] = {
+        { .query_key = 0xAA, .seq = 1, .resp = "ra",  .resp_len = 2 },
+        { .query_key = 0xBB, .seq = 9, .resp = "rb",  .resp_len = 2 },   /* newest OVERALL, wrong key */
+        { .query_key = 0xAA, .seq = 5, .resp = "ra2", .resp_len = 3 },   /* newest with key 0xAA */
+        { .query_key = 0xCC, .seq = 3, .resp = "rc",  .resp_len = 2 },
+    };
+    g3_candidate_t out[1];
+
+    CHECK(g3_select_exact_only(cands, 4, 0xAA, out) == 1, "T8 exact hit -> 1");
+    CHECK(out[0].query_key == 0xAA && out[0].seq == 5,
+          "T8 exact hit = newest-seq exact (dup -> newest, NOT the newer wrong-key BB seq9)");
+    CHECK(g3_select_exact_only(cands, 4, 0xFF, out) == 0,
+          "T8 no exact key -> 0 (does NOT fall back to recency)");
+    CHECK(g3_select_exact_only(cands, 4, 0xEE, out) == 0, "T8 recency-only candidate set -> 0");
+    CHECK(g3_select_exact_only(cands, 0, 0xAA, out) == 0, "T8 n=0 -> 0");
+}
+
+/* ================================================================
+ * T9 — G3/M6 fenced ANSWER-ONLY preamble: no prior-question text (anti-echo), answer present,
+ *      cap-safe (0xAA over-run canary), empty path.
+ * ================================================================ */
+static void test_answer_only(void)
+{
+    const char *Q = "What is the seL4 microkernel";   /* the prior QUESTION — must NOT appear */
+    const char *R = "seL4 is a formally verified microkernel";
+    g3_candidate_t sel[1] = {
+        { .query = Q, .query_len = (uint16_t)strlen(Q), .resp = R, .resp_len = (uint16_t)strlen(R) },
+    };
+    char buf[256];
+    int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf);
+    CHECK(len > 0, "T9 answer-only preamble built");
+    CHECK(strstr(buf, "Known context (your earlier answer to this question):") != NULL,
+          "T9 fenced header present");
+    CHECK(strstr(buf, R) != NULL, "T9 answer text present");
+    CHECK(strstr(buf, Q) == NULL, "T9 anti-echo: prior QUESTION text NOT in preamble");
+    CHECK(strstr(buf, "- ") == NULL, "T9 anti-echo: no '- <query>' pattern");
+
+    /* cap-safe: a giant response into a tiny cap must NOT overrun (0xAA canary past cap intact). */
+    char cbuf[64];
+    memset(cbuf, (int)0xAA, sizeof cbuf);
+    const int CAP = 32;
+    char big[300];
+    memset(big, 'Z', sizeof big);
+    g3_candidate_t sbig[1] = { { .query = Q, .query_len = 5, .resp = big, .resp_len = 300 } };
+    int l2 = g3_build_preamble_answer_only(sbig, 1, cbuf, CAP);
+    CHECK(l2 <= CAP - 1 && cbuf[l2] == '\0', "T9 cap: len<=cap-1 + NUL-terminated");
+    CHECK((unsigned char)cbuf[CAP] == 0xAA && (unsigned char)cbuf[63] == 0xAA,
+          "T9 cap: 0xAA canary past cap intact (no overrun)");
+
+    /* empty sel -> 0, out[0]=='\0'. */
+    char ebuf[16] = "x";
+    CHECK(g3_build_preamble_answer_only(NULL, 0, ebuf, (int)sizeof ebuf) == 0 && ebuf[0] == '\0',
+          "T9 empty sel -> 0 + NUL");
+}
+
 int main(void)
 {
-    printf("=== G3 Retrieval Tests (Phase 5 G3/M0 + M2 budget + M3 filter) ===\n");
+    printf("=== G3 Retrieval Tests (Phase 5 G3/M0 + M2 budget + M3 filter + M6 hygiene) ===\n");
     test_scorer();
     test_preamble_exact();
     test_empty();
@@ -168,6 +229,8 @@ int main(void)
     test_nul_safety();
     test_budget();
     test_usable();
+    test_exact_only();
+    test_answer_only();
     printf("\n== Results: %d PASS, %d FAIL ==\n", pass, fail);
     return fail ? 1 : 0;
 }
