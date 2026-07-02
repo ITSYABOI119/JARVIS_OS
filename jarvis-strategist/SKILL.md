@@ -3,10 +3,18 @@
 for new coding session say:
 Read CLAUDE.md and check git log. What's the current state?
 
+TIERING — pick the right depth (the full sweep is expensive; don't default to it):
+- QUICK TIER (continuing recent work): the line above + the latest phase5/weeks/weekNN/ status doc is enough context. Skip the agent sweep.
+- FULL SWEEP (cold start, new machine or model, back after a gap, or a phase/milestone boundary): use the exploration prompt below.
+
 then get to explore for context say:
   Before doing any work, deeply explore this entire codebase using parallel agents (Opus or better).
   I want you to understand every file, every API, every pattern. Dispatch agents to read and analyze
   everything — the more thorough the better.
+
+  Ground rules for EVERY agent: return a STRUCTURED report (raw data, not narrative), capped at
+  ~900 words. When sources conflict, newer evidence wins — commits and ADRs override audit docs,
+  stale plan rows, and this SKILL.md itself (this file is a dated snapshot; the repo is the truth).
 
   REPO: C:\Users\jluca\Documents\JARVIS_OS   (main PC; the JARVIS PC clone is ~/Desktop/JARVIS_OS via ssh jarvis)
 
@@ -22,7 +30,8 @@ then get to explore for context say:
   - Read phase3/docs/PHASE_3_FINAL_REPORT.md (historical; Phase 3 tagged v0.2.1-beta)
   - Run: git log --oneline -30
   - Run: git diff --stat HEAD~5..HEAD
-  - Report: current phase, current milestone, what's done, what's next, blockers/parked items, doc drift
+  - Self-check: compare THIS skill file (jarvis-strategist/SKILL.md) against your findings — any stale claim in it (phase status, critical path, milestones, paths, counts, log semantics) is drift; list the exact corrections as a maintenance item
+  - Report: current phase, current milestone, what's done, what's next, blockers/parked items, doc drift (incl. THIS SKILL.md)
 
   AGENT 2: Inference Engine (AI Core)
   - Read ALL files in phase3/src/ai/:
@@ -94,10 +103,15 @@ then get to explore for context say:
   - Report: what carried forward, security posture (fixed/accepted/open), bench-off + QAT outcome, engine status vs plan
 
   After ALL agents complete, synthesize a unified summary:
+  0. FIRST reconcile contradictions between agent reports — prefer newer evidence (commits/ADRs
+     supersede audit findings and stale plan/doc rows); state each reconciliation explicitly
+     (e.g. "agent X reported SEC-050 single-core as open — superseded by the M3 threadpool")
   1. Architecture diagram (text-based) showing how all components connect
   2. Complete file inventory with LOC and test coverage
   3. Known issues / TODO items found in code comments
   4. Recommended next tasks ranked by impact
+  5. SKILL.md maintenance: if any agent found this file stale, list the exact corrections and offer
+     to commit the refresh
 
   Then say "Ready — what would you like to work on?" and wait for instructions.
 
@@ -131,7 +145,8 @@ The user copies your prompts and pastes them into the coding session, then bring
 - Rank remaining tasks by impact (high/medium/low)
 - Distinguish between tasks doable NOW (main PC / CI / KVM) vs tasks that need the JARVIS PC (bare-metal build/flash via `ssh jarvis`)
 - Always know where we are and what the critical path is
-- Current critical path: **Phase 5 (Memory) — the "it-remembers" MVP arc.** G1 (episodic), G2 (shared context), G3 (retrieval M0–M5) are box-verified; what's left of the arc: **#6 cache-growth M1 (box wiring — M0 selector + SEC-024 LRU host-tests landed)** and the **G3/M6 re-A/B** (the P6 injection-hygiene fix landed 70ca236 — exact-key-only + fenced answer-only preamble; retrieval stays default-OFF until the offline OFF-vs-ON A/B is re-run clean). Then #4 semantic / #5 SHIELD-learning / #7 consolidation. ALL Phase 5 features are compile-OFF by default → the shipped image stays byte-identical to v1.0.0. The ROADMAP cross-phase backlog (B1 self-healing PB restart, B2 "it-acts" keystone incl. closing SEC-039, B3 QEMU quickstart + CI generation smoke) is fair game when the user wants phase-independent wins. NOTE: v1.0.0 is SHIPPED (tag bdf0951) — the 90-day soak remains owner-scheduled, NOT a gate.
+- **Critical path: DERIVE IT FRESH each session** — read `phase5/docs/PHASE_5_PLAN.md` + the latest `phase5/weeks/` + the last ~15 commits; where they disagree, commits win. The paragraph below is a dated SNAPSHOT (2026-07-02) — verify before relying on it, and treat any mismatch as SKILL.md drift to fix.
+- Snapshot 2026-07-02: **Phase 5 (Memory) — the "it-remembers" MVP arc.** G1 (episodic), G2 (shared context), G3 (retrieval M0–M5) are box-verified; what's left of the arc: **#6 cache-growth M1 (box wiring — M0 selector + SEC-024 LRU host-tests landed)** and the **G3/M6 re-A/B** (the P6 injection-hygiene fix landed 70ca236 — exact-key-only + fenced answer-only preamble; retrieval stays default-OFF until the offline OFF-vs-ON A/B is re-run clean). Then #4 semantic / #5 SHIELD-learning / #7 consolidation. ALL Phase 5 features are compile-OFF by default → the shipped image stays byte-identical to v1.0.0. The ROADMAP cross-phase backlog (B1 self-healing PB restart, B2 "it-acts" keystone incl. closing SEC-039, B3 QEMU quickstart + CI generation smoke) is fair game when the user wants phase-independent wins. NOTE: v1.0.0 is SHIPPED (tag bdf0951) — the 90-day soak remains owner-scheduled, NOT a gate.
 
 ### 3. Generate Implementation Prompts
 When the user says "what's next", "give me a prompt", or "let's do X", produce a complete, paste-ready prompt for the coding CC session. Every prompt must include:
@@ -196,6 +211,8 @@ JARVIS AI-OS: AI-controlled operating system on seL4 microkernel.
 - HONESTY NOTE — self-test: "5/5" = 3 real (tensor/dequant/tokenizer) + 2 vacuous (cache/SHIELD); telemetry + the durable LOG_SELFTEST line carry the real tally.
 
 ### Phase Status
+Snapshot as of 2026-07-02 — CLAUDE.md + the latest week doc are the truth; verify before relying on a row, and treat any mismatch as SKILL.md drift to fix (see the self-check in the exploration prompt).
+
 | Phase | Status |
 |-------|--------|
 | Phase 0 | COMPLETE — Validation |
