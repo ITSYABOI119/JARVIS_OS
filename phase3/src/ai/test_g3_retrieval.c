@@ -195,8 +195,8 @@ static void test_answer_only(void)
     char buf[256];
     int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf);
     CHECK(len > 0, "T9 answer-only preamble built");
-    CHECK(strstr(buf, "Known context (your earlier answer to this question):") != NULL,
-          "T9 fenced header present");
+    CHECK(strstr(buf, "Notes from a previous answer") != NULL,
+          "T9 build-on label present");
     CHECK(strstr(buf, R) != NULL, "T9 answer text present");
     CHECK(strstr(buf, Q) == NULL, "T9 anti-echo: prior QUESTION text NOT in preamble");
     CHECK(strstr(buf, "- ") == NULL, "T9 anti-echo: no '- <query>' pattern");
@@ -219,6 +219,49 @@ static void test_answer_only(void)
           "T9 empty sel -> 0 + NUL");
 }
 
+/* ================================================================
+ * T10 — G3/M6b clean-boundary truncation: word-boundary cut + strip a dangling "### W" markdown
+ *       header fragment (the P7 self-echo glitch). Rides the same G3 CI step.
+ * ================================================================ */
+static void test_clean_truncation(void)
+{
+    /* Craft a response where a hard cut at G3_R_MAX lands inside a trailing markdown header
+     * "### What ..." (=> the "### W" glitch). Clean-truncation must cut at a word boundary AND
+     * drop the incomplete header line. */
+    char resp[300];
+    int p = 0;
+    while (p < 111) { resp[p++] = 'a'; resp[p++] = 'b'; resp[p++] = ' '; }   /* 37x "ab " = 111 bytes */
+    resp[p++] = '\n';                                                        /* header on its own line */
+    static const char TAIL[] = "### What is important";
+    for (int k = 0; k < (int)(sizeof TAIL - 1); k++) resp[p++] = TAIL[k];
+    int resp_len = p;   /* 133 > G3_R_MAX(120): the hard cut lands inside "### What" */
+
+    g3_candidate_t sel[1] = { { .resp = resp, .resp_len = (uint16_t)resp_len } };
+    char buf[256];
+    int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf);
+    CHECK(len > 0, "T10 preamble built");
+    CHECK(strstr(buf, "### W") == NULL, "T10 dangling '### W' fragment gone");
+    CHECK(strstr(buf, "###") == NULL, "T10 trailing '#'-run stripped");
+    CHECK(strstr(buf, "ab ab") != NULL, "T10 answer content still present");
+    CHECK(strstr(buf, "Notes from a previous answer") != NULL, "T10 build-on label present");
+    {
+        int L = (int)strlen(buf);
+        while (L > 0 && buf[L - 1] == '\n') L--;   /* trim trailing newline */
+        CHECK(L == 0 || buf[L - 1] != '#', "T10 output does not end with a bare '#'");
+        CHECK(L >= 2 && buf[L - 1] == 'b' && buf[L - 2] == 'a',
+              "T10 truncation cut at a complete word boundary (ends '...ab')");
+    }
+    CHECK(len <= PREAMBLE_MAX_BYTES - 1, "T10 total within PREAMBLE_MAX_BYTES");
+
+    /* cap canary: same crafted input into a tiny cap must not overrun. */
+    char cbuf[80];
+    memset(cbuf, (int)0xAA, sizeof cbuf);
+    const int CAP = 48;
+    int l2 = g3_build_preamble_answer_only(sel, 1, cbuf, CAP);
+    CHECK(l2 <= CAP - 1 && cbuf[l2] == '\0', "T10 cap: len<=cap-1 + NUL");
+    CHECK((unsigned char)cbuf[CAP] == 0xAA && (unsigned char)cbuf[79] == 0xAA, "T10 cap: 0xAA canary intact");
+}
+
 int main(void)
 {
     printf("=== G3 Retrieval Tests (Phase 5 G3/M0 + M2 budget + M3 filter + M6 hygiene) ===\n");
@@ -231,6 +274,7 @@ int main(void)
     test_usable();
     test_exact_only();
     test_answer_only();
+    test_clean_truncation();
     printf("\n== Results: %d PASS, %d FAIL ==\n", pass, fail);
     return fail ? 1 : 0;
 }

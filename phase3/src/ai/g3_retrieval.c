@@ -116,6 +116,54 @@ int g3_select_exact_only(const g3_candidate_t *cands, int n, uint64_t query_key,
     return 1;
 }
 
+/* Clean-boundary truncation length for the injected prior answer (G3/M6b — fix the P7 "### W"
+ * dangling-header glitch): cap at G3_R_MAX; if we truncated, back up to the last COMPLETE word
+ * (last space) so no partial word bleeds through; then drop a trailing INCOMPLETE markdown header
+ * fragment — a last line that is a bare "#"-run with too little text after it (e.g. "### W",
+ * "###"). All trims are gated on truncation, so a complete short answer is kept verbatim.
+ * Length-only, no strlen; returns a length in [0, min(resp_len, G3_R_MAX)]. */
+static int g3_clean_answer_len(const char *resp, int resp_len)
+{
+    if (!resp || resp_len <= 0)
+        return 0;
+
+    int truncated = resp_len > G3_R_MAX;
+    int n = truncated ? G3_R_MAX : resp_len;
+
+    if (truncated) {
+        /* Back up to the last space so the last word is complete. (No space in the window =>
+         * one long token — keep the hard cut.) */
+        int cut = n;
+        while (cut > 0 && resp[cut - 1] != ' ')
+            cut--;
+        if (cut > 0)
+            n = cut;
+        /* Strip trailing whitespace. */
+        while (n > 0 && (resp[n - 1] == ' ' || resp[n - 1] == '\n' ||
+                        resp[n - 1] == '\r' || resp[n - 1] == '\t'))
+            n--;
+        /* Drop a trailing incomplete markdown header ("#"-run with < 3 chars of text after it),
+         * which sits at the start of the last line — so we never emit a dangling "### W". */
+        int ls = n;
+        while (ls > 0 && resp[ls - 1] != '\n')
+            ls--;                        /* ls = start of the last line */
+        int h = ls;
+        while (h < n && resp[h] == '#')  /* count the leading '#' run on that line */
+            h++;
+        if (h > ls) {                    /* the last line is a header line */
+            int t = h;
+            if (t < n && resp[t] == ' ')
+                t++;
+            if (n - t < 3) {             /* too little header text => incomplete fragment */
+                n = ls;                  /* drop the whole dangling header line */
+                while (n > 0 && (resp[n - 1] == '\n' || resp[n - 1] == ' '))
+                    n--;                 /* strip the newline/space before it */
+            }
+        }
+    }
+    return n;
+}
+
 int g3_build_preamble_answer_only(const g3_candidate_t *sel, int n, char *out, int cap)
 {
     if (!out || cap <= 0)
@@ -131,16 +179,20 @@ int g3_build_preamble_answer_only(const g3_candidate_t *sel, int n, char *out, i
         limit = 0;
 
     int pos = 0;
-    static const char HDR[] = "Known context (your earlier answer to this question):\n";
+    /* G3/M6b: reframe the label so the context reads as material to BUILD ON, not repeat (a soft
+     * nudge against the P7 verbatim self-restatement). Kept short (counts against the token cap). */
+    static const char HDR[] = "Notes from a previous answer (use as reference; add new detail, do not repeat):\n";
     g3_append(out, &pos, limit, HDR, (int)(sizeof HDR - 1));
 
     /* ANSWER-ONLY: emit each selected record's RESPONSE (never its query). No "- " / question
-     * text, so the prior QUESTION can't read like an instruction and get echoed verbatim. */
+     * text, so the prior QUESTION can't read like an instruction and get echoed verbatim.
+     * g3_clean_answer_len cuts at a word boundary + strips a dangling markdown header (fix P7). */
     int facts = n < G3_MAX_FACTS ? n : G3_MAX_FACTS;
     for (int i = 0; i < facts; i++) {
-        int rn = sel[i].resp_len < G3_R_MAX ? sel[i].resp_len : G3_R_MAX;
-        if (sel[i].resp)
+        if (sel[i].resp) {
+            int rn = g3_clean_answer_len(sel[i].resp, sel[i].resp_len);
             g3_append(out, &pos, limit, sel[i].resp, rn);
+        }
         g3_append(out, &pos, limit, "\n", 1);
     }
 
