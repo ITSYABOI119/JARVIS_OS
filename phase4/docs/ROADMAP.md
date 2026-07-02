@@ -128,6 +128,31 @@ This document is the simple forward roadmap. Each phase has specific goals and a
 
 ---
 
+## Cross-phase backlog: pull-forwards & multipliers (added 2026-07-02)
+
+Three items that no phase currently owns. They do not change the phase order — the first two are *mechanisms/slices pulled forward* to de-risk Phases 6–7 early (the same keystone-first logic that restructured Phase 5 into the "it-remembers" MVP arc), the third is phase-agnostic reach/velocity work.
+
+### B1. Self-healing: Process B fault-handler restart
+
+Phase 7's "0 crashes over 30 days" is an exit **criterion**, but no goal builds the **mechanism** that survives a crash. Cash in seL4's actual selling point (isolation): PA detects PB faulting (fault endpoint and/or heartbeat timeout on the existing IPC path) and **re-spawns PB from the CPIO without a reboot** — model re-load from NVMe, ring re-init, ready handshake, resume. Buildable now with zero Phase 5/6 dependencies (SEC-014 spawn path + shmem re-init already exist).
+
+**Done when:** an induced PB crash on the box (or QEMU) auto-restarts PB, service resumes with err rate unaffected, and the event is visible in the durable NVMe log + a console/telemetry signal (honest — a real `restart_count` field, per the UI-parity rule).
+
+### B2. "It-acts" keystone (thin slice of Phase 6 goal #3, pulled forward)
+
+On the current plan, the first moment JARVIS *acts* is deep in Phase 6, behind the full memory arc. Pull forward **one** Trust-Level-0 action — driven by real telemetry the box already has (e.g. telemetry-log-nearing-wrap → rotate/compact, or B1's PB restart decision) — routed through a **genuinely-linked SHIELD** (closes SEC-039 early, converting SHIELD from host-harness-only to load-bearing) with an NVMe audit trail. This de-risks Phase 6's hardest unknowns (SEC-039, action execution, audit) years early and makes the project *be* an AI-controlled OS in miniature, not just be roadmapped as one. Scope-honesty: ONE action, allowlisted, Trust Level 0; everything else stays Phase 6.
+
+**Done when:** one allowlisted action fires from live state on the box, SHIELD evaluated it in the live path (not a stub ALLOW), and the decision + outcome are reconstructable from the NVMe log + reflected on the console.
+
+### B3. Reach & dev-velocity (phase-agnostic)
+
+- **5-minute QEMU quickstart** — a `make demo`-style one-liner that boots the seL4 build in QEMU with a small bundled/downloaded GGUF (tens of MB, not the 3 GB Gemma) and reaches coherent generation. v1.0 is public MIT, but reproducing it today needs specific hardware + NVMe layout; "run an LLM on seL4 in 5 minutes" is what turns a public repo into a project people actually run.
+- **CI generation smoke** — text generation is currently verified only on the box; CI never exercises it (the model-gated tests SKIP with `::warning::`). The same tiny-model QEMU boot becomes a CI step that asserts end-to-end generation (boot → NVMe load → PA↔PB IPC → coherent tokens), closing the largest untested-in-CI surface.
+
+**Done when:** fresh clone → one command → generated text in QEMU with no physical box; and a CI job runs a bounded version of the same on every push.
+
+---
+
 ## Beyond Phase 7 (vision, no fixed timeline)
 
 These are direction, not commitments. Start only after Phase 7 exit criteria are met.
@@ -184,5 +209,5 @@ Beyond               — research directions
 
 ---
 
-**Last updated:** June 2026  
+**Last updated:** July 2026 (added the cross-phase backlog: B1 self-healing, B2 "it-acts" keystone, B3 QEMU quickstart + CI generation smoke)  
 **Status:** Phase 4 engineering COMPLETE — v1.0 scope FROZEN 2026-06-26. Goals #1 (inference perf, CPU) / #2 (graphical output) / #2b (Remote Telemetry Console) / #4 (installer) / #6 (docs) DONE; **#3 (USB keyboard) CUT** (interactive input is Phase 6 console control-IN, not a local keyboard); #5 (90-day soak) NOT run — owner-scheduled; **#7 (v1.0.0 MIT release) ✅ DONE** (tagged bdf0951, 2026-06-26; LICENSE + doc-honesty pass + final report done). See `phase4/docs/PHASE_4_FINAL_REPORT.md`.
