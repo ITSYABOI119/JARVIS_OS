@@ -322,6 +322,13 @@ jobs:
           -o /tmp/tcg
         /tmp/tcg
 
+    - name: "Phase 5: SHIELD-learning risk-map (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
+          phase3/src/ai/test_shield_learn.c phase3/src/ai/shield_learn.c \
+          -lm -o /tmp/tsl
+        /tmp/tsl
+
     - name: "Phase 5: Decision-cache LRU eviction (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
