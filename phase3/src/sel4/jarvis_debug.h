@@ -3,9 +3,10 @@
  * Compile-time flags to control diagnostic output.
  * Set to 1 to enable, 0 to disable.
  *
- * For the deployed/stability config: diagnostic flags are 0 except JARVIS_DBG_STATS and
- * JARVIS_DBG_INFER_SUMMARY; feature flags follow their own notes (JARVIS_G3_RETRIEVAL is OFF /
- * opt-in — the M6 flip-to-default-ON is pending the offline A/B). Enable diagnostics as needed.
+ * For the deployed/stability config: ON = JARVIS_DBG_STATS, JARVIS_DBG_INFER_SUMMARY, and
+ * JARVIS_G3_RETRIEVAL (default-ON since G3/M6, 2026-07-02 — retrieval is deployed); all other
+ * diagnostic/feature flags are 0 (JARVIS_G3_PROBE, JARVIS_G3_AB, JARVIS_CACHE_GROWTH,
+ * JARVIS_DBG_BOOT_LOG stay OFF). Enable diagnostics as needed.
  */
 
 #ifndef JARVIS_DEBUG_H
@@ -54,20 +55,26 @@
 #define JARVIS_SMP_PROBE  0
 
 /* Phase 5 G3 (Retrieval Before Inference): master switch for the retrieval path.
- * DEFAULT OFF / opt-in. When 1, Process A — on the inference route,
- * BEFORE MSG_QUERY — scores the recent episodic batch (g3_select), assembles a preamble, and
+ * DEFAULT ON since G3/M6 (2026-07-02) — retrieval is DEPLOYED. When 1, Process A — on the
+ * inference route, BEFORE MSG_QUERY — scores the recent episodic batch, assembles a preamble, and
  * PACKS it into the shared context pool (sctx_pack_preamble), logging one [RETR] line per
  * inference; Process B then INJECTS that preamble into the Gemma prompt between the user turn's
- * `\n` and the question (bounded by g3_prompt_budget, prompt_ids[256], KV stays 512). Box-
- * verified M0–M5: inject + coherent prose (g3_candidate_usable filter) + <50 ms on a cache miss
- * + NVMe-backed post-reboot recall. When 0, the whole PA block + PB injection + their
- * g3_retrieval.h include compile out — deploy byte-identical, no new dependency (OFF==baseline).
- * PA links g3_retrieval.c (build_jarvis_x86.sh); PB uses only the header's static-inline
- * g3_prompt_budget.
- * M6 (flip-to-default-ON) is PENDING the offline OFF-vs-ON A/B: retrieval WORKS + is USED
- * ([PROBE] hit=1), but M2/M3 showed it broadens/meta-izes answers, so whether it HELPS is
- * unproven. Flip to 1 only after the A/B shows it helps, not just works. */
-#define JARVIS_G3_RETRIEVAL  0
+ * `\n` and the question (bounded by g3_prompt_budget, prompt_ids[256], KV stays 512).
+ * Injection is EXACT-KEY-ONLY (g3_select_exact_only) + fenced answer-only preamble
+ * (g3_build_preamble_answer_only) + clean-boundary truncation (g3_clean_answer_len) — the
+ * recency fallback was DROPPED for injection (caused P6 cross-topic contamination; do NOT
+ * re-add) and prior-question text is NOT embedded (caused echo).
+ * Ship basis (M6): 3× offline OFF-vs-ON A/B on the box — A/B1 exposed P6 (fixed 70ca236),
+ * A/B2 blind panel net-positive + exposed P7 self-echo (fixed 2bb537b), A/B3 clean (### W = 0,
+ * zero contamination, coherent, err=0; blind panel net-neutral-to-slightly-positive; the
+ * residual lead-sentence overlap on repeats is the model's natural greedy answer — the OFF
+ * baseline produces the identical opening with no injection).
+ * Honesty: the metrics are retrieval HITS and LATENCY (telemetry v3 + console rows); "memory
+ * helped" is NOT a claim the system makes — that stays an offline-A/B question.
+ * When 0 (opt-out), the whole PA block + PB injection + their g3_retrieval.h include compile
+ * out — OFF==baseline behavior, no new dependency. PA links g3_retrieval.c
+ * (build_jarvis_x86.sh); PB uses only the header's static-inline g3_prompt_budget. */
+#define JARVIS_G3_RETRIEVAL  1
 
 /* Phase 5 G3/M4c: synthetic-fact PROBE harness (box-only). When 1 (alongside JARVIS_G3_RETRIEVAL=1),
  * Process A seeds ONE known INFER fact (marker SYNTHPROBEZX9Q7) whose query matches an inference

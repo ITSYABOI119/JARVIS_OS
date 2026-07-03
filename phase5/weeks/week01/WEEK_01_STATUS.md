@@ -77,3 +77,31 @@ design after a first-cut route-through-cache attempt (#6a) was reverted.
 ## Notes / risks
 - Deployed kernel remains `KernelFastpath=ON` + XSAVE/AVX + SMP `NUM_NODES=6` = functional-but-unverified by design.
 - All Phase 5 code lives under `phase3/src/ai/` (there is no `phase5/src/` tree); `phase5/` is docs + weeks.
+
+---
+
+## [Appended 2026-07-02/03] G3/M6 SHIPPED — retrieval default-ON (closes "Next" item 1)
+
+The offline A/B arc ran to completion after this week's close and **cleared the M6 gate**:
+
+- **A/B1** (2026-07-01, harness `9ba7007`, OFF=22/ON=10): net-neutral-to-slightly-positive (blind 3-2), but one
+  hard **P6** cross-topic contamination failure (recency fallback + embedded prior-question text) → **fixed
+  `70ca236`**: `g3_select_exact_only` (recency fallback DROPPED for injection) + `g3_build_preamble_answer_only`
+  (fenced, answer-only).
+- **A/B2** (on `70ca236`): blind panel **net-POSITIVE (ON 4/7)**, contamination-free — but exposed **P7** self-echo
+  (dangling `### W` markdown fragment from mid-token truncation + verbatim lead restatement) → **fixed `2bb537b`**:
+  `g3_clean_answer_len` clean-boundary truncation + "use as reference; add new detail, do not repeat" build-on
+  label; `test_g3_retrieval.c` 43→**53 PASS** (T10 clean-truncation).
+- **A/B3** (2026-07-02, on `2bb537b`, OFF=22/ON=13): **ALL CLEAN** — `### W`=0, `[RETR] hit=1`×14, zero
+  contamination, zero label leakage, coherent, err=0. Blind panel (13 pairs × 3 lenses + artifact-hunter +
+  repeat-progression analysts): net-neutral-to-slightly-positive, **zero materially-worse cases** — under greedy
+  decoding the OFF baseline gives a repeat-asker byte-identical output, so ON ≥ OFF everywhere, with clear ON wins
+  where build-on compresses covered framing into new substance. The residual lead-sentence overlap on repeats was
+  **proven the model's natural answer** (OFF produces the identical opening with no injection); the
+  first-sentence-only excerpt follow-up was evaluated and NOT taken.
+- **Ship (2026-07-02):** `JARVIS_G3_RETRIEVAL` `0`→`1` in `jarvis_debug.h` — retrieval is the deployed default.
+  **The image is intentionally no longer byte-identical to v1.0.0** (episodic + context pool + retrieval = the
+  deployed memory stack); `G3_PROBE`/`G3_AB`/`CACHE_GROWTH`/`BOOT_LOG` stay 0 with their OFF-is-inert guarantee.
+  Honesty stance unchanged: hits + latency are the metrics; "memory helped" is never a system claim.
+- **Remaining:** G3/M4d — bare-metal boot of the default-ON build (ESP deploy) with live v3 `TLM_F_RETRIEVAL`
+  telemetry over the real I211 + durable-log `[RETR]` evidence.
