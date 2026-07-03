@@ -435,6 +435,11 @@ static decision_cache_t g_cache;
 static uint32_t        g_cache_baseline = 0;         /* entries_used right after pattern load */
 static cg_freq_slot_t  g_key_freq[CG_FREQ_CAP];      /* zero-init = all empty (count==0) */
 #define CG_PROMOTE_HWM ((CACHE_SIZE * 4) / 5)        /* 409 of 512 */
+/* #6/M3a: promoted-pattern SERVE counters (the read-only cache_lookup-before-infer). g_cg_served
+ * counts inference-lane queries answered from the cache; g_cg_serve_logged bounds the verbatim
+ * [CACHE-SERVE] proof prints to the first 2 (evidence, never a per-hit serial flood). */
+static uint32_t        g_cg_served = 0;
+static int             g_cg_serve_logged = 0;
 #endif
 static uint32_t total_queries = 0;
 static uint32_t cache_hits = 0;
@@ -2683,6 +2688,35 @@ static void *main_continued(void *arg UNUSED)
         } else if (slot < 17) {
             /* --- Inference (15%) --- */
             const char *query = inference_queries[r % N_INFERENCE_QUERIES];
+#if JARVIS_CACHE_GROWTH
+            /* Phase 5 #6/M3a: serve already-PROMOTED patterns from the cache (READ-only — no
+             * insert here; promotion stays the [STATS]-cadence log pass, canon D-a). Without
+             * this, promoted inference queries are dead weight: the inference lane never
+             * consulted the cache (the two lanes ask disjoint query sets). On a HIT the stored
+             * answer is served (<1 ms vs ~55 s inference), counted as a hit, and recorded as an
+             * EPI_ACT_CACHE episodic memory; on a MISS the existing inference path runs
+             * unchanged. Flag-OFF compiles this out — the lane is byte-identical to deploy. */
+            int cg_served_now = 0;
+            {
+                char cg_snorm[MAX_QUERY_LEN];
+                char cg_saction[MAX_ACTION_LEN];
+                trust_level_t cg_strust;
+                if (cache_normalize_query(query, cg_snorm, sizeof cg_snorm) &&
+                    cache_lookup(&g_cache, cg_snorm, cg_saction, sizeof cg_saction, &cg_strust)) {
+                    q_hits++;
+                    g_cg_served++;
+                    if (g_cg_serve_logged < 2) {   /* first-2 verbatim serve proof (M3b evidence) */
+                        g_cg_serve_logged++;
+                        puts_serial("[CACHE-SERVE] q=\""); puts_serial(query);
+                        puts_serial("\" action=\""); puts_serial(cg_saction);
+                        puts_serial("\"\n");
+                    }
+                    epi_batch_add(query, EPI_ACT_CACHE, EPI_OUT_OK, cg_saction);
+                    cg_served_now = 1;
+                }
+            }
+            if (!cg_served_now) {
+#endif
             q_infer++;
 
 #if JARVIS_G3_PROBE
@@ -3031,6 +3065,10 @@ static void *main_continued(void *arg UNUSED)
             puts_serial("\"\n");
 #endif
 
+#if JARVIS_CACHE_GROWTH
+            }   /* !cg_served_now — end of the inference-miss path (#6/M3a) */
+#endif
+
         } else if (slot < 19) {
             /* --- Heartbeat (10%) --- */
             q_heartbeat++;
@@ -3170,6 +3208,7 @@ static void *main_continued(void *arg UNUSED)
                 puts_serial(" used="); put_dec(g_cache.stats.entries_used);
                 puts_serial(" grow="); put_dec(g_cache.stats.entries_used - g_cache_baseline);
                 puts_serial(" hwm="); put_dec((uint32_t)CG_PROMOTE_HWM);
+                puts_serial(" served="); put_dec(g_cg_served);   /* #6/M3a: promoted patterns served from cache */
                 puts_serial("\n");
             }
 #endif
