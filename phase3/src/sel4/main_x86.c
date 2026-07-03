@@ -199,6 +199,11 @@ static uint64_t          g_sctx_last_key = 0;   /* key of the last keyed (cache/
 static uint32_t          g_retrieval_hits = 0;        /* count of non-empty preambles packed */
 static uint32_t          g_retrieval_latency_us = 0;  /* last in-RAM retrieval latency (µs) */
 
+/* ---- Phase 5 #6/M2: cache-growth telemetry counter (same unconditional pattern). Only WRITTEN
+ * inside the gated promotion pass, so in the flag-OFF deploy it stays 0 and TLM_F_CACHE_GROWTH is
+ * never set — honest "cache growth not live". Value = entries_used − baseline (promoted entries). */
+static uint16_t          g_cache_growth_count = 0;
+
 /* G3/M4c-fix: the synthetic-fact probe uses an ARBITRARY, JARVIS-specific, UNKNOWABLE fact + an
  * unanswerable question, defined ONCE (used at the seed / forced-query / self-check sites — DRY, no
  * string drift). A correct marker echo can come ONLY from the injected context, so hit=1 proves the
@@ -1544,6 +1549,7 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
                          | (g_episodic_ready    ? TLM_F_MEMORY       : 0)
                          | (g_sctx_ready        ? TLM_F_CONTEXT      : 0)
                          | (g_retrieval_hits>0  ? TLM_F_RETRIEVAL    : 0)
+                         | (g_cache_growth_count>0 ? TLM_F_CACHE_GROWTH : 0)
                          | (g_selftest_pass == 5 ? TLM_F_SELFTEST_PASS : 0));
     pkt.boot_id   = nvme_log_boot_id();
     pkt.uptime_ms = jarvis_uptime_ms();
@@ -1558,6 +1564,7 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
     pkt.model_size_mb = (uint32_t)(nvme_model_size >> 20);  /* nvme_model_size is BYTES -> MB (== panel "2962") */
     pkt.total_ram_mb  = g_total_ram_mb;   /* Tier 0: real RAM available to JARVIS (sum of non-device untypeds) */
     pkt.infer_gen_tokens = 0;  /* M1_MEASURE off in deploy — no live token count */
+    pkt.cache_growth_count = g_cache_growth_count;  /* P5 #6/M2: promoted entries (0 + no flag flag-OFF) */
     /* Tier 1: real system fields packed into former reserved space (packet is 216 B v3, CRC[:212]).
      * infer_duty_pct = inference cycles / uptime — a WORKLOAD duty cycle, NOT a CPU-load gauge (PA busy-polls). */
     pkt.infer_active = g_infer_active;
@@ -3158,6 +3165,7 @@ static void *main_continued(void *arg UNUSED)
                         g_cache.stats.entries_used > cg_before)
                         cg_promoted++;
                 }
+                g_cache_growth_count = (uint16_t)(g_cache.stats.entries_used - g_cache_baseline);  /* #6/M2 telemetry */
                 puts_serial("[CACHE-GROW] promoted="); put_dec((uint32_t)cg_promoted);
                 puts_serial(" used="); put_dec(g_cache.stats.entries_used);
                 puts_serial(" grow="); put_dec(g_cache.stats.entries_used - g_cache_baseline);

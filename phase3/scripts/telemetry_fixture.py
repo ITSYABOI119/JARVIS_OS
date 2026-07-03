@@ -27,7 +27,7 @@ _DEFAULTS = dict(
     q_total=289, q_hits=211, q_infer=29, q_heartbeat=40, q_shield=9, q_errors=0,
     num_nodes=6, model_load_pct=100, fb_bpp=32, selftest_score=5,
     fb_w=1024, fb_h=768, model_size_mb=2962, total_ram_mb=30000,
-    infer_gen_tokens=0, reserved_i=0,
+    infer_gen_tokens=0, cache_growth_count=0,
     last_text=b"hello", model_name=b"Gemma 4 E2B",
     nvme_total_mb=1953892, episodic_count=0, pool_events=0, pool_decisions=0,
     retrieval_hits=0, retrieval_latency_us=0, crc32=0,
@@ -51,7 +51,7 @@ def build_packet(finalize=True, **overrides):
         v['q_total'], v['q_hits'], v['q_infer'], v['q_heartbeat'], v['q_shield'], v['q_errors'],
         v['num_nodes'], v['model_load_pct'], v['fb_bpp'], v['selftest_score'],
         v['fb_w'], v['fb_h'], v['model_size_mb'], v['total_ram_mb'],
-        v['infer_gen_tokens'], v['reserved_i'], v['last_text'], v['model_name'],
+        v['infer_gen_tokens'], v['cache_growth_count'], v['last_text'], v['model_name'],
         v['nvme_total_mb'], v['episodic_count'], v['pool_events'], v['pool_decisions'],
         v['retrieval_hits'], v['retrieval_latency_us'], v['crc32'])
     if finalize:
@@ -87,7 +87,7 @@ def build_pcap_many(frames, ts_start=1700000000):
 FLAG_BITS = {
     'MODEL_LOADED': 0x01, 'FB_DRAWABLE': 0x02, 'FB_MAPPED': 0x04,
     'HAS_ERROR': 0x08, 'SELFTEST_PASS': 0x10, 'MEMORY': 0x20, 'CONTEXT': 0x40,
-    'RETRIEVAL': 0x80,
+    'RETRIEVAL': 0x80, 'CACHE_GROWTH': 0x100,
 }
 _CORRUPT_CRC = 0xDEADBEEF  # deliberately wrong CRC for "corrupt" golden frames
 

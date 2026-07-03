@@ -53,6 +53,7 @@ FLAG_NAMES = {
     0x20: 'MEMORY',
     0x40: 'CONTEXT',
     0x80: 'RETRIEVAL',
+    0x100: 'CACHE_GROWTH',
 }
 KIND_NAMES = {1: 'STATS', 2: 'INFER', 3: 'STATE'}
 
@@ -85,7 +86,7 @@ def decode_packet(data: bytes) -> dict:
      q_total, q_hits, q_infer, q_heartbeat, q_shield, q_errors,
      num_nodes, model_load_pct, fb_bpp, selftest_score,
      fb_w, fb_h, model_size_mb, total_ram_mb,
-     infer_gen_tokens, reserved_i, last_text_raw, model_name_raw,
+     infer_gen_tokens, cache_growth_count, last_text_raw, model_name_raw,
      nvme_total_mb, episodic_count, pool_events, pool_decisions,
      retrieval_hits, retrieval_latency_us, crc32_field) = struct.unpack(FMT, data)
 
@@ -127,6 +128,7 @@ def decode_packet(data: bytes) -> dict:
         'pool_decisions': pool_decisions,
         'retrieval_hits': retrieval_hits,
         'retrieval_latency_us': retrieval_latency_us,
+        'cache_growth_count': cache_growth_count,
         'log_cursor': log_cursor,
         'infer_gen_tokens': infer_gen_tokens,
         'last_text': _cstr(last_text_raw),
@@ -210,6 +212,7 @@ def packet_to_record(d: dict, recv_ts: float = 0) -> dict:
         'pool_decisions': d['pool_decisions'],
         'retrieval_hits': d['retrieval_hits'],
         'retrieval_latency_us': d['retrieval_latency_us'],
+        'cache_growth_count': d['cache_growth_count'],
         'log_cursor': d['log_cursor'],
         'infer_gen_tokens': d['infer_gen_tokens'],
         'model_name': d['model_name'],

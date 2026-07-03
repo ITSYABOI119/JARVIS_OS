@@ -7,6 +7,7 @@
  *   q_heartbeat, q_shield, q_errors, num_nodes, model_load_pct, fb_w, fb_h,
  *   fb_bpp, selftest_score, model_size_mb, total_ram_mb, nvme_total_mb,
  *   episodic_count, pool_events, pool_decisions, retrieval_hits, retrieval_latency_us,
+ *   cache_growth_count,
  *   log_cursor, infer_gen_tokens, model_name, last_text, crc_ok
  *
  * Liveness is genuine: a record is "live" only while a fresh CRC-valid packet
@@ -160,6 +161,7 @@
       if (!loading) flags.push('MODEL_LOADED');
       flags.push('SELFTEST_PASS', 'FB_DRAWABLE', 'FB_MAPPED', 'MEMORY', 'CONTEXT');
       if (!loading) flags.push('RETRIEVAL');  // retrieval fires once the box is serving queries
+      if (!loading) flags.push('CACHE_GROWTH');  // preview: promotions occur once queries repeat (badged SIMULATED)
 
       let kind = 1, kindName = 'STATS';
       if (!loading) {
@@ -201,6 +203,7 @@
         pool_events: loading ? 0 : (qHits + qInfer),         // preview value (badged SIMULATED)
         pool_decisions: loading ? 0 : (qHits + qInfer),      // preview value (badged SIMULATED)
         retrieval_hits: loading ? 0 : Math.max(0, qInfer),   // preview value (badged SIMULATED)
+        cache_growth_count: loading ? 0 : 6,                 // preview value (badged SIMULATED)
         retrieval_latency_us: loading ? 0 : 35,              // preview value (badged SIMULATED)
         infer_active: kind === 2 ? 1 : 0,
         infer_duty_pct: loading ? 0 : 12,  // preview workload duty cycle (badged SIMULATED)

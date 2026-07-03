@@ -54,6 +54,7 @@ static void test_layout(void)
     OFF(pool_decisions, 200);
     OFF(retrieval_hits, 204);       /* P5 G3/M4: v3 fields appended before crc32 */
     OFF(retrieval_latency_us, 208);
+    OFF(cache_growth_count, 90);    /* P5 #6/M2: renamed from reserved_i (same offset/size, no bump) */
     OFF(crc32, 212);
 }
 
@@ -90,6 +91,7 @@ static void test_finalize_roundtrip(void)
     pkt.pool_decisions = 88;
     pkt.retrieval_hits = 3;          /* P5 G3/M4: v3 fields (CRC[:212] now covers 204-211) */
     pkt.retrieval_latency_us = 40;
+    pkt.cache_growth_count = 12;     /* P5 #6/M2: former reserved_i (offset 90, inside CRC region) */
 
     jarvis_tlm_finalize(&pkt);
 
@@ -104,6 +106,8 @@ static void test_finalize_roundtrip(void)
     CHECK(pkt.retrieval_hits == 3u && pkt.retrieval_latency_us == 40u,
           "retrieval_hits/retrieval_latency_us survive finalize (CRC covers 204-211)");
     CHECK(TLM_F_RETRIEVAL == 0x80, "TLM_F_RETRIEVAL == 0x80 (next free flag bit)");
+    CHECK(pkt.cache_growth_count == 12u, "cache_growth_count survives finalize (P5 #6/M2)");
+    CHECK(TLM_F_CACHE_GROWTH == 0x100, "TLM_F_CACHE_GROWTH == 0x100 (flags is u16 — fits)");
 
     /* The stored crc matches a recompute over the first 212 bytes. */
     uint32_t recomputed = jarvis_tlm_crc32(&pkt, offsetof(telemetry_packet_t, crc32));

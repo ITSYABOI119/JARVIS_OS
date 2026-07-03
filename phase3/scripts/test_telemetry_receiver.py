@@ -172,7 +172,7 @@ def main():
           "golden meta fmt/size match the wire format")
 
     kind_expect = {1: 'STATS', 2: 'INFER', 3: 'STATE'}
-    internal = ('magic', 'crc32', 'crc_calc', 'reserved_i')
+    internal = ('magic', 'crc32', 'crc_calc')
     for fr in golden['frames']:
         label = fr.get('label', '?')
         payload, corrupt = frame_to_packet(fr)

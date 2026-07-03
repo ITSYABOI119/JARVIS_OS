@@ -45,6 +45,11 @@ function SystemView({ store }) {
   const retrReported = !!(rec && rec.flags_list && rec.flags_list.indexOf('RETRIEVAL') >= 0);
   const retrHits = rec ? Number(rec.retrieval_hits) || 0 : null;
   const retrLatencyUs = rec ? Number(rec.retrieval_latency_us) || 0 : null;
+  // Cache growth (#6): promoted-pattern count, flag-gated on TLM_F_CACHE_GROWTH (set only once a
+  // promotion has occurred). Frequency-based + deterministic — the cache learns FREQUENTLY-ASKED
+  // queries and serves them fast; it never "understands" them.
+  const cgReported = !!(rec && rec.flags_list && rec.flags_list.indexOf('CACHE_GROWTH') >= 0);
+  const cgCount = rec ? Number(rec.cache_growth_count) || 0 : null;
 
   const stat = (label, value, sub) => (
     <div>
@@ -92,6 +97,8 @@ function SystemView({ store }) {
             retrReported ? 'retrieval before inference (non-empty preambles)' : 'retrieval not reported')}
           {stat('Last retrieval', retrReported ? (numMb(retrLatencyUs) + ' µs') : '—',
             retrReported ? 'in-RAM select + assemble + pack' : 'retrieval not reported')}
+          {stat('Patterns promoted', cgReported ? numMb(cgCount) : '—',
+            cgReported ? 'frequent queries promoted into the decision cache' : 'cache growth not reported')}
         </div>
         {note('Live heap used/free is not tracked on the box, so it is not shown. The floor above (model + a fixed static pool) is the only real lower bound.')}
       </Card>

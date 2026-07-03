@@ -31,6 +31,7 @@
 #define TLM_F_MEMORY        0x20   /* episodic memory store up (Phase 5 G1) */
 #define TLM_F_CONTEXT       0x40   /* shared context pool live (Phase 5 G2) */
 #define TLM_F_RETRIEVAL     0x80   /* retrieval-before-inference has fired (Phase 5 G3) */
+#define TLM_F_CACHE_GROWTH  0x100  /* cache-growth promotion has occurred (Phase 5 #6) — flags is u16 */
 
 /* kind */
 #define TLM_K_STATS 1
@@ -50,7 +51,7 @@ typedef struct __attribute__((packed)) {
     uint64_t q_total, q_hits, q_infer, q_heartbeat, q_shield, q_errors;                              /* 48 */
     uint8_t num_nodes; uint8_t model_load_pct; uint8_t fb_bpp; uint8_t selftest_score;
     uint16_t fb_w; uint16_t fb_h; uint32_t model_size_mb; uint32_t total_ram_mb;                     /* 16 */
-    uint16_t infer_gen_tokens; uint16_t reserved_i; char last_text[56];                              /* 60 */
+    uint16_t infer_gen_tokens; uint16_t cache_growth_count; char last_text[56];  /* P5 #6/M2: promoted-entry count (entries_used − baseline; former reserved_i — same offset/size, NO size bump) */ /* 60 */
     char model_name[40];                                                                             /* 40 */
     uint32_t nvme_total_mb; uint32_t episodic_count; /* NVMe namespace MB + episodic record count (P5 G1/M4) */ /* 8 */
     uint32_t pool_events; uint32_t pool_decisions;   /* P5 G2/M4: live context-pool lifetime counts */ /* 8 */

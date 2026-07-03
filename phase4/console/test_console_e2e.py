@@ -39,6 +39,7 @@ FLAG_LABEL = {
     'MEMORY': 'Episodic memory store',
     'CONTEXT': 'Shared context pool',
     'RETRIEVAL': 'Retrieval before inference',
+    'CACHE_GROWTH': 'Cache growth — learns frequent queries',
 }
 
 _P = 0
@@ -279,6 +280,41 @@ def main():
                 time.sleep(0.1)
             check(retr_ok,
                   "(G3/M4b) System 'Preambles packed' renders == live retrieval_hits (snap=%r)" % (retr_dbg,))
+
+            # (#6/M2) PIN the System 'Patterns promoted' VALUE — must equal the live
+            # cache_growth_count on a CACHE_GROWTH-flagged frame (flag-gated; '—' otherwise). The
+            # golden 'infer' frame carries cache_growth_count=12. TEETH: fails if the cache-growth
+            # rendering breaks (wrong value, '—', or removed). Same atomic store+DOM read + poll.
+            cg_ok = False
+            cg_dbg = None
+            deadline = time.time() + 12
+            while time.time() < deadline:
+                snap = page.evaluate(
+                    "() => {"
+                    " const rec = (window.JarvisTelemetry.getState().latest) || {};"
+                    " const flags = rec.flags_list || [];"
+                    " const lab = Array.from(document.querySelectorAll('div'))"
+                    "   .find(d => d.textContent.trim() === 'Patterns promoted');"
+                    " let rendered = null;"
+                    " if (lab && lab.parentElement) {"
+                    "   const kids = Array.from(lab.parentElement.children);"
+                    "   const i = kids.indexOf(lab);"
+                    "   rendered = kids[i + 1] ? kids[i + 1].textContent.trim() : null;"
+                    " }"
+                    " return { cg: flags.indexOf('CACHE_GROWTH') >= 0, count: rec.cache_growth_count, rendered };"
+                    "}")
+                cg_dbg = snap
+                if snap['cg'] and snap['rendered'] not in (None, '—'):
+                    try:
+                        rendered_num = int(str(snap['rendered']).replace(',', ''))
+                    except (ValueError, TypeError):
+                        rendered_num = None
+                    if rendered_num is not None and rendered_num == snap['count'] and rendered_num > 0:
+                        cg_ok = True
+                        break
+                time.sleep(0.1)
+            check(cg_ok,
+                  "(#6/M2) System 'Patterns promoted' renders == live cache_growth_count (snap=%r)" % (cg_dbg,))
 
             check(errors == [], "no console errors / pageerrors (saw %d)" % len(errors))
             for e in errors[:10]:
