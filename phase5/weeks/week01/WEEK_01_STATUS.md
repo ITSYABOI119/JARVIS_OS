@@ -105,3 +105,12 @@ The offline A/B arc ran to completion after this week's close and **cleared the 
   Honesty stance unchanged: hits + latency are the metrics; "memory helped" is never a system claim.
 - **Remaining:** G3/M4d — bare-metal boot of the default-ON build (ESP deploy) with live v3 `TLM_F_RETRIEVAL`
   telemetry over the real I211 + durable-log `[RETR]` evidence.
+
+### [Appended 2026-07-03] M4d BOX-VERIFIED LIVE — G3 COMPLETE (M0–M6)
+
+The flipped build (`66e1d18`) was ESP-deployed and booted bare metal (boot_id=11). Live I211 v3
+telemetry on the Main-PC receiver: **34 packets `version=3`/216 B crc_ok**, `flags_list` carrying
+`RETRIEVAL` (0x80), **`retrieval_hits` climbing 1→2→3**, `retrieval_latency_us` 192→5078 µs,
+`q_errors=0`, coherent Gemma, `episodic_count=584`; the console "Retrieval before inference"
+Capabilities row renders live. **Goal #3 is COMPLETE (M0–M6) — retrieval is deployed and
+box-verified live.** The "it-remembers" MVP arc now has only #6 (cache growth) open.
