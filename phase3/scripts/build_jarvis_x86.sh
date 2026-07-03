@@ -154,6 +154,7 @@ AI_FILES=(
     "episodic_store.c"    "episodic_store.h"
     "shared_context.c"    "shared_context.h"
     "g3_retrieval.c"      "g3_retrieval.h"
+    "cache_growth.c"      "cache_growth.h"
 )
 
 for f in "${AI_FILES[@]}"; do
@@ -412,6 +413,20 @@ if [ -f "$CMAKE_FILE" ]; then
         fi
     else
         echo -e "  ${CYAN}OK${NC}  src/ai/g3_retrieval.c already in source list"
+    fi
+
+    # Phase 5 #6/M1: add src/ai/cache_growth.c to the Process A source list if missing
+    # (PA-only: the promotion pass runs in PA's workload loop; PB never touches the cache.)
+    if ! grep -q "src/ai/cache_growth.c" "$CMAKE_FILE"; then
+        sed -i '/src\/ai\/g3_retrieval.c/a\    src/ai/cache_growth.c' "$CMAKE_FILE" 2>/dev/null
+        if grep -q "src/ai/cache_growth.c" "$CMAKE_FILE"; then
+            echo -e "  ${GREEN}ADDED${NC}  src/ai/cache_growth.c to source list"
+            PATCHED=1
+        else
+            echo -e "  ${RED}FAILED${NC}  Could not add cache_growth.c — edit CMakeLists.txt manually"
+        fi
+    else
+        echo -e "  ${CYAN}OK${NC}  src/ai/cache_growth.c already in source list"
     fi
 
     # Add JARVIS_SEL4 compile definition (needed for pci.c IOPort backend)

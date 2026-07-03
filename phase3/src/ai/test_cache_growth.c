@@ -106,6 +106,44 @@ int main(void)
         CHECK(m == 0, "T5: threshold=3, freq-2 key not promoted");
     }
 
+    /* T6 (M1): freq aggregate — bump/get basics. */
+    {
+        cg_freq_slot_t tbl[8] = {{0, 0}};
+        CHECK(cg_freq_bump(tbl, 8, 100) == 1, "T6: first bump of a new key -> 1");
+        CHECK(cg_freq_bump(tbl, 8, 100) == 2, "T6: second bump of same key -> 2");
+        CHECK(cg_freq_get(tbl, 8, 100) == 2, "T6: get returns the bumped count");
+        CHECK(cg_freq_get(tbl, 8, 999) == 0, "T6: absent key -> 0");
+    }
+
+    /* T7 (M1): two distinct keys keep independent counts. */
+    {
+        cg_freq_slot_t tbl[8] = {{0, 0}};
+        cg_freq_bump(tbl, 8, 1); cg_freq_bump(tbl, 8, 1); cg_freq_bump(tbl, 8, 2);
+        CHECK(cg_freq_get(tbl, 8, 1) == 2 && cg_freq_get(tbl, 8, 2) == 1,
+              "T7: distinct keys count independently");
+    }
+
+    /* T8 (M1): collision — keys 3 and 11 share slot 3 % 8; linear probing separates them. */
+    {
+        cg_freq_slot_t tbl[8] = {{0, 0}};
+        CHECK(cg_freq_bump(tbl, 8, 3) == 1, "T8: first colliding key inserts");
+        CHECK(cg_freq_bump(tbl, 8, 11) == 1, "T8: second colliding key probes to a new slot");
+        cg_freq_bump(tbl, 8, 11);
+        CHECK(cg_freq_get(tbl, 8, 3) == 1 && cg_freq_get(tbl, 8, 11) == 2,
+              "T8: colliding keys hold correct independent counts");
+    }
+
+    /* T9 (M1): saturation — a full table returns 0 for an absent key; present keys still bump. */
+    {
+        cg_freq_slot_t tbl[4] = {{0, 0}};
+        CHECK(cg_freq_bump(tbl, 4, 0) == 1 && cg_freq_bump(tbl, 4, 1) == 1 &&
+              cg_freq_bump(tbl, 4, 2) == 1 && cg_freq_bump(tbl, 4, 3) == 1,
+              "T9: fill cap=4 with 4 distinct keys");
+        CHECK(cg_freq_bump(tbl, 4, 99) == 0, "T9: full table, absent-key bump -> 0");
+        CHECK(cg_freq_get(tbl, 4, 99) == 0, "T9: full table, absent-key get -> 0");
+        CHECK(cg_freq_bump(tbl, 4, 2) == 2, "T9: already-present key still bumps when full");
+    }
+
     printf("== %d PASS, %d FAIL ==\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

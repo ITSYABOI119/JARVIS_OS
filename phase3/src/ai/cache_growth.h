@@ -46,4 +46,21 @@ typedef cg_candidate_t cg_promotion_t;
 int cg_select_promotions(const cg_candidate_t *cands, int n, int threshold,
                          cg_promotion_t *out, int max);
 
+/* ---- M1: rolling frequency aggregate (Option B — SYSTEM_DESIGN "frequency-signal gap") ----
+ *
+ * The M5 recall index is deduped-to-newest, so it cannot COUNT recurrences. This
+ * open-addressed table carries a rolling per-key occurrence count: seeded once from
+ * the boot scan of the persisted episodic store, then folded per RAM batch at the
+ * [STATS] cadence. Pure, zero-init = empty (count==0 is the empty sentinel — counts
+ * are >=1 after a bump, so 0 is safe). No I/O, no allocation. */
+#define CG_FREQ_CAP 1024   /* open-addressed capacity; realistic distinct-key load ~0.3 */
+typedef struct { uint64_t key; uint32_t count; } cg_freq_slot_t;   /* count==0 => empty */
+
+/* Increment key's count (insert if absent) via linear probing from key % cap.
+ * Returns the NEW count, or 0 if the table is full and key is absent. Pure, no I/O. */
+uint32_t cg_freq_bump(cg_freq_slot_t *tbl, int cap, uint64_t key);
+
+/* Current count for key (0 if absent — the probe stops at the first empty slot). Pure. */
+uint32_t cg_freq_get(const cg_freq_slot_t *tbl, int cap, uint64_t key);
+
 #endif /* CACHE_GROWTH_H */

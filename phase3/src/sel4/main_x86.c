@@ -62,6 +62,9 @@
 #if JARVIS_G3_RETRIEVAL
 #include "g3_retrieval.h"       /* Phase 5 G3/M1: PA-side retrieval scorer + preamble assembler (flag-gated) */
 #endif
+#if JARVIS_CACHE_GROWTH
+#include "cache_growth.h"       /* Phase 5 #6/M1: promotion threshold + rolling freq aggregate (flag-gated) */
+#endif
 #include "jarvis_ui_tokens.h"   /* Step 2c-2b: FBP_ and JUI_ palette + geometry (single source) */
 
 #if JARVIS_AVX2_PROBE
@@ -418,6 +421,16 @@ static uint32_t xorshift32(uint32_t *state) {
 /* ---- Globals ---- */
 
 static decision_cache_t g_cache;
+#if JARVIS_CACHE_GROWTH
+/* Phase 5 #6/M1: rolling query-key frequency aggregate (Option B — seeded once from the boot
+ * scan of the persisted episodic store, folded per RAM batch at the [STATS] cadence) + the
+ * promotion high-water mark (SYSTEM_DESIGN §7: cap growth at 0.8*CACHE_SIZE so EMPTY slots
+ * survive and the <1 ms miss path never degrades into full-table scans; the SEC-024 LRU stays
+ * a guardrail, not the steady-state mechanism). */
+static uint32_t        g_cache_baseline = 0;         /* entries_used right after pattern load */
+static cg_freq_slot_t  g_key_freq[CG_FREQ_CAP];      /* zero-init = all empty (count==0) */
+#define CG_PROMOTE_HWM ((CACHE_SIZE * 4) / 5)        /* 409 of 512 */
+#endif
 static uint32_t total_queries = 0;
 static uint32_t cache_hits = 0;
 static uint32_t cache_misses = 0;
@@ -1999,10 +2012,12 @@ static void *main_continued(void *arg UNUSED)
                                         put_dec(epi_store_boot_id(&g_episodic));
                                         puts_serial(" count="); put_dec(epi_store_count(&g_episodic));
                                         puts_serial(")\n");
-#if JARVIS_G3_RETRIEVAL
+#if (JARVIS_G3_RETRIEVAL || JARVIS_CACHE_GROWTH)
                                         /* G3/M5a: one-time boot scan → in-RAM key→logical_index map of the
                                          * persisted store, so retrieval can recall facts from PRIOR boots
-                                         * (survives power-cycle). NOT per-query — built once, here at boot. */
+                                         * (survives power-cycle). NOT per-query — built once, here at boot.
+                                         * #6/M1 rides the same scan to seed the rolling freq aggregate
+                                         * (Option B); the index is harmlessly built even if only #6 is on. */
                                         {
                                             uint32_t _cnt = epi_store_count(&g_episodic);
                                             if (_cnt > EPI_STORE_MAX_ENTRIES) _cnt = EPI_STORE_MAX_ENTRIES;
@@ -2012,6 +2027,10 @@ static void *main_continued(void *arg UNUSED)
                                                     g_epi_index[g_epi_index_n].key = g_epi_recall_rec.query_key;
                                                     g_epi_index[g_epi_index_n].logical_index = _li;
                                                     g_epi_index_n++;
+#if JARVIS_CACHE_GROWTH
+                                                    cg_freq_bump(g_key_freq, CG_FREQ_CAP,
+                                                                 g_epi_recall_rec.query_key);
+#endif
                                                 }
                                             }
                                             puts_serial("[RECALL] index built n="); put_dec((uint32_t)g_epi_index_n);
@@ -3098,6 +3117,54 @@ static void *main_continued(void *arg UNUSED)
             jarvis_log_snapshot(q_total, q_errors);   /* Step 2c-2a: full-state [SNAP] at the [STATS] cadence */
             jarvis_telemetry_emit(TLM_K_STATS, q_total, q_hits, q_infer, q_heartbeat, q_shield, q_errors);  /* N-c-1 */
             g_tlm_last_tsc = jarvis_rdtsc();   /* N-c-1: re-base the 1 Hz gate so the next tick isn't a near-dup */
+#if JARVIS_CACHE_GROWTH
+            /* Phase 5 #6/M1: fold this batch into the rolling freq aggregate, then run the
+             * bounded promotion pass — BEFORE epi_commit() clears the batch. Growth is capped
+             * at CG_PROMOTE_HWM so EMPTY slots survive (SYSTEM_DESIGN §7: never saturate →
+             * the <1 ms miss path is preserved; SEC-024 LRU stays a guardrail, not the
+             * steady-state mechanism). */
+            {
+                for (int cgi = 0; cgi < g_epi_batch_n; cgi++)
+                    cg_freq_bump(g_key_freq, CG_FREQ_CAP, g_epi_batch[cgi].query_key);
+                int cg_promoted = 0;
+                for (int cgi = 0; cgi < g_epi_batch_n; cgi++) {
+                    if (g_cache.stats.entries_used >= CG_PROMOTE_HWM) break;
+                    epi_record_t *cgr = &g_epi_batch[cgi];
+                    /* usable = a real inference answer, not a canned cache echo (mirrors
+                     * g3_candidate_usable). */
+                    if (!(cgr->action == EPI_ACT_INFER && cgr->outcome == EPI_OUT_OK &&
+                          cgr->resp_len > 0))
+                        continue;
+                    if (cg_freq_get(g_key_freq, CG_FREQ_CAP, cgr->query_key) < CG_PROMOTE_THRESHOLD)
+                        continue;
+                    /* newest-per-key: skip if a later batch entry carries the same key */
+                    int cg_later = 0;
+                    for (int cgj = cgi + 1; cgj < g_epi_batch_n; cgj++)
+                        if (g_epi_batch[cgj].query_key == cgr->query_key) { cg_later = 1; break; }
+                    if (cg_later) continue;
+                    /* normalize the RAW (length-prefixed, non-NUL) query into a cache key;
+                     * normalize fails (skip) if it exceeds MAX_QUERY_LEN-1 (C2). */
+                    char cg_qraw[EPI_QUERY_MAX + 1], cg_norm[MAX_QUERY_LEN], cg_act[MAX_ACTION_LEN];
+                    uint16_t cg_ql = cgr->query_len < EPI_QUERY_MAX ? cgr->query_len : EPI_QUERY_MAX;
+                    memcpy(cg_qraw, cgr->query, cg_ql); cg_qraw[cg_ql] = '\0';
+                    if (!cache_normalize_query(cg_qraw, cg_norm, sizeof(cg_norm))) continue;
+                    uint16_t cg_rl = cgr->resp_len < (MAX_ACTION_LEN - 1) ? cgr->resp_len
+                                                                          : (MAX_ACTION_LEN - 1);
+                    memcpy(cg_act, cgr->resp, cg_rl); cg_act[cg_rl] = '\0';
+                    /* idempotent: cache_insert updates-in-place on an existing key; count a
+                     * promotion only when entries_used actually grew (a NEW entry). */
+                    uint32_t cg_before = g_cache.stats.entries_used;
+                    if (cache_insert(&g_cache, cg_norm, cg_act, TRUST_AUTO) &&
+                        g_cache.stats.entries_used > cg_before)
+                        cg_promoted++;
+                }
+                puts_serial("[CACHE-GROW] promoted="); put_dec((uint32_t)cg_promoted);
+                puts_serial(" used="); put_dec(g_cache.stats.entries_used);
+                puts_serial(" grow="); put_dec(g_cache.stats.entries_used - g_cache_baseline);
+                puts_serial(" hwm="); put_dec((uint32_t)CG_PROMOTE_HWM);
+                puts_serial("\n");
+            }
+#endif
             epi_commit();   /* Phase 5 G1/M1: flush the episodic batch to NVMe at the [STATS] cadence (~100 q) */
             if (g_sctx_ready) {   /* Phase 5 G2/M2: live-pool proof at the [STATS] cadence (climbing seq/ev/dec) */
                 puts_serial("[SCTX] live seq="); put_dec(__atomic_load_n(&g_sctx->seq, __ATOMIC_ACQUIRE));
@@ -3238,6 +3305,9 @@ int main(void)
     puts_serial("[JARVIS] Loaded ");
     put_dec((uint32_t)(n1 + n2));
     puts_serial(" patterns\n\n");
+#if JARVIS_CACHE_GROWTH
+    g_cache_baseline = g_cache.stats.entries_used;   /* #6/M1: growth is measured past this */
+#endif
 
     /* Demo queries + SHIELD (serial only — too verbose for 25-line VGA) */
 #ifdef __x86_64__
