@@ -137,6 +137,30 @@ Nothing negative, reset, or wrapped incorrectly.
 - The run's absolute wall-clock start/stop and the reason logging ceased are inferred (§HEALTH),
   not directly recorded.
 
+## 10. Two-run comparison — boot_id=13 (the v4 live-tok/s build, optional addendum)
+
+The boot_id=13 tails were frozen the same way (2026-07-03 22:21: `/home/jarvis/cur_nvmelog.bin`
+md5 `14a22851380553398fb9d193b84ddeb7`, `/home/jarvis/cur_episodic.bin` md5
+`78d45aaadbbfb211a61f6234c5cc2e00`). Provenance note: the boot-12 analysis above was re-run from
+the frozen `boot12_*.bin` dumps and diffs **byte-identical** to the pre-freeze device reads.
+
+| Metric | boot_id=12 (`99419fb`, v3 wire) | boot_id=13 (`9671226`, **v4 wire**) |
+|---|---|---|
+| Final logged q / duration | 873,700 @ T+34.9 min | 560,500 @ T+23.1 min |
+| Sustained rate (window) | 489.8 q/s | **490.7 q/s** (v4 timing added no drag) |
+| Window hit-rate | 85.14% | 84.93% |
+| err / faults (visible window) | 0 / 0 | 0 / 0 |
+| Episodic records written | ≈743,342 (~90.7 wraps) | ≈476,567 (~58.2 wraps; lifetime 1,220,493, checksum OK) |
+| Episodic tail (8,192) | all epi-boot 6, 8,192× CACHE/OK | all epi-boot 7, 8,192× CACHE/OK |
+| Promoted-serve records in tail | 1,304 (all 8 queries) | 1,237 (all 8 queries) |
+| Non-OK / malformed | 0 / 0 | 0 / 0 |
+| Growth | `cache_growth_count` 6→9 | 0→9 (fresh boot re-promotes; live capture) |
+| New in v4 (live capture, 521/521 crc_ok) | — | `version=4`, `infer_last_tok_x100` **551–555 = 5.51–5.55 tok/s measured live** (≈1.6% from the 5.46 benchmark), `infer_gen_tokens=50` real, latch+idle lifecycle on-wire |
+
+**Verdict: the v4 wire bump + always-on generation timing changed nothing operationally** — the
+second cache-growth-ON soak reproduces the first's health profile within 0.2% on rate and
+hit-rate, at zero errors, while adding the real measured throughput field.
+
 ## Follow-ups
 
 1. None required for #6 — the deployed path behaved exactly as the flip bar predicted, at 3×
