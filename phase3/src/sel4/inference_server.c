@@ -34,13 +34,13 @@
 #include "smp_probe.h"
 #endif
 
-#if JARVIS_M1_MEASURE
+/* RDTSC helper — UNCONDITIONAL since v4: the generation loop is always timed for the live
+ * tok/s measurement (MSG_INFER_STATS). Previously gated under JARVIS_M1_MEASURE. */
 static inline uint64_t m1_rdtsc(void) {
     uint32_t lo, hi;
     __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
     return ((uint64_t)hi << 32) | lo;
 }
-#endif
 
 #include "gguf_parser.h"
 #include "llama_model.h"
