@@ -111,6 +111,24 @@
  * property of the repeat-heavy workload. When 0 (opt-out), all #6 blocks compile out. */
 #define JARVIS_CACHE_GROWTH 1
 
+/* Phase 5 #5 SHIELD failure-learning (MONITOR-ONLY — learns + surfaces a per-key risk signal,
+ * NEVER blocks; SEC-039 unchanged, live enforcement is Phase 6). When 1, Process A derives the
+ * risk map from the episodic log's ERROR/BLOCKED records (D-a): the boot recall-scan seeds
+ * shield_learn_record_failure per persisted failure, and the [STATS]-cadence pass folds this
+ * batch's failures the same way; a [SHIELD-LEARN] keys=/maxrisk_x100=/fails= summary prints at
+ * the [STATS] cadence. Phase-1 parity arithmetic (+0.1/failure, cap 0.5, monotonic-raise-only).
+ * Default 0 -> the include + table + seed + fold compile out; deploy behavior-identical.
+ * The benign deployed workload runs err=0, so with no probe the live counters honestly read 0. */
+#define JARVIS_SHIELD_LEARN 0
+
+/* Phase 5 #5/M3 synthetic-failure PROBE (box-only, needs JARVIS_SHIELD_LEARN=1): injects the SAME
+ * failing action twice (one synthetic EPI_OUT_ERROR record per [STATS] tick, marker query, no
+ * resp — so retrieval/cache-growth ignore it by their OK+resp filters) and prints
+ * `[SHIELD-PROBE] attempt=N risk_x100=` after each fold. The criterion-2 signal is the risk
+ * RISING on the repeat (10 -> 20), honestly scoped: the learning signal, NOT live blocking.
+ * Default 0 -> compiles out. */
+#define JARVIS_SHIELD_PROBE 0
+
 /* Serial [STATS] prints every 100 queries; NVMe LOG_IPC_STATS is written every
  * JARVIS_STATS_NVME_INTERVAL. Measured bare-metal rate is ~3k queries/day (single
  * core, scalar) -> interval=100 gives ~870 entries over 30 days, well under the

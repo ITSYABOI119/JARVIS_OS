@@ -1,6 +1,6 @@
 # Phase 5 — Goal #5: SHIELD Learning (persisted failure-learning — MONITOR-ONLY, not a live blocker)
 
-**Status:** 🚧 IN PROGRESS — **M0 ✅ host/CI (2026-07-03: `shield_learn.c/h` pure risk-map, Phase-1 parity, host-tested)**; M1 (box derive-from-episodic, gated) next. **Arc 2 opener.**
+**Status:** 🚧 IN PROGRESS — **M0 ✅ host/CI (2026-07-03: `shield_learn.c/h` pure risk-map, Phase-1 parity, host-tested 28/28)** · **M1 ✅ LANDED (2026-07-03: gated `JARVIS_SHIELD_LEARN` PA wiring — boot-scan seed + [STATS]-cadence fold + `[SHIELD-LEARN]` summary + the gated `JARVIS_SHIELD_PROBE` D-d probe; box smoke = the gate)**; M2 (telemetry/console slice) next. **Arc 2 opener.**
 **Date:** 2026-07-03
 **Prereqs:** #1 episodic store ✅ box-verified (the failure SOURCE — `outcome ∈ {EPI_OUT_ERROR, EPI_OUT_BLOCKED}` records) + the #6-proven **boot-scan-seeded + batch-folded per-key aggregate** pattern (`cg_freq_bump/get` precedent) + decision-cache FNV-1a key parity (an episodic `query_key` is the shared key currency).
 **Sources:** `phase1/src/ai/shield_framework.py:525-559` (`FailureLearningSystem` — THE port source); `phase5/docs/PHASE_5_PLAN.md` §7 locked decision 3 (learn + persist + MONITOR only; enforcement = Phase 6), §8 A2-2 (host+CI now; box = criterion-2 proof), §3 criterion 2; `phase4/docs/ROADMAP.md:64` (canon) + `:71` (done-when checkbox); SEC-039 (the live SHIELD stub — unchanged by this goal).

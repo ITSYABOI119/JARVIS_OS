@@ -65,6 +65,9 @@
 #if JARVIS_CACHE_GROWTH
 #include "cache_growth.h"       /* Phase 5 #6/M1: promotion threshold + rolling freq aggregate (flag-gated) */
 #endif
+#if JARVIS_SHIELD_LEARN
+#include "shield_learn.h"       /* Phase 5 #5/M1: failure-learning risk map (flag-gated; MONITOR-ONLY) */
+#endif
 #include "jarvis_ui_tokens.h"   /* Step 2c-2b: FBP_ and JUI_ palette + geometry (single source) */
 
 #if JARVIS_AVX2_PROBE
@@ -462,6 +465,13 @@ static cg_freq_slot_t  g_key_freq[CG_FREQ_CAP];      /* zero-init = all empty (c
  * [CACHE-SERVE] proof prints to the first 2 (evidence, never a per-hit serial flood). */
 static uint32_t        g_cg_served = 0;
 static int             g_cg_serve_logged = 0;
+#endif
+#if JARVIS_SHIELD_LEARN
+/* Phase 5 #5/M1: the failure-learning risk map (D-a derive-from-episodic — seeded from the boot
+ * recall-scan's ERROR/BLOCKED records, folded per batch at the [STATS] cadence). MONITOR-ONLY:
+ * this table is learned + surfaced, NEVER consulted to block anything (SEC-039 unchanged; live
+ * enforcement is Phase 6). Zero-init = all empty (fail_count==0). */
+static shield_learn_slot_t g_shield_learn[SHIELD_LEARN_CAP_KEYS];
 #endif
 static uint32_t total_queries = 0;
 static uint32_t cache_hits = 0;
@@ -2047,12 +2057,14 @@ static void *main_continued(void *arg UNUSED)
                                         put_dec(epi_store_boot_id(&g_episodic));
                                         puts_serial(" count="); put_dec(epi_store_count(&g_episodic));
                                         puts_serial(")\n");
-#if (JARVIS_G3_RETRIEVAL || JARVIS_CACHE_GROWTH)
+#if (JARVIS_G3_RETRIEVAL || JARVIS_CACHE_GROWTH || JARVIS_SHIELD_LEARN)
                                         /* G3/M5a: one-time boot scan → in-RAM key→logical_index map of the
                                          * persisted store, so retrieval can recall facts from PRIOR boots
                                          * (survives power-cycle). NOT per-query — built once, here at boot.
                                          * #6/M1 rides the same scan to seed the rolling freq aggregate
-                                         * (Option B); the index is harmlessly built even if only #6 is on. */
+                                         * (Option B); #5/M1 rides it to seed the failure risk map from
+                                         * persisted ERROR/BLOCKED records (derive-from-episodic, D-a);
+                                         * the index is harmlessly built even if only #6/#5 are on. */
                                         {
                                             uint32_t _cnt = epi_store_count(&g_episodic);
                                             if (_cnt > EPI_STORE_MAX_ENTRIES) _cnt = EPI_STORE_MAX_ENTRIES;
@@ -2065,6 +2077,12 @@ static void *main_continued(void *arg UNUSED)
 #if JARVIS_CACHE_GROWTH
                                                     cg_freq_bump(g_key_freq, CG_FREQ_CAP,
                                                                  g_epi_recall_rec.query_key);
+#endif
+#if JARVIS_SHIELD_LEARN
+                                                    if (g_epi_recall_rec.outcome != EPI_OUT_OK)
+                                                        shield_learn_record_failure(g_shield_learn,
+                                                                                    SHIELD_LEARN_CAP_KEYS,
+                                                                                    g_epi_recall_rec.query_key);
 #endif
                                                 }
                                             }
@@ -3201,6 +3219,65 @@ static void *main_continued(void *arg UNUSED)
             jarvis_log_snapshot(q_total, q_errors);   /* Step 2c-2a: full-state [SNAP] at the [STATS] cadence */
             jarvis_telemetry_emit(TLM_K_STATS, q_total, q_hits, q_infer, q_heartbeat, q_shield, q_errors);  /* N-c-1 */
             g_tlm_last_tsc = jarvis_rdtsc();   /* N-c-1: re-base the 1 Hz gate so the next tick isn't a near-dup */
+#if JARVIS_SHIELD_LEARN
+            /* Phase 5 #5/M1: derive-from-episodic failure learning (D-a). BEFORE epi_commit()
+             * clears the batch, fold this batch's FAILURE records (outcome != OK) into the risk
+             * map — Phase-1 parity arithmetic, monotonic-raise-only. MONITOR-ONLY: the map is
+             * learned + surfaced, never consulted to block (SEC-039 unchanged; Phase 6 enforces). */
+            {
+#if JARVIS_SHIELD_PROBE
+                /* #5/M3 synthetic-failure probe (D-d): inject the SAME failing action once per
+                 * [STATS] tick, twice total — marker query, EPI_OUT_ERROR, no resp, so the
+                 * retrieval/cache-growth OK+resp filters ignore it by construction. The gate is
+                 * the risk RISING on the repeat (attempt 1 -> 10, attempt 2 -> 20). */
+                static int sl_probe_n = 0;
+                if (sl_probe_n < 2) {
+                    sl_probe_n++;
+                    epi_batch_add("SHIELD synthetic-failure probe SLPROBEQX7",
+                                  EPI_ACT_INFER, EPI_OUT_ERROR, NULL);
+                }
+#endif
+                for (int sli = 0; sli < g_epi_batch_n; sli++)
+                    if (g_epi_batch[sli].outcome != EPI_OUT_OK)
+                        shield_learn_record_failure(g_shield_learn, SHIELD_LEARN_CAP_KEYS,
+                                                    g_epi_batch[sli].query_key);
+                /* [SHIELD-LEARN] summary (log-mirrored, [STATS] cadence): honest counters only —
+                 * keys learned / max learned risk / total failures. Never a "blocked" claim. */
+                {
+                    int sl_keys = 0; uint32_t sl_fails = 0; float sl_max = 0.0f;
+                    for (int sli = 0; sli < SHIELD_LEARN_CAP_KEYS; sli++) {
+                        if (g_shield_learn[sli].fail_count) {
+                            sl_keys++;
+                            sl_fails += g_shield_learn[sli].fail_count;
+                            if (g_shield_learn[sli].risk_adj > sl_max) sl_max = g_shield_learn[sli].risk_adj;
+                        }
+                    }
+                    puts_serial("[SHIELD-LEARN] keys="); put_dec((uint32_t)sl_keys);
+                    puts_serial(" maxrisk_x100="); put_dec((uint32_t)(sl_max * 100.0f + 0.5f));
+                    puts_serial(" fails="); put_dec(sl_fails);
+                    puts_serial("\n");
+                }
+#if JARVIS_SHIELD_PROBE
+                /* Probe read-back: report the learned risk for the probe key after each fold. */
+                {
+                    static int sl_probe_reported = 0;
+                    if (sl_probe_reported < sl_probe_n) {
+                        sl_probe_reported = sl_probe_n;
+                        char sl_norm[MAX_QUERY_LEN];
+                        uint64_t sl_key = 0;
+                        if (cache_normalize_query("SHIELD synthetic-failure probe SLPROBEQX7",
+                                                  sl_norm, sizeof sl_norm))
+                            sl_key = cache_hash(sl_norm);
+                        float sl_adj = shield_learn_adjustment(g_shield_learn,
+                                                               SHIELD_LEARN_CAP_KEYS, sl_key);
+                        puts_serial("[SHIELD-PROBE] attempt="); put_dec((uint32_t)sl_probe_n);
+                        puts_serial(" risk_x100="); put_dec((uint32_t)(sl_adj * 100.0f + 0.5f));
+                        puts_serial("\n");
+                    }
+                }
+#endif
+            }
+#endif
 #if JARVIS_CACHE_GROWTH
             /* Phase 5 #6/M1: fold this batch into the rolling freq aggregate, then run the
              * bounded promotion pass — BEFORE epi_commit() clears the batch. Growth is capped

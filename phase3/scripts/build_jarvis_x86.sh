@@ -155,6 +155,7 @@ AI_FILES=(
     "shared_context.c"    "shared_context.h"
     "g3_retrieval.c"      "g3_retrieval.h"
     "cache_growth.c"      "cache_growth.h"
+    "shield_learn.c"      "shield_learn.h"
 )
 
 for f in "${AI_FILES[@]}"; do
@@ -427,6 +428,20 @@ if [ -f "$CMAKE_FILE" ]; then
         fi
     else
         echo -e "  ${CYAN}OK${NC}  src/ai/cache_growth.c already in source list"
+    fi
+
+    # Phase 5 #5/M1: add src/ai/shield_learn.c to the Process A source list if missing
+    # (PA-only: the risk map derives from the episodic log in PA; MONITOR-ONLY, never blocks.)
+    if ! grep -q "src/ai/shield_learn.c" "$CMAKE_FILE"; then
+        sed -i '/src\/ai\/cache_growth.c/a\    src/ai/shield_learn.c' "$CMAKE_FILE" 2>/dev/null
+        if grep -q "src/ai/shield_learn.c" "$CMAKE_FILE"; then
+            echo -e "  ${GREEN}ADDED${NC}  src/ai/shield_learn.c to source list"
+            PATCHED=1
+        else
+            echo -e "  ${RED}FAILED${NC}  Could not add shield_learn.c — edit CMakeLists.txt manually"
+        fi
+    else
+        echo -e "  ${CYAN}OK${NC}  src/ai/shield_learn.c already in source list"
     fi
 
     # Add JARVIS_SEL4 compile definition (needed for pci.c IOPort backend)
