@@ -1567,7 +1567,7 @@ static void jarvis_log_snapshot(uint64_t q_total, uint64_t q_errors) {
     nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr, g_nvme_bounce_paddr, LOG_IPC_STATS, ln);
 }
 
-/* N-c-1: emit a 216-byte (v3) binary telemetry packet over UDP broadcast (:51000) via the I211.
+/* N-c-1: emit a 222-byte (v5) binary telemetry packet over UDP broadcast (:51000) via the I211.
  * Single-threaded — only PA's workload loop calls it; no locking. Strict NO-OP until the NIC
  * came up (g_net.ready) so QEMU / NIC-absent is unaffected. Fire-and-forget: NO DD poll
  * (protects err=0/throughput). Reuses the N-b net_udp framing. */
@@ -1603,7 +1603,7 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
     pkt.infer_gen_tokens = g_infer_last_tokens;        /* v4: REAL last-inference token count (0 until the first inference) */
     pkt.infer_last_tok_x100 = g_infer_last_tok_x100;   /* v4: REAL last-inference tok/s * 100 (RDTSC-measured in PB; latched, never fabricated) */
     pkt.cache_growth_count = g_cache_growth_count;  /* P5 #6/M2: promoted entries (0 + no flag flag-OFF) */
-    /* Tier 1: real system fields packed into former reserved space (packet is 216 B v3, CRC[:212]).
+    /* Tier 1: real system fields packed into former reserved space (packet is 222 B v5, CRC[:218]).
      * infer_duty_pct = inference cycles / uptime — a WORKLOAD duty cycle, NOT a CPU-load gauge (PA busy-polls). */
     pkt.infer_active = g_infer_active;
     { uint64_t up = g_boot_tsc ? (jarvis_rdtsc() - g_boot_tsc) : 0;
@@ -1616,6 +1616,24 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
     pkt.pool_decisions = g_sctx_ready ? sctx_decision_count(g_sctx) : 0;
     pkt.retrieval_hits       = g_retrieval_hits;         /* P5 G3/M4: non-empty preambles packed (0 + no flag flag-OFF) */
     pkt.retrieval_latency_us = g_retrieval_latency_us;   /* P5 G3/M4: last in-RAM retrieval latency (µs) */
+#if JARVIS_SHIELD_LEARN
+    /* P5 #5/M2: failure-learning monitor fields (v5) — same table walk as the [SHIELD-LEARN]
+     * summary: keys with learned risk + max learned adjustment. MONITOR-ONLY: a learned-risk
+     * count, NEVER a "blocked" count (SEC-039 unchanged; enforcement is Phase 6). Gated, so
+     * the flag-OFF deploy leaves both fields 0 + TLM_F_SHIELD_LEARN clear (honest). */
+    {
+        int slk = 0; float slm = 0.0f;
+        for (int sli = 0; sli < SHIELD_LEARN_CAP_KEYS; sli++) {
+            if (g_shield_learn[sli].fail_count) {
+                slk++;
+                if (g_shield_learn[sli].risk_adj > slm) slm = g_shield_learn[sli].risk_adj;
+            }
+        }
+        pkt.shield_learn_keys = (uint16_t)slk;
+        pkt.shield_learn_max_risk_x100 = (uint16_t)(slm * 100.0f + 0.5f);
+        if (pkt.shield_learn_keys > 0) pkt.flags |= TLM_F_SHIELD_LEARN;
+    }
+#endif
     /* model display name (matches the on-screen panel) + last response, NUL-bounded (pkt is zeroed) */
     { const char *mn = "Gemma 4 E2B";
       for (int i = 0; i < (int)sizeof(pkt.model_name) - 1 && mn[i]; i++) pkt.model_name[i] = mn[i]; }
@@ -1623,7 +1641,7 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
         pkt.last_text[i] = g_fb_last_resp[i];
     jarvis_tlm_finalize(&pkt);
     /* wrap as a UDP broadcast to :51000 and fire-and-forget (no DD poll) */
-    static uint8_t tlm_frame[288];   /* 14+20+8+216 = 258 <= 288 */
+    static uint8_t tlm_frame[288];   /* 14+20+8+222 = 264 <= 288 */
     int flen = net_build_udp_broadcast(tlm_frame, sizeof tlm_frame, g_net.nic.mac, JARVIS_BOX_IP,
                    JARVIS_TELEMETRY_PORT, JARVIS_TELEMETRY_PORT, &pkt, (uint16_t)sizeof pkt);
     if (flen > 0)

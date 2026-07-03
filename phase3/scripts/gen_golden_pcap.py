@@ -6,7 +6,7 @@ Reads golden_telemetry.json and packs each frame via telemetry_fixture
 (build_packet / build_pcap_many). The "corrupt" frame is packed finalize=False
 with a deliberately wrong CRC so it decodes to crc_ok=False downstream.
 
-Guards before writing: struct.calcsize(fmt)==218 (both FMT and the fixture's
+Guards before writing: struct.calcsize(fmt)==222 (both FMT and the fixture's
 meta.fmt) AND the canonical zlib CRC vector — so a struct change can't silently
 emit a valid-but-wrong-shape golden. CI gates that the committed golden.pcap
 matches this output (golden-fixture-drift gate). Stdlib only.
@@ -35,9 +35,9 @@ def main():
     meta = spec['meta']
 
     # guards: the packet shape can't have drifted under us
-    assert struct.calcsize(FMT) == 218, "FMT no longer 218 bytes (v4)"
-    assert struct.calcsize(meta['fmt']) == 218, "meta.fmt no longer 218 bytes (v4)"
-    assert meta['size'] == 218, "meta.size != 218"
+    assert struct.calcsize(FMT) == 222, "FMT no longer 222 bytes (v5)"
+    assert struct.calcsize(meta['fmt']) == 222, "meta.fmt no longer 222 bytes (v5)"
+    assert meta['size'] == 222, "meta.size != 222"
     assert zlib.crc32(b"123456789") & 0xFFFFFFFF == 0xCBF43926, "zlib CRC vector mismatch"
 
     frames = []

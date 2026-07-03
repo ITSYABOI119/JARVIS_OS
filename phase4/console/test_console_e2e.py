@@ -40,6 +40,7 @@ FLAG_LABEL = {
     'CONTEXT': 'Shared context pool',
     'RETRIEVAL': 'Retrieval before inference',
     'CACHE_GROWTH': 'Cache growth — learns frequent queries',
+    'SHIELD_LEARN': 'SHIELD failure-learning (monitor-only)',
 }
 
 _P = 0
@@ -337,6 +338,47 @@ def main():
                 time.sleep(0.1)
             check(cg_ok,
                   "(#6/M2) System 'Patterns promoted' renders == live cache_growth_count (snap=%r)" % (cg_dbg,))
+
+            # (#5/M2) PIN the SHIELD 'Actions with learned risk' VALUE — must equal the live
+            # shield_learn_keys on a SHIELD_LEARN-flagged frame (flag-gated; '—' otherwise). The
+            # golden 'infer' frame carries shield_learn_keys=1 (the D-d probe shape). MONITOR-ONLY:
+            # the section must also carry the 'not a live blocker' wording. TEETH: fails if the
+            # failure-learning rendering breaks (wrong value, '—', or removed).
+            page.get_by_title('SHIELD', exact=True).click()
+            expect(page.get_by_text('Failure-learning')).to_be_visible(timeout=10000)
+            sl_ok = False
+            sl_dbg = None
+            deadline = time.time() + 12
+            while time.time() < deadline:
+                snap = page.evaluate(
+                    "() => {"
+                    " const rec = (window.JarvisTelemetry.getState().latest) || {};"
+                    " const flags = rec.flags_list || [];"
+                    " const lab = Array.from(document.querySelectorAll('div'))"
+                    "   .find(d => d.textContent.trim() === 'Actions with learned risk');"
+                    " let rendered = null;"
+                    " if (lab && lab.parentElement) {"
+                    "   const kids = Array.from(lab.parentElement.children);"
+                    "   const i = kids.indexOf(lab);"
+                    "   rendered = kids[i + 1] ? kids[i + 1].textContent.trim() : null;"
+                    " }"
+                    " const m = document.querySelector('main');"
+                    " return { sl: flags.indexOf('SHIELD_LEARN') >= 0, keys: rec.shield_learn_keys,"
+                    "          rendered, monitor: m ? m.innerText.indexOf('not a live blocker') >= 0 : false };"
+                    "}")
+                sl_dbg = snap
+                if snap['sl'] and snap['monitor'] and snap['rendered'] not in (None, '—'):
+                    try:
+                        rendered_num = int(str(snap['rendered']).replace(',', ''))
+                    except (ValueError, TypeError):
+                        rendered_num = None
+                    if rendered_num is not None and rendered_num == snap['keys'] and rendered_num > 0:
+                        sl_ok = True
+                        break
+                time.sleep(0.1)
+            check(sl_ok,
+                  "(#5/M2) SHIELD 'Actions with learned risk' renders == live shield_learn_keys, "
+                  "monitor-only worded (snap=%r)" % (sl_dbg,))
 
             # (v4) PIN the CommandCenter Throughput VALUE — must equal infer_last_tok_x100/100
             # on a frame carrying the measured field (the golden 'infer' frame carries 152 ->

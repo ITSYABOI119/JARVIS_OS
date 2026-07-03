@@ -33,6 +33,8 @@ BANNED = [
     "GPU", "RTX", "formally verified", "558", "3.4 GB", "3.4GB", "2.1 s round",
     "tier swap", "model tier", "IDLE/ACTIVE", "approval required", "risk 0.",
     "risk score", "blocked rm", "Ask JARVIS", "<textarea", "ping 8.8", "1,284 msg",
+    # #5/M2: SHIELD failure-learning is MONITOR-ONLY — no live-blocking claims, ever.
+    "SHIELD blocks", "blocking active",
 ]
 
 # (b) Honest-framing markers that MUST stay present somewhere in the console
@@ -129,6 +131,23 @@ def main():
     lr = blobs.get('LastResponse.jsx', '')
     check('infer_last_tok_x100' in lr and 'infer_gen_tokens' in lr,
           "LastResponse decode-speed/tokens sourced from the REAL measured fields")
+
+    # --- #5/M2: SHIELD failure-learning — monitor-only section (real fields, honest wording) ---
+    # The learned signal is allowed ONLY as a monitor: real shield_learn_* fields, flag-gated,
+    # and worded "monitor-only / not a live blocker" — never a block count or a blocking claim.
+    sh = blobs.get('ConsoleShield.jsx', '')
+    check('shield_learn_keys' in sh,
+          "Shield failure-learning sources the REAL field (shield_learn_keys)")
+    check('shield_learn_max_risk_x100' in sh,
+          "Shield failure-learning sources the REAL field (shield_learn_max_risk_x100)")
+    check('monitor-only' in sh.lower(),
+          "failure-learning section carries 'monitor-only'")
+    check('not a live blocker' in sh.lower(),
+          "failure-learning section carries 'not a live blocker'")
+    check('enforcement is phase 6' in sh.lower(),
+          "failure-learning section defers enforcement to Phase 6")
+    check('SHIELD_LEARN' in blobs.get('ConsoleCapabilities.jsx', ''),
+          "Capabilities labels the SHIELD_LEARN flag (monitor-only row)")
 
     print("\n== Results: %d PASS, %d FAIL ==" % (_PASS, _FAIL))
     return 1 if _FAIL else 0

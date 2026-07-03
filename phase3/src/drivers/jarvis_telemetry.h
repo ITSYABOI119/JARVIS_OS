@@ -1,15 +1,15 @@
 /**
  * jarvis_telemetry.h - JARVIS binary telemetry packet (goal #2b N-c)
  *
- * A versioned, CRC'd, fixed-218-byte (v4) binary packet the box emits over UDP
+ * A versioned, CRC'd, fixed-222-byte (v5) binary packet the box emits over UDP
  * (255.255.255.255:51000, via net_udp.c + the I211) so a remote console can
  * render live, honest box state. Pure logic / host-testable (CRC + finalize);
  * the emit site is in main_x86.c.
  *
  * Wire format: little-endian (x86), packed, no padding. The CRC-32 is the
  * standard zlib/IEEE CRC (poly 0xEDB88320, init/xorout 0xFFFFFFFF) over the
- * first 214 bytes [0 .. offsetof(crc32)), so a Python receiver validates with
- * `zlib.crc32(pkt[:214]) == struct.unpack_from('<I', pkt, 214)[0]`.
+ * first 218 bytes [0 .. offsetof(crc32)), so a Python receiver validates with
+ * `zlib.crc32(pkt[:218]) == struct.unpack_from('<I', pkt, 218)[0]`.
  *
  * JARVIS AI-OS - Phase 4 (goal #2b Remote Telemetry Console)
  */
@@ -20,7 +20,7 @@
 #include <stdint.h>
 
 #define JARVIS_TLM_MAGIC   0x4A54454Cu  /* "JTEL" (LE on wire: 4C 45 54 4A) */
-#define JARVIS_TLM_VERSION 4
+#define JARVIS_TLM_VERSION 5
 
 /* flags (bitfield) */
 #define TLM_F_MODEL_LOADED  0x01
@@ -32,6 +32,7 @@
 #define TLM_F_CONTEXT       0x40   /* shared context pool live (Phase 5 G2) */
 #define TLM_F_RETRIEVAL     0x80   /* retrieval-before-inference has fired (Phase 5 G3) */
 #define TLM_F_CACHE_GROWTH  0x100  /* cache-growth promotion has occurred (Phase 5 #6) — flags is u16 */
+#define TLM_F_SHIELD_LEARN  0x200  /* SHIELD failure-learning has learned >=1 key (Phase 5 #5) — MONITOR-ONLY, never a block claim */
 
 /* kind */
 #define TLM_K_STATS 1
@@ -46,7 +47,10 @@
  * retrieval_hits/retrieval_latency_us -> 216 B, CRC@212; v4 appends
  * infer_last_tok_x100 -> 218 B, CRC@214 (and infer_gen_tokens becomes REAL —
  * both from PB's RDTSC-measured generation loop via MSG_INFER_STATS; never a
- * benchmark constant, 0 until a boot's first inference). */
+ * benchmark constant, 0 until a boot's first inference); v5 (P5 #5/M2) appends
+ * shield_learn_keys/shield_learn_max_risk_x100 -> 222 B, CRC@218 (the SHIELD
+ * failure-learning monitor signal — learned-risk counts, NEVER a block count;
+ * both 0 + flag clear in the flag-OFF deploy). */
 typedef struct __attribute__((packed)) {
     uint32_t magic; uint8_t version; uint8_t kind; uint16_t flags; uint32_t boot_id; uint32_t seq;  /* 16 */
     uint32_t uptime_ms;                                                                              /*  4 */
@@ -61,15 +65,17 @@ typedef struct __attribute__((packed)) {
     uint32_t retrieval_hits;        /* P5 G3/M4: count of non-empty retrieval preambles packed */     /*  4 */
     uint32_t retrieval_latency_us;  /* P5 G3/M4: last in-RAM retrieval (select+assemble+pack) latency, µs */ /* 4 */
     uint16_t infer_last_tok_x100;   /* v4: LAST real inference tok/s * 100 (RDTSC-measured in PB; 0 until first inference) */ /* 2 */
-    uint32_t crc32;          /* zlib CRC-32 over the first 214 bytes [0 .. offsetof(crc32)) */       /*  4 */
+    uint16_t shield_learn_keys;          /* v5 (P5 #5/M2): actions with learned failure-risk — monitor-only */ /* 2 */
+    uint16_t shield_learn_max_risk_x100; /* v5: max learned risk adjustment * 100 (cap 50 = +0.5) — never a block count */ /* 2 */
+    uint32_t crc32;          /* zlib CRC-32 over the first 218 bytes [0 .. offsetof(crc32)) */       /*  4 */
 } telemetry_packet_t;
 
-_Static_assert(sizeof(telemetry_packet_t) == 218, "telemetry packet must be 218 bytes (v4)");
+_Static_assert(sizeof(telemetry_packet_t) == 222, "telemetry packet must be 222 bytes (v5)");
 
 /* Standard zlib/IEEE CRC-32 (poly 0xEDB88320, init/xorout 0xFFFFFFFF) — equals Python zlib.crc32. */
 uint32_t jarvis_tlm_crc32(const void *data, uint32_t len);
 
-/* Stamp magic/version and compute+store crc32 over the first 214 bytes (v4). */
+/* Stamp magic/version and compute+store crc32 over the first 218 bytes (v5). */
 void jarvis_tlm_finalize(telemetry_packet_t *pkt);
 
 #endif /* JARVIS_TELEMETRY_H */

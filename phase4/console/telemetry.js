@@ -8,6 +8,7 @@
  *   fb_bpp, selftest_score, model_size_mb, total_ram_mb, nvme_total_mb,
  *   episodic_count, pool_events, pool_decisions, retrieval_hits, retrieval_latency_us,
  *   cache_growth_count, infer_last_tok_x100,
+ *   shield_learn_keys, shield_learn_max_risk_x100 (v5 — monitor-only learned-risk fields),
  *   log_cursor, infer_gen_tokens, model_name, last_text, crc_ok
  *
  * Liveness is genuine: a record is "live" only while a fresh CRC-valid packet
@@ -205,6 +206,8 @@
         retrieval_hits: loading ? 0 : Math.max(0, qInfer),   // preview value (badged SIMULATED)
         cache_growth_count: loading ? 0 : 6,                 // preview value (badged SIMULATED)
         retrieval_latency_us: loading ? 0 : 35,              // preview value (badged SIMULATED)
+        shield_learn_keys: 0,                // honest 0: no failures in the preview (no SHIELD_LEARN flag -> row shows '—')
+        shield_learn_max_risk_x100: 0,
         infer_active: kind === 2 ? 1 : 0,
         infer_duty_pct: loading ? 0 : 12,  // preview workload duty cycle (badged SIMULATED)
         infer_gen_tokens: loading ? 0 : 50,                  // preview value (badged SIMULATED) — REAL on the box since v4

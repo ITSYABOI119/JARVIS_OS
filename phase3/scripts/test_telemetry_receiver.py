@@ -51,8 +51,8 @@ def main():
     print("== telemetry receiver wire-compat ==")
 
     # Layout
-    check(struct.calcsize(FMT) == 218, "struct.calcsize(FMT) == 218 (v4)")
-    check(PKT_SIZE == 218, "PKT_SIZE == 218 (v4)")
+    check(struct.calcsize(FMT) == 222, "struct.calcsize(FMT) == 222 (v5)")
+    check(PKT_SIZE == 222, "PKT_SIZE == 222 (v5)")
 
     # Canonical zlib CRC vector — same CRC the C side proved (jarvis_telemetry.c)
     check(zlib.crc32(b"123456789") & 0xFFFFFFFF == 0xCBF43926,
@@ -60,7 +60,7 @@ def main():
 
     # Valid packet round-trips
     pkt = build_packet()
-    check(len(pkt) == 218, "built packet is 218 bytes (v4)")
+    check(len(pkt) == 222, "built packet is 222 bytes (v5)")
     d = decode_packet(pkt)
     check(d['crc_ok'] is True, "valid packet crc_ok True")
     check(d['kind_name'] == 'STATS', "kind_name == STATS")
@@ -88,7 +88,7 @@ def main():
 
     # Wrong length -> ValueError
     check(raises_valueerror(lambda: decode_packet(pkt[:207]), ), "207-byte input raises ValueError")
-    check(raises_valueerror(lambda: decode_packet(pkt + b'\x00')), "217-byte input raises ValueError")
+    check(raises_valueerror(lambda: decode_packet(pkt + b'\x00')), "223-byte input raises ValueError")
 
     # --- N-c-3a: packet_to_record (the /events SSE record) ---
     rec = packet_to_record(decode_packet(pkt))
@@ -128,11 +128,10 @@ def main():
 
     # --- G3/M4: retrieval_hits/retrieval_latency_us + TLM_F_RETRIEVAL (v3), then the v4 216->218
     # bump adding infer_last_tok_x100 (real measured tok/s*100; fabricated aliases stay banned) ---
-    check(PKT_SIZE == 218, "v4 size-bump: PKT_SIZE == 218")
     pkt_retr = build_packet(retrieval_hits=3, retrieval_latency_us=40, flags=0x01 | 0x10 | 0x80)
     dretr = decode_packet(pkt_retr)
-    check(dretr['crc_ok'] is True, "v3 retrieval packet crc_ok True (CRC over [:212])")
-    check(dretr['version'] == 4, "v4 packet version == 4")
+    check(dretr['crc_ok'] is True, "retrieval packet crc_ok True (CRC over [:PKT_SIZE-4])")
+    check(dretr['version'] == 5, "v5 packet version == 5")
     check(dretr['retrieval_hits'] == 3 and dretr['retrieval_latency_us'] == 40,
           "retrieval_hits/retrieval_latency_us decode")
     check('RETRIEVAL' in dretr['flags_list'], "TLM_F_RETRIEVAL 0x80 -> 'RETRIEVAL' in flags_list")
@@ -143,6 +142,27 @@ def main():
           "retrieval_hits/retrieval_latency_us are REQUIRED_RECORD_KEYs")
     check(FLAG_NAMES.get(0x80) == 'RETRIEVAL' and FLAG_BITS.get('RETRIEVAL') == 0x80,
           "FLAG_NAMES/FLAG_BITS both carry 0x80 RETRIEVAL")
+
+    # --- P5 #5/M2: shield_learn_keys/shield_learn_max_risk_x100 + TLM_F_SHIELD_LEARN (the v5
+    # 218->222 size-bump). MONITOR-ONLY fields: learned-risk counts, NEVER a block count — the
+    # fabricated 'shield_blocked' key stays banned. ---
+    check(PKT_SIZE == 222, "v5 size-bump: PKT_SIZE == 222")
+    pkt_sl = build_packet(shield_learn_keys=1, shield_learn_max_risk_x100=20,
+                          flags=0x01 | 0x10 | 0x200)
+    dsl = decode_packet(pkt_sl)
+    check(dsl['crc_ok'] is True, "v5 shield-learn packet crc_ok True (CRC over [:218])")
+    check(dsl['shield_learn_keys'] == 1 and dsl['shield_learn_max_risk_x100'] == 20,
+          "shield_learn_keys/shield_learn_max_risk_x100 decode")
+    check('SHIELD_LEARN' in dsl['flags_list'], "TLM_F_SHIELD_LEARN 0x200 -> 'SHIELD_LEARN' in flags_list")
+    rec_sl = packet_to_record(dsl)
+    check(rec_sl['shield_learn_keys'] == 1 and rec_sl['shield_learn_max_risk_x100'] == 20,
+          "record carries the shield-learn monitor fields")
+    check('shield_learn_keys' in REQUIRED_RECORD_KEYS and
+          'shield_learn_max_risk_x100' in REQUIRED_RECORD_KEYS,
+          "shield_learn_keys/shield_learn_max_risk_x100 are REQUIRED_RECORD_KEYs")
+    check(FLAG_NAMES.get(0x200) == 'SHIELD_LEARN' and FLAG_BITS.get('SHIELD_LEARN') == 0x200,
+          "FLAG_NAMES/FLAG_BITS both carry 0x200 SHIELD_LEARN")
+    check('shield_blocked' not in rec_sl, "no fabricated 'shield_blocked' key (monitor-only, ban holds)")
 
     # --- N-c-3a: iter_pcap_telemetry on a synthetic 1-packet pcap ---
     pcap = _build_pcap_one(pkt, ts_s=1700000001)
@@ -169,7 +189,7 @@ def main():
     meta_keys = set(golden['meta']['keys'])
     check(meta_keys == set(REQUIRED_RECORD_KEYS),
           "golden meta.keys == REQUIRED_RECORD_KEYS (fixture matches receiver output)")
-    check(golden['meta']['size'] == 218 and golden['meta']['fmt'] == FMT,
+    check(golden['meta']['size'] == 222 and golden['meta']['fmt'] == FMT,
           "golden meta fmt/size match the wire format")
 
     kind_expect = {1: 'STATS', 2: 'INFER', 3: 'STATE'}

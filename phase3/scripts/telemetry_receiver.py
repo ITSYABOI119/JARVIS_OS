@@ -3,15 +3,15 @@
 telemetry_receiver.py - JARVIS Remote Telemetry Console receiver (goal #2b N-c-2)
 
 Main-PC Python UDP receiver for the box-side telemetry stream. The JARVIS box
-(headless appliance) broadcasts a 218-byte (v4) binary `telemetry_packet_t` over UDP
+(headless appliance) broadcasts a 222-byte (v5) binary `telemetry_packet_t` over UDP
 to 255.255.255.255:51000 at ~1 Hz (see phase3/src/drivers/jarvis_telemetry.h and
 the N-c-1 emit site in phase3/src/sel4/main_x86.c, shipped at b9d689a). This tool
 binds the port, decodes each datagram, validates the zlib CRC-32 over the first
-214 bytes (v4), and pretty-prints honest live box state.
+218 bytes (v5), and pretty-prints honest live box state.
 
 Wire format (little-endian, packed, no padding):
-    struct format = '<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHI'  (struct.calcsize == 218)
-    crc32 is the last 4 bytes; valid iff zlib.crc32(pkt[:214]) == pkt.crc32.
+    struct format = '<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHHHI'  (struct.calcsize == 222)
+    crc32 is the last 4 bytes; valid iff zlib.crc32(pkt[:218]) == pkt.crc32.
 
 Usage:
     python3 telemetry_receiver.py [--bind ADDR] [--port 51000] [--once] [--follow] [--json]
@@ -25,7 +25,10 @@ HONESTY: only real fields are shown — no GPU, no "SHIELD blocked" (shield= is
 a check COUNT, not a block count), no "formally verified". Since v4 a REAL
 measured last-inference tok/s exists (infer_last_tok_x100, RDTSC-measured in
 Process B — never the 5.46 benchmark constant); the fabricated 'tok_s'/'tokps'
-aliases stay banned. The uptime is from an uncalibrated TSC, shown with "≈".
+aliases stay banned. The v5 shield_learn_* fields are the SHIELD
+failure-learning MONITOR signal (learned-risk counts — the box never blocks;
+'shield_blocked' stays banned). The uptime is from an uncalibrated TSC,
+shown with "≈".
 """
 
 import argparse
@@ -42,8 +45,8 @@ import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MAGIC = 0x4A54454C            # "JTEL" (LE on the wire: 4C 45 54 4A)
-FMT = '<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHI'
-PKT_SIZE = struct.calcsize(FMT)   # v4: 218 (derived — never hardcode a wire size)
+FMT = '<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHHHI'
+PKT_SIZE = struct.calcsize(FMT)   # v5: 222 (derived — never hardcode a wire size)
 LOG_MAX_ENTRIES = 2700        # NVME_LOG_MAX_ENTRIES (no-wrap durable telemetry log)
 
 FLAG_NAMES = {
@@ -56,6 +59,7 @@ FLAG_NAMES = {
     0x40: 'CONTEXT',
     0x80: 'RETRIEVAL',
     0x100: 'CACHE_GROWTH',
+    0x200: 'SHIELD_LEARN',
 }
 KIND_NAMES = {1: 'STATS', 2: 'INFER', 3: 'STATE'}
 
@@ -91,12 +95,13 @@ def decode_packet(data: bytes) -> dict:
      infer_gen_tokens, cache_growth_count, last_text_raw, model_name_raw,
      nvme_total_mb, episodic_count, pool_events, pool_decisions,
      retrieval_hits, retrieval_latency_us, infer_last_tok_x100,
+     shield_learn_keys, shield_learn_max_risk_x100,
      crc32_field) = struct.unpack(FMT, data)
 
     if magic != MAGIC:
         raise ValueError("bad magic 0x%08X (expected 0x%08X)" % (magic, MAGIC))
 
-    crc_calc = zlib.crc32(data[:PKT_SIZE - 4]) & 0xFFFFFFFF   # v4: 214 (= offsetof(crc32))
+    crc_calc = zlib.crc32(data[:PKT_SIZE - 4]) & 0xFFFFFFFF   # v5: 218 (= offsetof(crc32))
     flags_list = [name for bit, name in FLAG_NAMES.items() if flags & bit]
 
     return {
@@ -132,6 +137,8 @@ def decode_packet(data: bytes) -> dict:
         'retrieval_hits': retrieval_hits,
         'retrieval_latency_us': retrieval_latency_us,
         'infer_last_tok_x100': infer_last_tok_x100,
+        'shield_learn_keys': shield_learn_keys,
+        'shield_learn_max_risk_x100': shield_learn_max_risk_x100,
         'cache_growth_count': cache_growth_count,
         'log_cursor': log_cursor,
         'infer_gen_tokens': infer_gen_tokens,
@@ -182,7 +189,8 @@ def packet_to_record(d: dict, recv_ts: float = 0) -> dict:
 
     ONLY real fields (+ crc_ok, kind_name, flags_list, recv_ts). No fabricated
     keys (no tok/s, GPU, tier, agent grid, "SHIELD blocked"). 'q_shield' is the
-    raw check COUNT, not a block count.
+    raw check COUNT, not a block count; the v5 shield_learn_* fields are the
+    failure-learning MONITOR signal (learned-risk counts, never blocks).
     """
     return {
         'recv_ts': recv_ts,
@@ -217,6 +225,8 @@ def packet_to_record(d: dict, recv_ts: float = 0) -> dict:
         'retrieval_hits': d['retrieval_hits'],
         'retrieval_latency_us': d['retrieval_latency_us'],
         'infer_last_tok_x100': d['infer_last_tok_x100'],
+        'shield_learn_keys': d['shield_learn_keys'],
+        'shield_learn_max_risk_x100': d['shield_learn_max_risk_x100'],
         'cache_growth_count': d['cache_growth_count'],
         'log_cursor': d['log_cursor'],
         'infer_gen_tokens': d['infer_gen_tokens'],
@@ -242,8 +252,8 @@ def iter_pcap_telemetry(path):
 
     Parses the classic pcap format (24-byte global header + 16-byte per-record
     header + frame). Keeps only frames whose UDP payload (frame[42:]) starts
-    with the JTEL magic and is >= 216 bytes, then decode_packet()s the first 216
-    bytes. For box-free development against a captured stream.
+    with the JTEL magic and is >= PKT_SIZE bytes, then decode_packet()s the
+    first PKT_SIZE bytes. For box-free development against a captured stream.
     """
     with open(path, 'rb') as f:
         data = f.read()
