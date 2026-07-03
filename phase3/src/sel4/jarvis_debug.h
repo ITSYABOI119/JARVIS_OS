@@ -3,10 +3,11 @@
  * Compile-time flags to control diagnostic output.
  * Set to 1 to enable, 0 to disable.
  *
- * For the deployed/stability config: ON = JARVIS_DBG_STATS, JARVIS_DBG_INFER_SUMMARY, and
- * JARVIS_G3_RETRIEVAL (default-ON since G3/M6, 2026-07-02 — retrieval is deployed); all other
- * diagnostic/feature flags are 0 (JARVIS_G3_PROBE, JARVIS_G3_AB, JARVIS_CACHE_GROWTH,
- * JARVIS_DBG_BOOT_LOG stay OFF). Enable diagnostics as needed.
+ * For the deployed/stability config: ON = JARVIS_DBG_STATS, JARVIS_DBG_INFER_SUMMARY,
+ * JARVIS_G3_RETRIEVAL (default-ON since G3/M6, 2026-07-02 — retrieval is deployed), and
+ * JARVIS_CACHE_GROWTH (default-ON since #6/M3, 2026-07-03 — cache growth is deployed); all other
+ * diagnostic/feature flags are 0 (JARVIS_G3_PROBE, JARVIS_G3_AB, JARVIS_DBG_BOOT_LOG stay OFF).
+ * Enable diagnostics as needed.
  */
 
 #ifndef JARVIS_DEBUG_H
@@ -96,9 +97,19 @@
 
 /* Phase 5 #6 cache-growth — canon = promote repeated query→action patterns from the EPISODIC LOG
  * into the decision cache (see phase5/docs/PHASE_5_GOAL6_CACHE_GROWTH.md). The route-through-cache
- * impl (commit 7e8c30f) was REVERTED (wrong design vs canon); this flag is RETAINED — the canon
- * promotion pass reuses it (default 0 → compiles out, deploy byte-identical; box-only). */
-#define JARVIS_CACHE_GROWTH 0
+ * impl (commit 7e8c30f) was REVERTED (wrong design vs canon); this flag owns the canon pass:
+ * the [STATS]-cadence promotion (M1: Option-B rolling freq aggregate seeded at the boot scan +
+ * CG_PROMOTE_HWM=409 cap) + the READ-only cache_lookup-before-infer serve path (M3a — serves
+ * already-promoted answers; NEVER inserts on the inference path).
+ * DEFAULT ON since #6/M3 (2026-07-03) — cache growth is DEPLOYED. Ship basis: S1-snapshot
+ * ON/OFF/REF box proof — ON: grow 6→9, used max 261 < hwm 409 (SEC-024 LRU never fires; EMPTY
+ * slots survive, the <1 ms miss path preserved), served=42,404 promoted-pattern hits, infer
+ * FROZEN at 17 while q reached 283,400 err=0 (vs q≈220 OFF in the same 1800 s); served text =
+ * coherent stored answer heads ([CACHE-SERVE] verbatim); OFF = byte-identical to the pre-M3a
+ * baseline. Honesty: the cache learns FREQUENTLY-ASKED queries and serves them fast
+ * (frequency-based, deterministic) — it never "understands"; the throughput multiple is a
+ * property of the repeat-heavy workload. When 0 (opt-out), all #6 blocks compile out. */
+#define JARVIS_CACHE_GROWTH 1
 
 /* Serial [STATS] prints every 100 queries; NVMe LOG_IPC_STATS is written every
  * JARVIS_STATS_NVME_INTERVAL. Measured bare-metal rate is ~3k queries/day (single
