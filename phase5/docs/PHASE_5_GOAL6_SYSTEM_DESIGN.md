@@ -1,7 +1,7 @@
 # Phase 5 — Goal #6: Cache Growth — System Design
 
-**Status:** Design (system design from scratch, feeds the M0–M4 plan in `PHASE_5_GOAL6_CACHE_GROWTH.md`)
-**Date:** 2026-07-01
+**Status:** ✅ **AS-BUILT (implemented + box-verified 2026-07-03; cache-growth DEPLOYED default-ON — flip `99419fb`).** Outcomes: §6 Option-B rolling aggregate SHIPPED (`cg_freq_bump/get`); §7 HWM(409) HELD (max `used=261`); evidence: `GOAL6_FINISH_REPORT.md` + `GOAL6_SOAK_boot12_REPORT.md`.
+**Date:** 2026-07-01 (as-built annotations 2026-07-03)
 **Author:** design pass over the as-built code (`decision_cache.c`, `episodic_store.c/h`, `main_x86.c`)
 **Companion:** `phase5/docs/PHASE_5_GOAL6_CACHE_GROWTH.md` (scope + locked decisions D-a…D-g). This doc is the engineering design under that plan: components, data flow, the concurrency/failure model, and two findings the plan doesn't yet cover (the LRU saturation cliff and the frequency-signal gap in the M5 index).
 
@@ -46,7 +46,7 @@ These are read out of the source, not assumed — they shape every decision belo
 |---|---|---|---|
 | C1 | Key parity: `query_key = cache_hash(cache_normalize_query(query))` | `episodic_store.c:12`, `decision_cache.c:78` | An episodic key **is** a cache key. No translation layer. |
 | C2 | `cache_insert` needs the **normalized query string**, not just the key; it `strcmp`s it and rejects `strlen ≥ MAX_QUERY_LEN(128)` | `decision_cache.c:159,182` | Promotion must re-normalize `record.query` and skip ones that don't fit 127 chars. |
-| C3 | Episodic `query[200]` / `resp[256]` are **raw, length-prefixed, not NUL-terminated**; `resp` is a ≤256-byte **tail** of the response | `episodic_store.h:81`, `main_x86.c:2966` | Copy by `*_len` into a NUL-terminated temp before use; the promoted action is the stored tail (full answer only when the response was ≤256 B). |
+| C3 | Episodic `query[200]` / `resp[256]` are **raw, length-prefixed, not NUL-terminated**; `resp` is the ≤256-byte **HEAD** (first bytes) of the response — `episodic_fill` does `memcpy(rec->resp, resp, min(strlen,256))`. *(Corrected 2026-07-03: an earlier revision said "tail" — a misread of main_x86.c's "NUL-terminate the response tail" buffer-end comment; box-verified head-storage via verbatim `[CACHE-SERVE]` captures.)* | `episodic_store.c:169-174`, `main_x86.c` | Copy by `*_len` into a NUL-terminated temp before use; the promoted action is the stored HEAD — a coherent opening, and the COMPLETE answer whenever the response ≤256 B (true for the deployed ~50-token answers). |
 | C4 | `entries_used` increments on insert, is **unchanged on eviction**, decrements on remove | `decision_cache.c:190,237,266` | `cache_growth_count = entries_used − baseline` is well-defined only while no eviction has fired. |
 | C5 | The SEC-024 LRU branch runs **only when the table has zero EMPTY slots**; it overwrites the global-oldest entry in place | `decision_cache.c:214` | See §7 — this is a saturation cliff, not a clean ring buffer. |
 | C6 | The M5 boot index `g_epi_index` is **deduped to newest** (`key → newest logical_index`) | `main_x86.c:2009`, `episodic_store.h:138` | It cannot supply frequency as-built. See §6. |
@@ -78,7 +78,7 @@ Process A (rootserver, single-threaded workload loop)          Process B
 │    │  CACHE-GROWTH PASS  (NEW, gated)             │      │
 │    │  1 count freq over batch ∪ persisted aggregate│     │
 │    │  2 select keys with freq >= PROMOTE_THRESHOLD │     │
-│    │  3 for each: normalize query, take resp tail, │     │
+│    │  3 for each: normalize query, take resp head, │     │
 │    │     cache_insert(TRUST_AUTO)  (skip if cached │     │
 │    │     or table at high-water mark)              │     │
 │    │  4 cache_growth_count = entries_used-baseline │      │
@@ -126,6 +126,8 @@ Recommendation: **B.** It reuses a scan that already happens, needs no new NVMe 
 
 Start with A behind the flag to land M1 quickly if B slips, but treat B as the design target — the done-when depends on it.
 
+> **AS-BUILT (2026-07-03):** Option **B** shipped at M1 — `cg_freq_slot_t g_key_freq[CG_FREQ_CAP=1024]` (open-addressed `{key,count}`, `cg_freq_bump`/`cg_freq_get` in `cache_growth.c`, host-tested 22/22), seeded once from the boot recall-scan (outer gate widened to `(JARVIS_G3_RETRIEVAL || JARVIS_CACHE_GROWTH)`) and folded per batch at the `[STATS]` cadence. Box-verified: `[RECALL] index n=1242` seeded the counts; promotions fired exactly for the recurring inference queries (`grow 6→9`, idempotent thereafter).
+
 ---
 
 ## 7. The LRU saturation cliff (finding #2)
@@ -150,6 +152,8 @@ Implications, precisely:
 Optional, orthogonal: raise `CACHE_SIZE` 512 → 1024 for more promotion headroom (load factor 308/1024 ≈ 0.30). Cost is a larger `g_cache` struct (~426 KB vs ~213 KB — trivial on 32 GB) and re-touching the `% CACHE_SIZE` distribution. Not required for MVP; a good follow-up if the HWM proves too tight.
 
 This reframes plan decision **D-d**: keep the LRU host-tested, but make the promotion HWM the real ceiling.
+
+> **AS-BUILT (2026-07-03):** `CG_PROMOTE_HWM = (CACHE_SIZE*4)/5 = 409` shipped at M1 and **held at scale** — across the 283K-query flip-bar run and the 874K-query boot_id=12 soak, max `used=261` (the workload has only ~9 distinct promotable keys), EMPTY slots always survived, and the SEC-024 LRU **never fired on the box** — exactly the guardrail-not-mechanism posture this section designed. It remains host-proven (`test_decision_cache_lru.c` 10/10) and unreachable-by-design for this workload. The optional `CACHE_SIZE` 1024 widening was not needed.
 
 ---
 
@@ -180,7 +184,7 @@ Everything in 2–6 is bounded by `g_epi_batch` size + the promote list; no per-
 
 **Layer A — host / CI (deterministic, no device):**
 - Frequency + threshold: seeded records → exact expected promote set (incl. below-threshold excluded, dedup, usable-record selection).
-- Normalization/length guards: query normalizing to ≥128 is skipped; non-NUL-terminated inputs copied by length; resp tail ≤256.
+- Normalization/length guards: query normalizing to ≥128 is skipped; non-NUL-terminated inputs copied by length; resp head ≤256.
 - **SEC-024 LRU (the named risk):** fill to zero-EMPTY, force eviction, assert oldest `last_access_time` evicted, relocated entry still findable, no corruption, `entries_used` semantics.
 - **High-water mark:** promotion stops at `PROMOTE_HWM`; table never reaches zero-EMPTY under normal promotion; a saturated-table miss still returns correctly (guardrail proof).
 - Round-trip: a promoted pattern is a `cache_lookup` hit returning the stored action.
@@ -217,7 +221,7 @@ New test files get a matching `.github/workflows/ci.yml` step (repo rule).
 - **Threshold too low** → one-off queries pollute the cache and rush the HWM. Mitigate: start `PROMOTE_THRESHOLD` at 2–3, tune on-box; HWM caps the blast radius.
 - **Threshold too high** → cache never grows, done-when unmet. Tunable `#define`; measure.
 - **Normalized query > 127 chars** → `cache_insert` would reject; skip early (C2).
-- **resp is a tail** → long answers promote only their tail (C3). Acceptable for MVP; if fuller answers matter, store the head or widen the episodic schema (Arc 2 concern).
+- **resp is the HEAD** (C3, corrected) → a promoted hit serves a coherent opening; only responses >256 B lose their *tail*, never their head — and the deployed ~50-token answers fit whole, so the served text IS the full prior answer. No head-storage change needed (it already stores the head); widening the schema for >256 B answers stays an Arc-2 concern.
 - **Duplicate promotion** → `cache_lookup`-before-insert + `cache_insert`'s in-place update make it idempotent.
 - **Reboot** → Option B's aggregate rebuilds from the persisted store at boot, so frequency survives power-cycles (consistent with #1/M5 recall).
 - **Saturation despite HWM** (mis-estimate) → LRU guardrail keeps correctness; `[CACHE-GROW]`/`entries_used` flags it for retuning.

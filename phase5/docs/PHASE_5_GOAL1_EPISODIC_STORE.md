@@ -17,7 +17,7 @@ The episodic store is a clone of `nvme_log`'s raw-LBA circular store, carved as 
 ### Record schema (512-byte records)
 A fixed **512-byte** record, header + circular cursor exactly like `nvme_log`:
 - **Header (64 B):** magic (`"JEPI"`), version, `cursor` (wrapping write slot), `total_entries` (monotonic lifetime), `boot_id`, XOR checksum, reserved.
-- **Record (512 B):** `boot_id`, `seq`, `timestamp` (boot-relative T+ms, the existing TSC→ms convention), a **query key** (FNV-1a 64-bit normalized hash — the same normalization the decision cache uses, so #6 cache-growth can match), a compact `action`/route code, an `outcome` code (ok / error / blocked), an optional `feedback` byte, and a bounded truncated query/response tail for human readability. Field layout frozen in `episodic_store.h` with a `_Static_assert(sizeof == 512)`.
+- **Record (512 B):** `boot_id`, `seq`, `timestamp` (boot-relative T+ms, the existing TSC→ms convention), a **query key** (FNV-1a 64-bit normalized hash — the same normalization the decision cache uses, so #6 cache-growth can match), a compact `action`/route code, an `outcome` code (ok / error / blocked), an optional `feedback` byte, and a bounded truncated query + response **head** (the opening ≤256 B — the complete answer for the deployed ~50-token responses) for human readability. Field layout frozen in `episodic_store.h` with a `_Static_assert(sizeof == 512)`.
 - **Circular & durable:** wraps (keeps the latest, never fills); flushed after every committed write; `boot_id` increments each boot and is constant within a boot (the reboot-survival signal).
 
 ### Write path (batched, Process-A-side)
