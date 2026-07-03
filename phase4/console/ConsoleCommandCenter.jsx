@@ -140,14 +140,30 @@ function CommandCenter({ store }) {
           </div>
         </Tile>
 
-        <Tile label="Throughput" foot="deployed benchmark · not live">
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
-            <span style={big}>5.46</span><span style={unit}>tok/s</span>
-          </div>
-          <div style={{ marginTop: 4, font: '400 var(--text-2xs)/1.3 var(--font-mono)', color: 'var(--text-muted)' }}>
-            Gemma 4 E2B · CPU · 6 cores
-          </div>
-        </Tile>
+        {/* v4: REAL measured throughput — infer_last_tok_x100 is RDTSC-measured in Process B per
+            inference (never the benchmark constant). 0 until a boot's first inference; latched
+            between inferences and shown DIMMED + honestly captioned when the box is serving from
+            cache instead of generating. The 5.46 deployed benchmark stays a labeled reference. */}
+        {(() => {
+          const tokX100 = rec ? (Number(rec.infer_last_tok_x100) || 0) : 0;
+          const genActive = !!(rec && Number(rec.infer_active) === 1);
+          const haveTok = tokX100 > 0;
+          const foot = !haveTok ? 'no inference yet this boot'
+            : genActive ? 'live · last inference'
+            : 'idle (serving from cache) · last inference';
+          return (
+            <Tile label="Throughput" foot={foot}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 4,
+                opacity: haveTok && !genActive ? 0.55 : 1 }}>
+                <span style={big}>{haveTok ? (tokX100 / 100).toFixed(2) : '—'}</span>
+                <span style={unit}>tok/s</span>
+              </div>
+              <div style={{ marginTop: 4, font: '400 var(--text-2xs)/1.3 var(--font-mono)', color: 'var(--text-muted)' }}>
+                {haveTok ? 'measured (RDTSC, Process B)' : 'awaiting first inference'} · 5.46 tok/s deployed benchmark (reference)
+              </div>
+            </Tile>
+          );
+        })()}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '0.85fr 1.15fr', gap: 'var(--space-4)' }}>

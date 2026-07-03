@@ -2,7 +2,7 @@
 """
 telemetry_fixture.py - shared packer for the telemetry_packet_t (jarvis_telemetry.h).
 
-Single source for building 216-byte (v3) telemetry packets and legacy-pcap captures,
+Single source for building 218-byte (v4) telemetry packets and legacy-pcap captures,
 used by both test_telemetry_receiver.py (host wire-compat) and gen_golden_pcap.py
 (the golden fixture). Stdlib only.
 
@@ -22,7 +22,7 @@ from telemetry_receiver import (  # noqa: E402
 
 # Field order matches FMT / jarvis_telemetry.h exactly.
 _DEFAULTS = dict(
-    magic=MAGIC, version=3, kind=1, flags=0x01 | 0x10, boot_id=1, seq=42,
+    magic=MAGIC, version=4, kind=1, flags=0x01 | 0x10, boot_id=1, seq=42,
     uptime_ms=120000, infer_active=0, infer_duty_pct=18, log_cursor=137,
     q_total=289, q_hits=211, q_infer=29, q_heartbeat=40, q_shield=9, q_errors=0,
     num_nodes=6, model_load_pct=100, fb_bpp=32, selftest_score=5,
@@ -30,7 +30,7 @@ _DEFAULTS = dict(
     infer_gen_tokens=0, cache_growth_count=0,
     last_text=b"hello", model_name=b"Gemma 4 E2B",
     nvme_total_mb=1953892, episodic_count=0, pool_events=0, pool_decisions=0,
-    retrieval_hits=0, retrieval_latency_us=0, crc32=0,
+    retrieval_hits=0, retrieval_latency_us=0, infer_last_tok_x100=0, crc32=0,
 )
 
 
@@ -53,9 +53,9 @@ def build_packet(finalize=True, **overrides):
         v['fb_w'], v['fb_h'], v['model_size_mb'], v['total_ram_mb'],
         v['infer_gen_tokens'], v['cache_growth_count'], v['last_text'], v['model_name'],
         v['nvme_total_mb'], v['episodic_count'], v['pool_events'], v['pool_decisions'],
-        v['retrieval_hits'], v['retrieval_latency_us'], v['crc32'])
+        v['retrieval_hits'], v['retrieval_latency_us'], v['infer_last_tok_x100'], v['crc32'])
     if finalize:
-        crc = zlib.crc32(body[:PKT_SIZE - 4]) & 0xFFFFFFFF   # v3: 212
+        crc = zlib.crc32(body[:PKT_SIZE - 4]) & 0xFFFFFFFF   # v4: 214
         body = body[:PKT_SIZE - 4] + struct.pack('<I', crc)
     return body
 

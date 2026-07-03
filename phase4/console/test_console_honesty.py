@@ -113,6 +113,23 @@ def main():
     check(not cap_banned, "ConsoleCapabilities.jsx banned-free%s" % ("" if not cap_banned else "  <-- %s" % cap_banned))
     check('ConsoleCapabilities.jsx' in blobs.get('index.html', ''), "Capabilities view wired into index.html")
 
+    # --- v4: live measured tok/s — allowed ONLY as a real, captioned measurement ---
+    # The throughput value must be sourced from the REAL wire field (infer_last_tok_x100,
+    # RDTSC-measured in Process B), captioned live/idle honestly, and never conflated with
+    # the 5.46 deployed benchmark (which stays a labeled reference line).
+    cc = blobs.get('ConsoleCommandCenter.jsx', '')
+    check('infer_last_tok_x100' in cc,
+          "Throughput tile sources the REAL measured field (infer_last_tok_x100)")
+    check('live · last inference' in cc,
+          "live tok/s is captioned 'live · last inference' (never a deployed guarantee)")
+    check('idle (serving from cache)' in cc,
+          "idle state honestly captioned 'idle (serving from cache)'")
+    check('deployed benchmark (reference)' in cc,
+          "the 5.46 benchmark stays a separately-labeled reference (not conflated with live)")
+    lr = blobs.get('LastResponse.jsx', '')
+    check('infer_last_tok_x100' in lr and 'infer_gen_tokens' in lr,
+          "LastResponse decode-speed/tokens sourced from the REAL measured fields")
+
     print("\n== Results: %d PASS, %d FAIL ==" % (_PASS, _FAIL))
     return 1 if _FAIL else 0
 

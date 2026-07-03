@@ -54,14 +54,21 @@ function LastResponse({ store }) {
             </div>
           )}
 
-          {/* honest "tokens not measured" note */}
+          {/* honest measurement note — v4: tokens + decode speed are REAL (RDTSC-measured in PB,
+              latched from the last inference; 0/'none yet' until a boot's first inference) */}
           {rec && (
             <div style={{ marginTop: 'var(--space-8)', display: 'flex', gap: 18, flexWrap: 'wrap',
               padding: 'var(--space-4)', border: '1px solid var(--border-hairline)', borderRadius: 'var(--radius-md)',
               background: 'var(--surface-card)' }}>
-              {[['per-inference tokens', 'not measured in deploy (infer_gen_tokens=0)'],
-                ['RAM usage', 'no source (total_ram_mb=0)'],
-                ['decode speed', '5.46 tok/s — deployed benchmark, not live']].map(([k, v]) => (
+              {[['per-inference tokens', (Number(rec.infer_gen_tokens) || 0) > 0
+                  ? `${rec.infer_gen_tokens} — last inference, measured`
+                  : 'none yet this boot (measured from the first inference)'],
+                ['RAM available', (Number(rec.total_ram_mb) || 0) > 0
+                  ? `${rec.total_ram_mb} MB — live (sum of non-device untypeds)`
+                  : 'no source reported'],
+                ['decode speed', (Number(rec.infer_last_tok_x100) || 0) > 0
+                  ? `${(rec.infer_last_tok_x100 / 100).toFixed(2)} tok/s — live, last inference (RDTSC-measured) · 5.46 deployed benchmark (reference)`
+                  : 'no inference yet this boot · 5.46 tok/s deployed benchmark (reference)']].map(([k, v]) => (
                 <div key={k} style={{ minWidth: 180 }}>
                   <div style={{ font: 'var(--type-eyebrow)', letterSpacing: 'var(--tracking-wide)', textTransform: 'uppercase',
                     color: 'var(--text-muted)', marginBottom: 4 }}>{k}</div>

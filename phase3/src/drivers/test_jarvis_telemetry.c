@@ -32,7 +32,7 @@ static int pass = 0, fail = 0;
 
 static void test_layout(void)
 {
-    CHECK(sizeof(telemetry_packet_t) == 216, "sizeof(telemetry_packet_t) == 216 (v3)");
+    CHECK(sizeof(telemetry_packet_t) == 218, "sizeof(telemetry_packet_t) == 218 (v4)");
     OFF(magic, 0);
     OFF(flags, 6);
     OFF(boot_id, 8);
@@ -55,7 +55,8 @@ static void test_layout(void)
     OFF(retrieval_hits, 204);       /* P5 G3/M4: v3 fields appended before crc32 */
     OFF(retrieval_latency_us, 208);
     OFF(cache_growth_count, 90);    /* P5 #6/M2: renamed from reserved_i (same offset/size, no bump) */
-    OFF(crc32, 212);
+    OFF(infer_last_tok_x100, 212);  /* v4: appended before crc32 */
+    OFF(crc32, 214);
 }
 
 static void test_crc_known_vector(void)
@@ -92,11 +93,13 @@ static void test_finalize_roundtrip(void)
     pkt.retrieval_hits = 3;          /* P5 G3/M4: v3 fields (CRC[:212] now covers 204-211) */
     pkt.retrieval_latency_us = 40;
     pkt.cache_growth_count = 12;     /* P5 #6/M2: former reserved_i (offset 90, inside CRC region) */
+    pkt.infer_last_tok_x100 = 152;   /* v4: 1.52 tok/s (a real measured shape, never the 5.46 benchmark) */
+    pkt.infer_gen_tokens = 50;       /* v4: now REAL (last-inference token count) */
 
     jarvis_tlm_finalize(&pkt);
 
     CHECK(pkt.magic == JARVIS_TLM_MAGIC, "finalize sets magic == JTEL");
-    CHECK(pkt.version == JARVIS_TLM_VERSION, "finalize sets version == 3");
+    CHECK(pkt.version == JARVIS_TLM_VERSION, "finalize sets version == 4");
     CHECK(pkt.infer_active == 1 && pkt.infer_duty_pct == 42, "infer_active/infer_duty_pct survive finalize");
     CHECK(pkt.log_cursor == 137 && pkt.nvme_total_mb == 1953892u, "log_cursor/nvme_total_mb survive finalize");
     CHECK(pkt.total_ram_mb == 30000u, "total_ram_mb survives finalize");
@@ -107,11 +110,13 @@ static void test_finalize_roundtrip(void)
           "retrieval_hits/retrieval_latency_us survive finalize (CRC covers 204-211)");
     CHECK(TLM_F_RETRIEVAL == 0x80, "TLM_F_RETRIEVAL == 0x80 (next free flag bit)");
     CHECK(pkt.cache_growth_count == 12u, "cache_growth_count survives finalize (P5 #6/M2)");
+    CHECK(pkt.infer_last_tok_x100 == 152u && pkt.infer_gen_tokens == 50u,
+          "infer_last_tok_x100/infer_gen_tokens survive finalize (v4, CRC covers 212-213)");
     CHECK(TLM_F_CACHE_GROWTH == 0x100, "TLM_F_CACHE_GROWTH == 0x100 (flags is u16 — fits)");
 
     /* The stored crc matches a recompute over the first 212 bytes. */
     uint32_t recomputed = jarvis_tlm_crc32(&pkt, offsetof(telemetry_packet_t, crc32));
-    CHECK(pkt.crc32 == recomputed, "stored crc32 == recompute over first 212 B");
+    CHECK(pkt.crc32 == recomputed, "stored crc32 == recompute over first 214 B");
     CHECK(pkt.crc32 != 0u, "crc32 is non-zero for a populated packet");
 
     /* The magic bytes are "JTEL" little-endian: 4C 45 54 4A. */
@@ -127,7 +132,7 @@ static void test_finalize_roundtrip(void)
             detected_all = 0;   /* a flip went undetected */
         raw[i] ^= 0xFF;         /* restore */
     }
-    CHECK(detected_all, "every single-byte flip in [0,212) breaks the CRC");
+    CHECK(detected_all, "every single-byte flip in [0,214) breaks the CRC");
 }
 
 int main(void)

@@ -288,9 +288,10 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
     /* Autoregressive generation with per-token logging */
     int output_ids[64];
     int n_gen = 0;
-#if JARVIS_M1_MEASURE
-    uint64_t m1_t0 = m1_rdtsc();
-#endif
+    /* v4 live tok/s: the generation loop is ALWAYS timed (two RDTSC reads — immaterial vs the
+     * ~seconds-long loop). Raw tokens+cycles go to PA via MSG_INFER_STATS; PA converts to tok/s.
+     * The gated M1_MEASURE MSG_DEBUG report below is unchanged (offline-conversion text form). */
+    uint64_t gen_t0 = m1_rdtsc();
     while (n_gen < 50 && state->pos < state->max_seq_len) {
         int next = sample_greedy(state->logits, qm->config.vocab_size);
         output_ids[n_gen++] = next;
@@ -316,9 +317,20 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
 #if JARVIS_DBG_PB
     pb_log_num("[PB] Generation complete: ", (uint32_t)n_gen, " tokens");
 #endif
+    uint64_t gen_cyc = m1_rdtsc() - gen_t0;
 #if JARVIS_M1_MEASURE
-    uint64_t m1_cyc = m1_rdtsc() - m1_t0;
+    uint64_t m1_cyc = gen_cyc;
 #endif
+
+    /* v4 live tok/s: report the RAW measurement to PA BEFORE the response chunks, so PA's
+     * response drain latches it in the same pass (ring order: stats, then chunks — race-free).
+     * Best-effort: if the ring is unexpectedly full the stats are skipped, never the response. */
+    {
+        infer_stats_msg_t st;
+        st.tokens = (uint32_t)n_gen;
+        st.tsc_cycles = gen_cyc;
+        shmem_ipc_send(response_ring, MSG_INFER_STATS, seq, &st, (uint16_t)sizeof st);
+    }
 
     /* Decode to text */
     char text_out[512];

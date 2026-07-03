@@ -88,6 +88,28 @@ def main():
             expect(page.get_by_text('functional-unverified')).to_be_visible(timeout=15000)
             check(True, "page mounted (Babel + React over real HTTP)")
 
+            # (v4) EARLY WATCHER for the live tok/s pin: the tok-carrying golden frame is live for
+            # only ~1 s of the (non-looping) replay, so a late poll can miss it. Latch the moment
+            # the Throughput tile renders infer_last_tok_x100/100 while that record is live; the
+            # pin later asserts the latch.
+            page.evaluate(
+                "() => {"
+                " window.__tokPin = { seen: false, x: null, want: null };"
+                " window.__tokPinTimer = setInterval(() => {"
+                "   try {"
+                "     const rec = (window.JarvisTelemetry.getState().latest) || {};"
+                "     const x = rec.infer_last_tok_x100;"
+                "     if (typeof x === 'number' && x > 0) {"
+                "       const want = (x / 100).toFixed(2);"
+                "       window.__tokPin.x = x; window.__tokPin.want = want;"
+                "       if (Array.from(document.querySelectorAll('span'))"
+                "             .some(el => el.textContent.trim() === want))"
+                "         window.__tokPin.seen = true;"
+                "     }"
+                "   } catch (e) {}"
+                " }, 50);"
+                "}")
+
             expect(page.get_by_text('link OK · live')).to_be_visible(timeout=15000)
             check(True, "connection pill shows 'link OK · live' (real SSE)")
 
@@ -315,6 +337,25 @@ def main():
                 time.sleep(0.1)
             check(cg_ok,
                   "(#6/M2) System 'Patterns promoted' renders == live cache_growth_count (snap=%r)" % (cg_dbg,))
+
+            # (v4) PIN the CommandCenter Throughput VALUE — must equal infer_last_tok_x100/100
+            # on a frame carrying the measured field (the golden 'infer' frame carries 152 ->
+            # '1.52'), captured by the early watcher installed at mount (the frame is live for
+            # only ~1 s). TEETH: fails if the live tok/s rendering breaks or regresses to the
+            # static 5.46 placeholder.
+            tok_ok = False
+            tok_dbg = None
+            deadline = time.time() + 12
+            while time.time() < deadline:
+                snap = page.evaluate("() => window.__tokPin")
+                tok_dbg = snap
+                if snap and snap.get('seen'):
+                    tok_ok = True
+                    break
+                time.sleep(0.1)
+            page.evaluate("() => { if (window.__tokPinTimer) clearInterval(window.__tokPinTimer); }")
+            check(tok_ok,
+                  "(v4) Throughput rendered infer_last_tok_x100/100 as the live tok/s (watcher=%r)" % (tok_dbg,))
 
             check(errors == [], "no console errors / pageerrors (saw %d)" % len(errors))
             for e in errors[:10]:

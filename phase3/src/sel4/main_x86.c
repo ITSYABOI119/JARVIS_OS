@@ -204,6 +204,28 @@ static uint32_t          g_retrieval_latency_us = 0;  /* last in-RAM retrieval l
  * never set — honest "cache growth not live". Value = entries_used − baseline (promoted entries). */
 static uint16_t          g_cache_growth_count = 0;
 
+/* ---- v4 live tok/s: the LAST real inference measurement, latched from PB's MSG_INFER_STATS
+ * (raw tokens + TSC cycles measured around PB's generation loop — never a benchmark constant).
+ * 0 until the first inference of a boot; stays latched between inferences (the console reads
+ * infer_active/kind to present it as live vs idle — PA never fabricates a rate). ---- */
+static uint16_t          g_infer_last_tokens = 0;
+static uint16_t          g_infer_last_tok_x100 = 0;
+
+static void infer_stats_latch(const uint8_t *payload, uint16_t len)
+{
+    infer_stats_msg_t st;
+    if (len < (uint16_t)sizeof st) return;
+    memcpy(&st, payload, sizeof st);
+    g_infer_last_tokens = (uint16_t)(st.tokens > 65535u ? 65535u : st.tokens);
+    uint64_t gen_ms = st.tsc_cycles / TSC_PER_MS;
+    if (gen_ms > 0 && st.tokens > 0) {
+        uint64_t x100 = ((uint64_t)st.tokens * 100000ULL) / gen_ms;   /* tok/s * 100 */
+        g_infer_last_tok_x100 = (uint16_t)(x100 > 65535u ? 65535u : x100);
+    } else {
+        g_infer_last_tok_x100 = 0;
+    }
+}
+
 /* G3/M4c-fix: the synthetic-fact probe uses an ARBITRARY, JARVIS-specific, UNKNOWABLE fact + an
  * unanswerable question, defined ONCE (used at the seed / forced-query / self-check sites — DRY, no
  * string drift). A correct marker echo can come ONLY from the injected context, so hit=1 proves the
@@ -1568,7 +1590,8 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
     pkt.fb_h = (uint16_t)g_fb_desc_h;
     pkt.model_size_mb = (uint32_t)(nvme_model_size >> 20);  /* nvme_model_size is BYTES -> MB (== panel "2962") */
     pkt.total_ram_mb  = g_total_ram_mb;   /* Tier 0: real RAM available to JARVIS (sum of non-device untypeds) */
-    pkt.infer_gen_tokens = 0;  /* M1_MEASURE off in deploy — no live token count */
+    pkt.infer_gen_tokens = g_infer_last_tokens;        /* v4: REAL last-inference token count (0 until the first inference) */
+    pkt.infer_last_tok_x100 = g_infer_last_tok_x100;   /* v4: REAL last-inference tok/s * 100 (RDTSC-measured in PB; latched, never fabricated) */
     pkt.cache_growth_count = g_cache_growth_count;  /* P5 #6/M2: promoted entries (0 + no flag flag-OFF) */
     /* Tier 1: real system fields packed into former reserved space (packet is 216 B v3, CRC[:212]).
      * infer_duty_pct = inference cycles / uptime — a WORKLOAD duty cycle, NOT a CPU-load gauge (PA busy-polls). */
@@ -2879,6 +2902,10 @@ static void *main_continued(void *arg UNUSED)
                         uint8_t pk_pay[SHMEM_MAX_PAYLOAD];
                         while (shmem_ipc_recv(shared_response_ring, &pk_type, &pk_seq,
                                                pk_pay, &pk_len) == 0) {
+                            if (pk_type == MSG_INFER_STATS) {   /* v4: arrives BEFORE the chunks */
+                                infer_stats_latch(pk_pay, pk_len);
+                                continue;
+                            }
                             if (pk_type == MSG_DEBUG) {
                                 pk_pay[pk_len < SHMEM_MAX_PAYLOAD ? pk_len : SHMEM_MAX_PAYLOAD - 1] = '\0';
 #if JARVIS_M1_MEASURE
@@ -2942,6 +2969,10 @@ static void *main_continued(void *arg UNUSED)
 
                 while (shmem_ipc_recv(shared_response_ring, &msg_type, &msg_seq,
                                        payload, &msg_len) == 0) {
+                    if (msg_type == MSG_INFER_STATS) {   /* v4: normally consumed in the first drain */
+                        infer_stats_latch(payload, msg_len);
+                        continue;
+                    }
                     if (msg_type == MSG_DEBUG) {
                         payload[msg_len < SHMEM_MAX_PAYLOAD ? msg_len : SHMEM_MAX_PAYLOAD - 1] = '\0';
 #if JARVIS_M1_MEASURE
@@ -2970,6 +3001,14 @@ static void *main_continued(void *arg UNUSED)
 
 #if JARVIS_DBG_BOOT_LOG
             puts_serial("[PA] PB response received\n");
+#endif
+#if JARVIS_DBG_INFER_SUMMARY
+            /* v4 live tok/s serial proof (per-inference cadence, ~15% of queries). The QEMU
+             * smoke gates on this line — telemetry is invisible in QEMU (no NIC). Values are
+             * PB's RDTSC measurement latched via MSG_INFER_STATS, never a benchmark constant. */
+            puts_serial("[TOKS] gen="); put_dec((uint32_t)g_infer_last_tokens);
+            puts_serial(" tok_x100="); put_dec((uint32_t)g_infer_last_tok_x100);
+            puts_serial("\n");
 #endif
 #if JARVIS_DBG_IPC
             puts_serial("[DBG] INFER: woke up\n");

@@ -37,6 +37,16 @@
 #define MSG_STATE_ACK      0x0E
 #define MSG_DEBUG          0x0F  /* Debug log from Process B -> Process A for NVMe logging */
 /* 0x10 reserved (was MSG_MODEL_SWAP, removed 2026-04-17) */
+#define MSG_INFER_STATS    0x11  /* PB -> PA: per-inference tokens + TSC cycles (v4 live tok/s).
+                                  * Sent BEFORE the MSG_RESPONSE chunks so PA latches it in the
+                                  * same drain pass (no terminator race). Always-on, tiny. */
+
+/* MSG_INFER_STATS payload — a real per-inference measurement (never a benchmark constant).
+ * PA divides by its TSC_PER_MS to derive ms -> tok/s; PB reports RAW tokens + cycles. */
+typedef struct __attribute__((packed)) {
+    uint32_t tokens;      /* tokens generated this inference (n_gen) */
+    uint64_t tsc_cycles;  /* RDTSC delta over the generation loop */
+} infer_stats_msg_t;
 
 /* Ring buffer header (64 bytes, at start of shared page) */
 typedef struct {

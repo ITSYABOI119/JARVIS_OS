@@ -51,8 +51,8 @@ def main():
     print("== telemetry receiver wire-compat ==")
 
     # Layout
-    check(struct.calcsize(FMT) == 216, "struct.calcsize(FMT) == 216 (v3)")
-    check(PKT_SIZE == 216, "PKT_SIZE == 216 (v3)")
+    check(struct.calcsize(FMT) == 218, "struct.calcsize(FMT) == 218 (v4)")
+    check(PKT_SIZE == 218, "PKT_SIZE == 218 (v4)")
 
     # Canonical zlib CRC vector — same CRC the C side proved (jarvis_telemetry.c)
     check(zlib.crc32(b"123456789") & 0xFFFFFFFF == 0xCBF43926,
@@ -60,7 +60,7 @@ def main():
 
     # Valid packet round-trips
     pkt = build_packet()
-    check(len(pkt) == 216, "built packet is 216 bytes (v3)")
+    check(len(pkt) == 218, "built packet is 218 bytes (v4)")
     d = decode_packet(pkt)
     check(d['crc_ok'] is True, "valid packet crc_ok True")
     check(d['kind_name'] == 'STATS', "kind_name == STATS")
@@ -126,12 +126,13 @@ def main():
     check('pool_events' in REQUIRED_RECORD_KEYS and 'pool_decisions' in REQUIRED_RECORD_KEYS,
           "pool_events/pool_decisions are REQUIRED_RECORD_KEYs")
 
-    # --- G3/M4: retrieval_hits/retrieval_latency_us + TLM_F_RETRIEVAL (the v3 208->216 size-bump) ---
-    check(PKT_SIZE == 216, "v3 size-bump: PKT_SIZE == 216")
+    # --- G3/M4: retrieval_hits/retrieval_latency_us + TLM_F_RETRIEVAL (v3), then the v4 216->218
+    # bump adding infer_last_tok_x100 (real measured tok/s*100; fabricated aliases stay banned) ---
+    check(PKT_SIZE == 218, "v4 size-bump: PKT_SIZE == 218")
     pkt_retr = build_packet(retrieval_hits=3, retrieval_latency_us=40, flags=0x01 | 0x10 | 0x80)
     dretr = decode_packet(pkt_retr)
     check(dretr['crc_ok'] is True, "v3 retrieval packet crc_ok True (CRC over [:212])")
-    check(dretr['version'] == 3, "v3 packet version == 3")
+    check(dretr['version'] == 4, "v4 packet version == 4")
     check(dretr['retrieval_hits'] == 3 and dretr['retrieval_latency_us'] == 40,
           "retrieval_hits/retrieval_latency_us decode")
     check('RETRIEVAL' in dretr['flags_list'], "TLM_F_RETRIEVAL 0x80 -> 'RETRIEVAL' in flags_list")
@@ -168,7 +169,7 @@ def main():
     meta_keys = set(golden['meta']['keys'])
     check(meta_keys == set(REQUIRED_RECORD_KEYS),
           "golden meta.keys == REQUIRED_RECORD_KEYS (fixture matches receiver output)")
-    check(golden['meta']['size'] == 216 and golden['meta']['fmt'] == FMT,
+    check(golden['meta']['size'] == 218 and golden['meta']['fmt'] == FMT,
           "golden meta fmt/size match the wire format")
 
     kind_expect = {1: 'STATS', 2: 'INFER', 3: 'STATE'}

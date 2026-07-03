@@ -3,15 +3,15 @@
 telemetry_receiver.py - JARVIS Remote Telemetry Console receiver (goal #2b N-c-2)
 
 Main-PC Python UDP receiver for the box-side telemetry stream. The JARVIS box
-(headless appliance) broadcasts a 216-byte binary `telemetry_packet_t` over UDP
+(headless appliance) broadcasts a 218-byte (v4) binary `telemetry_packet_t` over UDP
 to 255.255.255.255:51000 at ~1 Hz (see phase3/src/drivers/jarvis_telemetry.h and
 the N-c-1 emit site in phase3/src/sel4/main_x86.c, shipped at b9d689a). This tool
 binds the port, decodes each datagram, validates the zlib CRC-32 over the first
-196 bytes, and pretty-prints honest live box state.
+214 bytes (v4), and pretty-prints honest live box state.
 
 Wire format (little-endian, packed, no padding):
-    struct format = '<IBBHIIIBBH6QBBBBHHIIHH56s40s6II'  (struct.calcsize == 216)
-    crc32 is the last 4 bytes; valid iff zlib.crc32(pkt[:196]) == pkt.crc32.
+    struct format = '<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHI'  (struct.calcsize == 218)
+    crc32 is the last 4 bytes; valid iff zlib.crc32(pkt[:214]) == pkt.crc32.
 
 Usage:
     python3 telemetry_receiver.py [--bind ADDR] [--port 51000] [--once] [--follow] [--json]
@@ -21,9 +21,11 @@ Usage:
       --follow  stream continuously (default behaviour)
       --json    emit one JSON object per line (for the N-c-3 console bridge)
 
-HONESTY: only real fields are shown — no tok/s, no GPU, no "SHIELD blocked"
-(shield= is a check COUNT, not a block count), no "formally verified". The
-uptime is from an uncalibrated TSC, shown with "≈".
+HONESTY: only real fields are shown — no GPU, no "SHIELD blocked" (shield= is
+a check COUNT, not a block count), no "formally verified". Since v4 a REAL
+measured last-inference tok/s exists (infer_last_tok_x100, RDTSC-measured in
+Process B — never the 5.46 benchmark constant); the fabricated 'tok_s'/'tokps'
+aliases stay banned. The uptime is from an uncalibrated TSC, shown with "≈".
 """
 
 import argparse
@@ -40,8 +42,8 @@ import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MAGIC = 0x4A54454C            # "JTEL" (LE on the wire: 4C 45 54 4A)
-FMT = '<IBBHIIIBBH6QBBBBHHIIHH56s40s6II'
-PKT_SIZE = struct.calcsize(FMT)   # v3: 216 (derived — never hardcode a wire size)
+FMT = '<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHI'
+PKT_SIZE = struct.calcsize(FMT)   # v4: 218 (derived — never hardcode a wire size)
 LOG_MAX_ENTRIES = 2700        # NVME_LOG_MAX_ENTRIES (no-wrap durable telemetry log)
 
 FLAG_NAMES = {
@@ -88,12 +90,13 @@ def decode_packet(data: bytes) -> dict:
      fb_w, fb_h, model_size_mb, total_ram_mb,
      infer_gen_tokens, cache_growth_count, last_text_raw, model_name_raw,
      nvme_total_mb, episodic_count, pool_events, pool_decisions,
-     retrieval_hits, retrieval_latency_us, crc32_field) = struct.unpack(FMT, data)
+     retrieval_hits, retrieval_latency_us, infer_last_tok_x100,
+     crc32_field) = struct.unpack(FMT, data)
 
     if magic != MAGIC:
         raise ValueError("bad magic 0x%08X (expected 0x%08X)" % (magic, MAGIC))
 
-    crc_calc = zlib.crc32(data[:PKT_SIZE - 4]) & 0xFFFFFFFF   # v3: 212 (= offsetof(crc32))
+    crc_calc = zlib.crc32(data[:PKT_SIZE - 4]) & 0xFFFFFFFF   # v4: 214 (= offsetof(crc32))
     flags_list = [name for bit, name in FLAG_NAMES.items() if flags & bit]
 
     return {
@@ -128,6 +131,7 @@ def decode_packet(data: bytes) -> dict:
         'pool_decisions': pool_decisions,
         'retrieval_hits': retrieval_hits,
         'retrieval_latency_us': retrieval_latency_us,
+        'infer_last_tok_x100': infer_last_tok_x100,
         'cache_growth_count': cache_growth_count,
         'log_cursor': log_cursor,
         'infer_gen_tokens': infer_gen_tokens,
@@ -212,6 +216,7 @@ def packet_to_record(d: dict, recv_ts: float = 0) -> dict:
         'pool_decisions': d['pool_decisions'],
         'retrieval_hits': d['retrieval_hits'],
         'retrieval_latency_us': d['retrieval_latency_us'],
+        'infer_last_tok_x100': d['infer_last_tok_x100'],
         'cache_growth_count': d['cache_growth_count'],
         'log_cursor': d['log_cursor'],
         'infer_gen_tokens': d['infer_gen_tokens'],

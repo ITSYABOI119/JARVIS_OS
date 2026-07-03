@@ -1,15 +1,15 @@
 /**
  * jarvis_telemetry.h - JARVIS binary telemetry packet (goal #2b N-c)
  *
- * A versioned, CRC'd, fixed-216-byte (v3) binary packet the box emits over UDP
+ * A versioned, CRC'd, fixed-218-byte (v4) binary packet the box emits over UDP
  * (255.255.255.255:51000, via net_udp.c + the I211) so a remote console can
  * render live, honest box state. Pure logic / host-testable (CRC + finalize);
  * the emit site is in main_x86.c.
  *
  * Wire format: little-endian (x86), packed, no padding. The CRC-32 is the
  * standard zlib/IEEE CRC (poly 0xEDB88320, init/xorout 0xFFFFFFFF) over the
- * first 212 bytes [0 .. offsetof(crc32)), so a Python receiver validates with
- * `zlib.crc32(pkt[:212]) == struct.unpack_from('<I', pkt, 212)[0]`.
+ * first 214 bytes [0 .. offsetof(crc32)), so a Python receiver validates with
+ * `zlib.crc32(pkt[:214]) == struct.unpack_from('<I', pkt, 214)[0]`.
  *
  * JARVIS AI-OS - Phase 4 (goal #2b Remote Telemetry Console)
  */
@@ -20,7 +20,7 @@
 #include <stdint.h>
 
 #define JARVIS_TLM_MAGIC   0x4A54454Cu  /* "JTEL" (LE on wire: 4C 45 54 4A) */
-#define JARVIS_TLM_VERSION 3
+#define JARVIS_TLM_VERSION 4
 
 /* flags (bitfield) */
 #define TLM_F_MODEL_LOADED  0x01
@@ -43,7 +43,10 @@
  * WORKLOAD duty cycle (inference cycles / uptime), NOT a CPU-load gauge (the rootserver
  * busy-polls). They consume former reserved bytes (v1 stayed 200 B, CRC@196); v2
  * appends pool_events/pool_decisions -> 208 B, CRC@204; v3 appends
- * retrieval_hits/retrieval_latency_us -> 216 B, CRC@212. */
+ * retrieval_hits/retrieval_latency_us -> 216 B, CRC@212; v4 appends
+ * infer_last_tok_x100 -> 218 B, CRC@214 (and infer_gen_tokens becomes REAL —
+ * both from PB's RDTSC-measured generation loop via MSG_INFER_STATS; never a
+ * benchmark constant, 0 until a boot's first inference). */
 typedef struct __attribute__((packed)) {
     uint32_t magic; uint8_t version; uint8_t kind; uint16_t flags; uint32_t boot_id; uint32_t seq;  /* 16 */
     uint32_t uptime_ms;                                                                              /*  4 */
@@ -57,15 +60,16 @@ typedef struct __attribute__((packed)) {
     uint32_t pool_events; uint32_t pool_decisions;   /* P5 G2/M4: live context-pool lifetime counts */ /* 8 */
     uint32_t retrieval_hits;        /* P5 G3/M4: count of non-empty retrieval preambles packed */     /*  4 */
     uint32_t retrieval_latency_us;  /* P5 G3/M4: last in-RAM retrieval (select+assemble+pack) latency, µs */ /* 4 */
-    uint32_t crc32;          /* zlib CRC-32 over the first 212 bytes [0 .. offsetof(crc32)) */       /*  4 */
+    uint16_t infer_last_tok_x100;   /* v4: LAST real inference tok/s * 100 (RDTSC-measured in PB; 0 until first inference) */ /* 2 */
+    uint32_t crc32;          /* zlib CRC-32 over the first 214 bytes [0 .. offsetof(crc32)) */       /*  4 */
 } telemetry_packet_t;
 
-_Static_assert(sizeof(telemetry_packet_t) == 216, "telemetry packet must be 216 bytes (v3)");
+_Static_assert(sizeof(telemetry_packet_t) == 218, "telemetry packet must be 218 bytes (v4)");
 
 /* Standard zlib/IEEE CRC-32 (poly 0xEDB88320, init/xorout 0xFFFFFFFF) — equals Python zlib.crc32. */
 uint32_t jarvis_tlm_crc32(const void *data, uint32_t len);
 
-/* Stamp magic/version and compute+store crc32 over the first 212 bytes. */
+/* Stamp magic/version and compute+store crc32 over the first 214 bytes (v4). */
 void jarvis_tlm_finalize(telemetry_packet_t *pkt);
 
 #endif /* JARVIS_TELEMETRY_H */
