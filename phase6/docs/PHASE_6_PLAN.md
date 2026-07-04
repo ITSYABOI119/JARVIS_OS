@@ -3,7 +3,7 @@
 **Status:** IN PLANNING (authored 2026-07-04) — a PROPOSAL for strategist/user review; no Phase 6 implementation starts from this doc until it is approved. Phase 5 (Memory) is SUBSTANTIALLY COMPLETE (`phase5/docs/PHASE_5_PLAN.md` — Arc 1 deployed default-ON; #4 semantic + #5 SHIELD-learning mechanism-proven but GATED-OFF, **waiting on exactly the real interaction Phase 6 creates**).
 **Prerequisite:** Phase 5 memory arc (deployed: episodic + shared context + retrieval + cache-growth; gated: semantic distill + SHIELD-learning). The proposed `v1.1.0-memory` tag is the clean baseline to cut before Phase 6 code lands.
 **Estimated effort:** 6–12 months (canon).
-**Sources:** `phase4/docs/ROADMAP.md` §Phase 6 (goals + done-when, canon — quoted verbatim below) + §Cross-phase backlog B1/B2; `docs/decisions/2026-06-21-adopt-headless-appliance-remote-console.md` (the control-IN security checklist — load-bearing here); `phase3/docs/SECURITY_AUDIT_2026-04-06.md` (SEC-039 live-SHIELD stub, SEC-014 process isolation, the 3-divergent-blocklists finding); `phase5/docs/PHASE_5_GOAL4_SEMANTIC_MEMORY.md` §8 + `PHASE_5_GOAL5_SHIELD_LEARNING.md` (the gated capabilities this phase activates). **Where an ADR/audit/box fact conflicts with aspiration, the ADR/audit/box fact wins.**
+**Sources:** `phase4/docs/ROADMAP.md` §Phase 6 (goals + done-when, canon — quoted verbatim below) + §Cross-phase backlog B1/B2; `docs/decisions/2026-06-21-adopt-headless-appliance-remote-console.md` (the control-IN security checklist — load-bearing here); `phase3/docs/SECURITY_AUDIT_2026-04-06.md` (SEC-039 live-SHIELD stub, SEC-014 process isolation) + the project's SHIELD-reality analysis (divergent SHIELD surfaces: PA's inline 6-word list, `shield.c`'s own list, PB's always-ALLOW stub with no list); `phase5/docs/PHASE_5_GOAL4_SEMANTIC_MEMORY.md` §8 + `PHASE_5_GOAL5_SHIELD_LEARNING.md` (the gated capabilities this phase activates). **Where an ADR/audit/box fact conflicts with aspiration, the ADR/audit/box fact wins.**
 
 > **Mission (canon, `ROADMAP.md`):** JARVIS behaves like a butler — anticipates, monitors, and acts
 > when appropriate, not only on direct commands.
@@ -69,7 +69,7 @@ Phases 1–5 were **read-only / monitor-only / gated**: the box observes, rememb
    shield_assess()  ←  shield.c LINKED INTO PROCESS A (closes SEC-039)
         │              risk = base(action class) + learned adj (#5 shield_learn)
         │              + the ONE canonical immutable blocklist (consolidates the
-        │                audit's 3-divergent-blocklists finding; never learned-down)
+        │                divergent SHIELD surfaces; never learned-down)
         ▼
    trust policy: L0 AUTO    → execute + audit
                  L1 NOTIFY  → execute + audit + console/HUD notification
@@ -93,7 +93,7 @@ Phases 1–5 were **read-only / monitor-only / gated**: the box observes, rememb
 
 Reserved region: base 21,100,000, ~8 GiB to ≈37,877,215 (`PHASE_5_PLAN.md` §5). Current tenants: episodic @ 21,100,000 (+8193 → ends 21,108,192), semantic @ 21,110,000 (+4097 → ends 21,114,096). Phase 6 adds:
 
-- **Action-audit store** — proposed base **21,120,000**, 4096 × 512 B records + header (4097 sectors → ends ≈21,124,096; 8-sector-aligned; ~1,900 sectors clear of semantic). The proven `episodic_store` clone (callback-driven, circular, boot_id, XOR header checksum, magic e.g. "JACT"). Record: {boot_id, seq, t_ms, action_id, trust_level, risk_x100 (base+learned), verdict (EXECUTED/BLOCKED/PROPOSED), outcome, trigger snapshot}. Host-testable like every prior store.
+- **Action-audit store** — proposed base **21,120,000**, 4096 × 512 B records + header (4097 sectors → ends ≈21,124,096; 8-sector-aligned; ~5,900 sectors clear of semantic). The proven `episodic_store` clone (callback-driven, circular, boot_id, XOR header checksum, magic e.g. "JACT"). Record: {boot_id, seq, t_ms, action_id, trust_level, risk_x100 (base+learned), verdict (EXECUTED/BLOCKED/PROPOSED), outcome, trigger snapshot}. Host-testable like every prior store.
 - **User model — NO new store:** the profile is **typed facts in the existing semantic store** (the `fact_type` field exists for exactly this: extend SEM_FACT_QA with e.g. SEM_FACT_SCHEDULE / SEM_FACT_STYLE / SEM_FACT_PRIORITY), written by consolidation — "updated from consolidation, not manual config" (canon). This also un-defers #7's periodic job with real signal behind it.
 - Total new footprint ≈ 2 MiB of the reserved 8 GiB. The region map stays documented + reserved (installer/repartition must not overlap).
 
@@ -116,7 +116,7 @@ Reserved region: base 21,100,000, ~8 GiB to ≈37,877,215 (`PHASE_5_PLAN.md` §5
 
 ## 7. Locked technical decisions (candidates — the implementing session settles the details, the DIRECTION is locked)
 
-a. **SHIELD activation = `shield.c` linked into Process A's action path.** One canonical gate + ONE immutable blocklist (consolidating the 3 divergent lists the audit found); Trust-Level enforcement per §4; #5's learned `risk_adj` feeds the score (monotonic-raise-only stands — nothing ever learns a risk DOWN). SEC-039 is closed when a live induced-BLOCK is proven on the box, not when the code merely links.
+a. **SHIELD activation = `shield.c` linked into Process A's action path.** One canonical gate + ONE immutable blocklist (consolidating the divergent SHIELD surfaces — PA's inline 6-word list, `shield.c`'s own list, PB's listless always-ALLOW stub; the project's SHIELD-reality analysis under SEC-039, not an audit finding); Trust-Level enforcement per §4; #5's learned `risk_adj` feeds the score (monotonic-raise-only stands — nothing ever learns a risk DOWN). SEC-039 is closed when a live induced-BLOCK is proven on the box, not when the code merely links.
 b. **The control-IN security checklist is a HARD gate.** No control-IN ships until **every** item is met: auth + HMAC (with replay protection; key provisioned at install, not over the network), live SHIELD (from (a)), rate-limiting, a hardened+fuzzed inbound parser (fuzz in CI, the `fuzz_harness` precedent), and the SEC-014 less-privileged input process (the PB-spawn path is the template). The ADR's physically-gated USB-keyboard fallback stays the recoverable no-network-attack-surface alternative.
 c. **Actions = a static C allowlist; the LLM selects, never synthesizes.** Every action is C-implemented with a compile-time trust level; >L1 asks (post-control-IN) or is log-only (before it). No generic shell, no LLM-composed commands — this is also the prompt-injection defense once inbound text exists (retrieved memory or inbound queries can never mint a new action).
 d. **Monitors are lightweight + event-driven, not polling the LLM.** Cheap C checks at the existing loop/[STATS] cadence over REAL observable state (§2 honesty note); the LLM/cache is invoked only on threshold events. "Minimal CPU when idle" is measured against the existing busy-poll baseline, honestly.
