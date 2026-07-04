@@ -79,7 +79,7 @@ typedef struct __attribute__((packed)) {
     uint16_t query_len;      /* bytes used in query[] */
     uint16_t resp_len;       /* bytes used in resp[] */
     char     query[EPI_QUERY_MAX];   /* truncated source query (raw; not NUL-required) */
-    char     resp[EPI_RESP_MAX];     /* truncated response tail */
+    char     resp[EPI_RESP_MAX];     /* response head (first <=256 B) */
     uint8_t  pad[24];        /* pad to exactly 512 */
 } epi_record_t;
 

@@ -344,6 +344,37 @@ jobs:
           -o /tmp/tsd
         /tmp/tsd
 
+    - name: "Phase 6: Action allowlist (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
+          phase3/src/ai/test_action_allowlist.c phase3/src/ai/action_allowlist.c \
+          -o /tmp/t_aa
+        /tmp/t_aa
+
+    - name: "Phase 6: SHIELD action gate (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
+          phase3/src/ai/test_shield_action.c phase3/src/ai/shield_action.c \
+          phase3/src/ai/action_allowlist.c phase3/src/ai/shield_learn.c \
+          phase3/src/ai/decision_cache.c \
+          -lm -o /tmp/t_sa
+        /tmp/t_sa
+
+    - name: "Phase 6: Action-audit store (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
+          phase3/src/ai/test_action_audit.c phase3/src/ai/action_audit.c \
+          -o /tmp/t_ac
+        /tmp/t_ac
+
+    - name: "Phase 6: Action-audit parser round-trip (Python)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
+          phase3/src/ai/test_action_audit.c phase3/src/ai/action_audit.c \
+          -o /tmp/t_ac
+        /tmp/t_ac --dump /tmp/act_fixture.bin
+        python3 phase3/scripts/test_parse_action_audit.py /tmp/act_fixture.bin
+
     - name: "Phase 5: Decision-cache LRU eviction (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
