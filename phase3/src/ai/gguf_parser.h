@@ -120,10 +120,12 @@ typedef struct {
             uint64_t len;
             char     str[GGUF_MAX_KV_STR_LEN];
         } s;
-        /* Arrays: we store type + count but skip the data (too variable) */
+        /* Arrays: we store type + count + where the element data lives in
+         * the file; elements are read on demand via gguf_get_kv_arr_u32() */
         struct {
             uint32_t elem_type;
             uint64_t count;
+            uint64_t data_off;  /* absolute file offset of first element */
         } arr;
     } value;
 } gguf_kv_t;
@@ -240,6 +242,18 @@ bool gguf_get_kv_f32(const gguf_ctx_t *ctx, const char *key, float *out);
  * Find a metadata uint64 value by key.
  */
 bool gguf_get_kv_u64(const gguf_ctx_t *ctx, const char *key, uint64_t *out);
+
+/**
+ * Read the elements of a metadata ARRAY value by key, widened to uint32.
+ * Supported element types: UINT8/INT8/BOOL/UINT16/INT16/UINT32/INT32
+ * (signed values are sign-extended, then cast to uint32).
+ * Writes at most max_out elements into out; sets *out_count (if non-NULL)
+ * to the array's TRUE element count so callers can verify the length.
+ * Returns true on success, false if the key is missing, the value is not
+ * an array, the element type is unsupported, or a read error occurs.
+ */
+bool gguf_get_kv_arr_u32(const gguf_ctx_t *ctx, const char *key,
+                         uint32_t *out, uint64_t max_out, uint64_t *out_count);
 
 /**
  * Get human-readable error message for error code.

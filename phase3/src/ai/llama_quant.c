@@ -1576,7 +1576,9 @@ void qmodel_forward(const qmodel_t *qm, llama_state_t *state, int token)
          * NOTE: The kv_share_map from Task 2 uses i % n_unique, which naturally
          * preserves SWA/global type matching in Gemma 4 E2B because the SWA pattern
          * repeats with the same period. Q and K therefore have the same head_dim.
-         * TODO: Add explicit attention-type matching verification for other models. */
+         * llama_load_config() verifies this at load time and warns on any shared
+         * layer whose source has a different attention type; the derivation above
+         * (most-recent-same-SWA-type source) guarantees it for this path. */
         int kv_layer_offset = kv_src * max_seq * max_kv_dim;
         float *key_layer = state->key_cache + kv_layer_offset;
         float *val_layer = state->value_cache + kv_layer_offset;
