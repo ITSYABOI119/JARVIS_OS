@@ -68,6 +68,10 @@
 #if JARVIS_SHIELD_LEARN
 #include "shield_learn.h"       /* Phase 5 #5/M1: failure-learning risk map (flag-gated; MONITOR-ONLY) */
 #endif
+#if JARVIS_SEMANTIC
+#include "semantic_store.h"     /* Phase 5 #4/M1: separate raw-LBA semantic fact store (flag-gated; WRITE-ONLY) */
+#include "semantic_distill.h"   /* Phase 5 #4/M1: deterministic episodic->semantic distill (no LLM/embeddings) */
+#endif
 #include "jarvis_ui_tokens.h"   /* Step 2c-2b: FBP_ and JUI_ palette + geometry (single source) */
 
 #if JARVIS_AVX2_PROBE
@@ -472,6 +476,19 @@ static int             g_cg_serve_logged = 0;
  * this table is learned + surfaced, NEVER consulted to block anything (SEC-039 unchanged; live
  * enforcement is Phase 6). Zero-init = all empty (fail_count==0). */
 static shield_learn_slot_t g_shield_learn[SHIELD_LEARN_CAP_KEYS];
+#endif
+#if JARVIS_SEMANTIC
+/* Phase 5 #4/M1: the SEPARATE semantic fact store + the boot-distill window. WRITE-ONLY at M1 —
+ * populated by the deterministic boot-scan distill (sd_distill -> sem_store_upsert), NEVER read
+ * into inference/routing (retrieval from it is a future G3 slice with its own hygiene review).
+ * Honest ceiling: compacts OBSERVABLE repeated Q&A patterns (frequency + consistency, no LLM,
+ * no embeddings) — never "knows preferences"/"understands". */
+static sem_store_t     g_semantic;
+static int             g_semantic_ready = 0;
+#define SEM_DISTILL_WINDOW   1024   /* newest episodic records distilled at boot (~512 KB BSS) */
+#define SEM_DISTILL_MAXFACTS 128
+static epi_record_t    g_sem_window[SEM_DISTILL_WINDOW];
+static semantic_fact_t g_sem_facts[SEM_DISTILL_MAXFACTS];
 #endif
 static uint32_t total_queries = 0;
 static uint32_t cache_hits = 0;
@@ -2075,7 +2092,25 @@ static void *main_continued(void *arg UNUSED)
                                         put_dec(epi_store_boot_id(&g_episodic));
                                         puts_serial(" count="); put_dec(epi_store_count(&g_episodic));
                                         puts_serial(")\n");
-#if (JARVIS_G3_RETRIEVAL || JARVIS_CACHE_GROWTH || JARVIS_SHIELD_LEARN)
+#if JARVIS_SEMANTIC
+                                        /* Phase 5 #4/M1: init the SEPARATE semantic fact store (same NVMe
+                                         * bounce callbacks, own raw-LBA sub-region — clear of episodic).
+                                         * WRITE-ONLY at M1: populated by the boot-scan distill below, NEVER
+                                         * read into inference/routing (retrieval from it is a future G3
+                                         * slice). Independent of nvme_log, like episodic's M1a fix — gated
+                                         * only on the NVMe bounce (wired above) + episodic being ready. */
+                                        if (sem_store_init(&g_semantic, epi_nvme_read, epi_nvme_write,
+                                                           SEM_STORE_BASE_LBA, SEM_STORE_MAX_FACTS) == 0) {
+                                            g_semantic_ready = 1;
+                                            puts_serial("[SEM] semantic store ready (boot ");
+                                            put_dec(sem_store_boot_id(&g_semantic));
+                                            puts_serial(" stored="); put_dec(sem_store_count(&g_semantic));
+                                            puts_serial(")\n");
+                                        } else {
+                                            puts_serial("[SEM] semantic store init FAILED (non-fatal)\n");
+                                        }
+#endif
+#if (JARVIS_G3_RETRIEVAL || JARVIS_CACHE_GROWTH || JARVIS_SHIELD_LEARN || JARVIS_SEMANTIC)
                                         /* G3/M5a: one-time boot scan → in-RAM key→logical_index map of the
                                          * persisted store, so retrieval can recall facts from PRIOR boots
                                          * (survives power-cycle). NOT per-query — built once, here at boot.
@@ -2087,6 +2122,9 @@ static void *main_continued(void *arg UNUSED)
                                             uint32_t _cnt = epi_store_count(&g_episodic);
                                             if (_cnt > EPI_STORE_MAX_ENTRIES) _cnt = EPI_STORE_MAX_ENTRIES;
                                             g_epi_index_n = 0;
+#if JARVIS_SEMANTIC
+                                            uint32_t sem_win_n = 0;
+#endif
                                             for (uint32_t _li = 0; _li < _cnt; _li++) {
                                                 if (epi_store_read(&g_episodic, _li, &g_epi_recall_rec) == 0) {
                                                     g_epi_index[g_epi_index_n].key = g_epi_recall_rec.query_key;
@@ -2102,10 +2140,44 @@ static void *main_continued(void *arg UNUSED)
                                                                                     SHIELD_LEARN_CAP_KEYS,
                                                                                     g_epi_recall_rec.query_key);
 #endif
+#if JARVIS_SEMANTIC
+                                                    /* #4/M1: buffer ONLY the newest SEM_DISTILL_WINDOW records,
+                                                     * sequentially — the scan walks oldest->newest and _cnt is
+                                                     * known up front, so buffering the tail (_li within WINDOW
+                                                     * of _cnt) keeps the window CHRONOLOGICAL. sd_distill's
+                                                     * newest-wins is position-based (last match in recs[]), so
+                                                     * no ring linearization is ever needed. */
+                                                    if (_li + SEM_DISTILL_WINDOW >= _cnt &&
+                                                        sem_win_n < SEM_DISTILL_WINDOW)
+                                                        g_sem_window[sem_win_n++] = g_epi_recall_rec;
+#endif
                                                 }
                                             }
                                             puts_serial("[RECALL] index built n="); put_dec((uint32_t)g_epi_index_n);
                                             puts_serial("\n");
+#if JARVIS_SEMANTIC
+                                            /* #4/M1: one-shot boot distill — compact the window into durable
+                                             * facts (DETERMINISTIC: support >= SEM_MIN_SUPPORT + consistency;
+                                             * no LLM — observable repeated Q&A patterns only). upsert =
+                                             * insert-or-raise-support (idempotent re-distill: a re-boot over
+                                             * the same records updates, never duplicates or inflates).
+                                             * WRITE-ONLY: nothing reads this store at M1. */
+                                            if (g_semantic_ready) {
+                                                int sem_nf = sd_distill(g_sem_window, (int)sem_win_n,
+                                                                        SEM_MIN_SUPPORT, g_sem_facts,
+                                                                        SEM_DISTILL_MAXFACTS);
+                                                if (sem_nf < 0) sem_nf = 0;
+                                                int sem_up = 0;
+                                                for (int fi = 0; fi < sem_nf; fi++)
+                                                    if (sem_store_upsert(&g_semantic, &g_sem_facts[fi]) == 0)
+                                                        sem_up++;
+                                                puts_serial("[SEM] window="); put_dec(sem_win_n);
+                                                puts_serial(" facts="); put_dec((uint32_t)sem_nf);
+                                                puts_serial(" upserted="); put_dec((uint32_t)sem_up);
+                                                puts_serial(" stored="); put_dec(sem_store_count(&g_semantic));
+                                                puts_serial("\n");
+                                            }
+#endif
                                         }
 #endif
                                     } else {

@@ -1,6 +1,6 @@
 # Phase 5 — Goal #4: Semantic Memory (deterministic distill — separate fact store, NO LLM, NO embeddings)
 
-**Status:** 🚧 IN PROGRESS — **M0 ✅ host/CI (2026-07-04: `semantic_store.c/h` raw-LBA circular fact store + `semantic_distill.c/h` pure deterministic distill, host-tested)**; M1 (box wiring, gated) next. **Arc 2, the distill workstream — #7's core lands here.**
+**Status:** 🚧 IN PROGRESS — **M0 ✅ host/CI (2026-07-04: `semantic_store.c/h` raw-LBA circular fact store + `semantic_distill.c/h` pure deterministic distill, host-tested)** · **M1 ✅ BOX-VERIFIED (2026-07-04: gated `JARVIS_SEMANTIC` default-0 PA wiring — boot-scan tail-window distill → `sem_store_upsert`, WRITE-ONLY; S0-snapshot OFF-vs-ON smoke: ON `[SEM] window=1024 facts=1 upserted=1 stored=1`, OFF 0×`[SEM]`, `[INFER]` byte-identical 16=16, err=0/0 faults)**; M2 (telemetry/console slice) next. **Arc 2, the distill workstream — #7's core lands here.**
 **Date:** 2026-07-04
 **Prereqs:** #1 episodic store ✅ box-verified (the distill SOURCE — `epi_record_t` records with decision-cache-parity `query_key`s). Intertwined with **#7 (consolidation)**: the "compact episodic → semantic" half of #7 IS this goal's distill; #7's remaining scope (prune + promote scheduling as a low-priority job) builds on it.
 **Sources:** `phase5/docs/PHASE_5_PLAN.md` §2 goal 4 (canon), §7.2 (NO embeddings — Phase 7), §7.6 (consolidation deterministic first; LLM distillation gated/Phase 7), §5 (the reserved raw-LBA memory region); `phase4/docs/ROADMAP.md:64` #4 + `:66` #7.
@@ -105,8 +105,18 @@
   512 B `semantic_fact_t`, callback-driven, + `sem_store_upsert` insert-or-raise-support) +
   `semantic_distill.{c,h}` (`sd_distill` — the pure deterministic distill, #7's core) +
   `test_semantic_store.c` / `test_semantic_distill.c` + the two CI steps.
-- **M1 (BOX)** — gated `JARVIS_SEMANTIC` wiring in Process A: boot-scan + batch distill →
-  `sem_store_upsert`; `[SEM]` proof line; OFF = behavior-identical smoke.
+- **M1 (BOX)** ✅ **DONE 2026-07-04 (box-verified)** — gated `JARVIS_SEMANTIC` (default-0) wiring in
+  Process A: `sem_store_init` after episodic-ready (nvme_log-independent); the boot recall-scan
+  buffers the newest ≤1024 records **tail-only/chronologically** (no ring buffer — `sd_distill`'s
+  newest-wins is position-based, so a chronological window is load-bearing) and runs the one-shot
+  distill → `sem_store_upsert` with the `[SEM] window=/facts=/upserted=/stored=` proof line;
+  `build_jarvis_x86.sh` injects both .c's into the PA source list. WRITE-ONLY (D-d honored).
+  **S0-snapshot OFF-vs-ON smoke** (regions dd-restored between legs): ON `[SEM] window=1024
+  facts=1 upserted=1 stored=1` / OFF zero `[SEM]` / **`[INFER]` byte-identical (16=16 exact)** /
+  err=0, 0 faults. facts=1 is the honest tail composition (cache-serving dominates the newest
+  records; usable INFER records are rare). *(The M1-shape "batch distill at the [STATS] cadence"
+  from §4 was deliberately deferred — the boot-scan distill alone proves the mechanism; a live
+  cadence fold is an M2+ call if the fact flow warrants it.)*
 - **M2 (CI + BOX)** — the deliberate telemetry/console slice (D-e): `semantic_fact_count`,
   fixture-synced, honest wording.
 - **M3 (BOX)** — reboot-survival: facts persist across a power cycle; re-distill idempotent

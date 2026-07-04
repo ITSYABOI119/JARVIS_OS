@@ -129,6 +129,16 @@
  * Default 0 -> compiles out. */
 #define JARVIS_SHIELD_PROBE 0
 
+/* Phase 5 #4 semantic memory (WRITE-ONLY at M1): at boot, Process A distills a bounded window of
+ * the persisted episodic store into the SEPARATE semantic fact store (sd_distill ->
+ * sem_store_upsert @ LBA 21,110,000) — DETERMINISTIC (support >= SEM_MIN_SUPPORT + consistency;
+ * no LLM, no embeddings; honest ceiling = observable repeated Q&A patterns compacted into durable
+ * facts, never "knows preferences"/"understands"). The store is populated but NEVER read into
+ * inference/routing at M1 (retrieval from it is a future G3 slice with its own hygiene review),
+ * so ON changes no generation; when 0 the includes + store + distill compile out
+ * (behavior-identical). Default 0 — a flip is a deliberate M4 call. */
+#define JARVIS_SEMANTIC 0
+
 /* Serial [STATS] prints every 100 queries; NVMe LOG_IPC_STATS is written every
  * JARVIS_STATS_NVME_INTERVAL. Measured bare-metal rate is ~3k queries/day (single
  * core, scalar) -> interval=100 gives ~870 entries over 30 days, well under the

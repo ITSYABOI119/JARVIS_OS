@@ -71,6 +71,21 @@ default-0; the deployed image is unchanged by #5.
   strlen. `test_semantic_distill.c` 8/8 (incl. FNV-1a key parity via the real `episodic_fill`).
 - Two new CI steps: "Phase 5: Semantic store (C)" + "Phase 5: Semantic distill (C)".
 
+### #4/M1 — box-wired the boot-scan distill, WRITE-ONLY, box-verified (2026-07-04)
+- Gated `JARVIS_SEMANTIC` (default-0): `sem_store_init` right after episodic-ready
+  (nvme_log-independent, the M1a pattern); the boot recall-scan (outer gate widened to include
+  `JARVIS_SEMANTIC`) buffers the newest ≤1024 records **tail-only/chronologically** (no ring — so
+  `sd_distill`'s position-based newest-wins holds without linearization), then one-shot distill →
+  `sem_store_upsert` + a `[SEM] window=/facts=/upserted=/stored=` proof line. `build_jarvis_x86.sh`
+  syncs + injects both new .c's into the PA source list. **WRITE-ONLY** — nothing reads the store
+  (retrieval from it is a future G3 slice with its own hygiene review).
+- **S0-snapshot OFF-vs-ON smoke** (episodic + semantic regions dd-saved/restored between legs so
+  both see the identical persisted store; 2×1200 s KVM legs): ON = `[SEM] semantic store ready
+  (boot 1 stored=0)` → `[SEM] window=1024 facts=1 upserted=1 stored=1`; OFF = zero `[SEM]`;
+  **`[INFER]` byte-identical OFF↔ON (16 = 16, exact)**; err=0 + 0 faults both legs; tree + image
+  restored (flag back to 0). facts=1 is honest: the store's tail is cache-served-dominated (#6
+  froze inference), so usable INFER records are rare in the newest 1024.
+
 ## Tests / verification
 - Host suites green locally: shield_learn 28, telemetry C 47, receiver 106, honesty 53, logic 14,
   e2e 24; golden-drift gate regenerated (2264-byte pcap). CI green after push.
@@ -78,8 +93,8 @@ default-0; the deployed image is unchanged by #5.
   (err=0) — that IS the correct display; the console row shows `—` until `TLM_F_SHIELD_LEARN` is live.
 
 ## Next
-1. **#4/M1** — gated `JARVIS_SEMANTIC` box wiring (boot-scan + batch distill → `sem_store_upsert`,
-   `[SEM]` proof line), then M2 telemetry slice / M3 reboot-survival / M4 flag decision.
+1. **#4/M2** — the deliberate telemetry/console slice (`semantic_fact_count`, fixture-synced,
+   honest wording), then M3 reboot-survival / M4 flag decision.
 2. **#7 consolidation** — the remaining scope (prune + low-prio job scheduling; its compact-core
    already landed in `sd_distill`) — plan doc first.
 3. Backlog (ROADMAP): B1 self-healing PB restart, B2 "it-acts" keystone (the real SEC-039 closure
