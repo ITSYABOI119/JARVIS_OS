@@ -24,7 +24,7 @@ then get to explore for context say:
   - Read CLAUDE.md (full file — this is the project bible)
   - Read phase4/docs/ROADMAP.md (Phases 4-7 + the cross-phase backlog B1 self-healing / B2 "it-acts" keystone / B3 QEMU quickstart + CI generation smoke, added 2026-07-02)
   - Read phase4/docs/PHASE_4_FINAL_REPORT.md (Phase 4 is CLOSED — v1.0.0 SHIPPED 2026-06-26, tag bdf0951; honest goal scoreboard lives here)
-  - Read phase5/docs/PHASE_5_PLAN.md + the phase5/docs/PHASE_5_GOAL*.md docs (G1 episodic KEYSTONE, G2 shared context, G3 retrieval, G6 cache-growth + its SYSTEM_DESIGN companion) — Phase 5 (Memory) is the LIVE phase
+  - Read phase5/docs/PHASE_5_PLAN.md + the phase5/docs/PHASE_5_GOAL*.md docs (G1 episodic KEYSTONE, G2 shared context, G3 retrieval, **G4 semantic memory, G5 SHIELD-learning**, G6 cache-growth + its SYSTEM_DESIGN companion) — Phase 5 (Memory) is largely complete; derive the live frontier fresh
   - Read the latest phase5/weeks/weekNN/ (current weekly cadence; phase4/weeks/ is historical)
   - Read docs/decisions/ ADRs (8 as of 2026-07: dynamic-scaling removal 2026-04-17; 30-day-soak + TurboQuant/RotorQuant deferrals 2026-06-15; GPU-inference deferral + x86 verification stance 2026-06-16; enable-SMP Branch A 2026-06-17; headless-appliance remote console 2026-06-21; target-disk full-SSD install 2026-06-25 [Proposed — code+dry-run only])
   - Read phase3/docs/PHASE_3_FINAL_REPORT.md (historical; Phase 3 tagged v0.2.1-beta)
@@ -45,10 +45,12 @@ then get to explore for context say:
     - tokenizer.c/h (BPE encode/decode with GPT-2 byte mapping), sampling.c/h (greedy + top-k)
     - inference.c/h (legacy F32-only API — NOT the production path)
     - bench_engine.c (llama-bench-format harness, per-arch chat templates)
-    - PHASE 5 MEMORY MODULES (all pure/host-testable, wired via main_x86.c/inference_server.c, compile-OFF by default):
+    - PHASE 5 MEMORY MODULES (all pure/host-testable, wired via main_x86.c/inference_server.c; retrieval + cache-growth deployed ON, the rest gated OFF):
       episodic_store.c/h (raw-LBA circular 512B-record store), shared_context.c/h (page-sized seqlock pool + preamble staging),
-      g3_retrieval.c/h (retrieval scorer + preamble assembler; post-P6 hygiene = g3_select_exact_only + g3_build_preamble_answer_only),
-      cache_growth.c/h (cg_select_promotions — promote freq>=2 episodic patterns into the decision cache)
+      g3_retrieval.c/h (retrieval scorer + preamble assembler; post-P6/P7 hygiene = g3_select_exact_only + g3_build_preamble_answer_only + g3_clean_answer_len),
+      cache_growth.c/h (cg_select_promotions + cg_freq_bump/get — promote freq>=2 episodic patterns into the decision cache),
+      shield_learn.c/h (Phase-1-parity failure-learning risk map, MONITOR-ONLY),
+      semantic_store.c/h + semantic_distill.c/h (durable fact store @ LBA 21,110,000 + the deterministic sd_distill — #7's compact-core)
   - Report: full API map, data flow GGUF→tokens→logits→text, memory budget (fwd_scratch, KV cache incl. shared-KV n_unique sizing, PLE),
     per-family code paths (Llama / Gemma 4 PLE+SWA+KV-share / Phi-3 fused QKV / Mistral / Qwen3 / Qwen3.5 SSM),
     threading model (pthread vs seL4 pool), SIMD coverage (the seL4 build gets AVX2 since Phase 4 M0/M1),
@@ -57,7 +59,7 @@ then get to explore for context say:
   AGENT 3: seL4 Rootserver, Process Isolation & Build System
   - Read phase3/src/sel4/main_x86.c (Process A — rootserver: self-tests [3 real, 2 vacuous — honestly telemetered], NVMe model load, PB spawn incl. the M3 worker TCBs + 3rd SCTX shared frame, IPC workload loop, telemetry emit, episodic/sctx/G3 wiring)
   - Read phase3/src/sel4/inference_server.c (Process B — IPC loop, model loading, generation, gated G3 preamble injection)
-  - Read phase3/src/sel4/jarvis_debug.h (compile-time flags — check values against the stability defaults; incl. JARVIS_AVX2_PROBE / JARVIS_M1_MEASURE / JARVIS_SMP_PROBE and the Phase 5 flags JARVIS_G3_RETRIEVAL / JARVIS_G3_PROBE / JARVIS_G3_AB / JARVIS_CACHE_GROWTH — ALL default 0)
+  - Read phase3/src/sel4/jarvis_debug.h (compile-time flags — check values against the stability defaults; incl. JARVIS_AVX2_PROBE / JARVIS_M1_MEASURE / JARVIS_SMP_PROBE and the Phase 5 flags: **JARVIS_G3_RETRIEVAL / JARVIS_CACHE_GROWTH default 1 (deployed ON)**; JARVIS_G3_PROBE / JARVIS_G3_AB / JARVIS_SEMANTIC / JARVIS_SHIELD_LEARN / JARVIS_SHIELD_PROBE default 0)
   - Read phase3/src/sel4/avx2_probe.h + smp_probe.h
   - Read phase3/src/sel4/CMakeLists.txt (NOTE: stale CI-only stub — does NOT describe the live build; see below)
   - Read phase3/src/ai/decision_cache.h AND cache_patterns.h
@@ -75,7 +77,7 @@ then get to explore for context say:
     - net_stack.c/h, net_cmd.c/h, net_udp.c/h (Eth/IPv4/UDP broadcast framing — telemetry-OUT)
     - nvme.c/h (read + write opcode 0x01), nvme_log.c/h (raw-sector telemetry — CIRCULAR/rolling 2700-entry buffer since 2026-06-24: cursor wraps, total_entries monotonic, keeps latest)
     - fat32.c/h (FAT-sector cache + exact data-only load-% progress hook), vga_text.c/h (legacy — GOP framebuffer is the live HUD), framebuffer.c/h + jarvis_ui_tokens.h (GOP HUD: panel/badge/route/counters/event-log/progress bar, log-mirrored)
-    - jarvis_telemetry.c/h (v3 216-byte packet, CRC@212, flags incl. TLM_F_MEMORY/CONTEXT/RETRIEVAL; v1 200B→v2 208B→v3 216B evolution)
+    - jarvis_telemetry.c/h (**v6 224-byte packet, CRC@220**, flags incl. TLM_F_MEMORY/CONTEXT/RETRIEVAL/**CACHE_GROWTH/SHIELD_LEARN/SEMANTIC**; v1 200B→…→**v6 224B** evolution)
     - fuzz_harness.c
   - Read phase3/src/ipc/shmem_ipc.c/h — the LIVE IPC path (2 rings, 15×256B slots, CRC-32/SEC-020, MSG_DEBUG 0x0F, 0x10 reserved; phase1/2 ring buffers compile but are not the runtime path)
   - Read phase3/src/ai/episodic_store.h (raw-LBA region @ LBA 21,100,000, 8192 records, JEPI magic, circular like nvme_log)
@@ -145,8 +147,8 @@ The user copies your prompts and pastes them into the coding session, then bring
 - Rank remaining tasks by impact (high/medium/low)
 - Distinguish between tasks doable NOW (main PC / CI / KVM) vs tasks that need the JARVIS PC (bare-metal build/flash via `ssh jarvis`)
 - Always know where we are and what the critical path is
-- **Critical path: DERIVE IT FRESH each session** — read `phase5/docs/PHASE_5_PLAN.md` + the latest `phase5/weeks/` + the last ~15 commits; where they disagree, commits win. The paragraph below is a dated SNAPSHOT (2026-07-02) — verify before relying on it, and treat any mismatch as SKILL.md drift to fix.
-- Snapshot 2026-07-02: **Phase 5 (Memory) — the "it-remembers" MVP arc.** G1 (episodic), G2 (shared context), G3 (retrieval M0–M5) are box-verified; what's left of the arc: **#6 cache-growth M1 (box wiring — M0 selector + SEC-024 LRU host-tests landed)** and the **G3/M6 re-A/B** (the P6 injection-hygiene fix landed 70ca236 — exact-key-only + fenced answer-only preamble; retrieval stays default-OFF until the offline OFF-vs-ON A/B is re-run clean). Then #4 semantic / #5 SHIELD-learning / #7 consolidation. ALL Phase 5 features are compile-OFF by default → the shipped image stays byte-identical to v1.0.0. The ROADMAP cross-phase backlog (B1 self-healing PB restart, B2 "it-acts" keystone incl. closing SEC-039, B3 QEMU quickstart + CI generation smoke) is fair game when the user wants phase-independent wins. NOTE: v1.0.0 is SHIPPED (tag bdf0951) — the 90-day soak remains owner-scheduled, NOT a gate.
+- **Critical path: DERIVE IT FRESH each session** — read `phase5/docs/PHASE_5_PLAN.md` + the latest `phase5/weeks/` + the last ~15 commits; where they disagree, commits win. The paragraph below is a dated SNAPSHOT (2026-07-04) — verify before relying on it, and treat any mismatch as SKILL.md drift to fix.
+- Snapshot 2026-07-04: **Phase 5 (Memory) — memory arc largely COMPLETE.** MVP "it-remembers" arc (#1 episodic, #2 shared context, #3 retrieval, #6 cache-growth) SHIPPED + box-verified + **DEPLOYED default-ON** (retrieval since 2026-07-02, cache-growth since 2026-07-03 — the deployed image now intentionally DIVERGES from v1.0.0, memory stack ON). Arc 2: **#5 SHIELD-learning + #4 semantic memory mechanism-proven but GATED-OFF** (activate in Phase 6); **#7 consolidation FOLDED into #4's `sd_distill`**. Telemetry grown v1→v6/224 B. `memory` tag PROPOSED as `v1.1.0-memory` (user creates tags), not yet cut. Remaining: cut the tag, then Phase 6 (Butler — proactive/control-IN — which also activates the gated #4/#5 capabilities). The ROADMAP cross-phase backlog (B1 self-healing, B2 "it-acts"/close SEC-039, B3 QEMU quickstart + CI gen smoke) is still un-started + fair game. v1.0.0 SHIPPED (tag bdf0951); 90-day soak owner-scheduled, not a gate.
 
 ### 3. Generate Implementation Prompts
 When the user says "what's next", "give me a prompt", or "let's do X", produce a complete, paste-ready prompt for the coding CC session. Every prompt must include:
@@ -183,8 +185,8 @@ Don't just agree with everything. If you see:
 - CC not updating CLAUDE.md after completing work (enforce every commit with significant changes)
 - CC skipping CI steps for new test files (CLAUDE.md rule — every test_*.c needs a CI step)
 - CC committing .claude/settings.local.json or .claude/workflows/ (local artifacts, never commit)
-- Overclaiming "formally verified" (the running x86-64 config — Fastpath + XSAVE/AVX + SMP — is unverified; see Architecture note), SHIELD (live IPC SHIELD is a stub, SEC-039), or memory helpfulness (the G3 A/B verdict is net-neutral-to-slightly-positive — hit/latency are honest metrics, "memory helped" is NOT provable from the box)
-- A Phase 5 memory change that breaks the byte-identical-when-OFF invariant (every gated flag default 0; flag-OFF build must be byte-identical to v1.0.0)
+- Overclaiming "formally verified" (the running x86-64 config — Fastpath + XSAVE/AVX + SMP — is unverified; see Architecture note), SHIELD (live IPC SHIELD is a stub, SEC-039 open — #5's failure-learning is MONITOR-ONLY), or memory helpfulness (retrieval's G3/M6 A/B went net-positive-*modest* after the P6+P7 hygiene fixes and shipped default-ON; cache-growth's hit-rate is synthetic-workload-caveated; semantic memory distills observable patterns NOT preferences — hit/latency/counts are the honest metrics, "memory helped" is NOT a system claim)
+- A Phase 5/6 change that breaks the gating discipline: the DEPLOYED image now runs the memory stack ON (retrieval + cache-growth default-ON) and intentionally diverges from v1.0.0; the REMAINING gated flags (JARVIS_SEMANTIC, JARVIS_SHIELD_LEARN, JARVIS_SHIELD_PROBE, JARVIS_G3_PROBE, JARVIS_G3_AB, JARVIS_DBG_BOOT_LOG) keep their OFF-is-inert guarantee — a prompt that adds an UNGATED new code path, or flips a gated flag without box proof, is still wrong
 - A shipped user-visible feature that isn't surfaced in the **Remote Telemetry Console** (`phase4/console/`) — every new feature must appear on the relevant console screen or its auto-populated **Capabilities/Features** section (real live signal, never hardcoded); conversely the console must show nothing without a live source. A real feature missing from the UI is a gap to close; UI showing something not actually live is fiction to remove. Ensure the prompts you generate include the console update.
 
 ...call it out directly and explain why it's a problem. Generate a follow-up prompt to fix the violation before moving on to new work. Also push back on your OWN prior claims when new evidence contradicts them — verify, then correct the record (incl. memory).
@@ -205,7 +207,7 @@ JARVIS AI-OS: AI-controlled operating system on seL4 microkernel.
 - Ring 3 (AI): Decision engine 50-500ms, decision cache, inference
 - Split because AI inference is too slow for Ring 0
 - Two seL4 processes: Process A (rootserver: cache, NVMe, telemetry, episodic/context/retrieval wiring, IPC loop) spawns Process B (inference + M3 worker threadpool) from CPIO; lock-free shmem rings (15×256B slots, CRC-32) between them + a 3rd shared page for the seqlock shared-context pool
-- Deployed inference: Gemma 4 E2B Q4_K_M, **5.46 tok/s @ NUM_NODES=6** (seL4 build, bare metal; M3 threadpool). Native dev-engine numbers (19.79 tok/s Llama 1B @16T) are NOT the seL4 build — don't conflate.
+- Deployed inference: Gemma 4 E2B Q4_K_M, **5.46 tok/s @ NUM_NODES=6** (seL4 build, bare metal; M3 threadpool — the recorded benchmark; since telemetry v4 the console renders the LIVE measured tok/s, 5.51–5.55 box-verified, with 5.46 kept as the labeled reference). Native dev-engine numbers (19.79 tok/s Llama 1B @16T) are NOT the seL4 build — don't conflate.
 - HONESTY NOTE — verification: the deployed x86-64 build runs a *performance* seL4 config (KernelFastpath=ON + XSAVE/AVX + SMP NUM_NODES=6) that is **outside** seL4's verified X64 set — functional-but-unverified by design (ADRs 2026-06-16 + 2026-06-17). "Formally verified" is true of seL4's canonical configs, NOT JARVIS's running config.
 - HONESTY NOTE — SHIELD: live SHIELD on the IPC path is a stub (SEC-039: shield.c not linked; Process B returns ALLOW; Process A has only an inline 6-word keyword check). Don't claim "100% harmful blocked" for the running system. Closing SEC-039 is ROADMAP backlog item B2.
 - HONESTY NOTE — self-test: "5/5" = 3 real (tensor/dequant/tokenizer) + 2 vacuous (cache/SHIELD); telemetry + the durable LOG_SELFTEST line carry the real tally.
@@ -220,7 +222,7 @@ Snapshot as of 2026-07-02 — CLAUDE.md + the latest week doc are the truth; ver
 | Phase 2 | COMPLETE — Alpha on Pi 4 bare metal |
 | Phase 3 | COMPLETE (beta) — v0.2.1-beta TAGGED @ 06de75c (2026-06-16). Engine: 11/11 models, 6 families. Bare-metal NVMe inference verified. Single-model Gemma 4 E2B (ADR 2026-04-17). 30-day x86 soak DEFERRED (ADR 2026-06-15). |
 | Phase 4 | **COMPLETE — v1.0.0 SHIPPED 2026-06-26 (tag bdf0951, MIT, public).** Scoreboard: #1 inference perf CPU ✅ (Gemma 4 E2B 5.46 tok/s @ NN=6, M0–M4; GPU deferred) · #2 GOP HUD ✅ · #2b Remote Telemetry Console ✅ (read-only; control-IN = Phase 6) · #3 keyboard ✂️ CUT · #4 installer ✅ (usb/esp dual-boot VERIFIED on-box; disk = code+dry-run only) · #5 90-day soak ❌ owner-scheduled · #6 docs ✅ · #7 release ✅. See PHASE_4_FINAL_REPORT.md. |
-| Phase 5 | **IN PROGRESS (Memory, started 2026-06-26)** — keystone-first "it-remembers" MVP arc. **G1 episodic (M0–M5), G2 shared context (M0–M4), G3 retrieval (M0–M5) all BOX-VERIFIED.** G3/M6 (flip retrieval default-ON) PARKED: A/B verdict net-neutral-to-slightly-positive with one P6 injection leak; the hygiene fix landed (70ca236 — exact-key-only + fenced answer-only preamble); re-A/B pending. #6 cache-growth M0 landed (c8f54bb — promotion selector + SEC-024 LRU host-tests); **M1 box wiring is next.** All memory features compile-OFF by default → shipped image byte-identical to v1.0.0. Code lives in phase3/src/ai (~813 LOC). |
+| Phase 5 | **Memory arc largely COMPLETE (started 2026-06-26).** MVP arc (#1 episodic M0–M4, #2 context M0–M4, #3 retrieval M0–M6, #6 cache-growth M0–M4) DONE + box-verified + DEPLOYED default-ON; retrieval flipped 2026-07-02 (66e1d18), cache-growth 2026-07-03 (99419fb) — deployed image DIVERGES from v1.0.0 by design. Arc 2: #5 SHIELD-learning (M0–M2, monitor-only) + #4 semantic memory (M0–M2/M4, deterministic distill) mechanism-proven but GATED-OFF (activate Phase 6); #7 folded into #4. Telemetry v6/224B. `v1.1.0-memory` proposed, not cut. Code in phase3/src/ai. |
 
 Current milestone: do NOT hardcode here (it moves) — read the latest `phase5/weeks/weekNN/WEEK_NN_STATUS.md` (and cross-check against the last few commits; week docs can lag).
 
@@ -236,8 +238,8 @@ These rules apply to the prompts you generate — the coding session must follow
 - **seL4 kernel config is set in build_jarvis_x86.sh** — KernelIOMMU=OFF + SIMULATION=OFF + KernelFPU=XSAVE / feature-set 7 / size 832 + SMP `-DSMP=ON` NUM_NODES=6 (two-pass cmake; per-build config-verification gate asserts all invariants); reproducible from the repo, NOT a manual ~/sel4-x86 edit
 - **Build without embedded model for fast iteration** — NVMe runtime loading is the live path; embedded model is fallback only
 - **Verify GRUB menu entry works** — wrong image names cause silent boot failures
-- **Before any long stability run:** `jarvis_debug.h` must be IPC=0, PB=0, RING=0, STATS=1, INFER_SUMMARY=1, BOOT_LOG=0, AVX2_PROBE=0, M1_MEASURE=0, SMP_PROBE=0, **G3_RETRIEVAL=0, G3_PROBE=0, G3_AB=0, CACHE_GROWTH=0** (BOOT_LOG causes NVMe write wear; the Phase 5 flags are opt-in until their milestones flip them)
-- **Phase 5 byte-identical invariant:** every memory feature is gated compile-OFF; a flag-OFF build must stay byte-identical to v1.0.0 — a prompt that adds an ungated Phase 5 code path is wrong
+- **Before any long stability run:** `jarvis_debug.h` must be IPC=0, PB=0, RING=0, STATS=1, INFER_SUMMARY=1, BOOT_LOG=0, AVX2_PROBE=0, M1_MEASURE=0, SMP_PROBE=0, **G3_RETRIEVAL=1, CACHE_GROWTH=1** (deployed ON), G3_PROBE=0, G3_AB=0, **JARVIS_SEMANTIC=0, JARVIS_SHIELD_LEARN=0, JARVIS_SHIELD_PROBE=0** (BOOT_LOG causes NVMe write wear; the gated-off flags are opt-in until a deliberate activation decision)
+- **Gating discipline (post-M6/M3 reframe):** the deployed image runs the memory stack ON and intentionally diverges from v1.0.0; the remaining gated flags keep their OFF-is-inert guarantee — a prompt that adds an ungated new code path, or flips a gated flag without box proof, is wrong
 - **qmodel_forward stack budget <8KB** — any temporary >4KB goes in `state->fwd_scratch`, never on the stack (seL4 Process B stack is tiny)
 - **No `diag:` commit left behind** — anything committed with "revert after testing/data collected" must be reverted before milestone work continues
 - **Never commit .claude/settings.local.json or .claude/workflows/** (local artifacts)
@@ -254,7 +256,7 @@ Before giving a prompt to the user, verify it includes:
 - [ ] CLAUDE.MD RULES footer block (the 5-rule enforcement section)
 - [ ] UI–feature parity: if the work adds/changes a user-visible feature, the prompt updates the Remote Telemetry Console (`phase4/console/`) — its real live signal on the relevant screen or the auto-populated Capabilities/Features section, kept honest (only real/live state)
 - [ ] Frontend correctness: if the work touches `phase4/console/` or the telemetry record shape, the prompt keeps the layered frontend tests green (honesty gate 40 + key-contract + Playwright-Python logic + e2e) and uses **vendored** libs (never re-introduce a live CDN); a wire-shape change updates the one golden fixture both tests read AND regenerates golden.pcap (CI drift gate)
-- [ ] Telemetry versioning: a wire change bumps the packet version + CRC offset in lockstep across jarvis_telemetry.h / telemetry_receiver.py / fixtures / console (v3 = 216B, CRC@212 — follow the v1→v2→v3 precedent)
+- [ ] Telemetry versioning: a wire change bumps the packet version + CRC offset in lockstep across jarvis_telemetry.h / telemetry_receiver.py / fixtures / console (**v6 = 224B, CRC@220** — follow the v1→…→v6 precedent)
 
 ## Common Commands (for reference)
 
@@ -308,7 +310,7 @@ sudo modprobe kvm_amd    # load KVM module
   Clear (archive first!): `phase3/scripts/clear_nvme_log.sh` (zeros the header → fresh boot_id=1)
 - Episodic memory store (Phase 5 G1): **LBA 21,100,000** — circular 8192 × 512B records (JEPI magic), in the verified free gap after JARVIS_DATA.
   Read:  `sudo dd if=/dev/nvme0n1 bs=512 skip=21100000 count=8193 | python3 phase3/scripts/parse_episodic.py`
-- Telemetry console: box broadcasts UDP :51000 (v3 216B packets) → Main PC `py -3 phase3/scripts/telemetry_receiver.py --sse` (Windows-native, NOT WSL — WSL2 NAT can't see the LAN broadcast) → browser console at `phase4/console/`; `--replay golden.pcap` for box-free dev.
+- Telemetry console: box broadcasts UDP :51000 (v6 224B packets) → Main PC `py -3 phase3/scripts/telemetry_receiver.py --sse` (Windows-native, NOT WSL — WSL2 NAT can't see the LAN broadcast) → browser console at `phase4/console/`; `--replay golden.pcap` for box-free dev.
 
 ## Session Start
 
