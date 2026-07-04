@@ -139,6 +139,23 @@
  * (behavior-identical). Default 0 — a flip is a deliberate M4 call. */
 #define JARVIS_SEMANTIC 0
 
+/* Phase 6 K: the action-execution spine (allowlist + linked SHIELD gate + JACT action-audit
+ * store @ LBA 21,120,000). When 1, Process A inits the audit store and the it-acts spine is
+ * linked (shield_action.c — the SEC-039 closure MECHANISM); when 0 the includes + store +
+ * probe compile out (deployed path byte-identical; the image stays ACTION-INERT). NO action
+ * executes at M1 regardless (execution is K/M2); the deploy default-ON flip is the deliberate
+ * K/M4 decision — SEC-039 is fully closed only then. Default 0. */
+#define JARVIS_ACTIONS 0
+
+/* Phase 6 K/M1 induced-BLOCK probe (box-only, needs JARVIS_ACTIONS=1): one-shot at boot,
+ * three cases through the REAL linked gate, NOTHING executes — (A) benign allowlisted action
+ * -> EXECUTE risk=10 (assessed only; proves not-a-blanket-block), (B) the blocklisted poison
+ * id -> BLOCKED risk=100 + an AUDIT_BLOCKED record (the SEC-039 closure-mechanism teeth),
+ * (C, needs JARVIS_SHIELD_LEARN=1) PROBE_HIGH 75 EXECUTE -> one recorded failure -> 85
+ * BLOCKED on the 2nd attempt (K-e — Phase-5 criterion-2's live half) + audited.
+ * `[ACTION-PROBE]` serial proof lines. Default 0 -> compiles out. */
+#define JARVIS_ACTION_PROBE 0
+
 /* Serial [STATS] prints every 100 queries; NVMe LOG_IPC_STATS is written every
  * JARVIS_STATS_NVME_INTERVAL. Measured bare-metal rate is ~3k queries/day (single
  * core, scalar) -> interval=100 gives ~870 entries over 30 days, well under the

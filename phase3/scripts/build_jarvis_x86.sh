@@ -158,6 +158,9 @@ AI_FILES=(
     "shield_learn.c"      "shield_learn.h"
     "semantic_store.c"    "semantic_store.h"
     "semantic_distill.c"  "semantic_distill.h"
+    "action_allowlist.c"  "action_allowlist.h"
+    "shield_action.c"     "shield_action.h"
+    "action_audit.c"      "action_audit.h"
 )
 
 for f in "${AI_FILES[@]}"; do
@@ -469,6 +472,43 @@ if [ -f "$CMAKE_FILE" ]; then
         fi
     else
         echo -e "  ${CYAN}OK${NC}  src/ai/semantic_distill.c already in source list"
+    fi
+
+    # Phase 6 K/M1: add the it-acts decision core (action_allowlist.c + shield_action.c +
+    # action_audit.c) to the Process A source list if missing (PA-only: PA is the actor;
+    # all gated JARVIS_ACTIONS default-0 — the deployed image stays action-inert).
+    if ! grep -q "src/ai/action_allowlist.c" "$CMAKE_FILE"; then
+        sed -i '/src\/ai\/semantic_distill.c/a\    src/ai/action_allowlist.c' "$CMAKE_FILE" 2>/dev/null
+        if grep -q "src/ai/action_allowlist.c" "$CMAKE_FILE"; then
+            echo -e "  ${GREEN}ADDED${NC}  src/ai/action_allowlist.c to source list"
+            PATCHED=1
+        else
+            echo -e "  ${RED}FAILED${NC}  Could not add action_allowlist.c — edit CMakeLists.txt manually"
+        fi
+    else
+        echo -e "  ${CYAN}OK${NC}  src/ai/action_allowlist.c already in source list"
+    fi
+    if ! grep -q "src/ai/shield_action.c" "$CMAKE_FILE"; then
+        sed -i '/src\/ai\/action_allowlist.c/a\    src/ai/shield_action.c' "$CMAKE_FILE" 2>/dev/null
+        if grep -q "src/ai/shield_action.c" "$CMAKE_FILE"; then
+            echo -e "  ${GREEN}ADDED${NC}  src/ai/shield_action.c to source list"
+            PATCHED=1
+        else
+            echo -e "  ${RED}FAILED${NC}  Could not add shield_action.c — edit CMakeLists.txt manually"
+        fi
+    else
+        echo -e "  ${CYAN}OK${NC}  src/ai/shield_action.c already in source list"
+    fi
+    if ! grep -q "src/ai/action_audit.c" "$CMAKE_FILE"; then
+        sed -i '/src\/ai\/shield_action.c/a\    src/ai/action_audit.c' "$CMAKE_FILE" 2>/dev/null
+        if grep -q "src/ai/action_audit.c" "$CMAKE_FILE"; then
+            echo -e "  ${GREEN}ADDED${NC}  src/ai/action_audit.c to source list"
+            PATCHED=1
+        else
+            echo -e "  ${RED}FAILED${NC}  Could not add action_audit.c — edit CMakeLists.txt manually"
+        fi
+    else
+        echo -e "  ${CYAN}OK${NC}  src/ai/action_audit.c already in source list"
     fi
 
     # Add JARVIS_SEL4 compile definition (needed for pci.c IOPort backend)

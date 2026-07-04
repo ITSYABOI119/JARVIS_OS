@@ -72,6 +72,11 @@
 #include "semantic_store.h"     /* Phase 5 #4/M1: separate raw-LBA semantic fact store (flag-gated; WRITE-ONLY) */
 #include "semantic_distill.h"   /* Phase 5 #4/M1: deterministic episodic->semantic distill (no LLM/embeddings) */
 #endif
+#if JARVIS_ACTIONS
+#include "action_allowlist.h"   /* Phase 6 K/M1: the static action allowlist (flag-gated; LLM selects, never synthesizes) */
+#include "shield_action.h"      /* Phase 6 K/M1: the linked SHIELD action gate (flag-gated; the SEC-039 closure mechanism) */
+#include "action_audit.h"       /* Phase 6 K/M1: the raw-LBA action-audit store (flag-gated; JACT @ 21,120,000) */
+#endif
 #include "jarvis_ui_tokens.h"   /* Step 2c-2b: FBP_ and JUI_ palette + geometry (single source) */
 
 #if JARVIS_AVX2_PROBE
@@ -489,6 +494,14 @@ static int             g_semantic_ready = 0;
 #define SEM_DISTILL_MAXFACTS 128
 static epi_record_t    g_sem_window[SEM_DISTILL_WINDOW];
 static semantic_fact_t g_sem_facts[SEM_DISTILL_MAXFACTS];
+#endif
+#if JARVIS_ACTIONS
+/* Phase 6 K/M1: the action-audit store (JACT @ LBA 21,120,000 — the it-acts spine's durable
+ * evidence base). GATED default-0: the deployed image stays ACTION-INERT until the deliberate
+ * K/M4 flip; at M1 the SEC-039 closure MECHANISM is proven by the JARVIS_ACTION_PROBE
+ * induced-BLOCK smoke (the gate REFUSES live) — no action ever executes before K/M2. */
+static act_audit_t g_action_audit;
+static int         g_action_audit_ready = 0;
 #endif
 static uint32_t total_queries = 0;
 static uint32_t cache_hits = 0;
@@ -2120,6 +2133,22 @@ static void *main_continued(void *arg UNUSED)
                                             puts_serial("[SEM] semantic store init FAILED (non-fatal)\n");
                                         }
 #endif
+#if JARVIS_ACTIONS
+                                        /* Phase 6 K/M1: init the action-audit store (same NVMe bounce
+                                         * callbacks, own raw-LBA sub-region — clear of semantic). Records
+                                         * every action DECISION (executed/blocked/proposed). nvme_log-
+                                         * independent (the M1a pattern). NO action executes at M1. */
+                                        if (act_audit_init(&g_action_audit, epi_nvme_read, epi_nvme_write,
+                                                           ACT_AUDIT_BASE_LBA, ACT_AUDIT_MAX_ENTRIES) == 0) {
+                                            g_action_audit_ready = 1;
+                                            puts_serial("[ACTION] audit store ready (boot ");
+                                            put_dec(act_audit_boot_id(&g_action_audit));
+                                            puts_serial(" stored="); put_dec(act_audit_count(&g_action_audit));
+                                            puts_serial(")\n");
+                                        } else {
+                                            puts_serial("[ACTION] audit store init FAILED (non-fatal)\n");
+                                        }
+#endif
 #if (JARVIS_G3_RETRIEVAL || JARVIS_CACHE_GROWTH || JARVIS_SHIELD_LEARN || JARVIS_SEMANTIC)
                                         /* G3/M5a: one-time boot scan → in-RAM key→logical_index map of the
                                          * persisted store, so retrieval can recall facts from PRIOR boots
@@ -2186,6 +2215,87 @@ static void *main_continued(void *arg UNUSED)
                                                 puts_serial(" upserted="); put_dec((uint32_t)sem_up);
                                                 puts_serial(" stored="); put_dec(sem_store_count(&g_semantic));
                                                 puts_serial("\n");
+                                            }
+#endif
+                                        }
+#endif
+#if JARVIS_ACTIONS && JARVIS_ACTION_PROBE
+                                        /* Phase 6 K/M1: the one-shot induced-BLOCK probe — the SEC-039
+                                         * closure-MECHANISM teeth. Three cases through the REAL linked gate;
+                                         * NOTHING EXECUTES (M1 proves the gate REFUSES before M2 executes
+                                         * anything). Runs once at boot, after the recall/seed scan, so the
+                                         * K-e case exercises the same live shield_learn map the seed fed. */
+                                        {
+#if JARVIS_SHIELD_LEARN
+                                            const shield_learn_slot_t *act_pl = g_shield_learn;
+                                            int act_plc = SHIELD_LEARN_CAP_KEYS;
+#else
+                                            const shield_learn_slot_t *act_pl = NULL;
+                                            int act_plc = 0;
+#endif
+                                            /* A — benign discriminator: allowlisted, clean trigger ->
+                                             * EXECUTE (assessed ONLY — proves not a blanket block). */
+                                            static const char act_trig_a[] = "PB heartbeat age 12000 ms";
+                                            action_ctx_t act_ctx_a =
+                                                { act_trig_a, (uint16_t)(sizeof(act_trig_a) - 1), 0 };
+                                            shield_action_result_t act_ra =
+                                                shield_assess(ACTION_RESTART_PB, &act_ctx_a, act_pl, act_plc);
+                                            puts_serial("[ACTION-PROBE] benign restart_pb -> ");
+                                            puts_serial(act_ra.verdict == SHIELD_VERDICT_EXECUTE ? "EXECUTE" : "BLOCKED");
+                                            puts_serial(" risk="); put_dec(act_ra.risk_x100);
+                                            puts_serial(" (not executed at M1)\n");
+
+                                            /* B — the SEC-039 teeth: blocklisted poison id -> BLOCKED + audited. */
+                                            static const char act_trig_b[] = "induced-block probe";
+                                            action_ctx_t act_ctx_b =
+                                                { act_trig_b, (uint16_t)(sizeof(act_trig_b) - 1), 0 };
+                                            shield_action_result_t act_rb =
+                                                shield_assess(ACTION_ID_BLOCK_PROBE, &act_ctx_b, act_pl, act_plc);
+                                            puts_serial("[ACTION-PROBE] poison id="); put_dec(ACTION_ID_BLOCK_PROBE);
+                                            puts_serial(act_rb.verdict == SHIELD_VERDICT_BLOCKED ? " -> BLOCKED" : " -> EXECUTE");
+                                            puts_serial(" risk="); put_dec(act_rb.risk_x100);
+                                            puts_serial(" (audited)\n");
+                                            if (g_action_audit_ready && act_rb.verdict == SHIELD_VERDICT_BLOCKED) {
+                                                action_audit_rec_t act_arec;
+                                                act_audit_fill(&act_arec, jarvis_uptime_ms(), ACTION_ID_BLOCK_PROBE,
+                                                               TRUST_REQUIRE, AUDIT_BLOCKED, act_rb.risk_x100,
+                                                               AUDIT_OUT_NA, act_trig_b,
+                                                               (uint16_t)(sizeof(act_trig_b) - 1));
+                                                act_audit_append(&g_action_audit, &act_arec);
+                                            }
+
+#if JARVIS_SHIELD_LEARN
+                                            /* C — the K-e live loop: PROBE_HIGH 75 EXECUTE -> record ONE
+                                             * failure in the LIVE shield_learn map -> 85 BLOCKED on the 2nd
+                                             * attempt (Phase-5 criterion-2's live half). In-RAM only —
+                                             * nothing persists to episodic. */
+                                            {
+                                                char act_pn[MAX_QUERY_LEN];
+                                                uint64_t act_pkey = 0;
+                                                if (cache_normalize_query("action probe risky", act_pn, sizeof act_pn))
+                                                    act_pkey = cache_hash(act_pn);
+                                                action_ctx_t act_ctx_c = { NULL, 0, act_pkey };
+                                                shield_action_result_t act_r1 =
+                                                    shield_assess_class(ACTION_CLASS_PROBE_HIGH, &act_ctx_c, act_pl, act_plc);
+                                                shield_learn_record_failure(g_shield_learn, SHIELD_LEARN_CAP_KEYS, act_pkey);
+                                                shield_action_result_t act_r2 =
+                                                    shield_assess_class(ACTION_CLASS_PROBE_HIGH, &act_ctx_c, act_pl, act_plc);
+                                                puts_serial("[ACTION-PROBE] probe_high risk="); put_dec(act_r1.risk_x100);
+                                                puts_serial(act_r1.verdict == SHIELD_VERDICT_EXECUTE ? " EXECUTE" : " BLOCKED");
+                                                puts_serial(" -> (failure) risk="); put_dec(act_r2.risk_x100);
+                                                puts_serial(act_r2.verdict == SHIELD_VERDICT_BLOCKED ?
+                                                            " BLOCKED on 2nd attempt (K-e)\n" : " EXECUTE (UNEXPECTED)\n");
+                                                if (g_action_audit_ready && act_r2.verdict == SHIELD_VERDICT_BLOCKED) {
+                                                    /* action_id 0xFFFD = the class-probe marker (not a real
+                                                     * action id — self-described by the trigger text). */
+                                                    static const char act_trig_c[] = "probe_high 2nd attempt (K-e)";
+                                                    action_audit_rec_t act_crec;
+                                                    act_audit_fill(&act_crec, jarvis_uptime_ms(), 0xFFFD,
+                                                                   TRUST_REQUIRE, AUDIT_BLOCKED, act_r2.risk_x100,
+                                                                   AUDIT_OUT_NA, act_trig_c,
+                                                                   (uint16_t)(sizeof(act_trig_c) - 1));
+                                                    act_audit_append(&g_action_audit, &act_crec);
+                                                }
                                             }
 #endif
                                         }
