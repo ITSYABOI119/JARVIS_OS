@@ -1,7 +1,7 @@
 # Phase 5 — Week 03 Status (Memory)
 
 **Period:** 2026-07-03 → 2026-07-04
-**Phase:** 5 (Memory) — Arc 2 opener: **#5 SHIELD failure-learning (MONITOR-ONLY)**
+**Phase:** 5 (Memory) — Arc 2: **#5 SHIELD failure-learning (MONITOR-ONLY)** + **#4 semantic memory kickoff**
 **Branch:** `master` · **This week's HEAD:** the #5/M2 telemetry-v5 commit (after `bb0f902`)
 **Author:** JARVIS Development
 
@@ -54,6 +54,23 @@ default-0; the deployed image is unchanged by #5.
   recall-scan seeds prior probe failures, and the probe raises the learned risk further across attempts
   (monotonic from the seeded level), err=0. Flags restored to 0 — **NOT deployed-ON, no ESP write**.
 
+### #4/M0 — semantic memory kickoff: plan doc + store + deterministic distill (2026-07-04)
+- Plan doc `phase5/docs/PHASE_5_GOAL4_SEMANTIC_MEMORY.md`: honest ceiling ("compacts what it has
+  repeatedly seen" — observable patterns, never "knows preferences"/"understands"; NO LLM/embeddings,
+  PLAN §7.2/§7.6), D-a..D-f locked (separate store @ LBA 21,110,000; deterministic distill = #7's
+  compact-core; distinct-from-#6 boundary; retrieval hook is a future G3 slice; gated `JARVIS_SEMANTIC`
+  default-0 at M1), and the explicit note that **#4/#7 are completeness/Phase-6-readiness goals —
+  Phase 5's canonical done-when is already met**.
+- `semantic_store.c/h`: raw-LBA circular fact store (episodic_store clone; 4096 × 512 B
+  `semantic_fact_t`, magic "JSEM") + `sem_store_upsert` — insert-or-raise-support, support monotonic
+  via max (idempotent across boot re-distills), a repeated subject updates its fact, never a dup.
+  `test_semantic_store.c` 6/6.
+- `semantic_distill.c/h`: `sd_distill` — group by `query_key`, support counted over usable records
+  only (`sd_record_usable` = INFER+OK+resp>0), newest answer wins, `confidence_x100` = share of
+  byte-identical same-key answers, emit at support ≥ `SEM_MIN_SUPPORT`(3); text by `resp_len`, never
+  strlen. `test_semantic_distill.c` 8/8 (incl. FNV-1a key parity via the real `episodic_fill`).
+- Two new CI steps: "Phase 5: Semantic store (C)" + "Phase 5: Semantic distill (C)".
+
 ## Tests / verification
 - Host suites green locally: shield_learn 28, telemetry C 47, receiver 106, honesty 53, logic 14,
   e2e 24; golden-drift gate regenerated (2264-byte pcap). CI green after push.
@@ -61,10 +78,13 @@ default-0; the deployed image is unchanged by #5.
   (err=0) — that IS the correct display; the console row shows `—` until `TLM_F_SHIELD_LEARN` is live.
 
 ## Next
-1. Arc 2 remainder: **#4 semantic memory** (plan doc first) and **#7 consolidation** (plan doc first).
-2. Backlog (ROADMAP): B1 self-healing PB restart, B2 "it-acts" keystone (the real SEC-039 closure
+1. **#4/M1** — gated `JARVIS_SEMANTIC` box wiring (boot-scan + batch distill → `sem_store_upsert`,
+   `[SEM]` proof line), then M2 telemetry slice / M3 reboot-survival / M4 flag decision.
+2. **#7 consolidation** — the remaining scope (prune + low-prio job scheduling; its compact-core
+   already landed in `sd_distill`) — plan doc first.
+3. Backlog (ROADMAP): B1 self-healing PB restart, B2 "it-acts" keystone (the real SEC-039 closure
    path), B3 QEMU quickstart + CI generation smoke.
-3. User: the proposed `memory` tag (Arc 1) remains open — user names/creates tags.
+4. User: the proposed `memory` tag (Arc 1) remains open — user names/creates tags.
 
 ## Notes / risks
 - #5's honest ceiling stands: it learns and surfaces failure risk, never blocks, never lowers a score

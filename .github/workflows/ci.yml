@@ -329,6 +329,21 @@ jobs:
           -lm -o /tmp/tsl
         /tmp/tsl
 
+    - name: "Phase 5: Semantic store (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
+          phase3/src/ai/test_semantic_store.c phase3/src/ai/semantic_store.c \
+          -o /tmp/tsem
+        /tmp/tsem
+
+    - name: "Phase 5: Semantic distill (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -I phase3/src/ai \
+          phase3/src/ai/test_semantic_distill.c phase3/src/ai/semantic_distill.c \
+          phase3/src/ai/episodic_store.c phase3/src/ai/decision_cache.c \
+          -o /tmp/tsd
+        /tmp/tsd
+
     - name: "Phase 5: Decision-cache LRU eviction (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
