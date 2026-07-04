@@ -1651,6 +1651,16 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
         if (pkt.shield_learn_keys > 0) pkt.flags |= TLM_F_SHIELD_LEARN;
     }
 #endif
+#if JARVIS_SEMANTIC
+    /* P5 #4/M2: distilled-fact count (v6) — observable repeated Q&A patterns compacted by the
+     * deterministic distill; a count, never a "knows preferences"/"understands" claim. Gated,
+     * so the flag-OFF deploy emits 0 + TLM_F_SEMANTIC clear (honest). */
+    if (g_semantic_ready) {
+        pkt.semantic_fact_count = (uint16_t)sem_store_count(&g_semantic);
+        if (pkt.semantic_fact_count > 0)
+            pkt.flags |= TLM_F_SEMANTIC;
+    }
+#endif
     /* model display name (matches the on-screen panel) + last response, NUL-bounded (pkt is zeroed) */
     { const char *mn = "Gemma 4 E2B";
       for (int i = 0; i < (int)sizeof(pkt.model_name) - 1 && mn[i]; i++) pkt.model_name[i] = mn[i]; }

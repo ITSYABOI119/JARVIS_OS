@@ -51,8 +51,8 @@ def main():
     print("== telemetry receiver wire-compat ==")
 
     # Layout
-    check(struct.calcsize(FMT) == 222, "struct.calcsize(FMT) == 222 (v5)")
-    check(PKT_SIZE == 222, "PKT_SIZE == 222 (v5)")
+    check(struct.calcsize(FMT) == 224, "struct.calcsize(FMT) == 224 (v6)")
+    check(PKT_SIZE == 224, "PKT_SIZE == 224 (v6)")
 
     # Canonical zlib CRC vector — same CRC the C side proved (jarvis_telemetry.c)
     check(zlib.crc32(b"123456789") & 0xFFFFFFFF == 0xCBF43926,
@@ -60,7 +60,7 @@ def main():
 
     # Valid packet round-trips
     pkt = build_packet()
-    check(len(pkt) == 222, "built packet is 222 bytes (v5)")
+    check(len(pkt) == 224, "built packet is 224 bytes (v6)")
     d = decode_packet(pkt)
     check(d['crc_ok'] is True, "valid packet crc_ok True")
     check(d['kind_name'] == 'STATS', "kind_name == STATS")
@@ -88,7 +88,7 @@ def main():
 
     # Wrong length -> ValueError
     check(raises_valueerror(lambda: decode_packet(pkt[:207]), ), "207-byte input raises ValueError")
-    check(raises_valueerror(lambda: decode_packet(pkt + b'\x00')), "223-byte input raises ValueError")
+    check(raises_valueerror(lambda: decode_packet(pkt + b'\x00')), "225-byte input raises ValueError")
 
     # --- N-c-3a: packet_to_record (the /events SSE record) ---
     rec = packet_to_record(decode_packet(pkt))
@@ -131,7 +131,7 @@ def main():
     pkt_retr = build_packet(retrieval_hits=3, retrieval_latency_us=40, flags=0x01 | 0x10 | 0x80)
     dretr = decode_packet(pkt_retr)
     check(dretr['crc_ok'] is True, "retrieval packet crc_ok True (CRC over [:PKT_SIZE-4])")
-    check(dretr['version'] == 5, "v5 packet version == 5")
+    check(dretr['version'] == 6, "v6 packet version == 6")
     check(dretr['retrieval_hits'] == 3 and dretr['retrieval_latency_us'] == 40,
           "retrieval_hits/retrieval_latency_us decode")
     check('RETRIEVAL' in dretr['flags_list'], "TLM_F_RETRIEVAL 0x80 -> 'RETRIEVAL' in flags_list")
@@ -146,7 +146,6 @@ def main():
     # --- P5 #5/M2: shield_learn_keys/shield_learn_max_risk_x100 + TLM_F_SHIELD_LEARN (the v5
     # 218->222 size-bump). MONITOR-ONLY fields: learned-risk counts, NEVER a block count — the
     # fabricated 'shield_blocked' key stays banned. ---
-    check(PKT_SIZE == 222, "v5 size-bump: PKT_SIZE == 222")
     pkt_sl = build_packet(shield_learn_keys=1, shield_learn_max_risk_x100=20,
                           flags=0x01 | 0x10 | 0x200)
     dsl = decode_packet(pkt_sl)
@@ -163,6 +162,20 @@ def main():
     check(FLAG_NAMES.get(0x200) == 'SHIELD_LEARN' and FLAG_BITS.get('SHIELD_LEARN') == 0x200,
           "FLAG_NAMES/FLAG_BITS both carry 0x200 SHIELD_LEARN")
     check('shield_blocked' not in rec_sl, "no fabricated 'shield_blocked' key (monitor-only, ban holds)")
+
+    # --- P5 #4/M2: semantic_fact_count + TLM_F_SEMANTIC (the v6 222->224 size-bump). The
+    # distilled-fact count — observable repeated Q&A patterns, never "knows preferences". ---
+    check(PKT_SIZE == 224, "v6 size-bump: PKT_SIZE == 224")
+    pkt_sem = build_packet(semantic_fact_count=1, flags=0x01 | 0x10 | 0x400)
+    dsem = decode_packet(pkt_sem)
+    check(dsem['crc_ok'] is True, "v6 semantic packet crc_ok True (CRC over [:220])")
+    check(dsem['semantic_fact_count'] == 1, "semantic_fact_count decodes")
+    check('SEMANTIC' in dsem['flags_list'], "TLM_F_SEMANTIC 0x400 -> 'SEMANTIC' in flags_list")
+    rec_sem = packet_to_record(dsem)
+    check(rec_sem['semantic_fact_count'] == 1, "record carries semantic_fact_count")
+    check('semantic_fact_count' in REQUIRED_RECORD_KEYS, "semantic_fact_count is a REQUIRED_RECORD_KEY")
+    check(FLAG_NAMES.get(0x400) == 'SEMANTIC' and FLAG_BITS.get('SEMANTIC') == 0x400,
+          "FLAG_NAMES/FLAG_BITS both carry 0x400 SEMANTIC")
 
     # --- N-c-3a: iter_pcap_telemetry on a synthetic 1-packet pcap ---
     pcap = _build_pcap_one(pkt, ts_s=1700000001)
@@ -189,7 +202,7 @@ def main():
     meta_keys = set(golden['meta']['keys'])
     check(meta_keys == set(REQUIRED_RECORD_KEYS),
           "golden meta.keys == REQUIRED_RECORD_KEYS (fixture matches receiver output)")
-    check(golden['meta']['size'] == 222 and golden['meta']['fmt'] == FMT,
+    check(golden['meta']['size'] == 224 and golden['meta']['fmt'] == FMT,
           "golden meta fmt/size match the wire format")
 
     kind_expect = {1: 'STATS', 2: 'INFER', 3: 'STATE'}

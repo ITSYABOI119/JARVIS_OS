@@ -1,8 +1,8 @@
 {
   "meta": {
     "comment": "Golden /events contract for phase4/console. 'keys' MUST equal set(packet_to_record(...).keys()); the key-contract test (test_telemetry_receiver.py) enforces it. Regenerate golden.pcap via phase3/scripts/gen_golden_pcap.py (CI gates drift). 'flags' are names (telemetry_fixture.FLAG_BITS); other fields are build_packet overrides; label/ts_s/ts_frac/corrupt are fixture-only.",
-    "fmt": "<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHHHI",
-    "size": 222,
+    "fmt": "<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHHHHI",
+    "size": 224,
     "keys": [
       "recv_ts",
       "version",
@@ -38,6 +38,7 @@
       "infer_last_tok_x100",
       "shield_learn_keys",
       "shield_learn_max_risk_x100",
+      "semantic_fact_count",
       "cache_growth_count",
       "log_cursor",
       "infer_gen_tokens",
@@ -136,7 +137,8 @@
         "CONTEXT",
         "RETRIEVAL",
         "CACHE_GROWTH",
-        "SHIELD_LEARN"
+        "SHIELD_LEARN",
+        "SEMANTIC"
       ],
       "boot_id": 1,
       "seq": 4,
@@ -159,7 +161,8 @@
       "cache_growth_count": 12,
       "infer_last_tok_x100": 152,
       "shield_learn_keys": 1,
-      "shield_learn_max_risk_x100": 20
+      "shield_learn_max_risk_x100": 20,
+      "semantic_fact_count": 1
     },
     {
       "label": "state",

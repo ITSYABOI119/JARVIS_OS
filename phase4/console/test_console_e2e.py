@@ -41,6 +41,7 @@ FLAG_LABEL = {
     'RETRIEVAL': 'Retrieval before inference',
     'CACHE_GROWTH': 'Cache growth — learns frequent queries',
     'SHIELD_LEARN': 'SHIELD failure-learning (monitor-only)',
+    'SEMANTIC': 'Semantic memory (distilled facts)',
 }
 
 _P = 0
@@ -338,6 +339,41 @@ def main():
                 time.sleep(0.1)
             check(cg_ok,
                   "(#6/M2) System 'Patterns promoted' renders == live cache_growth_count (snap=%r)" % (cg_dbg,))
+
+            # (#4/M2) PIN the System 'Distilled facts' VALUE — must equal the live
+            # semantic_fact_count on a SEMANTIC-flagged frame (flag-gated; '—' otherwise). The
+            # golden 'infer' frame carries 1 (the honest ~1-fact box yield). TEETH: fails if the
+            # semantic rendering breaks (wrong value, '—', or removed). Still on the System screen.
+            sem_ok = False
+            sem_dbg = None
+            deadline = time.time() + 12
+            while time.time() < deadline:
+                snap = page.evaluate(
+                    "() => {"
+                    " const rec = (window.JarvisTelemetry.getState().latest) || {};"
+                    " const flags = rec.flags_list || [];"
+                    " const lab = Array.from(document.querySelectorAll('div'))"
+                    "   .find(d => d.textContent.trim() === 'Distilled facts');"
+                    " let rendered = null;"
+                    " if (lab && lab.parentElement) {"
+                    "   const kids = Array.from(lab.parentElement.children);"
+                    "   const i = kids.indexOf(lab);"
+                    "   rendered = kids[i + 1] ? kids[i + 1].textContent.trim() : null;"
+                    " }"
+                    " return { sem: flags.indexOf('SEMANTIC') >= 0, count: rec.semantic_fact_count, rendered };"
+                    "}")
+                sem_dbg = snap
+                if snap['sem'] and snap['rendered'] not in (None, '—'):
+                    try:
+                        rendered_num = int(str(snap['rendered']).replace(',', ''))
+                    except (ValueError, TypeError):
+                        rendered_num = None
+                    if rendered_num is not None and rendered_num == snap['count'] and rendered_num > 0:
+                        sem_ok = True
+                        break
+                time.sleep(0.1)
+            check(sem_ok,
+                  "(#4/M2) System 'Distilled facts' renders == live semantic_fact_count (snap=%r)" % (sem_dbg,))
 
             # (#5/M2) PIN the SHIELD 'Actions with learned risk' VALUE — must equal the live
             # shield_learn_keys on a SHIELD_LEARN-flagged frame (flag-gated; '—' otherwise). The

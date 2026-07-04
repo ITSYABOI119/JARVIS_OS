@@ -3,15 +3,15 @@
 telemetry_receiver.py - JARVIS Remote Telemetry Console receiver (goal #2b N-c-2)
 
 Main-PC Python UDP receiver for the box-side telemetry stream. The JARVIS box
-(headless appliance) broadcasts a 222-byte (v5) binary `telemetry_packet_t` over UDP
+(headless appliance) broadcasts a 224-byte (v6) binary `telemetry_packet_t` over UDP
 to 255.255.255.255:51000 at ~1 Hz (see phase3/src/drivers/jarvis_telemetry.h and
 the N-c-1 emit site in phase3/src/sel4/main_x86.c, shipped at b9d689a). This tool
 binds the port, decodes each datagram, validates the zlib CRC-32 over the first
-218 bytes (v5), and pretty-prints honest live box state.
+220 bytes (v6), and pretty-prints honest live box state.
 
 Wire format (little-endian, packed, no padding):
-    struct format = '<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHHHI'  (struct.calcsize == 222)
-    crc32 is the last 4 bytes; valid iff zlib.crc32(pkt[:218]) == pkt.crc32.
+    struct format = '<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHHHHI'  (struct.calcsize == 224)
+    crc32 is the last 4 bytes; valid iff zlib.crc32(pkt[:220]) == pkt.crc32.
 
 Usage:
     python3 telemetry_receiver.py [--bind ADDR] [--port 51000] [--once] [--follow] [--json]
@@ -27,8 +27,10 @@ measured last-inference tok/s exists (infer_last_tok_x100, RDTSC-measured in
 Process B — never the 5.46 benchmark constant); the fabricated 'tok_s'/'tokps'
 aliases stay banned. The v5 shield_learn_* fields are the SHIELD
 failure-learning MONITOR signal (learned-risk counts — the box never blocks;
-'shield_blocked' stays banned). The uptime is from an uncalibrated TSC,
-shown with "≈".
+'shield_blocked' stays banned). The v6 semantic_fact_count is the distilled
+semantic-fact count (observable repeated Q&A patterns compacted by the
+deterministic distill — never "knows preferences"). The uptime is from an
+uncalibrated TSC, shown with "≈".
 """
 
 import argparse
@@ -45,8 +47,8 @@ import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MAGIC = 0x4A54454C            # "JTEL" (LE on the wire: 4C 45 54 4A)
-FMT = '<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHHHI'
-PKT_SIZE = struct.calcsize(FMT)   # v5: 222 (derived — never hardcode a wire size)
+FMT = '<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHHHHI'
+PKT_SIZE = struct.calcsize(FMT)   # v6: 224 (derived — never hardcode a wire size)
 LOG_MAX_ENTRIES = 2700        # NVME_LOG_MAX_ENTRIES (no-wrap durable telemetry log)
 
 FLAG_NAMES = {
@@ -60,6 +62,7 @@ FLAG_NAMES = {
     0x80: 'RETRIEVAL',
     0x100: 'CACHE_GROWTH',
     0x200: 'SHIELD_LEARN',
+    0x400: 'SEMANTIC',
 }
 KIND_NAMES = {1: 'STATS', 2: 'INFER', 3: 'STATE'}
 
@@ -95,13 +98,13 @@ def decode_packet(data: bytes) -> dict:
      infer_gen_tokens, cache_growth_count, last_text_raw, model_name_raw,
      nvme_total_mb, episodic_count, pool_events, pool_decisions,
      retrieval_hits, retrieval_latency_us, infer_last_tok_x100,
-     shield_learn_keys, shield_learn_max_risk_x100,
+     shield_learn_keys, shield_learn_max_risk_x100, semantic_fact_count,
      crc32_field) = struct.unpack(FMT, data)
 
     if magic != MAGIC:
         raise ValueError("bad magic 0x%08X (expected 0x%08X)" % (magic, MAGIC))
 
-    crc_calc = zlib.crc32(data[:PKT_SIZE - 4]) & 0xFFFFFFFF   # v5: 218 (= offsetof(crc32))
+    crc_calc = zlib.crc32(data[:PKT_SIZE - 4]) & 0xFFFFFFFF   # v6: 220 (= offsetof(crc32))
     flags_list = [name for bit, name in FLAG_NAMES.items() if flags & bit]
 
     return {
@@ -139,6 +142,7 @@ def decode_packet(data: bytes) -> dict:
         'infer_last_tok_x100': infer_last_tok_x100,
         'shield_learn_keys': shield_learn_keys,
         'shield_learn_max_risk_x100': shield_learn_max_risk_x100,
+        'semantic_fact_count': semantic_fact_count,
         'cache_growth_count': cache_growth_count,
         'log_cursor': log_cursor,
         'infer_gen_tokens': infer_gen_tokens,
@@ -227,6 +231,7 @@ def packet_to_record(d: dict, recv_ts: float = 0) -> dict:
         'infer_last_tok_x100': d['infer_last_tok_x100'],
         'shield_learn_keys': d['shield_learn_keys'],
         'shield_learn_max_risk_x100': d['shield_learn_max_risk_x100'],
+        'semantic_fact_count': d['semantic_fact_count'],
         'cache_growth_count': d['cache_growth_count'],
         'log_cursor': d['log_cursor'],
         'infer_gen_tokens': d['infer_gen_tokens'],

@@ -35,6 +35,8 @@ BANNED = [
     "risk score", "blocked rm", "Ask JARVIS", "<textarea", "ping 8.8", "1,284 msg",
     # #5/M2: SHIELD failure-learning is MONITOR-ONLY — no live-blocking claims, ever.
     "SHIELD blocks", "blocking active",
+    # #4/M2: semantic memory compacts OBSERVABLE patterns — never a preference/intent claim.
+    "knows your preferences",
 ]
 
 # (b) Honest-framing markers that MUST stay present somewhere in the console
@@ -148,6 +150,17 @@ def main():
           "failure-learning section defers enforcement to Phase 6")
     check('SHIELD_LEARN' in blobs.get('ConsoleCapabilities.jsx', ''),
           "Capabilities labels the SHIELD_LEARN flag (monitor-only row)")
+
+    # --- #4/M2: semantic memory — distilled-fact count with the honest observable-patterns wording ---
+    sysb = blobs.get('ConsoleSystem.jsx', '')
+    check('semantic_fact_count' in sysb,
+          "System 'Distilled facts' sources the REAL field (semantic_fact_count)")
+    check('observable patterns' in sysb.lower(),
+          "semantic stat carries 'observable patterns'")
+    check('not stated preferences' in sysb.lower(),
+          "semantic stat carries 'not stated preferences'")
+    check('Semantic memory (distilled facts)' in blobs.get('ConsoleCapabilities.jsx', ''),
+          "Capabilities labels the SEMANTIC flag (distilled facts row)")
 
     print("\n== Results: %d PASS, %d FAIL ==" % (_PASS, _FAIL))
     return 1 if _FAIL else 0

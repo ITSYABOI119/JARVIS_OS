@@ -50,6 +50,11 @@ function SystemView({ store }) {
   // queries and serves them fast; it never "understands" them.
   const cgReported = !!(rec && rec.flags_list && rec.flags_list.indexOf('CACHE_GROWTH') >= 0);
   const cgCount = rec ? Number(rec.cache_growth_count) || 0 : null;
+  // Semantic memory (#4): distilled-fact count, flag-gated on TLM_F_SEMANTIC. The deterministic
+  // distill compacts recurring Q&A into durable facts — observable patterns, NOT stated
+  // preferences; it never "knows" anything.
+  const semReported = !!(rec && rec.flags_list && rec.flags_list.indexOf('SEMANTIC') >= 0);
+  const semCount = rec ? Number(rec.semantic_fact_count) || 0 : null;
 
   const stat = (label, value, sub) => (
     <div>
@@ -99,6 +104,9 @@ function SystemView({ store }) {
             retrReported ? 'in-RAM select + assemble + pack' : 'retrieval not reported')}
           {stat('Patterns promoted', cgReported ? numMb(cgCount) : '—',
             cgReported ? 'frequent queries promoted into the decision cache' : 'cache growth not reported')}
+          {stat('Distilled facts', semReported ? numMb(semCount) : '—',
+            semReported ? 'compacts recurring Q&A into durable facts — observable patterns, not stated preferences'
+                        : 'semantic memory not reported')}
         </div>
         {note('Live heap used/free is not tracked on the box, so it is not shown. The floor above (model + a fixed static pool) is the only real lower bound.')}
       </Card>

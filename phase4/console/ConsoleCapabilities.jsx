@@ -31,6 +31,7 @@ function Capabilities({ store }) {
     RETRIEVAL:     { label: 'Retrieval before inference', tone: 'ok' },
     CACHE_GROWTH:  { label: 'Cache growth — learns frequent queries', tone: 'ok' },
     SHIELD_LEARN:  { label: 'SHIELD failure-learning (monitor-only)', tone: 'ok' },
+    SEMANTIC:      { label: 'Semantic memory (distilled facts)', tone: 'ok' },
   };
 
   // The live capability set IS the record's flags_list — iterate it, never a
