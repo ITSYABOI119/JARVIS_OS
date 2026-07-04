@@ -1,7 +1,8 @@
 # Phase 5 — Week 03 Status (Memory)
 
 **Period:** 2026-07-03 → 2026-07-04
-**Phase:** 5 (Memory) — Arc 2: **#5 SHIELD failure-learning (MONITOR-ONLY)** + **#4 semantic memory kickoff**
+**Phase:** 5 (Memory) — Arc 2 COMPLETE: **#5 SHIELD failure-learning** + **#4 semantic memory** (both
+mechanism-proven, gated-off) + **#7 folded** → **PHASE 5 SUBSTANTIALLY COMPLETE**
 **Branch:** `master` · **This week's HEAD:** the #5/M2 telemetry-v5 commit (after `bb0f902`)
 **Author:** JARVIS Development
 
@@ -86,6 +87,30 @@ default-0; the deployed image is unchanged by #5.
   restored (flag back to 0). facts=1 is honest: the store's tail is cache-served-dominated (#6
   froze inference), so usable INFER records are rare in the newest 1024.
 
+### #4/M2 — semantic_fact_count telemetry v6 + console (2026-07-04, gated)
+- Telemetry **v6** (222→224 B, CRC@220): `semantic_fact_count` + `TLM_F_SEMANTIC` 0x400; gated
+  `#if JARVIS_SEMANTIC` fill (OFF deploy emits 0 + flag clear); receiver/fixture/golden lockstep;
+  console System "Distilled facts" stat ("compacts recurring Q&A into durable facts — observable
+  patterns, not stated preferences") + "Semantic memory (distilled facts)" Capabilities row;
+  honesty gate bans "knows your preferences"; e2e value-pin (golden carries 1 — the honest yield).
+  Host green: C 50, receiver 112, honesty 58, logic 14, e2e 25. Box smoke (transient flag): v6
+  build OK, `[SEM] stored=1` = the live source value, err=0, flag restored.
+
+### #4/M4 close + #7 fold → Phase 5 wrapped (2026-07-04)
+- **#4 COMPLETE (M0/M1/M2/M4), gated-off in deploy.** The honest yield story (GOAL4 §8): #6
+  cache-growth serves the recurring inference (`EPI_ACT_CACHE` records, correctly excluded by the
+  usable-filter), so the deployed distill yield is ~1 fact — the two features compete for the
+  same recurring signal and #6 wins by design. #4 activates with Phase 6 real interaction; the
+  post-#6 filter nuance (promoted answers indistinguishable from canned echoes) is recorded for
+  Phase-6 refinement. M3 reboot-survival: satisfied by construction (episodic-clone persistence,
+  host-proven); a dedicated power-cycle gate adds no value while nothing consumes the store.
+- **#7 (consolidation) FOLDED into #4:** the boot-scan `sd_distill` IS the compact-core (D-b);
+  periodic cadence + prune deferred to Phase 6 / signal (the circular episodic store never fills).
+- **Phase 5 = SUBSTANTIALLY COMPLETE:** all 7 goals mechanism-proven; §3 done-when met (MVP arc +
+  #5); Arc 1 deployed default-ON; #4/#5 gated-off by honest-display decisions.
+- **`memory` tag PROPOSED as `v1.1.0-memory`** (monotonic above v1.0.0; the user names/creates
+  tags — command in the closeout report).
+
 ## Tests / verification
 - Host suites green locally: shield_learn 28, telemetry C 47, receiver 106, honesty 53, logic 14,
   e2e 24; golden-drift gate regenerated (2264-byte pcap). CI green after push.
@@ -93,13 +118,10 @@ default-0; the deployed image is unchanged by #5.
   (err=0) — that IS the correct display; the console row shows `—` until `TLM_F_SHIELD_LEARN` is live.
 
 ## Next
-1. **#4/M2** — the deliberate telemetry/console slice (`semantic_fact_count`, fixture-synced,
-   honest wording), then M3 reboot-survival / M4 flag decision.
-2. **#7 consolidation** — the remaining scope (prune + low-prio job scheduling; its compact-core
-   already landed in `sd_distill`) — plan doc first.
-3. Backlog (ROADMAP): B1 self-healing PB restart, B2 "it-acts" keystone (the real SEC-039 closure
-   path), B3 QEMU quickstart + CI generation smoke.
-4. User: the proposed `memory` tag (Arc 1) remains open — user names/creates tags.
+1. **User:** the proposed `v1.1.0-memory` tag — create it if the Phase-5 wrap is accepted
+   (`git tag -a v1.1.0-memory -m "..." && git push origin v1.1.0-memory`).
+2. Backlog (ROADMAP): B1 self-healing PB restart, B2 "it-acts" keystone (the real SEC-039 closure
+   path — also where #4/#5 activate), B3 QEMU quickstart + CI generation smoke; then Phase 6.
 
 ## Notes / risks
 - #5's honest ceiling stands: it learns and surfaces failure risk, never blocks, never lowers a score
