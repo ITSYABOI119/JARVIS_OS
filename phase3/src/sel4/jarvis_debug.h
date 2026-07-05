@@ -156,6 +156,19 @@
  * `[ACTION-PROBE]` serial proof lines. Default 0 -> compiles out. */
 #define JARVIS_ACTION_PROBE 0
 
+/* Phase 6 K/M2a-2 reuse-in-place respawn spike (box-only KVM measurement; SYSTEM_DESIGN
+ * §4.1/§4.2). When 1, Process B gains a muslc-init-safe `pb_restart_entry` (re-enters PAST
+ * musl's one-time init on a dedicated ABI-aligned restart stack, REUSING the warm model
+ * state — no re-alloc) and Process A runs an N-cycle spike after the ready handshake:
+ * suspend PB-main (quiescent) → WriteRegisters(rip=pb_restart_entry, fresh SP, fs_base
+ * preserved) → Resume → drain-then-poll the ready ACK → one inference → measure the 3
+ * zero-RESOURCE axes (PB musl-heap pointers flat + PA cslot-delta==0 + coherent gen).
+ * Independent of JARVIS_ACTIONS (which stays 0 — the deploy image is action-inert and this
+ * flag is OFF in it). THROWAWAY: reset after the measurement locks Strategy A. Default 0 ->
+ * pb_restart_entry + the spike driver + the restart stack compile out (deploy byte-identical;
+ * pb_serve_loop is extracted unconditionally but is a behavior-neutral refactor). */
+#define JARVIS_KM2A_SPIKE 0
+
 /* Serial [STATS] prints every 100 queries; NVMe LOG_IPC_STATS is written every
  * JARVIS_STATS_NVME_INTERVAL. Measured bare-metal rate is ~3k queries/day (single
  * core, scalar) -> interval=100 gives ~870 entries over 30 days, well under the

@@ -59,6 +59,30 @@ extern const unsigned char _binary_model_gguf_start[];
 extern const unsigned char _binary_model_gguf_end[];
 #endif
 
+#if JARVIS_KM2A_SPIKE
+/* ===== Phase 6 K/M2a-2 reuse-in-place respawn spike (SYSTEM_DESIGN §4.1/§4.2). Gated; the
+ * deployed image builds with JARVIS_KM2A_SPIKE=0 and JARVIS_ACTIONS stays 0 (action-inert).
+ * THROWAWAY — reset after the KVM measurement locks Strategy A. ===== */
+#ifndef JARVIS_MAX_WORKERS
+#define JARVIS_MAX_WORKERS 8
+#endif
+#define KM2A_RESTART_STACK_SIZE (256 * 1024)   /* >= PB-main guarded-stack budget; keep in sync with main_x86.c */
+/* External linkage so Process A can resolve its vaddr from PB's .symtab (resolve_pb_symbol). */
+_Alignas(64) unsigned char g_km2a_restart_stack[KM2A_RESTART_STACK_SIZE];
+/* Warm-context handles stashed after PB setup. Pointers into main()'s frame stay valid because
+ * the restart re-enters on g_km2a_restart_stack (fresh SP), preserving main()'s frame; §4.2 item
+ * G's true file-scope-static hoist lands in K/M2b when this code becomes permanent. */
+static shmem_ring_t  *g_km2a_req_ring, *g_km2a_resp_ring;
+static seL4_CPtr      g_km2a_req_notif, g_km2a_resp_notif;
+static qmodel_t      *g_km2a_qm;
+static llama_state_t *g_km2a_state;
+static tokenizer_t   *g_km2a_tok;
+static int            g_km2a_bos_id, g_km2a_model_loaded;
+static int            g_km2a_pool_n_threads = 1, g_km2a_pool_n_wake = 0;
+static seL4_CPtr      g_km2a_pool_done = 0, g_km2a_pool_wake[JARVIS_MAX_WORKERS];
+static uint32_t       g_km2a_restart_count = 0;
+#endif
+
 /* ---- Serial output (via seL4 debug syscall, same as rootserver) ---- */
 
 static void puts_serial(const char *s)
@@ -414,6 +438,137 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
 #endif
 }
 
+/* ---- IPC serve loop (extracted so both main() and the K/M2a-2 pb_restart_entry drive one
+ *      source; SYSTEM_DESIGN §4.2 item G). Behavior-neutral vs the prior inline loop —
+ *      generation is deterministic, so [INFER] stays byte-identical when JARVIS_KM2A_SPIKE=0. ---- */
+static void pb_serve_loop(shmem_ring_t *request_ring, shmem_ring_t *response_ring,
+                          seL4_CPtr req_notif, seL4_CPtr resp_notif,
+                          qmodel_t *qm, llama_state_t *state, tokenizer_t *tok,
+                          int bos_id, int model_loaded)
+{
+    uint32_t pb_query_count = 0;
+    while (1) {
+        pb_query_count++;
+        pb_log_num("[PB] Waiting for query #", pb_query_count, "");
+
+#if JARVIS_AVX2_PROBE
+        /* M0 AVX2-under-preemption gate: a burst of long YMM reductions each loop
+         * cycle, interleaved with the live PA<->PB workload (timer ticks + IPC
+         * force context switches; PA also dirties YMM via avx2_probe_touch). */
+        for (int _pi = 0; _pi < 8; _pi++)
+            avx2_probe_run("PB", ((uint64_t)pb_query_count << 8) ^ (uint64_t)_pi ^ 0x5A5Au);
+#endif
+
+        /* Wait for signal from Process A */
+        seL4_Wait(req_notif, NULL);
+
+        pb_log_num("[PB] Woke for query #", pb_query_count, "");
+
+        /* Process all pending requests */
+        uint8_t msg_type;
+        uint16_t msg_seq;
+        uint8_t payload[SHMEM_MAX_PAYLOAD];
+        uint16_t msg_len;
+
+        while (shmem_ipc_recv(request_ring, &msg_type, &msg_seq, payload, &msg_len) == 0) {
+            switch (msg_type) {
+            case MSG_QUERY:
+                if (!model_loaded) {
+                    /* No model — send empty response */
+                    shmem_ipc_send(response_ring, MSG_RESPONSE, msg_seq, "", 0);
+                    seL4_Signal(resp_notif);
+                    break;
+                }
+                handle_query(response_ring, resp_notif,
+                             msg_seq, (const char *)payload, msg_len,
+                             qm, state, tok, bos_id);
+                break;
+
+            case MSG_HEARTBEAT:
+                shmem_ipc_send(response_ring, MSG_HEARTBEAT_ACK, msg_seq, NULL, 0);
+                seL4_Signal(resp_notif);
+                break;
+
+            case MSG_SHIELD_CHECK: {
+                /* For now, just echo back ALLOW — full model-assisted SHIELD is future work */
+                uint8_t result = 0; /* SHIELD_ALLOW */
+                shmem_ipc_send(response_ring, MSG_SHIELD_RESULT, msg_seq, &result, 1);
+                seL4_Signal(resp_notif);
+                break;
+            }
+
+            default:
+                /* Unknown message type — ignore */
+                break;
+            }
+        }
+    }
+}
+
+#if JARVIS_KM2A_SPIKE
+/* K/M2a-2 (SYSTEM_DESIGN §4.2): PA suspends PB-main at a quiescent point (parked on
+ * seL4_Wait(req_notif)) and WriteRegisters it HERE with a fresh SP = g_km2a_restart_stack top
+ * (rsp ≡ 8 mod 16), fs_base preserved, DF clear, then Resumes. This re-enters PAST musl's
+ * one-time per-process init (the naive spawn_process_v re-call aborts there, §4.1) and REUSES the
+ * warm qm/state/tok (no re-alloc — the ~40 MiB KV stays put). External linkage + used/noinline so
+ * it survives -O2/--gc-sections and resolve_pb_symbol finds it. */
+static void km2a_putdec(uint32_t v) {
+    char d[12]; int di = 0;
+    if (v == 0) d[di++] = '0'; else while (v) { d[di++] = (char)('0' + v % 10); v /= 10; }
+    char out[13]; int oi = 0;
+    while (di) out[oi++] = d[--di];
+    out[oi] = '\0';
+    puts_serial(out);
+}
+static void km2a_puthex64(const char *label, uint64_t v) {
+    static const char hx[] = "0123456789abcdef";
+    char b[40]; int p = 0;
+    while (*label) b[p++] = *label++;
+    b[p++] = '0'; b[p++] = 'x';
+    for (int s = 60; s >= 0; s -= 4) b[p++] = hx[(v >> s) & 0xF];
+    b[p++] = '\n'; b[p] = '\0';
+    puts_serial(b);
+}
+static uint32_t km2a_stack_highwater(void) {
+    uint32_t i = 0;
+    while (i < KM2A_RESTART_STACK_SIZE && g_km2a_restart_stack[i] == 0xAA) i++;
+    return KM2A_RESTART_STACK_SIZE - i;   /* bytes used (the stack grows down from the top) */
+}
+__attribute__((used, noinline)) _Noreturn void pb_restart_entry(void);
+void pb_restart_entry(void)
+{
+    g_km2a_restart_count++;
+#ifdef JARVIS_SEL4_SMP
+    /* §4.2 F: drain the pool wake/done pending-bits via PB's own caps (PA cannot reach these
+     * PB-CSpace caps), then reset the pool struct fields (jarvis_sel4_pool_init zeros
+     * gen/next_idx/active — the parked workers are reused, not recreated: §4.2 B). */
+    for (int i = 1; i < g_km2a_pool_n_threads && i < JARVIS_MAX_WORKERS; i++)
+        if (g_km2a_pool_wake[i]) { seL4_Word bw; seL4_Poll(g_km2a_pool_wake[i], &bw); }
+    if (g_km2a_pool_done) { seL4_Word bd; seL4_Poll(g_km2a_pool_done, &bd); }
+    jarvis_sel4_pool_init(g_km2a_pool_n_threads, g_km2a_pool_done,
+                          g_km2a_pool_wake + 1, g_km2a_pool_n_wake);
+#endif
+    /* PB-heap axis (§4.2 STEP-3): these warm-state heap pointers must be UNCHANGED vs the armed
+     * baseline (any re-alloc moves them); the restart-stack high-water must keep headroom. */
+    puts_serial("[RESTART-PB] cycle="); km2a_putdec(g_km2a_restart_count); puts_serial("\n");
+    km2a_puthex64("[RESTART-PB]   key_cache=",   (uint64_t)(uintptr_t)g_km2a_state->key_cache);
+    km2a_puthex64("[RESTART-PB]   value_cache=", (uint64_t)(uintptr_t)g_km2a_state->value_cache);
+    km2a_puthex64("[RESTART-PB]   logits=",      (uint64_t)(uintptr_t)g_km2a_state->logits);
+    km2a_puthex64("[RESTART-PB]   layers=",      (uint64_t)(uintptr_t)g_km2a_qm->layers);
+    puts_serial("[RESTART-PB]   stack_hw="); km2a_putdec(km2a_stack_highwater());
+    puts_serial(" of "); km2a_putdec(KM2A_RESTART_STACK_SIZE); puts_serial("\n");
+    if (g_km2a_restart_stack[0] != 0xAA || g_km2a_restart_stack[63] != 0xAA)
+        puts_serial("[RESTART-PB]   *** STACK CANARY CORRUPT (overflow) ***\n");
+    /* re-signal ready — PA drained resp_notif then polls the resp ring for this ACK (§6 step 9) */
+    shmem_ipc_send(g_km2a_resp_ring, MSG_HEARTBEAT_ACK, 0, NULL, 0);
+    seL4_Signal(g_km2a_resp_notif);
+    /* re-enter the serve loop, reusing the warm state (no re-alloc) */
+    pb_serve_loop(g_km2a_req_ring, g_km2a_resp_ring, g_km2a_req_notif, g_km2a_resp_notif,
+                  g_km2a_qm, g_km2a_state, g_km2a_tok, g_km2a_bos_id, g_km2a_model_loaded);
+    for (;;) seL4_Yield();   /* _Noreturn trap tail — pb_serve_loop never returns */
+}
+#endif
+
 /* ---- Main ---- */
 
 int main(int argc, char **argv)
@@ -680,6 +835,15 @@ int main(int argc, char **argv)
         for (int i = 7; i < argc && n_wake < (JARVIS_MAX_WORKERS - 1); i++)
             wake[n_wake++] = (seL4_CPtr)atol(argv[i]);
         jarvis_sel4_pool_init(n_threads, done, wake, n_wake);
+#if JARVIS_KM2A_SPIKE
+        /* K/M2a-2: stash the pool params so pb_restart_entry can re-init the pool on respawn.
+         * Store wakes at [1..n_wake] to mirror jarvis_sel4_pool_init's own +1 indexing. */
+        g_km2a_pool_n_threads = n_threads;
+        g_km2a_pool_done      = done;
+        g_km2a_pool_n_wake    = n_wake;
+        for (int wi = 0; wi < n_wake && (wi + 1) < JARVIS_MAX_WORKERS; wi++)
+            g_km2a_pool_wake[wi + 1] = wake[wi];
+#endif
         puts_serial("[PB] M3 pool init: n_threads="); put_dec((uint32_t)n_threads);
         puts_serial(" workers="); put_dec((uint32_t)n_wake); puts_serial("\n");
     }
@@ -705,64 +869,27 @@ int main(int argc, char **argv)
         pb_log_num("[SCTX] boot_id=", scs.boot_id, "");
     }
 
-    /* ---- Main IPC loop ---- */
-    uint32_t pb_query_count = 0;
-    while (1) {
-        pb_query_count++;
-        pb_log_num("[PB] Waiting for query #", pb_query_count, "");
-
-#if JARVIS_AVX2_PROBE
-        /* M0 AVX2-under-preemption gate: a burst of long YMM reductions each loop
-         * cycle, interleaved with the live PA<->PB workload (timer ticks + IPC
-         * force context switches; PA also dirties YMM via avx2_probe_touch). */
-        for (int _pi = 0; _pi < 8; _pi++)
-            avx2_probe_run("PB", ((uint64_t)pb_query_count << 8) ^ (uint64_t)_pi ^ 0x5A5Au);
+    /* ---- Main IPC loop (extracted into pb_serve_loop; §4.2 item G) ---- */
+#if JARVIS_KM2A_SPIKE
+    /* K/M2a-2: stash the warm context for pb_restart_entry + arm the restart stack (0xAA fill for
+     * the high-water scan). The &qm/&state/&tok pointers into this frame stay valid because the
+     * restart re-enters on g_km2a_restart_stack (fresh SP), preserving main()'s frame. */
+    g_km2a_req_ring     = request_ring;
+    g_km2a_resp_ring    = response_ring;
+    g_km2a_req_notif    = req_notif;
+    g_km2a_resp_notif   = resp_notif;
+    g_km2a_qm           = &qm;
+    g_km2a_state        = &state;
+    g_km2a_tok          = &tok;
+    g_km2a_bos_id       = (int)vocab.bos_id;
+    g_km2a_model_loaded = model_loaded;
+    memset(g_km2a_restart_stack, 0xAA, KM2A_RESTART_STACK_SIZE);
+    puts_serial("[RESTART-PB] armed — baseline pointers:\n");
+    km2a_puthex64("[RESTART-PB]   key_cache=", (uint64_t)(uintptr_t)state.key_cache);
+    km2a_puthex64("[RESTART-PB]   layers=",    (uint64_t)(uintptr_t)qm.layers);
 #endif
-
-        /* Wait for signal from Process A */
-        seL4_Wait(req_notif, NULL);
-
-        pb_log_num("[PB] Woke for query #", pb_query_count, "");
-
-        /* Process all pending requests */
-        uint8_t msg_type;
-        uint16_t msg_seq;
-        uint8_t payload[SHMEM_MAX_PAYLOAD];
-        uint16_t msg_len;
-
-        while (shmem_ipc_recv(request_ring, &msg_type, &msg_seq, payload, &msg_len) == 0) {
-            switch (msg_type) {
-            case MSG_QUERY:
-                if (!model_loaded) {
-                    /* No model — send empty response */
-                    shmem_ipc_send(response_ring, MSG_RESPONSE, msg_seq, "", 0);
-                    seL4_Signal(resp_notif);
-                    break;
-                }
-                handle_query(response_ring, resp_notif,
-                             msg_seq, (const char *)payload, msg_len,
-                             &qm, &state, &tok, vocab.bos_id);
-                break;
-
-            case MSG_HEARTBEAT:
-                shmem_ipc_send(response_ring, MSG_HEARTBEAT_ACK, msg_seq, NULL, 0);
-                seL4_Signal(resp_notif);
-                break;
-
-            case MSG_SHIELD_CHECK: {
-                /* For now, just echo back ALLOW — full model-assisted SHIELD is future work */
-                uint8_t result = 0; /* SHIELD_ALLOW */
-                shmem_ipc_send(response_ring, MSG_SHIELD_RESULT, msg_seq, &result, 1);
-                seL4_Signal(resp_notif);
-                break;
-            }
-
-            default:
-                /* Unknown message type — ignore */
-                break;
-            }
-        }
-    }
+    pb_serve_loop(request_ring, response_ring, req_notif, resp_notif,
+                  &qm, &state, &tok, (int)vocab.bos_id, model_loaded);
 
     /* Cleanup (unreachable in normal operation) */
     llama_free_state(&state);
