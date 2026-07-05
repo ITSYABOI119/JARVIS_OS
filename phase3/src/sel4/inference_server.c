@@ -81,7 +81,20 @@ static int            g_km2a_bos_id, g_km2a_model_loaded;
 static int            g_km2a_pool_n_threads = 1, g_km2a_pool_n_wake = 0;
 static seL4_CPtr      g_km2a_pool_done = 0, g_km2a_pool_wake[JARVIS_MAX_WORKERS];
 static uint32_t       g_km2a_restart_count = 0;
+static volatile int   g_km2a_please_restart = 0;   /* E: PA-requested cooperative restart at the loop top */
 #endif
+
+/* G (Phase 6 K/M2b-2): the warm inference state hoisted to FILE-SCOPE STATICS (was main()
+ * locals). Deletes the pointer-into-frame fragility — pb_restart_entry / the K/M2a-2 stash now
+ * reference fixed .bss objects, never a main()-frame pointer. UNGATED + behavior-neutral: the
+ * structs move stack->.bss (the ~40 MiB KV / fwd_scratch live behind pointers), generation is
+ * deterministic so OFF [INFER] is byte-identical. main() aliases the historical local names via
+ * #define (scoped to main() only, #undef'd at its end) so handle_query's `&qm->config` PARAM
+ * sites (before main) are untouched. */
+static qmodel_t      g_pbm_qm;
+static gguf_vocab_t  g_pbm_vocab;
+static tokenizer_t   g_pbm_tok;
+static llama_state_t g_pbm_state;
 
 /* ---- Serial output (via seL4 debug syscall, same as rootserver) ---- */
 
@@ -232,6 +245,24 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
         while (*hp && hi < 270) hq[hi++] = *hp++;
         hq[hi++] = '"'; hq[hi] = '\0';
         pb_log(hq);
+    }
+#endif
+
+#if JARVIS_KM2A_SPIKE
+    /* K/M2b-2 probe markers (gated; the deployed workload never sends them). */
+    if (qlen == 7 && memcmp(query_buf, "TOKSPIN", 7) == 0) {
+        /* mode-2 (mid-TOKENIZE): linger AT the tokenize phase so PA can async-Suspend PB here — the
+         * malloc window K/M2b-1's mid-generation restart couldn't reach. With the alloc-free
+         * tokenizer (E), this phase does NO malloc, so a restart fired here has no arena to tear. */
+        uint64_t _t0 = m1_rdtsc();
+        while (m1_rdtsc() - _t0 < 2000000000ULL) __asm__ volatile("pause");   /* ~540 ms @ 3.7 GHz */
+    } else if (qlen == 4 && memcmp(query_buf, "COOP", 4) == 0) {
+        /* E cooperative flag: request a self-driven restart at the next pb_serve_loop top (a
+         * quiescent point) instead of PA async-Suspending. Ack + return; the loop-top check fires. */
+        g_km2a_please_restart = 1;
+        shmem_ipc_send(response_ring, MSG_RESPONSE, seq, "", 0);
+        seL4_Signal(resp_notif);
+        return;
     }
 #endif
 
@@ -451,6 +482,26 @@ static void pb_serve_loop(shmem_ring_t *request_ring, shmem_ring_t *response_rin
         pb_query_count++;
         pb_log_num("[PB] Waiting for query #", pb_query_count, "");
 
+#if JARVIS_KM2A_SPIKE
+        /* E cooperative restart: at this quiescent loop top (workers parked, no malloc in flight),
+         * self-drive the reset PA requested via the flag — drain the pool wake/done pending-bits,
+         * re-init the pool, re-signal ready — instead of PA async-Suspend-ing a busy PB. */
+        if (g_km2a_please_restart) {
+            g_km2a_please_restart = 0;
+            puts_serial("[RESTART-COOP] self-restart at loop top\n");
+#ifdef JARVIS_SEL4_SMP
+            for (int i = 1; i < g_km2a_pool_n_threads && i < JARVIS_MAX_WORKERS; i++)
+                if (g_km2a_pool_wake[i]) { seL4_Word bw; seL4_Poll(g_km2a_pool_wake[i], &bw); }
+            if (g_km2a_pool_done) { seL4_Word bd; seL4_Poll(g_km2a_pool_done, &bd); }
+            jarvis_sel4_pool_init(g_km2a_pool_n_threads, g_km2a_pool_done,
+                                  g_km2a_pool_wake + 1, g_km2a_pool_n_wake);
+#endif
+            shmem_ipc_send(response_ring, MSG_HEARTBEAT_ACK, 0, NULL, 0);
+            seL4_Signal(resp_notif);
+            continue;
+        }
+#endif
+
 #if JARVIS_AVX2_PROBE
         /* M0 AVX2-under-preemption gate: a burst of long YMM reductions each loop
          * cycle, interleaved with the live PA<->PB workload (timer ticks + IPC
@@ -573,6 +624,12 @@ void pb_restart_entry(void)
 
 int main(int argc, char **argv)
 {
+/* G: alias the historical local names to the file-scope statics for main()'s body ONLY.
+ * #undef'd before return. Token-based, so sctx_system_state_t / tokenizer_free are untouched. */
+#define qm    g_pbm_qm
+#define vocab g_pbm_vocab
+#define tok   g_pbm_tok
+#define state g_pbm_state
     puts_serial("[Process B] Inference server started\n");
 
     if (argc < 3) {
@@ -664,7 +721,6 @@ int main(int argc, char **argv)
         goto idle;
     }
 
-    qmodel_t qm;
     err = qmodel_load(&qm, &gguf_ctx, model_data);
     if (err) {
         puts_serial("[Process B] Model load failed\n");
@@ -676,7 +732,6 @@ int main(int argc, char **argv)
     put_dec((uint32_t)qm.config.vocab_size); puts_serial(" vocab\n");
 
     /* Extract tokenizer */
-    gguf_vocab_t vocab;
     err = gguf_vocab_extract(model_data, model_data_size, &vocab);
     if (err) {
         puts_serial("[Process B] Vocab extraction failed\n");
@@ -685,7 +740,6 @@ int main(int argc, char **argv)
         goto idle;
     }
 
-    tokenizer_t tok;
     err = gguf_vocab_init_tokenizer(&vocab, &tok);
     if (err) {
         puts_serial("[Process B] Tokenizer init failed\n");
@@ -698,7 +752,6 @@ int main(int argc, char **argv)
     put_dec((uint32_t)vocab.vocab_size); puts_serial(" tokens\n");
 
     /* Allocate inference state */
-    llama_state_t state;
     err = llama_alloc_state(&state, &qm.config);
     if (err) {
         puts_serial("[Process B] State alloc failed (OOM?)\n");
@@ -916,5 +969,9 @@ idle:
         seL4_Yield();
     }
 
+#undef qm
+#undef vocab
+#undef tok
+#undef state
     return 0;
 }

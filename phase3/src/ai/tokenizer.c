@@ -22,6 +22,17 @@ static int next_pow2(int n)
     return p;
 }
 
+typedef struct {
+    int prev, next;     /* Linked list indices (-1 = none) */
+    int start, len;     /* Substring of input text */
+    int token_id;
+} bpe_sym_t;
+
+/* E (Phase 6 K/M2b-2): max ORIGINAL text length tokenizer_encode serves from the pre-allocated
+ * scratch (no per-query malloc). Deployed prompts are bounded (query <= 240 B, preamble <= 512 B);
+ * anything longer falls back to per-query malloc (still correct). */
+#define TOK_ENC_MAX_TEXT 2048
+
 int tokenizer_init(tokenizer_t *t, const char **tokens, const float *scores,
                    int vocab_size, int bos_id, int eos_id)
 {
@@ -33,6 +44,9 @@ int tokenizer_init(tokenizer_t *t, const char **tokens, const float *scores,
     t->ht_table = NULL;
     t->ht_capacity = 0;
     t->add_space_prefix = 1;  /* default: prepend ▁ (overridden by GGUF flag) */
+    t->enc_sp_scratch = NULL;
+    t->enc_syms_scratch = NULL;
+    t->enc_scratch_cap = 0;
 
     t->tokens = (char **)malloc(sizeof(char *) * (size_t)vocab_size);
     t->scores = (float *)malloc(sizeof(float) * (size_t)vocab_size);
@@ -60,6 +74,15 @@ int tokenizer_init(tokenizer_t *t, const char **tokens, const float *scores,
         t->ht_table[h] = i;
     }
 
+    /* E: pre-allocate the per-encode scratch ONCE (graceful — if either alloc fails, cap stays
+     * 0 and encode falls back to per-query malloc). syms max_syms <= substituted length <= cap*3+4. */
+    {
+        size_t sp_bytes = (size_t)TOK_ENC_MAX_TEXT * 3 + 4;
+        t->enc_sp_scratch   = (char *)malloc(sp_bytes);
+        t->enc_syms_scratch = malloc(sizeof(bpe_sym_t) * sp_bytes);
+        if (t->enc_sp_scratch && t->enc_syms_scratch) t->enc_scratch_cap = TOK_ENC_MAX_TEXT;
+    }
+
     return 0;
 }
 
@@ -83,12 +106,6 @@ int tokenizer_find(const tokenizer_t *t, const char *token_str)
     return -1;
 }
 
-typedef struct {
-    int prev, next;     /* Linked list indices (-1 = none) */
-    int start, len;     /* Substring of input text */
-    int token_id;
-} bpe_sym_t;
-
 int tokenizer_encode(const tokenizer_t *t, const char *text,
                      int *out_ids, int max_tokens)
 {
@@ -107,6 +124,8 @@ int tokenizer_encode(const tokenizer_t *t, const char *text,
      *
      * If neither marker is in the vocab, skip substitution entirely — the
      * caller's text is tokenized character-by-character as-is. */
+    /* E: serve from the pre-allocated scratch when the text fits (no per-query malloc/free). */
+    int use_scratch = (text_len <= t->enc_scratch_cap && t->enc_sp_scratch && t->enc_syms_scratch);
     char *sp_text = NULL;
     const char *sp_marker = NULL;
     int sp_len = 0;
@@ -123,7 +142,7 @@ int tokenizer_encode(const tokenizer_t *t, const char *text,
         sp_prepend = 0;
     }
     if (sp_marker) {
-        sp_text = (char *)malloc((size_t)text_len * 3 + 4);
+        sp_text = use_scratch ? t->enc_sp_scratch : (char *)malloc((size_t)text_len * 3 + 4);
         if (!sp_text) return -1;
         int wp = 0;
         if (sp_prepend) {
@@ -146,8 +165,9 @@ int tokenizer_encode(const tokenizer_t *t, const char *text,
     /* Initialize: one symbol per UTF-8 character (not per byte).
      * For ASCII: 1 byte. For ▁ (0xE2 0x96 0x81): 3 bytes. */
     int max_syms = text_len;
-    bpe_sym_t *syms = (bpe_sym_t *)malloc(sizeof(bpe_sym_t) * (size_t)max_syms);
-    if (!syms) { free(sp_text); return -1; }
+    bpe_sym_t *syms = use_scratch ? (bpe_sym_t *)t->enc_syms_scratch
+                                  : (bpe_sym_t *)malloc(sizeof(bpe_sym_t) * (size_t)max_syms);
+    if (!syms) { if (!use_scratch) free(sp_text); return -1; }
 
     int n_syms = 0;
     {
@@ -225,8 +245,7 @@ int tokenizer_encode(const tokenizer_t *t, const char *text,
         out_ids[out_count++] = syms[i].token_id;
     }
 
-    free(syms);
-    free(sp_text);
+    if (!use_scratch) { free(syms); free(sp_text); }
     return out_count;
 }
 
@@ -343,5 +362,10 @@ void tokenizer_free(tokenizer_t *t)
     free(t->ht_table);
     t->ht_table = NULL;
     t->ht_capacity = 0;
+    free(t->enc_sp_scratch);
+    t->enc_sp_scratch = NULL;
+    free(t->enc_syms_scratch);
+    t->enc_syms_scratch = NULL;
+    t->enc_scratch_cap = 0;
     t->vocab_size = 0;
 }

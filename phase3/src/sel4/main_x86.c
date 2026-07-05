@@ -2861,6 +2861,7 @@ static void *main_continued(void *arg UNUSED)
             seL4_CPtr pb_tcb = inference_process.thread.tcb.cptr;
             const int N = 8;
             const uint64_t KM2B_MID_DELAY_CYC = 1500000000ULL;   /* ~400 ms @ 3.7 GHz — mid-generation */
+            const uint64_t KM2B_TOK_DELAY_CYC = 500000000ULL;    /* ~135 ms — PB is inside the ~540 ms TOKSPIN */
             const char *sq_text = "The seL4 microkernel is";
             uint16_t sseq = 40000;
             seL4_Word nregs = sizeof(seL4_UserContext) / sizeof(seL4_Word);
@@ -2872,18 +2873,22 @@ static void *main_continued(void *arg UNUSED)
             /* mode 0 = QUIESCENT (PB-main only, workers stay parked — the K/M2a-2 case, re-proven
              * on NN=6). mode 1 = MID-DISPATCH (§4.2 B/I-b): fire the restart WHILE PB is generating
              * (workers active mid-qmatmul) — reset ALL workers via km2b_reset_workers, then PB-main. */
-            for (int mode = 0; mode < 2; mode++) {
-                const char *tag = mode ? "[RESTART-MD]" : "[RESTART-Q]";
-                puts_serial(mode ? "[SPIKE] === PHASE B: MID-DISPATCH (workers reset) ===\n"
-                                 : "[SPIKE] === PHASE A: QUIESCENT (workers parked) ===\n");
+            for (int mode = 0; mode < 3; mode++) {
+                const char *tag = (mode == 2) ? "[RESTART-TK]" : mode ? "[RESTART-MD]" : "[RESTART-Q]";
+                puts_serial(mode == 2 ? "[SPIKE] === PHASE C: MID-TOKENIZE (E alloc-free window) ===\n"
+                          : mode      ? "[SPIKE] === PHASE B: MID-DISPATCH (workers reset) ===\n"
+                                      : "[SPIKE] === PHASE A: QUIESCENT (workers parked) ===\n");
                 for (int cyc = 1; cyc <= N; cyc++) {
                     int early = 0, nw = 0;
-                    if (mode == 1) {
-                        /* kick off an inference and let PB run mid-generation (workers active) */
-                        shmem_ipc_send(shared_request_ring, MSG_QUERY, sseq++, sq_text, (uint16_t)strlen(sq_text));
+                    if (mode >= 1) {
+                        /* mode 1: real query -> PB mid-generation (workers active).
+                         * mode 2: "TOKSPIN" marker -> PB lingers in the tokenize phase; interrupt sooner. */
+                        const char *pq = (mode == 2) ? "TOKSPIN" : sq_text;
+                        uint64_t delay = (mode == 2) ? KM2B_TOK_DELAY_CYC : KM2B_MID_DELAY_CYC;
+                        shmem_ipc_send(shared_request_ring, MSG_QUERY, sseq++, pq, (uint16_t)strlen(pq));
                         seL4_Signal(req_notif);
                         uint64_t t0 = jarvis_rdtsc();
-                        while (jarvis_rdtsc() - t0 < KM2B_MID_DELAY_CYC) {
+                        while (jarvis_rdtsc() - t0 < delay) {
                             uint8_t t; uint16_t s, l; uint8_t pay[SHMEM_MAX_PAYLOAD];
                             if (shmem_ipc_recv(shared_response_ring, &t, &s, pay, &l) == 0 &&
                                 t == MSG_RESPONSE) { early = 1; break; }  /* PB finished before we could interrupt */
@@ -2947,14 +2952,32 @@ static void *main_continued(void *arg UNUSED)
                     puts_serial(" dcslot="); if (dcslot < 0) puts_serial("NEG"); else put_dec((uint32_t)dcslot);
                     puts_serial(" fs_base="); puts_serial(fsb ? "kept" : "ZERO");
                     puts_serial(" workers_reset="); put_dec((uint32_t)nw);
-                    if (mode == 1) { puts_serial(" mid="); puts_serial(early ? "no(early-finish)" : "yes"); }
+                    if (mode >= 1) { puts_serial(" mid="); puts_serial(early ? "no(early-finish)" : "yes"); }
                     puts_serial(" rejoin="); puts_serial(got ? "OK" : "DEADLOCK/MISS");
                     puts_serial(" \""); if (got) puts_serial(rbuf); puts_serial("\"\n");
                     if (dcslot != 0 || !got) locked = 0;
                 }
             }
+            /* E cooperative-flag smoke: PA requests a self-driven restart (marker "COOP") instead of an
+             * async Suspend; PB self-restarts at the pb_serve_loop top; verify it serves coherently again. */
+            {
+                puts_serial("[SPIKE] === COOP: cooperative self-restart (E) ===\n");
+                for (int cyc = 1; cyc <= 4; cyc++) {
+                    shmem_ipc_send(shared_request_ring, MSG_QUERY, sseq++, "COOP", 4);
+                    seL4_Signal(req_notif);
+                    (void)wait_for_response(shared_response_ring, MSG_RESPONSE);            /* PB's empty ack */
+                    int ackrc = wait_for_response(shared_response_ring, MSG_HEARTBEAT_ACK); /* self-restart ready */
+                    shmem_ipc_send(shared_request_ring, MSG_QUERY, sseq++, sq_text, (uint16_t)strlen(sq_text));
+                    seL4_Signal(req_notif);
+                    int serverc = wait_for_response(shared_response_ring, MSG_RESPONSE);
+                    puts_serial("[RESTART-COOP] cycle="); put_dec((uint32_t)cyc);
+                    puts_serial(" self_restart="); puts_serial(ackrc == 0 ? "OK" : "MISS");
+                    puts_serial(" serve="); puts_serial(serverc == 0 ? "OK" : "MISS"); puts_serial("\n");
+                    if (ackrc != 0 || serverc != 0) locked = 0;
+                }
+            }
             puts_serial(locked
-                ? "[SPIKE] RESULT: BOTH modes PASS — dcslot=0 + workers rejoin + coherent every cycle (confirm [RESTART-PB] heap pointers held)\n"
+                ? "[SPIKE] RESULT: ALL 3 modes (Q/MD/TK) + COOP PASS — dcslot=0 + workers rejoin + coherent every cycle (confirm [RESTART-PB] heap held)\n"
                 : "[SPIKE] RESULT: NOT locked — see the failing cycle above\n");
         }
         puts_serial("[SPIKE] complete — continuing to normal workload\n");
