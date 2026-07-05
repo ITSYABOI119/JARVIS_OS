@@ -1515,6 +1515,39 @@ static int wait_for_response(shmem_ring_t *ring, uint8_t expected_type)
     return -1;
 }
 
+#if JARVIS_KM2A_SPIKE
+/* K/M2b-1 (SYSTEM_DESIGN §4.2 B): reset EVERY M3 worker via the full launch-triple
+ * (ReadRegisters -> mutate rip/rdi/rsi/rdx/rsp, preserve fs_base, clear DF -> WriteRegisters).
+ * Used for a MID-DISPATCH restart: PB-main is being re-entered, so the workers' in-flight
+ * jarvis_parallel_for dispatch is orphaned — each worker is reconstructed to re-enter
+ * jarvis_sel4_worker_entry cleanly (re-park on its wake, re-run seL4_SetIPCBuffer). rdi = the
+ * PB-CSpace wake cptr, rsi = index, rdx = the ipc-buffer vaddr, rsp = the ABI-aligned launch SP
+ * (sel4utils' initial_stack_pointer) — the exact registers sel4utils_start_thread set at launch
+ * (main:1425-1427). Returns the count reset. */
+static int km2b_reset_workers(void)
+{
+    seL4_Word nregs = sizeof(seL4_UserContext) / sizeof(seL4_Word);
+    int reset = 0;
+    for (int i = 1; i <= g_pb_workers_started && i < JARVIS_MAX_WORKERS; i++) {
+        seL4_CPtr wtcb = g_pb_workers[i].tcb.cptr;
+        if (!wtcb) continue;
+        seL4_TCB_Suspend(wtcb);
+        seL4_UserContext wr;
+        if (seL4_TCB_ReadRegisters(wtcb, 0, 0, nregs, &wr) != seL4_NoError) continue;
+        wr.rip = (seL4_Word)g_pb_worker_entry;
+        wr.rdi = (seL4_Word)g_pb_remote_wake[i];                                 /* arg0 = wake cptr (PB CSpace) */
+        wr.rsi = (seL4_Word)i;                                                   /* arg1 = worker index */
+        wr.rdx = (seL4_Word)g_pb_workers[i].ipc_buffer_addr;                     /* arg2 = ipc-buffer vaddr */
+        wr.rsp = (seL4_Word)(uintptr_t)g_pb_workers[i].initial_stack_pointer;    /* ABI-aligned launch SP */
+        wr.rflags &= ~((seL4_Word)1 << 10);                                      /* clear DF */
+        if (seL4_TCB_WriteRegisters(wtcb, 0, 0, nregs, &wr) != seL4_NoError) continue;
+        seL4_TCB_Resume(wtcb);
+        reset++;
+    }
+    return reset;
+}
+#endif
+
 /* ---- Step 2c-1: status-panel helpers (fixed-position fields; the FB is Uncacheable,
  *      so updates are in-place — clear a line's strip, redraw — never a full-frame scroll).
  *      FBP_ and FBP_Y_ palette + field geometry now come from jarvis_ui_tokens.h (2c-2b). */
@@ -2817,7 +2850,7 @@ static void *main_continued(void *arg UNUSED)
      * any vka_alloc_* in the reset would consume a cslot for its cap), coherent gen, and PB's
      * own [RESTART-PB] heap-pointer axis. Workers stay PARKED (§4.2 B). JARVIS_ACTIONS unaffected. */
     {
-        puts_serial("[SPIKE] K/M2a-2 reuse-in-place respawn spike START\n");
+        puts_serial("[SPIKE] K/M2b-1 multi-worker respawn spike START\n");
         uintptr_t pb_entry = resolve_pb_symbol(g_pb_elf, g_pb_elf_size, "pb_restart_entry");
         uintptr_t pb_stk   = resolve_pb_symbol(g_pb_elf, g_pb_elf_size, "g_km2a_restart_stack");
         const uintptr_t KM2A_RESTART_STACK_SIZE = 256UL * 1024UL;   /* keep in sync with inference_server.c */
@@ -2826,76 +2859,102 @@ static void *main_continued(void *arg UNUSED)
         } else {
             uintptr_t sp = ((pb_stk + KM2A_RESTART_STACK_SIZE) & ~(uintptr_t)0xF) - 8;  /* rsp≡8 mod16 (§4.2 C) */
             seL4_CPtr pb_tcb = inference_process.thread.tcb.cptr;
-            const int N = 16;
+            const int N = 8;
+            const uint64_t KM2B_MID_DELAY_CYC = 1500000000ULL;   /* ~400 ms @ 3.7 GHz — mid-generation */
             const char *sq_text = "The seL4 microkernel is";
             uint16_t sseq = 40000;
+            seL4_Word nregs = sizeof(seL4_UserContext) / sizeof(seL4_Word);
             int locked = 1;
             puts_serial("[SPIKE] pb_entry="); put_dec((uint32_t)pb_entry);
-            puts_serial(" stk="); put_dec((uint32_t)pb_stk);
-            puts_serial(" sp="); put_dec((uint32_t)sp); puts_serial("\n");
-            for (int cyc = 1; cyc <= N; cyc++) {
-                seL4_TCB_Suspend(pb_tcb);
-                seL4_CPtr probe_a = 0; (void)vka_cspace_alloc(&vka, &probe_a);
-                /* §6 steps 3/4/6: reset both rings (allocation-free), drain PA's resp_notif, clear latch */
-                shmem_ipc_init(shared_request_ring);
-                shmem_ipc_init(shared_response_ring);
-                { seL4_Word bdg; seL4_Poll(resp_notif, &bdg); }
-                g_infer_active = 0; g_infer_t0 = 0;
-                /* §4.2 A: read the live context, mutate ONLY rip/rsp/rflags, preserve fs_base/gs_base */
-                seL4_UserContext regs;
-                seL4_Word nregs = sizeof(regs) / sizeof(seL4_Word);
-                if (seL4_TCB_ReadRegisters(pb_tcb, 0, 0, nregs, &regs) != seL4_NoError) {
-                    puts_serial("[SPIKE] ReadRegisters FAILED\n"); locked = 0; break;
-                }
-                uint64_t fsb = (uint64_t)regs.fs_base;
-                regs.rip = (seL4_Word)pb_entry;
-                regs.rsp = (seL4_Word)sp;
-                regs.rflags &= ~((seL4_Word)1 << 10);          /* clear DF */
-                if (seL4_TCB_WriteRegisters(pb_tcb, 0, 0, nregs, &regs) != seL4_NoError) {
-                    puts_serial("[SPIKE] WriteRegisters FAILED\n"); locked = 0; break;
-                }
-                seL4_TCB_Resume(pb_tcb);                        /* one Resume — Suspend is idempotent */
-                /* §6 step 9: drain-then-poll the ready ACK (never a bare seL4_Wait on resp_notif) */
-                if (wait_for_response(shared_response_ring, MSG_HEARTBEAT_ACK) != 0) {
-                    puts_serial("[SPIKE] cycle "); put_dec((uint32_t)cyc);
-                    puts_serial(": PB NEVER RE-READY (timeout)\n"); locked = 0; break;
-                }
-                seL4_CPtr probe_b = 0; (void)vka_cspace_alloc(&vka, &probe_b);
-                /* The allocman cspace hands out DESCENDING cslots, so two consecutive allocs give
-                 * probe_b = probe_a - 1. Use |Δ|-1 so "zero allocs between the probes" reads 0
-                 * regardless of allocation direction (§4.2 STEP-3 cslot axis). */
-                long dabs = (long)probe_a - (long)probe_b; if (dabs < 0) dabs = -dabs;
-                long dcslot = dabs - 1;
-                /* coherence: one inference; capture the first MSG_RESPONSE chunk text */
-                shmem_ipc_send(shared_request_ring, MSG_QUERY, sseq++, sq_text, (uint16_t)strlen(sq_text));
-                seL4_Signal(req_notif);
-                char rbuf[64]; int rlen = 0, got = 0; uint32_t pp = 0;
-                while (!got && pp < 5000000) {
-                    uint8_t t; uint16_t s, l; uint8_t pay[SHMEM_MAX_PAYLOAD];
-                    while (shmem_ipc_recv(shared_response_ring, &t, &s, pay, &l) == 0) {
-                        if (t == MSG_INFER_STATS || t == MSG_DEBUG) continue;
-                        if (t == MSG_RESPONSE) {
-                            rlen = l < 63 ? l : 63;
-                            for (int k = 0; k < rlen; k++)
-                                rbuf[k] = (pay[k] >= 0x20 && pay[k] <= 0x7e) ? (char)pay[k] : '.';
-                            rbuf[rlen] = '\0'; got = 1; break;
+            puts_serial(" sp="); put_dec((uint32_t)sp);
+            puts_serial(" workers="); put_dec((uint32_t)g_pb_workers_started); puts_serial("\n");
+
+            /* mode 0 = QUIESCENT (PB-main only, workers stay parked — the K/M2a-2 case, re-proven
+             * on NN=6). mode 1 = MID-DISPATCH (§4.2 B/I-b): fire the restart WHILE PB is generating
+             * (workers active mid-qmatmul) — reset ALL workers via km2b_reset_workers, then PB-main. */
+            for (int mode = 0; mode < 2; mode++) {
+                const char *tag = mode ? "[RESTART-MD]" : "[RESTART-Q]";
+                puts_serial(mode ? "[SPIKE] === PHASE B: MID-DISPATCH (workers reset) ===\n"
+                                 : "[SPIKE] === PHASE A: QUIESCENT (workers parked) ===\n");
+                for (int cyc = 1; cyc <= N; cyc++) {
+                    int early = 0, nw = 0;
+                    if (mode == 1) {
+                        /* kick off an inference and let PB run mid-generation (workers active) */
+                        shmem_ipc_send(shared_request_ring, MSG_QUERY, sseq++, sq_text, (uint16_t)strlen(sq_text));
+                        seL4_Signal(req_notif);
+                        uint64_t t0 = jarvis_rdtsc();
+                        while (jarvis_rdtsc() - t0 < KM2B_MID_DELAY_CYC) {
+                            uint8_t t; uint16_t s, l; uint8_t pay[SHMEM_MAX_PAYLOAD];
+                            if (shmem_ipc_recv(shared_response_ring, &t, &s, pay, &l) == 0 &&
+                                t == MSG_RESPONSE) { early = 1; break; }  /* PB finished before we could interrupt */
+                            seL4_Yield();
                         }
                     }
-                    if (got) break;
-                    pp++; seL4_Yield();
+                    /* ---- the restart ---- */
+                    seL4_TCB_Suspend(pb_tcb);
+                    seL4_CPtr probe_a = 0; (void)vka_cspace_alloc(&vka, &probe_a);
+                    /* §6 steps 3/4/6: reset both rings (allocation-free), drain PA's resp_notif, clear latch */
+                    shmem_ipc_init(shared_request_ring);
+                    shmem_ipc_init(shared_response_ring);
+                    { seL4_Word bdg; seL4_Poll(resp_notif, &bdg); }
+                    g_infer_active = 0; g_infer_t0 = 0;
+                    /* §4.2 B: reset ALL workers (their in-flight dispatch is orphaned by the PB-main
+                     * restart). Quiescent: workers are parked — harmless re-park. Mid-dispatch: this is
+                     * the real proof (worker WriteRegisters + the wake/done coalescing drain). */
+                    nw = km2b_reset_workers();
+                    /* §4.2 A: read PB-main's live context, mutate ONLY rip/rsp/rflags, preserve fs_base */
+                    seL4_UserContext regs;
+                    if (seL4_TCB_ReadRegisters(pb_tcb, 0, 0, nregs, &regs) != seL4_NoError) {
+                        puts_serial("[SPIKE] ReadRegisters FAILED\n"); locked = 0; break;
+                    }
+                    uint64_t fsb = (uint64_t)regs.fs_base;
+                    regs.rip = (seL4_Word)pb_entry;
+                    regs.rsp = (seL4_Word)sp;
+                    regs.rflags &= ~((seL4_Word)1 << 10);          /* clear DF */
+                    if (seL4_TCB_WriteRegisters(pb_tcb, 0, 0, nregs, &regs) != seL4_NoError) {
+                        puts_serial("[SPIKE] WriteRegisters FAILED\n"); locked = 0; break;
+                    }
+                    seL4_TCB_Resume(pb_tcb);   /* workers already resumed inside km2b_reset_workers */
+                    /* §6 step 9: drain-then-poll the ready ACK (never a bare seL4_Wait on resp_notif) */
+                    if (wait_for_response(shared_response_ring, MSG_HEARTBEAT_ACK) != 0) {
+                        puts_serial(tag); puts_serial(" cycle "); put_dec((uint32_t)cyc);
+                        puts_serial(": PB NEVER RE-READY (timeout)\n"); locked = 0; break;
+                    }
+                    seL4_CPtr probe_b = 0; (void)vka_cspace_alloc(&vka, &probe_b);
+                    long dabs = (long)probe_a - (long)probe_b; if (dabs < 0) dabs = -dabs;
+                    long dcslot = dabs - 1;   /* allocman hands out DESCENDING cslots; |Δ|-1 (§4.2 STEP-3) */
+                    /* coherence + WORKER REJOIN: this post-restart inference dispatches to the reset
+                     * workers via jarvis_parallel_for; a coherent MSG_RESPONSE ⇒ the join completed
+                     * (no deadlock, active reached 0). Capture the first chunk text. */
+                    shmem_ipc_send(shared_request_ring, MSG_QUERY, sseq++, sq_text, (uint16_t)strlen(sq_text));
+                    seL4_Signal(req_notif);
+                    char rbuf[64]; int rlen = 0, got = 0; uint32_t pp = 0;
+                    while (!got && pp < 8000000) {
+                        uint8_t t; uint16_t s, l; uint8_t pay[SHMEM_MAX_PAYLOAD];
+                        while (shmem_ipc_recv(shared_response_ring, &t, &s, pay, &l) == 0) {
+                            if (t == MSG_INFER_STATS || t == MSG_DEBUG) continue;
+                            if (t == MSG_RESPONSE) {
+                                rlen = l < 63 ? l : 63;
+                                for (int k = 0; k < rlen; k++)
+                                    rbuf[k] = (pay[k] >= 0x20 && pay[k] <= 0x7e) ? (char)pay[k] : '.';
+                                rbuf[rlen] = '\0'; got = 1; break;
+                            }
+                        }
+                        if (got) break;
+                        pp++; seL4_Yield();
+                    }
+                    puts_serial(tag); puts_serial(" cycle="); put_dec((uint32_t)cyc);
+                    puts_serial(" dcslot="); if (dcslot < 0) puts_serial("NEG"); else put_dec((uint32_t)dcslot);
+                    puts_serial(" fs_base="); puts_serial(fsb ? "kept" : "ZERO");
+                    puts_serial(" workers_reset="); put_dec((uint32_t)nw);
+                    if (mode == 1) { puts_serial(" mid="); puts_serial(early ? "no(early-finish)" : "yes"); }
+                    puts_serial(" rejoin="); puts_serial(got ? "OK" : "DEADLOCK/MISS");
+                    puts_serial(" \""); if (got) puts_serial(rbuf); puts_serial("\"\n");
+                    if (dcslot != 0 || !got) locked = 0;
                 }
-                puts_serial("[RESTART] cycle="); put_dec((uint32_t)cyc);
-                puts_serial(" probe_a="); put_dec((uint32_t)probe_a);
-                puts_serial(" probe_b="); put_dec((uint32_t)probe_b);
-                puts_serial(" dcslot="); if (dcslot < 0) puts_serial("NEG"); else put_dec((uint32_t)dcslot);
-                puts_serial(" fs_base="); puts_serial(fsb ? "kept" : "ZERO");
-                puts_serial(" resp="); puts_serial(got ? "OK" : "MISS");
-                puts_serial(" rlen="); put_dec((uint32_t)rlen);
-                puts_serial(" \""); if (got) puts_serial(rbuf); puts_serial("\"\n");
-                if (dcslot != 0 || !got) locked = 0;
             }
             puts_serial(locked
-                ? "[SPIKE] RESULT: PA axes flat (dcslot=0) + coherent every cycle — Strategy A candidate-LOCK (confirm the [RESTART-PB] heap pointers held)\n"
+                ? "[SPIKE] RESULT: BOTH modes PASS — dcslot=0 + workers rejoin + coherent every cycle (confirm [RESTART-PB] heap pointers held)\n"
                 : "[SPIKE] RESULT: NOT locked — see the failing cycle above\n");
         }
         puts_serial("[SPIKE] complete — continuing to normal workload\n");
