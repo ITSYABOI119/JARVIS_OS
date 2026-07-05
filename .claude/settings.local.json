@@ -69,7 +69,19 @@
       "Bash(git -C \"C:\\\\Users\\\\jluca\\\\Documents\\\\JARVIS_OS\" log --oneline -5)",
       "Bash(git -C \"C:\\\\Users\\\\jluca\\\\Documents\\\\JARVIS_OS\" add CLAUDE.md phase2/firmware/jarvis-sel4-image-arm-bcm2711 phase2/src/ai/uart_ipc_client.py phase2/src/ai/stability_harness.py phase2/src/boot/boot_manager.c phase2/src/boot/boot_manager.h phase2/src/drivers/net_cmd.c phase2/src/drivers/net_cmd.h phase2/src/drivers/uart_pl011.c phase2/src/drivers/bcm_dma.c phase2/src/drivers/bcm_dma.h phase2/src/jarvis-sel4-cmake/CMakeLists.txt phase2/src/sel4/main_arm64.c phase2/weeks/week48/)",
       "Bash(git -C \"C:\\\\Users\\\\jluca\\\\Documents\\\\JARVIS_OS\" diff --cached --stat)",
-      "Bash(git -C \"C:\\\\Users\\\\jluca\\\\Documents\\\\JARVIS_OS\" status)"
+      "Bash(git -C \"C:\\\\Users\\\\jluca\\\\Documents\\\\JARVIS_OS\" status)",
+      "Bash(git revert *)",
+      "Bash(echo \"exit=$? \\(grep exit 1 = no matches = good\\)\")",
+      "Bash(bash -n phase3/scripts/qemu_test_nvme.sh)",
+      "Bash(bash -n phase3/scripts/setup_nvme_partition.sh)",
+      "Bash(ssh *)",
+      "Read(//tmp/**)",
+      "Read(//c/Users/jluca/sel4-x86/jbuild/images/**)",
+      "Bash(sudo parted /dev/nvme0n1 unit s print)",
+      "Bash(lsblk -d -o NAME,SIZE,TYPE,TRAN,RM,MODEL)",
+      "Bash(\"')",
+      "Bash(git check-ignore *)",
+      "Bash(gh run *)"
     ],
     "deny": [],
     "ask": []

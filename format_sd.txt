@@ -1,2 +1,7 @@
+rem === JARVIS boot media format script (Windows diskpart) ===
+rem Formats the target removable volume as FAT32 labeled BOOT for the seL4 boot image.
+rem WARNING: DESTRUCTIVE — this ERASES the selected volume. Verify "volume D" is the
+rem correct removable drive first: run `diskpart` then `list volume` to confirm the
+rem letter, and edit the line below if it differs. Run: diskpart /s format_sd.txt
 select volume D
 format fs=fat32 label=BOOT quick

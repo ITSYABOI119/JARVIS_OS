@@ -96,3 +96,7 @@ bash.exe.stackdump
 # kept local-only (~5.9 MB: React Command Center + component library + rendered HTML + .zip bundle),
 # the UI seed for a WEB console that does NOT run on the bare-metal box; never committed (ADR 2026-06-21).
 phase4/docs/ui_mockups/design-system/
+
+.claude/settings.local.json
+.claude/settings.json
+.claude/workflows/

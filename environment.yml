@@ -1,0 +1,13 @@
+name: base
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.13.2
+  - pip=25.0
+  - pip:
+      - psutil==5.9.8
+      - pyserial==3.5
+      - pynvml==11.5.0
+      - huggingface-hub==0.16.4
+
