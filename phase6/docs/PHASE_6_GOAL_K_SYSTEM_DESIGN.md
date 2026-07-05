@@ -1,6 +1,6 @@
 # Phase 6 — Goal K / M2 System Design: PB-restart (self-healing) via reuse-in-place
 
-**Status:** 📝 PLAN-FIRST (authored 2026-07-05) — this is the engineering design companion to `PHASE_6_GOAL_K_IT_ACTS.md` (§6 K/M2), for **strategist review BEFORE the K/M2a spike or any K/M2 code**. No code, no flags, no build changes. Every citation below was re-verified against the live tree (5-agent code sweep, 2026-07-05, HEAD `4d77a7e` — post-K/M1); line numbers are FRESH.
+**Status:** 🚧 IN PROGRESS — design authored 2026-07-05 (5-agent code sweep, HEAD `4d77a7e`; citations FRESH); **K/M2a spike RUN 2026-07-05 (§4.1)** — the reuse-in-place DIRECTION is locked, the respawn MECHANIC refined (a `spawn_process_v` re-call aborts in muslc's non-re-entrant per-process init → a `pb_restart_entry` muslc-safe re-entry is required; a follow-up **K/M2a-2** spike + K/M2b implement it). The §3 hoist refactor landed (OFF-verified). No shipped behavior change (`JARVIS_ACTIONS` default-0).
 **Prereqs:** the it-acts spine (K/M0 host core + K/M1 linked SHIELD gate, box-verified) — `action_allowlist` / `shield_action` / `action_audit` are compiled into PA and the `ACTION_RESTART_PB` id + `shield_assess` are exercised (probe-gated) today. B1 (self-healing PB restart, `ROADMAP.md` §Backlog) folds into this milestone.
 **Mirrors:** `phase4/docs/PHASE_4_M3_THREADPOOL_DESIGN.md`, `phase5/docs/PHASE_5_GOAL6_SYSTEM_DESIGN.md`.
 
@@ -59,6 +59,30 @@ Today a PB crash is invisible: **no fault endpoint** is configured (`process_con
 - **(b) HANG (heuristic).** Stamp `last_hb_ack_ms = jarvis_uptime_ms()` on every `MSG_HEARTBEAT_ACK`. Trigger a restart when the age exceeds a threshold with **margin above the worst-case single-query latency** (~12 s Gemma @ `NUM_NODES=6`): require **N consecutive missed heartbeats spanning > one inference window** so a legitimately BUSY PB (mid-generation, counters frozen — the existing `[STATS]` behavior) is never misread as hung. Both timeout sites feed the same trigger, or a PB hung only on the hb/shield lane won't restart.
 
 The trigger, once fired, calls `shield_assess(ACTION_RESTART_PB, ctx)` → `trust_policy` → execute. **`trust_policy()` is host-tested but never yet called live** (K/M1 is assess-only, "not executed at M1", `main:2246`) — **K/M2 introduces the first live `shield_assess→trust_policy→execute` chain.**
+
+## 4.1 K/M2a spike result (2026-07-05, KVM) — direction LOCKED, mechanic REFINED
+
+**What ran:** a throwaway gated spike (`JARVIS_KM2A_SPIKE`, since reset) exercised the *convenient-primitive* variant of Strategy A — after PB came up (model probed OK, forward pass OK, `[JARVIS] Process B ready type=4 seq=0`), PA suspended PB + workers, re-inited both rings, and **re-invoked `sel4utils_spawn_process_v` on the live `inference_process`** (reusing its CNode/VSpace/TCB/ELF frames/caps).
+
+**Result — it ABORTS on the FIRST respawn cycle, in the C runtime:**
+```
+[SPIKE] K/M2a reuse-in-place respawn spike START
+Assertion failed: ret == boot_set_tid_address
+  (.../seL4_libs/libsel4muslcsys/src/vsyscall.c: init_syscall_table: 227)
+seL4 root server abort()ed  →  Debug halt syscall from user thread "8"  →  halting
+```
+
+**Root cause (the finding neither this design nor the 5-agent sweep anticipated):** muslc's **per-process init** (`init_syscall_table` → `set_tid_address`) is a **ONE-TIME, non-re-entrant** setup whose guard state lives in PB's `.data`/`.bss`. Re-entering PB at `_start` **without resetting those segments** re-runs that init against dirty guards → the assertion. So the naive "re-call `spawn_process_v`" is NOT a valid reset-in-place — it re-enters through the C runtime's init, which cannot run twice.
+
+**§11 Q3 ANSWERED:** reset-in-place CANNOT reuse the naive `spawn_process_v` re-call. It requires **either** (a) re-copying the ELF **writable** segments (`.data` reset + `.bss` zero — which *resets* muslc's init guards so `_start` may safely re-run), **or** (b) a dedicated **`pb_restart_entry`** in `inference_server.c` that re-enters PB **PAST** musl's one-time init (skipping `_start`'s C-runtime setup) and re-derives config from the fixed vaddrs (`SHMEM_VADDR_B` / `MODEL_VADDR_B` — no argv). **(b) is the cleaner path** — it avoids the ELF `.data` re-copy entirely and is the "restart-entry-skips-argv" approach.
+
+**Measurement not obtained:** the abort halted the run before completing a single cycle, so the **zero-untyped gate (cslot-delta across N restarts) was NOT empirically confirmed.** It remains true *by construction* for a no-allocation reuse path, but is unproven end-to-end → it moves to the follow-up spike.
+
+**DECISION:**
+- **Direction LOCKED = reuse-in-place (the Strategy A family).** Strategy B is NOT chosen — it needs net-new `seL4_CNode_Revoke` + a proof that revoking PB's instance untyped spares the model/shared caps, strictly *more* work than fixing the re-entry.
+- **Mechanic REFINED:** the respawn re-entry is **NOT** a `spawn_process_v` re-call — it must be a **muslc-init-safe re-entry (`pb_restart_entry` preferred)**. This also simplifies §6 (no re-run of musl's runtime init; the g_pool re-init happens inside `pb_restart_entry`, not via `_start`).
+- **Follow-up:** **K/M2a-2** — a second spike implementing `pb_restart_entry` (+ the ELF-writable-reset fallback) and re-measuring the untyped delta across N≥8 cycles — precedes K/M2b.
+- **KEPT from this milestone:** the §3 **hoist refactor** (durable file-scope `g_pb_*` handles — real K/M2b prep, OFF-build-verified byte-neutral). The throwaway spike block + its flag were reset (they did not reach a clean gate-passing state).
 
 ## 6. The ordered respawn sequence
 

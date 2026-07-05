@@ -1117,6 +1117,23 @@ static int find_model_untypeds(uintptr_t *model_paddr_out,
 /* M3 worker pool sizing (>= kernel NUM_NODES cap of 8). */
 #define JARVIS_MAX_WORKERS 8
 
+/* Phase 6 K/M2 (prereq hoist, §3): durable file-scope handles for a PB respawn. These were
+ * LOCALS of spawn_inference_process() — a respawn needs them to survive so it can re-drive the
+ * SAME process object + workers without reallocating (the forward-only allocator would leak).
+ * Written through during the normal spawn; behavior-neutral (pure additions — no OFF change).
+ * Declared here (after JARVIS_MAX_WORKERS) so the array sizes resolve. */
+static sel4utils_thread_t g_pb_workers[JARVIS_MAX_WORKERS];   /* the M3 worker thread handles */
+static int          g_pb_workers_started = 0;
+static uintptr_t    g_pb_worker_entry    = 0;
+static seL4_CPtr    g_pb_remote_wake[JARVIS_MAX_WORKERS] = {0};
+static seL4_CPtr    g_pb_remote_done     = 0;
+static seL4_CPtr    g_pb_remote_req      = 0;   /* PB-CSpace cap for the request notification */
+static seL4_CPtr    g_pb_remote_resp     = 0;
+static uint32_t     g_pb_model_size      = 0;
+static uint32_t     g_pb_model_n_pages   = 0;
+static const void  *g_pb_elf             = NULL;
+static unsigned long g_pb_elf_size       = 0;
+
 /* Resolve a global symbol's vaddr from PB's (ET_EXEC, unstripped) ELF blob via .symtab.
  * PA never links the threadpool (PB-only), so it finds the worker entry by name. For an
  * ET_EXEC, no PIE bias → st_value is the runtime vaddr in PB's VSpace. */
@@ -1411,9 +1428,13 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
                     puts_serial("[JARVIS] M3: worker start failed — degrading to serial\n");
                     n_workers = 0; break;
                 }
+                g_pb_workers[i]     = wt;              /* K/M2 hoist: durable worker handle for respawn */
+                g_pb_remote_wake[i] = remote_wake[i];
                 workers_started++;
             }
             if (n_workers == 0) workers_started = 0;
+            g_pb_worker_entry = worker_entry;          /* K/M2 hoist */
+            g_pb_remote_done  = remote_done;
         }
     }
 #endif /* CONFIG_ENABLE_SMP_SUPPORT */
@@ -1447,6 +1468,16 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
         return -1;
     }
     puts_serial("[JARVIS] Process B started\n");
+
+    /* K/M2 hoist (§3): save the argv-rebuild inputs + workers-started + ELF so a respawn can
+     * re-drive the SAME process object without reallocating. Behavior-neutral. */
+    g_pb_workers_started = workers_started;
+    g_pb_remote_req      = remote_req_notif;
+    g_pb_remote_resp     = remote_resp_notif;
+    g_pb_model_size      = model_size;
+    g_pb_model_n_pages   = model_n_pages;
+    g_pb_elf             = elf;
+    g_pb_elf_size        = elf_size;
 
     return 0;
 }
