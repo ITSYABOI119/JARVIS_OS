@@ -84,6 +84,18 @@ seL4 root server abort()ed  →  Debug halt syscall from user thread "8"  →  h
 - **Follow-up:** **K/M2a-2** — a second spike implementing `pb_restart_entry` (+ the ELF-writable-reset fallback) and re-measuring the untyped delta across N≥8 cycles — precedes K/M2b.
 - **KEPT from this milestone:** the §3 **hoist refactor** (durable file-scope `g_pb_*` handles — real K/M2b prep, OFF-build-verified byte-neutral). The throwaway spike block + its flag were reset (they did not reach a clean gate-passing state).
 
+### K/M2a-2 implementation plan + a second finding (reconnaissance done 2026-07-05)
+
+The `pb_restart_entry` re-entry (§4.1) was scoped against the live `inference_server.c`. A **second finding** shapes it: PB's query loop uses `qm`/`state`/`vocab`/`tok` as **`main()` locals** (`inference_server.c:512-546`, passed into `handle_query` at `:742-744`), and `llama_alloc_state` (`:547`) allocates the KV cache from **PB's bounded heap** (musl `malloc`, heap in `.bss`/`.data` which the restart *preserves*). Therefore a `pb_restart_entry` that **re-loads** the model would **re-alloc ~40 MiB of KV per cycle and leak it** (the old allocation is never freed — the heap is preserved, not reset), exhausting PB's heap within a few restarts. **So the mechanic must REUSE the warm model state, not reload it.**
+
+**Required shape (K/M2a-2, an invasive PB-side change — its own careful increment):**
+1. **Hoist** the warm inference state to reachable scope so `pb_restart_entry` can reuse it without re-alloc: `qm` / `vocab` / `tok` / `state` + the config (`req_notif` / `resp_notif` / `request_ring` / `response_ring` / `g_sctx_pb` / pool params `n_threads`/`done`/`wake[]`). Simplest safe form: under `#if JARVIS_KM2A_SPIKE`, stash pointers to `main()`'s locals into file-scope globals after setup + extract the query loop (`:708-765`) into a `pb_serve_loop()` both `main()` and `pb_restart_entry` call.
+2. **Dedicated restart stack** (a static `g_restart_stack[]` in PB `.bss`): PA re-enters via `WriteRegisters(PC=pb_restart_entry, SP=g_restart_stack top)` so the new frame does NOT clobber `main()`'s frame (which holds the reused `qm`/`state`); the stashed pointers stay valid. Re-entering at `main()`'s original SP would overwrite that frame — do not.
+3. `pb_restart_entry` re-inits ONLY volatile state (`jarvis_sel4_pool_init` from preserved params; per-query KV memset already happens in `handle_query`), re-signals `MSG_HEARTBEAT_ACK` + `Signal(resp_notif)`, and calls `pb_serve_loop()`.
+4. PA side: the §6 reset sequence (suspend PB+workers → worker `WriteRegisters(PC=worker_entry)` + re-supply `ipc_buf` → `shmem_ipc_init` both rings, NOT sctx → drain notifs → `WriteRegisters(PB, PC=pb_restart_entry, SP=restart-stack)` → resume → drain-then-poll ready handshake), **with an `alloc_calls` counter around the whole path** (the definitive zero-untyped proof) + one inference per cycle for coherence.
+
+**Status:** reconnaissance + design complete; the implementation is a delicate multi-round KVM bring-up (WriteRegisters PC/SP/arg conventions for PB-main AND workers, the restart-stack, the warm-state reuse) touching the deployed inference path — deferred to its own box-verified increment rather than rushed. `JARVIS_ACTIONS` / deploy image unaffected.
+
 ## 6. The ordered respawn sequence
 
 1. **Suspend PB-main + ALL workers FIRST** (`seL4_TCB_Suspend`). A live worker mid-`seL4_Wait` on a since-freed wake cap faults on unmapped memory if you teardown before suspending.
