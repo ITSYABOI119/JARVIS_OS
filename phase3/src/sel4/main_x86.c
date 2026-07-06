@@ -76,6 +76,7 @@
 #include "action_allowlist.h"   /* Phase 6 K/M1: the static action allowlist (flag-gated; LLM selects, never synthesizes) */
 #include "shield_action.h"      /* Phase 6 K/M1: the linked SHIELD action gate (flag-gated; the SEC-039 closure mechanism) */
 #include "action_audit.h"       /* Phase 6 K/M1: the raw-LBA action-audit store (flag-gated; JACT @ 21,120,000) */
+#include "km2b_trigger.h"       /* Phase 6 K/M2b-2: keyword-clean restart trigger builder (§5-E; host-tested) */
 #endif
 #include "jarvis_ui_tokens.h"   /* Step 2c-2b: FBP_ and JUI_ palette + geometry (single source) */
 
@@ -1427,11 +1428,24 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
                 cfg = thread_config_auth(cfg, simple_get_tcb(&simple));
                 cfg = thread_config_priority(cfg, seL4_MaxPrio);
 #if JARVIS_ACTIONS
-                /* K/M2b-2 §5-A: bind the worker's fault to PB's fault EP (@ SEL4UTILS_ENDPOINT_SLOT
-                 * in PB's cspace — the same EP PB-main is bound to; single audit class). Workers are
-                 * cfg={0} = null handler otherwise, so a worker fault would be silently undeliverable.
+                /* K/M2b-2 §5-A: bind the worker's fault to PB's fault EP (the same EP object
+                 * PB-main is bound to @ SEL4UTILS_ENDPOINT_SLOT — one receiver, one audit class).
+                 * Workers are cfg={0} = null handler otherwise, so a worker fault would be
+                 * silently undeliverable. STEP-3: mint a BADGED cap (badge=i) so pa_poll_fault
+                 * attributes a fault to worker i vs PB-main (badge 0, sel4utils' unbadged copy) —
+                 * attribution/audit only, the restart policy stays whole-PB (§5-D). A mint failure
+                 * degrades to the unbadged shared slot (fault still delivered, just unattributed).
                  * Set BEFORE configure — never post-hoc seL4_TCB_SetSpace a live worker. */
-                cfg = thread_config_fault_endpoint(cfg, SEL4UTILS_ENDPOINT_SLOT);
+                {
+                    cspacepath_t fep_path;
+                    vka_cspace_make_path(&vka, inference_process.fault_endpoint.cptr, &fep_path);
+                    seL4_CPtr badged_fep = sel4utils_mint_cap_to_process(
+                        &inference_process, fep_path, seL4_AllRights, (seL4_Word)i);
+                    if (badged_fep == 0)
+                        puts_serial("[JARVIS] M3: badged fault-EP mint failed (worker fault unattributed)\n");
+                    cfg = thread_config_fault_endpoint(
+                        cfg, badged_fep ? badged_fep : (seL4_CPtr)SEL4UTILS_ENDPOINT_SLOT);
+                }
 #endif
                 sel4utils_thread_t wt;
                 if (sel4utils_configure_thread_config(&vka, &inference_process.vspace,
@@ -1537,6 +1551,18 @@ static int wait_for_response(shmem_ring_t *ring, uint8_t expected_type)
 }
 
 #if JARVIS_RESPAWN
+/* STEP-3 diagnostics: full-width hex (put_hex is 32-bit; fault IPs/addrs are 64-bit — the STEP-2
+ * `put_dec((uint32_t)ip)` truncation misdirected the diagnosis: "ip=678101344" was a 32-bit cast). */
+static void put_hex64(uint64_t v)
+{
+    static const char hx[] = "0123456789abcdef";
+    char b[19]; int p = 0;
+    b[p++] = '0'; b[p++] = 'x';
+    for (int s = 60; s >= 0; s -= 4) b[p++] = hx[(v >> s) & 0xF];
+    b[p] = '\0';
+    puts_serial(b);
+}
+
 /* K/M2b-1 (SYSTEM_DESIGN §4.2 B): reset EVERY M3 worker via the full launch-triple
  * (ReadRegisters -> mutate rip/rdi/rsi/rdx/rsp, preserve fs_base, clear DF -> WriteRegisters).
  * Used for a MID-DISPATCH restart: PB-main is being re-entered, so the workers' in-flight
@@ -1555,6 +1581,11 @@ static int km2b_reset_workers(void)
         seL4_TCB_Suspend(wtcb);
         seL4_UserContext wr;
         if (seL4_TCB_ReadRegisters(wtcb, 0, 0, nregs, &wr) != seL4_NoError) continue;
+        /* STEP-3 0b: the worker's pre-reset context — where was it, is its fs_base intact? */
+        puts_serial("[RESTART] w"); put_dec((uint32_t)i);
+        puts_serial(" rip="); put_hex64(wr.rip);
+        puts_serial(" rsp="); put_hex64(wr.rsp);
+        puts_serial(" fs=");  put_hex64(wr.fs_base); puts_serial("\n");
         wr.rip = (seL4_Word)g_pb_worker_entry;
         wr.rdi = (seL4_Word)g_pb_remote_wake[i];                                 /* arg0 = wake cptr (PB CSpace) */
         wr.rsi = (seL4_Word)i;                                                   /* arg1 = worker index */
@@ -1575,29 +1606,8 @@ static int km2b_reset_workers(void)
 
 /* §5-E: keyword-CLEAN trigger_snapshot from SYSTEM FACTS ONLY — NEVER the in-flight query text (the
  * shield lane's queries are all blocklist keywords, which would make shield_assess BLOCK its own
- * restart). Reason strings ("fault"/"hang") are keyword-clean by construction. Host-tested. */
-static char *km2b_ts(char *p, const char *s) { while (*s) *p++ = *s++; return p; }
-static char *km2b_tu(char *p, uint32_t v) {
-    char d[12]; int n = 0;
-    if (!v) d[n++] = '0'; else while (v) { d[n++] = (char)('0' + v % 10); v /= 10; }
-    while (n) *p++ = d[--n];
-    return p;
-}
-static int km2b_build_trigger(char *buf, int cap, const char *reason, uint16_t lane,
-                              uint32_t missed, uint64_t age_ms, seL4_Word flabel, seL4_Word fbadge)
-{
-    (void)cap;
-    char *p = buf;
-    p = km2b_ts(p, "respawn ");
-    p = km2b_ts(p, reason);
-    p = km2b_ts(p, " lane="); p = km2b_tu(p, (uint32_t)lane);
-    p = km2b_ts(p, " miss="); p = km2b_tu(p, missed);
-    p = km2b_ts(p, " age=");  p = km2b_tu(p, (uint32_t)age_ms); p = km2b_ts(p, "ms");
-    p = km2b_ts(p, " flt=");  p = km2b_tu(p, (uint32_t)flabel);
-    p = km2b_ts(p, "/");      p = km2b_tu(p, (uint32_t)fbadge);
-    *p = '\0';
-    return (int)(p - buf);
-}
+ * restart). Reason strings ("fault"/"hang") are keyword-clean by construction. STEP-3: extracted
+ * to the host-pure km2b_trigger.c (test_km2b_trigger.c pins keyword-clean + never-self-blocks). */
 
 /* §5-A: non-blocking fault receipt. seL4_NBRecv (NEVER seL4_Poll — won't dequeue an endpoint;
  * NEVER seL4_Recv — blocks PA on the normal no-fault iteration => box dead). Loop-drains to empty
@@ -1611,7 +1621,25 @@ static int pa_poll_fault(seL4_Word *badge_out, seL4_Word *label_out, seL4_Word *
         seL4_MessageInfo_t mi = seL4_NBRecv(inference_process.fault_endpoint.cptr, &badge);
         seL4_Word label = seL4_MessageInfo_get_label(mi);
         seL4_Word len   = seL4_MessageInfo_get_length(mi);
-        if (label == 0 && len == 0 && badge == 0) break;   /* nothing pending (empty NBRecv) */
+        /* STEP-3 ROOT CAUSE: seL4_NBRecv on an endpoint with NO message pending does NOT zero the
+         * returned MessageInfo — it leaves STALE/garbage register content (box-observed label
+         * ~165553, stale MR ip ~0x286b0160). The STEP-2 all-zero heuristic never matched that
+         * garbage, so every poll reported a PHANTOM fault -> spurious restart -> crash-loop bound.
+         * (0x286b0160 was literally the STEP-2 "re-fault ip" — a stale MR, never real code.) A
+         * GENUINE seL4 fault ALWAYS carries a valid fault-tag label: the kernel DebugAsserts every
+         * seL4_Fault type fits in 4 bits (NullFault=0 .. VMFault=5), so 1..15 = real fault, and
+         * NullFault(0) / any label > 15 = endpoint empty. Gate on the TAG, not the all-zero read. */
+        if (label < 1 || label > 15) break;   /* NullFault or garbage -> nothing pending */
+        /* STEP-3: print EVERY drained fault in FULL (faults are rare — verbosity is diagnosis
+         * gold). VMFault MRs: 0=IP, 1=Addr, 2=PrefetchFault, 3=FSR. badge: 0=PB-main (sel4utils'
+         * unbadged copy), i>0 = worker i (the badged mint at worker creation). */
+        puts_serial("[FAULT] label="); put_dec((uint32_t)label);
+        puts_serial(" badge="); put_dec((uint32_t)badge);
+        puts_serial(" ip=");   put_hex64((len >= 1) ? seL4_GetMR(0) : 0);
+        puts_serial(" addr="); put_hex64((len >= 2) ? seL4_GetMR(1) : 0);
+        puts_serial(" pf=");   put_dec((uint32_t)((len >= 3) ? seL4_GetMR(2) : 0));
+        puts_serial(" fsr=");  put_hex64((len >= 4) ? seL4_GetMR(3) : 0);
+        puts_serial("\n");
         if (n == 0) {
             *badge_out = badge; *label_out = label;
             *ip_out = (len >= 1) ? seL4_GetMR(0) : 0;   /* MR0 ~ faulting IP for common fault types */
@@ -1642,6 +1670,11 @@ static int km2b_do_respawn(void)
     seL4_UserContext regs;
     seL4_Word nregs = sizeof(regs) / sizeof(seL4_Word);
     if (seL4_TCB_ReadRegisters(pb_tcb, 0, 0, nregs, &regs) != seL4_NoError) return 0;
+    /* STEP-3 0b: PB-main's fault-time context — is fs_base intact after a GENUINE fault? */
+    puts_serial("[RESTART] pbmain rip="); put_hex64(regs.rip);
+    puts_serial(" rsp="); put_hex64(regs.rsp);
+    puts_serial(" fs=");  put_hex64(regs.fs_base);
+    puts_serial(" gs=");  put_hex64(regs.gs_base); puts_serial("\n");
     if (regs.fs_base == 0) puts_serial("[RESTART] WARN: fs_base==0 at fault (TLS may be clobbered)\n");
     regs.rip = (seL4_Word)pb_entry;
     regs.rsp = (seL4_Word)sp;
@@ -1711,15 +1744,52 @@ static int pa_fault_check(void)
 {
     if (g_restart_in_progress || g_pb_dead) return 0;
     seL4_Word badge, label, ip;
-    if (pa_poll_fault(&badge, &label, &ip) > 0) {
-        puts_serial("[FAULT] PB fault label="); put_dec((uint32_t)label);
-        puts_serial(" badge="); put_dec((uint32_t)badge);
-        puts_serial(" ip="); put_dec((uint32_t)ip); puts_serial("\n");
+    if (pa_poll_fault(&badge, &label, &ip) > 0) {   /* pa_poll_fault prints the full detail */
         pa_restart_pb("fault", 0, 0, 0, label, badge);
         return 1;
     }
     return 0;
 }
+
+#if JARVIS_ACTION_PROBE
+/* STEP-3 Part-3: the probe recovery gate is a REAL inference that must DISPATCH the reset workers
+ * (every Gemma generation qmatmul is >=256 rows, so jarvis_parallel_for goes parallel — a coherent
+ * MSG_RESPONSE therefore proves the worker join completed = rejoin OK), with the response TEXT
+ * captured and printed — NOT a bare rc==0 (STEP-2's "serve=OK" never verified text, which let the
+ * broken-workers hypothesis survive). A recovery that RE-FAULTS is surfaced and funneled through
+ * pa_restart_pb (never left BlockedOnFault). Returns 1 only on coherent non-trivial text. */
+static int km2b_probe_recovery(const char *tag, uint16_t seq)
+{
+    static const char *rq = "Explain what a capability is in an operating system";
+    shmem_ipc_send(shared_request_ring, MSG_QUERY, seq, rq, (uint16_t)strlen(rq));
+    seL4_Signal(g_pa_req_notif);
+    char rbuf[64]; int rlen = 0, got = 0;
+    for (uint32_t pp = 0; !got && pp < 60000000u; pp++) {
+        uint8_t t; uint16_t s, l; uint8_t pay[SHMEM_MAX_PAYLOAD];
+        while (shmem_ipc_recv(shared_response_ring, &t, &s, pay, &l) == 0) {
+            if (t == MSG_RESPONSE) {
+                rlen = l < 63 ? (int)l : 63;
+                for (int k = 0; k < rlen; k++)
+                    rbuf[k] = (pay[k] >= 0x20 && pay[k] <= 0x7e) ? (char)pay[k] : '.';
+                rbuf[rlen] = '\0'; got = 1; break;
+            }
+        }
+        if (got) break;
+        seL4_Word fb, fl, fi;
+        if (pa_poll_fault(&fb, &fl, &fi) > 0) {     /* full detail printed by pa_poll_fault */
+            puts_serial("[ACTION-PROBE] "); puts_serial(tag);
+            puts_serial(" recovery RE-FAULTED\n");
+            pa_restart_pb("fault", 0, 0, 0, fl, fb);
+            return 0;
+        }
+        seL4_Yield();
+    }
+    puts_serial("[ACTION-PROBE] "); puts_serial(tag);
+    puts_serial(" recovery rejoin="); puts_serial(got ? "OK" : "MISS(timeout)");
+    puts_serial(" text=\""); if (got) puts_serial(rbuf); puts_serial("\"\n");
+    return got && rlen > 10;
+}
+#endif /* JARVIS_ACTION_PROBE */
 #endif
 
 /* ---- Step 2c-1: status-panel helpers (fixed-position fields; the FB is Uncacheable,
@@ -3023,19 +3093,46 @@ static void *main_continued(void *arg UNUSED)
      * never a wild write) exercised end-to-end: PA's fault-EP receiver detects it -> shield_assess
      * -> execute the register-rewrite respawn (BlockedOnReply Suspend-first) -> JACT audit ->
      * coherent gen. Gated JARVIS_ACTION_PROBE (default 0); one-shot before the workload. */
+    /* STEP-3 §10 gate: induce a REAL fault in PB-main AND a worker, N_PROBE cycles EACH (not the
+     * STEP-2 single shot), proving detection + coherent worker-dispatched recovery is robust across
+     * repetitions and the phantom re-fault is gone. Each cycle: send the poison marker -> spin until
+     * pa_fault_check funnels the restart -> km2b_probe_recovery forces a real cache-MISS inference
+     * (workers dispatch; text captured). Between cycles we clear the crash-loop WINDOW to isolate
+     * each induced fault — equivalent to the KM2B_HEALTHY_RESET healthy interval elapsing (the
+     * window-reset ITSELF is proven separately by the steady workload); without this the (correct)
+     * bound would trip g_pb_dead at the 5th back-to-back restart. */
     {
-        puts_serial("[ACTION-PROBE] K/M2b-2 real-crash: inducing a PB-main null-read fault\n");
-        shmem_ipc_send(shared_request_ring, MSG_QUERY, 60000, "FAULTPROBE", 10);
-        seL4_Signal(req_notif);
-        int detected = 0;
-        for (uint32_t p = 0; p < 40000000u && !(detected = pa_fault_check()); p++) seL4_Yield();
-        puts_serial("[ACTION-PROBE] PB-main fault ");
-        puts_serial(detected ? "DETECTED + restarted" : "NOT detected (timeout)"); puts_serial("\n");
-        shmem_ipc_send(shared_request_ring, MSG_QUERY, 60001, "The seL4 microkernel is", 23);
-        seL4_Signal(req_notif);
-        int rc = wait_for_response(shared_response_ring, MSG_RESPONSE);
-        puts_serial("[ACTION-PROBE] post-restart serve=");
-        puts_serial(rc == 0 ? "OK (coherent gen resumed)" : "MISS"); puts_serial("\n");
+        const int N_PROBE = 5;
+        uint16_t pseq = 60000;
+        for (int c = 1; c <= N_PROBE; c++) {
+            puts_serial("[ACTION-PROBE] PB-main cycle "); put_dec((uint32_t)c);
+            puts_serial("/"); put_dec((uint32_t)N_PROBE); puts_serial(": inducing null-read fault\n");
+            shmem_ipc_send(shared_request_ring, MSG_QUERY, pseq++, "FAULTPROBE", 10);
+            seL4_Signal(req_notif);
+            int detected = 0;
+            for (uint32_t p = 0; p < 40000000u && !(detected = pa_fault_check()); p++) seL4_Yield();
+            if (!detected) { puts_serial("[ACTION-PROBE] PB-main fault NOT detected (timeout)\n"); break; }
+            /* Part-3: recovery = a REAL worker-dispatched inference with text captured (not rc==0). */
+            int ok = km2b_probe_recovery("pbmain-fault", pseq++);
+            puts_serial("[ACTION-PROBE] PB-main cycle "); put_dec((uint32_t)c);
+            puts_serial(ok ? " recovery=COHERENT\n" : " recovery=FAILED\n");
+            g_restart_window = 0; g_healthy_since_restart = 0;   /* isolate the next induced cycle */
+            if (!ok) break;
+        }
+        for (int c = 1; c <= N_PROBE; c++) {
+            puts_serial("[ACTION-PROBE] worker cycle "); put_dec((uint32_t)c);
+            puts_serial("/"); put_dec((uint32_t)N_PROBE); puts_serial(": inducing WORKER null-read fault\n");
+            shmem_ipc_send(shared_request_ring, MSG_QUERY, pseq++, "WFAULTPROBE", 11);
+            seL4_Signal(req_notif);
+            int detected = 0;
+            for (uint32_t p = 0; p < 40000000u && !(detected = pa_fault_check()); p++) seL4_Yield();
+            if (!detected) { puts_serial("[ACTION-PROBE] worker fault NOT detected (timeout)\n"); break; }
+            int ok = km2b_probe_recovery("worker-fault", pseq++);
+            puts_serial("[ACTION-PROBE] worker cycle "); put_dec((uint32_t)c);
+            puts_serial(ok ? " recovery=COHERENT\n" : " recovery=FAILED\n");
+            g_restart_window = 0; g_healthy_since_restart = 0;
+            if (!ok) break;
+        }
     }
 #endif
 
@@ -3640,6 +3737,21 @@ static void *main_continued(void *arg UNUSED)
 
 #if JARVIS_DBG_BOOT_LOG
             puts_serial("[PA] PB response received\n");
+#endif
+#if JARVIS_ACTIONS
+            /* §5-F: a completed PB inference is evidence PB is healthy. After KM2B_HEALTHY_RESET
+             * consecutive healthy inferences the crash-loop WINDOW resets to 0 — making the bound a
+             * true SLIDING window (rare, widely-spaced self-heals never accumulate to a false
+             * g_pb_dead), not a lifetime cap. STEP-2 defined KM2B_HEALTHY_RESET + zeroed the counter
+             * on restart but NEVER incremented it, so the window never reset (a latent
+             * permanent-degrade bug: any 5 lifetime self-heals -> degraded). Only ticks while a
+             * window is open (g_restart_window > 0). */
+            if (resp_offset > 0 && g_restart_window > 0 &&
+                ++g_healthy_since_restart >= KM2B_HEALTHY_RESET) {
+                puts_serial("[RESTART] window reset ("); put_dec(g_healthy_since_restart);
+                puts_serial(" healthy inferences)\n");
+                g_restart_window = 0; g_healthy_since_restart = 0;
+            }
 #endif
 #if JARVIS_DBG_INFER_SUMMARY
             /* v4 live tok/s serial proof (per-inference cadence, ~15% of queries). The QEMU

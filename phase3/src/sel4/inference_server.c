@@ -86,6 +86,29 @@ static uint32_t       g_km2a_restart_count = 0;
 static volatile int   g_km2a_please_restart = 0;   /* E: PA-requested cooperative restart (spike-only) */
 #endif
 
+#if JARVIS_ACTION_PROBE && defined(JARVIS_SEL4_SMP)
+/* STEP-3 Part-2: worker-fault probe fn. The first pool thread whose stack anchor is FAR from the
+ * dispatcher's takes the one-shot null-READ — workers run on their own sel4utils stacks while the
+ * dispatcher (PB-main) runs wfault_fn on the stack that set g_wfault_anchor, so only a genuine
+ * WORKER can fault (a deterministic worker VMFault, never PB-main). The pause spin keeps indexes
+ * flowing long enough (~0.5 ms total) that the workers' wake latency (~µs) always joins the race. */
+static volatile int       g_wfault_arm = 0;
+static volatile uintptr_t g_wfault_anchor = 0;
+static void wfault_fn(int i, void *ctx)
+{
+    (void)i; (void)ctx;
+    char here;
+    uintptr_t h = (uintptr_t)&here, a = g_wfault_anchor;
+    uintptr_t d = h > a ? h - a : a - h;
+    if (g_wfault_arm && d > (256UL * 1024UL)) {   /* not the dispatcher's stack -> a worker */
+        g_wfault_arm = 0;
+        volatile int *nullp = (volatile int *)0;
+        volatile int v = *nullp; (void)v;          /* -> worker VMFault -> badged fault EP -> PA */
+    }
+    for (volatile int s = 0; s < 400; s++) __asm__ volatile("pause");
+}
+#endif
+
 /* G (Phase 6 K/M2b-2): the warm inference state hoisted to FILE-SCOPE STATICS (was main()
  * locals). Deletes the pointer-into-frame fragility — pb_restart_entry / the K/M2a-2 stash now
  * reference fixed .bss objects, never a main()-frame pointer. UNGATED + behavior-neutral: the
@@ -248,6 +271,28 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
         volatile int *nullp = (volatile int *)0;
         volatile int v = *nullp; (void)v;   /* -> VMFault -> PB fault EP -> PA */
     }
+#ifdef JARVIS_SEL4_SMP
+    /* STEP-3 Part-2: the WORKER-fault probe (the corrected §10 gate needs a real fault in PB-main
+     * AND a worker). Dispatch a poisoned pool run: the first thread whose stack anchor is far from
+     * the dispatcher's (workers run on their own sel4utils stacks) takes a one-shot null-READ ->
+     * genuine worker VMFault -> PA's badged fault EP attributes it (badge=i). The faulted worker
+     * never decrements `active`, so this dispatch's join blocks PB-main in seL4_Wait(done) — BY
+     * DESIGN: PA's whole-PB restart (Suspend-first) is exactly what recovers from it. */
+    if (qlen == 11 && memcmp(query_buf, "WFAULTPROBE", 11) == 0) {
+        char anchor;
+        g_wfault_anchor = (uintptr_t)&anchor;
+        g_wfault_arm = 1;
+        puts_serial("[PB] ACTION_PROBE: dispatching poisoned pool run (worker null-READ)\n");
+        jarvis_parallel_for(0, 512, wfault_fn, NULL, 0);
+        /* Reached only if NO thread took the poison (dispatcher consumed every index before any
+         * worker woke — never observed in practice). Respond so PA's probe reports honestly. */
+        g_wfault_arm = 0;
+        puts_serial("[PB] ACTION_PROBE: worker-fault probe NOT taken (dispatcher won the race)\n");
+        shmem_ipc_send(response_ring, MSG_RESPONSE, seq, "WFPROBE-MISS", 12);
+        seL4_Signal(resp_notif);
+        return;
+    }
+#endif
 #endif
 
 #if JARVIS_DBG_PB

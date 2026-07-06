@@ -360,6 +360,15 @@ jobs:
           -lm -o /tmp/t_sa
         /tmp/t_sa
 
+    - name: "Phase 6: K/M2b-2 keyword-clean restart trigger (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
+          phase3/src/ai/test_km2b_trigger.c phase3/src/ai/km2b_trigger.c \
+          phase3/src/ai/shield_action.c phase3/src/ai/action_allowlist.c \
+          phase3/src/ai/shield_learn.c phase3/src/ai/decision_cache.c \
+          -lm -o /tmp/t_km2b
+        /tmp/t_km2b
+
     - name: "Phase 6: Action-audit store (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
