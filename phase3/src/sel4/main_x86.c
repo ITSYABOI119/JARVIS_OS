@@ -502,6 +502,20 @@ static semantic_fact_t g_sem_facts[SEM_DISTILL_MAXFACTS];
  * induced-BLOCK smoke (the gate REFUSES live) — no action ever executes before K/M2. */
 static act_audit_t g_action_audit;
 static int         g_action_audit_ready = 0;
+
+/* K/M2b-2 live self-heal state (all PA-side, gated JARVIS_ACTIONS). SYSTEM_DESIGN §5 A–G. */
+#define KM2B_RESTART_STACK_SIZE  (256 * 1024)   /* keep in sync with inference_server.c */
+#define KM2B_MISS_THRESHOLD      3              /* consecutive PB-contact failures -> hang restart */
+#define KM2B_CRASHLOOP_BOUND     5              /* windowed restarts -> g_pb_dead (degraded) */
+#define KM2B_HEALTHY_RESET       25             /* coherent queries after a restart -> reset the window */
+static seL4_CPtr  g_pa_req_notif  = 0;          /* PA-side notif object cptrs (hoisted for the funnel) */
+static seL4_CPtr  g_pa_resp_notif = 0;
+static volatile int g_restart_in_progress = 0;  /* §5-D funnel re-entrancy latch */
+static uint32_t   g_restart_count = 0;          /* lifetime (v7 telemetry = K/M3; PA-internal here) */
+static uint32_t   g_pb_miss_count = 0;          /* consecutive PB-contact failures (all 3 lanes; cache neutral) */
+static uint32_t   g_restart_window = 0;         /* windowed consecutive restarts (crash-loop bound) */
+static uint32_t   g_healthy_since_restart = 0;  /* coherent PB responses since the last restart */
+static int        g_pb_dead = 0;                /* §5-F: crash-loop bound hit -> stop dispatching to PB */
 #endif
 static uint32_t total_queries = 0;
 static uint32_t cache_hits = 0;
@@ -1412,6 +1426,13 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
                 cfg = thread_config_cspace(cfg, inference_process.cspace.cptr, pb_cspace_data);
                 cfg = thread_config_auth(cfg, simple_get_tcb(&simple));
                 cfg = thread_config_priority(cfg, seL4_MaxPrio);
+#if JARVIS_ACTIONS
+                /* K/M2b-2 §5-A: bind the worker's fault to PB's fault EP (@ SEL4UTILS_ENDPOINT_SLOT
+                 * in PB's cspace — the same EP PB-main is bound to; single audit class). Workers are
+                 * cfg={0} = null handler otherwise, so a worker fault would be silently undeliverable.
+                 * Set BEFORE configure — never post-hoc seL4_TCB_SetSpace a live worker. */
+                cfg = thread_config_fault_endpoint(cfg, SEL4UTILS_ENDPOINT_SLOT);
+#endif
                 sel4utils_thread_t wt;
                 if (sel4utils_configure_thread_config(&vka, &inference_process.vspace,
                                                       &inference_process.vspace, cfg, &wt) != 0) {
@@ -1515,7 +1536,7 @@ static int wait_for_response(shmem_ring_t *ring, uint8_t expected_type)
     return -1;
 }
 
-#if JARVIS_KM2A_SPIKE
+#if JARVIS_RESPAWN
 /* K/M2b-1 (SYSTEM_DESIGN §4.2 B): reset EVERY M3 worker via the full launch-triple
  * (ReadRegisters -> mutate rip/rdi/rsi/rdx/rsp, preserve fs_base, clear DF -> WriteRegisters).
  * Used for a MID-DISPATCH restart: PB-main is being re-entered, so the workers' in-flight
@@ -1545,6 +1566,159 @@ static int km2b_reset_workers(void)
         reset++;
     }
     return reset;
+}
+#endif
+
+#if JARVIS_ACTIONS
+/* ===== K/M2b-2 live self-heal: detect (fault-EP + miss-counter) -> shield_assess -> execute the
+ * respawn -> JACT audit. All gated JARVIS_ACTIONS (default 0). SYSTEM_DESIGN §5 A–G. ===== */
+
+/* §5-E: keyword-CLEAN trigger_snapshot from SYSTEM FACTS ONLY — NEVER the in-flight query text (the
+ * shield lane's queries are all blocklist keywords, which would make shield_assess BLOCK its own
+ * restart). Reason strings ("fault"/"hang") are keyword-clean by construction. Host-tested. */
+static char *km2b_ts(char *p, const char *s) { while (*s) *p++ = *s++; return p; }
+static char *km2b_tu(char *p, uint32_t v) {
+    char d[12]; int n = 0;
+    if (!v) d[n++] = '0'; else while (v) { d[n++] = (char)('0' + v % 10); v /= 10; }
+    while (n) *p++ = d[--n];
+    return p;
+}
+static int km2b_build_trigger(char *buf, int cap, const char *reason, uint16_t lane,
+                              uint32_t missed, uint64_t age_ms, seL4_Word flabel, seL4_Word fbadge)
+{
+    (void)cap;
+    char *p = buf;
+    p = km2b_ts(p, "respawn ");
+    p = km2b_ts(p, reason);
+    p = km2b_ts(p, " lane="); p = km2b_tu(p, (uint32_t)lane);
+    p = km2b_ts(p, " miss="); p = km2b_tu(p, missed);
+    p = km2b_ts(p, " age=");  p = km2b_tu(p, (uint32_t)age_ms); p = km2b_ts(p, "ms");
+    p = km2b_ts(p, " flt=");  p = km2b_tu(p, (uint32_t)flabel);
+    p = km2b_ts(p, "/");      p = km2b_tu(p, (uint32_t)fbadge);
+    *p = '\0';
+    return (int)(p - buf);
+}
+
+/* §5-A: non-blocking fault receipt. seL4_NBRecv (NEVER seL4_Poll — won't dequeue an endpoint;
+ * NEVER seL4_Recv — blocks PA on the normal no-fault iteration => box dead). Loop-drains to empty
+ * (SMP faults queue FIFO); fills *badge/*label/*ip from the FIRST fault. Returns count drained. */
+static int pa_poll_fault(seL4_Word *badge_out, seL4_Word *label_out, seL4_Word *ip_out)
+{
+    int n = 0;
+    *badge_out = 0; *label_out = 0; *ip_out = 0;
+    for (;;) {
+        seL4_Word badge = 0;
+        seL4_MessageInfo_t mi = seL4_NBRecv(inference_process.fault_endpoint.cptr, &badge);
+        seL4_Word label = seL4_MessageInfo_get_label(mi);
+        seL4_Word len   = seL4_MessageInfo_get_length(mi);
+        if (label == 0 && len == 0 && badge == 0) break;   /* nothing pending (empty NBRecv) */
+        if (n == 0) {
+            *badge_out = badge; *label_out = label;
+            *ip_out = (len >= 1) ? seL4_GetMR(0) : 0;   /* MR0 ~ faulting IP for common fault types */
+        }
+        if (++n > 64) break;   /* safety bound */
+    }
+    return n;
+}
+
+/* §6: the live respawn. Suspend-FIRST (a real fault leaves the thread BlockedOnReply — a bare
+ * Resume no-ops => silent failure), reset all workers (whole-PB), re-init rings, drain, then
+ * ReadRegisters -> mutate(rip=pb_restart_entry, fresh restart-stack SP, fs_base preserved) ->
+ * WriteRegisters -> Resume, drain the fault EP, drain-then-poll the ready ACK. 1 = re-ready. */
+static int km2b_do_respawn(void)
+{
+    seL4_CPtr pb_tcb = inference_process.thread.tcb.cptr;
+    uintptr_t pb_entry = resolve_pb_symbol(g_pb_elf, g_pb_elf_size, "pb_restart_entry");
+    uintptr_t pb_stk   = resolve_pb_symbol(g_pb_elf, g_pb_elf_size, "g_km2a_restart_stack");
+    if (!pb_entry || !pb_stk) { puts_serial("[RESTART] FATAL: respawn symbols unresolved\n"); return 0; }
+    uintptr_t sp = ((pb_stk + KM2B_RESTART_STACK_SIZE) & ~(uintptr_t)0xF) - 8;
+
+    seL4_TCB_Suspend(pb_tcb);          /* Suspend-FIRST — cancels BlockedOnReply (§5-B) */
+    km2b_reset_workers();              /* whole-PB restart: all workers reconstructed (§5-D) */
+    shmem_ipc_init(shared_request_ring);
+    shmem_ipc_init(shared_response_ring);
+    { seL4_Word b; seL4_Poll(g_pa_resp_notif, &b); }
+
+    seL4_UserContext regs;
+    seL4_Word nregs = sizeof(regs) / sizeof(seL4_Word);
+    if (seL4_TCB_ReadRegisters(pb_tcb, 0, 0, nregs, &regs) != seL4_NoError) return 0;
+    if (regs.fs_base == 0) puts_serial("[RESTART] WARN: fs_base==0 at fault (TLS may be clobbered)\n");
+    regs.rip = (seL4_Word)pb_entry;
+    regs.rsp = (seL4_Word)sp;
+    regs.rflags &= ~((seL4_Word)1 << 10);
+    if (seL4_TCB_WriteRegisters(pb_tcb, 0, 0, nregs, &regs) != seL4_NoError) return 0;
+    seL4_TCB_Resume(pb_tcb);           /* one Resume (Suspend idempotent) */
+
+    { seL4_Word fb, fl, fi; (void)pa_poll_fault(&fb, &fl, &fi); }   /* drain the EP; NEVER seL4_Reply */
+
+    return (wait_for_response(shared_response_ring, MSG_HEARTBEAT_ACK) == 0) ? 1 : 0;
+}
+
+/* §5-D/E: the SINGLE restart funnel. Idempotent via g_restart_in_progress. First LIVE shield_assess
+ * -> trust_policy; execute on EXECUTE/NOTIFY; exactly ONE JACT record; restart_count bump; windowed
+ * crash-loop bound (§5-F -> g_pb_dead). This is the first time JARVIS_ACTIONS executes live. */
+static void pa_restart_pb(const char *reason, uint16_t lane, uint32_t missed, uint64_t age_ms,
+                          seL4_Word flabel, seL4_Word fbadge)
+{
+    if (g_restart_in_progress || g_pb_dead) return;
+    g_restart_in_progress = 1;
+
+    char trig[ACT_TRIGGER_MAX];
+    int tl = km2b_build_trigger(trig, sizeof(trig), reason, lane, missed, age_ms, flabel, fbadge);
+
+    action_ctx_t ctx = { .trigger = trig, .trigger_len = (uint16_t)tl, .query_key = 0 };
+    shield_action_result_t sr = shield_assess(ACTION_RESTART_PB, &ctx, NULL, 0);   /* learn=NULL (§5-E) */
+    const action_def_t *ad = action_lookup(ACTION_RESTART_PB);
+    trust_level_t tlv = ad ? ad->trust : TRUST_NOTIFY;
+    act_decision_t dec = trust_policy(sr.verdict, tlv, false);   /* no control-IN yet */
+
+    uint16_t verdict = AUDIT_BLOCKED, outcome = AUDIT_OUT_NA;
+    if (dec == ACT_EXECUTE || dec == ACT_NOTIFY) {
+        g_infer_active = 0; g_infer_t0 = 0;   /* §5-E: clear the duty latch (stale t0 corrupts) */
+        int ok = km2b_do_respawn();
+        verdict = AUDIT_EXECUTED;
+        outcome = ok ? AUDIT_OUT_OK : AUDIT_OUT_FAIL;
+        g_restart_count++; g_restart_window++; g_healthy_since_restart = 0;
+        puts_serial("[RESTART] reason="); puts_serial(reason);
+        puts_serial(" risk="); put_dec(sr.risk_x100);
+        puts_serial(" -> EXECUTED outcome="); puts_serial(ok ? "OK" : "FAIL");
+        puts_serial(" restart_count="); put_dec(g_restart_count);
+        puts_serial(" window="); put_dec(g_restart_window); puts_serial("\n");
+    } else {
+        puts_serial("[RESTART] reason="); puts_serial(reason);
+        puts_serial(" risk="); put_dec(sr.risk_x100); puts_serial(" -> REFUSED (not executed)\n");
+    }
+
+    if (g_action_audit_ready) {   /* §5-E: exactly ONE JACT record per resolved event */
+        action_audit_rec_t rec;
+        act_audit_fill(&rec, jarvis_uptime_ms(), ACTION_RESTART_PB, (uint16_t)tlv,
+                       verdict, sr.risk_x100, outcome, trig, (uint16_t)tl);
+        act_audit_append(&g_action_audit, &rec);
+    }
+
+    if (g_restart_window >= KM2B_CRASHLOOP_BOUND) {   /* §5-F: crash-loop -> degraded (stop SENDS) */
+        g_pb_dead = 1;
+        puts_serial("[FATAL] PB crash-loop bound hit — degraded: cache-only, PB dispatch STOPPED\n");
+    }
+
+    g_pb_miss_count = 0;
+    g_restart_in_progress = 0;
+}
+
+/* §5-A: called from the PB-touching poll spins (co-located with jarvis_telemetry_tick's cadence, NOT
+ * per seL4_Yield). If a fault is pending, funnel a restart. Returns 1 if it restarted. */
+static int pa_fault_check(void)
+{
+    if (g_restart_in_progress || g_pb_dead) return 0;
+    seL4_Word badge, label, ip;
+    if (pa_poll_fault(&badge, &label, &ip) > 0) {
+        puts_serial("[FAULT] PB fault label="); put_dec((uint32_t)label);
+        puts_serial(" badge="); put_dec((uint32_t)badge);
+        puts_serial(" ip="); put_dec((uint32_t)ip); puts_serial("\n");
+        pa_restart_pb("fault", 0, 0, 0, label, badge);
+        return 1;
+    }
+    return 0;
 }
 #endif
 
@@ -2841,6 +3015,30 @@ static void *main_continued(void *arg UNUSED)
         }
     }
 
+#if JARVIS_ACTIONS
+    g_pa_req_notif = req_notif; g_pa_resp_notif = resp_notif;   /* K/M2b-2: hoist the notif cptrs for the funnel */
+#endif
+#if JARVIS_ACTIONS && JARVIS_ACTION_PROBE
+    /* K/M2b-2 STEP-3 real-crash probe: a GENUINE PB-main VMFault (deliberate null-READ inside PB —
+     * never a wild write) exercised end-to-end: PA's fault-EP receiver detects it -> shield_assess
+     * -> execute the register-rewrite respawn (BlockedOnReply Suspend-first) -> JACT audit ->
+     * coherent gen. Gated JARVIS_ACTION_PROBE (default 0); one-shot before the workload. */
+    {
+        puts_serial("[ACTION-PROBE] K/M2b-2 real-crash: inducing a PB-main null-read fault\n");
+        shmem_ipc_send(shared_request_ring, MSG_QUERY, 60000, "FAULTPROBE", 10);
+        seL4_Signal(req_notif);
+        int detected = 0;
+        for (uint32_t p = 0; p < 40000000u && !(detected = pa_fault_check()); p++) seL4_Yield();
+        puts_serial("[ACTION-PROBE] PB-main fault ");
+        puts_serial(detected ? "DETECTED + restarted" : "NOT detected (timeout)"); puts_serial("\n");
+        shmem_ipc_send(shared_request_ring, MSG_QUERY, 60001, "The seL4 microkernel is", 23);
+        seL4_Signal(req_notif);
+        int rc = wait_for_response(shared_response_ring, MSG_RESPONSE);
+        puts_serial("[ACTION-PROBE] post-restart serve=");
+        puts_serial(rc == 0 ? "OK (coherent gen resumed)" : "MISS"); puts_serial("\n");
+    }
+#endif
+
 #if JARVIS_KM2A_SPIKE
     /* ===== K/M2a-2 reuse-in-place respawn spike (SYSTEM_DESIGN §4.1/§4.2) — KVM measurement.
      * Per cycle: suspend PB-main (quiescent, parked on seL4_Wait(req_notif)) -> reset both rings
@@ -3377,6 +3575,12 @@ static void *main_continued(void *arg UNUSED)
                      * `while` above and never touches the shmem ring -> cannot perturb the
                      * PA<->PB IPC, lose a response, or bump err=. */
                     jarvis_telemetry_tick();
+#if JARVIS_ACTIONS
+                    /* §5-A: poll the fault EP in the ~12 s inference spin (co-located with the
+                     * telemetry tick cadence, not per-Yield). A PB-main OR worker fault here ->
+                     * funnel a restart, then abandon this query (handled, not an error). */
+                    if (pa_fault_check()) goto next_query;
+#endif
                     timeout_polls++;
                     if (timeout_polls % LOG_INTERVAL == 0) {
                         puts_serial("[PA] Waiting for PB... ");

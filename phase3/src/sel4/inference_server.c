@@ -59,10 +59,10 @@ extern const unsigned char _binary_model_gguf_start[];
 extern const unsigned char _binary_model_gguf_end[];
 #endif
 
-#if JARVIS_KM2A_SPIKE
-/* ===== Phase 6 K/M2a-2 reuse-in-place respawn spike (SYSTEM_DESIGN §4.1/§4.2). Gated; the
- * deployed image builds with JARVIS_KM2A_SPIKE=0 and JARVIS_ACTIONS stays 0 (action-inert).
- * THROWAWAY — reset after the KVM measurement locks Strategy A. ===== */
+#if JARVIS_RESPAWN
+/* ===== Phase 6 reuse-in-place respawn PRIMITIVES (SYSTEM_DESIGN §4.1/§4.2). Shared by the
+ * K/M2a-2/b-1 measurement spike (JARVIS_KM2A_SPIKE) AND the K/M2b-2 live self-heal (JARVIS_ACTIONS)
+ * — gated JARVIS_RESPAWN = (KM2A_SPIKE || ACTIONS). Deploy with both 0 = action-inert. ===== */
 #ifndef JARVIS_MAX_WORKERS
 #define JARVIS_MAX_WORKERS 8
 #endif
@@ -81,7 +81,9 @@ static int            g_km2a_bos_id, g_km2a_model_loaded;
 static int            g_km2a_pool_n_threads = 1, g_km2a_pool_n_wake = 0;
 static seL4_CPtr      g_km2a_pool_done = 0, g_km2a_pool_wake[JARVIS_MAX_WORKERS];
 static uint32_t       g_km2a_restart_count = 0;
-static volatile int   g_km2a_please_restart = 0;   /* E: PA-requested cooperative restart at the loop top */
+#endif
+#if JARVIS_KM2A_SPIKE
+static volatile int   g_km2a_please_restart = 0;   /* E: PA-requested cooperative restart (spike-only) */
 #endif
 
 /* G (Phase 6 K/M2b-2): the warm inference state hoisted to FILE-SCOPE STATICS (was main()
@@ -236,6 +238,17 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
     int qlen = query_len > 240 ? 240 : query_len;
     memcpy(query_buf, query, (size_t)qlen);
     query_buf[qlen] = '\0';
+
+#if JARVIS_ACTION_PROBE
+    /* K/M2b-2 STEP-3 real-crash probe: a GENUINE PB-main VMFault (deliberate null-READ — NEVER a
+     * wild write, so PB's .data the respawn preserves is intact) so PA's fault-EP receiver + the
+     * register-rewrite respawn are exercised on a REAL fault. Gated; deploy never sends the marker. */
+    if (qlen == 10 && memcmp(query_buf, "FAULTPROBE", 10) == 0) {
+        puts_serial("[PB] ACTION_PROBE: inducing PB-main null-READ fault NOW\n");
+        volatile int *nullp = (volatile int *)0;
+        volatile int v = *nullp; (void)v;   /* -> VMFault -> PB fault EP -> PA */
+    }
+#endif
 
 #if JARVIS_DBG_PB
     {
@@ -556,7 +569,7 @@ static void pb_serve_loop(shmem_ring_t *request_ring, shmem_ring_t *response_rin
     }
 }
 
-#if JARVIS_KM2A_SPIKE
+#if JARVIS_RESPAWN
 /* K/M2a-2 (SYSTEM_DESIGN §4.2): PA suspends PB-main at a quiescent point (parked on
  * seL4_Wait(req_notif)) and WriteRegisters it HERE with a fresh SP = g_km2a_restart_stack top
  * (rsp ≡ 8 mod 16), fs_base preserved, DF clear, then Resumes. This re-enters PAST musl's
@@ -888,7 +901,7 @@ int main(int argc, char **argv)
         for (int i = 7; i < argc && n_wake < (JARVIS_MAX_WORKERS - 1); i++)
             wake[n_wake++] = (seL4_CPtr)atol(argv[i]);
         jarvis_sel4_pool_init(n_threads, done, wake, n_wake);
-#if JARVIS_KM2A_SPIKE
+#if JARVIS_RESPAWN
         /* K/M2a-2: stash the pool params so pb_restart_entry can re-init the pool on respawn.
          * Store wakes at [1..n_wake] to mirror jarvis_sel4_pool_init's own +1 indexing. */
         g_km2a_pool_n_threads = n_threads;
@@ -923,7 +936,7 @@ int main(int argc, char **argv)
     }
 
     /* ---- Main IPC loop (extracted into pb_serve_loop; §4.2 item G) ---- */
-#if JARVIS_KM2A_SPIKE
+#if JARVIS_RESPAWN
     /* K/M2a-2: stash the warm context for pb_restart_entry + arm the restart stack (0xAA fill for
      * the high-water scan). The &qm/&state/&tok pointers into this frame stay valid because the
      * restart re-enters on g_km2a_restart_stack (fresh SP), preserving main()'s frame. */

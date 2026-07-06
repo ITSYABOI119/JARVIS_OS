@@ -169,6 +169,14 @@
  * pb_serve_loop is extracted unconditionally but is a behavior-neutral refactor). */
 #define JARVIS_KM2A_SPIKE 0
 
+/* Phase 6 K/M2b-2: the reuse-in-place respawn PRIMITIVES (pb_restart_entry + the dedicated
+ * restart stack + the stashed warm-context handles + km2b_reset_workers) are needed by BOTH the
+ * K/M2a-2/b-1 measurement spike (JARVIS_KM2A_SPIKE) AND the live self-healing path
+ * (JARVIS_ACTIONS). This macro gates the shared primitives; the spike-measurement-only bits (the
+ * N-cycle driver, the cooperative-flag/TOKSPIN markers) stay under JARVIS_KM2A_SPIKE, and the
+ * live detect→assess→execute→audit path stays under JARVIS_ACTIONS. */
+#define JARVIS_RESPAWN (JARVIS_KM2A_SPIKE || JARVIS_ACTIONS)
+
 /* Serial [STATS] prints every 100 queries; NVMe LOG_IPC_STATS is written every
  * JARVIS_STATS_NVME_INTERVAL. Measured bare-metal rate is ~3k queries/day (single
  * core, scalar) -> interval=100 gives ~870 entries over 30 days, well under the
