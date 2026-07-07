@@ -163,6 +163,7 @@ AI_FILES=(
     "action_audit.c"      "action_audit.h"
     "km2b_trigger.c"      "km2b_trigger.h"
     "km2b_miss.c"         "km2b_miss.h"
+    "km2b_fault.c"        "km2b_fault.h"
 )
 
 for f in "${AI_FILES[@]}"; do
@@ -533,6 +534,17 @@ if [ -f "$CMAKE_FILE" ]; then
         fi
     else
         echo -e "  ${CYAN}OK${NC}  src/ai/km2b_miss.c already in source list"
+    fi
+    if ! grep -q "src/ai/km2b_fault.c" "$CMAKE_FILE"; then
+        sed -i '/src\/ai\/km2b_miss.c/a\    src/ai/km2b_fault.c' "$CMAKE_FILE" 2>/dev/null
+        if grep -q "src/ai/km2b_fault.c" "$CMAKE_FILE"; then
+            echo -e "  ${GREEN}ADDED${NC}  src/ai/km2b_fault.c to source list"
+            PATCHED=1
+        else
+            echo -e "  ${RED}FAILED${NC}  Could not add km2b_fault.c — edit CMakeLists.txt manually"
+        fi
+    else
+        echo -e "  ${CYAN}OK${NC}  src/ai/km2b_fault.c already in source list"
     fi
 
     # Add JARVIS_SEL4 compile definition (needed for pci.c IOPort backend)

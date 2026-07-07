@@ -78,6 +78,7 @@
 #include "action_audit.h"       /* Phase 6 K/M1: the raw-LBA action-audit store (flag-gated; JACT @ 21,120,000) */
 #include "km2b_trigger.h"       /* Phase 6 K/M2b-2: keyword-clean restart trigger builder (§5-E; host-tested) */
 #include "km2b_miss.h"          /* Phase 6 K/M2c: shared PB-contact miss-counter (hang/wedge detector; host-tested) */
+#include "km2b_fault.h"         /* Phase 6 K/M4 pre-flip: fault-EP validity predicate (label+badge; host-tested) */
 #endif
 #include "jarvis_ui_tokens.h"   /* Step 2c-2b: FBP_ and JUI_ palette + geometry (single source) */
 
@@ -147,6 +148,7 @@ static void sel4_pci_outl(uint16_t port, uint32_t val) {
 static void puts_serial(const char *s);
 static void put_hex(uint32_t val);
 static void put_dec(uint32_t val);
+static void put_hex64(uint64_t val);   /* defined later (~spawn); K/M4 [FAULT-WIN] logs the PB .text window before the def */
 
 /* NVMe bounce buffer for FAT32 reads.
  * FAT32 callback gets an arbitrary buf pointer, but NVMe needs DMA paddr.
@@ -1193,6 +1195,35 @@ static uintptr_t resolve_pb_symbol(const void *elf_blob, size_t elf_size, const 
     return 0;
 }
 
+#if JARVIS_ACTIONS
+/* K/M4 pre-flip (§10 carry-forward #2): PB's executable address window, derived ONCE at spawn
+ * from the union of its PF_X PT_LOAD segments (ET_EXEC => segment vaddr == runtime vaddr, no PIE
+ * bias). Feeds the pa_poll_fault fault-IP ADVISORY only (a log-only warn when a VMFault ip lands
+ * outside code — never a restart veto). If the ELF can't be parsed or has no executable segment,
+ * the window stays 0/0 and km2b_fault_ip_plausible degrades to always-plausible. */
+static uint64_t g_pb_text_lo = 0, g_pb_text_hi = 0;
+static void stash_pb_text_window(const void *elf_blob, size_t elf_size)
+{
+    g_pb_text_lo = 0; g_pb_text_hi = 0;
+    elf_t e;
+    if (elf_newFile(elf_blob, elf_size, &e) != 0) return;
+    size_t nph = elf_getNumProgramHeaders(&e);
+    uint64_t lo = 0, hi = 0; int found = 0;
+    for (size_t i = 0; i < nph; i++) {
+        if (elf_getProgramHeaderType(&e, i) != 1u) continue;         /* PT_LOAD */
+        if (!(elf_getProgramHeaderFlags(&e, i) & 0x1u)) continue;    /* PF_X (executable) */
+        uint64_t v  = (uint64_t)elf_getProgramHeaderVaddr(&e, i);
+        uint64_t sz = (uint64_t)elf_getProgramHeaderMemorySize(&e, i);
+        if (sz == 0) continue;
+        uint64_t end = v + sz;
+        if (end < v) continue;   /* vaddr+memsz wrap guard (advisory-only consumer, but keep parity) */
+        if (!found) { lo = v; hi = end; found = 1; }
+        else { if (v < lo) lo = v; if (end > hi) hi = end; }
+    }
+    if (found) { g_pb_text_lo = lo; g_pb_text_hi = hi; }
+}
+#endif
+
 /* ---- Spawn inference process (Process B) ---- */
 
 static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_notif_out,
@@ -1530,6 +1561,11 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
     g_pb_model_n_pages   = model_n_pages;
     g_pb_elf             = elf;
     g_pb_elf_size        = elf_size;
+#if JARVIS_ACTIONS
+    stash_pb_text_window(elf, elf_size);   /* K/M4 pre-flip: PB .text window for the fault-IP advisory */
+    puts_serial("[FAULT-WIN] pb_text_lo="); put_hex64(g_pb_text_lo);
+    puts_serial(" pb_text_hi="); put_hex64(g_pb_text_hi); puts_serial("\n");
+#endif
 
     return 0;
 }
@@ -1647,6 +1683,24 @@ static int pa_poll_fault(seL4_Word *badge_out, seL4_Word *label_out, seL4_Word *
          * seL4_Fault type fits in 4 bits (NullFault=0 .. VMFault=5), so 1..15 = real fault, and
          * NullFault(0) / any label > 15 = endpoint empty. Gate on the TAG, not the all-zero read. */
         if (label < 1 || label > 15) break;   /* NullFault or garbage -> nothing pending */
+        /* K/M4 pre-flip defense-in-depth (§10 carry-forward #2): a phantom must now clear BOTH the
+         * label gate AND a plausible badge (0=PB-main .. g_pb_workers_started). NBRecv-empty leaves
+         * stale garbage across MULTIPLE registers, so requiring label in 1..15 AND badge in 0..N is
+         * multiplicatively less likely to coincide than the label gate alone. The IP stays ADVISORY
+         * (log, never a veto — a genuine jump-to-garbage crash legitimately faults outside .text and
+         * MUST still restart). Bound note: on a partial worker-start degrade PB runs SERIAL
+         * (g_pb_workers_started=0) and any already-started workers park in seL4_Wait — never woken
+         * or dispatched, so they cannot fault; the tight badge<=N bound is correct in practice. */
+        {
+            uint64_t fip = (len >= 1) ? seL4_GetMR(0) : 0;
+            if (!km2b_fault_is_genuine((uint32_t)label, (uint64_t)badge, fip,
+                                       (uint32_t)g_pb_workers_started, g_pb_text_lo, g_pb_text_hi)) {
+                puts_serial("[FAULT-REJECT] label/badge out of range (phantom)\n");
+                break;   /* don't count / record / funnel */
+            }
+            if (label == 5 && !km2b_fault_ip_plausible((uint32_t)label, fip, g_pb_text_lo, g_pb_text_hi))
+                puts_serial("[FAULT-IP-WARN] VMFault ip outside PB .text\n");
+        }
         /* STEP-3: print EVERY drained fault in FULL (faults are rare — verbosity is diagnosis
          * gold). VMFault MRs: 0=IP, 1=Addr, 2=PrefetchFault, 3=FSR. badge: 0=PB-main (sel4utils'
          * unbadged copy), i>0 = worker i (the badged mint at worker creation). */

@@ -375,6 +375,12 @@ jobs:
         gcc -Wall -Werror -O2 -std=c11 -I. test_km2b_miss.c km2b_miss.c -o /tmp/t_km2b_miss
         /tmp/t_km2b_miss
 
+    - name: "Phase 6: K/M4 fault validity predicate (C)"
+      run: |
+        cd phase3/src/ai
+        gcc -Wall -Werror -O2 -std=c11 -I. test_km2b_fault.c km2b_fault.c -o /tmp/t_km2b_fault
+        /tmp/t_km2b_fault
+
     - name: "Phase 6: Action-audit store (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
