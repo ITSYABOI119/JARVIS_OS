@@ -271,6 +271,19 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
         volatile int *nullp = (volatile int *)0;
         volatile int v = *nullp; (void)v;   /* -> VMFault -> PB fault EP -> PA */
     }
+    /* K/M2c HANG probe: PB-main WEDGES — it NEVER returns to pb_serve_loop, so it ACKs nothing AND
+     * never faults (the fault EP stays SILENT). This is the "alive but wedged" failure the crash
+     * lane can't see; PA detects it via the consecutive-miss counter. The wedge YIELDS (not a
+     * `pause` busy-loop): PA and PB-main share core 0 (only the M3 workers are pinned to cores
+     * 1-5), so a non-yielding spin would STARVE PA on core 0 and it could never run the detection
+     * loop — a crash works only because the fault deschedules PB-main. `for(;;) seL4_Yield()`
+     * models a real soft-hang (alive, scheduled, but stuck not serving) and lets PA run.
+     * km2b_do_respawn's Suspend-first deschedules it and the register-rewrite recovers.
+     * "HANGPROBE" is 9 chars. Gated; the deployed workload never sends the marker. */
+    if (qlen == 9 && memcmp(query_buf, "HANGPROBE", 9) == 0) {
+        puts_serial("[PB] ACTION_PROBE: WEDGING PB-main (yield-loop, no ACK, no fault)\n");
+        for (;;) seL4_Yield();   /* PA (core 0) gets scheduled -> miss-counter climbs -> "hang" restart */
+    }
 #ifdef JARVIS_SEL4_SMP
     /* STEP-3 Part-2: the WORKER-fault probe (the corrected §10 gate needs a real fault in PB-main
      * AND a worker). Dispatch a poisoned pool run: the first thread whose stack anchor is far from

@@ -77,6 +77,7 @@
 #include "shield_action.h"      /* Phase 6 K/M1: the linked SHIELD action gate (flag-gated; the SEC-039 closure mechanism) */
 #include "action_audit.h"       /* Phase 6 K/M1: the raw-LBA action-audit store (flag-gated; JACT @ 21,120,000) */
 #include "km2b_trigger.h"       /* Phase 6 K/M2b-2: keyword-clean restart trigger builder (§5-E; host-tested) */
+#include "km2b_miss.h"          /* Phase 6 K/M2c: shared PB-contact miss-counter (hang/wedge detector; host-tested) */
 #endif
 #include "jarvis_ui_tokens.h"   /* Step 2c-2b: FBP_ and JUI_ palette + geometry (single source) */
 
@@ -513,11 +514,25 @@ static seL4_CPtr  g_pa_req_notif  = 0;          /* PA-side notif object cptrs (h
 static seL4_CPtr  g_pa_resp_notif = 0;
 static volatile int g_restart_in_progress = 0;  /* §5-D funnel re-entrancy latch */
 static uint32_t   g_restart_count = 0;          /* lifetime (v7 telemetry = K/M3; PA-internal here) */
-static uint32_t   g_pb_miss_count = 0;          /* consecutive PB-contact failures (all 3 lanes; cache neutral) */
+static km2b_miss_t g_pb_miss = {0};             /* K/M2c: consecutive PB-contact timeouts (all 3 lanes; cache neutral) */
+static uint64_t   g_pb_last_ack_ms = 0;         /* K/M2c: uptime at the last genuine typed PB dequeue (age instrument) */
 static uint32_t   g_restart_window = 0;         /* windowed consecutive restarts (crash-loop bound) */
 static uint32_t   g_healthy_since_restart = 0;  /* coherent PB responses since the last restart */
 static int        g_pb_dead = 0;                /* §5-F: crash-loop bound hit -> stop dispatching to PB */
 #endif
+
+/* §5-F degraded-mode gate: when the crash-loop bound has tripped (g_pb_dead), PA must STOP
+ * dispatching to the dead/wedged PB — otherwise every PB-contact iteration burns a ~60-120 s
+ * timeout, inflates q_errors, and churns the K/M2c miss-counter, making the "cache-only, PB
+ * dispatch STOPPED" log a lie. This makes it TRUE: a cache HIT still serves; a cache MISS / HB /
+ * shield is simply not sent. OFF (JARVIS_ACTIONS=0) has no degraded state -> always 1 -> the
+ * compiler folds the guard out -> deployed path byte-identical. */
+#if JARVIS_ACTIONS
+#define PB_DISPATCH_OK()  (!g_pb_dead)
+#else
+#define PB_DISPATCH_OK()  1
+#endif
+
 static uint32_t total_queries = 0;
 static uint32_t cache_hits = 0;
 static uint32_t cache_misses = 0;
@@ -1734,7 +1749,7 @@ static void pa_restart_pb(const char *reason, uint16_t lane, uint32_t missed, ui
         puts_serial("[FATAL] PB crash-loop bound hit — degraded: cache-only, PB dispatch STOPPED\n");
     }
 
-    g_pb_miss_count = 0;
+    km2b_miss_on_pb_ack(&g_pb_miss);   /* K/M2c: a restart clears the miss window (fresh start) */
     g_restart_in_progress = 0;
 }
 
@@ -3133,6 +3148,52 @@ static void *main_continued(void *arg UNUSED)
             g_restart_window = 0; g_healthy_since_restart = 0;
             if (!ok) break;
         }
+
+        /* K/M2c HANG lane, N_PROBE cycles: PB alive-but-WEDGED (no fault fires). Send HANGPROBE
+         * (PB-main busy-loops), then drive heartbeats that time out — feeding the SAME shared
+         * miss-counter the workload uses — until it trips; then funnel pa_restart_pb("hang", ...)
+         * and verify a REAL cache-miss, worker-dispatched, COHERENT recovery. This is the §10 gate's
+         * "fault EP stays SILENT, miss climbs, hang restart, coherent recovery". */
+        for (int c = 1; c <= N_PROBE; c++) {
+            puts_serial("[ACTION-PROBE] hang cycle "); put_dec((uint32_t)c);
+            puts_serial("/"); put_dec((uint32_t)N_PROBE); puts_serial(": WEDGING PB-main (HANGPROBE)\n");
+            km2b_miss_on_pb_ack(&g_pb_miss);   /* clean slate before the induced wedge */
+            shmem_ipc_send(shared_request_ring, MSG_QUERY, pseq++, "HANGPROBE", 9);
+            seL4_Signal(req_notif);
+            int tripped = 0, saw_fault = 0;
+            for (int hb = 0; hb < 12 && !tripped; hb++) {
+                /* A wedge fires NO fault; assert that (a spurious fault here = a bug, not a hang). */
+                if (pa_fault_check()) { saw_fault = 1; break; }
+                shmem_ipc_send(shared_request_ring, MSG_HEARTBEAT, pseq++, NULL, 0);
+                seL4_Signal(req_notif);
+                /* Fast probe-local wait: PB is KNOWN-wedged here, so a short ~5 s window suffices
+                 * to observe "no ACK" — the production hb/shield lanes use the real 5M-poll
+                 * wait_for_response (~90 s); shortening ONLY the induced test keeps the N-cycle hang
+                 * gate tractable (5M polls × 3 misses × 5 cycles would be ~20 min). */
+                int acked = 0;
+                { uint8_t t; uint16_t s, l; uint8_t pay[SHMEM_MAX_PAYLOAD];
+                  for (uint32_t p = 0; p < 300000u && !acked; p++) {
+                      while (shmem_ipc_recv(shared_response_ring, &t, &s, pay, &l) == 0)
+                          if (t == MSG_HEARTBEAT_ACK) { acked = 1; break; }
+                      seL4_Yield();
+                  } }
+                if (!acked) km2b_miss_on_pb_timeout(&g_pb_miss, KM2B_LANE_HEARTBEAT);
+                else        km2b_miss_on_pb_ack(&g_pb_miss);   /* PB unexpectedly ACKed -> not wedged */
+                tripped = km2b_miss_tripped(&g_pb_miss, KM2B_MISS_THRESHOLD);
+            }
+            puts_serial("[ACTION-PROBE] hang miss_count="); put_dec(km2b_miss_count(&g_pb_miss));
+            puts_serial(" fault_EP="); puts_serial(saw_fault ? "FIRED(bug!)" : "silent");
+            puts_serial(tripped ? " -> TRIPPED\n" : " -> NOT tripped\n");
+            if (!tripped) { puts_serial("[ACTION-PROBE] hang NOT detected — aborting hang probe\n"); break; }
+            uint64_t age = g_pb_last_ack_ms ? (jarvis_uptime_ms() - g_pb_last_ack_ms) : 0;
+            pa_restart_pb("hang", km2b_miss_last_lane(&g_pb_miss),
+                          km2b_miss_count(&g_pb_miss), age, 0, 0);
+            int ok = km2b_probe_recovery("hang", pseq++);
+            puts_serial("[ACTION-PROBE] hang cycle "); put_dec((uint32_t)c);
+            puts_serial(ok ? " recovery=COHERENT\n" : " recovery=FAILED\n");
+            g_restart_window = 0; g_healthy_since_restart = 0;
+            if (!ok) break;
+        }
     }
 #endif
 
@@ -3468,7 +3529,10 @@ static void *main_continued(void *arg UNUSED)
                     cg_served_now = 1;
                 }
             }
-            if (!cg_served_now) {
+            /* §5-F: skip the PB dispatch when degraded (a cache MISS is simply not served — no
+             * dead-PB send, no ~60-120 s timeout, no q_error, no miss churn). PB_DISPATCH_OK() is
+             * a compile-time 1 when JARVIS_ACTIONS=0 -> the guard folds out -> byte-identical. */
+            if (!cg_served_now && PB_DISPATCH_OK()) {
 #endif
             q_infer++;
 
@@ -3692,8 +3756,20 @@ static void *main_continued(void *arg UNUSED)
                     put_dec(POLL_TIMEOUT / 1000000);
                     puts_serial("M polls -- PB may have crashed\n");
                     q_errors++;
+#if JARVIS_ACTIONS
+                    /* K/M2c: a PURE inference timeout — reached only AFTER pa_fault_check (in the
+                     * spin) found NO fault, so a crash and a hang never double-count. Feed the
+                     * shared miss-counter; the hang trigger at next_query decides. */
+                    km2b_miss_on_pb_timeout(&g_pb_miss, KM2B_LANE_INFERENCE);
+#endif
                     goto next_query;
                 }
+#if JARVIS_ACTIONS
+                /* K/M2c: a genuine MSG_RESPONSE dequeued (got_response) -> PB is alive + serving,
+                 * reset the shared miss window. Timestamp the ACK for the age instrument. */
+                km2b_miss_on_pb_ack(&g_pb_miss);
+                g_pb_last_ack_ms = jarvis_uptime_ms();
+#endif
             }
 
             /* Drain all messages: MSG_DEBUG → NVMe log, MSG_RESPONSE → response buffer */
@@ -3879,17 +3955,42 @@ static void *main_continued(void *arg UNUSED)
 #if JARVIS_DBG_IPC
             puts_serial("[DBG] HB: sending...\n");
 #endif
+            if (PB_DISPATCH_OK()) {   /* §5-F: skip the heartbeat when degraded (folds out OFF) */
             shmem_ipc_send(shared_request_ring, MSG_HEARTBEAT, seq++, NULL, 0);
             seL4_Signal(req_notif);
             /* Poll the ring for the ACK (race-free); do NOT seL4_Wait(resp_notif) —
              * the inference path leaves it stale-signaled, so the old Wait+single-recv
              * returned immediately and read before PB responded (~7% spurious errors). */
-            if (wait_for_response(shared_response_ring, MSG_HEARTBEAT_ACK) != 0) {
-                q_errors++;
+            {
+                int hbrc = wait_for_response(shared_response_ring, MSG_HEARTBEAT_ACK);
+                if (hbrc != 0) {
+                    q_errors++;
 #if JARVIS_DBG_IPC
-                puts_serial("[ERR] heartbeat timeout\n");
+                    puts_serial("[ERR] heartbeat timeout\n");
+#endif
+#if JARVIS_ACTIONS
+                    km2b_miss_on_pb_timeout(&g_pb_miss, KM2B_LANE_HEARTBEAT);
+#endif
+                }
+#if JARVIS_ACTIONS
+                else {
+                    /* K/M2c: genuine HEARTBEAT_ACK -> PB alive, reset the miss window + timestamp.
+                     * Log the observed inter-heartbeat gap for K/M3+ age calibration
+                     * (INSTRUMENT-ONLY; the age is NOT a trigger this milestone, D1). Suppress the
+                     * gap reasoning while an inference is in flight (g_infer_active) — a ~12 s
+                     * inference legitimately stretches it. */
+                    uint64_t now = jarvis_uptime_ms();
+                    if (g_pb_last_ack_ms && !g_infer_active) {
+                        puts_serial("[HB-AGE] gap_ms=");
+                        put_dec((uint32_t)(now - g_pb_last_ack_ms));
+                        puts_serial("\n");
+                    }
+                    km2b_miss_on_pb_ack(&g_pb_miss);
+                    g_pb_last_ack_ms = now;
+                }
 #endif
             }
+            }   /* end if (PB_DISPATCH_OK()) — §5-F degraded skip */
 
         } else {
             /* --- SHIELD (5%) --- */
@@ -3899,16 +4000,31 @@ static void *main_continued(void *arg UNUSED)
 #if JARVIS_DBG_IPC
             puts_serial("[DBG] SHIELD: sending...\n");
 #endif
+            if (PB_DISPATCH_OK()) {   /* §5-F: skip the shield check when degraded (folds out OFF) */
             shmem_ipc_send(shared_request_ring, MSG_SHIELD_CHECK, seq++,
                            query, (uint16_t)strlen(query));
             seL4_Signal(req_notif);
             /* Poll the ring for the result (race-free); see heartbeat note above. */
-            if (wait_for_response(shared_response_ring, MSG_SHIELD_RESULT) != 0) {
-                q_errors++;
+            {
+                int shrc = wait_for_response(shared_response_ring, MSG_SHIELD_RESULT);
+                if (shrc != 0) {
+                    q_errors++;
 #if JARVIS_DBG_IPC
-                puts_serial("[ERR] shield timeout\n");
+                    puts_serial("[ERR] shield timeout\n");
+#endif
+#if JARVIS_ACTIONS
+                    km2b_miss_on_pb_timeout(&g_pb_miss, KM2B_LANE_SHIELD);
+#endif
+                }
+#if JARVIS_ACTIONS
+                else {
+                    /* K/M2c: genuine SHIELD_RESULT -> PB alive, reset the miss window + timestamp. */
+                    km2b_miss_on_pb_ack(&g_pb_miss);
+                    g_pb_last_ack_ms = jarvis_uptime_ms();
+                }
 #endif
             }
+            }   /* end if (PB_DISPATCH_OK()) — §5-F degraded skip */
         }
 
         /* Phase 5 G2/M2: publish the live system_state snapshot ONCE PER QUERY (same counters
@@ -4141,6 +4257,20 @@ static void *main_continued(void *arg UNUSED)
             g_infer_cycles += jarvis_rdtsc() - g_infer_t0;
             g_infer_active = 0;
         }
+#if JARVIS_ACTIONS
+        /* K/M2c HANG lane: the SINGLE post-lane check (reached by EVERY iteration — fall-through
+         * or the inference-timeout goto). If the shared miss-counter tripped (PB alive-but-wedged,
+         * no fault so the fault EP stayed silent), funnel the SAME pa_restart_pb("hang", ...) the
+         * crash lane uses — idempotent via g_restart_in_progress, feeds the crash-loop window,
+         * one JACT record. Cache iterations never fed the counter (D4), so this never fires on a
+         * healthy cache-heavy run. age = time since the last genuine ACK (0 if PB never ACKed). */
+        if (!g_restart_in_progress && !g_pb_dead &&
+            km2b_miss_tripped(&g_pb_miss, KM2B_MISS_THRESHOLD)) {
+            uint64_t age = g_pb_last_ack_ms ? (jarvis_uptime_ms() - g_pb_last_ack_ms) : 0;
+            pa_restart_pb("hang", km2b_miss_last_lane(&g_pb_miss),
+                          km2b_miss_count(&g_pb_miss), age, 0, 0);
+        }
+#endif
         /* Step 2c-1: live per-query counter — END of every iteration (reached by all
          * paths incl. the inference-timeout goto). One ~field-line UC write (~0.2ms),
          * NOT per-token; q_total/q_errors are final here. */
