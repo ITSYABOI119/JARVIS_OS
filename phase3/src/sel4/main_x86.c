@@ -3264,6 +3264,64 @@ static void *main_continued(void *arg UNUSED)
             g_restart_window = 0; g_healthy_since_restart = 0;
             if (!ok) break;
         }
+
+        /* K/M4 pre-flip experiment (§10 carry-forward #1): is a HARD (non-yielding) same-core PB-main
+         * loop detectable by the PRODUCTION polling path? Each marker: wedge PB, drive heartbeats
+         * through a POLLING wait (yield + ring poll, wall-clock bounded via jarvis_uptime_ms — NEVER
+         * seL4_Wait, which blocks PA and re-creates the historical deadlock) feeding the SAME miss-
+         * counter, until it trips -> pa_restart_pb("hang") -> coherent recovery. NOTE: a hard-looping
+         * PB makes each seL4_Yield poll cost a full ~10 ms PB timeslice, so a poll-COUNT budget would
+         * be minutes; jarvis_uptime_ms reads the TSC (advances while PA is descheduled) so the 2 s
+         * bound is real wall-time. HARDLOOP first; PAUSELOOP runs ONLY if HARDLOOP recovered (if
+         * HARDLOOP starves PA the box hangs here = Outcome B -> pkill qemu). */
+        {
+            const char *hl_marker[2] = { "HARDLOOP", "PAUSELOOP" };
+            const int   hl_len[2]    = { 8, 9 };
+            uint16_t hlseq = 61000;
+            for (int mk = 0; mk < 2; mk++) {
+                puts_serial("[HARDLOOP-EXP] marker="); puts_serial(hl_marker[mk]);
+                puts_serial(": WEDGING PB-main (hard non-yielding loop)\n");
+                km2b_miss_on_pb_ack(&g_pb_miss);   /* clean slate before the induced wedge */
+                shmem_ipc_send(shared_request_ring, MSG_QUERY, hlseq++, hl_marker[mk], (uint16_t)hl_len[mk]);
+                seL4_Signal(req_notif);
+                int tripped = 0, saw_fault = 0;
+                for (int hb = 0; hb < 8 && !tripped; hb++) {
+                    if (pa_fault_check()) { saw_fault = 1; break; }   /* a hard loop must NOT fault */
+                    shmem_ipc_send(shared_request_ring, MSG_HEARTBEAT, hlseq++, NULL, 0);
+                    seL4_Signal(req_notif);
+                    int acked = 0;
+                    uint64_t deadline = jarvis_uptime_ms() + 2000;   /* PB is known-wedged; 2 s ample */
+                    while (!acked && jarvis_uptime_ms() < deadline) {
+                        uint8_t t; uint16_t s, l; uint8_t pay[SHMEM_MAX_PAYLOAD];
+                        while (shmem_ipc_recv(shared_response_ring, &t, &s, pay, &l) == 0)
+                            if (t == MSG_HEARTBEAT_ACK) { acked = 1; break; }
+                        seL4_Yield();
+                    }
+                    if (!acked) km2b_miss_on_pb_timeout(&g_pb_miss, KM2B_LANE_HEARTBEAT);
+                    else        km2b_miss_on_pb_ack(&g_pb_miss);
+                    tripped = km2b_miss_tripped(&g_pb_miss, KM2B_MISS_THRESHOLD);
+                    puts_serial("[HARDLOOP-EXP] hb="); put_dec((uint32_t)hb);
+                    puts_serial(" acked="); put_dec((uint32_t)acked);
+                    puts_serial(" miss="); put_dec(km2b_miss_count(&g_pb_miss)); puts_serial("\n");
+                }
+                puts_serial("[HARDLOOP-EXP] marker="); puts_serial(hl_marker[mk]);
+                puts_serial(" fault_EP="); puts_serial(saw_fault ? "FIRED(unexpected)" : "silent");
+                puts_serial(tripped ? " -> DETECTED (miss tripped)\n" : " -> NOT DETECTED\n");
+                if (!tripped) {
+                    puts_serial("[HARDLOOP-EXP] OUTCOME-B: hard loop NOT detected by the polling path\n");
+                    break;   /* do not proceed to PAUSELOOP */
+                }
+                uint64_t age = g_pb_last_ack_ms ? (jarvis_uptime_ms() - g_pb_last_ack_ms) : 0;
+                pa_restart_pb("hang", km2b_miss_last_lane(&g_pb_miss),
+                              km2b_miss_count(&g_pb_miss), age, 0, 0);
+                int ok = km2b_probe_recovery("hardloop", hlseq++);
+                puts_serial("[HARDLOOP-EXP] marker="); puts_serial(hl_marker[mk]);
+                puts_serial(ok ? " -> OUTCOME-A: DETECTED + recovery=COHERENT\n"
+                               : " -> recovery=FAILED\n");
+                g_restart_window = 0; g_healthy_since_restart = 0;
+                if (!ok) break;
+            }
+        }
         /* v7 (K/M3) box proof: the probes climbed all three action counters — these are the exact
          * globals jarvis_telemetry_emit fills into the v7 packet (fill/flag/CRC host-proven in
          * test_jarvis_telemetry.c; on-wire I211 validation deferred to K/M4, no NIC in QEMU).

@@ -284,6 +284,23 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
         puts_serial("[PB] ACTION_PROBE: WEDGING PB-main (yield-loop, no ACK, no fault)\n");
         for (;;) seL4_Yield();   /* PA (core 0) gets scheduled -> miss-counter climbs -> "hang" restart */
     }
+    /* K/M4 pre-flip experiment (§10 carry-forward #1): the HARD (non-yielding) counterpart to the
+     * HANGPROBE soft yield-loop. Settles whether the PRODUCTION polling path detects a PB-main that
+     * NEVER cooperatively deschedules. RESULT (2026-07-07): OUTCOME B — a hard loop is NOT detected.
+     * The timer tick does NOT rotate core 0 to PA against a non-yielding PB (PA's production wait
+     * YIELDS the core to PB each iteration -> PA STARVES); only deschedule-able wedges (soft-yield,
+     * crash-fault) are caught. See §4.2. KVM ONLY — an Outcome-B starve just hangs QEMU (pkill-
+     * recoverable), never a bare-metal brick. "HARDLOOP"=8 chars. */
+    if (qlen == 8 && memcmp(query_buf, "HARDLOOP", 8) == 0) {
+        puts_serial("[PB] ACTION_PROBE: HARD non-yielding loop (no yield/ACK/fault)\n");
+        for (;;) { }   /* constant controlling expr => a well-defined infinite loop; never deschedules */
+    }
+    /* PAUSELOOP: identical wedge with a `pause` hint — scheduling-identical to the bare loop, it only
+     * rules out a compiler-optimized empty-loop artifact. Run ONLY after HARDLOOP already recovered. */
+    if (qlen == 9 && memcmp(query_buf, "PAUSELOOP", 9) == 0) {
+        puts_serial("[PB] ACTION_PROBE: pause loop (no yield/ACK/fault)\n");
+        for (;;) __asm__ volatile ("pause");
+    }
 #ifdef JARVIS_SEL4_SMP
     /* STEP-3 Part-2: the WORKER-fault probe (the corrected §10 gate needs a real fault in PB-main
      * AND a worker). Dispatch a poisoned pool run: the first thread whose stack anchor is far from
