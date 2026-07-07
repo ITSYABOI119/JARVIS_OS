@@ -1,15 +1,15 @@
 /**
  * jarvis_telemetry.h - JARVIS binary telemetry packet (goal #2b N-c)
  *
- * A versioned, CRC'd, fixed-224-byte (v6) binary packet the box emits over UDP
+ * A versioned, CRC'd, fixed-232-byte (v7) binary packet the box emits over UDP
  * (255.255.255.255:51000, via net_udp.c + the I211) so a remote console can
  * render live, honest box state. Pure logic / host-testable (CRC + finalize);
  * the emit site is in main_x86.c.
  *
  * Wire format: little-endian (x86), packed, no padding. The CRC-32 is the
  * standard zlib/IEEE CRC (poly 0xEDB88320, init/xorout 0xFFFFFFFF) over the
- * first 220 bytes [0 .. offsetof(crc32)), so a Python receiver validates with
- * `zlib.crc32(pkt[:220]) == struct.unpack_from('<I', pkt, 220)[0]`.
+ * first 228 bytes [0 .. offsetof(crc32)), so a Python receiver validates with
+ * `zlib.crc32(pkt[:228]) == struct.unpack_from('<I', pkt, 228)[0]`.
  *
  * JARVIS AI-OS - Phase 4 (goal #2b Remote Telemetry Console)
  */
@@ -20,7 +20,7 @@
 #include <stdint.h>
 
 #define JARVIS_TLM_MAGIC   0x4A54454Cu  /* "JTEL" (LE on wire: 4C 45 54 4A) */
-#define JARVIS_TLM_VERSION 6
+#define JARVIS_TLM_VERSION 7
 
 /* flags (bitfield) */
 #define TLM_F_MODEL_LOADED  0x01
@@ -34,6 +34,7 @@
 #define TLM_F_CACHE_GROWTH  0x100  /* cache-growth promotion has occurred (Phase 5 #6) — flags is u16 */
 #define TLM_F_SHIELD_LEARN  0x200  /* SHIELD failure-learning has learned >=1 key (Phase 5 #5) — MONITOR-ONLY, never a block claim */
 #define TLM_F_SEMANTIC      0x400  /* semantic fact store holds >=1 distilled fact (Phase 5 #4) — observable patterns, never "knows preferences" */
+#define TLM_F_ACTIONS       0x800  /* Phase 6 K/M3: the it-acts action gate + audit store are live (g_action_audit_ready) — self-heal/action counts, NOT a query-SHIELD block */
 
 /* kind */
 #define TLM_K_STATS 1
@@ -54,7 +55,11 @@
  * both 0 + flag clear in the flag-OFF deploy); v6 (P5 #4/M2) appends
  * semantic_fact_count -> 224 B, CRC@220 (distilled-fact count — observable
  * repeated Q&A patterns compacted by the deterministic distill, never "knows
- * preferences"; 0 + flag clear in the flag-OFF deploy). */
+ * preferences"; 0 + flag clear in the flag-OFF deploy); v7 (P6 K/M3) appends
+ * restart_count/actions_fired/actions_blocked -> 232 B, CRC@228 (the self-heal/
+ * action activity — lifetime PB restarts + allowlisted actions EXECUTED/BLOCKED
+ * by the action gate; TLM_F_ACTIONS set on g_action_audit_ready; all 0 + flag
+ * clear in the flag-OFF deploy — NOT a query-SHIELD block count). */
 typedef struct __attribute__((packed)) {
     uint32_t magic; uint8_t version; uint8_t kind; uint16_t flags; uint32_t boot_id; uint32_t seq;  /* 16 */
     uint32_t uptime_ms;                                                                              /*  4 */
@@ -72,15 +77,18 @@ typedef struct __attribute__((packed)) {
     uint16_t shield_learn_keys;          /* v5 (P5 #5/M2): actions with learned failure-risk — monitor-only */ /* 2 */
     uint16_t shield_learn_max_risk_x100; /* v5: max learned risk adjustment * 100 (cap 50 = +0.5) — never a block count */ /* 2 */
     uint16_t semantic_fact_count;        /* v6 (P5 #4/M2): distilled semantic facts stored — observable patterns only */ /* 2 */
-    uint32_t crc32;          /* zlib CRC-32 over the first 220 bytes [0 .. offsetof(crc32)) */       /*  4 */
+    uint32_t restart_count;    /* v7 (P6 K/M3) @220 — lifetime PB self-heal restarts (g_restart_count) */ /* 4 */
+    uint16_t actions_fired;    /* v7 @224 — allowlisted actions EXECUTED (SHIELD-gated); 0 + flag clear in the flag-OFF deploy */ /* 2 */
+    uint16_t actions_blocked;  /* v7 @226 — actions BLOCKED by the action gate (NOT the query-SHIELD path) */ /* 2 */
+    uint32_t crc32;          /* zlib CRC-32 over the first 228 bytes [0 .. offsetof(crc32)) */       /*  4 */
 } telemetry_packet_t;
 
-_Static_assert(sizeof(telemetry_packet_t) == 224, "telemetry packet must be 224 bytes (v6)");
+_Static_assert(sizeof(telemetry_packet_t) == 232, "telemetry packet must be 232 bytes (v7)");
 
 /* Standard zlib/IEEE CRC-32 (poly 0xEDB88320, init/xorout 0xFFFFFFFF) — equals Python zlib.crc32. */
 uint32_t jarvis_tlm_crc32(const void *data, uint32_t len);
 
-/* Stamp magic/version and compute+store crc32 over the first 220 bytes (v6). */
+/* Stamp magic/version and compute+store crc32 over the first 228 bytes (v7). */
 void jarvis_tlm_finalize(telemetry_packet_t *pkt);
 
 #endif /* JARVIS_TELEMETRY_H */

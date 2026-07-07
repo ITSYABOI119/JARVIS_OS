@@ -513,7 +513,9 @@ static int         g_action_audit_ready = 0;
 static seL4_CPtr  g_pa_req_notif  = 0;          /* PA-side notif object cptrs (hoisted for the funnel) */
 static seL4_CPtr  g_pa_resp_notif = 0;
 static volatile int g_restart_in_progress = 0;  /* §5-D funnel re-entrancy latch */
-static uint32_t   g_restart_count = 0;          /* lifetime (v7 telemetry = K/M3; PA-internal here) */
+static uint32_t   g_restart_count = 0;          /* v7 telemetry (K/M3): lifetime PB self-heal restarts */
+static uint32_t   g_actions_fired = 0;          /* v7: allowlisted actions EXECUTED (SHIELD-gated) */
+static uint32_t   g_actions_blocked = 0;        /* v7: actions BLOCKED by the action gate (NOT query-SHIELD) */
 static km2b_miss_t g_pb_miss = {0};             /* K/M2c: consecutive PB-contact timeouts (all 3 lanes; cache neutral) */
 static uint64_t   g_pb_last_ack_ms = 0;         /* K/M2c: uptime at the last genuine typed PB dequeue (age instrument) */
 static uint32_t   g_restart_window = 0;         /* windowed consecutive restarts (crash-loop bound) */
@@ -1727,12 +1729,14 @@ static void pa_restart_pb(const char *reason, uint16_t lane, uint32_t missed, ui
         verdict = AUDIT_EXECUTED;
         outcome = ok ? AUDIT_OUT_OK : AUDIT_OUT_FAIL;
         g_restart_count++; g_restart_window++; g_healthy_since_restart = 0;
+        g_actions_fired++;                    /* v7: a real allowlisted action EXECUTED */
         puts_serial("[RESTART] reason="); puts_serial(reason);
         puts_serial(" risk="); put_dec(sr.risk_x100);
         puts_serial(" -> EXECUTED outcome="); puts_serial(ok ? "OK" : "FAIL");
         puts_serial(" restart_count="); put_dec(g_restart_count);
         puts_serial(" window="); put_dec(g_restart_window); puts_serial("\n");
     } else {
+        g_actions_blocked++;                  /* v7: the action gate REFUSED this action */
         puts_serial("[RESTART] reason="); puts_serial(reason);
         puts_serial(" risk="); put_dec(sr.risk_x100); puts_serial(" -> REFUSED (not executed)\n");
     }
@@ -1997,6 +2001,16 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
             pkt.flags |= TLM_F_SEMANTIC;
     }
 #endif
+#if JARVIS_ACTIONS
+    /* v7 (P6 K/M3): the self-heal/action activity — lifetime PB restarts + allowlisted actions
+     * EXECUTED/BLOCKED by the ACTION gate (NOT the passive query-SHIELD path). TLM_F_ACTIONS is set
+     * on g_action_audit_ready (capability-live, like TLM_F_MEMORY). Gated, so the flag-OFF deploy
+     * emits 0s + flag clear (honest — the SAME pattern as the v5 shield-learn / v6 semantic slices). */
+    pkt.restart_count   = g_restart_count;
+    pkt.actions_fired   = (uint16_t)g_actions_fired;
+    pkt.actions_blocked = (uint16_t)g_actions_blocked;
+    if (g_action_audit_ready) pkt.flags |= TLM_F_ACTIONS;
+#endif
     /* model display name (matches the on-screen panel) + last response, NUL-bounded (pkt is zeroed) */
     { const char *mn = "Gemma 4 E2B";
       for (int i = 0; i < (int)sizeof(pkt.model_name) - 1 && mn[i]; i++) pkt.model_name[i] = mn[i]; }
@@ -2004,7 +2018,7 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
         pkt.last_text[i] = g_fb_last_resp[i];
     jarvis_tlm_finalize(&pkt);
     /* wrap as a UDP broadcast to :51000 and fire-and-forget (no DD poll) */
-    static uint8_t tlm_frame[288];   /* 14+20+8+222 = 264 <= 288 */
+    static uint8_t tlm_frame[288];   /* 14+20+8+232 = 274 <= 288 (v7) */
     int flen = net_build_udp_broadcast(tlm_frame, sizeof tlm_frame, g_net.nic.mac, JARVIS_BOX_IP,
                    JARVIS_TELEMETRY_PORT, JARVIS_TELEMETRY_PORT, &pkt, (uint16_t)sizeof pkt);
     if (flen > 0)
@@ -2578,6 +2592,7 @@ static void *main_continued(void *arg UNUSED)
                                             puts_serial(act_rb.verdict == SHIELD_VERDICT_BLOCKED ? " -> BLOCKED" : " -> EXECUTE");
                                             puts_serial(" risk="); put_dec(act_rb.risk_x100);
                                             puts_serial(" (audited)\n");
+                                            if (act_rb.verdict == SHIELD_VERDICT_BLOCKED) g_actions_blocked++;  /* v7 */
                                             if (g_action_audit_ready && act_rb.verdict == SHIELD_VERDICT_BLOCKED) {
                                                 action_audit_rec_t act_arec;
                                                 act_audit_fill(&act_arec, jarvis_uptime_ms(), ACTION_ID_BLOCK_PROBE,
@@ -2608,6 +2623,7 @@ static void *main_continued(void *arg UNUSED)
                                                 puts_serial(" -> (failure) risk="); put_dec(act_r2.risk_x100);
                                                 puts_serial(act_r2.verdict == SHIELD_VERDICT_BLOCKED ?
                                                             " BLOCKED on 2nd attempt (K-e)\n" : " EXECUTE (UNEXPECTED)\n");
+                                                if (act_r2.verdict == SHIELD_VERDICT_BLOCKED) g_actions_blocked++;  /* v7 */
                                                 if (g_action_audit_ready && act_r2.verdict == SHIELD_VERDICT_BLOCKED) {
                                                     /* action_id 0xFFFD = the class-probe marker (not a real
                                                      * action id — self-described by the trigger text). */
@@ -3194,6 +3210,15 @@ static void *main_continued(void *arg UNUSED)
             g_restart_window = 0; g_healthy_since_restart = 0;
             if (!ok) break;
         }
+        /* v7 (K/M3) box proof: the probes climbed all three action counters — these are the exact
+         * globals jarvis_telemetry_emit fills into the v7 packet (fill/flag/CRC host-proven in
+         * test_jarvis_telemetry.c; on-wire I211 validation deferred to K/M4, no NIC in QEMU).
+         * audit_ready=1 => TLM_F_ACTIONS would be set on the wire. */
+        puts_serial("[TLM-V7] restart_count="); put_dec(g_restart_count);
+        puts_serial(" actions_fired="); put_dec(g_actions_fired);
+        puts_serial(" actions_blocked="); put_dec(g_actions_blocked);
+        puts_serial(" audit_ready="); put_dec((uint32_t)g_action_audit_ready);
+        puts_serial(" (TLM_F_ACTIONS would be set)\n");
     }
 #endif
 

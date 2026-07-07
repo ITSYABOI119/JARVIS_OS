@@ -55,6 +55,13 @@ function SystemView({ store }) {
   // preferences; it never "knows" anything.
   const semReported = !!(rec && rec.flags_list && rec.flags_list.indexOf('SEMANTIC') >= 0);
   const semCount = rec ? Number(rec.semantic_fact_count) || 0 : null;
+  // Self-healing / autonomous actions (Phase 6 K/M3): flag-gated on TLM_F_ACTIONS. restart_count =
+  // lifetime PB self-heal restarts; actions_fired = allowlisted actions EXECUTED (SHIELD-gated);
+  // actions_blocked = actions REFUSED by the SEPARATE action gate — NOT the passive query-SHIELD path.
+  const actReported = !!(rec && rec.flags_list && rec.flags_list.indexOf('ACTIONS') >= 0);
+  const restartCount = rec ? Number(rec.restart_count) || 0 : null;
+  const actionsFired = rec ? Number(rec.actions_fired) || 0 : null;
+  const actionsBlocked = rec ? Number(rec.actions_blocked) || 0 : null;
 
   const stat = (label, value, sub) => (
     <div>
@@ -107,6 +114,13 @@ function SystemView({ store }) {
           {stat('Distilled facts', semReported ? numMb(semCount) : '—',
             semReported ? 'compacts recurring Q&A into durable facts — observable patterns, not stated preferences'
                         : 'semantic memory not reported')}
+          {/* Self-healing / autonomous actions (Phase 6 K/M3) — flag-gated on TLM_F_ACTIONS. */}
+          {stat('PB restarts (self-heal)', actReported ? numMb(restartCount) : '—',
+            actReported ? 'lifetime Process-B respawns by the self-heal action' : 'self-healing not reported')}
+          {stat('Actions executed', actReported ? numMb(actionsFired) : '—',
+            actReported ? 'allowlisted actions executed through the SHIELD action gate' : 'self-healing not reported')}
+          {stat('Actions blocked (gate)', actReported ? numMb(actionsBlocked) : '—',
+            actReported ? 'actions refused by the action gate — not the passive query-SHIELD path' : 'self-healing not reported')}
         </div>
         {note('Live heap used/free is not tracked on the box, so it is not shown. The floor above (model + a fixed static pool) is the only real lower bound.')}
       </Card>

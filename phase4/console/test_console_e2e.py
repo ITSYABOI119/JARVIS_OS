@@ -42,6 +42,7 @@ FLAG_LABEL = {
     'CACHE_GROWTH': 'Cache growth — learns frequent queries',
     'SHIELD_LEARN': 'SHIELD failure-learning (monitor-only)',
     'SEMANTIC': 'Semantic memory (distilled facts)',
+    'ACTIONS': 'Self-healing / autonomous actions',
 }
 
 _P = 0
@@ -374,6 +375,41 @@ def main():
                 time.sleep(0.1)
             check(sem_ok,
                   "(#4/M2) System 'Distilled facts' renders == live semantic_fact_count (snap=%r)" % (sem_dbg,))
+
+            # (K/M3) PIN the System 'PB restarts (self-heal)' VALUE — must equal the live
+            # restart_count on an ACTIONS-flagged frame (flag-gated; '—' otherwise). The golden
+            # 'infer' frame carries restart_count=3. TEETH: fails if the self-heal rendering breaks
+            # (wrong value, '—', or removed). Still on the System screen.
+            act_ok = False
+            act_dbg = None
+            deadline = time.time() + 12
+            while time.time() < deadline:
+                snap = page.evaluate(
+                    "() => {"
+                    " const rec = (window.JarvisTelemetry.getState().latest) || {};"
+                    " const flags = rec.flags_list || [];"
+                    " const lab = Array.from(document.querySelectorAll('div'))"
+                    "   .find(d => d.textContent.trim() === 'PB restarts (self-heal)');"
+                    " let rendered = null;"
+                    " if (lab && lab.parentElement) {"
+                    "   const kids = Array.from(lab.parentElement.children);"
+                    "   const i = kids.indexOf(lab);"
+                    "   rendered = kids[i + 1] ? kids[i + 1].textContent.trim() : null;"
+                    " }"
+                    " return { act: flags.indexOf('ACTIONS') >= 0, count: rec.restart_count, rendered };"
+                    "}")
+                act_dbg = snap
+                if snap['act'] and snap['rendered'] not in (None, '—'):
+                    try:
+                        rendered_num = int(str(snap['rendered']).replace(',', ''))
+                    except (ValueError, TypeError):
+                        rendered_num = None
+                    if rendered_num is not None and rendered_num == snap['count'] and rendered_num > 0:
+                        act_ok = True
+                        break
+                time.sleep(0.1)
+            check(act_ok,
+                  "(K/M3) System 'PB restarts (self-heal)' renders == live restart_count (snap=%r)" % (act_dbg,))
 
             # (#5/M2) PIN the SHIELD 'Actions with learned risk' VALUE — must equal the live
             # shield_learn_keys on a SHIELD_LEARN-flagged frame (flag-gated; '—' otherwise). The

@@ -98,7 +98,8 @@ function Shield({ store }) {
         <p style={{ margin: '0 0 16px', font: '400 var(--text-sm)/1.55 var(--font-sans)', color: 'var(--text-secondary)', maxWidth: 760 }}>
           The full S.H.I.E.L.D. framework is designed in <code style={{ font: '400 var(--text-xs) var(--font-mono)', color: 'var(--text-accent)' }}>shield_framework.py</code>,
           but it is <strong>not linked into the deployed build</strong> (<code style={{ font: '400 var(--text-xs) var(--font-mono)', color: 'var(--text-accent)' }}>shield.c</code> absent).
-          The running box performs passive checks and always returns ALLOW — there is no risk scoring, no gating, and no blocked actions on this system.
+          On the <strong>query</strong> path the box performs passive checks and always returns ALLOW — no risk scoring, no gating, no blocked <em>queries</em>.
+          (A <em>separate</em> action gate scores and can BLOCK <strong>autonomous actions</strong>; when live, its <code style={{ font: '400 var(--text-xs) var(--font-mono)', color: 'var(--text-accent)' }}>actions_blocked</code> count appears on the System screen — that is a different path from these query checks.)
         </p>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
           {pillars.map(([k, name]) => (

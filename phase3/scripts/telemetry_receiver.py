@@ -10,8 +10,8 @@ binds the port, decodes each datagram, validates the zlib CRC-32 over the first
 220 bytes (v6), and pretty-prints honest live box state.
 
 Wire format (little-endian, packed, no padding):
-    struct format = '<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHHHHI'  (struct.calcsize == 224)
-    crc32 is the last 4 bytes; valid iff zlib.crc32(pkt[:220]) == pkt.crc32.
+    struct format = '<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHHHHIHHI'  (struct.calcsize == 232)
+    crc32 is the last 4 bytes; valid iff zlib.crc32(pkt[:228]) == pkt.crc32.
 
 Usage:
     python3 telemetry_receiver.py [--bind ADDR] [--port 51000] [--once] [--follow] [--json]
@@ -29,8 +29,11 @@ aliases stay banned. The v5 shield_learn_* fields are the SHIELD
 failure-learning MONITOR signal (learned-risk counts — the box never blocks;
 'shield_blocked' stays banned). The v6 semantic_fact_count is the distilled
 semantic-fact count (observable repeated Q&A patterns compacted by the
-deterministic distill — never "knows preferences"). The uptime is from an
-uncalibrated TSC, shown with "≈".
+deterministic distill — never "knows preferences"). The v7
+restart_count/actions_fired/actions_blocked are the Phase-6 self-heal/ACTION-gate
+activity (PB restarts + allowlisted actions executed/blocked by the SEPARATE
+action gate); actions_blocked is a real, allowed key — distinct from the still-banned
+query-path 'shield_blocked'. The uptime is from an uncalibrated TSC, shown with "≈".
 """
 
 import argparse
@@ -47,8 +50,8 @@ import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MAGIC = 0x4A54454C            # "JTEL" (LE on the wire: 4C 45 54 4A)
-FMT = '<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHHHHI'
-PKT_SIZE = struct.calcsize(FMT)   # v6: 224 (derived — never hardcode a wire size)
+FMT = '<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHHHHIHHI'
+PKT_SIZE = struct.calcsize(FMT)   # v7: 232 (derived — never hardcode a wire size)
 LOG_MAX_ENTRIES = 2700        # NVME_LOG_MAX_ENTRIES (no-wrap durable telemetry log)
 
 FLAG_NAMES = {
@@ -63,6 +66,7 @@ FLAG_NAMES = {
     0x100: 'CACHE_GROWTH',
     0x200: 'SHIELD_LEARN',
     0x400: 'SEMANTIC',
+    0x800: 'ACTIONS',
 }
 KIND_NAMES = {1: 'STATS', 2: 'INFER', 3: 'STATE'}
 
@@ -99,12 +103,13 @@ def decode_packet(data: bytes) -> dict:
      nvme_total_mb, episodic_count, pool_events, pool_decisions,
      retrieval_hits, retrieval_latency_us, infer_last_tok_x100,
      shield_learn_keys, shield_learn_max_risk_x100, semantic_fact_count,
+     restart_count, actions_fired, actions_blocked,
      crc32_field) = struct.unpack(FMT, data)
 
     if magic != MAGIC:
         raise ValueError("bad magic 0x%08X (expected 0x%08X)" % (magic, MAGIC))
 
-    crc_calc = zlib.crc32(data[:PKT_SIZE - 4]) & 0xFFFFFFFF   # v6: 220 (= offsetof(crc32))
+    crc_calc = zlib.crc32(data[:PKT_SIZE - 4]) & 0xFFFFFFFF   # v7: 228 (= offsetof(crc32))
     flags_list = [name for bit, name in FLAG_NAMES.items() if flags & bit]
 
     return {
@@ -143,6 +148,9 @@ def decode_packet(data: bytes) -> dict:
         'shield_learn_keys': shield_learn_keys,
         'shield_learn_max_risk_x100': shield_learn_max_risk_x100,
         'semantic_fact_count': semantic_fact_count,
+        'restart_count': restart_count,
+        'actions_fired': actions_fired,
+        'actions_blocked': actions_blocked,
         'cache_growth_count': cache_growth_count,
         'log_cursor': log_cursor,
         'infer_gen_tokens': infer_gen_tokens,
@@ -232,6 +240,9 @@ def packet_to_record(d: dict, recv_ts: float = 0) -> dict:
         'shield_learn_keys': d['shield_learn_keys'],
         'shield_learn_max_risk_x100': d['shield_learn_max_risk_x100'],
         'semantic_fact_count': d['semantic_fact_count'],
+        'restart_count': d['restart_count'],
+        'actions_fired': d['actions_fired'],
+        'actions_blocked': d['actions_blocked'],
         'cache_growth_count': d['cache_growth_count'],
         'log_cursor': d['log_cursor'],
         'infer_gen_tokens': d['infer_gen_tokens'],

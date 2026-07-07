@@ -162,6 +162,24 @@ def main():
     check('Semantic memory (distilled facts)' in blobs.get('ConsoleCapabilities.jsx', ''),
           "Capabilities labels the SEMANTIC flag (distilled facts row)")
 
+    # --- K/M3: self-heal / action-gate counts — real fields, self-heal/action framing, NEVER a
+    # query-block claim (actions_blocked is the SEPARATE action gate, not the passive query SHIELD) ---
+    check('restart_count' in sysb and 'actions_fired' in sysb and 'actions_blocked' in sysb,
+          "System 'Self-healing' sources the REAL fields (restart_count/actions_fired/actions_blocked)")
+    check('self-heal' in sysb.lower() or 'self heal' in sysb.lower(),
+          "self-healing stats carry 'self-heal' framing")
+    check('action gate' in sysb.lower(),
+          "actions_blocked stat is scoped to the 'action gate' (not the query path)")
+    # The ACTIONS capability label must use self-heal/action framing, never query-block wording.
+    capb = blobs.get('ConsoleCapabilities.jsx', '')
+    check('Self-healing / autonomous actions' in capb,
+          "Capabilities labels the ACTIONS flag (self-healing / autonomous actions)")
+    # The SHIELD screen must scope its 'always ALLOW / no blocked' claim to the QUERY path so it
+    # does not contradict a nonzero actions_blocked (the separate action gate).
+    shb = blobs.get('ConsoleShield.jsx', '')
+    check('action gate' in shb.lower() and 'query' in shb.lower(),
+          "SHIELD screen scopes the passive-ALLOW note to the query path (separate action gate noted)")
+
     print("\n== Results: %d PASS, %d FAIL ==" % (_PASS, _FAIL))
     return 1 if _FAIL else 0
 

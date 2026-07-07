@@ -32,7 +32,7 @@ static int pass = 0, fail = 0;
 
 static void test_layout(void)
 {
-    CHECK(sizeof(telemetry_packet_t) == 224, "sizeof(telemetry_packet_t) == 224 (v6)");
+    CHECK(sizeof(telemetry_packet_t) == 232, "sizeof(telemetry_packet_t) == 232 (v7)");
     OFF(magic, 0);
     OFF(flags, 6);
     OFF(boot_id, 8);
@@ -59,7 +59,10 @@ static void test_layout(void)
     OFF(shield_learn_keys, 214);          /* P5 #5/M2: v5 fields appended before crc32 */
     OFF(shield_learn_max_risk_x100, 216);
     OFF(semantic_fact_count, 218);        /* P5 #4/M2: v6 field appended before crc32 */
-    OFF(crc32, 220);
+    OFF(restart_count, 220);              /* P6 K/M3: v7 fields appended before crc32 */
+    OFF(actions_fired, 224);
+    OFF(actions_blocked, 226);
+    OFF(crc32, 228);
 }
 
 static void test_crc_known_vector(void)
@@ -101,11 +104,14 @@ static void test_finalize_roundtrip(void)
     pkt.shield_learn_keys = 1;             /* P5 #5/M2: monitor-only failure-learning fields (v5) */
     pkt.shield_learn_max_risk_x100 = 20;   /* the D-d probe's 0.20 after the 2nd attempt */
     pkt.semantic_fact_count = 1;           /* P5 #4/M2 (v6): distilled-fact count — the honest ~1 box yield */
+    pkt.restart_count = 3;                  /* P6 K/M3 (v7): self-heal/action-gate activity */
+    pkt.actions_fired = 3;
+    pkt.actions_blocked = 2;
 
     jarvis_tlm_finalize(&pkt);
 
     CHECK(pkt.magic == JARVIS_TLM_MAGIC, "finalize sets magic == JTEL");
-    CHECK(pkt.version == JARVIS_TLM_VERSION, "finalize sets version == 6");
+    CHECK(pkt.version == JARVIS_TLM_VERSION, "finalize sets version == 7");
     CHECK(pkt.infer_active == 1 && pkt.infer_duty_pct == 42, "infer_active/infer_duty_pct survive finalize");
     CHECK(pkt.log_cursor == 137 && pkt.nvme_total_mb == 1953892u, "log_cursor/nvme_total_mb survive finalize");
     CHECK(pkt.total_ram_mb == 30000u, "total_ram_mb survives finalize");
@@ -125,10 +131,13 @@ static void test_finalize_roundtrip(void)
     CHECK(pkt.semantic_fact_count == 1u,
           "semantic_fact_count survives finalize (v6, CRC covers 218-219)");
     CHECK(TLM_F_SEMANTIC == 0x400, "TLM_F_SEMANTIC == 0x400 (flags is u16 — fits)");
+    CHECK(pkt.restart_count == 3u && pkt.actions_fired == 3u && pkt.actions_blocked == 2u,
+          "restart_count/actions_fired/actions_blocked survive finalize (v7, CRC covers 220-227)");
+    CHECK(TLM_F_ACTIONS == 0x800, "TLM_F_ACTIONS == 0x800 (flags is u16 — fits)");
 
-    /* The stored crc matches a recompute over the first 220 bytes. */
+    /* The stored crc matches a recompute over the first 228 bytes (offsetof(crc32)). */
     uint32_t recomputed = jarvis_tlm_crc32(&pkt, offsetof(telemetry_packet_t, crc32));
-    CHECK(pkt.crc32 == recomputed, "stored crc32 == recompute over first 220 B");
+    CHECK(pkt.crc32 == recomputed, "stored crc32 == recompute over first 228 B");
     CHECK(pkt.crc32 != 0u, "crc32 is non-zero for a populated packet");
 
     /* The magic bytes are "JTEL" little-endian: 4C 45 54 4A. */
@@ -136,7 +145,7 @@ static void test_finalize_roundtrip(void)
     CHECK(raw[0] == 0x4C && raw[1] == 0x45 && raw[2] == 0x54 && raw[3] == 0x4A,
           "magic on wire (LE) == 4C 45 54 4A (\"JTEL\")");
 
-    /* Flipping any byte in [0,220) must break the CRC check. */
+    /* Flipping any byte in [0,228) must break the CRC check. */
     int detected_all = 1;
     for (uint32_t i = 0; i < offsetof(telemetry_packet_t, crc32); i++) {
         raw[i] ^= 0xFF;
@@ -144,7 +153,7 @@ static void test_finalize_roundtrip(void)
             detected_all = 0;   /* a flip went undetected */
         raw[i] ^= 0xFF;         /* restore */
     }
-    CHECK(detected_all, "every single-byte flip in [0,220) breaks the CRC");
+    CHECK(detected_all, "every single-byte flip in [0,228) breaks the CRC");
 }
 
 int main(void)
