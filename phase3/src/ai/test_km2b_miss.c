@@ -89,6 +89,22 @@ int main(void)
     CHECK(km2b_miss_count(&a) == 2 && km2b_miss_count(&b) == 0,
           "T10 independent instances isolated");
 
+    /* T11: NULL-arg safety — the wiring passes &g_pb_miss, but a defensive contract must not crash
+     * and must read as 0 (all five accessors guard NULL). */
+    km2b_miss_on_pb_timeout(NULL, KM2B_LANE_INFERENCE);   /* no-op, no crash */
+    km2b_miss_on_pb_ack(NULL);                            /* no-op, no crash */
+    CHECK(km2b_miss_count(NULL) == 0 && km2b_miss_last_lane(NULL) == 0 &&
+          km2b_miss_tripped(NULL, 3) == 0,
+          "T11 NULL args: no crash, all read 0 / not tripped");
+
+    /* T12: threshold 0 is refused (never trips) even at a high count — km2b_miss.c's guard against
+     * a mis-configured threshold that would "trip" at count 0. */
+    km2b_miss_t z = {0};
+    km2b_miss_on_pb_timeout(&z, KM2B_LANE_SHIELD);
+    km2b_miss_on_pb_timeout(&z, KM2B_LANE_SHIELD);
+    CHECK(!km2b_miss_tripped(&z, 0),
+          "T12 threshold 0 never trips (count 2)");
+
     printf("=== %d PASS, %d FAIL ===\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

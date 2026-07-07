@@ -3502,6 +3502,10 @@ static void *main_continued(void *arg UNUSED)
         } else if (slot < 17) {
             /* --- Inference (15%) --- */
             const char *query = inference_queries[r % N_INFERENCE_QUERIES];
+            /* D1: cg_served_now is declared UNCONDITIONALLY (0 = not cache-served — correct when
+             * JARVIS_CACHE_GROWTH is compiled out) so the §5-F dispatch guard below can wrap the
+             * inference send regardless of cache-growth. */
+            int cg_served_now = 0;
 #if JARVIS_CACHE_GROWTH
             /* Phase 5 #6/M3a: serve already-PROMOTED patterns from the cache (READ-only — no
              * insert here; promotion stays the [STATS]-cadence log pass, canon D-a). Without
@@ -3510,7 +3514,6 @@ static void *main_continued(void *arg UNUSED)
              * answer is served (<1 ms vs ~55 s inference), counted as a hit, and recorded as an
              * EPI_ACT_CACHE episodic memory; on a MISS the existing inference path runs
              * unchanged. Flag-OFF compiles this out — the lane is byte-identical to deploy. */
-            int cg_served_now = 0;
             {
                 char cg_snorm[MAX_QUERY_LEN];
                 char cg_saction[MAX_ACTION_LEN];
@@ -3529,11 +3532,13 @@ static void *main_continued(void *arg UNUSED)
                     cg_served_now = 1;
                 }
             }
-            /* §5-F: skip the PB dispatch when degraded (a cache MISS is simply not served — no
-             * dead-PB send, no ~60-120 s timeout, no q_error, no miss churn). PB_DISPATCH_OK() is
-             * a compile-time 1 when JARVIS_ACTIONS=0 -> the guard folds out -> byte-identical. */
-            if (!cg_served_now && PB_DISPATCH_OK()) {
 #endif
+            /* §5-F: ALWAYS guard the PB dispatch (D1: unconditional, NOT nested in #if
+             * JARVIS_CACHE_GROWTH — an ACTIONS=1 CACHE_GROWTH=0 build must ALSO skip dispatch to a
+             * dead PB after g_pb_dead trips). A cache MISS is simply not served: no dead-PB send,
+             * no ~60-120 s timeout, no q_error, no miss churn. PB_DISPATCH_OK() is a compile-time 1
+             * when JARVIS_ACTIONS=0 -> the guard folds out -> byte-identical. */
+            if (!cg_served_now && PB_DISPATCH_OK()) {
             q_infer++;
 
 #if JARVIS_G3_PROBE
@@ -3931,9 +3936,7 @@ static void *main_continued(void *arg UNUSED)
             puts_serial("\"\n");
 #endif
 
-#if JARVIS_CACHE_GROWTH
-            }   /* !cg_served_now — end of the inference-miss path (#6/M3a) */
-#endif
+            }   /* end if (!cg_served_now && PB_DISPATCH_OK()) — inference-miss path (#6/M3a + D1) */
 
         } else if (slot < 19) {
             /* --- Heartbeat (10%) --- */
@@ -4266,9 +4269,17 @@ static void *main_continued(void *arg UNUSED)
          * healthy cache-heavy run. age = time since the last genuine ACK (0 if PB never ACKed). */
         if (!g_restart_in_progress && !g_pb_dead &&
             km2b_miss_tripped(&g_pb_miss, KM2B_MISS_THRESHOLD)) {
-            uint64_t age = g_pb_last_ack_ms ? (jarvis_uptime_ms() - g_pb_last_ack_ms) : 0;
-            pa_restart_pb("hang", km2b_miss_last_lane(&g_pb_miss),
-                          km2b_miss_count(&g_pb_miss), age, 0, 0);
+            /* D2: a PB CRASH during an HB/shield wait (those lanes have no pre-miss fault poll,
+             * unlike the inference lane) would otherwise be MIS-audited as "hang". Poll the fault EP
+             * FIRST: a queued fault means it was really a crash → pa_fault_check funnels "fault" and
+             * we SKIP the "hang" restart (correct JACT classification, which is the SEC-039 evidence
+             * base). Only a truly-silent EP is a genuine wedge. pa_fault_check reuses the STEP-3
+             * label-gated pa_poll_fault, so a speculative call can't reintroduce a phantom. */
+            if (!pa_fault_check()) {
+                uint64_t age = g_pb_last_ack_ms ? (jarvis_uptime_ms() - g_pb_last_ack_ms) : 0;
+                pa_restart_pb("hang", km2b_miss_last_lane(&g_pb_miss),
+                              km2b_miss_count(&g_pb_miss), age, 0, 0);
+            }
         }
 #endif
         /* Step 2c-1: live per-query counter — END of every iteration (reached by all
