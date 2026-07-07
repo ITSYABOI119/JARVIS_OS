@@ -4,7 +4,7 @@ for new coding session say:
 Read CLAUDE.md and check git log. What's the current state?
 
 TIERING — pick the right depth (the full sweep is expensive; don't default to it):
-- QUICK TIER (continuing recent work): the line above + the latest phase5/weeks/weekNN/ status doc is enough context. Skip the agent sweep.
+- QUICK TIER (continuing recent work): the line above + the current-frontier docs is enough context. Skip the agent sweep. (Phase 6 has NO weekly cadence — read `phase6/docs/` + the `memory/` Phase-6 notes; earlier phases used `phaseN/weeks/`.)
 - FULL SWEEP (cold start, new machine or model, back after a gap, or a phase/milestone boundary): use the exploration prompt below.
 
 then get to explore for context say:
@@ -138,7 +138,7 @@ The user copies your prompts and pastes them into the coding session, then bring
 ### 1. Analyze What's Been Done
 - Run `git log --oneline -20` to see recent commits
 - Read CLAUDE.md for current project status
-- Check `phase4/docs/ROADMAP.md` (Phases 4-7 + cross-phase backlog B1/B2/B3) + `phase5/docs/PHASE_5_PLAN.md` and the `phase5/docs/PHASE_5_GOAL*.md` docs (the LIVE plan set) + the latest `phase5/weeks/weekNN/` status; `phase4/docs/PHASE_4_FINAL_REPORT.md` and `phase3/docs/PHASE_3_FINAL_REPORT.md` are the closed-phase records
+- Check `phase4/docs/ROADMAP.md` (Phases 4-7 + cross-phase backlog B1/B2/B3) + **`phase6/docs/` (`PHASE_6_PLAN.md` + `PHASE_6_GOAL_K_IT_ACTS.md` + `PHASE_6_GOAL_K_SYSTEM_DESIGN.md`) — the LIVE plan set** + the `memory/` Phase-6 notes; `phase5/docs/`, `phase4/docs/PHASE_4_FINAL_REPORT.md`, and `phase3/docs/PHASE_3_FINAL_REPORT.md` are now the closed-phase records (Phase 5 is COMPLETE)
 - Check `docs/decisions/` for ADRs — they override stale plan-doc rows (dynamic scaling removed 2026-04-17; 30-day soak + TurboQuant/RotorQuant deferred 2026-06-15; GPU inference deferred + x86 verification stance 2026-06-16; SMP Branch A 2026-06-17; headless appliance 2026-06-21; target-disk install [Proposed] 2026-06-25)
 - Compare what exists in `phase3/src/` (incl. the Phase 5 code — it lives in phase3/src/ai, there is no phase5/src) against what the plans/ADRs say should exist
 
@@ -147,8 +147,8 @@ The user copies your prompts and pastes them into the coding session, then bring
 - Rank remaining tasks by impact (high/medium/low)
 - Distinguish between tasks doable NOW (main PC / CI / KVM) vs tasks that need the JARVIS PC (bare-metal build/flash via `ssh jarvis`)
 - Always know where we are and what the critical path is
-- **Critical path: DERIVE IT FRESH each session** — read `phase5/docs/PHASE_5_PLAN.md` + the latest `phase5/weeks/` + the last ~15 commits; where they disagree, commits win. The paragraph below is a dated SNAPSHOT (2026-07-04) — verify before relying on it, and treat any mismatch as SKILL.md drift to fix.
-- Snapshot 2026-07-04: **Phase 5 (Memory) — memory arc largely COMPLETE.** MVP "it-remembers" arc (#1 episodic, #2 shared context, #3 retrieval, #6 cache-growth) SHIPPED + box-verified + **DEPLOYED default-ON** (retrieval since 2026-07-02, cache-growth since 2026-07-03 — the deployed image now intentionally DIVERGES from v1.0.0, memory stack ON). Arc 2: **#5 SHIELD-learning + #4 semantic memory mechanism-proven but GATED-OFF** (activate in Phase 6); **#7 consolidation FOLDED into #4's `sd_distill`**. Telemetry grown v1→v6/224 B. `memory` tag PROPOSED as `v1.1.0-memory` (user creates tags), not yet cut. Remaining: cut the tag, then Phase 6 (Butler — proactive/control-IN — which also activates the gated #4/#5 capabilities). The ROADMAP cross-phase backlog (B1 self-healing, B2 "it-acts"/close SEC-039, B3 QEMU quickstart + CI gen smoke) is still un-started + fair game. v1.0.0 SHIPPED (tag bdf0951); 90-day soak owner-scheduled, not a gate.
+- **Critical path: DERIVE IT FRESH each session** — read `phase6/docs/` (`PHASE_6_PLAN.md` + `PHASE_6_GOAL_K_IT_ACTS.md` + `PHASE_6_GOAL_K_SYSTEM_DESIGN.md`) + the `memory/` Phase-6 notes + the last ~15 commits; where they disagree, commits win. The paragraph below is a dated SNAPSHOT (2026-07-07) — verify before relying on it, and treat any mismatch as SKILL.md drift to fix.
+- Snapshot 2026-07-07: **Phase 5 (Memory) COMPLETE + `v1.1.0-memory` tag CUT (`feeafd1`).** **Phase 6 (Butler) IN PROGRESS — keystone K = "it-acts" / PB self-healing** (folds ROADMAP backlog B1+B2, closes SEC-039 at the flip). Done, all gated `JARVIS_ACTIONS` default-0 (deploy ACTION-INERT, byte-identical): K/M0 (host decision core: allowlist + linked SHIELD action gate + JACT audit store @ LBA 21,120,000) · K/M1 (SHIELD gate linked into PA, induced-BLOCK box proof) · K/M2a–K/M2b-2 STEP-3 (reuse-in-place respawn + **CRASH self-heal** via fault-EP; STEP-2 re-fault ROOT-CAUSED to an `seL4_NBRecv` phantom, fixed by a 1..15 fault-tag-label gate) · **K/M2c (`a0dde19` + D1/D2 `07e7794`) — HANG/wedge self-heal** via a shared miss-counter (`km2b_miss`), + the first off-box JACT read-back. Both PB failure modes now self-heal (crash + wedge), 5/5/5 box-gated coherent. **Next: K/M3** — v7 telemetry (`restart_count`/`actions_fired`/`actions_blocked` on the wire + receiver/fixture/golden/console-honesty lockstep) → **K/M4** — the `JARVIS_ACTIONS` default-ON flip that closes SEC-039 in deploy. **3 K/M4 pre-flip carry-forwards (gate the flip, §10):** (1) hard-loop box experiment (the "hard busy-loop undetectable" claim is UNVERIFIED/likely-detectable), (2) `pa_poll_fault` label-gate defense-in-depth, (3) weigh a dedicated PA core only if (1) fails. v1.0.0 SHIPPED (`bdf0951`); 90-day soak owner-scheduled, not a gate.
 
 ### 3. Generate Implementation Prompts
 When the user says "what's next", "give me a prompt", or "let's do X", produce a complete, paste-ready prompt for the coding CC session. Every prompt must include:
@@ -209,11 +209,11 @@ JARVIS AI-OS: AI-controlled operating system on seL4 microkernel.
 - Two seL4 processes: Process A (rootserver: cache, NVMe, telemetry, episodic/context/retrieval wiring, IPC loop) spawns Process B (inference + M3 worker threadpool) from CPIO; lock-free shmem rings (15×256B slots, CRC-32) between them + a 3rd shared page for the seqlock shared-context pool
 - Deployed inference: Gemma 4 E2B Q4_K_M, **5.46 tok/s @ NUM_NODES=6** (seL4 build, bare metal; M3 threadpool — the recorded benchmark; since telemetry v4 the console renders the LIVE measured tok/s, 5.51–5.55 box-verified, with 5.46 kept as the labeled reference). Native dev-engine numbers (19.79 tok/s Llama 1B @16T) are NOT the seL4 build — don't conflate.
 - HONESTY NOTE — verification: the deployed x86-64 build runs a *performance* seL4 config (KernelFastpath=ON + XSAVE/AVX + SMP NUM_NODES=6) that is **outside** seL4's verified X64 set — functional-but-unverified by design (ADRs 2026-06-16 + 2026-06-17). "Formally verified" is true of seL4's canonical configs, NOT JARVIS's running config.
-- HONESTY NOTE — SHIELD: live SHIELD on the IPC path is a stub (SEC-039: shield.c not linked; Process B returns ALLOW; Process A has only an inline 6-word keyword check). Don't claim "100% harmful blocked" for the running system. Closing SEC-039 is ROADMAP backlog item B2.
+- HONESTY NOTE — SHIELD: live SHIELD on the IPC *query* path is a stub (SEC-039: shield.c not linked; Process B returns ALLOW; Process A has only an inline 6-word keyword check). Don't claim "100% harmful blocked" for the running system. Closing SEC-039 is **Phase 6 Goal K (the "it-acts" keystone)** — K/M0–M2c have PROVEN the closure MECHANISM on a separate ACTION path (`shield_action.c` linked into PA refuses a blocklisted action, audited to JACT), but it's gated `JARVIS_ACTIONS`=0 (deploy ACTION-INERT), so SEC-039 is "mechanism proven, deploy-live pending the **K/M4** default-ON flip", NOT yet closed in deploy.
 - HONESTY NOTE — self-test: "5/5" = 3 real (tensor/dequant/tokenizer) + 2 vacuous (cache/SHIELD); telemetry + the durable LOG_SELFTEST line carry the real tally.
 
 ### Phase Status
-Snapshot as of 2026-07-02 — CLAUDE.md + the latest week doc are the truth; verify before relying on a row, and treat any mismatch as SKILL.md drift to fix (see the self-check in the exploration prompt).
+Snapshot as of 2026-07-07 — CLAUDE.md + `phase6/docs/` + the `memory/` Phase-6 notes are the truth; verify before relying on a row, and treat any mismatch as SKILL.md drift to fix (see the self-check in the exploration prompt).
 
 | Phase | Status |
 |-------|--------|
@@ -222,9 +222,10 @@ Snapshot as of 2026-07-02 — CLAUDE.md + the latest week doc are the truth; ver
 | Phase 2 | COMPLETE — Alpha on Pi 4 bare metal |
 | Phase 3 | COMPLETE (beta) — v0.2.1-beta TAGGED @ 06de75c (2026-06-16). Engine: 11/11 models, 6 families. Bare-metal NVMe inference verified. Single-model Gemma 4 E2B (ADR 2026-04-17). 30-day x86 soak DEFERRED (ADR 2026-06-15). |
 | Phase 4 | **COMPLETE — v1.0.0 SHIPPED 2026-06-26 (tag bdf0951, MIT, public).** Scoreboard: #1 inference perf CPU ✅ (Gemma 4 E2B 5.46 tok/s @ NN=6, M0–M4; GPU deferred) · #2 GOP HUD ✅ · #2b Remote Telemetry Console ✅ (read-only; control-IN = Phase 6) · #3 keyboard ✂️ CUT · #4 installer ✅ (usb/esp dual-boot VERIFIED on-box; disk = code+dry-run only) · #5 90-day soak ❌ owner-scheduled · #6 docs ✅ · #7 release ✅. See PHASE_4_FINAL_REPORT.md. |
-| Phase 5 | **Memory arc largely COMPLETE (started 2026-06-26).** MVP arc (#1 episodic M0–M4, #2 context M0–M4, #3 retrieval M0–M6, #6 cache-growth M0–M4) DONE + box-verified + DEPLOYED default-ON; retrieval flipped 2026-07-02 (66e1d18), cache-growth 2026-07-03 (99419fb) — deployed image DIVERGES from v1.0.0 by design. Arc 2: #5 SHIELD-learning (M0–M2, monitor-only) + #4 semantic memory (M0–M2/M4, deterministic distill) mechanism-proven but GATED-OFF (activate Phase 6); #7 folded into #4. Telemetry v6/224B. `v1.1.0-memory` proposed, not cut. Code in phase3/src/ai. |
+| Phase 5 | **Memory arc largely COMPLETE (started 2026-06-26).** MVP arc (#1 episodic M0–M4, #2 context M0–M4, #3 retrieval M0–M6, #6 cache-growth M0–M4) DONE + box-verified + DEPLOYED default-ON; retrieval flipped 2026-07-02 (66e1d18), cache-growth 2026-07-03 (99419fb) — deployed image DIVERGES from v1.0.0 by design. Arc 2: #5 SHIELD-learning (M0–M2, monitor-only) + #4 semantic memory (M0–M2/M4, deterministic distill) mechanism-proven but GATED-OFF (activate Phase 6); #7 folded into #4. Telemetry v6/224B. `v1.1.0-memory` tag CUT (`feeafd1`). Code in phase3/src/ai. |
+| Phase 6 | **IN PROGRESS — Butler; keystone K "it-acts" / PB self-healing** (folds ROADMAP B1+B2; all gated `JARVIS_ACTIONS` default-0, deploy ACTION-INERT + byte-identical). K/M0–M1 = host decision core (allowlist + linked SHIELD action gate + JACT audit @ LBA 21,120,000) + induced-BLOCK box proof (SEC-039 closure MECHANISM). K/M2a–M2c DONE — PB self-heals BOTH **crashes** (fault-EP respawn; STEP-3 `c819d34` + D1/D2 `07e7794`) AND **wedges** (hang miss-counter `km2b_miss`, `a0dde19`), 5/5 crash + 5/5 worker + 5/5 hang box-gated coherent, first off-box JACT read-back. **Next K/M3** (v7 telemetry: restart_count/actions_fired/actions_blocked) → **K/M4** (`JARVIS_ACTIONS` default-ON flip = closes SEC-039 in deploy). Docs: `phase6/docs/`. |
 
-Current milestone: do NOT hardcode here (it moves) — read the latest `phase5/weeks/weekNN/WEEK_NN_STATUS.md` (and cross-check against the last few commits; week docs can lag).
+Current milestone: do NOT hardcode here (it moves) — Phase 6 has NO weekly cadence; read `phase6/docs/` + the `memory/` Phase-6 notes + the last ~15 commits (commits win on any disagreement).
 
 ### Working Rules
 These rules apply to the prompts you generate — the coding session must follow them:
@@ -317,7 +318,7 @@ sudo modprobe kvm_amd    # load KVM module
 Every session, begin by:
 1. Reading CLAUDE.md
 2. Running `git log --oneline -20`
-3. Checking `phase4/docs/ROADMAP.md` (incl. the B1/B2/B3 backlog) + `phase5/docs/PHASE_5_PLAN.md` + the relevant `phase5/docs/PHASE_5_GOAL*.md` + the latest `phase5/weeks/weekNN/` + `docs/decisions/` ADRs (the phase3/phase4 plans are historical)
+3. Checking `phase4/docs/ROADMAP.md` (incl. the B1/B2/B3 backlog) + **`phase6/docs/`** (`PHASE_6_PLAN.md` + `PHASE_6_GOAL_K_IT_ACTS.md` + `PHASE_6_GOAL_K_SYSTEM_DESIGN.md`) + the `memory/` Phase-6 notes + `docs/decisions/` ADRs (the phase3/phase4/phase5 plans are historical — Phase 5 COMPLETE)
 4. Telling the user where things stand and what's next
 
 ## Mid-Session (when user pastes CC output)
