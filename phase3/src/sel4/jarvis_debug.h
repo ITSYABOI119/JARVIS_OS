@@ -140,12 +140,15 @@
 #define JARVIS_SEMANTIC 0
 
 /* Phase 6 K: the action-execution spine (allowlist + linked SHIELD gate + JACT action-audit
- * store @ LBA 21,120,000). When 1, Process A inits the audit store and the it-acts spine is
- * linked (shield_action.c — the SEC-039 closure MECHANISM); when 0 the includes + store +
- * probe compile out (deployed path byte-identical; the image stays ACTION-INERT). NO action
- * executes at M1 regardless (execution is K/M2); the deploy default-ON flip is the deliberate
- * K/M4 decision — SEC-039 is fully closed only then. Default 0. */
-#define JARVIS_ACTIONS 0
+ * store @ LBA 21,120,000). When 1, Process A inits the audit store, links the it-acts spine
+ * (shield_action.c), and runs the fault-EP receiver + miss-counter self-heal: a PB crash/wedge is
+ * detected -> shield_assess (SHIELD-scored) -> reuse-in-place respawn -> JACT audit.
+ * **K/M4 FLIPPED DEFAULT-ON 2026-07-08** — the deployed x86 image now runs the SHIELD-scored,
+ * JACT-audited self-heal ACTION gate LIVE, which closes SEC-039 FOR THE ACTION PATH (boot_id=15
+ * supervised on-wire: v7 crc_ok, TLM_F_ACTIONS set, restart/fired/blocked honest-0, err=0, NN=6).
+ * The QUERY path stays PASSIVE (Process B returns ALLOW) BY DESIGN — this does NOT block queries.
+ * When 0 the includes + store + probe compile out (action-inert, byte-identical to pre-K). */
+#define JARVIS_ACTIONS 1
 
 /* Phase 6 K/M1 induced-BLOCK probe (box-only, needs JARVIS_ACTIONS=1): one-shot at boot,
  * three cases through the REAL linked gate, NOTHING executes — (A) benign allowlisted action
