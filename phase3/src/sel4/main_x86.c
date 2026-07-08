@@ -1758,9 +1758,52 @@ static int km2b_do_respawn(void)
     return (wait_for_response(shared_response_ring, MSG_HEARTBEAT_ACK) == 0) ? 1 : 0;
 }
 
+/* ===== 6-1/M1: the generic action spine, factored OUT of pa_restart_pb so the K self-heal and a
+ * monitor NOTIFY share ONE assess + ONE count/audit step (one JACT shape, one counter discipline).
+ * Scoped extraction by design: each caller keeps its OWN execute body at its call site (the respawn
+ * with its latch/window stays in pa_restart_pb; a monitor's "emit one line" stays in the monitor) —
+ * no callback, no switch, the K/M4-proven funnel instructions untouched. ===== */
+
+typedef struct {
+    act_decision_t   dec;
+    shield_verdict_t verdict;
+    uint16_t         risk_x100;
+    trust_level_t    trust;
+} spine_decision_t;
+
+/* The assess step — a VERBATIM move of the funnel's shield_assess -> action_lookup ->
+ * trust_policy sequence. Pure: touches ZERO globals. */
+static spine_decision_t spine_decide(uint16_t id, const action_ctx_t *ctx,
+                                     const shield_learn_slot_t *learn, int learn_cap)
+{
+    shield_action_result_t sr = shield_assess(id, ctx, learn, learn_cap);
+    const action_def_t *ad = action_lookup(id);
+    trust_level_t tlv = ad ? ad->trust : TRUST_NOTIFY;
+    act_decision_t dec = trust_policy(sr.verdict, tlv, false);   /* no control-IN yet */
+    spine_decision_t d = { dec, sr.verdict, sr.risk_x100, tlv };
+    return d;
+}
+
+/* The count + audit step — a move of the funnel's v7 counter bumps + the JACT block.
+ * Exactly ONE call per resolved event => exactly ONE JACT record (§5-E preserved). */
+static void spine_record(uint16_t id, const spine_decision_t *d, uint16_t audit_verdict,
+                         uint16_t outcome, const char *trig, uint16_t trig_len, int executed)
+{
+    if (executed) g_actions_fired++;      /* v7: a real allowlisted action EXECUTED */
+    else          g_actions_blocked++;    /* v7: the action gate REFUSED this action */
+    if (g_action_audit_ready) {           /* §5-E: exactly ONE JACT record per resolved event */
+        action_audit_rec_t rec;
+        act_audit_fill(&rec, jarvis_uptime_ms(), id, (uint16_t)d->trust,
+                       audit_verdict, d->risk_x100, outcome, trig, trig_len);
+        act_audit_append(&g_action_audit, &rec);
+    }
+}
+
 /* §5-D/E: the SINGLE restart funnel. Idempotent via g_restart_in_progress. First LIVE shield_assess
  * -> trust_policy; execute on EXECUTE/NOTIFY; exactly ONE JACT record; restart_count bump; windowed
- * crash-loop bound (§5-F -> g_pb_dead). This is the first time JARVIS_ACTIONS executes live. */
+ * crash-loop bound (§5-F -> g_pb_dead). 6-1/M1: assess + count/audit now go through the shared
+ * spine helpers (a behavior-neutral extract — the only delta is the counter bump moving after the
+ * serial print, invisible: counters are read only at telemetry emit). */
 static void pa_restart_pb(const char *reason, uint16_t lane, uint32_t missed, uint64_t age_ms,
                           seL4_Word flabel, seL4_Word fbadge)
 {
@@ -1771,36 +1814,27 @@ static void pa_restart_pb(const char *reason, uint16_t lane, uint32_t missed, ui
     int tl = km2b_build_trigger(trig, sizeof(trig), reason, lane, missed, age_ms, flabel, fbadge);
 
     action_ctx_t ctx = { .trigger = trig, .trigger_len = (uint16_t)tl, .query_key = 0 };
-    shield_action_result_t sr = shield_assess(ACTION_RESTART_PB, &ctx, NULL, 0);   /* learn=NULL (§5-E) */
-    const action_def_t *ad = action_lookup(ACTION_RESTART_PB);
-    trust_level_t tlv = ad ? ad->trust : TRUST_NOTIFY;
-    act_decision_t dec = trust_policy(sr.verdict, tlv, false);   /* no control-IN yet */
+    spine_decision_t d = spine_decide(ACTION_RESTART_PB, &ctx, NULL, 0);   /* learn=NULL (§5-E) */
 
     uint16_t verdict = AUDIT_BLOCKED, outcome = AUDIT_OUT_NA;
-    if (dec == ACT_EXECUTE || dec == ACT_NOTIFY) {
+    if (d.dec == ACT_EXECUTE || d.dec == ACT_NOTIFY) {
         g_infer_active = 0; g_infer_t0 = 0;   /* §5-E: clear the duty latch (stale t0 corrupts) */
         int ok = km2b_do_respawn();
         verdict = AUDIT_EXECUTED;
         outcome = ok ? AUDIT_OUT_OK : AUDIT_OUT_FAIL;
         g_restart_count++; g_restart_window++; g_healthy_since_restart = 0;
-        g_actions_fired++;                    /* v7: a real allowlisted action EXECUTED */
         puts_serial("[RESTART] reason="); puts_serial(reason);
-        puts_serial(" risk="); put_dec(sr.risk_x100);
+        puts_serial(" risk="); put_dec(d.risk_x100);
         puts_serial(" -> EXECUTED outcome="); puts_serial(ok ? "OK" : "FAIL");
         puts_serial(" restart_count="); put_dec(g_restart_count);
         puts_serial(" window="); put_dec(g_restart_window); puts_serial("\n");
     } else {
-        g_actions_blocked++;                  /* v7: the action gate REFUSED this action */
         puts_serial("[RESTART] reason="); puts_serial(reason);
-        puts_serial(" risk="); put_dec(sr.risk_x100); puts_serial(" -> REFUSED (not executed)\n");
+        puts_serial(" risk="); put_dec(d.risk_x100); puts_serial(" -> REFUSED (not executed)\n");
     }
 
-    if (g_action_audit_ready) {   /* §5-E: exactly ONE JACT record per resolved event */
-        action_audit_rec_t rec;
-        act_audit_fill(&rec, jarvis_uptime_ms(), ACTION_RESTART_PB, (uint16_t)tlv,
-                       verdict, sr.risk_x100, outcome, trig, (uint16_t)tl);
-        act_audit_append(&g_action_audit, &rec);
-    }
+    spine_record(ACTION_RESTART_PB, &d, verdict, outcome, trig, (uint16_t)tl,
+                 (d.dec == ACT_EXECUTE || d.dec == ACT_NOTIFY));
 
     if (g_restart_window >= KM2B_CRASHLOOP_BOUND) {   /* §5-F: crash-loop -> degraded (stop SENDS) */
         g_pb_dead = 1;
