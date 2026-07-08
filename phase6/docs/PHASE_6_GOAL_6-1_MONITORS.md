@@ -88,6 +88,7 @@ surface. No new decision machinery — the spine K built is the delivery channel
 - **M0 (host/CI, no box):** the pure monitor framework — `phase3/src/ai/monitors.{c,h}` (threshold/debounce/
   hysteresis state machine + per-boot counter-delta helper + keyword-clean event snapshot builder) +
   `test_monitors.c` + a CI step. The km2b_miss/km2b_fault precedent: host-pure, NO `<sel4/sel4.h>`.
+  ✅ **DONE 2026-07-08** — see §6.
 - **M1 (box, gated `JARVIS_MONITORS` default-0):** factor `spine_run_action` out of `pa_restart_pb`
   (behavior-neutral; box re-verify the self-heal gates unchanged) + wire the FIRST watcher (q_errors-delta at
   the [STATS] cadence) → `ACTION_NOTIFY_ANOMALY` → the spine → `[MONITOR]` line + JACT record. Box gate: an
@@ -126,7 +127,17 @@ live surface. Watcher state is a few dozen bytes of PA statics (`monitor_t` per 
 
 ## 6. Milestone log
 
-- (M0 lands next — this log fills as milestones complete.)
+- **M0 ✅ DONE 2026-07-08:** `phase3/src/ai/monitors.{c,h}` + `test_monitors.c` (**27 PASS**, TDD RED→GREEN) —
+  `monitor_t` (GE/LE threshold, debounce = N CONSECUTIVE samples, fire-ONCE latch + re-arm-on-clear
+  hysteresis; debounce 0 treated as 1; NULL-guarded), `monitor_delta_step` (per-boot cumulative-counter
+  delta; first-call and boot_id-change baseline to 0 — the episodic/JACT boot_id precedent),
+  `monitor_build_snapshot` (per-type fixed literals + decimals only, cap-bounded `MON_SNAP_MAX`, truncation
+  NUL-safe). T7 pins the keyword-clean discipline BOTH ways: every event type's snapshot scans clean against
+  the canonical blocklist AND passes the REAL `shield_assess(ACTION_NOTIFY_ANOMALY, <snapshot>, NULL, 0)`
+  un-BLOCKED (the test_km2b_trigger discipline — a monitor NOTIFY can never block itself). CI step
+  "Phase 6: 6-1 Monitor framework (C)" (links monitors.c + shield_action.c + action_allowlist.c +
+  shield_learn.c). Links NOTHING into the deployed path (host-only; M1 is the first box wiring — deploy
+  unaffected, no gating concern yet).
 
 ## 7. Done-when
 
