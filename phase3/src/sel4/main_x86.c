@@ -79,6 +79,7 @@
 #include "km2b_trigger.h"       /* Phase 6 K/M2b-2: keyword-clean restart trigger builder (§5-E; host-tested) */
 #include "km2b_miss.h"          /* Phase 6 K/M2c: shared PB-contact miss-counter (hang/wedge detector; host-tested) */
 #include "km2b_fault.h"         /* Phase 6 K/M4 pre-flip: fault-EP validity predicate (label+badge; host-tested) */
+#include "monitors.h"           /* Phase 6 6-1: pure watcher framework (threshold/debounce/delta/snapshot; host-tested) */
 #endif
 #include "jarvis_ui_tokens.h"   /* Step 2c-2b: FBP_ and JUI_ palette + geometry (single source) */
 
@@ -485,6 +486,17 @@ static int             g_cg_serve_logged = 0;
  * this table is learned + surfaced, NEVER consulted to block anything (SEC-039 unchanged; live
  * enforcement is Phase 6). Zero-init = all empty (fail_count==0). */
 static shield_learn_slot_t g_shield_learn[SHIELD_LEARN_CAP_KEYS];
+#endif
+#if JARVIS_MONITORS
+/* Phase 6 6-1/M1: the first always-on watcher — the q_errors window delta at the [STATS]
+ * cadence. The deploy baseline is err=0 (boot_id=15 sustained), so ANY sustained growth is
+ * anomalous; these are M1 defaults — the per-signal calibration pass is M2. Debounce 2 =
+ * two consecutive over-threshold windows, so a single transient error burst never fires. */
+#define MON_ERRRATE_THRESHOLD  5    /* errors per 100-query [STATS] window */
+#define MON_ERRRATE_DEBOUNCE   2    /* consecutive over-threshold windows to fire */
+static monitor_t       g_mon_errrate;
+static monitor_delta_t g_mon_err_d;
+static int             g_mon_inited = 0;
 #endif
 #if JARVIS_SEMANTIC
 /* Phase 5 #4/M1: the SEPARATE semantic fact store + the boot-distill window. WRITE-ONLY at M1 —
@@ -4242,6 +4254,65 @@ static void *main_continued(void *arg UNUSED)
             jarvis_log_snapshot(q_total, q_errors);   /* Step 2c-2a: full-state [SNAP] at the [STATS] cadence */
             jarvis_telemetry_emit(TLM_K_STATS, q_total, q_hits, q_infer, q_heartbeat, q_shield, q_errors);  /* N-c-1 */
             g_tlm_last_tsc = jarvis_rdtsc();   /* N-c-1: re-base the 1 Hz gate so the next tick isn't a near-dup */
+#if JARVIS_MONITORS
+            /* 6-1/M1: the q_errors-delta watcher -> ACTION_NOTIFY_ANOMALY through the shared
+             * spine. Deliberately NO g_restart_in_progress latch and NO g_pb_dead gate (a NOTIFY
+             * must be able to fire even when PB is degraded — it restarts nothing); fire-once +
+             * debounce are monitor_t's job (M0, host-proven 27/27), not the restart latch's.
+             * Snapshot = SYSTEM FACTS ONLY, keyword-clean by construction (never query text —
+             * or shield_assess would BLOCK the monitor's own NOTIFY). */
+            {
+                if (!g_mon_inited) {
+                    monitor_init(&g_mon_errrate, MON_ERRRATE_THRESHOLD, MON_CMP_GE,
+                                 MON_ERRRATE_DEBOUNCE);
+                    g_mon_inited = 1;
+                }
+                uint64_t mon_d = monitor_delta_step(&g_mon_err_d, q_errors, 0);
+#if JARVIS_MONITOR_PROBE
+                /* MON-PROBE (box gate only): a synthetic over-threshold delta fed to the
+                 * watcher's WINDOW DELTA (never the real q_errors counter — honest) for the
+                 * first 3 windows: fires at window MON_ERRRATE_DEBOUNCE, window 3 sustained
+                 * must NOT re-fire (the M0 fire-once latch), later real-0 windows re-arm. */
+                static int mon_probe_win = 0;
+                if (mon_probe_win < 3) {
+                    mon_probe_win++;
+                    mon_d += (uint64_t)(MON_ERRRATE_THRESHOLD * 2);
+                    puts_serial("[MON-PROBE] window="); put_dec((uint32_t)mon_probe_win);
+                    puts_serial(" synthetic d="); put_dec((uint32_t)mon_d); puts_serial("\n");
+                }
+#endif
+                if (monitor_sample(&g_mon_errrate, (int64_t)mon_d)) {
+                    monitor_event_t mev;
+                    if (monitor_build_snapshot(&mev, MON_EV_ERROR_RATE, 1,
+                                               (int64_t)mon_d, 100) > 0) {
+#if JARVIS_SHIELD_LEARN
+                        const shield_learn_slot_t *mon_pl = g_shield_learn;
+                        int mon_plc = SHIELD_LEARN_CAP_KEYS;
+#else
+                        const shield_learn_slot_t *mon_pl = NULL;
+                        int mon_plc = 0;
+#endif
+                        action_ctx_t mctx = { mev.snap, mev.snap_len, 0 };
+                        spine_decision_t md = spine_decide(ACTION_NOTIFY_ANOMALY, &mctx,
+                                                           mon_pl, mon_plc);
+                        if (md.dec == ACT_EXECUTE || md.dec == ACT_NOTIFY) {
+                            /* The NOTIFY "execute" = exactly this line + the JACT record. */
+                            puts_serial("[ANOMALY] "); puts_serial(mev.snap);
+                            puts_serial(" risk="); put_dec(md.risk_x100); puts_serial("\n");
+                            spine_record(ACTION_NOTIFY_ANOMALY, &md, AUDIT_EXECUTED,
+                                         AUDIT_OUT_OK, mev.snap, mev.snap_len, 1);
+                        } else {
+                            /* Unreachable by construction (M0 T7c: a monitor snapshot never
+                             * blocks its own NOTIFY) — but audit honestly if it ever happens. */
+                            puts_serial("[ANOMALY] NOTIFY REFUSED risk=");
+                            put_dec(md.risk_x100); puts_serial("\n");
+                            spine_record(ACTION_NOTIFY_ANOMALY, &md, AUDIT_BLOCKED,
+                                         AUDIT_OUT_NA, mev.snap, mev.snap_len, 0);
+                        }
+                    }
+                }
+            }
+#endif /* JARVIS_MONITORS */
 #if JARVIS_SHIELD_LEARN
             /* Phase 5 #5/M1: derive-from-episodic failure learning (D-a). BEFORE epi_commit()
              * clears the batch, fold this batch's FAILURE records (outcome != OK) into the risk

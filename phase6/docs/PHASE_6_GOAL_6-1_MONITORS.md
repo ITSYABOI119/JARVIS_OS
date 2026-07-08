@@ -94,6 +94,7 @@ surface. No new decision machinery — the spine K built is the delivery channel
   the [STATS] cadence) → `ACTION_NOTIFY_ANOMALY` → the spine → `[MONITOR]` line + JACT record. Box gate: an
   induced error burst fires the NOTIFY exactly once (debounced), JACT reads back off-box, the deployed-config
   run shows 0 monitor lines (OFF) and the self-heal probes still pass. **The minimal viable 6-1.**
+  ✅ **DONE 2026-07-08** — see §6 (implemented as `spine_decide`+`spine_record`, the scoped two-helper split).
 - **M2 (box+host):** the honest monitor set — heartbeat-age (calibrated ABOVE the ~12 s worst-case inference,
   suppressed while `g_infer_active`), self-heal-rate, store-growth/wrap, uptime-milestone; NIC TX-activity
   optional. A real-telemetry calibration pass sets per-signal thresholds + debounce (no guessed constants).
@@ -138,6 +139,31 @@ live surface. Watcher state is a few dozen bytes of PA statics (`monitor_t` per 
   "Phase 6: 6-1 Monitor framework (C)" (links monitors.c + shield_action.c + action_allowlist.c +
   shield_learn.c). Links NOTHING into the deployed path (host-only; M1 is the first box wiring — deploy
   unaffected, no gating concern yet).
+- **M1 ✅ DONE 2026-07-08** (two commits, each box-gated):
+  - **Commit A (`7a4d7ba`) — the spine extract, behavior-neutral on the DEPLOYED self-heal.** The scoped
+    two-helper split (Locked decision 4, refined): `spine_decide` = a VERBATIM move of the funnel's
+    `shield_assess` → `action_lookup` → `trust_policy` sequence (pure, zero globals); `spine_record` = the v7
+    counter bumps + the single JACT block. `pa_restart_pb` keeps its latch, trigger render, the ENTIRE
+    execute body, serial lines, crash-loop bound, and `km2b_miss_on_pb_ack` verbatim — no callback, no
+    switch; each caller keeps its own execute body at its call site. **Box re-verify (KVM `-smp 6`,
+    ACTIONS=1/PROBE=1): 5/5 + 5/5 + 5/5 `recovery=COHERENT`, 0 phantoms, 0 `[FAULT-REJECT]`, 0 REFUSED;
+    `[RESTART]` serial format identical; JACT byte-matched (15 new records all `action=1 NOTIFY/EXECUTED/OK
+    risk=10`, zero field drift vs the boot_id=13 baseline); the HARDLOOP tail reproduces the committed
+    Outcome-B signature unchanged; deploy-config healthy smoke 0 spurious `[RESTART]`; OFF (`ACTIONS=0`)
+    compiles clean.**
+  - **Commit B — the first watcher live.** `JARVIS_MONITORS` (default-0, compile-guarded to require
+    `JARVIS_ACTIONS`) + `JARVIS_MONITOR_PROBE` (default-0, its OWN flag — `ACTION_PROBE` runs end at the
+    committed HARDLOOP Outcome-B starve and never reach the workload): the q_errors-delta watcher at the
+    `[STATS]` cadence (`MON_ERRRATE_THRESHOLD` 5/window, `MON_ERRRATE_DEBOUNCE` 2; M1 defaults — the
+    calibration pass is M2) → `monitor_delta_step` → `monitor_sample` → on fire: `monitor_build_snapshot` →
+    `spine_decide(ACTION_NOTIFY_ANOMALY, …)` (learn map passed when `JARVIS_SHIELD_LEARN`, the K/M1 probe
+    pattern) → one `[ANOMALY]` line + `spine_record` (EXECUTED/OK). Deliberately NO restart latch and NO
+    `g_pb_dead` gate (a NOTIFY must fire even degraded); fire-once/debounce are `monitor_t`'s job. **Box
+    gate (KVM `-smp 6`, MONITORS=1/MONITOR_PROBE=1, ACTION_PROBE=0): `[MON-PROBE]` windows 1–3 → EXACTLY ONE
+    `[ANOMALY] mon err-rate d=10 win=100 risk=0` at window 2 (debounce), window 3 sustained did NOT re-fire,
+    the 736 later real-0 windows never fired (zero NOTIFY spam to q=73,900, err=0, 0 `[RESTART]`); JACT:
+    exactly one `action=2 AUTO/EXECUTED/OK risk=0 trigger="mon err-rate d=10 win=100"` (keyword-clean, never
+    BLOCKED). OFF (`JARVIS_MONITORS=0`, the deploy default) compiles the watcher out (RC=0).**
 
 ## 7. Done-when
 

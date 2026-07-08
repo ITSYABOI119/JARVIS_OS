@@ -159,6 +159,29 @@
  * `[ACTION-PROBE]` serial proof lines. Default 0 -> compiles out. */
 #define JARVIS_ACTION_PROBE 0
 
+/* Phase 6 goal 6-1 M1: always-on monitors — lightweight threshold watchers over REAL observable
+ * state at the [STATS] cadence (first watcher: the q_errors window delta). A debounced,
+ * fire-once-per-crossing threshold crossing emits a NOTIFY through the K action spine
+ * (ACTION_NOTIFY_ANOMALY -> spine_decide -> [ANOMALY] line + JACT record + actions_fired) —
+ * NOTE a NOTIFY-only monitor still EXECUTES something real (line + audit + counter), so it
+ * gates like any action: prove on the box, flip deliberately (the K discipline). When 0 the
+ * watcher statics + tick compile out (deploy byte-identical). Default 0. */
+#ifndef JARVIS_MONITORS
+#define JARVIS_MONITORS 0
+#endif
+#if JARVIS_MONITORS && !JARVIS_ACTIONS
+#error "JARVIS_MONITORS requires JARVIS_ACTIONS (the monitor rides the action spine: spine_decide / g_action_audit / g_actions_fired)"
+#endif
+
+/* Phase 6 6-1/M1 monitor probe (box-only, needs JARVIS_MONITORS=1): feeds a synthetic
+ * over-threshold delta into the q_errors watcher's WINDOW DELTA (never the real counter) for
+ * the first 3 [STATS] windows — fires at window MON_ERRRATE_DEBOUNCE, window 3 sustained must
+ * NOT re-fire (the M0 fire-once latch), later real-0 windows re-arm. Its OWN flag (the
+ * G3_PROBE/SHIELD_PROBE one-flag-per-probe precedent) because JARVIS_ACTION_PROBE runs end at
+ * the committed HARDLOOP experiment (Outcome-B starve) and never reach the workload.
+ * `[MON-PROBE]` serial proof lines. Default 0 -> compiles out. */
+#define JARVIS_MONITOR_PROBE 0
+
 /* Phase 6 K/M2a-2 reuse-in-place respawn spike (box-only KVM measurement; SYSTEM_DESIGN
  * §4.1/§4.2). When 1, Process B gains a muslc-init-safe `pb_restart_entry` (re-enters PAST
  * musl's one-time init on a dedicated ABI-aligned restart stack, REUSING the warm model
