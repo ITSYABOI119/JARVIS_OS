@@ -497,6 +497,34 @@ static shield_learn_slot_t g_shield_learn[SHIELD_LEARN_CAP_KEYS];
 static monitor_t       g_mon_errrate;
 static monitor_delta_t g_mon_err_d;
 static int             g_mon_inited = 0;
+/* 6-1/M2: three additive near-zero-FP watchers (heartbeat-age DEFERRED — goal doc §2/§6:
+ * on the cache-heavy workload it conflates "PB down" with "nothing asked PB anything" and
+ * overlaps the K/M2c wedge detector).
+ * W1 self-heal-rate: g_restart_count window delta >= 2 (debounce 1) — early warning BEFORE
+ * the crash-loop bound (5); the deploy baseline is flat 0 (boot_id=15: restart_count=0).
+ * W2 store-wrap: an ABSOLUTE GE latch on each store's monotonic hdr.total_entries at its
+ * capacity — fires ONCE at the FIRST wrap ("began overwriting oldest"); armed at init ONLY
+ * if the store has NOT already wrapped (an already-rolling store gets one [MONITOR] info
+ * line, no event — else every boot would re-notify a historical wrap).
+ * W3 uptime-milestone: fire-once GE marks at boot-relative ELAPSED 1h/24h/7d.
+ * jarvis_uptime_ms is uint32 (wraps ~49.7 d) so marks are capped <= 7 d; this is elapsed
+ * time since boot, NEVER wall-clock/time-of-day (no RTC — Locked decision 1). */
+#define MON_HEALRATE_THRESHOLD 2
+#define MON_HEALRATE_DEBOUNCE  1
+static monitor_t       g_mon_heal;
+static monitor_delta_t g_mon_heal_d;
+static monitor_t       g_mon_wrap_epi, g_mon_wrap_jact;
+static int             g_mon_wrap_epi_on = 0, g_mon_wrap_jact_on = 0;
+#if JARVIS_SEMANTIC
+static monitor_t       g_mon_wrap_sem;
+static int             g_mon_wrap_sem_on = 0;
+#endif
+#if JARVIS_MONITOR_PROBE
+static const int64_t   g_mon_uptime_marks[3] = { 5000, 15000, 30000 };   /* probe: short marks */
+#else
+static const int64_t   g_mon_uptime_marks[3] = { 3600000LL, 86400000LL, 604800000LL };  /* 1h/24h/7d */
+#endif
+static monitor_t       g_mon_uptime[3];
 #endif
 #if JARVIS_SEMANTIC
 /* Phase 5 #4/M1: the SEPARATE semantic fact store + the boot-distill window. WRITE-ONLY at M1 —
@@ -1810,6 +1838,39 @@ static void spine_record(uint16_t id, const spine_decision_t *d, uint16_t audit_
         act_audit_append(&g_action_audit, &rec);
     }
 }
+
+#if JARVIS_MONITORS
+/* 6-1/M2: ONE notify path for every watcher — snapshot -> spine_decide -> "[ANOMALY]" line ->
+ * spine_record (EXECUTED/OK; the defensive BLOCKED branch audits honestly — unreachable by
+ * construction, M0 T7: a monitor snapshot never blocks its own NOTIFY). Factored verbatim out
+ * of the M1 q_errors fire block so the M2 watchers don't quadruplicate it. */
+static void mon_notify(monitor_event_type_t type, int64_t v1, int64_t v2)
+{
+    monitor_event_t mev;
+    if (monitor_build_snapshot(&mev, type, 1, v1, v2) <= 0) return;
+#if JARVIS_SHIELD_LEARN
+    const shield_learn_slot_t *mon_pl = g_shield_learn;
+    int mon_plc = SHIELD_LEARN_CAP_KEYS;
+#else
+    const shield_learn_slot_t *mon_pl = NULL;
+    int mon_plc = 0;
+#endif
+    action_ctx_t mctx = { mev.snap, mev.snap_len, 0 };
+    spine_decision_t md = spine_decide(ACTION_NOTIFY_ANOMALY, &mctx, mon_pl, mon_plc);
+    if (md.dec == ACT_EXECUTE || md.dec == ACT_NOTIFY) {
+        /* The NOTIFY "execute" = exactly this line + the JACT record. */
+        puts_serial("[ANOMALY] "); puts_serial(mev.snap);
+        puts_serial(" risk="); put_dec(md.risk_x100); puts_serial("\n");
+        spine_record(ACTION_NOTIFY_ANOMALY, &md, AUDIT_EXECUTED, AUDIT_OUT_OK,
+                     mev.snap, mev.snap_len, 1);
+    } else {
+        puts_serial("[ANOMALY] NOTIFY REFUSED risk=");
+        put_dec(md.risk_x100); puts_serial("\n");
+        spine_record(ACTION_NOTIFY_ANOMALY, &md, AUDIT_BLOCKED, AUDIT_OUT_NA,
+                     mev.snap, mev.snap_len, 0);
+    }
+}
+#endif /* JARVIS_MONITORS */
 
 /* §5-D/E: the SINGLE restart funnel. Idempotent via g_restart_in_progress. First LIVE shield_assess
  * -> trust_policy; execute on EXECUTE/NOTIFY; exactly ONE JACT record; restart_count bump; windowed
@@ -4265,8 +4326,55 @@ static void *main_continued(void *arg UNUSED)
                 if (!g_mon_inited) {
                     monitor_init(&g_mon_errrate, MON_ERRRATE_THRESHOLD, MON_CMP_GE,
                                  MON_ERRRATE_DEBOUNCE);
+                    /* 6-1/M2 W1: self-heal-rate. */
+                    monitor_init(&g_mon_heal, MON_HEALRATE_THRESHOLD, MON_CMP_GE,
+                                 MON_HEALRATE_DEBOUNCE);
+                    /* 6-1/M2 W2: store-wrap — arm ONLY for stores that have NOT already
+                     * wrapped (see the statics note; probe: threshold = current total + 1
+                     * so the very next store write trips it). */
+                    {
+#if JARVIS_MONITOR_PROBE
+                        int64_t mon_epi_thr  = (int64_t)g_episodic.hdr.total_entries + 1;
+                        int64_t mon_jact_thr = (int64_t)g_action_audit.hdr.total_entries + 1;
+#else
+                        int64_t mon_epi_thr  = (int64_t)EPI_STORE_MAX_ENTRIES;
+                        int64_t mon_jact_thr = (int64_t)ACT_AUDIT_MAX_ENTRIES;
+#endif
+                        if (g_episodic_ready &&
+                            (int64_t)g_episodic.hdr.total_entries < mon_epi_thr) {
+                            monitor_init(&g_mon_wrap_epi, mon_epi_thr, MON_CMP_GE, 1);
+                            g_mon_wrap_epi_on = 1;
+                        } else if (g_episodic_ready) {
+                            puts_serial("[MONITOR] episodic already rolling total=");
+                            put_dec(g_episodic.hdr.total_entries); puts_serial("\n");
+                        }
+                        if (g_action_audit_ready &&
+                            (int64_t)g_action_audit.hdr.total_entries < mon_jact_thr) {
+                            monitor_init(&g_mon_wrap_jact, mon_jact_thr, MON_CMP_GE, 1);
+                            g_mon_wrap_jact_on = 1;
+                        } else if (g_action_audit_ready) {
+                            puts_serial("[MONITOR] jact already rolling total=");
+                            put_dec(g_action_audit.hdr.total_entries); puts_serial("\n");
+                        }
+#if JARVIS_SEMANTIC
+                        if (g_semantic_ready &&
+                            g_semantic.hdr.total_entries < SEM_STORE_MAX_FACTS) {
+                            monitor_init(&g_mon_wrap_sem, (int64_t)SEM_STORE_MAX_FACTS,
+                                         MON_CMP_GE, 1);
+                            g_mon_wrap_sem_on = 1;
+                        } else if (g_semantic_ready) {
+                            puts_serial("[MONITOR] semantic already rolling total=");
+                            put_dec(g_semantic.hdr.total_entries); puts_serial("\n");
+                        }
+#endif
+                    }
+                    /* 6-1/M2 W3: boot-relative uptime milestones (fire-once each). */
+                    for (int mi = 0; mi < 3; mi++)
+                        monitor_init(&g_mon_uptime[mi], g_mon_uptime_marks[mi], MON_CMP_GE, 1);
                     g_mon_inited = 1;
                 }
+
+                /* M1 — q_errors window delta. */
                 uint64_t mon_d = monitor_delta_step(&g_mon_err_d, q_errors, 0);
 #if JARVIS_MONITOR_PROBE
                 /* MON-PROBE (box gate only): a synthetic over-threshold delta fed to the
@@ -4281,35 +4389,56 @@ static void *main_continued(void *arg UNUSED)
                     puts_serial(" synthetic d="); put_dec((uint32_t)mon_d); puts_serial("\n");
                 }
 #endif
-                if (monitor_sample(&g_mon_errrate, (int64_t)mon_d)) {
-                    monitor_event_t mev;
-                    if (monitor_build_snapshot(&mev, MON_EV_ERROR_RATE, 1,
-                                               (int64_t)mon_d, 100) > 0) {
-#if JARVIS_SHIELD_LEARN
-                        const shield_learn_slot_t *mon_pl = g_shield_learn;
-                        int mon_plc = SHIELD_LEARN_CAP_KEYS;
-#else
-                        const shield_learn_slot_t *mon_pl = NULL;
-                        int mon_plc = 0;
-#endif
-                        action_ctx_t mctx = { mev.snap, mev.snap_len, 0 };
-                        spine_decision_t md = spine_decide(ACTION_NOTIFY_ANOMALY, &mctx,
-                                                           mon_pl, mon_plc);
-                        if (md.dec == ACT_EXECUTE || md.dec == ACT_NOTIFY) {
-                            /* The NOTIFY "execute" = exactly this line + the JACT record. */
-                            puts_serial("[ANOMALY] "); puts_serial(mev.snap);
-                            puts_serial(" risk="); put_dec(md.risk_x100); puts_serial("\n");
-                            spine_record(ACTION_NOTIFY_ANOMALY, &md, AUDIT_EXECUTED,
-                                         AUDIT_OUT_OK, mev.snap, mev.snap_len, 1);
-                        } else {
-                            /* Unreachable by construction (M0 T7c: a monitor snapshot never
-                             * blocks its own NOTIFY) — but audit honestly if it ever happens. */
-                            puts_serial("[ANOMALY] NOTIFY REFUSED risk=");
-                            put_dec(md.risk_x100); puts_serial("\n");
-                            spine_record(ACTION_NOTIFY_ANOMALY, &md, AUDIT_BLOCKED,
-                                         AUDIT_OUT_NA, mev.snap, mev.snap_len, 0);
-                        }
+                if (monitor_sample(&g_mon_errrate, (int64_t)mon_d))
+                    mon_notify(MON_EV_ERROR_RATE, (int64_t)mon_d, 100);
+
+                /* M2 W1 — self-heal-rate: restarts per window (early warning BEFORE the
+                 * crash-loop bound; the bound itself is the [FATAL] degraded state). */
+                {
+                    uint64_t heal_d = monitor_delta_step(&g_mon_heal_d, g_restart_count, 0);
+                    if (monitor_sample(&g_mon_heal, (int64_t)heal_d))
+                        mon_notify(MON_EV_SELF_HEAL_RATE, (int64_t)heal_d, 100);
+                }
+#if JARVIS_MONITOR_PROBE
+                /* W1 probe: TWO REAL back-to-back respawns in one window — an HONEST
+                 * induction (real km2b_do_respawn cycles, real JACT respawn records, real
+                 * restart_count — the wire counters stay truthful) -> the NEXT window's
+                 * delta = 2 -> W1 fires exactly once. Window reset between the two mirrors
+                 * the ACTION_PROBE cycles (isolates the probe from the crash-loop bound). */
+                {
+                    static int mon_heal_probe_win = 0, mon_heal_probe_done = 0;
+                    mon_heal_probe_win++;
+                    if (mon_heal_probe_win == 2 && !mon_heal_probe_done) {
+                        mon_heal_probe_done = 1;
+                        puts_serial("[MON-PROBE] inducing 2 real respawns for heal-rate\n");
+                        pa_restart_pb("hang", 0, 0, 0, 0, 0);
+                        g_restart_window = 0; g_healthy_since_restart = 0;
+                        pa_restart_pb("hang", 0, 0, 0, 0, 0);
+                        g_restart_window = 0; g_healthy_since_restart = 0;
                     }
+                }
+#endif
+                /* M2 W2 — store-wrap: the absolute latch on the monotonic totals. */
+                if (g_mon_wrap_epi_on &&
+                    monitor_sample(&g_mon_wrap_epi, (int64_t)g_episodic.hdr.total_entries))
+                    mon_notify(MON_EV_STORE_WRAP, 1, (int64_t)g_episodic.hdr.total_entries);
+                if (g_mon_wrap_jact_on &&
+                    monitor_sample(&g_mon_wrap_jact, (int64_t)g_action_audit.hdr.total_entries))
+                    mon_notify(MON_EV_STORE_WRAP, 2, (int64_t)g_action_audit.hdr.total_entries);
+#if JARVIS_SEMANTIC
+                if (g_mon_wrap_sem_on &&
+                    monitor_sample(&g_mon_wrap_sem, (int64_t)g_semantic.hdr.total_entries))
+                    mon_notify(MON_EV_STORE_WRAP, 3, (int64_t)g_semantic.hdr.total_entries);
+#endif
+                /* M2 W3 — uptime milestones: boot-relative ELAPSED only (guard the pre-TSC
+                 * zero read; marks <= 7 d — uint32 ms wraps ~49.7 d). */
+                {
+                    uint32_t mon_up_ms = jarvis_uptime_ms();
+                    if (mon_up_ms)
+                        for (int mi = 0; mi < 3; mi++)
+                            if (monitor_sample(&g_mon_uptime[mi], (int64_t)mon_up_ms))
+                                mon_notify(MON_EV_UPTIME_MILESTONE, (int64_t)mon_up_ms,
+                                           g_mon_uptime_marks[mi]);
                 }
             }
 #endif /* JARVIS_MONITORS */

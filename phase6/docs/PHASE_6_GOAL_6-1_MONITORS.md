@@ -95,9 +95,10 @@ surface. No new decision machinery — the spine K built is the delivery channel
   induced error burst fires the NOTIFY exactly once (debounced), JACT reads back off-box, the deployed-config
   run shows 0 monitor lines (OFF) and the self-heal probes still pass. **The minimal viable 6-1.**
   ✅ **DONE 2026-07-08** — see §6 (implemented as `spine_decide`+`spine_record`, the scoped two-helper split).
-- **M2 (box+host):** the honest monitor set — heartbeat-age (calibrated ABOVE the ~12 s worst-case inference,
-  suppressed while `g_infer_active`), self-heal-rate, store-growth/wrap, uptime-milestone; NIC TX-activity
-  optional. A real-telemetry calibration pass sets per-signal thresholds + debounce (no guessed constants).
+- **M2 (box+host):** the honest monitor set — self-heal-rate, store-growth/wrap, uptime-milestone
+  (**heartbeat-age DEFERRED** — see §6; NIC TX-activity left optional/not taken). A real-telemetry
+  calibration pass sets per-signal thresholds + debounce (no guessed constants).
+  ✅ **DONE 2026-07-09** — see §6.
 - **M3 (telemetry/console slice — REQUIRED for done):** the NOTIFY activity on the wire — telemetry **v8**
   (232 → +N B, CRC offset shifts, the FULL K/M3-precedent lockstep: `jarvis_telemetry.h` → receiver →
   fixture → `gen_golden_pcap` → `golden.pcap` → console) + a console monitor feed (a "Monitors" surface
@@ -164,6 +165,46 @@ live surface. Watcher state is a few dozen bytes of PA statics (`monitor_t` per 
     the 736 later real-0 windows never fired (zero NOTIFY spam to q=73,900, err=0, 0 `[RESTART]`); JACT:
     exactly one `action=2 AUTO/EXECUTED/OK risk=0 trigger="mon err-rate d=10 win=100"` (keyword-clean, never
     BLOCKED). OFF (`JARVIS_MONITORS=0`, the deploy default) compiles the watcher out (RC=0).**
+- **M2 ✅ DONE 2026-07-09 — the honest monitor set (3 added watchers on the M1 framework+spine; heartbeat-age
+  DEFERRED).**
+  - **The deferral:** a heartbeat-age watcher is NOT in 6-1. On the cache-heavy deployed workload it
+    conflates "PB is down" with "the workload asked PB nothing for a while" (cache serves repeats; HB/shield
+    sends are workload-lane-paced), and it overlaps the K/M2c consecutive-miss wedge detector, which already
+    catches the real failure. `[HB-AGE]` stays INSTRUMENT-ONLY (K/M2c D1); a calibrated age backstop remains
+    future work if a real gap ever shows.
+  - **W1 self-heal-rate** (`MON_EV_SELF_HEAL_RATE`): `g_restart_count` window delta ≥ 2, debounce 1 — early
+    warning BEFORE the crash-loop bound (5). **W2 store-wrap** (`MON_EV_STORE_WRAP`): an ABSOLUTE GE latch on
+    each store's monotonic `hdr.total_entries` at capacity (episodic 8192 / JACT 4096 / semantic 4096 when
+    enabled) — NOT a delta (totals persist across boots); fires ONCE at the FIRST wrap; **armed at init only
+    if the store has not already wrapped** (an already-rolling store logs one `[MONITOR] … already rolling`
+    info line, no event — else every boot would re-notify a historical wrap). **W3 uptime-milestone**
+    (`MON_EV_UPTIME_MILESTONE`): fire-once marks at boot-relative ELAPSED 1h/24h/7d (`jarvis_uptime_ms` is
+    uint32, wraps ~49.7 d → marks capped ≤ 7 d; NEVER wall-clock — no RTC, Locked decision 1). All four
+    watchers share ONE notify path (`mon_notify`, factored verbatim from the M1 fire block): snapshot →
+    `spine_decide` → `[ANOMALY]` line → `spine_record` — one JACT record per crossing.
+  - **Host pins:** `test_monitors.c` **41/41** (+T9 wrap absolute-latch never re-arms on monotonic growth;
+    +T10 multi-mark each-fires-exactly-once; +T11 heal-delta re-fires only on a NEW burst; the existing T7
+    loop already pins every M2 snapshot type keyword-clean + un-BLOCKED through the real `shield_assess`).
+  - **Calibration (measured, not guessed):** boot_id=15 bare-metal (durable log q=166k→301k + 147 on-wire
+    packets): q_errors delta flat 0 and restart_count flat 0 → the err-rate (5/win) and heal-rate (2/win)
+    thresholds have effectively unbounded margin. Episodic on both the box and the KVM image is ALREADY
+    rolling (box total=8192=cap on-wire; KVM total ≈ 1.02 M) → W2's arm-only-if-unwrapped rule is what keeps
+    it per-boot silent; JACT lifetime ≈ 160/4096 (years from wrapping at healthy rates); gate-length uptimes
+    (KVM ~500 s to first `[STATS]`, box ~95 s boot) sit far below the 1 h first mark.
+  - **Box gates (KVM `-smp 6`): OFF** (`MONITORS=0`) — **machine-code-identical, proven at the object level**:
+    `.text`/`.rodata`/`.data`/`.bss` + the symbol table of `main.c.obj` byte-identical vs the committed M1
+    build; the ONLY delta is 11 bytes of `.debug_line` DWARF (shifted source lines), which then avalanches
+    through the image's COMPRESSED payload (405 k image bytes differ from 11 bytes of debug metadata) —
+    documented so nobody md5-compares packed images again. **ON-silent** (`MONITORS=1`, no probe, 900 s):
+    **0 `[ANOMALY]` over 731 windows** (q=73,100, err=0, 0 restarts); one honest `[MONITOR] episodic already
+    rolling total=959853` info line; the JACT wrap watcher armed silently (159/4096). **ON-probe**
+    (`+MONITOR_PROBE=1`, short marks + wrap thresholds total+1 + 2 REAL respawns): **exactly 7 `[ANOMALY]`,
+    each type once** — 3 uptime marks (first window, ms=200212), err-rate d=10 (debounce window), store-wrap
+    id=1 total=1022054 + id=2 total=164, heal-rate d=2 (the window after the 2 real `[RESTART] reason=hang
+    EXECUTED OK` respawns — an HONEST induction: real `km2b_do_respawn` cycles, real JACT respawn records,
+    truthful wire counters) — and **zero re-fires over the remaining ~720 windows** (q=72,400, err=0,
+    0 `[FATAL]`). **JACT read-back:** boot 19 = exactly 7 `action=2 AUTO/EXECUTED/OK risk=0` records with
+    the keyword-clean snapshots + the 2 `action=1` respawns, monotonic seq.
 
 ## 7. Done-when
 

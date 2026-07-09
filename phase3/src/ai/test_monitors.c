@@ -164,6 +164,56 @@ int main(void)
               "T8d invalid type / NULL event -> -1");
     }
 
+    /* ===== 6-1/M2 usage-shape pins (the three added watchers ride these semantics) ===== */
+
+    /* T9: STORE-WRAP absolute-latch — GE on a MONOTONIC value (a store's total_entries vs its
+     * capacity) fires ONCE at the crossing and NEVER re-arms (the value never returns under). */
+    {
+        monitor_t w;
+        monitor_init(&w, 4096, MON_CMP_GE, 1);
+        CHECK(monitor_sample(&w, 100)  == 0, "T9a far below capacity -> 0");
+        CHECK(monitor_sample(&w, 4095) == 0, "T9b one below capacity -> 0");
+        CHECK(monitor_sample(&w, 4096) == 1, "T9c at capacity -> fires (first wrap)");
+        CHECK(monitor_sample(&w, 4097) == 0 && monitor_sample(&w, 50000) == 0,
+              "T9d monotonic growth after the wrap never re-fires (latched for life)");
+    }
+
+    /* T10: UPTIME multi-mark — independent fire-once marks; each fires exactly once as the
+     * value climbs; a mark already passed does not re-fire on later samples. */
+    {
+        monitor_t m1h, m24h, m7d;
+        monitor_init(&m1h,  5000,  MON_CMP_GE, 1);
+        monitor_init(&m24h, 15000, MON_CMP_GE, 1);
+        monitor_init(&m7d,  30000, MON_CMP_GE, 1);
+        CHECK(monitor_sample(&m1h, 1000) == 0 && monitor_sample(&m24h, 1000) == 0 &&
+              monitor_sample(&m7d, 1000) == 0, "T10a below all marks -> none fire");
+        CHECK(monitor_sample(&m1h, 6000) == 1 && monitor_sample(&m24h, 6000) == 0 &&
+              monitor_sample(&m7d, 6000) == 0, "T10b mark 1 crossed -> ONLY mark 1 fires");
+        CHECK(monitor_sample(&m1h, 16000) == 0 && monitor_sample(&m24h, 16000) == 1 &&
+              monitor_sample(&m7d, 16000) == 0, "T10c mark 2 crossed -> only mark 2 (1 stays quiet)");
+        CHECK(monitor_sample(&m1h, 31000) == 0 && monitor_sample(&m24h, 31000) == 0 &&
+              monitor_sample(&m7d, 31000) == 1, "T10d mark 3 crossed -> only mark 3");
+        CHECK(monitor_sample(&m1h, 32000) == 0 && monitor_sample(&m24h, 32000) == 0 &&
+              monitor_sample(&m7d, 32000) == 0, "T10e all passed -> all quiet forever");
+    }
+
+    /* T11: SELF-HEAL-RATE delta — a cumulative counter's window delta >= threshold fires;
+     * a quiet window re-arms; a NEW burst fires again (each burst is a new anomaly). */
+    {
+        monitor_t h; monitor_delta_t hd = {0};
+        monitor_init(&h, 2, MON_CMP_GE, 1);
+        CHECK(monitor_sample(&h, (int64_t)monitor_delta_step(&hd, 0, 5)) == 0,
+              "T11a first window baselines (delta 0) -> 0");
+        CHECK(monitor_sample(&h, (int64_t)monitor_delta_step(&hd, 2, 5)) == 1,
+              "T11b 2 restarts in one window -> fires");
+        CHECK(monitor_sample(&h, (int64_t)monitor_delta_step(&hd, 2, 5)) == 0,
+              "T11c quiet window (delta 0) -> 0 (re-arms)");
+        CHECK(monitor_sample(&h, (int64_t)monitor_delta_step(&hd, 5, 5)) == 1,
+              "T11d a NEW 3-restart burst -> fires again (new anomaly)");
+        CHECK(monitor_sample(&h, (int64_t)monitor_delta_step(&hd, 6, 5)) == 0,
+              "T11e single restart (delta 1 < 2) -> 0");
+    }
+
     printf("=== %d PASS, %d FAIL ===\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }
