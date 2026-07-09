@@ -1,10 +1,9 @@
 /* JARVIS OS — Telemetry Console · System
  * Real box system telemetry only. Every value here has a live /events source:
- *   - Memory:  RAM available to JARVIS (total_ram_mb), model resident (model_size_mb),
- *              a fixed-floor estimate (model + static pool), and the episodic record
- *              count (episodic_count, shown only when the box reports TLM_F_MEMORY).
- *              Live heap is NOT tracked, so there is no used/free figure — only the
- *              floor, which is real.
+ *   - Memory:  RAM available to JARVIS (total_ram_mb), model resident (model_size_mb —
+ *              the real lower bound), and the episodic record count (episodic_count,
+ *              shown only when the box reports TLM_F_MEMORY). Live heap is NOT
+ *              tracked, so there is no used/free figure.
  *   - Inference: a real ACTIVE / IDLE state (infer_active) + a WORKLOAD duty cycle
  *              (infer_duty_pct = inference time / uptime). This is NOT a CPU-load gauge —
  *              the rootserver busy-polls, so a literal load would read ~100% and mean nothing.
@@ -16,18 +15,15 @@
 
 function SystemView({ store }) {
   const { Card, Badge } = window.JarvisOSDesignSystem_e0065d;
-  const { fmtUptime } = window.JConsoleHelpers;
+  const { num, fmtUptime } = window.JConsoleHelpers;
   const rec = store.latest;
 
   const has = (v) => rec && v != null;
-  const numMb = (v) => (Number(v) || 0).toLocaleString('en-US');
   const gib = (mb) => (Number(mb) / 1024).toFixed(2) + ' GiB';
-  const FIXED_POOL_MB = 2;     // static rootserver pool (real, fixed) — part of the floor
-  const LOG_CAP = 2700;        // NVME_LOG_MAX_ENTRIES (no-wrap durable telemetry log)
+  const LOG_CAP = 2700;        // NVME_LOG_MAX_ENTRIES (rolling durable telemetry log)
 
   const totalRam = rec ? Number(rec.total_ram_mb) || 0 : null;
   const modelMb = rec ? Number(rec.model_size_mb) || 0 : null;
-  const floorMb = modelMb != null ? modelMb + FIXED_POOL_MB : null;
   const nvmeMb = rec ? Number(rec.nvme_total_mb) || 0 : null;
   const inferActive = rec ? !!Number(rec.infer_active) : false;
   const duty = rec ? Math.max(0, Math.min(100, Number(rec.infer_duty_pct) || 0)) : 0;
@@ -43,7 +39,7 @@ function SystemView({ store }) {
   const poolDecisions = rec ? Number(rec.pool_decisions) || 0 : null;
   // Retrieval before inference (G3): hit count + last in-RAM latency (µs), flag-gated on
   // TLM_F_RETRIEVAL (set only once retrieval has fired). Real fields — hit/latency only, never a
-  // "memory helped" claim.
+  // "memory-helped" claim.
   const retrReported = !!(rec && rec.flags_list && rec.flags_list.indexOf('RETRIEVAL') >= 0);
   const retrHits = rec ? Number(rec.retrieval_hits) || 0 : null;
   const retrLatencyUs = rec ? Number(rec.retrieval_latency_us) || 0 : null;
@@ -105,39 +101,37 @@ function SystemView({ store }) {
       {/* Memory — only what the box actually reports */}
       <Card title="Memory" subtitle="from the untyped-memory total + model size" padding="md">
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 'var(--space-5)' }}>
-          {stat('RAM available to JARVIS', has(totalRam) ? numMb(totalRam) + ' MB' : '—',
+          {stat('RAM available to JARVIS', has(totalRam) ? num(totalRam) + ' MB' : '—',
             has(totalRam) ? gib(totalRam) + ' · sum of non-device untypeds' : 'no telemetry yet')}
-          {stat('Model resident', has(modelMb) ? numMb(modelMb) + ' MB' : '—',
-            has(modelMb) ? '~2.89 GiB in RAM' : null)}
-          {stat('Model + fixed (floor)', has(floorMb) ? numMb(floorMb) + ' MB' : '—',
-            'floor — excludes live heap')}
-          {stat('Episodic records', epiReported ? numMb(epiCount) : '—',
+          {stat('Model resident', has(modelMb) ? num(modelMb) + ' MB' : '—',
+            has(modelMb) ? gib(modelMb) + ' in RAM — the real lower bound (live heap not tracked)' : null)}
+          {stat('Episodic records', epiReported ? num(epiCount) : '—',
             epiReported ? 'persisted to the NVMe memory region' : 'store not reported')}
-          {stat('Context pool', ctxReported ? numMb(poolDecisions) : '—',
-            ctxReported ? numMb(poolEvents) + ' events · live working memory (decisions tracked)' : 'pool not reported')}
-          {stat('Preambles packed', retrReported ? numMb(retrHits) : '—',
+          {stat('Context pool', ctxReported ? num(poolDecisions) : '—',
+            ctxReported ? num(poolEvents) + ' events · live working memory (decisions tracked)' : 'pool not reported')}
+          {stat('Preambles packed', retrReported ? num(retrHits) : '—',
             retrReported ? 'retrieval before inference (non-empty preambles)' : 'retrieval not reported')}
-          {stat('Last retrieval', retrReported ? (numMb(retrLatencyUs) + ' µs') : '—',
+          {stat('Last retrieval', retrReported ? (num(retrLatencyUs) + ' µs') : '—',
             retrReported ? 'in-RAM select + assemble + pack' : 'retrieval not reported')}
-          {stat('Patterns promoted', cgReported ? numMb(cgCount) : '—',
+          {stat('Patterns promoted', cgReported ? num(cgCount) : '—',
             cgReported ? 'frequent queries promoted into the decision cache' : 'cache growth not reported')}
-          {stat('Distilled facts', semReported ? numMb(semCount) : '—',
+          {stat('Distilled facts', semReported ? num(semCount) : '—',
             semReported ? 'compacts recurring Q&A into durable facts — observable patterns, not stated preferences'
                         : 'semantic memory not reported')}
           {/* Self-healing / autonomous actions (Phase 6 K/M3) — flag-gated on TLM_F_ACTIONS. */}
-          {stat('PB restarts (self-heal)', actReported ? numMb(restartCount) : '—',
+          {stat('PB restarts (self-heal)', actReported ? num(restartCount) : '—',
             actReported ? 'lifetime Process-B respawns by the self-heal action' : 'self-healing not reported')}
-          {stat('Actions executed', actReported ? numMb(actionsFired) : '—',
+          {stat('Actions executed', actReported ? num(actionsFired) : '—',
             actReported ? 'allowlisted actions executed through the SHIELD action gate' : 'self-healing not reported')}
-          {stat('Actions blocked (gate)', actReported ? numMb(actionsBlocked) : '—',
+          {stat('Actions blocked (gate)', actReported ? num(actionsBlocked) : '—',
             actReported ? 'actions refused by the action gate — not the passive query-SHIELD path' : 'self-healing not reported')}
           {/* Always-on monitors (Phase 6 6-1/M3) — flag-gated on TLM_F_MONITORS; a neutral event count. */}
-          {stat('Monitor notifications', monReported ? numMb(monFired) : '—',
+          {stat('Monitor notifications', monReported ? num(monFired) : '—',
             monReported ? 'events the always-on monitors flagged and audited — a mix of degradation and benign liveness events' : 'monitors not reported')}
           {stat('Last monitor event', monReported ? monLastEvent : '—',
             monReported ? 'the most recent monitor event type' : 'monitors not reported')}
         </div>
-        {note('Live heap used/free is not tracked on the box, so it is not shown. The floor above (model + a fixed static pool) is the only real lower bound.')}
+        {note('Live heap used/free is not tracked on the box, so it is not shown. The resident model size above is the only real lower bound.')}
       </Card>
 
       {/* Inference — real state + honest workload duty cycle */}
@@ -162,8 +156,8 @@ function SystemView({ store }) {
       <Card title="Storage" subtitle="NVMe totals + durable telemetry log" padding="md">
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 'var(--space-5)' }}>
           {stat('NVMe namespace', has(nvmeMb) ? gib(nvmeMb) : '—',
-            has(nvmeMb) ? numMb(nvmeMb) + ' MB · total device' : 'no telemetry yet')}
-          {stat('Model file', has(modelMb) ? numMb(modelMb) + ' MB' : '—',
+            has(nvmeMb) ? num(nvmeMb) + ' MB · total device' : 'no telemetry yet')}
+          {stat('Model file', has(modelMb) ? num(modelMb) + ' MB' : '—',
             'GEMMA2B.GUF on JARVIS_DATA @ LBA 32768')}
         </div>
         <div style={{ marginTop: 'var(--space-5)' }}>

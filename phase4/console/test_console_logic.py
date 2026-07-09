@@ -94,7 +94,7 @@ def fresh_page(browser, errors):
     expect(page.get_by_text('functional-unverified')).to_be_visible(timeout=15000)
     page.evaluate("window.JarvisTelemetry.connect('/events')")
     check(bool(page.evaluate("!!window.__es")), "EventSource stub wired (window.__es set)")
-    page.clock.run_for(10)                   # fire the stub onopen (setTimeout(0))
+    page.clock.run_for(10)                   # flush timers; the stub onopen fired via microtask
     return page
 
 

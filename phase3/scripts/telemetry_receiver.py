@@ -3,15 +3,15 @@
 telemetry_receiver.py - JARVIS Remote Telemetry Console receiver (goal #2b N-c-2)
 
 Main-PC Python UDP receiver for the box-side telemetry stream. The JARVIS box
-(headless appliance) broadcasts a 224-byte (v6) binary `telemetry_packet_t` over UDP
+(headless appliance) broadcasts a 236-byte (v8) binary `telemetry_packet_t` over UDP
 to 255.255.255.255:51000 at ~1 Hz (see phase3/src/drivers/jarvis_telemetry.h and
-the N-c-1 emit site in phase3/src/sel4/main_x86.c, shipped at b9d689a). This tool
-binds the port, decodes each datagram, validates the zlib CRC-32 over the first
-220 bytes (v6), and pretty-prints honest live box state.
+the N-c-1 emit site in phase3/src/sel4/main_x86.c). This tool binds the port,
+decodes each datagram, validates the zlib CRC-32 over the first 232 bytes (v8),
+and pretty-prints honest live box state.
 
-Wire format (little-endian, packed, no padding):
-    struct format = '<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHHHHIHHI'  (struct.calcsize == 232)
-    crc32 is the last 4 bytes; valid iff zlib.crc32(pkt[:228]) == pkt.crc32.
+Wire format (little-endian, packed, no padding — see FMT below; sizes are DERIVED,
+never hardcoded here):
+    crc32 is the last 4 bytes; valid iff zlib.crc32(pkt[:PKT_SIZE-4]) == pkt.crc32.
 
 Usage:
     python3 telemetry_receiver.py [--bind ADDR] [--port 51000] [--once] [--follow] [--json]
@@ -26,14 +26,17 @@ a check COUNT, not a block count), no "formally verified". Since v4 a REAL
 measured last-inference tok/s exists (infer_last_tok_x100, RDTSC-measured in
 Process B — never the 5.46 benchmark constant); the fabricated 'tok_s'/'tokps'
 aliases stay banned. The v5 shield_learn_* fields are the SHIELD
-failure-learning MONITOR signal (learned-risk counts — the box never blocks;
+failure-learning MONITOR signal (learned-risk counts — queries are never blocked;
 'shield_blocked' stays banned). The v6 semantic_fact_count is the distilled
 semantic-fact count (observable repeated Q&A patterns compacted by the
 deterministic distill — never "knows preferences"). The v7
 restart_count/actions_fired/actions_blocked are the Phase-6 self-heal/ACTION-gate
 activity (PB restarts + allowlisted actions executed/blocked by the SEPARATE
 action gate); actions_blocked is a real, allowed key — distinct from the still-banned
-query-path 'shield_blocked'. The uptime is from an uncalibrated TSC, shown with "≈".
+query-path 'shield_blocked'. The v8 monitors_fired/last_monitor_event are the
+always-on-monitor NOTIFY activity (a NEUTRAL debounced event count — a mix of
+degradation and benign liveness events, never "anomalies detected"). The uptime
+is from an uncalibrated TSC, shown with "≈".
 """
 
 import argparse

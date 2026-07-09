@@ -1,6 +1,7 @@
 /* JARVIS OS — Telemetry Console · Routing view
  * Live route split = aggregate ratio only (no per-query routing).
- * The 4 specialists appear ONLY as a static roadmap diagram — not live in v1.0.
+ * The 4 specialists appear ONLY as a static roadmap diagram — not live in the
+ * deployed build.
  */
 
 function Routing({ store }) {
@@ -65,10 +66,10 @@ function Routing({ store }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
           <span style={{ font: 'var(--type-eyebrow)', letterSpacing: 'var(--tracking-caps)', textTransform: 'uppercase',
             color: 'var(--text-muted)' }}>Architecture (roadmap)</span>
-          <Badge tone="neutral">not live in v1.0</Badge>
+          <Badge tone="neutral">not live in the deployed build</Badge>
         </div>
         <p style={{ margin: '0 0 14px', font: '400 var(--text-sm)/1.5 var(--font-sans)', color: 'var(--text-muted)', maxWidth: 720 }}>
-          The deployed box is single-process (A rootserver + B inference). The four specialist agents below are a
+          The deployed box runs two processes (A rootserver + B inference). The four specialist agents below are a
           design from the Phase-1 multi-agent work — they are <strong>not running</strong> in the deployed build and
           emit no telemetry. Shown for context only.
         </p>

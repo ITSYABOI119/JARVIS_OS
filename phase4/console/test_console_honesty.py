@@ -42,6 +42,19 @@ BANNED = [
     "anomalies detected",
     "problems detected",
     "system unhealthy",
+    # truth-audit 2026-07-09: the wire last_text is the response HEAD (main_x86.c copies
+    # full_response[0..47]) — the old "truncated tail" framing was WRONG; it must not return.
+    "truncated tail",
+    # retrieval = hits + latency only; a "memory helped" system claim is banned.
+    "memory helped",
+    # the old Phase-1 harness claim — the live query path is passive ALLOW.
+    "100% harmful blocked",
+    # no CPU-load fiction (the rootserver busy-polls; a load % would be meaningless).
+    "cpu%", "cpu load",
+    # no fabricated disk metrics (the box reports none).
+    "IOPS", "SMART",
+    # the deployed box is TWO processes (A rootserver + B inference), not one.
+    "single-process",
 ]
 
 # (b) Honest-framing markers that MUST stay present somewhere in the console
@@ -52,7 +65,8 @@ REQUIRED = [
     "no queries yet",
     "collecting",
     "SIMULATED",
-    "truncated tail",
+    "response head",           # last_text is the response HEAD (truth-audit 2026-07-09)
+    "vacuous",                 # the 2-of-5-vacuous self-test caveat must stay on-screen
     "5.46",
     "not the deployed build",
 ]
@@ -102,8 +116,9 @@ def main():
         check(any(v.lower() in corpus for v in variants),
               "required (any of): %s" % " | ".join(variants))
 
-    # special case: "19.7" (the bench-off native-engine figure) may appear ONLY
-    # if the "not the deployed build" caveat is also present.
+    # special case: "19.7" (the bench-off llama.cpp/llama-bench REFERENCE figure —
+    # not the JARVIS engine) may appear ONLY if the "not the deployed build"
+    # caveat is also present.
     if "19.7" in corpus:
         check("not the deployed build" in corpus,
               "'19.7' present -> caveat 'not the deployed build' also present")
@@ -151,8 +166,9 @@ def main():
           "failure-learning section carries 'monitor-only'")
     check('not a live blocker' in sh.lower(),
           "failure-learning section carries 'not a live blocker'")
-    check('enforcement is phase 6' in sh.lower(),
-          "failure-learning section defers enforcement to Phase 6")
+    check('feeds the live phase-6 action gate' in sh.lower(),
+          "failure-learning points its learned risk at the live Phase-6 ACTION gate "
+          "(the gate went live at K/M4 — never a query-blocking claim)")
     check('SHIELD_LEARN' in blobs.get('ConsoleCapabilities.jsx', ''),
           "Capabilities labels the SHIELD_LEARN flag (monitor-only row)")
 
@@ -206,6 +222,20 @@ def main():
           "uptime stat carries the 'TSC-derived (approximate)' caveat (no RTC on the box)")
     check('uptime_ms' in cc,
           "CommandCenter header uptime sources the REAL field (uptime_ms)")
+
+    # --- truth-audit 2026-07-09: every embedded count/identity comes from the wire ---
+    shell = blobs.get('ConsoleShell.jsx', '')
+    check('selftest_score' in shell,
+          "sidebar Process-A label sources the REAL selftest_score (no hardcoded 5/5)")
+    check('selftest_score' in cc,
+          "ProcessesCard self-test footer sources the REAL selftest_score (no hardcoded 5/5)")
+    check('selftest_score' in capb,
+          "Capabilities SELFTEST_PASS label sources the REAL selftest_score")
+    check('model_name' in capb,
+          "Capabilities MODEL_LOADED label sources the REAL model_name (no hardcoded identity)")
+    mo = blobs.get('ConsoleModels.jsx', '')
+    check('llama.cpp' in mo,
+          "Models bench-off speeds attributed to llama.cpp (llama-bench) — not the JARVIS engine")
 
     print("\n== Results: %d PASS, %d FAIL ==" % (_PASS, _FAIL))
     return 1 if _FAIL else 0

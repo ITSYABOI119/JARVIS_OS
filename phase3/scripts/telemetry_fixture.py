@@ -2,7 +2,7 @@
 """
 telemetry_fixture.py - shared packer for the telemetry_packet_t (jarvis_telemetry.h).
 
-Single source for building 224-byte (v6) telemetry packets and legacy-pcap captures,
+Single source for building 236-byte (v8) telemetry packets and legacy-pcap captures,
 used by both test_telemetry_receiver.py (host wire-compat) and gen_golden_pcap.py
 (the golden fixture). Stdlib only.
 

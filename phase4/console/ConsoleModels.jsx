@@ -39,20 +39,21 @@ function Models({ store }) {
           letterSpacing: 'var(--tracking-tight)', color: 'var(--text-primary)' }}>Deployed model</h1>
       </div>
 
-      {/* live deployed-model card */}
-      <Card title={rec ? rec.model_name : 'Gemma 4 E2B'} subtitle="resident on the deployed box"
+      {/* live deployed-model card — every value from the wire; '—' until telemetry arrives
+          (no live-looking hardcoded fallbacks) */}
+      <Card title={rec ? rec.model_name : 'awaiting telemetry'} subtitle="resident on the deployed box"
         right={loaded ? <Badge tone="ok" dot>LOADED</Badge> : <Badge tone="warn">{rec ? (rec.model_load_pct || 0) + '%' : '—'}</Badge>}
         padding="md">
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 'var(--space-5)' }}>
-          {stat('Size', rec ? rec.model_size_mb + ' MB' : '2962 MB', '~2.89 GiB')}
-          {stat('Compute', rec ? 'CPU · ' + rec.num_nodes + ' cores' : 'CPU · 6 cores', 'NUM_NODES')}
+          {stat('Size', rec ? rec.model_size_mb + ' MB' : '—', rec ? (Number(rec.model_size_mb) / 1024).toFixed(2) + ' GiB' : 'no telemetry yet')}
+          {stat('Compute', rec ? 'CPU · ' + rec.num_nodes + ' cores' : '—', 'NUM_NODES')}
           {stat('Load', rec ? (rec.model_load_pct || 0) + '%' : '—', loaded ? 'MODEL_LOADED' : 'loading')}
-          {stat('Framebuffer', rec ? rec.fb_w + '×' + rec.fb_h : '1024×768', rec ? rec.fb_bpp + 'bpp' : '32bpp')}
+          {stat('Framebuffer', rec ? rec.fb_w + '×' + rec.fb_h : '—', rec ? rec.fb_bpp + 'bpp' : 'no telemetry yet')}
         </div>
         <div style={{ marginTop: 'var(--space-5)', paddingTop: 'var(--space-4)', borderTop: '1px solid var(--border-hairline)',
           font: '400 var(--text-sm)/1.5 var(--font-mono)', color: 'var(--text-secondary)' }}>
           5.46 tok/s — deployed CPU benchmark (NUM_NODES=6), <span style={{ color: 'var(--text-muted)' }}>not live</span>.
-          Differs from the bench-off's 19.7 t/s, which is the <em>native dev engine</em>, not the deployed build.
+          Differs from the bench-off's 19.7 t/s, which is <em>llama.cpp (llama-bench) on the 2700X</em> — a reference engine, not the deployed build.
         </div>
       </Card>
 
@@ -84,7 +85,7 @@ function Models({ store }) {
             </div>
           ))}
           <div style={{ marginTop: 10, font: '400 var(--text-2xs)/1.4 var(--font-mono)', color: 'var(--text-muted)' }}>
-            · = deployed model. Bench-off ran on a Ryzen 7 2700X (CPU, native engine). Deployed speed differs — see card above.
+            · = deployed model. Speeds are llama.cpp (llama-bench) tg128 on a Ryzen 7 2700X CPU — a reference engine. Deployed speed differs — see card above.
           </div>
         </div>
       </Card>

@@ -75,7 +75,7 @@ def main():
     bridge = subprocess.Popen(
         [sys.executable, 'phase3/scripts/telemetry_receiver.py', '--sse',
          '--web-dir', 'phase4/console', '--http-port', str(PORT),
-         '--replay', GOLDEN, '--replay-rate', '0.1'],
+         '--replay', GOLDEN, '--replay-rate', '0.3'],
         cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     static = None
     try:
@@ -93,9 +93,9 @@ def main():
             check(True, "page mounted (Babel + React over real HTTP)")
 
             # (v4) EARLY WATCHER for the live tok/s pin: the tok-carrying golden frame is live for
-            # only ~1 s of the (non-looping) replay, so a late poll can miss it. Latch the moment
-            # the Throughput tile renders infer_last_tok_x100/100 while that record is live; the
-            # pin later asserts the latch.
+            # only one replay-rate dwell per LOOP pass (the replay loops), so a late poll can miss
+            # it. Latch the moment the Throughput tile renders infer_last_tok_x100/100 while that
+            # record is live; the pin later asserts the latch.
             page.evaluate(
                 "() => {"
                 " window.__tokPin = { seen: false, x: null, want: null };"
@@ -156,12 +156,15 @@ def main():
             check(page.get_by_text('SIMULATED · replay').count() == 0,
                   "no 'SIMULATED · replay' badge on the real-SSE page")
 
-            # FLAG-PARITY INVARIANT: every reported flag renders a Capabilities row
+            # FLAG-PARITY INVARIANT: every reported flag renders a Capabilities row.
+            # Gated on a MONITORS-bearing frame (the maximal 12-flag synthetic 'infer'
+            # frame) so the invariant is proven on the RICH flag set — an opportunistic
+            # pass on a small 3-6-flag frame would leave most feature rows unexercised.
             page.get_by_title('Capabilities', exact=True).click()
             expect(page.get_by_text('Reported capabilities (flags)')).to_be_visible(timeout=10000)
             parity_ok = False
             seen = None
-            deadline = time.time() + 10
+            deadline = time.time() + 15
             while time.time() < deadline:
                 snap = page.evaluate(
                     "() => { const s = window.JarvisTelemetry.getState();"
@@ -169,12 +172,13 @@ def main():
                     " return { flags: (s.latest && s.latest.flags_list) || [], text: m ? m.innerText : '' }; }")
                 flags, text = snap['flags'], snap['text']
                 seen = flags
-                if flags and all((FLAG_LABEL.get(f, f) in text) for f in flags):
+                if flags and 'MONITORS' in flags and all((FLAG_LABEL.get(f, f) in text) for f in flags):
                     parity_ok = True
                     break
-                time.sleep(0.12)
+                time.sleep(0.1)
             check(parity_ok,
-                  "flag-parity: every live flags_list flag renders a Capabilities row (flags=%s)" % seen)
+                  "flag-parity on the maximal frame: every live flags_list flag renders a "
+                  "Capabilities row (flags=%s)" % seen)
 
             # (G2) PIN the MEMORY capability row explicitly (parity above is opportunistic — it
             # passes on any frame; here we WAIT for a MEMORY-bearing frame, then require the row).
@@ -189,6 +193,37 @@ def main():
             check(mem_seen, "(G2) live record carries MEMORY (episodic store up) within 10s")
             expect(page.get_by_text('Episodic memory store')).to_be_visible(timeout=10000)
             check(True, "(G2) MEMORY -> 'Episodic memory store' Capabilities row renders")
+
+            # --- Routing screen renders (truth-audit: previously ZERO render coverage) ---
+            page.get_by_title('Routing', exact=True).click()
+            expect(page.get_by_text('Workload split')).to_be_visible(timeout=10000)
+            expect(page.get_by_text('Cache hit').first).to_be_visible(timeout=10000)
+            check(True, "Routing renders the live workload split (q_hits/q_infer/q_heartbeat/q_shield)")
+
+            # --- Models screen renders; bench speeds carry the llama.cpp provenance ---
+            page.get_by_title('Models', exact=True).click()
+            expect(page.get_by_text('Quality bench-off')).to_be_visible(timeout=10000)
+            models_text = page.evaluate("() => { const m = document.querySelector('main'); return m ? m.innerText : ''; }")
+            check('llama.cpp' in models_text,
+                  "Models attributes the bench-off speeds to llama.cpp (llama-bench), not the JARVIS engine")
+            check('not the deployed build' in models_text,
+                  "Models keeps the 'not the deployed build' caveat on-screen")
+
+            # --- Last response screen renders; the head framing replaces the old (wrong) 'tail' ---
+            page.get_by_title('Last response', exact=True).click()
+            expect(page.get_by_text('deployed benchmark (reference)').first).to_be_visible(timeout=10000)
+            check(True, "LastResponse renders the measurement panel (real fields + labeled 5.46 reference)")
+            head_ok = False
+            deadline = time.time() + 15
+            while time.time() < deadline:
+                mt = page.evaluate("() => { const m = document.querySelector('main'); return m ? m.innerText : ''; }")
+                if 'response head' in mt:
+                    head_ok = True
+                    break
+                time.sleep(0.1)
+            check(head_ok,
+                  "LastResponse shows the 'response head' framing while an INFER frame is live "
+                  "(last_text is the HEAD, not a tail)")
 
             # --- System screen: real system fields only (Tier 0 RAM + Tier 1 inference/storage) ---
             page.get_by_title('System', exact=True).click()

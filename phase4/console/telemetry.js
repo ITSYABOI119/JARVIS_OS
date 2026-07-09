@@ -10,7 +10,8 @@
  *   cache_growth_count, infer_last_tok_x100,
  *   shield_learn_keys, shield_learn_max_risk_x100 (v5 — monitor-only learned-risk fields),
  *   semantic_fact_count (v6 — distilled observable-pattern facts, never "knows preferences"),
- *   restart_count / actions_fired / actions_blocked (v7 — self-heal/action-gate activity, gated),
+ *   restart_count / actions_fired / actions_blocked (v7 — self-heal/action-gate activity),
+ *   monitors_fired / last_monitor_event (v8 — always-on-monitor NOTIFY activity, neutral),
  *   log_cursor, infer_gen_tokens, model_name, last_text, crc_ok
  *
  * Liveness is genuine: a record is "live" only while a fresh CRC-valid packet
@@ -34,7 +35,7 @@
     droppedPackets: 0,              // cumulative seq-gap total
     lastSeq: null,
     lastArrival: 0,                 // client-clock ms of last fresh CRC-valid arrival
-    rateBuf: [],                    // [{t, q_total}] rolling buffer for queries/sec
+    rateBuf: [],                    // [{t, q}] rolling buffer for queries/sec
   };
 
   function emit() { listeners.forEach((fn) => fn(snapshot())); }
@@ -106,11 +107,13 @@
   }
 
   // ---- public API ----------------------------------------------------------
+  let connectedOnce = false;        // connect()/startSimulator() are one-shot — a double
+  let simStarted = false;           // call must never stack a second stream/1 Hz loop
   const API = {
     subscribe(fn) { listeners.add(fn); fn(snapshot()); return () => listeners.delete(fn); },
     getState: snapshot,
     queriesPerSec,
-    connect(url) { startEventSource(url || '/events'); },
+    connect(url) { if (connectedOnce) return; connectedOnce = true; startEventSource(url || '/events'); },
     startSimulator,
   };
 
@@ -135,6 +138,8 @@
 
   // ---- box-free replay simulator (SAME record shape; clearly labelled) -----
   function startSimulator() {
+    if (simStarted) return;          // guard: overlapping fallback paths must not double-tick
+    simStarted = true;
     state.simulated = true;
     state.connState = 'connecting';
     emit();
@@ -143,11 +148,14 @@
     let seq = 0;
     let qTotal = 0;
     const t0 = Date.now();
-    // honest split that matches the synthetic workload weighting (70/15/10/5)
+    // preview split = the box's 70/15/10/5 dispatch weighting (badged SIMULATED);
+    // the LIVE box is far more cache-heavy — promoted patterns serve most repeats.
+    // Canned texts are model-utterance-shaped and deliberately NOT system-stat-shaped
+    // (a fake "free space is N GB" line could be mistaken for storage telemetry).
     const responses = [
       'the capital of France is Paris.',
-      'free space on the root volume is 148 GB.',
-      'memory in use is approximately 3 of 32 GB.',
+      'a microkernel keeps drivers out of the kernel.',
+      'seL4 IPC uses capability-addressed endpoints.',
       'the current kernel is seL4 on x86-64.',
       'no errors recorded in the last interval.',
     ];
@@ -165,6 +173,9 @@
       flags.push('SELFTEST_PASS', 'FB_DRAWABLE', 'FB_MAPPED', 'MEMORY', 'CONTEXT');
       if (!loading) flags.push('RETRIEVAL');  // retrieval fires once the box is serving queries
       if (!loading) flags.push('CACHE_GROWTH');  // preview: promotions occur once queries repeat (badged SIMULATED)
+      // ACTIONS + MONITORS are default-ON in the deploy (Phase 6 K/M4 + 6-1) — the preview
+      // mirrors a healthy live box: flags set, counters honest-0 (no faults, no crossings yet).
+      if (!loading) flags.push('ACTIONS', 'MONITORS');
 
       let kind = 1, kindName = 'STATS';
       if (!loading) {
@@ -186,7 +197,7 @@
 
       return {
         recv_ts: Date.now() / 1000,
-        version: 3,
+        version: 8,
         kind, kind_name: kindName,
         flags: 0, flags_list: flags,
         boot_id: BOOT_ID,
@@ -211,10 +222,10 @@
         shield_learn_keys: 0,                // honest 0: no failures in the preview (no SHIELD_LEARN flag -> row shows '—')
         shield_learn_max_risk_x100: 0,
         semantic_fact_count: 0,              // honest 0: gated-off in deploy (no SEMANTIC flag -> stat shows '—')
-        restart_count: 0,                    // honest 0: gated-off in deploy (no ACTIONS flag -> rows show '—')
+        restart_count: 0,                    // ACTIONS is default-ON in deploy — healthy preview box: 0 restarts/blocks
         actions_fired: 0,
         actions_blocked: 0,
-        monitors_fired: 0,                   // honest 0: gated-off in deploy (no MONITORS flag -> rows show '—')
+        monitors_fired: 0,                   // MONITORS is default-ON in deploy — healthy preview box: no crossings yet
         last_monitor_event: 0,
         infer_active: kind === 2 ? 1 : 0,
         infer_duty_pct: loading ? 0 : 12,  // preview workload duty cycle (badged SIMULATED)

@@ -30,6 +30,9 @@ function pct(part, total) {
 }
 // connection pill descriptor from store state
 function connPill(s) {
+  // The simulator is NOT a link — never show 'link OK · live' for preview data
+  // (the SIMULATED badge alone shouldn't carry that burden).
+  if (s.simulated) return { label: 'simulated · preview', tone: 'warn', dot: 'warn', pulse: false };
   switch (s.connState) {
     case 'live':         return { label: 'link OK · live', tone: 'ok', dot: 'ok', pulse: true };
     case 'stale':        return { label: 'stale · no packet', tone: 'warn', dot: 'warn', pulse: false };
@@ -152,9 +155,16 @@ function processStatuses(rec, live) {
   const err = hasFlag(rec, 'HAS_ERROR') || (Number(rec.q_errors) || 0) > 0;
   const selftest = hasFlag(rec, 'SELFTEST_PASS');
   const loaded = hasFlag(rec, 'MODEL_LOADED');
+  // self-test label sourced from the REAL selftest_score wire field (never a hardcoded
+  // "5/5") — a partial score (<5, flag clear) surfaces as a warn instead of hiding.
+  const score = Number(rec.selftest_score) || 0;
   const procA = err
     ? { dot: 'err', pulse: false, label: 'error', color: C.err }
-    : { dot: 'ok', pulse: live, label: selftest ? 'self-test 5/5*' : 'running', color: C.ok };
+    : selftest
+      ? { dot: 'ok', pulse: live, label: 'self-test ' + score + '/5*', color: C.ok }
+      : score > 0
+        ? { dot: 'warn', pulse: false, label: 'self-test ' + score + '/5*', color: C.warn }
+        : { dot: 'ok', pulse: live, label: 'running', color: C.ok };
   const procB = loaded
     ? { dot: 'ok', pulse: live, label: 'loaded', color: C.ok }
     : { dot: 'warn', pulse: false, label: (rec.model_load_pct || 0) + '%', color: C.warn };
@@ -189,10 +199,10 @@ function Sidebar({ view, store }) {
           <div style={{ padding: 'var(--space-2) var(--space-3)', display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div>
               <div style={{ font: '400 var(--text-2xs)/1.5 var(--font-mono)', color: 'var(--text-muted)', marginBottom: 6 }}>
-                truncated tail (≤55 chars)
+                response head (first ≤47 chars)
               </div>
-              <div style={{ font: '400 var(--text-sm)/1.45 var(--font-sans)', color: rec && rec.last_text ? 'var(--text-secondary)' : 'var(--text-muted)' }}>
-                {rec && rec.last_text ? '“…' + rec.last_text + '”' : 'No inference response yet'}
+              <div style={{ font: '400 var(--text-sm)/1.45 var(--font-sans)', color: rec && rec.last_text && rec.last_text !== '-' ? 'var(--text-secondary)' : 'var(--text-muted)' }}>
+                {rec && rec.last_text && rec.last_text !== '-' ? '“' + rec.last_text + '…”' : 'No inference response yet'}
               </div>
             </div>
             <div style={{ borderTop: '1px solid var(--border-hairline)', paddingTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -211,7 +221,7 @@ function Sidebar({ view, store }) {
       <div style={{ padding: 'var(--space-3) var(--space-4)', borderTop: '1px solid var(--border-hairline)',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <span style={{ font: '400 var(--text-2xs)/1 var(--font-mono)', color: 'var(--text-muted)' }}>
-          seL4 x86 · Phase 4 · boot {rec ? rec.boot_id : '—'}
+          seL4 x86 · tlm v{rec ? rec.version : '—'} · boot {rec ? rec.boot_id : '—'}
         </span>
       </div>
     </aside>

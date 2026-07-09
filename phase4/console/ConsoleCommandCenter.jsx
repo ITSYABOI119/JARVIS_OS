@@ -22,6 +22,8 @@ function CommandCenter({ store }) {
   const llmP = rec ? pct(rec.q_infer, rec.q_total) : null;
   const qErr = rec ? Number(rec.q_errors) || 0 : 0;
   const qps = window.JarvisTelemetry.queriesPerSec();
+  // honest share rounding: never collapse a real nonzero share to '0' (or a <100 to '100')
+  const fmtShare = (p) => (p > 0 && p < 1) ? '<1' : (p > 99 && p < 100) ? '>99' : p.toFixed(0);
 
   function Tile({ label, children, foot }) {
     return (
@@ -59,12 +61,14 @@ function CommandCenter({ store }) {
     );
   }
 
-  // activity feed from live SSE records, keyed on kind_name
+  // activity feed from live SSE records, keyed on kind_name; an unknown kind
+  // (receiver renders it '?N') gets a neutral icon, not a STATS look-alike
   const kindMeta = {
     STATS: { icon: 'activity', color: 'var(--text-accent)' },
     INFER: { icon: 'message-square', color: 'var(--status-live)' },
     STATE: { icon: 'git-commit-horizontal', color: 'var(--text-secondary)' },
   };
+  const kindMetaFor = (k) => kindMeta[k] || { icon: 'activity', color: 'var(--text-muted)' };
 
   return (
     <div style={{ padding: 'var(--space-6)', overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }}>
@@ -126,14 +130,16 @@ function CommandCenter({ store }) {
           </div>
         </Tile>
 
-        <Tile label="Route" foot={qTotal === 0 ? null : 'cache vs → LLM (aggregate)'}>
+        <Tile label="Route" foot={qTotal === 0 ? null : num(rec.q_hits) + ' cache · ' + num(rec.q_infer) + ' LLM (aggregate)'}>
           {qTotal === 0 ? (
             <div style={{ font: '400 var(--text-sm)/1.3 var(--font-mono)', color: 'var(--text-muted)', paddingTop: 6 }}>no queries yet</div>
           ) : (
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-              <span style={{ ...big, fontSize: 'var(--text-2xl)', color: 'var(--status-ok)' }}>{cacheP.toFixed(0)}%</span>
+              {/* cache-heavy live box: a nonzero-but-tiny LLM share must read '<1%', never a
+                  rounded-to-0 '0%' that looks like "no inference ever" */}
+              <span style={{ ...big, fontSize: 'var(--text-2xl)', color: 'var(--status-ok)' }}>{fmtShare(cacheP)}%</span>
               <span style={unit}>cache</span>
-              <span style={{ ...big, fontSize: 'var(--text-2xl)', color: 'var(--text-accent)' }}>{llmP.toFixed(0)}%</span>
+              <span style={{ ...big, fontSize: 'var(--text-2xl)', color: 'var(--text-accent)' }}>{fmtShare(llmP)}%</span>
               <span style={unit}>→ LLM</span>
             </div>
           )}
@@ -181,7 +187,7 @@ function CommandCenter({ store }) {
           <div style={{ padding: '4px var(--space-3) var(--space-3)', maxHeight: 320, overflow: 'auto' }}>
             {(!rec) && <div style={{ padding: 'var(--space-4)', font: '400 var(--text-sm)/1 var(--font-mono)', color: 'var(--text-muted)' }}>waiting for first packet…</div>}
             {store.records.map((r, i) => {
-              const meta = kindMeta[r.kind_name] || kindMeta.STATS;
+              const meta = kindMetaFor(r.kind_name);
               return (
                 <div key={r.seq + '-' + i} style={{ display: 'flex', gap: 12, alignItems: 'center', padding: 'var(--space-2) var(--space-2)',
                   borderBottom: i < store.records.length - 1 ? '1px solid var(--border-hairline)' : 'none' }}>
@@ -191,7 +197,7 @@ function CommandCenter({ store }) {
                   </span>
                   <span style={{ font: '500 var(--text-2xs)/1 var(--font-mono)', color: 'var(--text-secondary)', width: 46, textTransform: 'uppercase' }}>{r.kind_name}</span>
                   <span style={{ font: '400 var(--text-xs)/1.3 var(--font-mono)', color: 'var(--text-muted)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    seq {r.seq} · q={num(r.q_total)}{r.kind_name === 'INFER' && r.last_text ? ' · “…' + r.last_text + '”' : ''}
+                    seq {r.seq} · q={num(r.q_total)}{r.kind_name === 'INFER' && r.last_text && r.last_text !== '-' ? ' · “' + r.last_text + '…”' : ''}
                   </span>
                   <span style={{ font: '400 var(--text-2xs)/1.6 var(--font-mono)', color: 'var(--text-muted)', flex: 'none' }}>{fmtClock(r.recv_ts)}</span>
                 </div>
@@ -219,12 +225,13 @@ function ProcessesCard({ store }) {
     </div>
   );
   return (
-    <Card title="Processes" subtitle="single-process box · A rootserver + B inference" padding="none">
+    <Card title="Processes" subtitle="two-process box · A rootserver + B inference" padding="none">
       <div style={{ padding: '4px var(--space-2) var(--space-2)' }}>
         {row('Process A', 'seL4 rootserver', procA)}
         {row('Process B', rec ? rec.model_name + ' inference' : 'inference', procB)}
         <div style={{ padding: '6px var(--space-3) var(--space-2)', font: '400 var(--text-2xs)/1.5 var(--font-mono)', color: 'var(--text-muted)' }}>
-          self-test 5/5 — 2 of 5 are vacuous
+          {/* score from the REAL selftest_score field — never a hardcoded count */}
+          self-test {rec ? (Number(rec.selftest_score) || 0) + '/5' : '—'} — 2 of 5 are vacuous
         </div>
       </div>
     </Card>

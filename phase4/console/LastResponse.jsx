@@ -4,7 +4,9 @@ function LastResponse({ store }) {
   const { Badge, StatusDot } = window.JarvisOSDesignSystem_e0065d;
   const { num, fmtAgo } = window.JConsoleHelpers;
   const rec = store.latest;
-  const hasText = rec && rec.last_text;
+  // '-' is the box's boot placeholder (g_fb_last_resp init) carried in EVERY packet
+  // kind until the first inference — never render it as a real response.
+  const hasText = rec && rec.last_text && rec.last_text !== '-';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -37,11 +39,14 @@ function LastResponse({ store }) {
               </div>
               <div style={{ flex: 1 }}>
                 <div style={{ font: '400 var(--text-lg)/1.55 var(--font-sans)', color: 'var(--text-primary)' }}>
-                  …{rec.last_text}
+                  {rec.last_text}…
                 </div>
                 <div style={{ marginTop: 10, display: 'flex', gap: 14, font: '400 var(--text-2xs)/1 var(--font-mono)', color: 'var(--text-muted)' }}>
-                  <span>truncated last-response tail, ≤55 chars</span>
-                  <span>· updated {fmtAgo(rec.recv_ts)}</span>
+                  {/* the wire carries the response HEAD (first ≤47 chars, main_x86.c cap) — the
+                      value is latched into every packet, so freshness = packet arrival, not
+                      response age */}
+                  <span>response head (first ≤47 chars)</span>
+                  <span>· as of the last packet, {fmtAgo(rec.recv_ts)}</span>
                 </div>
               </div>
             </div>
@@ -49,7 +54,7 @@ function LastResponse({ store }) {
             <div style={{ textAlign: 'center', padding: 'var(--space-12) 0', color: 'var(--text-muted)' }}>
               <div style={{ font: '400 var(--text-lg)/1.4 var(--font-sans)' }}>No inference response yet</div>
               <div style={{ marginTop: 8, font: '400 var(--text-sm)/1.4 var(--font-mono)' }}>
-                last_text is empty until the box reports an INFER packet
+                last_text carries the boot placeholder until the box's first inference
               </div>
             </div>
           )}
@@ -67,7 +72,8 @@ function LastResponse({ store }) {
                   ? `${rec.total_ram_mb} MB — live (sum of non-device untypeds)`
                   : 'no source reported'],
                 ['decode speed', (Number(rec.infer_last_tok_x100) || 0) > 0
-                  ? `${(rec.infer_last_tok_x100 / 100).toFixed(2)} tok/s — live, last inference (RDTSC-measured) · 5.46 deployed benchmark (reference)`
+                  ? `${(rec.infer_last_tok_x100 / 100).toFixed(2)} tok/s — ${Number(rec.infer_active) === 1
+                      ? 'live · last inference' : 'idle (serving from cache) · last inference'} (RDTSC-measured) · 5.46 deployed benchmark (reference)`
                   : 'no inference yet this boot · 5.46 tok/s deployed benchmark (reference)']].map(([k, v]) => (
                 <div key={k} style={{ minWidth: 180 }}>
                   <div style={{ font: 'var(--type-eyebrow)', letterSpacing: 'var(--tracking-wide)', textTransform: 'uppercase',
@@ -83,7 +89,7 @@ function LastResponse({ store }) {
       {/* footer — explain why there is no composer */}
       <div style={{ flex: 'none', padding: 'var(--space-4) var(--space-6)', borderTop: '1px solid var(--border-hairline)',
         font: '400 var(--text-xs)/1.5 var(--font-mono)', color: 'var(--text-muted)', textAlign: 'center' }}>
-        Read-only telemetry console (telemetry-OUT). Inbound queries are control-IN, deferred to ~Phase 6.
+        Read-only telemetry console (telemetry-OUT). Inbound queries are control-IN — a later, hard-gated Phase-6 goal, not live yet.
       </div>
     </div>
   );

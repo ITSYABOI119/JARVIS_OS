@@ -19,10 +19,12 @@ function Capabilities({ store }) {
   const rec = store.latest;
 
   // KNOWN flag -> human label (a declared LABEL map only — NOT the source of
-  // truth for which rows appear; unknown flags still render below).
+  // truth for which rows appear; unknown flags still render below). Labels that
+  // embed a value pull it from the LIVE record (model_name / selftest_score),
+  // never a hardcoded identity/count.
   const FLAG_LABELS = {
-    MODEL_LOADED:  { label: 'LLM model loaded (Gemma 4 E2B)', tone: 'ok' },
-    SELFTEST_PASS: { label: 'Self-test passed (5/5 — note: 2 vacuous)', tone: 'ok' },
+    MODEL_LOADED:  { label: 'LLM model loaded (' + ((rec && rec.model_name) || '…') + ')', tone: 'ok' },
+    SELFTEST_PASS: { label: 'Self-test passed (' + ((rec && Number(rec.selftest_score)) || 0) + '/5 — note: 2 vacuous)', tone: 'ok' },
     FB_DRAWABLE:   { label: 'Framebuffer drawable', tone: 'ok' },
     FB_MAPPED:     { label: 'Framebuffer mapped (on-box HUD)', tone: 'ok' },
     HAS_ERROR:     { label: 'Error state', tone: 'err' },

@@ -1,6 +1,6 @@
 {
   "meta": {
-    "comment": "Golden /events contract for phase4/console. 'keys' MUST equal set(packet_to_record(...).keys()); the key-contract test (test_telemetry_receiver.py) enforces it. Regenerate golden.pcap via phase3/scripts/gen_golden_pcap.py (CI gates drift). 'flags' are names (telemetry_fixture.FLAG_BITS); other fields are build_packet overrides; label/ts_s/ts_frac/corrupt are fixture-only.",
+    "comment": "Golden /events contract for phase4/console. 'keys' MUST equal set(packet_to_record(...).keys()); the key-contract test (test_telemetry_receiver.py) enforces it. Regenerate golden.pcap via phase3/scripts/gen_golden_pcap.py (CI gates drift). 'flags' are names (telemetry_fixture.FLAG_BITS); other fields are build_packet overrides; label/ts_s/ts_frac/corrupt are fixture-only. NOTE: the 'infer' frame is a SYNTHETIC all-features-on pin frame (SHIELD_LEARN/SEMANTIC are gated-off in the shipped deploy; its nonzero action/monitor counts exist to give the e2e value-pins teeth) — it is NOT a real capture.",
     "fmt": "<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHHHHIHHHBBI",
     "size": 236,
     "keys": [

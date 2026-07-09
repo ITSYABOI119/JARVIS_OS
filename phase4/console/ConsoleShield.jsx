@@ -1,6 +1,8 @@
-/* JARVIS OS — Telemetry Console · SHIELD (passive monitoring)
- * The ONLY live SHIELD datum is q_shield = a passive CHECK COUNT.
- * No risk ladder, no recent-actions feed, no blocked-action icons.
+/* JARVIS OS — Telemetry Console · SHIELD (passive query monitoring)
+ * Live SHIELD data here: q_shield = the passive query-path CHECK COUNT (the box
+ * always ALLOWs queries) + the flag-gated shield_learn_* failure-learning MONITOR
+ * fields. The SEPARATE Phase-6 ACTION gate (live in the deploy) is surfaced on the
+ * System screen. No risk ladder, no recent-actions feed, no blocked-query icons.
  */
 
 function Shield({ store }) {
@@ -10,7 +12,9 @@ function Shield({ store }) {
   const qShield = rec ? Number(rec.q_shield) || 0 : 0;
   const qErr = rec ? Number(rec.q_errors) || 0 : 0;
   // P5 #5/M2: failure-learning MONITOR fields (v5), flag-gated on TLM_F_SHIELD_LEARN —
-  // learned-risk counts only, NEVER a block count (the box never blocks; SEC-039).
+  // learned-risk counts only, NEVER a block count. Queries are never blocked; the
+  // SEPARATE action gate (live since Phase 6 K/M4) can block autonomous actions —
+  // that count lives on the System screen.
   const slReported = !!(rec && rec.flags_list && rec.flags_list.indexOf('SHIELD_LEARN') >= 0);
   const slKeys = rec ? Number(rec.shield_learn_keys) || 0 : 0;
   const slMax = rec ? Number(rec.shield_learn_max_risk_x100) || 0 : 0;
@@ -67,7 +71,7 @@ function Shield({ store }) {
         * '—' until the box reports them. On the benign deployed workload (err=0) they honestly
         * read 0 / stay unreported — that IS the correct display. */}
       <Card title="Failure-learning"
-        subtitle="learns which actions fail and raises their risk — monitor-only, not a live blocker; enforcement is Phase 6"
+        subtitle="learns which actions fail and raises their risk — monitor-only, not a live blocker for queries; when enabled, its learned risk feeds the live Phase-6 action gate"
         padding="md">
         <div style={{ display: 'flex', gap: 'var(--space-8)' }}>
           <div>
@@ -87,19 +91,19 @@ function Shield({ store }) {
               {slReported ? '+' + (slMax / 100).toFixed(2) : '—'}
             </div>
             <div style={{ marginTop: 3, font: '400 var(--text-2xs)/1.3 var(--font-mono)', color: 'var(--text-muted)' }}>
-              shield_learn_max_risk_x100 / 100 · cap +0.50 · surfaced, never enforced
+              shield_learn_max_risk_x100 / 100 · cap +0.50 · monitor signal — feeds the action gate only when enabled
             </div>
           </div>
         </div>
       </Card>
 
       {/* honest framework note — NOT a ladder */}
-      <Card title="Framework (designed, not enforced)" padding="md">
+      <Card title="Framework (designed; not enforced on the query path)" padding="md">
         <p style={{ margin: '0 0 16px', font: '400 var(--text-sm)/1.55 var(--font-sans)', color: 'var(--text-secondary)', maxWidth: 760 }}>
           The full S.H.I.E.L.D. framework is designed in <code style={{ font: '400 var(--text-xs) var(--font-mono)', color: 'var(--text-accent)' }}>shield_framework.py</code>,
-          but it is <strong>not linked into the deployed build</strong> (<code style={{ font: '400 var(--text-xs) var(--font-mono)', color: 'var(--text-accent)' }}>shield.c</code> absent).
+          but it is <strong>not linked on the deployed query path</strong> (<code style={{ font: '400 var(--text-xs) var(--font-mono)', color: 'var(--text-accent)' }}>shield.c</code> absent there).
           On the <strong>query</strong> path the box performs passive checks and always returns ALLOW — no risk scoring, no gating, no blocked <em>queries</em>.
-          (A <em>separate</em> action gate scores and can BLOCK <strong>autonomous actions</strong>; when live, its <code style={{ font: '400 var(--text-xs) var(--font-mono)', color: 'var(--text-accent)' }}>actions_blocked</code> count appears on the System screen — that is a different path from these query checks.)
+          (A <em>separate</em> action gate <strong>is live in the deployed build</strong> — Phase 6: it scores and can BLOCK <strong>autonomous actions</strong> such as self-heal restarts; its <code style={{ font: '400 var(--text-xs) var(--font-mono)', color: 'var(--text-accent)' }}>actions_blocked</code> count appears on the System screen — a different path from these query checks.)
         </p>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
           {pillars.map(([k, name]) => (
