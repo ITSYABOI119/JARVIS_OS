@@ -106,6 +106,7 @@ surface. No new decision machinery — the spine K built is the delivery channel
   ✅ **DONE 2026-07-09** — see §6. **6-1 build slices COMPLETE — only the deliberate flip remains.**
 - **Flip:** `JARVIS_MONITORS` default-ON — deliberate, box-proven, after a supervised healthy run shows no
   false-positive NOTIFY spam (the K/M4 validate-before-commit pattern).
+  ✅ **DONE 2026-07-09 — 6-1 COMPLETE** (see §6).
 
 ---
 
@@ -234,6 +235,22 @@ live surface. Watcher state is a few dozen bytes of PA statics (`monitor_t` per 
     last_monitor_event=2 mon_inited=1`** — the central bump counts exactly the NOTIFY events, the last-event
     latch tracks, the capability flag is live. On-wire I211 validation of nonzero v8 happens at the flip
     (no NIC in QEMU — the v5/v6/v7 precedent).
+- **FLIP ✅ DONE 2026-07-09 — `JARVIS_MONITORS` default-ON; GOAL 6-1 COMPLETE.** The one-line default flip
+  (`jarvis_debug.h` 0→1; `MONITOR_PROBE` stays 0 — the deployed image NEVER induces synthetic events, that
+  would be dishonest telemetry). Validate-before-commit (the K/M4 pattern): KVM `-smp 6` healthy run of the
+  flipped-default image (**0 spurious `[ANOMALY]`, 0 `[RESTART]`, err=0, NN=6, coherent Gemma**, one honest
+  `[MONITOR] episodic already rolling` info line) → transient ESP deploy (in-place image swap, backup
+  `.bak-pre61flip`, Ubuntu kept `BootOrder[0]`, one-shot `BootNext`) → supervised bare-metal **boot_id=16**
+  → **FIRST on-wire v8 over the real I211**: 60 packets captured on the Main PC (via Npcap/dumpcap L2
+  capture — the UDP:51000 socket bind was blocked by a Hyper-V dynamic port exclusion, so an at-L2 capture
+  replayed through `telemetry_receiver.py --replay` proved the wire), **all `version=8`/236 B, all crc_ok
+  (60/60), `TLM_F_MONITORS` set in every packet** (capability live), **`monitors_fired`/`last_monitor_event`
+  honest-0** on the healthy ~27 min run (below the 1 h first uptime mark; no false positives — exactly the
+  goal), err=0, NN=6, coherent, MEMORY/RETRIEVAL/CACHE_GROWTH/ACTIONS flags co-live. No monitor fired → no
+  new `action=2` JACT records this boot (correct). **The deployed image now runs the always-on monitors
+  live** — the 4 honest watchers → the K action spine → `[ANOMALY]` NOTIFY + JACT + the live console
+  "Monitor notifications" surface. Deploy now diverges from v1.0.0 by the memory stack (Phase 5) + the live
+  action gate (Phase 6 K) + the always-on monitors (Phase 6 6-1).
 
 ## 7. Done-when
 
