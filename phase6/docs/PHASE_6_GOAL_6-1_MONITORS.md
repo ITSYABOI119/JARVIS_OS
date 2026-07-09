@@ -103,6 +103,7 @@ surface. No new decision machinery — the spine K built is the delivery channel
   (232 → +N B, CRC offset shifts, the FULL K/M3-precedent lockstep: `jarvis_telemetry.h` → receiver →
   fixture → `gen_golden_pcap` → `golden.pcap` → console) + a console monitor feed (a "Monitors" surface
   rendering the real event counts). A monitor with no live surface violates UI–feature-parity.
+  ✅ **DONE 2026-07-09** — see §6. **6-1 build slices COMPLETE — only the deliberate flip remains.**
 - **Flip:** `JARVIS_MONITORS` default-ON — deliberate, box-proven, after a supervised healthy run shows no
   false-positive NOTIFY spam (the K/M4 validate-before-commit pattern).
 
@@ -205,6 +206,34 @@ live surface. Watcher state is a few dozen bytes of PA statics (`monitor_t` per 
     truthful wire counters) — and **zero re-fires over the remaining ~720 windows** (q=72,400, err=0,
     0 `[FATAL]`). **JACT read-back:** boot 19 = exactly 7 `action=2 AUTO/EXECUTED/OK risk=0` records with
     the keyword-clean snapshots + the 2 `action=1` respawns, monotonic seq.
+- **M3 ✅ DONE 2026-07-09 — telemetry v8 + the console "Monitors" surface (the UI-parity slice). 6-1 build
+  slices COMPLETE; only the deliberate `JARVIS_MONITORS` default-ON flip remains.**
+  - **Wire:** v8 appends `uint16 monitors_fired` + `uint8 last_monitor_event` + `uint8 mon_pad` →
+    **236 B, CRC@232, version 8**, +`TLM_F_MONITORS` 0x1000. `monitors_fired` is a **NEUTRAL** debounced
+    NOTIFY-event count (a MIX of degradation signals and benign liveness events — never
+    "anomalies/problems detected"); bumped ONLY in `mon_notify`'s EXECUTED branch (one central bump covers
+    every watcher; a refused NOTIFY is not a flagged event); flag set on `g_mon_inited` (capability-live).
+    Gated `#if JARVIS_MONITORS` fill → the MONITORS=0 deploy emits the fields as 0 + the flag CLEAR (the
+    v5/v6/v7 honest pattern; the size bump to 236 B is deliberate and universal — the wire grows, the
+    behavior doesn't). `.c` untouched (finalize is offsetof-based).
+  - **Lockstep:** receiver FMT `…IHHHBBI` + `FLAG_NAMES[0x1000]` + `packet_to_record` keys; fixture
+    `_DEFAULTS`/`FLAG_BITS`; `gen_golden_pcap` guards 236; `golden_telemetry.json` meta + the infer frame
+    (`monitors_fired=4`, `last_monitor_event=3`, `MONITORS` flag); `golden.pcap` regenerated (2376 B).
+    Console: Capabilities "Always-on monitors" row + System "Monitor notifications" ("events the always-on
+    monitors flagged and audited — a mix of degradation and benign liveness events") + "Last monitor event"
+    (type name); the honesty gate BANS "anomalies detected"/"problems detected"/"system unhealthy" and
+    asserts the neutral wording; sim preview honest-0 (no flag → "—").
+  - **Host green:** `test_jarvis_telemetry.c` **60/60** (layout @228/230/231, crc@232, survive-finalize,
+    `TLM_F_MONITORS`==0x1000, every-byte-flip [0,232)); `test_telemetry_receiver.py` **127/127** (v8 block:
+    decode/flags/record/keys/FLAG sym); console honesty **71/71**; logic **14/14**; e2e **27/27** run
+    LOCALLY (incl. the "Monitor notifications"==4 value-pin + MONITORS flag-parity); golden-drift clean.
+  - **Box gates (KVM `-smp 6`): OFF** (deploy defaults, MONITORS=0): 0 monitor/`[TLM-V8]` lines, 0
+    restarts, err=0, and **all 12 overlapping `[INFER]` lines byte-identical** vs the pre-v8 deploy baseline
+    (the 4 extras = the longer run's additional inferences). **Transient ON** (MONITORS=1 +
+    MONITOR_PROBE=1): the probe's 7 each-type-once fires → **`[TLM-V8] monitors_fired=7
+    last_monitor_event=2 mon_inited=1`** — the central bump counts exactly the NOTIFY events, the last-event
+    latch tracks, the capability flag is live. On-wire I211 validation of nonzero v8 happens at the flip
+    (no NIC in QEMU — the v5/v6/v7 precedent).
 
 ## 7. Done-when
 

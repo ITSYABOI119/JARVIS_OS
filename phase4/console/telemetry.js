@@ -214,6 +214,8 @@
         restart_count: 0,                    // honest 0: gated-off in deploy (no ACTIONS flag -> rows show '—')
         actions_fired: 0,
         actions_blocked: 0,
+        monitors_fired: 0,                   // honest 0: gated-off in deploy (no MONITORS flag -> rows show '—')
+        last_monitor_event: 0,
         infer_active: kind === 2 ? 1 : 0,
         infer_duty_pct: loading ? 0 : 12,  // preview workload duty cycle (badged SIMULATED)
         infer_gen_tokens: loading ? 0 : 50,                  // preview value (badged SIMULATED) — REAL on the box since v4

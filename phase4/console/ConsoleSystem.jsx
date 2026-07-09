@@ -62,6 +62,14 @@ function SystemView({ store }) {
   const restartCount = rec ? Number(rec.restart_count) || 0 : null;
   const actionsFired = rec ? Number(rec.actions_fired) || 0 : null;
   const actionsBlocked = rec ? Number(rec.actions_blocked) || 0 : null;
+  // Always-on monitors (Phase 6 6-1/M3): flag-gated on TLM_F_MONITORS. monitors_fired is a
+  // NEUTRAL count of debounced monitor NOTIFY events — a MIX of degradation signals (error-rate,
+  // self-heal-rate) and benign liveness events (uptime milestones, store wraps). Never a health
+  // verdict; every event is SHIELD-assessed and JACT-audited.
+  const monReported = !!(rec && rec.flags_list && rec.flags_list.indexOf('MONITORS') >= 0);
+  const monFired = rec ? Number(rec.monitors_fired) || 0 : null;
+  const MON_EVENT_LABELS = ['none', 'error-rate', 'self-heal-rate', 'store-wrap', 'heartbeat-age', 'uptime-milestone'];
+  const monLastEvent = rec ? (MON_EVENT_LABELS[Number(rec.last_monitor_event) || 0] || 'none') : null;
 
   const stat = (label, value, sub) => (
     <div>
@@ -121,6 +129,11 @@ function SystemView({ store }) {
             actReported ? 'allowlisted actions executed through the SHIELD action gate' : 'self-healing not reported')}
           {stat('Actions blocked (gate)', actReported ? numMb(actionsBlocked) : '—',
             actReported ? 'actions refused by the action gate — not the passive query-SHIELD path' : 'self-healing not reported')}
+          {/* Always-on monitors (Phase 6 6-1/M3) — flag-gated on TLM_F_MONITORS; a neutral event count. */}
+          {stat('Monitor notifications', monReported ? numMb(monFired) : '—',
+            monReported ? 'events the always-on monitors flagged and audited — a mix of degradation and benign liveness events' : 'monitors not reported')}
+          {stat('Last monitor event', monReported ? monLastEvent : '—',
+            monReported ? 'the most recent monitor event type' : 'monitors not reported')}
         </div>
         {note('Live heap used/free is not tracked on the box, so it is not shown. The floor above (model + a fixed static pool) is the only real lower bound.')}
       </Card>

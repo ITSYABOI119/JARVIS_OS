@@ -50,8 +50,8 @@ import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MAGIC = 0x4A54454C            # "JTEL" (LE on the wire: 4C 45 54 4A)
-FMT = '<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHHHHIHHI'
-PKT_SIZE = struct.calcsize(FMT)   # v7: 232 (derived — never hardcode a wire size)
+FMT = '<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHHHHIHHHBBI'
+PKT_SIZE = struct.calcsize(FMT)   # v8: 236 (derived — never hardcode a wire size)
 LOG_MAX_ENTRIES = 2700        # NVME_LOG_MAX_ENTRIES (no-wrap durable telemetry log)
 
 FLAG_NAMES = {
@@ -67,6 +67,7 @@ FLAG_NAMES = {
     0x200: 'SHIELD_LEARN',
     0x400: 'SEMANTIC',
     0x800: 'ACTIONS',
+    0x1000: 'MONITORS',
 }
 KIND_NAMES = {1: 'STATS', 2: 'INFER', 3: 'STATE'}
 
@@ -104,12 +105,13 @@ def decode_packet(data: bytes) -> dict:
      retrieval_hits, retrieval_latency_us, infer_last_tok_x100,
      shield_learn_keys, shield_learn_max_risk_x100, semantic_fact_count,
      restart_count, actions_fired, actions_blocked,
+     monitors_fired, last_monitor_event, _mon_pad,
      crc32_field) = struct.unpack(FMT, data)
 
     if magic != MAGIC:
         raise ValueError("bad magic 0x%08X (expected 0x%08X)" % (magic, MAGIC))
 
-    crc_calc = zlib.crc32(data[:PKT_SIZE - 4]) & 0xFFFFFFFF   # v7: 228 (= offsetof(crc32))
+    crc_calc = zlib.crc32(data[:PKT_SIZE - 4]) & 0xFFFFFFFF   # v8: 232 (= offsetof(crc32))
     flags_list = [name for bit, name in FLAG_NAMES.items() if flags & bit]
 
     return {
@@ -151,6 +153,8 @@ def decode_packet(data: bytes) -> dict:
         'restart_count': restart_count,
         'actions_fired': actions_fired,
         'actions_blocked': actions_blocked,
+        'monitors_fired': monitors_fired,
+        'last_monitor_event': last_monitor_event,
         'cache_growth_count': cache_growth_count,
         'log_cursor': log_cursor,
         'infer_gen_tokens': infer_gen_tokens,
@@ -243,6 +247,8 @@ def packet_to_record(d: dict, recv_ts: float = 0) -> dict:
         'restart_count': d['restart_count'],
         'actions_fired': d['actions_fired'],
         'actions_blocked': d['actions_blocked'],
+        'monitors_fired': d['monitors_fired'],
+        'last_monitor_event': d['last_monitor_event'],
         'cache_growth_count': d['cache_growth_count'],
         'log_cursor': d['log_cursor'],
         'infer_gen_tokens': d['infer_gen_tokens'],

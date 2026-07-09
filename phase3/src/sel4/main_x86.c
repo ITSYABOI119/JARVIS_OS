@@ -525,6 +525,11 @@ static const int64_t   g_mon_uptime_marks[3] = { 5000, 15000, 30000 };   /* prob
 static const int64_t   g_mon_uptime_marks[3] = { 3600000LL, 86400000LL, 604800000LL };  /* 1h/24h/7d */
 #endif
 static monitor_t       g_mon_uptime[3];
+/* 6-1/M3 (v8 telemetry): the monitor NOTIFY activity on the wire. monitors_fired counts
+ * EXECUTED NOTIFYs only (mon_notify's EXECUTED branch — a refused NOTIFY is not a flagged
+ * event); a NEUTRAL mix of degradation + benign liveness events, never "problems detected". */
+static uint32_t        g_monitors_fired = 0;
+static uint8_t         g_last_monitor_event = 0;   /* monitor_event_type_t; 0 = none yet */
 #endif
 #if JARVIS_SEMANTIC
 /* Phase 5 #4/M1: the SEPARATE semantic fact store + the boot-distill window. WRITE-ONLY at M1 —
@@ -1863,6 +1868,8 @@ static void mon_notify(monitor_event_type_t type, int64_t v1, int64_t v2)
         puts_serial(" risk="); put_dec(md.risk_x100); puts_serial("\n");
         spine_record(ACTION_NOTIFY_ANOMALY, &md, AUDIT_EXECUTED, AUDIT_OUT_OK,
                      mev.snap, mev.snap_len, 1);
+        g_monitors_fired++;                        /* v8: one central bump covers every watcher */
+        g_last_monitor_event = (uint8_t)type;
     } else {
         puts_serial("[ANOMALY] NOTIFY REFUSED risk=");
         put_dec(md.risk_x100); puts_serial("\n");
@@ -2172,6 +2179,15 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
     pkt.actions_blocked = (uint16_t)g_actions_blocked;
     if (g_action_audit_ready) pkt.flags |= TLM_F_ACTIONS;
 #endif
+#if JARVIS_MONITORS
+    /* v8 (P6 6-1/M3): the always-on-monitor NOTIFY activity — a NEUTRAL debounced event count
+     * (a MIX of degradation + benign liveness events, never "anomalies/problems detected").
+     * TLM_F_MONITORS is set on g_mon_inited (capability-live, like TLM_F_ACTIONS). Gated, so
+     * the flag-OFF deploy emits 0s + flag clear (the SAME honest pattern as v5/v6/v7). */
+    pkt.monitors_fired     = (uint16_t)g_monitors_fired;
+    pkt.last_monitor_event = g_last_monitor_event;
+    if (g_mon_inited) pkt.flags |= TLM_F_MONITORS;
+#endif
     /* model display name (matches the on-screen panel) + last response, NUL-bounded (pkt is zeroed) */
     { const char *mn = "Gemma 4 E2B";
       for (int i = 0; i < (int)sizeof(pkt.model_name) - 1 && mn[i]; i++) pkt.model_name[i] = mn[i]; }
@@ -2179,7 +2195,7 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
         pkt.last_text[i] = g_fb_last_resp[i];
     jarvis_tlm_finalize(&pkt);
     /* wrap as a UDP broadcast to :51000 and fire-and-forget (no DD poll) */
-    static uint8_t tlm_frame[288];   /* 14+20+8+232 = 274 <= 288 (v7) */
+    static uint8_t tlm_frame[288];   /* 14+20+8+236 = 278 <= 288 (v8) */
     int flen = net_build_udp_broadcast(tlm_frame, sizeof tlm_frame, g_net.nic.mac, JARVIS_BOX_IP,
                    JARVIS_TELEMETRY_PORT, JARVIS_TELEMETRY_PORT, &pkt, (uint16_t)sizeof pkt);
     if (flen > 0)
@@ -4440,6 +4456,22 @@ static void *main_continued(void *arg UNUSED)
                                 mon_notify(MON_EV_UPTIME_MILESTONE, (int64_t)mon_up_ms,
                                            g_mon_uptime_marks[mi]);
                 }
+#if JARVIS_MONITOR_PROBE
+                /* 6-1/M3 (v8) box proof: after the probe inductions settle, print the exact
+                 * globals jarvis_telemetry_emit fills into the v8 packet (fill/flag/CRC are
+                 * host-proven; on-wire I211 validation happens at the flip — no NIC in QEMU). */
+                {
+                    static int mon_v8_win = 0, mon_v8_printed = 0;
+                    mon_v8_win++;
+                    if (mon_v8_win >= 5 && !mon_v8_printed) {
+                        mon_v8_printed = 1;
+                        puts_serial("[TLM-V8] monitors_fired="); put_dec(g_monitors_fired);
+                        puts_serial(" last_monitor_event="); put_dec((uint32_t)g_last_monitor_event);
+                        puts_serial(" mon_inited="); put_dec((uint32_t)g_mon_inited);
+                        puts_serial(" (TLM_F_MONITORS would be set)\n");
+                    }
+                }
+#endif
             }
 #endif /* JARVIS_MONITORS */
 #if JARVIS_SHIELD_LEARN

@@ -37,6 +37,11 @@ BANNED = [
     "SHIELD blocks", "blocking active",
     # #4/M2: semantic memory compacts OBSERVABLE patterns — never a preference/intent claim.
     "knows your preferences",
+    # 6-1/M3: monitors_fired is a NEUTRAL event count (a mix of degradation + benign liveness
+    # events) — never a health verdict or an "anomalies/problems detected" claim.
+    "anomalies detected",
+    "problems detected",
+    "system unhealthy",
 ]
 
 # (b) Honest-framing markers that MUST stay present somewhere in the console
@@ -179,6 +184,19 @@ def main():
     shb = blobs.get('ConsoleShield.jsx', '')
     check('action gate' in shb.lower() and 'query' in shb.lower(),
           "SHIELD screen scopes the passive-ALLOW note to the query path (separate action gate noted)")
+
+    # --- 6-1/M3: always-on monitors — a NEUTRAL notification count, never a health verdict. The
+    # stat must source the REAL fields and use observational "notifications/flagged" wording. ---
+    check('monitors_fired' in sysb and 'last_monitor_event' in sysb,
+          "System 'Monitors' sources the REAL fields (monitors_fired/last_monitor_event)")
+    check('Monitor notifications' in sysb,
+          "monitor stat uses the neutral 'Monitor notifications' label")
+    check('flagged' in sysb.lower() and 'audited' in sysb.lower(),
+          "monitor stat wording is observational (flagged + audited), not a health verdict")
+    check('benign' in sysb.lower(),
+          "monitor stat notes the mix includes benign liveness events (not all 'problems')")
+    check('Always-on monitors' in capb,
+          "Capabilities labels the MONITORS flag (always-on monitors)")
 
     print("\n== Results: %d PASS, %d FAIL ==" % (_PASS, _FAIL))
     return 1 if _FAIL else 0

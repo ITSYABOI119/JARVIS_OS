@@ -52,8 +52,8 @@ def main():
     print("== telemetry receiver wire-compat ==")
 
     # Layout
-    check(struct.calcsize(FMT) == 232, "struct.calcsize(FMT) == 232 (v7)")
-    check(PKT_SIZE == 232, "PKT_SIZE == 232 (v7)")
+    check(struct.calcsize(FMT) == 236, "struct.calcsize(FMT) == 236 (v8)")
+    check(PKT_SIZE == 236, "PKT_SIZE == 236 (v8)")
 
     # Canonical zlib CRC vector — same CRC the C side proved (jarvis_telemetry.c)
     check(zlib.crc32(b"123456789") & 0xFFFFFFFF == 0xCBF43926,
@@ -61,7 +61,7 @@ def main():
 
     # Valid packet round-trips
     pkt = build_packet()
-    check(len(pkt) == 232, "built packet is 232 bytes (v7)")
+    check(len(pkt) == 236, "built packet is 236 bytes (v8)")
     d = decode_packet(pkt)
     check(d['crc_ok'] is True, "valid packet crc_ok True")
     check(d['kind_name'] == 'STATS', "kind_name == STATS")
@@ -132,7 +132,7 @@ def main():
     pkt_retr = build_packet(retrieval_hits=3, retrieval_latency_us=40, flags=0x01 | 0x10 | 0x80)
     dretr = decode_packet(pkt_retr)
     check(dretr['crc_ok'] is True, "retrieval packet crc_ok True (CRC over [:PKT_SIZE-4])")
-    check(dretr["version"] == 7, "v7 packet version == 7")
+    check(dretr["version"] == 8, "v8 packet version == 8")
     check(dretr['retrieval_hits'] == 3 and dretr['retrieval_latency_us'] == 40,
           "retrieval_hits/retrieval_latency_us decode")
     check('RETRIEVAL' in dretr['flags_list'], "TLM_F_RETRIEVAL 0x80 -> 'RETRIEVAL' in flags_list")
@@ -165,7 +165,7 @@ def main():
     check('shield_blocked' not in rec_sl, "no fabricated 'shield_blocked' key (monitor-only, ban holds)")
 
     # --- P5 #4/M2: semantic_fact_count + TLM_F_SEMANTIC (added at the v6 222->224 bump; now rides
-    # inside the v7 232-byte packet). The distilled-fact count — observable repeated Q&A patterns. ---
+    # inside the packet). The distilled-fact count — observable repeated Q&A patterns. ---
     pkt_sem = build_packet(semantic_fact_count=1, flags=0x01 | 0x10 | 0x400)
     dsem = decode_packet(pkt_sem)
     check(dsem['crc_ok'] is True, "v6 semantic packet crc_ok True (CRC over [:220])")
@@ -180,11 +180,11 @@ def main():
     # --- P6 K/M3: restart_count/actions_fired/actions_blocked + TLM_F_ACTIONS (the v7 224->232
     # size-bump). The self-heal/action-gate activity — actions_blocked is the SEPARATE action gate,
     # a real allowed key distinct from the still-banned query-path 'shield_blocked'. ---
-    check(PKT_SIZE == 232, "v7 size-bump: PKT_SIZE == 232")
+    check(PKT_SIZE >= 232, "v7 fields present (the v8 bump keeps them at the same offsets)")
     pkt_act = build_packet(restart_count=3, actions_fired=3, actions_blocked=2,
                            flags=0x01 | 0x10 | 0x800)
     dact = decode_packet(pkt_act)
-    check(dact['crc_ok'] is True, "v7 actions packet crc_ok True (CRC over [:228])")
+    check(dact['crc_ok'] is True, "v7 actions packet crc_ok True (CRC over [:PKT_SIZE-4])")
     check(dact['restart_count'] == 3 and dact['actions_fired'] == 3 and dact['actions_blocked'] == 2,
           "restart_count/actions_fired/actions_blocked decode")
     check('ACTIONS' in dact['flags_list'], "TLM_F_ACTIONS 0x800 -> 'ACTIONS' in flags_list")
@@ -198,6 +198,26 @@ def main():
           "FLAG_NAMES/FLAG_BITS both carry 0x800 ACTIONS")
     check('actions_blocked' not in BANNED_RECORD_KEYS and 'shield_blocked' in BANNED_RECORD_KEYS,
           "actions_blocked is allowed; the query-path shield_blocked stays banned")
+
+    # --- P6 6-1/M3: monitors_fired/last_monitor_event + TLM_F_MONITORS (the v8 232->236
+    # size-bump). A NEUTRAL monitor NOTIFY event count (a mix of degradation + benign liveness
+    # events) — never "anomalies/problems detected". ---
+    check(PKT_SIZE == 236, "v8 size-bump: PKT_SIZE == 236")
+    pkt_mon = build_packet(monitors_fired=5, last_monitor_event=3,
+                           flags=0x01 | 0x10 | 0x1000)
+    dmon = decode_packet(pkt_mon)
+    check(dmon['crc_ok'] is True, "v8 monitors packet crc_ok True (CRC over [:232])")
+    check(dmon['version'] == 8, "v8 packet version == 8")
+    check(dmon['monitors_fired'] == 5 and dmon['last_monitor_event'] == 3,
+          "monitors_fired/last_monitor_event decode")
+    check('MONITORS' in dmon['flags_list'], "TLM_F_MONITORS 0x1000 -> 'MONITORS' in flags_list")
+    rec_mon = packet_to_record(dmon)
+    check(rec_mon['monitors_fired'] == 5 and rec_mon['last_monitor_event'] == 3,
+          "record carries monitors_fired/last_monitor_event")
+    check('monitors_fired' in REQUIRED_RECORD_KEYS and 'last_monitor_event' in REQUIRED_RECORD_KEYS,
+          "monitors_fired/last_monitor_event are REQUIRED_RECORD_KEYs")
+    check(FLAG_NAMES.get(0x1000) == 'MONITORS' and FLAG_BITS.get('MONITORS') == 0x1000,
+          "FLAG_NAMES/FLAG_BITS both carry 0x1000 MONITORS")
 
     # --- N-c-3a: iter_pcap_telemetry on a synthetic 1-packet pcap ---
     pcap = _build_pcap_one(pkt, ts_s=1700000001)
@@ -224,7 +244,7 @@ def main():
     meta_keys = set(golden['meta']['keys'])
     check(meta_keys == set(REQUIRED_RECORD_KEYS),
           "golden meta.keys == REQUIRED_RECORD_KEYS (fixture matches receiver output)")
-    check(golden['meta']['size'] == 232 and golden['meta']['fmt'] == FMT,
+    check(golden['meta']['size'] == 236 and golden['meta']['fmt'] == FMT,
           "golden meta fmt/size match the wire format")
 
     kind_expect = {1: 'STATS', 2: 'INFER', 3: 'STATE'}

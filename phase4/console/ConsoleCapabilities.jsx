@@ -33,6 +33,7 @@ function Capabilities({ store }) {
     SHIELD_LEARN:  { label: 'SHIELD failure-learning (monitor-only)', tone: 'ok' },
     SEMANTIC:      { label: 'Semantic memory (distilled facts)', tone: 'ok' },
     ACTIONS:       { label: 'Self-healing / autonomous actions', tone: 'ok' },
+    MONITORS:      { label: 'Always-on monitors', tone: 'ok' },
   };
 
   // The live capability set IS the record's flags_list — iterate it, never a

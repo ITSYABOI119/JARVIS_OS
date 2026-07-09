@@ -43,6 +43,7 @@ FLAG_LABEL = {
     'SHIELD_LEARN': 'SHIELD failure-learning (monitor-only)',
     'SEMANTIC': 'Semantic memory (distilled facts)',
     'ACTIONS': 'Self-healing / autonomous actions',
+    'MONITORS': 'Always-on monitors',
 }
 
 _P = 0
@@ -410,6 +411,41 @@ def main():
                 time.sleep(0.1)
             check(act_ok,
                   "(K/M3) System 'PB restarts (self-heal)' renders == live restart_count (snap=%r)" % (act_dbg,))
+
+            # (6-1/M3) PIN the System 'Monitor notifications' VALUE — must equal the live
+            # monitors_fired on a MONITORS-flagged frame (flag-gated; '—' otherwise). The golden
+            # 'infer' frame carries monitors_fired=4. TEETH: fails if the monitor rendering breaks
+            # (wrong value, '—', or removed). Still on the System screen.
+            mon_ok = False
+            mon_dbg = None
+            deadline = time.time() + 12
+            while time.time() < deadline:
+                snap = page.evaluate(
+                    "() => {"
+                    " const rec = (window.JarvisTelemetry.getState().latest) || {};"
+                    " const flags = rec.flags_list || [];"
+                    " const lab = Array.from(document.querySelectorAll('div'))"
+                    "   .find(d => d.textContent.trim() === 'Monitor notifications');"
+                    " let rendered = null;"
+                    " if (lab && lab.parentElement) {"
+                    "   const kids = Array.from(lab.parentElement.children);"
+                    "   const i = kids.indexOf(lab);"
+                    "   rendered = kids[i + 1] ? kids[i + 1].textContent.trim() : null;"
+                    " }"
+                    " return { mon: flags.indexOf('MONITORS') >= 0, count: rec.monitors_fired, rendered };"
+                    "}")
+                mon_dbg = snap
+                if snap['mon'] and snap['rendered'] not in (None, '—'):
+                    try:
+                        rendered_num = int(str(snap['rendered']).replace(',', ''))
+                    except (ValueError, TypeError):
+                        rendered_num = None
+                    if rendered_num is not None and rendered_num == snap['count'] and rendered_num > 0:
+                        mon_ok = True
+                        break
+                time.sleep(0.1)
+            check(mon_ok,
+                  "(6-1/M3) System 'Monitor notifications' renders == live monitors_fired (snap=%r)" % (mon_dbg,))
 
             # (#5/M2) PIN the SHIELD 'Actions with learned risk' VALUE — must equal the live
             # shield_learn_keys on a SHIELD_LEARN-flagged frame (flag-gated; '—' otherwise). The
