@@ -39,8 +39,20 @@ function connPill(s) {
   }
 }
 function hasFlag(rec, f) { return rec && rec.flags_list && rec.flags_list.indexOf(f) >= 0; }
+// Box uptime from the REAL uptime_ms wire field (boot-relative, uncalibrated TSC —
+// callers show it ≈-marked, never as wall-clock).
+function fmtUptime(ms) {
+  const v = Number(ms);
+  if (!isFinite(v) || v <= 0) return '—';
+  const s = Math.floor(v / 1000);
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  if (d > 0) return d + 'd ' + h + 'h';
+  if (h > 0) return h + 'h ' + m + 'm';
+  if (m > 0) return m + 'm ' + (s % 60) + 's';
+  return s + 's';
+}
 
-window.JConsoleHelpers = { fmtAgo, fmtClock, num, pct, connPill, hasFlag };
+window.JConsoleHelpers = { fmtAgo, fmtClock, num, pct, connPill, hasFlag, fmtUptime };
 
 /* ---- Icon (Lucide, isolated from React reconciliation) ------------------ */
 function Icon({ name, size = 18, style }) {

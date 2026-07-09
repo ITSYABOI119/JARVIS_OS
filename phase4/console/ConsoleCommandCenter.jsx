@@ -3,7 +3,7 @@
 function CommandCenter({ store }) {
   const { Card, Badge } = window.JarvisOSDesignSystem_e0065d;
   const { Icon } = window.JarvisShell;
-  const { num, pct, fmtClock, hasFlag } = window.JConsoleHelpers;
+  const { num, pct, fmtClock, hasFlag, fmtUptime } = window.JConsoleHelpers;
   const rec = store.latest;
 
   // state eyebrow — never "nominal"/"verified"
@@ -78,6 +78,12 @@ function CommandCenter({ store }) {
             letterSpacing: 'var(--tracking-tight)', color: 'var(--text-primary)' }}>
             {rec ? 'JARVIS telemetry' : 'Awaiting telemetry'}
           </h1>
+          {/* Box uptime — the REAL boot-relative uptime_ms wire field (uncalibrated TSC, so ≈). */}
+          {rec && (
+            <div style={{ marginTop: 6, font: '400 var(--text-xs)/1 var(--font-mono)', color: 'var(--text-muted)' }}>
+              up ≈{fmtUptime(rec.uptime_ms)} · boot {Number(rec.boot_id) || 0}
+            </div>
+          )}
         </div>
         <a href="#" onClick={(e) => { e.preventDefault(); store._setView && store._setView('last'); }}
           style={{ display: 'inline-flex', alignItems: 'center', gap: 8, height: 34, padding: '0 14px',

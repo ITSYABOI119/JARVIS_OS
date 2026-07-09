@@ -202,6 +202,48 @@ def main():
             check(page.evaluate("(window.JarvisTelemetry.getState().latest||{}).infer_active") in (0, 1),
                   "System: infer_active is a real 0/1 field on /events")
 
+            # (uptime) PIN the System 'Uptime' VALUE — must equal the live uptime_ms, formatted.
+            # The expected string is computed HERE in Python (an independent reimplementation of
+            # fmtUptime), so a broken/removed JS formatter can't self-consistently pass. Same
+            # atomic store+DOM read + poll-until-agree as the other pins.
+            def fmt_uptime_py(ms):
+                s = int(ms // 1000)
+                if s >= 86400:
+                    return '%dd %dh' % (s // 86400, (s % 86400) // 3600)
+                if s >= 3600:
+                    return '%dh %dm' % (s // 3600, (s % 3600) // 60)
+                if s >= 60:
+                    return '%dm %ds' % (s // 60, s % 60)
+                return '%ds' % s
+            up_ok = False
+            up_dbg = None
+            deadline = time.time() + 12
+            while time.time() < deadline:
+                snap = page.evaluate(
+                    "() => {"
+                    " const rec = (window.JarvisTelemetry.getState().latest) || {};"
+                    " const lab = Array.from(document.querySelectorAll('div'))"
+                    "   .find(d => d.textContent.trim() === 'Uptime');"
+                    " let rendered = null;"
+                    " if (lab && lab.parentElement) {"
+                    "   const kids = Array.from(lab.parentElement.children);"
+                    "   const i = kids.indexOf(lab);"
+                    "   rendered = kids[i + 1] ? kids[i + 1].textContent.trim() : null;"
+                    " }"
+                    " return { ms: rec.uptime_ms, rendered };"
+                    "}")
+                up_dbg = snap
+                ms = snap.get('ms')
+                if isinstance(ms, (int, float)) and ms > 0 and snap['rendered'] not in (None, '—'):
+                    if snap['rendered'] == '≈ ' + fmt_uptime_py(ms):
+                        up_ok = True
+                        break
+                time.sleep(0.1)
+            # NB: message kept ASCII-safe (the rendered value carries U+2248 '≈', which a cp1252
+            # Windows console can't print) — ascii() escapes it in the debug snap.
+            check(up_ok,
+                  "(uptime) System 'Uptime' renders == live uptime_ms, approx-marked (snap=%s)" % ascii(up_dbg))
+
             # (G1) PIN the System 'Episodic records' VALUE — must equal the live episodic_count on a
             # MEMORY-bearing frame (flag-gated; shows '—' otherwise). TEETH: fails if the episodic_count
             # rendering breaks (wrong value, '—', or removed). Store value + rendered DOM are read in ONE

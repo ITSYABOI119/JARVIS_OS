@@ -8,6 +8,7 @@
  *   - Inference: a real ACTIVE / IDLE state (infer_active) + a WORKLOAD duty cycle
  *              (infer_duty_pct = inference time / uptime). This is NOT a CPU-load gauge —
  *              the rootserver busy-polls, so a literal load would read ~100% and mean nothing.
+ *              Plus the box uptime (uptime_ms — boot-relative, uncalibrated TSC, shown ≈).
  *   - Storage: NVMe namespace size (nvme_total_mb), the model file, and telemetry-log
  *              fullness (log_cursor / cap). No used/free, throughput, or drive-health —
  *              the box does not report them, so they are not shown.
@@ -15,6 +16,7 @@
 
 function SystemView({ store }) {
   const { Card, Badge } = window.JarvisOSDesignSystem_e0065d;
+  const { fmtUptime } = window.JConsoleHelpers;
   const rec = store.latest;
 
   const has = (v) => rec && v != null;
@@ -147,6 +149,11 @@ function SystemView({ store }) {
             rec ? 'infer_active' : 'no telemetry yet')}
           {stat('Workload duty cycle', rec ? duty + '%' : '—', 'inference time ÷ uptime')}
           {stat('Compute', cores ? cores + ' cores' : '—', 'CPU · NUM_NODES')}
+          {/* Box uptime — the REAL boot-relative uptime_ms wire field. The box has no RTC; the
+              clock is an uncalibrated TSC, so the value is approximate (≈) and never wall-clock. */}
+          {stat('Uptime', rec ? '≈ ' + fmtUptime(rec.uptime_ms) : '—',
+            rec ? 'boot ' + (Number(rec.boot_id) || 0) + ' · boot-relative, TSC-derived (approximate)'
+                : 'no telemetry yet')}
         </div>
         {note('The duty cycle is the share of uptime spent inferring — not a CPU-load gauge. The rootserver busy-polls, so a literal load reading would sit near 100% and tell you nothing.')}
       </Card>

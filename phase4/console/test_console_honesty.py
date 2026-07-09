@@ -198,6 +198,15 @@ def main():
     check('Always-on monitors' in capb,
           "Capabilities labels the MONITORS flag (always-on monitors)")
 
+    # --- uptime: box uptime is shown ONLY as the real boot-relative uptime_ms — ≈-marked and
+    # TSC-caveated (the box has no RTC), never presented as wall-clock. ---
+    check('uptime_ms' in sysb,
+          "System 'Uptime' sources the REAL field (uptime_ms)")
+    check('tsc-derived (approximate)' in sysb.lower(),
+          "uptime stat carries the 'TSC-derived (approximate)' caveat (no RTC on the box)")
+    check('uptime_ms' in cc,
+          "CommandCenter header uptime sources the REAL field (uptime_ms)")
+
     print("\n== Results: %d PASS, %d FAIL ==" % (_PASS, _FAIL))
     return 1 if _FAIL else 0
 
