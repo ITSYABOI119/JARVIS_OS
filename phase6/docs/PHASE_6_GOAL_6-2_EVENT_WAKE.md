@@ -322,7 +322,12 @@ claim (fiction; PA busy-polls).
    (`g_infer_cycles += now - g_infer_t0`) before opening its own, never clobber `g_infer_t0`.
    Everything else is the lane's machinery unchanged: `PB_DISPATCH_OK()`, `MSG_QUERY` +
    `seL4_Signal`, the drain/tick/fault-check spin, `POLL_TIMEOUT`, `km2b_miss_on_pb_ack` on a genuine
-   response.
+   response. One hygiene pin (pre-mortem, LOW): the wake DRAINS the response ring before its
+   `MSG_QUERY` (the lane pattern), so a stale `MSG_RESPONSE`/`MSG_INFER_STATS` can never be misread as
+   the wake's reply — and the property that keeps the ring clean at the wake site today is
+   load-bearing and fragile: a FAULTING inference lane `goto next_query` skips the ENTIRE [STATS]
+   block, so the wake never dispatches on an iteration whose lane left the IPC mid-drain. A refactor
+   that moves the wake site, or makes a lane fault fall through instead of `goto`, must re-check both.
 6. **The preamble staging buffer is explicitly CLEARED (`sctx_pack_preamble(g_sctx, NULL, 0)`) as the
    LAST staging write before a wake `MSG_QUERY`** — a stale workload preamble must never inject into a
    wake inference (§3 hazard; adequacy verified: PA is single-threaded and the spin never re-packs).
