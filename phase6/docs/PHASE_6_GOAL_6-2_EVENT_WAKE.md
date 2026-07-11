@@ -2,7 +2,9 @@
 
 **Status: APPROVED (strategist verdict 2026-07-10; O1–O5 resolved — see §11) — M0 ✅ DONE 2026-07-10
 (the host-pure wake decision core) + M1 ✅ DONE 2026-07-11 (box wiring BOX-GATED on KVM, gated
-`JARVIS_WAKE` default-0 — deploy stays wake-inert; see §8); M2 (anti-loop + cost proof) is next.**
+`JARVIS_WAKE` default-0) + M2 ✅ DONE 2026-07-11 (anti-loop + flat-q_errors timeout + cache route —
+the O3 checkpoint PASSED on pure #6, no fallback code; deploy stays wake-inert; see §8); M3
+(telemetry v9 + console) is next.**
 **Depends on:** keystone K (✅ COMPLETE 2026-07-08 — the action spine is live in deploy: static allowlist +
 `shield_assess` + `trust_policy` + JACT audit, `JARVIS_ACTIONS` default-ON since `34a165e`) and goal 6-1
 (✅ COMPLETE 2026-07-09 — the always-on monitors are live in deploy, `JARVIS_MONITORS` default-ON since
@@ -424,6 +426,32 @@ claim (fiction; PA busy-polls).
   `route=cache` <1 ms), which the 10-min production cooldown would stretch past any gate, hence the
   probe shrink (§7.9); measured added decision-path µs/event; deployed-config (WAKE=0) regression run
   clean. Cooldown/budget values re-calibrated from the measured runs.
+  ✅ **DONE 2026-07-11 — all legs PASSED (KVM `-smp 6 -cpu host`; probe = MODE-cycling crossings — 2
+  delta windows + 1 re-arm window per cycle — under a transient 45 s cooldown shrink, box-side sed of
+  the #ifndef-guarded `wake.h` tunable):**
+  **G1 anti-loop:** exactly ONE wake decision per crossing — **perfect parity** (run 2: 163 `[ANOMALY]`
+  = 4 dispatched + 119 SUPPRESS_COOLDOWN + 40 SUPPRESS_BUDGET; run 1: 171 = 4+129+38); suppressed =
+  serial-counted, never audited; 0 `[RESTART]`/`[FATAL]` in every run.
+  **G2 flat-q_errors timeout (§6.2):** the probe forced the FIRST dispatch into its timeout leg
+  (`wpoll_max=2000` — 60000 was too generous, the 13.6 s response beat it) → `[WAKE] … route=infer
+  outcome=FAIL` + JACT `EXECUTED/FAIL` + `KM2B_LANE_WAKE` miss — and **`err=0` held to q=48,800**: a
+  wake failure is provably never a workload error. (Probe-only settle drain absorbs the late response
+  so it can't mispair with the next workload inference — real timeouts have no late response.)
+  **G3 cache route — the O3 CHECKPOINT PASSED on pure #6:** both storm runs reached `route=cache`
+  IN-GATE with **zero new code** — the persisted M1 wake record seeded the freq aggregate at the boot
+  recall-scan, so ONE in-gate inference reached freq≥2 and promoted; sequence run 2:
+  `FAIL(infer,timeout) → OK(infer 13.5 s) → OK(cache ms=0) → OK(cache ms=0)` then budget suppressions.
+  **NO direct-insert fallback needed or added.**
+  **Degraded leg:** probe mode 2 latches `g_pb_dead` before the first crossing → `[WAKE] mon=err-rate
+  route=none ms=0 decide_us=2 outcome=FAIL` — no dispatch, no timeout burn, JACT `EXECUTED/FAIL
+  route=none`; the workload continued cache-only, err=0 (q=15,600).
+  **Cost:** `decide_us=2` on every dispatch (take→try→build→normalize/hash→assess→cache_lookup = 2 µs);
+  inference seconds paid ONLY on a real event + cache miss. Honest µs/event — never a CPU%.
+  **G6 deployed regression:** WAKE=0 build = `main.c.obj` `.text`/`.rodata`/`.data` + `nm`
+  md5-identical to the pre-M1 baseline (re-verified WITH all M2 probe code in-tree) + a deploy-config
+  KVM run with ZERO `[WAKE*` lines, err=0, coherent. JACT read-back: all four exit shapes audited
+  (OK-infer / OK-cache / FAIL-timeout / FAIL-degraded — boots 23-26 of the KVM store). Flags + cooldown
+  restored post-gate; deploy stays wake-inert.
 - **M3 (telemetry v9 + console — REQUIRED for done, the UI-parity slice):** append
   `uint16 wakes_fired` + `uint8 last_wake_event` + `uint8 wake_pad` → **240 B, CRC@236, version 9**,
   +`TLM_F_WAKE` **0x2000** (PROPOSED pin — the v8 pattern verbatim: gated `#if JARVIS_WAKE` fill, a
@@ -480,11 +508,17 @@ EXISTING episodic store (route-coded, §7.7). Gate state = a few dozen bytes of 
 - **O2 ✅ RESOLVED — cooldown/budget defaults:** 10 min per-type + 4/hour global stand as
   M2-calibration proposals (M0 defines `WAKE_BUDGET_PER_HOUR` 4), but **the FLIP starts the budget
   CONSERVATIVE (2/hour)** and relaxes only after observation — the flip commit may tighten the
-  constant.
+  constant. **M2 calibration (2026-07-11, measured):** a healthy box crosses ~never (boot_id=17:
+  zero degradation crossings in 28.7 h; the deploy-config M2 run: zero) — the 10-min per-type
+  cooldown STANDS as the production value; the FLIP commit tightens `WAKE_BUDGET_PER_HOUR` 4→2.
 - **O3 ✅ RESOLVED (the one with risk) — cache seeding:** pure #6-promotion for v1 (zero new
   cache-write machinery), **BUT M2 makes "does #6 actually promote the wake key within the gate" an
   explicit PASS/FAIL checkpoint**, with a direct `cache_insert`-after-first-inference as the READY
   FALLBACK if promotion proves gate-infeasible. M0/M1 must not assume the cache route comes free.
+  **M2 CHECKPOINT: PASS on pure #6 (2026-07-11)** — `route=cache` reached in-gate in BOTH storm runs
+  (the persisted M1 wake record seeds the freq aggregate at the boot recall-scan, so one in-gate
+  inference hits freq≥2 → promoted at the next [STATS] pass → the following ALLOW serves `ms=0`).
+  **The fallback was NOT needed and was NOT added** — the wake lane has zero cache-write machinery.
 - **O4 ✅ RESOLVED — retrieval-on-wake:** DEFERRED to v2/6-3 (v1 keeps the wake prompt fully
   deterministic).
 - **O5 ✅ RESOLVED — consult result surfacing:** DEFERRED to v2/6-3 (v9 carries counts only; the

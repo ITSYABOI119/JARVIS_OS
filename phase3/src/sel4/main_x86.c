@@ -4431,19 +4431,31 @@ static void *main_continued(void *arg UNUSED)
                 }
 #endif
 #if JARVIS_WAKE_PROBE
-                /* 6-2/M1 WAKE-PROBE (box gate only): SELF-CONTAINED — a synthetic
-                 * over-threshold delta into the err-rate watcher's WINDOW DELTA (never the
-                 * real q_errors counter) for the first 3 windows, so the ONE demonstrator
-                 * wake fires deterministically WITHOUT JARVIS_MONITOR_PROBE (whose heal-rate
-                 * probe fires 2 REAL respawns that would race the staged wake against the
-                 * post-respawn handshake — §7.9 / pre-mortem). Fire-once + debounce keep it
-                 * to exactly one crossing; the wake gate keeps it to exactly one dispatch. */
+                /* 6-2/M2 WAKE-PROBE (box gate only; the flag is a MODE — 1 = crossing storm +
+                 * first-wake timeout leg, 2 = degraded leg): SELF-CONTAINED — synthetic deltas
+                 * into the err-rate watcher's WINDOW DELTA only (never the real q_errors), no
+                 * MONITOR_PROBE (#error-forbidden). Pattern: 2 delta windows then 1 zero
+                 * window, cycling — each cycle re-arms (hysteresis) then re-crosses (debounce
+                 * 2 + fire-once ⇒ EXACTLY one crossing per 3-window cycle), so one gate run
+                 * gets REPEATED same-type crossings: re-crossings inside the (probe-shrunk)
+                 * cooldown ⇒ SUPPRESS_COOLDOWN; one ALLOW per cooldown expiry; the ALLOW after
+                 * the hourly budget exhausts ⇒ SUPPRESS_BUDGET (§6 bounds 1/3/4/5 exercised). */
                 {
-                    static int wake_probe_win = 0;
-                    if (wake_probe_win < 3) {
-                        wake_probe_win++;
+                    static uint32_t wake_probe_win = 0;
+                    wake_probe_win++;
+#if JARVIS_WAKE_PROBE == 2
+                    /* M2 degraded leg: latch g_pb_dead BEFORE the first crossing — the
+                     * dispatched wake must take route=none outcome=FAIL with NO dispatch and
+                     * NO timeout burn (§4). Probe-lowered STATE, honestly labeled; PB stays
+                     * alive, PA just stops dispatching to it (the §5-F latch semantics). */
+                    if (wake_probe_win == 1 && !g_pb_dead) {
+                        g_pb_dead = 1;
+                        puts_serial("[WAKE-PROBE] inducing g_pb_dead (degraded leg)\n");
+                    }
+#endif
+                    if (wake_probe_win % 3u != 0u) {
                         mon_d += (uint64_t)(MON_ERRRATE_THRESHOLD * 2);
-                        puts_serial("[WAKE-PROBE] window="); put_dec((uint32_t)wake_probe_win);
+                        puts_serial("[WAKE-PROBE] window="); put_dec(wake_probe_win);
                         puts_serial(" synthetic d="); put_dec((uint32_t)mon_d); puts_serial("\n");
                     }
                 }
@@ -4717,6 +4729,7 @@ static void *main_continued(void *arg UNUSED)
                     } else {
                         const wake_template_t *wtpl = wake_template_lookup(wt);
                         uint32_t wake_t0_ms = jarvis_uptime_ms();
+                        uint64_t wdec_t0 = jarvis_rdtsc();   /* M2: decision-path cost (µs/event) */
                         char wq[MAX_QUERY_LEN];
                         int wql = wake_build_query(wt, wq, sizeof wq);
                         char wnq[MAX_QUERY_LEN];
@@ -4736,13 +4749,21 @@ static void *main_continued(void *arg UNUSED)
                         int wexec = (wd.dec == ACT_EXECUTE || wd.dec == ACT_NOTIFY);
                         wake_route_t wroute = WAKE_ROUTE_NONE;
                         uint16_t woutcome = AUDIT_OUT_NA;
+                        uint32_t wdecide_us = 0;
                         char wresp[512]; int wresp_off = 0; wresp[0] = '\0';
 
                         if (wexec) {
                             char waction[MAX_ACTION_LEN];
                             trust_level_t wtrust;
-                            if (wnorm_ok &&
-                                cache_lookup(&g_cache, wnq, waction, sizeof waction, &wtrust)) {
+                            int wcache_hit = wnorm_ok &&
+                                cache_lookup(&g_cache, wnq, waction, sizeof waction, &wtrust);
+                            /* M2 honest cost metric: the DECISION path (gate try + template
+                             * build + normalize/hash + shield assess + cache lookup) in µs —
+                             * inference seconds are paid ONLY on a real event + cache miss;
+                             * NEVER a CPU% claim. */
+                            wdecide_us = (uint32_t)(((jarvis_rdtsc() - wdec_t0) * 1000ULL)
+                                                    / TSC_PER_MS);
+                            if (wcache_hit) {
                                 /* route=cache: a promoted answer serves in <1 ms (canon). */
                                 wroute = WAKE_ROUTE_CACHE;
                                 woutcome = AUDIT_OUT_OK;
@@ -4790,8 +4811,24 @@ static void *main_continued(void *arg UNUSED)
                                 {
                                     int wgot = 0, wake_faulted = 0;
                                     uint32_t wpolls = 0;
-                                    const uint32_t WPOLL_TIMEOUT = 5000000;
-                                    while (!wgot && !wake_faulted && wpolls < WPOLL_TIMEOUT) {
+                                    uint32_t wpoll_max = 5000000;   /* the lane's POLL_TIMEOUT */
+#if JARVIS_WAKE_PROBE == 1
+                                    /* M2: force the FIRST dispatched wake into its timeout leg —
+                                     * shrink THIS dispatch's poll budget so it expires while PB
+                                     * is genuinely generating (the honest §7.5b leg: outcome
+                                     * FAIL + KM2B_LANE_WAKE, q_errors untouched). */
+                                    static int wp_tmo_done = 0;
+                                    if (!wp_tmo_done) {
+                                        wp_tmo_done = 1;
+                                        /* 2000 polls ≈ sub-second (each poll = tick + fault
+                                         * NBRecv + yield, ~100-300 µs) — always expires under
+                                         * a ~13 s generation. (60000 was too generous: the
+                                         * first M2 run's response beat it at 13.6 s.) */
+                                        wpoll_max = 2000;
+                                        puts_serial("[WAKE-PROBE] timeout leg: wpoll_max=2000\n");
+                                    }
+#endif
+                                    while (!wgot && !wake_faulted && wpolls < wpoll_max) {
                                         uint8_t pk_type; uint16_t pk_seq, pk_len;
                                         uint8_t pk_pay[SHMEM_MAX_PAYLOAD];
                                         while (shmem_ipc_recv(shared_response_ring, &pk_type,
@@ -4860,6 +4897,32 @@ static void *main_continued(void *arg UNUSED)
                                         if (!wake_faulted)
                                             km2b_miss_on_pb_timeout(&g_pb_miss, KM2B_LANE_WAKE);
                                         epi_batch_add(wq, EPI_ACT_INFER, EPI_OUT_ERROR, NULL);
+#if JARVIS_WAKE_PROBE == 1
+                                        /* M2 probe-only settle: PB is HEALTHY here and will
+                                         * finish the timed-out answer; drain-and-discard it
+                                         * (bounded) so the stale response can't mispair with
+                                         * the NEXT workload inference in the same gate run. A
+                                         * REAL timeout (PB dead/wedged) never produces a late
+                                         * response — this scaffolding exists only under the
+                                         * probe and compiles out of every deploy build. */
+                                        if (!wake_faulted) {
+                                            uint32_t settle = 0, tail = 0;
+                                            int saw = 0;
+                                            while (settle < 3000000 && tail < 50000) {
+                                                uint8_t s_t; uint16_t s_s, s_l;
+                                                uint8_t s_p[SHMEM_MAX_PAYLOAD];
+                                                while (shmem_ipc_recv(shared_response_ring,
+                                                        &s_t, &s_s, s_p, &s_l) == 0) {
+                                                    if (s_t == MSG_RESPONSE) saw = 1;
+                                                }
+                                                if (saw) tail++;
+                                                settle++;
+                                                seL4_Yield();
+                                            }
+                                            puts_serial("[WAKE-PROBE] settle saw_response=");
+                                            put_dec((uint32_t)saw); puts_serial("\n");
+                                        }
+#endif
                                     }
                                 }
                                 /* Close the wake's duty window (a fault-mid-wake path may have
@@ -4879,6 +4942,7 @@ static void *main_continued(void *arg UNUSED)
                         puts_serial(wroute == WAKE_ROUTE_CACHE ? "cache"
                                     : wroute == WAKE_ROUTE_INFER ? "infer" : "none");
                         puts_serial(" ms="); put_dec(wms);
+                        puts_serial(" decide_us="); put_dec(wdecide_us);
                         puts_serial(" risk="); put_dec(wd.risk_x100);
                         puts_serial(" outcome=");
                         puts_serial(!wexec ? "REFUSED"
