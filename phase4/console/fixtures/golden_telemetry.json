@@ -1,8 +1,8 @@
 {
   "meta": {
     "comment": "Golden /events contract for phase4/console. 'keys' MUST equal set(packet_to_record(...).keys()); the key-contract test (test_telemetry_receiver.py) enforces it. Regenerate golden.pcap via phase3/scripts/gen_golden_pcap.py (CI gates drift). 'flags' are names (telemetry_fixture.FLAG_BITS); other fields are build_packet overrides; label/ts_s/ts_frac/corrupt are fixture-only. NOTE: the 'infer' frame is a SYNTHETIC all-features-on pin frame (SHIELD_LEARN/SEMANTIC are gated-off in the shipped deploy; its nonzero action/monitor counts exist to give the e2e value-pins teeth) — it is NOT a real capture.",
-    "fmt": "<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHHHHIHHHBBI",
-    "size": 236,
+    "fmt": "<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHHHHIHHHBBHBBI",
+    "size": 240,
     "keys": [
       "recv_ts",
       "version",
@@ -44,6 +44,8 @@
       "actions_blocked",
       "monitors_fired",
       "last_monitor_event",
+      "wakes_fired",
+      "last_wake_event",
       "cache_growth_count",
       "log_cursor",
       "infer_gen_tokens",
@@ -145,7 +147,8 @@
         "SHIELD_LEARN",
         "SEMANTIC",
         "ACTIONS",
-        "MONITORS"
+        "MONITORS",
+        "WAKE"
       ],
       "boot_id": 1,
       "seq": 4,
@@ -174,7 +177,9 @@
       "actions_fired": 3,
       "actions_blocked": 2,
       "monitors_fired": 4,
-      "last_monitor_event": 3
+      "last_monitor_event": 3,
+      "wakes_fired": 3,
+      "last_wake_event": 1
     },
     {
       "label": "state",

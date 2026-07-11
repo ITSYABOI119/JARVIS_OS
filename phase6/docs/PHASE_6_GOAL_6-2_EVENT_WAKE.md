@@ -3,8 +3,9 @@
 **Status: APPROVED (strategist verdict 2026-07-10; O1–O5 resolved — see §11) — M0 ✅ DONE 2026-07-10
 (the host-pure wake decision core) + M1 ✅ DONE 2026-07-11 (box wiring BOX-GATED on KVM, gated
 `JARVIS_WAKE` default-0) + M2 ✅ DONE 2026-07-11 (anti-loop + flat-q_errors timeout + cache route —
-the O3 checkpoint PASSED on pure #6, no fallback code; deploy stays wake-inert; see §8); M3
-(telemetry v9 + console) is next.**
+the O3 checkpoint PASSED on pure #6, no fallback code) + M3 ✅ DONE 2026-07-12 (telemetry v9 240 B +
+the console "Event consults" surface; see §8). **6-2 build slices COMPLETE — only the deliberate
+`JARVIS_WAKE` default-ON flip remains (with the O2 budget tightening 4→2/hr + first on-wire v9).**
 **Depends on:** keystone K (✅ COMPLETE 2026-07-08 — the action spine is live in deploy: static allowlist +
 `shield_assess` + `trust_policy` + JACT audit, `JARVIS_ACTIONS` default-ON since `34a165e`) and goal 6-1
 (✅ COMPLETE 2026-07-09 — the always-on monitors are live in deploy, `JARVIS_MONITORS` default-ON since
@@ -463,6 +464,26 @@ claim (fiction; PA busy-polls).
   `—` until the flag is live; the throughput-tile seam noted per §7.10) → all test layers. Honesty gate
   bans "thinking"/"reasoning"/"decided on its own"; wording = "event-triggered consults — a fixed,
   human-reviewed question per monitor event; cache-served or one bounded inference".
+  ✅ **DONE 2026-07-12 — the full v8-precedent lockstep in ONE slice:** wire (`jarvis_telemetry.h` —
+  `wakes_fired` u16 @232 / `last_wake_event` u8 @234 / `wake_pad` u8 @235, crc32 → @236, **240 B,
+  version 9, `TLM_F_WAKE` 0x2000**; `.c` untouched — finalize is offsetof-based) + the PA fill
+  (`#if JARVIS_WAKE`, one central bump at the dispatch site's executed branch — DISPATCHED consults
+  only; `TLM_F_WAKE` on `g_wake_inited`, capability-live) + receiver (FMT `…HBBHBBI`, decode +
+  `packet_to_record` BOTH, `FLAG_NAMES[0x2000]`; `wakes_fired` asserted NOT banned) + fixture +
+  `gen_golden_pcap` guards 240 + `golden_telemetry.json` meta/infer-frame (`wakes_fired=3`,
+  `last_wake_event=1`, WAKE flag) + `golden.pcap` regenerated (2408 B) + console (Capabilities
+  "Event-driven wake (templated consults)" + System "Event consults"/"Last wake event", `—` until the
+  flag is live; sim previews `—` — no WAKE flag pre-flip) + the honesty gate BANS
+  "thinking"/"reasoning"/"decided on its own" and REQUIRES the "human-reviewed question" consult
+  framing ("autonomous" deliberately NOT banned — the K/M3 ACTIONS row legitimately uses it of the
+  bounded action gate). **Host green:** telemetry C **65/65**, receiver **136/136**, honesty
+  **92/92**, logic 14/14, e2e **34/34** (incl. the "Event consults"==3 value-pin + WAKE flag-parity),
+  golden-drift idempotent. **Box smoke:** OFF (deploy defaults) = zero `[WAKE*`/`[TLM-V9]` lines,
+  err=0 (q=15,400), overlapping `[INFER]` lines byte-identical to the M2 OFF baseline; transient ON
+  (WAKE=1+WAKE_PROBE=1) = **`[TLM-V9] wakes_fired=2 last_wake_event=1 wake_inited=1`** (the FAIL and
+  OK consults both counted — dispatched-only discipline), err=0, 0 restarts. On-wire I211 v9
+  validation happens at the flip (no NIC in QEMU — the v5…v8 precedent). Flags + cooldown restored;
+  deploy stays wake-inert.
 - **Flip:** `JARVIS_WAKE` default-ON — deliberate, box-proven, after a supervised healthy run shows
   honest-0 wakes (no event ⇒ no wake ⇒ no false-positive LLM burn — exactly the point; the 6-1 flip
   precedent, incl. the on-wire v9 validation at the flip since QEMU has no NIC).

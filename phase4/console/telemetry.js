@@ -12,6 +12,7 @@
  *   semantic_fact_count (v6 — distilled observable-pattern facts, never "knows preferences"),
  *   restart_count / actions_fired / actions_blocked (v7 — self-heal/action-gate activity),
  *   monitors_fired / last_monitor_event (v8 — always-on-monitor NOTIFY activity, neutral),
+ *   wakes_fired / last_wake_event (v9 — event-triggered CONSULT activity, never cognition),
  *   log_cursor, infer_gen_tokens, model_name, last_text, crc_ok
  *
  * Liveness is genuine: a record is "live" only while a fresh CRC-valid packet
@@ -197,7 +198,7 @@
 
       return {
         recv_ts: Date.now() / 1000,
-        version: 8,
+        version: 9,
         kind, kind_name: kindName,
         flags: 0, flags_list: flags,
         boot_id: BOOT_ID,
@@ -227,6 +228,8 @@
         actions_blocked: 0,
         monitors_fired: 0,                   // MONITORS is default-ON in deploy — healthy preview box: no crossings yet
         last_monitor_event: 0,
+        wakes_fired: 0,                      // WAKE is gated default-0 pre-flip — NO WAKE flag in the sim, so the console previews '—'
+        last_wake_event: 0,
         infer_active: kind === 2 ? 1 : 0,
         infer_duty_pct: loading ? 0 : 12,  // preview workload duty cycle (badged SIMULATED)
         infer_gen_tokens: loading ? 0 : 50,                  // preview value (badged SIMULATED) — REAL on the box since v4

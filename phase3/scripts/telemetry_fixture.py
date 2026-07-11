@@ -2,7 +2,7 @@
 """
 telemetry_fixture.py - shared packer for the telemetry_packet_t (jarvis_telemetry.h).
 
-Single source for building 236-byte (v8) telemetry packets and legacy-pcap captures,
+Single source for building 240-byte (v9) telemetry packets and legacy-pcap captures,
 used by both test_telemetry_receiver.py (host wire-compat) and gen_golden_pcap.py
 (the golden fixture). Stdlib only.
 
@@ -22,7 +22,7 @@ from telemetry_receiver import (  # noqa: E402
 
 # Field order matches FMT / jarvis_telemetry.h exactly.
 _DEFAULTS = dict(
-    magic=MAGIC, version=8, kind=1, flags=0x01 | 0x10, boot_id=1, seq=42,
+    magic=MAGIC, version=9, kind=1, flags=0x01 | 0x10, boot_id=1, seq=42,
     uptime_ms=120000, infer_active=0, infer_duty_pct=18, log_cursor=137,
     q_total=289, q_hits=211, q_infer=29, q_heartbeat=40, q_shield=9, q_errors=0,
     num_nodes=6, model_load_pct=100, fb_bpp=32, selftest_score=5,
@@ -33,12 +33,13 @@ _DEFAULTS = dict(
     retrieval_hits=0, retrieval_latency_us=0, infer_last_tok_x100=0,
     shield_learn_keys=0, shield_learn_max_risk_x100=0, semantic_fact_count=0,
     restart_count=0, actions_fired=0, actions_blocked=0,
-    monitors_fired=0, last_monitor_event=0, mon_pad=0, crc32=0,
+    monitors_fired=0, last_monitor_event=0, mon_pad=0,
+    wakes_fired=0, last_wake_event=0, wake_pad=0, crc32=0,
 )
 
 
 def build_packet(finalize=True, **overrides):
-    """Pack a 236-byte (v8) packet; when finalize, stamp a valid zlib CRC over [:PKT_SIZE-4].
+    """Pack a 240-byte (v9) packet; when finalize, stamp a valid zlib CRC over [:PKT_SIZE-4].
 
     Pass finalize=False (with an explicit crc32=...) to forge a corrupt packet.
     String fields (last_text/model_name) accept bytes or str.
@@ -60,9 +61,10 @@ def build_packet(finalize=True, **overrides):
         v['shield_learn_keys'], v['shield_learn_max_risk_x100'], v['semantic_fact_count'],
         v['restart_count'], v['actions_fired'], v['actions_blocked'],
         v['monitors_fired'], v['last_monitor_event'], v['mon_pad'],
+        v['wakes_fired'], v['last_wake_event'], v['wake_pad'],
         v['crc32'])
     if finalize:
-        crc = zlib.crc32(body[:PKT_SIZE - 4]) & 0xFFFFFFFF   # v8: 232
+        crc = zlib.crc32(body[:PKT_SIZE - 4]) & 0xFFFFFFFF   # v9: 236
         body = body[:PKT_SIZE - 4] + struct.pack('<I', crc)
     return body
 
@@ -97,6 +99,7 @@ FLAG_BITS = {
     'RETRIEVAL': 0x80, 'CACHE_GROWTH': 0x100, 'SHIELD_LEARN': 0x200, 'SEMANTIC': 0x400,
     'ACTIONS': 0x800,
     'MONITORS': 0x1000,
+    'WAKE': 0x2000,
 }
 _CORRUPT_CRC = 0xDEADBEEF  # deliberately wrong CRC for "corrupt" golden frames
 

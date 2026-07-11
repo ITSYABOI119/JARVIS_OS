@@ -44,6 +44,7 @@ FLAG_LABEL = {
     'SEMANTIC': 'Semantic memory (distilled facts)',
     'ACTIONS': 'Self-healing / autonomous actions',
     'MONITORS': 'Always-on monitors',
+    'WAKE': 'Event-driven wake (templated consults)',
 }
 
 _P = 0
@@ -523,6 +524,41 @@ def main():
                 time.sleep(0.1)
             check(mon_ok,
                   "(6-1/M3) System 'Monitor notifications' renders == live monitors_fired (snap=%r)" % (mon_dbg,))
+
+            # (6-2/M3) PIN the System 'Event consults' VALUE — must equal the live wakes_fired
+            # on a WAKE-flagged frame (flag-gated; '—' otherwise). The golden 'infer' frame
+            # carries wakes_fired=3. TEETH: fails if the wake rendering breaks (wrong value,
+            # '—', or removed). Still on the System screen.
+            wake_ok = False
+            wake_dbg = None
+            deadline = time.time() + 12
+            while time.time() < deadline:
+                snap = page.evaluate(
+                    "() => {"
+                    " const rec = (window.JarvisTelemetry.getState().latest) || {};"
+                    " const flags = rec.flags_list || [];"
+                    " const lab = Array.from(document.querySelectorAll('div'))"
+                    "   .find(d => d.textContent.trim() === 'Event consults');"
+                    " let rendered = null;"
+                    " if (lab && lab.parentElement) {"
+                    "   const kids = Array.from(lab.parentElement.children);"
+                    "   const i = kids.indexOf(lab);"
+                    "   rendered = kids[i + 1] ? kids[i + 1].textContent.trim() : null;"
+                    " }"
+                    " return { wake: flags.indexOf('WAKE') >= 0, count: rec.wakes_fired, rendered };"
+                    "}")
+                wake_dbg = snap
+                if snap['wake'] and snap['rendered'] not in (None, '—'):
+                    try:
+                        rendered_num = int(str(snap['rendered']).replace(',', ''))
+                    except (ValueError, TypeError):
+                        rendered_num = None
+                    if rendered_num is not None and rendered_num == snap['count'] and rendered_num > 0:
+                        wake_ok = True
+                        break
+                time.sleep(0.1)
+            check(wake_ok,
+                  "(6-2/M3) System 'Event consults' renders == live wakes_fired (snap=%r)" % (wake_dbg,))
 
             # (#5/M2) PIN the SHIELD 'Actions with learned risk' VALUE — must equal the live
             # shield_learn_keys on a SHIELD_LEARN-flagged frame (flag-gated; '—' otherwise). The

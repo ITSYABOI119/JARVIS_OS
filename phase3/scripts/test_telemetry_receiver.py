@@ -52,8 +52,8 @@ def main():
     print("== telemetry receiver wire-compat ==")
 
     # Layout
-    check(struct.calcsize(FMT) == 236, "struct.calcsize(FMT) == 236 (v8)")
-    check(PKT_SIZE == 236, "PKT_SIZE == 236 (v8)")
+    check(struct.calcsize(FMT) == 240, "struct.calcsize(FMT) == 240 (v9)")
+    check(PKT_SIZE == 240, "PKT_SIZE == 240 (v9)")
 
     # Canonical zlib CRC vector — same CRC the C side proved (jarvis_telemetry.c)
     check(zlib.crc32(b"123456789") & 0xFFFFFFFF == 0xCBF43926,
@@ -61,7 +61,7 @@ def main():
 
     # Valid packet round-trips
     pkt = build_packet()
-    check(len(pkt) == 236, "built packet is 236 bytes (v8)")
+    check(len(pkt) == 240, "built packet is 240 bytes (v9)")
     d = decode_packet(pkt)
     check(d['crc_ok'] is True, "valid packet crc_ok True")
     check(d['kind_name'] == 'STATS', "kind_name == STATS")
@@ -132,7 +132,7 @@ def main():
     pkt_retr = build_packet(retrieval_hits=3, retrieval_latency_us=40, flags=0x01 | 0x10 | 0x80)
     dretr = decode_packet(pkt_retr)
     check(dretr['crc_ok'] is True, "retrieval packet crc_ok True (CRC over [:PKT_SIZE-4])")
-    check(dretr["version"] == 8, "v8 packet version == 8")
+    check(dretr["version"] == 9, "v9 packet version == 9")
     check(dretr['retrieval_hits'] == 3 and dretr['retrieval_latency_us'] == 40,
           "retrieval_hits/retrieval_latency_us decode")
     check('RETRIEVAL' in dretr['flags_list'], "TLM_F_RETRIEVAL 0x80 -> 'RETRIEVAL' in flags_list")
@@ -202,12 +202,12 @@ def main():
     # --- P6 6-1/M3: monitors_fired/last_monitor_event + TLM_F_MONITORS (the v8 232->236
     # size-bump). A NEUTRAL monitor NOTIFY event count (a mix of degradation + benign liveness
     # events) — never "anomalies/problems detected". ---
-    check(PKT_SIZE == 236, "v8 size-bump: PKT_SIZE == 236")
+    check(PKT_SIZE >= 236, "v8 fields present (the v9 bump keeps them at the same offsets)")
     pkt_mon = build_packet(monitors_fired=5, last_monitor_event=3,
                            flags=0x01 | 0x10 | 0x1000)
     dmon = decode_packet(pkt_mon)
-    check(dmon['crc_ok'] is True, "v8 monitors packet crc_ok True (CRC over [:232])")
-    check(dmon['version'] == 8, "v8 packet version == 8")
+    check(dmon['crc_ok'] is True, "v8 monitors packet crc_ok True (CRC over [:PKT_SIZE-4])")
+    check(dmon['version'] == 9, "monitors packet version == 9 (v9 wire)")
     check(dmon['monitors_fired'] == 5 and dmon['last_monitor_event'] == 3,
           "monitors_fired/last_monitor_event decode")
     check('MONITORS' in dmon['flags_list'], "TLM_F_MONITORS 0x1000 -> 'MONITORS' in flags_list")
@@ -218,6 +218,28 @@ def main():
           "monitors_fired/last_monitor_event are REQUIRED_RECORD_KEYs")
     check(FLAG_NAMES.get(0x1000) == 'MONITORS' and FLAG_BITS.get('MONITORS') == 0x1000,
           "FLAG_NAMES/FLAG_BITS both carry 0x1000 MONITORS")
+
+    # --- P6 6-2/M3: wakes_fired/last_wake_event + TLM_F_WAKE (the v9 236->240
+    # size-bump — event-triggered CONSULT activity; DISPATCHED consults only,
+    # never suppressed/refused; a real allowed key, distinct from every ban) ---
+    check(PKT_SIZE == 240, "v9 size-bump: PKT_SIZE == 240")
+    pkt_wake = build_packet(wakes_fired=3, last_wake_event=1,
+                            flags=0x01 | 0x10 | 0x2000)
+    dwake = decode_packet(pkt_wake)
+    check(dwake['crc_ok'] is True, "v9 wake packet crc_ok True (CRC over [:236])")
+    check(dwake['version'] == 9, "v9 packet version == 9")
+    check(dwake['wakes_fired'] == 3 and dwake['last_wake_event'] == 1,
+          "wakes_fired/last_wake_event decode")
+    check('WAKE' in dwake['flags_list'], "TLM_F_WAKE 0x2000 -> 'WAKE' in flags_list")
+    rec_wake = packet_to_record(dwake, 1700000000.0)
+    check(rec_wake['wakes_fired'] == 3 and rec_wake['last_wake_event'] == 1,
+          "record carries wakes_fired/last_wake_event")
+    check('wakes_fired' in REQUIRED_RECORD_KEYS and 'last_wake_event' in REQUIRED_RECORD_KEYS,
+          "wakes_fired/last_wake_event are REQUIRED_RECORD_KEYs")
+    check(FLAG_NAMES.get(0x2000) == 'WAKE' and FLAG_BITS.get('WAKE') == 0x2000,
+          "FLAG_NAMES/FLAG_BITS both carry 0x2000 WAKE")
+    check('wakes_fired' not in BANNED_RECORD_KEYS,
+          "wakes_fired is a REAL allowed key (NOT banned — the monitors_fired precedent)")
 
     # --- N-c-3a: iter_pcap_telemetry on a synthetic 1-packet pcap ---
     pcap = _build_pcap_one(pkt, ts_s=1700000001)
@@ -244,7 +266,7 @@ def main():
     meta_keys = set(golden['meta']['keys'])
     check(meta_keys == set(REQUIRED_RECORD_KEYS),
           "golden meta.keys == REQUIRED_RECORD_KEYS (fixture matches receiver output)")
-    check(golden['meta']['size'] == 236 and golden['meta']['fmt'] == FMT,
+    check(golden['meta']['size'] == 240 and golden['meta']['fmt'] == FMT,
           "golden meta fmt/size match the wire format")
 
     kind_expect = {1: 'STATS', 2: 'INFER', 3: 'STATE'}

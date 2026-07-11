@@ -1,15 +1,15 @@
 /**
  * jarvis_telemetry.h - JARVIS binary telemetry packet (goal #2b N-c)
  *
- * A versioned, CRC'd, fixed-236-byte (v8) binary packet the box emits over UDP
+ * A versioned, CRC'd, fixed-240-byte (v9) binary packet the box emits over UDP
  * (255.255.255.255:51000, via net_udp.c + the I211) so a remote console can
  * render live, honest box state. Pure logic / host-testable (CRC + finalize);
  * the emit site is in main_x86.c.
  *
  * Wire format: little-endian (x86), packed, no padding. The CRC-32 is the
  * standard zlib/IEEE CRC (poly 0xEDB88320, init/xorout 0xFFFFFFFF) over the
- * first 232 bytes [0 .. offsetof(crc32)), so a Python receiver validates with
- * `zlib.crc32(pkt[:232]) == struct.unpack_from('<I', pkt, 232)[0]`.
+ * first 236 bytes [0 .. offsetof(crc32)), so a Python receiver validates with
+ * `zlib.crc32(pkt[:236]) == struct.unpack_from('<I', pkt, 236)[0]`.
  *
  * JARVIS AI-OS - Phase 4 (goal #2b Remote Telemetry Console)
  */
@@ -20,7 +20,7 @@
 #include <stdint.h>
 
 #define JARVIS_TLM_MAGIC   0x4A54454Cu  /* "JTEL" (LE on wire: 4C 45 54 4A) */
-#define JARVIS_TLM_VERSION 8
+#define JARVIS_TLM_VERSION 9
 
 /* flags (bitfield) */
 #define TLM_F_MODEL_LOADED  0x01
@@ -36,6 +36,7 @@
 #define TLM_F_SEMANTIC      0x400  /* semantic fact store holds >=1 distilled fact (Phase 5 #4) — observable patterns, never "knows preferences" */
 #define TLM_F_ACTIONS       0x800  /* Phase 6 K/M3: the it-acts action gate + audit store are live (g_action_audit_ready) — self-heal/action counts, NOT a query-SHIELD block */
 #define TLM_F_MONITORS      0x1000 /* Phase 6 6-1/M3: the always-on monitors are live (g_mon_inited) — a NEUTRAL monitor-event count (a mix of degradation + benign liveness events), never "anomalies/problems detected" */
+#define TLM_F_WAKE          0x2000 /* Phase 6 6-2/M3: the event-driven wake lane is live (g_wake_inited) — event-triggered CONSULTS (a fixed, human-reviewed question per monitor event; cache-served or one bounded inference), never "thinking"/"reasoning" */
 
 /* kind */
 #define TLM_K_STATS 1
@@ -66,7 +67,12 @@
  * degradation signals (error-rate, self-heal-rate) and benign liveness events
  * (uptime milestones, store wraps) — NEVER framed as "anomalies/problems
  * detected"; TLM_F_MONITORS set on g_mon_inited; 0s + flag clear in the
- * flag-OFF deploy). */
+ * flag-OFF deploy); v9 (P6 6-2/M3) appends wakes_fired/last_wake_event/wake_pad
+ * -> 240 B, CRC@236 (the event-driven-wake CONSULT activity — DISPATCHED
+ * consults only, never suppressed/refused; a consult = a fixed, human-reviewed
+ * question per monitor event, cache-served or one bounded inference — NEVER
+ * "thinking"/"reasoning"; TLM_F_WAKE set on g_wake_inited; 0s + flag clear in
+ * the flag-OFF deploy). */
 typedef struct __attribute__((packed)) {
     uint32_t magic; uint8_t version; uint8_t kind; uint16_t flags; uint32_t boot_id; uint32_t seq;  /* 16 */
     uint32_t uptime_ms;                                                                              /*  4 */
@@ -90,15 +96,18 @@ typedef struct __attribute__((packed)) {
     uint16_t monitors_fired;     /* v8 (P6 6-1/M3) @228 — monitor NOTIFY events (debounced, fire-once-per-crossing; a NEUTRAL mix, NOT "problems") */ /* 2 */
     uint8_t  last_monitor_event; /* v8 @230 — monitor_event_type_t of the most recent event (0=none .. 5=uptime-milestone) */ /* 1 */
     uint8_t  mon_pad;            /* v8 @231 — alignment pad, always 0 */ /* 1 */
-    uint32_t crc32;          /* zlib CRC-32 over the first 232 bytes [0 .. offsetof(crc32)) */       /*  4 */
+    uint16_t wakes_fired;        /* v9 (P6 6-2/M3) @232 — DISPATCHED wake consults (never suppressed/refused) */ /* 2 */
+    uint8_t  last_wake_event;    /* v9 @234 — monitor_event_type_t of the most recent dispatched wake (0=none yet) */ /* 1 */
+    uint8_t  wake_pad;           /* v9 @235 — alignment pad, always 0 */ /* 1 */
+    uint32_t crc32;          /* zlib CRC-32 over the first 236 bytes [0 .. offsetof(crc32)) */       /*  4 */
 } telemetry_packet_t;
 
-_Static_assert(sizeof(telemetry_packet_t) == 236, "telemetry packet must be 236 bytes (v8)");
+_Static_assert(sizeof(telemetry_packet_t) == 240, "telemetry packet must be 240 bytes (v9)");
 
 /* Standard zlib/IEEE CRC-32 (poly 0xEDB88320, init/xorout 0xFFFFFFFF) — equals Python zlib.crc32. */
 uint32_t jarvis_tlm_crc32(const void *data, uint32_t len);
 
-/* Stamp magic/version and compute+store crc32 over the first 232 bytes (v8). */
+/* Stamp magic/version and compute+store crc32 over the first 236 bytes (v9). */
 void jarvis_tlm_finalize(telemetry_packet_t *pkt);
 
 #endif /* JARVIS_TELEMETRY_H */

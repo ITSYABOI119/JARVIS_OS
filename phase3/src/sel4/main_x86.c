@@ -541,6 +541,13 @@ static uint8_t         g_last_monitor_event = 0;   /* monitor_event_type_t; 0 = 
  * valid empty state; wake_gate_init re-runs at the monitor-init site (belt-and-suspenders). */
 static wake_gate_t     g_wake_gate;
 static int             g_wake_resp_logged = 0;   /* first-2 verbatim [WAKE-RESP] proof lines */
+/* 6-2/M3 (v9 telemetry): the wake CONSULT activity on the wire. wakes_fired counts DISPATCHED
+ * consults only (bumped ONLY at the dispatch site's executed branch — never suppressed, never
+ * refused; the monitors_fired one-central-bump discipline); last_wake_event = the event type of
+ * the most recent dispatched wake. TLM_F_WAKE is set on g_wake_inited (capability-live). */
+static uint16_t        g_wakes_fired = 0;
+static uint8_t         g_last_wake_event = 0;    /* monitor_event_type_t; 0 = none yet */
+static int             g_wake_inited = 0;
 #endif
 #endif
 #if JARVIS_SEMANTIC
@@ -2207,6 +2214,16 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
     pkt.monitors_fired     = (uint16_t)g_monitors_fired;
     pkt.last_monitor_event = g_last_monitor_event;
     if (g_mon_inited) pkt.flags |= TLM_F_MONITORS;
+#endif
+#if JARVIS_WAKE
+    /* v9 (P6 6-2/M3): the event-driven-wake CONSULT activity — DISPATCHED consults only (a
+     * consult = a fixed, human-reviewed question per monitor event, cache-served or one bounded
+     * inference — never "thinking"/"reasoning"). TLM_F_WAKE is set on g_wake_inited
+     * (capability-live). Gated, so the flag-OFF deploy emits 0s + flag clear (the SAME honest
+     * pattern as v5/v6/v7/v8). */
+    pkt.wakes_fired     = g_wakes_fired;
+    pkt.last_wake_event = g_last_wake_event;
+    if (g_wake_inited) pkt.flags |= TLM_F_WAKE;
 #endif
     /* model display name (matches the on-screen panel) + last response, NUL-bounded (pkt is zeroed) */
     { const char *mn = "Gemma 4 E2B";
@@ -4411,6 +4428,7 @@ static void *main_continued(void *arg UNUSED)
                     /* 6-2/M1: init the wake gate alongside the watchers (mon_notify — the only
                      * stager — runs strictly after this block on the same first window). */
                     wake_gate_init(&g_wake_gate);
+                    g_wake_inited = 1;   /* 6-2/M3: TLM_F_WAKE capability-live latch */
 #endif
                     g_mon_inited = 1;
                 }
@@ -4968,6 +4986,25 @@ static void *main_continued(void *arg UNUSED)
                         spine_record(ACTION_WAKE_CONSULT, &wd,
                                      wexec ? AUDIT_EXECUTED : AUDIT_BLOCKED,
                                      woutcome, wtrig, (uint16_t)(wtl > 0 ? wtl : 0), wexec);
+                        if (wexec) {   /* 6-2/M3 (v9): DISPATCHED consults only — one central bump */
+                            g_wakes_fired++;
+                            g_last_wake_event = (uint8_t)wt;
+                        }
+#if JARVIS_WAKE_PROBE
+                        /* 6-2/M3 (v9) box proof: once ≥2 consults dispatched, print the exact
+                         * globals jarvis_telemetry_emit fills (fill/flag/CRC are host-proven;
+                         * on-wire I211 validation happens at the flip — no NIC in QEMU). */
+                        {
+                            static int wp_v9_printed = 0;
+                            if (g_wakes_fired >= 2 && !wp_v9_printed) {
+                                wp_v9_printed = 1;
+                                puts_serial("[TLM-V9] wakes_fired="); put_dec(g_wakes_fired);
+                                puts_serial(" last_wake_event="); put_dec((uint32_t)g_last_wake_event);
+                                puts_serial(" wake_inited="); put_dec((uint32_t)g_wake_inited);
+                                puts_serial(" (TLM_F_WAKE would be set)\n");
+                            }
+                        }
+#endif
                     }
                 }
             }

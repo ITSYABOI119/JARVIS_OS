@@ -68,6 +68,12 @@ function SystemView({ store }) {
   const monFired = rec ? Number(rec.monitors_fired) || 0 : null;
   const MON_EVENT_LABELS = ['none', 'error-rate', 'self-heal-rate', 'store-wrap', 'heartbeat-age', 'uptime-milestone'];
   const monLastEvent = rec ? (MON_EVENT_LABELS[Number(rec.last_monitor_event) || 0] || 'none') : null;
+  // Event-driven wake (Phase 6 6-2/M3): flag-gated on TLM_F_WAKE. wakes_fired counts DISPATCHED
+  // consults — each is a fixed, human-reviewed question selected by monitor event type, served
+  // from the decision cache or by one bounded inference. Event-triggered consults, not cognition.
+  const wakeReported = !!(rec && rec.flags_list && rec.flags_list.indexOf('WAKE') >= 0);
+  const wakesFired = rec ? Number(rec.wakes_fired) || 0 : null;
+  const wakeLastEvent = rec ? (MON_EVENT_LABELS[Number(rec.last_wake_event) || 0] || 'none') : null;
 
   const stat = (label, value, sub) => (
     <div>
@@ -130,6 +136,11 @@ function SystemView({ store }) {
             monReported ? 'events the always-on monitors flagged and audited — a mix of degradation and benign liveness events' : 'monitors not reported')}
           {stat('Last monitor event', monReported ? monLastEvent : '—',
             monReported ? 'the most recent monitor event type' : 'monitors not reported')}
+          {/* Event-driven wake (Phase 6 6-2/M3) — flag-gated on TLM_F_WAKE; consults, not cognition. */}
+          {stat('Event consults', wakeReported ? num(wakesFired) : '—',
+            wakeReported ? 'cache-served or one bounded inference per monitor event — a fixed, human-reviewed question' : 'event-driven wake not reported')}
+          {stat('Last wake event', wakeReported ? wakeLastEvent : '—',
+            wakeReported ? 'the monitor event that triggered the most recent consult' : 'event-driven wake not reported')}
         </div>
         {note('Live heap used/free is not tracked on the box, so it is not shown. The resident model size above is the only real lower bound.')}
       </Card>

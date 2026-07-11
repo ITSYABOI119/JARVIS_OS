@@ -55,6 +55,12 @@ BANNED = [
     "IOPS", "SMART",
     # the deployed box is TWO processes (A rootserver + B inference), not one.
     "single-process",
+    # 6-2/M3: a wake is an event-triggered CONSULT of a fixed, human-reviewed template —
+    # never cognition. ("autonomous" is NOT banned here: the K/M3 ACTIONS row legitimately
+    # says "Self-healing / autonomous actions" of the bounded, allowlisted action gate.)
+    "thinking",
+    "reasoning",
+    "decided on its own",
 ]
 
 # (b) Honest-framing markers that MUST stay present somewhere in the console
@@ -69,6 +75,7 @@ REQUIRED = [
     "vacuous",                 # the 2-of-5-vacuous self-test caveat must stay on-screen
     "5.46",
     "not the deployed build",
+    "human-reviewed question",  # 6-2/M3: the wake consult framing (consults, not cognition)
 ]
 
 # At least one spelling of the verification-stance marker must be present.
