@@ -388,7 +388,10 @@ claim (fiction; PA busy-polls).
   added. Host-only — nothing links into the deployed path (M1 is the first box wiring).
 - **M1 (box, gated `JARVIS_WAKE` default-0):** wire the staging into `mon_notify`'s EXECUTED branch
   (stage guard, §7.3) + the ONE dispatch site (§7.8) with the full route (§4) including the three
-  deviations (§7.5); `wake.c` added to `build_jarvis_x86.sh`'s `AI_FILES` sync + the CMakeLists
+  deviations (§7.5). **M1 wiring constraint (M0 review LOW-2):** the dispatch site consumes ONLY via
+  `wake_gate_take` → `wake_gate_try` — `try` trusts its caller by documented contract (it does not
+  re-check template mapping; the stage guard is the sole enforcement), so never call it with a raw
+  event type; `wake.c` added to `build_jarvis_x86.sh`'s `AI_FILES` sync + the CMakeLists
   PA-source injection (the `monitors.c` precedent). Box gate (KVM `-smp 6`, WAKE=1 + **WAKE_PROBE=1**
   — self-contained, MONITOR_PROBE stays 0): exactly ONE `[WAKE] … route=infer` with a coherent result
   head, the wake JACT record (`action=3 NOTIFY/EXECUTED/OK`) alongside the event's `action=2` NOTIFY
