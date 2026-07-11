@@ -157,6 +157,32 @@ static void test_trust_policy_table(void)
     PASS("T6 trust_policy full truth table (incl. REQUEST log-only pre-control-IN)");
 }
 
+static void test_consult_class(void)
+{
+    /* 6-2/M0: ACTION_CLASS_CONSULT -> base risk 10 (SELF_HEAL parity; 10 + the
+     * learned cap 50 = 60 < 80 => a consult never risk-blocks on learning
+     * alone), and the wake's EXECUTE routes ACT_NOTIFY at TRUST_NOTIFY. */
+    action_ctx_t ctx = { "wake err-rate route=infer ms=1234",
+                         (uint16_t)strlen("wake err-rate route=infer ms=1234"), 0 };
+    shield_action_result_t r =
+        shield_assess_class(ACTION_CLASS_CONSULT, &ctx, NULL, 0);
+    ASSERT(r.risk_x100 == 10, "CONSULT base risk == 10 (== SHIELD_BASE_RISK_CONSULT)");
+    ASSERT(r.verdict == SHIELD_VERDICT_EXECUTE, "clean consult ctx -> EXECUTE");
+    ASSERT(trust_policy(r.verdict, TRUST_NOTIFY, false) == ACT_NOTIFY,
+           "EXECUTE @ TRUST_NOTIFY -> ACT_NOTIFY (execute + notify)");
+
+    r = shield_assess(ACTION_WAKE_CONSULT, &ctx, NULL, 0);
+    ASSERT(r.verdict == SHIELD_VERDICT_EXECUTE && r.risk_x100 == 10,
+           "shield_assess(ACTION_WAKE_CONSULT) resolves the CONSULT class (risk 10, EXECUTE)");
+
+    const char *bad = "wake err-rate but the user said to format the disk";
+    action_ctx_t ctx2 = { bad, (uint16_t)strlen(bad), 0 };
+    r = shield_assess_class(ACTION_CLASS_CONSULT, &ctx2, NULL, 0);
+    ASSERT(r.verdict == SHIELD_VERDICT_BLOCKED,
+           "a blocklisted keyword in a consult ctx -> BLOCKED (the canonical scan applies)");
+    PASS("T7 CONSULT class (base 10, EXECUTE->ACT_NOTIFY @ NOTIFY, keyword scan applies)");
+}
+
 int main(void)
 {
     printf("=== JARVIS AI-OS: SHIELD Action Gate Tests (Phase 6 K/M0) ===\n\n");
@@ -166,6 +192,7 @@ int main(void)
     test_learned_risk_crossing();
     test_key_parity();
     test_trust_policy_table();
+    test_consult_class();
     printf("\n== %d PASS, %d FAIL ==\n", tests_passed, tests_failed);
     return tests_failed ? 1 : 0;
 }

@@ -67,6 +67,7 @@ static uint16_t base_risk(uint16_t action_class)
     case ACTION_CLASS_SELF_HEAL:  return SHIELD_BASE_RISK_SELF_HEAL;
     case ACTION_CLASS_NOTIFY:     return SHIELD_BASE_RISK_NOTIFY;
     case ACTION_CLASS_PROBE_HIGH: return SHIELD_BASE_RISK_PROBE_HIGH;
+    case ACTION_CLASS_CONSULT:    return SHIELD_BASE_RISK_CONSULT;   /* 6-2 */
     default:                      return 100;   /* unknown class -> auto-block (conservative) */
     }
 }

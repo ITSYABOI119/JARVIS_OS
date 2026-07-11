@@ -46,6 +46,8 @@
 #define SHIELD_BASE_RISK_SELF_HEAL   10
 #define SHIELD_BASE_RISK_NOTIFY       0
 #define SHIELD_BASE_RISK_PROBE_HIGH  75
+#define SHIELD_BASE_RISK_CONSULT     10  /* 6-2: SELF_HEAL parity — a consult burns real compute;
+                                          * 10 + learned cap 50 = 60 < 80 => never risk-blocks alone */
 
 /* Context for one assessment. trigger MAY be NULL (trigger_len 0); when
  * present it is scanned BOUNDED by trigger_len (never strlen on untrusted

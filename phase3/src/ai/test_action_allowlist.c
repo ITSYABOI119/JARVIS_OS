@@ -54,11 +54,26 @@ static void test_unknown_id_refusal(void)
 
 static void test_count_and_names(void)
 {
-    ASSERT(action_allowlist_count() == 2, "exactly 2 DEPLOYED entries (v1)");
+    ASSERT(action_allowlist_count() == 3, "exactly 3 DEPLOYED entries (since 6-2/M0)");
     ASSERT(action_lookup(ACTION_RESTART_PB)->name != NULL &&
-           action_lookup(ACTION_NOTIFY_ANOMALY)->name != NULL,
+           action_lookup(ACTION_NOTIFY_ANOMALY)->name != NULL &&
+           action_lookup(ACTION_WAKE_CONSULT)->name != NULL,
            "every entry has a non-NULL name");
-    PASS("T4 allowlist count == 2, names non-NULL");
+    PASS("T4 allowlist count == 3, names non-NULL");
+}
+
+static void test_wake_consult_entry(void)
+{
+    /* 6-2/M0: the event-triggered consult — TRUST_NOTIFY (monotonic with the
+     * restart's NOTIFY: a consult burns 10-120 s of compute, it must not sit
+     * BELOW the self-heal in ceremony), class CONSULT (base risk 10). */
+    const action_def_t *d = action_lookup(ACTION_WAKE_CONSULT);
+    ASSERT(d != NULL, "ACTION_WAKE_CONSULT is allowlisted");
+    ASSERT(d->id == ACTION_WAKE_CONSULT, "id round-trips");
+    ASSERT(d->trust == TRUST_NOTIFY, "wake-consult trust == TRUST_NOTIFY (L1)");
+    ASSERT(d->action_class == ACTION_CLASS_CONSULT, "wake-consult class == CONSULT");
+    ASSERT(d->name != NULL && strcmp(d->name, "wake-consult") == 0, "name for logs only");
+    PASS("T5 ACTION_WAKE_CONSULT entry (TRUST_NOTIFY, CONSULT)");
 }
 
 int main(void)
@@ -68,6 +83,7 @@ int main(void)
     test_notify_anomaly_entry();
     test_unknown_id_refusal();
     test_count_and_names();
+    test_wake_consult_entry();
     printf("\n== %d PASS, %d FAIL ==\n", tests_passed, tests_failed);
     return tests_failed ? 1 : 0;
 }

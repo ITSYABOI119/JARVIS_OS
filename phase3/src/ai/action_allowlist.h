@@ -25,6 +25,7 @@
 enum {
     ACTION_RESTART_PB     = 1,   /* self-heal: respawn Process B (K/M2) */
     ACTION_NOTIFY_ANOMALY = 2,   /* notify-only L0 (the de-risk fallback action) */
+    ACTION_WAKE_CONSULT   = 3,   /* 6-2: event-triggered cache/LLM consult (inform-only) */
 };
 
 /* Reserved id for the K/M1 induced-BLOCK probe: on the immutable action-id
@@ -38,6 +39,7 @@ enum {
     ACTION_CLASS_SELF_HEAL  = 0,
     ACTION_CLASS_NOTIFY     = 1,
     ACTION_CLASS_PROBE_HIGH = 2,
+    ACTION_CLASS_CONSULT    = 3,   /* 6-2: a bounded cache/LLM consult (compute-burning, inform-only) */
 };
 
 typedef struct {
@@ -50,7 +52,8 @@ typedef struct {
 /* NULL = not allowlisted -> refuse before SHIELD. Pure. */
 const action_def_t *action_lookup(uint16_t id);
 
-/* Number of DEPLOYED allowlist entries (v1: exactly 2). */
+/* Number of DEPLOYED allowlist entries (3 since 6-2/M0: restart_pb +
+ * notify_anomaly + wake-consult). */
 uint32_t action_allowlist_count(void);
 
 #endif /* ACTION_ALLOWLIST_H */

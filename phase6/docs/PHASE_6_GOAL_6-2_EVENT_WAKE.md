@@ -1,6 +1,7 @@
 # Phase 6 Goal 6-2 — Event-Driven Wake (PLAN-FIRST)
 
-**Status: PLAN-FIRST — for strategist review BEFORE any M0 code. Nothing in this doc is implemented.**
+**Status: APPROVED (strategist verdict 2026-07-10; O1–O5 resolved — see §11) — M0 ✅ DONE 2026-07-10
+(the host-pure wake decision core, see §8); M1 (box wiring, gated `JARVIS_WAKE` default-0) is next.**
 **Depends on:** keystone K (✅ COMPLETE 2026-07-08 — the action spine is live in deploy: static allowlist +
 `shield_assess` + `trust_policy` + JACT audit, `JARVIS_ACTIONS` default-ON since `34a165e`) and goal 6-1
 (✅ COMPLETE 2026-07-09 — the always-on monitors are live in deploy, `JARVIS_MONITORS` default-ON since
@@ -378,6 +379,13 @@ claim (fiction; PA busy-polls).
   `SHMEM_MAX_PAYLOAD`; cooldown/budget truth tables (suppress inside window, re-allow after, budget
   exhaustion + bucket-change reset, wrap-crossing cases, drop-on-pending); trigger builder
   keyword-clean + cap/canary.
+  ✅ **DONE 2026-07-10 (TDD RED→GREEN):** `phase3/src/ai/wake.{c,h}` + `test_wake.c` (**9 PASS**,
+  groups A–I exactly as pinned above — incl. the 23-seed key-disjointness mirror and the wrap cases) +
+  `ACTION_WAKE_CONSULT=3` @ `TRUST_NOTIFY` / `ACTION_CLASS_CONSULT` (=3) → base 10 landed in
+  `action_allowlist.c` / `shield_action.c` (their suites extended: allowlist **5 PASS** incl. the T5
+  entry pin + count 3, shield gate **7 PASS** incl. the T7 CONSULT-class pin); sibling suites
+  re-verified (km2b_trigger 11/11, monitors 41/41). CI step **"Phase 6: 6-2 Wake decision core (C)"**
+  added. Host-only — nothing links into the deployed path (M1 is the first box wiring).
 - **M1 (box, gated `JARVIS_WAKE` default-0):** wire the staging into `mon_notify`'s EXECUTED branch
   (stage guard, §7.3) + the ONE dispatch site (§7.8) with the full route (§4) including the three
   deviations (§7.5); `wake.c` added to `build_jarvis_x86.sh`'s `AI_FILES` sync + the CMakeLists
@@ -445,23 +453,23 @@ EXISTING episodic store (route-coded, §7.7). Gate state = a few dozen bytes of 
   the single bump site is pinned (the `monitors_fired` discipline). The throughput tile may show a
   wake's tok/s (§7.10 — honest, noted).
 
-## 11. Open questions (for strategist review)
+## 11. Open questions — ALL RESOLVED (strategist verdict 2026-07-10)
 
-- **O1 — the demonstrator event:** proposal = `MON_EV_ERROR_RATE`, induced by the self-contained
-  `JARVIS_WAKE_PROBE` (synthetic window-delta, the MONITOR_PROBE technique — but its own flag; the
-  pre-mortem showed the M1 gate must not ride MONITOR_PROBE's real-respawn probe). Confirm?
-- **O2 — cooldown/budget defaults:** 10 min per-type + 4/hour global are proposals; M2 calibrates (probe
-  runs use the probe-shrunk cooldown). Any strategist priors (e.g. tighter budget pre-flip)?
-- **O3 — cache seeding:** rely purely on #6 promotion (the 3-crossing timeline: 2nd wake reaches freq≥2
-  and promotes, 3rd serves from cache — M2 proves it under the probe cooldown), or let the wake lane
-  `cache_insert` its answer directly after the FIRST inference (faster canon behavior, but a second
-  write path into the cache)? Proposal: pure #6 reuse for v1 (zero new cache-write machinery).
-- **O4 — retrieval-on-wake:** exact-key retrieval would let a wake build on the SAME template's prior
-  answer (the G3 build-on behavior). Deferred in v1 (deterministic prompt, fewer variables). Worth a v2
-  slice, or leave to 6-3 behaviors?
-- **O5 — consult result surfacing:** v9 carries counts only; the result text lives in serial + episodic.
-  Should a later slice surface the last consult head on the console (the `last_text` precedent), or is
-  that 6-3's briefing surface?
+- **O1 ✅ CONFIRMED — the demonstrator event:** `MON_EV_ERROR_RATE`, induced by the self-contained
+  `JARVIS_WAKE_PROBE` (synthetic window-delta, the MONITOR_PROBE technique — its own flag; the
+  pre-mortem showed the M1 gate must not ride MONITOR_PROBE's real-respawn probe).
+- **O2 ✅ RESOLVED — cooldown/budget defaults:** 10 min per-type + 4/hour global stand as
+  M2-calibration proposals (M0 defines `WAKE_BUDGET_PER_HOUR` 4), but **the FLIP starts the budget
+  CONSERVATIVE (2/hour)** and relaxes only after observation — the flip commit may tighten the
+  constant.
+- **O3 ✅ RESOLVED (the one with risk) — cache seeding:** pure #6-promotion for v1 (zero new
+  cache-write machinery), **BUT M2 makes "does #6 actually promote the wake key within the gate" an
+  explicit PASS/FAIL checkpoint**, with a direct `cache_insert`-after-first-inference as the READY
+  FALLBACK if promotion proves gate-infeasible. M0/M1 must not assume the cache route comes free.
+- **O4 ✅ RESOLVED — retrieval-on-wake:** DEFERRED to v2/6-3 (v1 keeps the wake prompt fully
+  deterministic).
+- **O5 ✅ RESOLVED — consult result surfacing:** DEFERRED to v2/6-3 (v9 carries counts only; the
+  result text lives in serial + episodic; a console consult-head surface is 6-3's briefing territory).
 
 ## 12. Done-when (6-2's own — the mechanism, not the canon phase claim)
 
