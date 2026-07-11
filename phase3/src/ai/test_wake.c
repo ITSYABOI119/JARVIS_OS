@@ -308,6 +308,8 @@ static void test_gate_wrap(void)
     wake_gate_init(&g);
     uint32_t t0 = UINT32_MAX - 1000;   /* bucket 1193 */
     ASSERT(wake_gate_try(&g, MON_EV_ERROR_RATE, t0) == WAKE_ALLOW, "pre-wrap ALLOW");
+    ASSERT(wake_gate_try(&g, MON_EV_ERROR_RATE, UINT32_MAX - 500) == WAKE_SUPPRESS_COOLDOWN,
+           "pre-wrap just-after-last -> SUPPRESS (catches the last+cooldown absolute-mark bug)");
     ASSERT(wake_gate_try(&g, MON_EV_ERROR_RATE, 1000) == WAKE_SUPPRESS_COOLDOWN,
            "post-wrap, ~2 s elapsed -> still inside the cooldown (subtraction is wrap-correct)");
     uint32_t t_ok = (uint32_t)(t0 + WAKE_COOLDOWN_MS);   /* wrapped absolute value */
