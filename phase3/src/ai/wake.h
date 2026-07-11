@@ -64,9 +64,15 @@ typedef enum { WAKE_ROUTE_NONE = 0, WAKE_ROUTE_CACHE = 1, WAKE_ROUTE_INFER = 2 }
 int wake_build_trigger(monitor_event_type_t type, wake_route_t route, uint32_t ms,
                        char *buf, uint32_t cap);
 
-/* ---- the anti-loop gate: one-slot latch + per-type cooldown + hourly budget ---- */
+/* ---- the anti-loop gate: one-slot latch + per-type cooldown + hourly budget ----
+ * #ifndef-guarded so an M2 gate build can shrink them via -D (the probe-shrunk-cooldown
+ * mechanism, §8 M2) without touching this header; defaults are the production values. */
+#ifndef WAKE_COOLDOWN_MS
 #define WAKE_COOLDOWN_MS      600000u  /* 10 min/type — M2-calibrated; flip may tighten (O2) */
+#endif
+#ifndef WAKE_BUDGET_PER_HOUR
 #define WAKE_BUDGET_PER_HOUR  4u       /* global/hour — M2-calibrated; flip prior = 2 (O2)  */
+#endif
 
 typedef enum {
     WAKE_ALLOW             = 0,

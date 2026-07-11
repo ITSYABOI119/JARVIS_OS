@@ -1,7 +1,8 @@
 # Phase 6 Goal 6-2 — Event-Driven Wake (PLAN-FIRST)
 
 **Status: APPROVED (strategist verdict 2026-07-10; O1–O5 resolved — see §11) — M0 ✅ DONE 2026-07-10
-(the host-pure wake decision core, see §8); M1 (box wiring, gated `JARVIS_WAKE` default-0) is next.**
+(the host-pure wake decision core) + M1 ✅ DONE 2026-07-11 (box wiring BOX-GATED on KVM, gated
+`JARVIS_WAKE` default-0 — deploy stays wake-inert; see §8); M2 (anti-loop + cost proof) is next.**
 **Depends on:** keystone K (✅ COMPLETE 2026-07-08 — the action spine is live in deploy: static allowlist +
 `shield_assess` + `trust_policy` + JACT audit, `JARVIS_ACTIONS` default-ON since `34a165e`) and goal 6-1
 (✅ COMPLETE 2026-07-09 — the always-on monitors are live in deploy, `JARVIS_MONITORS` default-ON since
@@ -398,6 +399,21 @@ claim (fiction; PA busy-polls).
   record, workload advancing err=0 (and the wake dispatch itself provably NOT bumping `q_errors`), 0
   spurious restarts; OFF (deploy default) = object-level byte-identical + zero `[WAKE]` lines. **The
   minimal viable 6-2.**
+  ✅ **DONE 2026-07-11 — box gate PASSED (KVM `-smp 6 -cpu host`, WAKE=1 + WAKE_PROBE=1,
+  MONITOR_PROBE=0):** exactly ONE **`[WAKE] mon=err-rate route=infer ms=13533 risk=10 outcome=OK`** +
+  a coherent `[WAKE-RESP]` head; the event's `[ANOMALY] mon err-rate d=10 win=100` NOTIFY fired
+  unchanged alongside; 3 `[WAKE-PROBE]` windows, 0 suppressions; **JACT holds the pair** — the
+  `action=2` NOTIFY + the FIRST **`action=3 NOTIFY/EXECUTED/OK risk=10 trigger="wake err-rate
+  route=infer ms=13533"`** wake-consult record (keyword-clean, read back via
+  `parse_action_audit.py`); workload advanced q=200→2600 with **err=0 throughout** (the wake provably
+  never bumped `q_errors` — the §6.2 healthy-leg proof), 0 `[RESTART]`/`[FATAL]`, coherent `[INFER]`
+  lines (~5.9 tok/s). **OFF (deploy default): object-level byte-identical** — `main.c.obj`
+  `.text`/`.rodata`/`.data` + the `nm` symbol table md5-identical to the pre-M1 baseline build
+  (`objcopy -O binary --only-section` + `nm | sort`; never md5 the packed image). As wired: staging in
+  `mon_notify`'s EXECUTED branch; THE dispatch site at the end of the [STATS] block (take→try, LOW-2);
+  the three §7.5 deviations implemented; the F9 pre-send ring drain + §7.6 preamble clear;
+  `KM2B_LANE_WAKE=4` appended (`km2b_miss.h`); `build_jarvis_x86.sh` syncs + injects `wake.c`. Flags
+  restored to 0 post-gate — the deployed image remains wake-inert until the post-M2/M3 flip.
 - **M2 (box): anti-loop + cost proof.** Sustained/repeated induced crossings → exactly one wake per
   crossing; a re-crossing INSIDE the cooldown is suppressed + counted (serial-visible); the hourly
   budget caps a burst; an induced wake TIMEOUT leaves `q_errors` flat (the §6.2 anti-amplification

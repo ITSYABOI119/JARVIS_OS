@@ -184,6 +184,37 @@
  * `[MON-PROBE]` serial proof lines. Default 0 -> compiles out. */
 #define JARVIS_MONITOR_PROBE 0
 
+/* Phase 6 goal 6-2: event-driven wake — event-triggered DISPATCH of a consult ("wake" is
+ * metaphorical; PA busy-polls). When 1, a 6-1 monitor crossing whose event type has a FIXED,
+ * human-reviewed query template (wake.c — v1: err-rate + heal-rate only) stages a one-slot
+ * pending wake in mon_notify's EXECUTED branch; ONE dispatch site at the end of the [STATS]
+ * block gates it (per-type cooldown + hourly budget, wrap-safe) -> the K spine
+ * (ACTION_WAKE_CONSULT, TRUST_NOTIFY) -> cache-lookup FIRST -> PB inference on a miss via the
+ * lane discipline WITH the three §7.5 deviations (a fault mid-wake audits FAIL, never goto;
+ * a wake timeout NEVER bumps q_errors — anti-self-amplification; duty window folded) ->
+ * [WAKE] serial + episodic record + ONE JACT record per dispatched wake (suppressed = counted,
+ * never audited). Inform-only: the answer has NO actuator. Design:
+ * phase6/docs/PHASE_6_GOAL_6-2_EVENT_WAKE.md. Default 0 -> compiles out (deploy wake-inert;
+ * the default-ON flip is a deliberate post-M2/M3 decision). */
+#define JARVIS_WAKE 0
+#if JARVIS_WAKE && !(JARVIS_ACTIONS && JARVIS_MONITORS)
+#error "JARVIS_WAKE requires JARVIS_ACTIONS && JARVIS_MONITORS (the wake rides the monitor->spine path)"
+#endif
+
+/* Phase 6 6-2/M1 wake probe (box-only, needs JARVIS_WAKE=1): SELF-CONTAINED — induces ONLY the
+ * error-rate WINDOW DELTA (the honest MONITOR_PROBE synthetic-delta technique; never the real
+ * q_errors counter) for the first 3 [STATS] windows so the wake demonstrator fires
+ * deterministically. It must NOT ride JARVIS_MONITOR_PROBE — that probe fires 2 REAL respawns
+ * in the same [STATS] block, racing a staged wake against the post-respawn handshake (§7.9 /
+ * pre-mortem). `[WAKE-PROBE]` serial proof lines. Default 0 -> compiles out. */
+#define JARVIS_WAKE_PROBE 0
+#if JARVIS_WAKE_PROBE && !JARVIS_WAKE
+#error "JARVIS_WAKE_PROBE requires JARVIS_WAKE"
+#endif
+#if JARVIS_WAKE_PROBE && JARVIS_MONITOR_PROBE
+#error "JARVIS_WAKE_PROBE must not ride JARVIS_MONITOR_PROBE (its heal-rate probe fires 2 real respawns that race the staged wake)"
+#endif
+
 /* Phase 6 K/M2a-2 reuse-in-place respawn spike (box-only KVM measurement; SYSTEM_DESIGN
  * §4.1/§4.2). When 1, Process B gains a muslc-init-safe `pb_restart_entry` (re-enters PAST
  * musl's one-time init on a dedicated ABI-aligned restart stack, REUSING the warm model

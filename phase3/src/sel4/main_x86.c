@@ -80,6 +80,9 @@
 #include "km2b_miss.h"          /* Phase 6 K/M2c: shared PB-contact miss-counter (hang/wedge detector; host-tested) */
 #include "km2b_fault.h"         /* Phase 6 K/M4 pre-flip: fault-EP validity predicate (label+badge; host-tested) */
 #include "monitors.h"           /* Phase 6 6-1: pure watcher framework (threshold/debounce/delta/snapshot; host-tested) */
+#if JARVIS_WAKE
+#include "wake.h"               /* Phase 6 6-2/M1: wake decision core (fixed templates + anti-loop gate; host-tested) */
+#endif
 #endif
 #include "jarvis_ui_tokens.h"   /* Step 2c-2b: FBP_ and JUI_ palette + geometry (single source) */
 
@@ -530,6 +533,15 @@ static monitor_t       g_mon_uptime[3];
  * event); a NEUTRAL mix of degradation + benign liveness events, never "problems detected". */
 static uint32_t        g_monitors_fired = 0;
 static uint8_t         g_last_monitor_event = 0;   /* monitor_event_type_t; 0 = none yet */
+#if JARVIS_WAKE
+/* 6-2/M1: the wake gate (one-slot latch + per-type cooldown + hourly budget — wake.h). Staged
+ * in mon_notify's EXECUTED branch (templated types only), consumed at THE one dispatch site at
+ * the end of the [STATS] block via wake_gate_take -> wake_gate_try (try trusts the caller —
+ * the stage guard is the sole template enforcement; §8 M1 / review LOW-2). Zero-init is a
+ * valid empty state; wake_gate_init re-runs at the monitor-init site (belt-and-suspenders). */
+static wake_gate_t     g_wake_gate;
+static int             g_wake_resp_logged = 0;   /* first-2 verbatim [WAKE-RESP] proof lines */
+#endif
 #endif
 #if JARVIS_SEMANTIC
 /* Phase 5 #4/M1: the SEPARATE semantic fact store + the boot-distill window. WRITE-ONLY at M1 —
@@ -1870,6 +1882,14 @@ static void mon_notify(monitor_event_type_t type, int64_t v1, int64_t v2)
                      mev.snap, mev.snap_len, 1);
         g_monitors_fired++;                        /* v8: one central bump covers every watcher */
         g_last_monitor_event = (uint8_t)type;
+#if JARVIS_WAKE
+        /* 6-2/M1: stage a pending wake (§7.3). The stage guard lives INSIDE wake_gate_stage —
+         * only a TEMPLATED type touches the latch (benign/unmapped = no-op; a second templated
+         * event this window = dropped + counted). The NOTIFY path above is unchanged: an event
+         * still [ANOMALY]s + audits even when its wake is unmapped/suppressed. The latch carries
+         * the event TYPE only — never the snapshot (§5). */
+        wake_gate_stage(&g_wake_gate, type);
+#endif
     } else {
         puts_serial("[ANOMALY] NOTIFY REFUSED risk=");
         put_dec(md.risk_x100); puts_serial("\n");
@@ -4387,6 +4407,11 @@ static void *main_continued(void *arg UNUSED)
                     /* 6-1/M2 W3: boot-relative uptime milestones (fire-once each). */
                     for (int mi = 0; mi < 3; mi++)
                         monitor_init(&g_mon_uptime[mi], g_mon_uptime_marks[mi], MON_CMP_GE, 1);
+#if JARVIS_WAKE
+                    /* 6-2/M1: init the wake gate alongside the watchers (mon_notify — the only
+                     * stager — runs strictly after this block on the same first window). */
+                    wake_gate_init(&g_wake_gate);
+#endif
                     g_mon_inited = 1;
                 }
 
@@ -4403,6 +4428,24 @@ static void *main_continued(void *arg UNUSED)
                     mon_d += (uint64_t)(MON_ERRRATE_THRESHOLD * 2);
                     puts_serial("[MON-PROBE] window="); put_dec((uint32_t)mon_probe_win);
                     puts_serial(" synthetic d="); put_dec((uint32_t)mon_d); puts_serial("\n");
+                }
+#endif
+#if JARVIS_WAKE_PROBE
+                /* 6-2/M1 WAKE-PROBE (box gate only): SELF-CONTAINED — a synthetic
+                 * over-threshold delta into the err-rate watcher's WINDOW DELTA (never the
+                 * real q_errors counter) for the first 3 windows, so the ONE demonstrator
+                 * wake fires deterministically WITHOUT JARVIS_MONITOR_PROBE (whose heal-rate
+                 * probe fires 2 REAL respawns that would race the staged wake against the
+                 * post-respawn handshake — §7.9 / pre-mortem). Fire-once + debounce keep it
+                 * to exactly one crossing; the wake gate keeps it to exactly one dispatch. */
+                {
+                    static int wake_probe_win = 0;
+                    if (wake_probe_win < 3) {
+                        wake_probe_win++;
+                        mon_d += (uint64_t)(MON_ERRRATE_THRESHOLD * 2);
+                        puts_serial("[WAKE-PROBE] window="); put_dec((uint32_t)wake_probe_win);
+                        puts_serial(" synthetic d="); put_dec((uint32_t)mon_d); puts_serial("\n");
+                    }
                 }
 #endif
                 if (monitor_sample(&g_mon_errrate, (int64_t)mon_d))
@@ -4653,6 +4696,218 @@ static void *main_continued(void *arg UNUSED)
                 nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr, g_nvme_bounce_paddr,
                                LOG_IPC_STATS, sb);
             }
+
+#if JARVIS_WAKE
+            /* ===== 6-2/M1: THE one wake dispatch site (§4/§7.8) — end of the [STATS] block,
+             * after epi_commit (the existing passes ran undisturbed; the wake's episodic record
+             * commits at the next cadence). PA is single-threaded: a pending wake is staged and
+             * consumed in the SAME iteration, at most ONE ever in flight. Consumption is ONLY
+             * via wake_gate_take -> wake_gate_try (try trusts the caller — the stage guard is
+             * the sole template enforcement; review LOW-2). A suppressed wake is a NON-event:
+             * counted + one serial line, NO JACT (§7.1). ===== */
+            {
+                monitor_event_type_t wt = wake_gate_take(&g_wake_gate);
+                if (wt != MON_EV_NONE) {
+                    wake_verdict_t wv = wake_gate_try(&g_wake_gate, wt, jarvis_uptime_ms());
+                    if (wv != WAKE_ALLOW) {
+                        puts_serial("[WAKE] suppressed reason=");
+                        puts_serial(wv == WAKE_SUPPRESS_COOLDOWN ? "cooldown" : "budget");
+                        puts_serial(" total="); put_dec(g_wake_gate.suppressed);
+                        puts_serial("\n");
+                    } else {
+                        const wake_template_t *wtpl = wake_template_lookup(wt);
+                        uint32_t wake_t0_ms = jarvis_uptime_ms();
+                        char wq[MAX_QUERY_LEN];
+                        int wql = wake_build_query(wt, wq, sizeof wq);
+                        char wnq[MAX_QUERY_LEN];
+                        uint64_t wkey = 0;
+                        int wnorm_ok = (wql > 0 && cache_normalize_query(wq, wnq, sizeof wnq));
+                        if (wnorm_ok) wkey = cache_hash(wnq);
+
+                        /* §7.4: SHIELD scans the ACTUAL dispatch payload (the template text)
+                         * with a REAL key so the learned-risk feed is non-vacuous (§5). */
+                        action_ctx_t wctx = { wq, (uint16_t)(wql > 0 ? wql : 0), wkey };
+#if JARVIS_SHIELD_LEARN
+                        spine_decision_t wd = spine_decide(ACTION_WAKE_CONSULT, &wctx,
+                                                           g_shield_learn, SHIELD_LEARN_CAP_KEYS);
+#else
+                        spine_decision_t wd = spine_decide(ACTION_WAKE_CONSULT, &wctx, NULL, 0);
+#endif
+                        int wexec = (wd.dec == ACT_EXECUTE || wd.dec == ACT_NOTIFY);
+                        wake_route_t wroute = WAKE_ROUTE_NONE;
+                        uint16_t woutcome = AUDIT_OUT_NA;
+                        char wresp[512]; int wresp_off = 0; wresp[0] = '\0';
+
+                        if (wexec) {
+                            char waction[MAX_ACTION_LEN];
+                            trust_level_t wtrust;
+                            if (wnorm_ok &&
+                                cache_lookup(&g_cache, wnq, waction, sizeof waction, &wtrust)) {
+                                /* route=cache: a promoted answer serves in <1 ms (canon). */
+                                wroute = WAKE_ROUTE_CACHE;
+                                woutcome = AUDIT_OUT_OK;
+                                while (waction[wresp_off] && wresp_off < (int)sizeof(wresp) - 1) {
+                                    wresp[wresp_off] = waction[wresp_off]; wresp_off++;
+                                }
+                                wresp[wresp_off] = '\0';
+                                epi_batch_add(wq, EPI_ACT_CACHE, EPI_OUT_OK, wresp);
+                            } else if (!PB_DISPATCH_OK()) {
+                                /* degraded (§4): no dispatch, no timeout burn — honest FAIL. */
+                                woutcome = AUDIT_OUT_FAIL;
+                            } else {
+                                wroute = WAKE_ROUTE_INFER;
+                                /* (§7.5c) FOLD any open duty window (the [STATS] block can run
+                                 * with the workload lane's window still open — the lane closes
+                                 * only at next_query), then open the wake's own. */
+                                if (g_infer_active)
+                                    g_infer_cycles += jarvis_rdtsc() - g_infer_t0;
+                                g_infer_active = 1;
+                                g_infer_t0 = jarvis_rdtsc();
+                                /* (F9) drain the response ring BEFORE the send — a stale
+                                 * MSG_RESPONSE/MSG_INFER_STATS must never be misread as the
+                                 * wake's reply (today the ring is clean here because a faulting
+                                 * lane goto's PAST this block; drain-first keeps that safe
+                                 * under future refactors). */
+                                {
+                                    uint8_t fk_t; uint16_t fk_s, fk_l;
+                                    uint8_t fk_p[SHMEM_MAX_PAYLOAD];
+                                    while (shmem_ipc_recv(shared_response_ring, &fk_t, &fk_s,
+                                                          fk_p, &fk_l) == 0) { }
+                                }
+                                /* (§7.6) clear the preamble staging — the LAST staging write
+                                 * before the send. A stale workload preamble must never inject
+                                 * into a wake inference (the P6 contamination class). */
+                                if (g_sctx_ready) sctx_pack_preamble(g_sctx, NULL, 0);
+                                shmem_ipc_send(shared_request_ring, MSG_QUERY, seq++,
+                                               wq, (uint16_t)wql);
+                                seL4_Signal(req_notif);
+                                /* The lane's poll-spin discipline WITH the three §7.5
+                                 * deviations: (a) a fault mid-wake sets wake_faulted + breaks —
+                                 * NEVER goto next_query, the wake must still reach
+                                 * spine_record; (b) a timeout NEVER bumps q_errors (§6.2
+                                 * anti-self-amplification — that bump would feed the err-rate
+                                 * watcher that fired this wake); (c) duty handled above. */
+                                {
+                                    int wgot = 0, wake_faulted = 0;
+                                    uint32_t wpolls = 0;
+                                    const uint32_t WPOLL_TIMEOUT = 5000000;
+                                    while (!wgot && !wake_faulted && wpolls < WPOLL_TIMEOUT) {
+                                        uint8_t pk_type; uint16_t pk_seq, pk_len;
+                                        uint8_t pk_pay[SHMEM_MAX_PAYLOAD];
+                                        while (shmem_ipc_recv(shared_response_ring, &pk_type,
+                                                              &pk_seq, pk_pay, &pk_len) == 0) {
+                                            if (pk_type == MSG_INFER_STATS) {
+                                                infer_stats_latch(pk_pay, pk_len);
+                                                continue;
+                                            }
+                                            if (pk_type == MSG_DEBUG) continue;
+                                            if (pk_type == MSG_RESPONSE) {
+                                                int copy = (int)pk_len;
+                                                if (wresp_off + copy > (int)sizeof(wresp) - 1)
+                                                    copy = (int)sizeof(wresp) - 1 - wresp_off;
+                                                if (copy > 0) {
+                                                    memcpy(wresp + wresp_off, pk_pay, (size_t)copy);
+                                                    wresp_off += copy;
+                                                }
+                                                wgot = 1;
+                                                break;
+                                            }
+                                            break;   /* unknown type */
+                                        }
+                                        if (wgot) break;
+                                        jarvis_telemetry_tick();
+                                        /* (§7.5a) the self-heal funnels exactly as the lane
+                                         * does; only the wake's OWN control flow differs. */
+                                        if (pa_fault_check()) { wake_faulted = 1; break; }
+                                        wpolls++;
+                                        seL4_Yield();
+                                    }
+                                    if (wgot) {
+                                        /* Drain the remaining response chunks (ring hygiene —
+                                         * the lane's multi-chunk drain, F9). */
+                                        uint8_t d_t; uint16_t d_s, d_l;
+                                        uint8_t d_p[SHMEM_MAX_PAYLOAD];
+                                        while (shmem_ipc_recv(shared_response_ring, &d_t, &d_s,
+                                                              d_p, &d_l) == 0) {
+                                            if (d_t == MSG_INFER_STATS) {
+                                                infer_stats_latch(d_p, d_l);
+                                                continue;
+                                            }
+                                            if (d_t == MSG_DEBUG) continue;
+                                            if (d_t != MSG_RESPONSE) break;
+                                            int copy = (int)d_l;
+                                            if (wresp_off + copy > (int)sizeof(wresp) - 1)
+                                                copy = (int)sizeof(wresp) - 1 - wresp_off;
+                                            if (copy > 0) {
+                                                memcpy(wresp + wresp_off, d_p, (size_t)copy);
+                                                wresp_off += copy;
+                                            }
+                                        }
+                                        wresp[wresp_off] = '\0';
+                                        woutcome = wresp_off > 0 ? AUDIT_OUT_OK : AUDIT_OUT_FAIL;
+                                        km2b_miss_on_pb_ack(&g_pb_miss);
+                                        g_pb_last_ack_ms = jarvis_uptime_ms();
+                                        epi_batch_add(wq, EPI_ACT_INFER,
+                                                      wresp_off > 0 ? EPI_OUT_OK : EPI_OUT_ERROR,
+                                                      wresp_off > 0 ? wresp : NULL);
+                                    } else {
+                                        /* (§7.5b) timeout or fault-mid-wake: honest FAIL. NO
+                                         * q_errors++ — a wake failure is never a workload
+                                         * error. A pure timeout feeds the shared miss-counter
+                                         * under its own lane (honest hang attribution); a
+                                         * fault was already funneled by pa_fault_check. */
+                                        woutcome = AUDIT_OUT_FAIL;
+                                        if (!wake_faulted)
+                                            km2b_miss_on_pb_timeout(&g_pb_miss, KM2B_LANE_WAKE);
+                                        epi_batch_add(wq, EPI_ACT_INFER, EPI_OUT_ERROR, NULL);
+                                    }
+                                }
+                                /* Close the wake's duty window (a fault-mid-wake path may have
+                                 * had it cleared by pa_restart_pb — the guard keeps it sane). */
+                                if (g_infer_active) {
+                                    g_infer_cycles += jarvis_rdtsc() - g_infer_t0;
+                                    g_infer_active = 0;
+                                }
+                            }
+                        }
+
+                        /* [WAKE] serial proof (log-mirrored) + first-2 verbatim resp heads. */
+                        uint32_t wms = jarvis_uptime_ms() - wake_t0_ms;
+                        puts_serial("[WAKE] mon=");
+                        puts_serial(wtpl ? wtpl->event_literal : "?");
+                        puts_serial(" route=");
+                        puts_serial(wroute == WAKE_ROUTE_CACHE ? "cache"
+                                    : wroute == WAKE_ROUTE_INFER ? "infer" : "none");
+                        puts_serial(" ms="); put_dec(wms);
+                        puts_serial(" risk="); put_dec(wd.risk_x100);
+                        puts_serial(" outcome=");
+                        puts_serial(!wexec ? "REFUSED"
+                                    : woutcome == AUDIT_OUT_OK ? "OK"
+                                    : woutcome == AUDIT_OUT_FAIL ? "FAIL" : "NA");
+                        puts_serial("\n");
+                        if (wresp_off > 0 && g_wake_resp_logged < 2) {
+                            g_wake_resp_logged++;
+                            puts_serial("[WAKE-RESP] \"");
+                            for (int wi = 0; wi < wresp_off && wi < 200; wi++) {
+                                char wch = wresp[wi];
+                                putc_serial((wch >= 0x20 && wch < 0x7F) ? wch : ' ');
+                            }
+                            puts_serial("\"\n");
+                        }
+
+                        /* AUDIT (§7.1/§7.4): ONE JACT record on EVERY dispatched-wake exit
+                         * path — cache hit / coherent inference / timeout / fault-mid-wake /
+                         * degraded / (defensive) refused. The snapshot is the system-facts
+                         * trigger (route + latency), never the model's answer. */
+                        char wtrig[96];
+                        int wtl = wake_build_trigger(wt, wroute, wms, wtrig, sizeof wtrig);
+                        spine_record(ACTION_WAKE_CONSULT, &wd,
+                                     wexec ? AUDIT_EXECUTED : AUDIT_BLOCKED,
+                                     woutcome, wtrig, (uint16_t)(wtl > 0 ? wtl : 0), wexec);
+                    }
+                }
+            }
+#endif /* JARVIS_WAKE */
         }
 #endif
 

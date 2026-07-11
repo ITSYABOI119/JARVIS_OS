@@ -31,6 +31,7 @@ enum {
     KM2B_LANE_INFERENCE = 1,
     KM2B_LANE_HEARTBEAT = 2,
     KM2B_LANE_SHIELD    = 3,
+    KM2B_LANE_WAKE      = 4,   /* 6-2/M1: a wake-consult dispatch timed out (append-only) */
 };
 
 typedef struct {
