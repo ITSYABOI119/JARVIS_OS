@@ -26,6 +26,7 @@ enum {
     ACTION_RESTART_PB     = 1,   /* self-heal: respawn Process B (K/M2) */
     ACTION_NOTIFY_ANOMALY = 2,   /* notify-only L0 (the de-risk fallback action) */
     ACTION_WAKE_CONSULT   = 3,   /* 6-2: event-triggered cache/LLM consult (inform-only) */
+    ACTION_STATUS_DIGEST  = 4,   /* 6-3 B4: boot-relative status digest (inform-only L0) */
 };
 
 /* Reserved id for the K/M1 induced-BLOCK probe: on the immutable action-id

@@ -54,12 +54,13 @@ static void test_unknown_id_refusal(void)
 
 static void test_count_and_names(void)
 {
-    ASSERT(action_allowlist_count() == 3, "exactly 3 DEPLOYED entries (since 6-2/M0)");
+    ASSERT(action_allowlist_count() == 4, "exactly 4 DEPLOYED entries (since 6-3/M0)");
     ASSERT(action_lookup(ACTION_RESTART_PB)->name != NULL &&
            action_lookup(ACTION_NOTIFY_ANOMALY)->name != NULL &&
-           action_lookup(ACTION_WAKE_CONSULT)->name != NULL,
+           action_lookup(ACTION_WAKE_CONSULT)->name != NULL &&
+           action_lookup(ACTION_STATUS_DIGEST)->name != NULL,
            "every entry has a non-NULL name");
-    PASS("T4 allowlist count == 3, names non-NULL");
+    PASS("T4 allowlist count == 4, names non-NULL");
 }
 
 static void test_wake_consult_entry(void)
@@ -76,6 +77,21 @@ static void test_wake_consult_entry(void)
     PASS("T5 ACTION_WAKE_CONSULT entry (TRUST_NOTIFY, CONSULT)");
 }
 
+static void test_status_digest_entry(void)
+{
+    /* 6-3/M0: the B4 status digest — TRUST_AUTO (L0, an inform's "execute" =
+     * its serial line + JACT record), class NOTIFY reused (base risk 0 — NO
+     * new class; the digest is a notify-shaped inform, not a consult). */
+    const action_def_t *d = action_lookup(ACTION_STATUS_DIGEST);
+    ASSERT(d != NULL, "ACTION_STATUS_DIGEST is allowlisted");
+    ASSERT(d->id == ACTION_STATUS_DIGEST && d->id == 4, "id round-trips (== 4, append-only)");
+    ASSERT(d->trust == TRUST_AUTO, "status-digest trust == TRUST_AUTO (L0)");
+    ASSERT(d->action_class == ACTION_CLASS_NOTIFY,
+           "status-digest class == NOTIFY (reused — base risk 0, no new class)");
+    ASSERT(d->name != NULL && strcmp(d->name, "status-digest") == 0, "name for logs only");
+    PASS("T6 ACTION_STATUS_DIGEST entry (TRUST_AUTO, class NOTIFY reused)");
+}
+
 int main(void)
 {
     printf("=== JARVIS AI-OS: Action Allowlist Tests (Phase 6 K/M0) ===\n\n");
@@ -84,6 +100,7 @@ int main(void)
     test_unknown_id_refusal();
     test_count_and_names();
     test_wake_consult_entry();
+    test_status_digest_entry();
     printf("\n== %d PASS, %d FAIL ==\n", tests_passed, tests_failed);
     return tests_failed ? 1 : 0;
 }

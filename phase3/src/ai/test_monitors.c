@@ -214,6 +214,23 @@ int main(void)
               "T11e single restart (delta 1 < 2) -> 0");
     }
 
+    /* ===== 6-3/M0: the appended MON_EV_DEGRADED (B5's event type) ===== */
+
+    /* T12: the silent-never-fire pin — the enum value MUST have a snapshot case, or
+     * monitor_build_snapshot's `default: return -1` makes B5 SILENTLY never fire (an
+     * audit hole: the latch transition would produce no [ANOMALY] and no JACT record).
+     * Exact-format pin + keyword-clean + the T7 loop above auto-covers it both ways. */
+    {
+        monitor_event_t ev;
+        int n = monitor_build_snapshot(&ev, MON_EV_DEGRADED, 2, 3, 0);
+        CHECK(n > 0, "T12a DEGRADED snapshot builds (> 0 — the silent-never-fire pin)");
+        CHECK(n > 0 && strcmp(ev.snap, "mon degraded cache-only miss=3") == 0,
+              "T12b exact: \"mon degraded cache-only miss=3\"");
+        CHECK(n > 0 && ev.type == MON_EV_DEGRADED && ev.severity == 2 &&
+              ev.snap_len == (uint16_t)n,
+              "T12c event fields stamped (type/severity/snap_len)");
+    }
+
     printf("=== %d PASS, %d FAIL ===\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

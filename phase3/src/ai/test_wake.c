@@ -125,6 +125,8 @@ static void test_template_truth_table(void)
            "HEARTBEAT_AGE (unwired in 6-1) -> NULL until it becomes a live watcher");
     ASSERT(wake_template_lookup(MON_EV_UPTIME_MILESTONE) == NULL,
            "UPTIME_MILESTONE (benign liveness) -> NULL, no wake");
+    ASSERT(wake_template_lookup(MON_EV_DEGRADED) == NULL,
+           "DEGRADED (6-3 B5 — the NOTIFY lane, and PB is DOWN: nothing to consult) -> NULL");
     ASSERT(wake_template_lookup(MON_EV__COUNT) == NULL, "__COUNT -> NULL");
     ASSERT(wake_template_lookup((monitor_event_type_t)99) == NULL, "out-of-range 99 -> NULL");
     PASS("A template truth table (2 degradation events mapped; benign/unwired/invalid -> NULL)");

@@ -1,6 +1,8 @@
 # Phase 6 Goal 6-3 — Proactive Actions: ≥5 Butler Behaviors (PLAN-FIRST)
 
-**Status: PLAN-FIRST — for strategist review BEFORE any M0 code. Nothing in this doc is implemented.**
+**Status: APPROVED (strategist review 2026-07-12 — O1–O5 resolved, §12) — M0 DONE 2026-07-12
+(host-only: the behavior registry + integer-only digest + the two append-only edits; NO box wiring,
+NO flags, NO wire changes — M1 is next).**
 **Depends on:** keystone K (✅ the live action spine: allowlist + `shield_assess` + `trust_policy` +
 JACT, `JARVIS_ACTIONS` default-ON since 2026-07-08), goal 6-1 (✅ the live always-on monitors,
 `JARVIS_MONITORS` default-ON since 2026-07-09), and goal 6-2 (✅ COMPLETE 2026-07-12 — the event-driven
@@ -274,12 +276,17 @@ wire minimalism.
 
 ## 9. Milestones
 
-- **M0 (host/CI, pure):** `phase3/src/ai/behaviors.c/h` — the registry table + accessors + the
-  INTEGER-ONLY digest builder (+ the appended `MON_EV_DEGRADED` snapshot case in `monitors.c`,
-  T7-covered — the case MUST land with the enum value or `monitor_build_snapshot`'s
-  `default: return -1` makes B5 SILENTLY never fire, an audit hole) + `test_behaviors.c` (+ extend
-  `test_monitors.c` for the new event type and `test_wake.c`'s enum truth-table for the appended
-  values → they must map to NULL templates). CI step "Phase 6: 6-3 Behavior registry (C)".
+- **M0 (host/CI, pure) — ✅ DONE 2026-07-12 (TDD RED→GREEN):** `phase3/src/ai/behaviors.c/h` — the
+  registry table + accessors + the INTEGER-ONLY digest builder (+ the appended `MON_EV_DEGRADED`
+  snapshot case in `monitors.c`, T7-covered — the case MUST land with the enum value or
+  `monitor_build_snapshot`'s `default: return -1` makes B5 SILENTLY never fire, an audit hole; the
+  RED run proved exactly this: enum-without-case failed T7a with `type 6: n=-1`) + `test_behaviors.c`
+  (7 test groups, ~45 asserts) (+ extended `test_monitors.c` 44/44 (T12 exact-format pin) /
+  `test_wake.c` 9/9 (DEGRADED → NULL template; gate arrays 6→7 recompile-safe) /
+  `test_action_allowlist.c` 6/6 (count==4, id-4 = {TRUST_AUTO, CLASS_NOTIFY}) /
+  `test_shield_action.c` 8/8 (T8 digest gate: base 0, teeth)). CI step
+  "Phase 6: 6-3 Behavior registry (C)". Console `MON_EVENT_LABELS` gained 'degraded' (the
+  else-unlabeled-event pin); honesty 92/92 + logic 14/14 + e2e 34/34 re-green.
   **M0 pin list (pre-mortem F3/F4):** `MON_EV_DEGRADED` appended IMMEDIATELY before `MON_EV__COUNT`
   with every existing value unchanged (JACT snapshot-type stability, `monitors.h:29-30`; the wake
   gate's `last_fire_ms`/`fired[MON_EV__COUNT]` arrays resize recompile-safe);
@@ -337,25 +344,25 @@ registry + budgets = PA statics; v10 fields are the live surface.
 - **The RTC follow-up** — flagged, out of scope; any "daily" wording before a verified RTC is
   dishonest and banned.
 
-## 12. Open questions (for strategist review)
+## 12. Open questions — ALL RESOLVED (strategist review 2026-07-12)
 
-- **O1 — the final set:** confirm B1-B5 as v1; take or drop B6 (TX-stall — the one new watcher)?
-  Proposal: B1-B5 in, B6 deferred unless the strategist wants a sixth.
-- **O2 — FP-budget defaults:** per-behavior budgets as §6; any global cap across behaviors (e.g.
-  ≤N informs/hour aggregate) on top?
-- **O3 — telemetry:** v10 (`behaviors_fired` u16 + `behaviors_mask` u16 + `last_behavior` u8 +
-  pad, 246 B, CRC@242) vs pure reuse (no wire change; JACT-only per-behavior history). Proposal:
-  v10 — the console needs a live per-row source, and the u16 mask leaves 6-5/6-6 headroom.
-- **O4 — the PROPOSE_LOG demonstrator:** include ONE TRUST_REQUEST behavior (e.g. "proposes: archive
-  the rolled episodic history" — logged only, never executed pre-6-5) to exercise the L2-degrade
-  lane end-to-end, or keep v1 inform-pure? Proposal: keep v1 inform-pure; demonstrate PROPOSE_LOG
-  at 6-5 where the ask-channel makes it real. NOTE (pre-mortem F6): `spine_record` today counts only
-  fired/blocked (`main_x86.c:1856-1857`) — a PROPOSE_LOG would mis-increment `actions_blocked`
-  (proposed ≠ blocked); the lane needs an `AUDIT_PROPOSED`-aware count before it is wire-honest —
-  one more reason it defers to 6-5.
-- **O5 — the console shape:** a System-screen card vs its own screen; and whether the registry
-  manifest (static names) + `behaviors_mask` (live per-row) satisfies the honesty bar (proposal:
-  yes — same pattern as Capabilities rows driven by live flags).
+- **O1 — the final set: RESOLVED = B1–B5 in, B6 DEFERRED.** The TX-stall watcher stays a 6-1-class
+  candidate (a genuinely new watcher belongs behind the 6-1 honesty table, not smuggled into 6-3);
+  the ≥5 canon bar is met without it.
+- **O2 — FP-budget defaults: RESOLVED = per-behavior budgets as §6 PLUS a global aggregate cap
+  (≤N informs/hour across all behaviors, the 6-2 budget precedent).** The CONCRETE N is calibrated
+  and lands with the box wiring at M1/M2 (measured, not guessed — the 6-1/6-2 discipline); M0
+  deliberately ships no budget code (the gate state is PA-side, not registry-side).
+- **O3 — telemetry: RESOLVED = v10 at M3** (`behaviors_fired` u16 + `behaviors_mask` u16 +
+  `last_behavior` u8 + pad → 246 B, CRC@242, `TLM_F_PROACTIVE` 0x4000). The console needs a live
+  per-row source; the u16 mask leaves 6-5/6-6 headroom (behaviors.h pins ids ≤ 16 for exactly this).
+- **O4 — the PROPOSE_LOG demonstrator: RESOLVED = DEFERRED to 6-5; v1 is INFORM-PURE.** Every v1
+  behavior is L0/L1 (test_behaviors.c test C pins it: allowlisted + AUTO/NOTIFY only, a clean
+  verdict always executes as an inform). The F6 `spine_record` mis-count (`actions_blocked` bump on
+  a PROPOSED) stands as the recorded blocker; the `AUDIT_PROPOSED`-aware count ships with 6-5.
+- **O5 — the console shape: RESOLVED = a System-screen card** (the registry manifest's static names
+  + `behaviors_mask` live per-row — the Capabilities-rows-driven-by-live-flags pattern satisfies
+  the honesty bar; no new screen).
 
 ## 13. Done-when (6-3's own)
 

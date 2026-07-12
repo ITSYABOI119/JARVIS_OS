@@ -396,6 +396,15 @@ jobs:
           -lm -o /tmp/t_wake
         /tmp/t_wake
 
+    - name: "Phase 6: 6-3 Behavior registry (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
+          phase3/src/ai/test_behaviors.c phase3/src/ai/behaviors.c \
+          phase3/src/ai/monitors.c phase3/src/ai/shield_action.c \
+          phase3/src/ai/action_allowlist.c phase3/src/ai/shield_learn.c \
+          phase3/src/ai/decision_cache.c -lm -o /tmp/t_behaviors
+        /tmp/t_behaviors
+
     - name: "Phase 6: Action-audit store (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \

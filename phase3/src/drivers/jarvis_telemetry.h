@@ -94,7 +94,7 @@ typedef struct __attribute__((packed)) {
     uint16_t actions_fired;    /* v7 @224 — allowlisted actions EXECUTED (SHIELD-gated); 0 + flag clear in the flag-OFF deploy */ /* 2 */
     uint16_t actions_blocked;  /* v7 @226 — actions BLOCKED by the action gate (NOT the query-SHIELD path) */ /* 2 */
     uint16_t monitors_fired;     /* v8 (P6 6-1/M3) @228 — monitor NOTIFY events (debounced, fire-once-per-crossing; a NEUTRAL mix, NOT "problems") */ /* 2 */
-    uint8_t  last_monitor_event; /* v8 @230 — monitor_event_type_t of the most recent event (0=none .. 5=uptime-milestone) */ /* 1 */
+    uint8_t  last_monitor_event; /* v8 @230 — monitor_event_type_t of the most recent event (0=none .. 6=degraded; 6 appended at 6-3/M0, emitted from M1) */ /* 1 */
     uint8_t  mon_pad;            /* v8 @231 — alignment pad, always 0 */ /* 1 */
     uint16_t wakes_fired;        /* v9 (P6 6-2/M3) @232 — DISPATCHED wake consults (never suppressed/refused) */ /* 2 */
     uint8_t  last_wake_event;    /* v9 @234 — monitor_event_type_t of the most recent dispatched wake (0=none yet) */ /* 1 */

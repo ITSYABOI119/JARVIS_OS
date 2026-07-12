@@ -85,6 +85,12 @@ int monitor_build_snapshot(monitor_event_t *ev, monitor_event_type_t type,
         n = snprintf(ev->snap, MON_SNAP_MAX, "mon uptime ms=%lld mark=%lld",
                      (long long)v1, (long long)v2);
         break;
+    case MON_EV_DEGRADED:
+        /* 6-3 B5: PB dead, the box latched cache-only. v1 = the miss count that
+         * tripped the latch (v2 unused). System facts only — keyword-clean. */
+        n = snprintf(ev->snap, MON_SNAP_MAX, "mon degraded cache-only miss=%lld",
+                     (long long)v1);
+        break;
     default:
         return -1;
     }

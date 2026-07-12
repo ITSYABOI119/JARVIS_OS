@@ -66,7 +66,7 @@ function SystemView({ store }) {
   // verdict; every event is SHIELD-assessed and JACT-audited.
   const monReported = !!(rec && rec.flags_list && rec.flags_list.indexOf('MONITORS') >= 0);
   const monFired = rec ? Number(rec.monitors_fired) || 0 : null;
-  const MON_EVENT_LABELS = ['none', 'error-rate', 'self-heal-rate', 'store-wrap', 'heartbeat-age', 'uptime-milestone'];
+  const MON_EVENT_LABELS = ['none', 'error-rate', 'self-heal-rate', 'store-wrap', 'heartbeat-age', 'uptime-milestone', 'degraded'];
   const monLastEvent = rec ? (MON_EVENT_LABELS[Number(rec.last_monitor_event) || 0] || 'none') : null;
   // Event-driven wake (Phase 6 6-2/M3): flag-gated on TLM_F_WAKE. wakes_fired counts DISPATCHED
   // consults — each is a fixed, human-reviewed question selected by monitor event type, served

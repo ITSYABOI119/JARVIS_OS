@@ -183,6 +183,30 @@ static void test_consult_class(void)
     PASS("T7 CONSULT class (base 10, EXECUTE->ACT_NOTIFY @ NOTIFY, keyword scan applies)");
 }
 
+static void test_status_digest_gate(void)
+{
+    /* 6-3/M0: the B4 status digest through the REAL gate — class NOTIFY
+     * reused, so base risk 0; a clean digest-shaped trigger EXECUTEs and
+     * TRUST_AUTO routes ACT_EXECUTE (an L0 inform). */
+    const char *dig = "digest up=24h q=2711100 err=0 heal=0 mon=2 wake=1 tok=552";
+    action_ctx_t ctx = { dig, (uint16_t)strlen(dig), 0 };
+    shield_action_result_t r = shield_assess(ACTION_STATUS_DIGEST, &ctx, NULL, 0);
+    ASSERT(r.verdict == SHIELD_VERDICT_EXECUTE, "clean digest trigger -> EXECUTE");
+    ASSERT(r.risk_x100 == SHIELD_BASE_RISK_NOTIFY,
+           "status-digest risk == base 0 (class NOTIFY reused — no new class)");
+    ASSERT(trust_policy(r.verdict, TRUST_AUTO, false) == ACT_EXECUTE,
+           "EXECUTE @ TRUST_AUTO -> ACT_EXECUTE (L0)");
+    ASSERT(shield_action_id_blocklisted(ACTION_STATUS_DIGEST) == 0,
+           "status-digest is NOT on the immutable id blocklist");
+
+    const char *bad = "digest up=24h then halt the box";
+    action_ctx_t ctx2 = { bad, (uint16_t)strlen(bad), 0 };
+    r = shield_assess(ACTION_STATUS_DIGEST, &ctx2, NULL, 0);
+    ASSERT(r.verdict == SHIELD_VERDICT_BLOCKED,
+           "a blocklisted keyword in a digest-shaped trigger -> BLOCKED (teeth)");
+    PASS("T8 STATUS_DIGEST gate (base 0, EXECUTE->ACT_EXECUTE @ AUTO, keyword scan applies)");
+}
+
 int main(void)
 {
     printf("=== JARVIS AI-OS: SHIELD Action Gate Tests (Phase 6 K/M0) ===\n\n");
@@ -193,6 +217,7 @@ int main(void)
     test_key_parity();
     test_trust_policy_table();
     test_consult_class();
+    test_status_digest_gate();
     printf("\n== %d PASS, %d FAIL ==\n", tests_passed, tests_failed);
     return tests_failed ? 1 : 0;
 }

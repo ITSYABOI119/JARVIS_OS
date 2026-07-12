@@ -35,6 +35,7 @@ typedef enum {
     MON_EV_STORE_WRAP,        /* a circular store wrapped (fires once per store)    */
     MON_EV_HEARTBEAT_AGE,     /* PB heartbeat age exceeded the calibrated threshold */
     MON_EV_UPTIME_MILESTONE,  /* boot-relative uptime crossed a milestone mark      */
+    MON_EV_DEGRADED,          /* PB dead — the box latched cache-only (6-3 B5)      */
     MON_EV__COUNT
 } monitor_event_type_t;
 
