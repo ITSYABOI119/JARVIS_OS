@@ -164,6 +164,22 @@ These are direction, not commitments. Start only after Phase 7 exit criteria are
 | **Federated learning** | Improve models across devices without sending raw data to cloud |
 | **Custom hardware** | NPU/ASIC for inference or decision-cache acceleration |
 | **True agency research** | Explore bounded autonomy within formally verified capability sets — the safe habitat goal |
+| **Operates a workspace** | JARVIS gets its own read-write filesystem + a scratch/project region (separate from its own code) and a sandboxed task/command executor, so it can make files and run code/projects on request — every file-write and process-launch an allowlisted, SHIELD-scored, JACT-audited action. Data-and-projects by default, NOT self-modifying code (that stays Phase 7 #3). |
+
+> **On "Operates a workspace"** — the north star toward a *do-things* AI-OS (the Model B design already
+> places user-space filesystems + applications at Ring 3 with the AI coordinating them): the jump from
+> "butler that watches, informs, and self-heals" (Phase 6) to "assistant that runs a computer for you."
+> Honest scoping — **this half is not built**: the box today is a read-only model partition + raw-LBA
+> record stores + one inference process + no input channel. It needs, roughly: (1) a crash-safe
+> read-write filesystem service on seL4 (today's FS is read-only FAT32); (2) a scratch/project data
+> region JARVIS may freely read-write, distinct from the model and from its own code; (3) a sandboxed
+> process/task executor (the K/M2 respawn path is the seed); (4) every op wired through the K action
+> spine (allowlisted + SHIELD-scored + JACT-audited — bounded, reconstructable, never free-form);
+> (5) **prerequisites** — control-IN (Phase 6 #5, so you can hand it a command/project) and a bigger
+> model than Gemma 4 E2B for competent project work (GPU/hardware-gated, Phase 7 #4). **The safety line:
+> operating a data/project workspace is a distinct, *less-dangerous* capability than self-modifying its
+> own code** — this arc is data-and-projects by default; code self-modification stays the tightly-guarded
+> Phase 7 #3.
 
 ---
 
@@ -209,5 +225,5 @@ Beyond               — research directions
 
 ---
 
-**Last updated:** July 2026 (Phase 5 memory arc: it-remembers MVP #1/#2/#3/#6 DONE + deployed default-ON; Arc 2 #4 semantic + #5 SHIELD-learning mechanism-proven gated-off; #7 folded into #4; telemetry v6. Earlier: the cross-phase backlog B1 self-healing, B2 "it-acts" keystone, B3 QEMU quickstart + CI generation smoke)  
+**Last updated:** July 2026 (Beyond-Phase-7 vision: added the "Operates a workspace" arc — read-write FS + scratch/project region + sandboxed executor through the K action spine; data-and-projects by default, NOT self-modifying code. Earlier: Phase 5 memory arc: it-remembers MVP #1/#2/#3/#6 DONE + deployed default-ON; Arc 2 #4 semantic + #5 SHIELD-learning mechanism-proven gated-off; #7 folded into #4; telemetry v6; the cross-phase backlog B1 self-healing, B2 "it-acts" keystone, B3 QEMU quickstart + CI generation smoke)  
 **Status:** Phase 4 engineering COMPLETE — v1.0 scope FROZEN 2026-06-26. Goals #1 (inference perf, CPU) / #2 (graphical output) / #2b (Remote Telemetry Console) / #4 (installer) / #6 (docs) DONE; **#3 (USB keyboard) CUT** (interactive input is Phase 6 console control-IN, not a local keyboard); #5 (90-day soak) NOT run — owner-scheduled; **#7 (v1.0.0 MIT release) ✅ DONE** (tagged bdf0951, 2026-06-26; LICENSE + doc-honesty pass + final report done). See `phase4/docs/PHASE_4_FINAL_REPORT.md`. **Phase 5 largely complete** — the memory stack is deployed (retrieval + cache-growth live default-ON); `v1.1.0-memory` tag proposed; the remaining Arc-2 items activate in Phase 6. See `phase5/docs/PHASE_5_PLAN.md`.
