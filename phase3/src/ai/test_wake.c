@@ -261,12 +261,15 @@ static void test_gate_stage_take(void)
     PASS("F stage guard (templated-only) + one-slot latch + take + NULL safety");
 }
 
-/* G. Gate — per-type cooldown (cooldown FIRST, per-type independent, cold-start free). */
+/* G. Gate — per-type cooldown (cooldown FIRST, per-type independent, cold-start free).
+ * t0 is placed so t0 + WAKE_COOLDOWN_MS crosses an hour-bucket boundary: the budget resets
+ * there, so the final assert isolates the COOLDOWN re-allow at ANY WAKE_BUDGET_PER_HOUR >= 2
+ * (the flip tightened the budget 4->2; the cooldown check still gates FIRST regardless). */
 static void test_gate_cooldown(void)
 {
     wake_gate_t g;
     wake_gate_init(&g);
-    uint32_t t0 = 1000;
+    uint32_t t0 = 3600000u - (WAKE_COOLDOWN_MS / 2);   /* bucket 0; +COOLDOWN lands in bucket 1 */
     ASSERT(wake_gate_try(&g, MON_EV_ERROR_RATE, t0) == WAKE_ALLOW,
            "cold start: first try ALLOWs (no false cooldown)");
     ASSERT(wake_gate_try(&g, MON_EV_ERROR_RATE, t0 + 1) == WAKE_SUPPRESS_COOLDOWN,

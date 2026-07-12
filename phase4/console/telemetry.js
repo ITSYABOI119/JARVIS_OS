@@ -174,9 +174,9 @@
       flags.push('SELFTEST_PASS', 'FB_DRAWABLE', 'FB_MAPPED', 'MEMORY', 'CONTEXT');
       if (!loading) flags.push('RETRIEVAL');  // retrieval fires once the box is serving queries
       if (!loading) flags.push('CACHE_GROWTH');  // preview: promotions occur once queries repeat (badged SIMULATED)
-      // ACTIONS + MONITORS are default-ON in the deploy (Phase 6 K/M4 + 6-1) — the preview
+      // ACTIONS + MONITORS + WAKE are default-ON in the deploy (Phase 6 K/M4 + 6-1 + 6-2) — the preview
       // mirrors a healthy live box: flags set, counters honest-0 (no faults, no crossings yet).
-      if (!loading) flags.push('ACTIONS', 'MONITORS');
+      if (!loading) flags.push('ACTIONS', 'MONITORS', 'WAKE');
 
       let kind = 1, kindName = 'STATS';
       if (!loading) {
@@ -228,7 +228,7 @@
         actions_blocked: 0,
         monitors_fired: 0,                   // MONITORS is default-ON in deploy — healthy preview box: no crossings yet
         last_monitor_event: 0,
-        wakes_fired: 0,                      // WAKE is gated default-0 pre-flip — NO WAKE flag in the sim, so the console previews '—'
+        wakes_fired: 0,                      // WAKE is default-ON in deploy (6-2 flip) — healthy preview box: no degradation crossings, 0 consults
         last_wake_event: 0,
         infer_active: kind === 2 ? 1 : 0,
         infer_duty_pct: loading ? 0 : 12,  // preview workload duty cycle (badged SIMULATED)

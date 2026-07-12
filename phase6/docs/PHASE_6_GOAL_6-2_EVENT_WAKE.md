@@ -4,8 +4,9 @@
 (the host-pure wake decision core) + M1 ✅ DONE 2026-07-11 (box wiring BOX-GATED on KVM, gated
 `JARVIS_WAKE` default-0) + M2 ✅ DONE 2026-07-11 (anti-loop + flat-q_errors timeout + cache route —
 the O3 checkpoint PASSED on pure #6, no fallback code) + M3 ✅ DONE 2026-07-12 (telemetry v9 240 B +
-the console "Event consults" surface; see §8). **6-2 build slices COMPLETE — only the deliberate
-`JARVIS_WAKE` default-ON flip remains (with the O2 budget tightening 4→2/hr + first on-wire v9).**
+the console "Event consults" surface) + FLIP ✅ DONE 2026-07-12 (`JARVIS_WAKE` default-ON + budget
+4→2/hr; supervised bare-metal boot_id=18 + FIRST on-wire v9, honest-0 wakes on the healthy run — see
+§8). **GOAL 6-2 COMPLETE. The next goal (6-3, ≥5 proactive behaviors) CONSUMES this mechanism.**
 **Depends on:** keystone K (✅ COMPLETE 2026-07-08 — the action spine is live in deploy: static allowlist +
 `shield_assess` + `trust_policy` + JACT audit, `JARVIS_ACTIONS` default-ON since `34a165e`) and goal 6-1
 (✅ COMPLETE 2026-07-09 — the always-on monitors are live in deploy, `JARVIS_MONITORS` default-ON since
@@ -487,6 +488,21 @@ claim (fiction; PA busy-polls).
 - **Flip:** `JARVIS_WAKE` default-ON — deliberate, box-proven, after a supervised healthy run shows
   honest-0 wakes (no event ⇒ no wake ⇒ no false-positive LLM burn — exactly the point; the 6-1 flip
   precedent, incl. the on-wire v9 validation at the flip since QEMU has no NIC).
+  ✅ **DONE 2026-07-12 — GOAL 6-2 COMPLETE.** The flip commit = `JARVIS_WAKE` 0→1 +
+  `WAKE_BUDGET_PER_HOUR` 4→2 (the O2 conservative prior; test G made budget-proof by placing its
+  cooldown-elapsed retry across an hour-bucket boundary — the host wake suite re-verified 9/9 at
+  budget 2, all sibling suites green). Validate-before-commit: **KVM healthy run** of the flipped
+  image (WAKE=1, PROBE=0): q=23,600, **zero `[WAKE*` lines, zero `[ANOMALY]`, err=0, 0 restarts** —
+  the wake lane live-but-inert on a healthy box, the correct honest state. **ESP deploy**: in-place
+  image swap (md5 `fa1e4e49…`), backup `.bak-pre62flip` (the 6-1 image), Ubuntu kept `BootOrder[0]`,
+  one-shot `BootNext`. **Supervised bare-metal boot_id=18 + FIRST on-wire v9 over the real I211:
+  185 packets captured, ALL `version=9`/240 B crc_ok; `TLM_F_WAKE` latches exactly when
+  `g_wake_inited` sets at the first [STATS] window (the pre-window packets honestly lack it) and
+  persists (40/40 in the confirm batch); `wakes_fired=0`/`last_wake_event=none` HONEST-0 on the
+  healthy run; err=0, NN=6, coherent Gemma, 5.45 tok/s live;
+  MEMORY/CONTEXT/RETRIEVAL/CACHE_GROWTH/ACTIONS/MONITORS/WAKE co-live.** The sim preview mirrors the
+  deploy (WAKE flag + honest-0). The deployed image now diverges from v1.0.0 by: the Phase-5 memory
+  stack + the K action gate + the 6-1 monitors + the 6-2 event-driven wake lane.
 
 ## 9. Storage / state
 

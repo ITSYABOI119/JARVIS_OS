@@ -194,9 +194,13 @@
  * a wake timeout NEVER bumps q_errors — anti-self-amplification; duty window folded) ->
  * [WAKE] serial + episodic record + ONE JACT record per dispatched wake (suppressed = counted,
  * never audited). Inform-only: the answer has NO actuator. Design:
- * phase6/docs/PHASE_6_GOAL_6-2_EVENT_WAKE.md. Default 0 -> compiles out (deploy wake-inert;
- * the default-ON flip is a deliberate post-M2/M3 decision). */
-#define JARVIS_WAKE 0
+ * phase6/docs/PHASE_6_GOAL_6-2_EVENT_WAKE.md.
+ * **6-2 FLIPPED DEFAULT-ON 2026-07-12** — the deployed image runs the event-driven wake lane
+ * live (box-gated M1/M2/M3: the demonstrator + anti-loop parity + flat-q_errors timeout +
+ * pure-#6 cache route + the degraded leg + v9 telemetry; a HEALTHY box crosses ~never, so the
+ * honest deployed state is wakes_fired=0 — live-but-inert until a real degradation event).
+ * When 0 everything compiles out (wake-inert). */
+#define JARVIS_WAKE 1
 #if JARVIS_WAKE && !(JARVIS_ACTIONS && JARVIS_MONITORS)
 #error "JARVIS_WAKE requires JARVIS_ACTIONS && JARVIS_MONITORS (the wake rides the monitor->spine path)"
 #endif

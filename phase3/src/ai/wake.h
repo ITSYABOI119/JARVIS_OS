@@ -71,7 +71,10 @@ int wake_build_trigger(monitor_event_type_t type, wake_route_t route, uint32_t m
 #define WAKE_COOLDOWN_MS      600000u  /* 10 min/type — M2-calibrated; flip may tighten (O2) */
 #endif
 #ifndef WAKE_BUDGET_PER_HOUR
-#define WAKE_BUDGET_PER_HOUR  4u       /* global/hour — M2-calibrated; flip prior = 2 (O2)  */
+#define WAKE_BUDGET_PER_HOUR  2u       /* global/hour — tightened 4->2 at the 6-2 flip (O2: a
+                                        * healthy box crosses ~never, so a tight cap bounds a
+                                        * miscalibrated watcher at zero cost; relax only after
+                                        * observation) */
 #endif
 
 typedef enum {
