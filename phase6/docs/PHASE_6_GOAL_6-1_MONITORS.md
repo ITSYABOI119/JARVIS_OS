@@ -207,6 +207,15 @@ live surface. Watcher state is a few dozen bytes of PA statics (`monitor_t` per 
     truthful wire counters) — and **zero re-fires over the remaining ~720 windows** (q=72,400, err=0,
     0 `[FATAL]`). **JACT read-back:** boot 19 = exactly 7 `action=2 AUTO/EXECUTED/OK risk=0` records with
     the keyword-clean snapshots + the 2 `action=1` respawns, monotonic seq.
+  - **⚠ PROBE-GATE RE-BASELINE (6-3/M1, 2026-07-12 — a deliberate, documented behavior change):** with
+    `JARVIS_PROACTIVE=1`, the B4 status digest REPLACES the bare uptime NOTIFY at the mark-sample site
+    (a milestone was never an anomaly — `PHASE_6_GOAL_6-3_PROACTIVE.md` §5/§8.2). The ON-probe expectation
+    above becomes **"4 `[ANOMALY]` + 3 `[DIGEST]`"**: the uptime marks emit `[DIGEST]` + JACT `action=4`
+    (not `action=2`), and `monitors_fired` no longer counts marks. **Confirmed on the box 2026-07-12**
+    (KVM, `MONITOR_PROBE=1` + `PROACTIVE=1`): exactly 4 `[ANOMALY]` (err-rate, store-wrap ×2, heal-rate)
+    + 3 `[DIGEST]`, `[TLM-V8] monitors_fired=4 last_monitor_event=2`, err=0. The original
+    "exactly 7 `[ANOMALY]` / monitors_fired=7" numbers remain THE gate for a `PROACTIVE=0` build (the
+    deploy default until the 6-3 flip).
 - **M3 ✅ DONE 2026-07-09 — telemetry v8 + the console "Monitors" surface (the UI-parity slice). 6-1 build
   slices COMPLETE; only the deliberate `JARVIS_MONITORS` default-ON flip remains.**
   - **Wire:** v8 appends `uint16 monitors_fired` + `uint8 last_monitor_event` + `uint8 mon_pad` →

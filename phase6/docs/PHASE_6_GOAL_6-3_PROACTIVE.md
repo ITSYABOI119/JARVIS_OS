@@ -295,12 +295,27 @@ wire minimalism.
   keyword DOES block (teeth); `ACTION_ID_BLOCK_PROBE` 0xFFFE still refused; the receiver/console
   `last_monitor_event` label table gains the new type (else B5's telemetry renders an unlabeled
   event).
-- **M1 (box, gated `JARVIS_PROACTIVE` default-0):** wire the registry over the existing sites +
-  the B4 emit (REPLACING the bare uptime NOTIFY at the mark-sample site) + the B5 fire-once
-  edge-detect at the watcher tick + `build_jarvis_x86.sh` sync/injection;
-  each behavior demonstrated ONCE on KVM via `JARVIS_PROACTIVE_PROBE` (B1/B2 via the synthetic
-  err-delta technique + real respawns; B3 via wrap-threshold=total+1; B4 via short marks; B5 via the
-  probe latch — every induction honest, wire counters truthful). OFF = object-level byte-identical.
+- **M1 (box, gated `JARVIS_PROACTIVE` default-0) — ✅ DONE 2026-07-12 (KVM `-smp 6`, no deploy):**
+  the registry wired over the existing sites — `proactive_mark` (the §6/F-a ALWAYS-FIRES bump:
+  `g_behaviors_fired`/`g_last_behavior`/`g_behaviors_mask`, called at mon_notify's EXECUTED record
+  step, never at the gate-suppressible consult dispatch) + the B4 `proactive_digest_emit`
+  (REPLACING the bare uptime NOTIFY at the mark-sample site; digest → spine `ACTION_STATUS_DIGEST`
+  → `[DIGEST]` + ONE JACT `action=4` + the mark) + the B5 fire-once edge-detect at the watcher tick
+  (`g_pb_dead && !g_b5_notified` — `pa_restart_pb` untouched) + `build_jarvis_x86.sh`
+  sync/injection of behaviors.c. **Gate 1 (PROACTIVE=1 + PROACTIVE_PROBE=1):** all 5 behaviors
+  fired in the designed sequence — B4×3 `[DIGEST] digest up=0h q=100 … tok=593 risk=0` (one per
+  short mark) → B1 → B3 → B2 → B5, `mask=31`, `fired=7`; B1/B2 rode the live 6-2 lane
+  (`[WAKE] route=infer ms≈13.5s outcome=OK` ×2 — the hourly budget exactly consumed); B2's
+  induction = 2 REAL respawns (EXECUTED/OK); **the sequencing constraint held live** (B2's
+  respawns at window 5, AWAY from B1's window-2 staged wake — the §7.9 hazard; B5's terminal
+  latch LAST at window 8); after B5 the box served cache-only with **err=0 to q=91,900**,
+  0 `[FATAL]`, 0 phantoms. **JACT read-back** (KVM store boot 31, monotonic, keyword-clean):
+  3× `action=4` digest (the first action=4 records) + the B1/B2 `action=2`+`action=3` pairs +
+  2× `action=1` respawn + B3/B5 `action=2`. **OFF-identity:** pre-M1 (`22c1ef4`) vs
+  M1-at-PROACTIVE=0 — `main.c.obj` `.text`/`.rodata`/`.data` + `nm` all IDENTICAL (the packed
+  image grows only by the linked-but-unused behaviors.o — the wake.c pre-flip pattern).
+  Probe inductions all honest (synthetic deltas into the WINDOW delta only; real respawns; real
+  wrap thresholds; short marks; a labeled probe latch).
 - **M2 (box):** all ≥5 firing in ONE gated run **with B5 ordered STRICTLY LAST** (pre-mortem F-e:
   `g_pb_dead` is TERMINAL — once latched, `pa_restart_pb` early-returns so B2 can induce no more
   respawns, and a cache-miss consult dies at `PB_DISPATCH_OK()`, killing B1's infer route; B2's own
@@ -336,6 +351,13 @@ registry + budgets = PA statics; v10 fields are the live surface.
   and `monitors_fired` no longer counts marks; the 6-1 probe expectation ("exactly 7 `[ANOMALY]`")
   becomes "4 `[ANOMALY]` + 3 `[DIGEST]`". M1 re-runs the 6-1 probe gate against the NEW baseline and
   records it in both docs — a deliberate, documented change, never a silent drift.
+  **✅ RE-BASELINE CONFIRMED ON THE BOX 2026-07-12 (M1 run 2, `JARVIS_MONITOR_PROBE=1` +
+  `JARVIS_PROACTIVE=1`):** exactly **4 `[ANOMALY]`** (err-rate, store-wrap ×2 epi+jact, heal-rate)
+  + **3 `[DIGEST]`**, `[TLM-V8] monitors_fired=4` (was 7 — marks no longer bump it;
+  `last_monitor_event=2` = the heal-rate, the last true monitor event), behavior marks
+  B4×3/B1/B3×2/B2 → `mask=15` (B5 correctly absent — MONITOR_PROBE induces no degraded latch),
+  both consults `outcome=OK` alongside the probe's 2 real respawns, err=0 at q=27,000.
+  Recorded in `PHASE_6_GOAL_6-1_MONITORS.md` the same day.
 - **The digest drifting into fiction** — it must render ONLY live counters (the [SNAP]/telemetry
   fields); no "health verdict", no CPU%, no wall-clock. The honesty gate + T7 pin it.
 - **Double-counting confusion** — a consult behavior bumps both `wakes_fired` and (v10)

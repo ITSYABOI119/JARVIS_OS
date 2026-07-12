@@ -219,6 +219,40 @@
 #error "JARVIS_WAKE_PROBE must not ride JARVIS_MONITOR_PROBE (its heal-rate probe fires 2 real respawns that race the staged wake)"
 #endif
 
+/* Phase 6 goal 6-3: proactive behaviors — the M0 registry (behaviors.c) wired over the spine.
+ * When 1, PA marks a registry behavior at every mon_notify EXECUTED crossing (B1 err-rate /
+ * B2 heal-rate / B3 store-wrap / B5 degraded — the always-fires §6/F-a counter site, never the
+ * gate-suppressible consult dispatch), REPLACES the bare uptime NOTIFY with the B4 status
+ * digest (behavior_build_digest -> spine ACTION_STATUS_DIGEST=4 -> [DIGEST] + JACT action=4 —
+ * the ONE documented 6-1 behavior change: a milestone was never an anomaly; the 6-1 probe gate
+ * re-baselines "7 [ANOMALY]" -> "4 [ANOMALY] + 3 [DIGEST]"), and runs the B5 fire-once
+ * degraded-mode edge-detect at the watcher tick (g_pb_dead && !notified — pa_restart_pb is
+ * NEVER touched). INFORM-only v1 (O4); per-behavior budgets INHERITED at M1 (the O2 aggregate
+ * cap lands with the M2 anti-spam proof). Default 0 -> everything compiles out (object-level
+ * byte-identical); the flip is a deliberate post-M3 decision. */
+#define JARVIS_PROACTIVE 0
+#if JARVIS_PROACTIVE && !(JARVIS_ACTIONS && JARVIS_MONITORS && JARVIS_WAKE)
+#error "JARVIS_PROACTIVE requires JARVIS_ACTIONS && JARVIS_MONITORS && JARVIS_WAKE (behaviors ride the monitor->spine->wake channels)"
+#endif
+
+/* Phase 6 6-3/M1 proactive probe (box-only, needs JARVIS_PROACTIVE=1): SELF-CONTAINED
+ * per-behavior demonstrators — B1 via the synthetic err-rate WINDOW-DELTA technique (windows
+ * 1-3; never the real q_errors), B2 via 2 REAL respawns at window 5 (sequenced AWAY from B1's
+ * window-2 staged wake so the respawns never race a pending dispatch — the §7.9 hazard), B3
+ * via the episodic wrap-threshold=total+1 (jact stays real — ONE deterministic B3 fire), B4
+ * via the SHORT uptime marks (5/15/30 s), B5 via a LATE (window 8) g_pb_dead latch -> the
+ * edge-detect (terminal — must come after B1/B2's consults). `[PROACTIVE-PROBE]` proof lines.
+ * Its OWN flag (the one-flag-per-probe precedent); #error-forbidden from MONITOR_PROBE (its
+ * heal-rate probe fires 2 real respawns that race the behavior fires) AND from WAKE_PROBE
+ * (both drive the same synthetic err-rate delta). Default 0 -> compiles out. */
+#define JARVIS_PROACTIVE_PROBE 0
+#if JARVIS_PROACTIVE_PROBE && !JARVIS_PROACTIVE
+#error "JARVIS_PROACTIVE_PROBE requires JARVIS_PROACTIVE"
+#endif
+#if JARVIS_PROACTIVE_PROBE && (JARVIS_MONITOR_PROBE || JARVIS_WAKE_PROBE)
+#error "JARVIS_PROACTIVE_PROBE must not ride JARVIS_MONITOR_PROBE or JARVIS_WAKE_PROBE (respawn races + a shared synthetic delta)"
+#endif
+
 /* Phase 6 K/M2a-2 reuse-in-place respawn spike (box-only KVM measurement; SYSTEM_DESIGN
  * §4.1/§4.2). When 1, Process B gains a muslc-init-safe `pb_restart_entry` (re-enters PAST
  * musl's one-time init on a dedicated ABI-aligned restart stack, REUSING the warm model

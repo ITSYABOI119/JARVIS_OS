@@ -83,6 +83,9 @@
 #if JARVIS_WAKE
 #include "wake.h"               /* Phase 6 6-2/M1: wake decision core (fixed templates + anti-loop gate; host-tested) */
 #endif
+#if JARVIS_PROACTIVE
+#include "behaviors.h"          /* Phase 6 6-3/M1: the compile-time behavior registry (B1-B5 + digest; host-tested) */
+#endif
 #endif
 #include "jarvis_ui_tokens.h"   /* Step 2c-2b: FBP_ and JUI_ palette + geometry (single source) */
 
@@ -522,7 +525,7 @@ static int             g_mon_wrap_epi_on = 0, g_mon_wrap_jact_on = 0;
 static monitor_t       g_mon_wrap_sem;
 static int             g_mon_wrap_sem_on = 0;
 #endif
-#if JARVIS_MONITOR_PROBE
+#if JARVIS_MONITOR_PROBE || JARVIS_PROACTIVE_PROBE
 static const int64_t   g_mon_uptime_marks[3] = { 5000, 15000, 30000 };   /* probe: short marks */
 #else
 static const int64_t   g_mon_uptime_marks[3] = { 3600000LL, 86400000LL, 604800000LL };  /* 1h/24h/7d */
@@ -548,6 +551,16 @@ static int             g_wake_resp_logged = 0;   /* first-2 verbatim [WAKE-RESP]
 static uint16_t        g_wakes_fired = 0;
 static uint8_t         g_last_wake_event = 0;    /* monitor_event_type_t; 0 = none yet */
 static int             g_wake_inited = 0;
+#endif
+#if JARVIS_PROACTIVE
+/* 6-3/M1: behavior activity (the v10 wire is M3 — M1 needs only the serial proof + the §6/F-a
+ * always-fires counter discipline: one bump per behavior FIRE at the always-fires record step,
+ * never at the gate-suppressible consult dispatch). mask bit = behavior id - 1 (ids <= 16,
+ * host-pinned in test_behaviors.c). */
+static uint16_t        g_behaviors_fired = 0;
+static uint8_t         g_last_behavior = 0;      /* behavior id; 0 = none yet */
+static uint16_t        g_behaviors_mask = 0;     /* bit (id-1) set once id has fired this boot */
+static uint8_t         g_b5_notified = 0;        /* B5 fire-once edge-detect latch (per boot) */
 #endif
 #endif
 #if JARVIS_SEMANTIC
@@ -1863,6 +1876,71 @@ static void spine_record(uint16_t id, const spine_decision_t *d, uint16_t audit_
     }
 }
 
+#if JARVIS_PROACTIVE
+/* ===== 6-3/M1: the behavior registry over the spine. proactive_mark = THE always-fires bump
+ * (§6/F-a): exactly one call per behavior FIRE, at the always-fires record step — the #7 FP
+ * fraction's denominator is behavior fires (user interrupts), never JACT records. ===== */
+static void proactive_mark(uint16_t behavior_id)
+{
+    const behavior_def_t *b = behavior_lookup(behavior_id);
+    if (!b) return;   /* defensive — callers pass registry-resolved ids */
+    g_behaviors_fired++;
+    g_last_behavior   = (uint8_t)behavior_id;
+    g_behaviors_mask |= (uint16_t)(1u << (behavior_id - 1));
+    puts_serial("[BEHAVIOR] b="); put_dec(behavior_id);
+    puts_serial(" ");            puts_serial(b->name);
+    puts_serial(" fired=");      put_dec(g_behaviors_fired);
+    puts_serial(" mask=");       put_dec(g_behaviors_mask);
+    puts_serial("\n");
+}
+
+/* 6-3/M1 B4: the STATUS DIGEST at an uptime mark — REPLACES the bare uptime NOTIFY (§5, the
+ * ONE documented 6-1 behavior change: a milestone was never an anomaly; the mark's JACT
+ * action_id shifts 2->4 and monitors_fired/last_monitor_event no longer move on marks — only
+ * the behavior counters do). INTEGER-ONLY inputs by construction (behavior_build_digest has
+ * no char* parameter); digest -> spine (ACTION_STATUS_DIGEST, TRUST_AUTO, class NOTIFY base 0)
+ * -> [DIGEST] line + exactly ONE JACT record + the always-fires mark. query_key = the digest's
+ * own FNV-1a (the wake-lane discipline — a real key so the learned-risk feed is non-vacuous). */
+static void proactive_digest_emit(uint32_t up_ms, uint64_t q_total, uint64_t q_errors)
+{
+    char dig[ACT_TRIGGER_MAX];
+    int dlen = behavior_build_digest(dig, sizeof dig,
+                                     up_ms / 3600000u, q_total, q_errors,
+                                     g_restart_count, (uint16_t)g_monitors_fired,
+                                     g_wakes_fired, g_infer_last_tok_x100);
+    if (dlen <= 0) return;
+    uint64_t dkey = 0;
+    {
+        char dnorm[MAX_QUERY_LEN];
+        if (cache_normalize_query(dig, dnorm, sizeof dnorm))
+            dkey = cache_hash(dnorm);
+    }
+#if JARVIS_SHIELD_LEARN
+    const shield_learn_slot_t *dig_pl = g_shield_learn;
+    int dig_plc = SHIELD_LEARN_CAP_KEYS;
+#else
+    const shield_learn_slot_t *dig_pl = NULL;
+    int dig_plc = 0;
+#endif
+    action_ctx_t dctx = { dig, (uint16_t)dlen, dkey };
+    spine_decision_t dd = spine_decide(ACTION_STATUS_DIGEST, &dctx, dig_pl, dig_plc);
+    if (dd.dec == ACT_EXECUTE || dd.dec == ACT_NOTIFY) {
+        /* The digest's "execute" = exactly this line + the JACT record (an L0 inform). */
+        puts_serial("[DIGEST] "); puts_serial(dig);
+        puts_serial(" risk="); put_dec(dd.risk_x100); puts_serial("\n");
+        spine_record(ACTION_STATUS_DIGEST, &dd, AUDIT_EXECUTED, AUDIT_OUT_OK,
+                     dig, (uint16_t)dlen, 1);
+        proactive_mark(BEHAVIOR_STATUS_DIGEST);
+    } else {
+        /* Defensive (unreachable by construction — test_behaviors E pins the digest
+         * un-BLOCKED through the real gate); audits honestly if it ever fires. */
+        puts_serial("[DIGEST] REFUSED risk="); put_dec(dd.risk_x100); puts_serial("\n");
+        spine_record(ACTION_STATUS_DIGEST, &dd, AUDIT_BLOCKED, AUDIT_OUT_NA,
+                     dig, (uint16_t)dlen, 0);
+    }
+}
+#endif /* JARVIS_PROACTIVE */
+
 #if JARVIS_MONITORS
 /* 6-1/M2: ONE notify path for every watcher — snapshot -> spine_decide -> "[ANOMALY]" line ->
  * spine_record (EXECUTED/OK; the defensive BLOCKED branch audits honestly — unreachable by
@@ -1889,6 +1967,19 @@ static void mon_notify(monitor_event_type_t type, int64_t v1, int64_t v2)
                      mev.snap, mev.snap_len, 1);
         g_monitors_fired++;                        /* v8: one central bump covers every watcher */
         g_last_monitor_event = (uint8_t)type;
+#if JARVIS_PROACTIVE
+        /* 6-3/M1: the ALWAYS-FIRES behavior mark (§6/F-a) — count the crossing's behavior
+         * HERE, at the always-fires record step, never at the consult dispatch (which is
+         * gate-suppressible: a suppressed B1/B2 consult must still count its crossing's
+         * behavior fire, or the user sees an [ANOMALY] that counted 0). B1 err-rate /
+         * B2 heal-rate / B3 store-wrap / B5 degraded resolve via the registry; a benign or
+         * unmapped type has no behavior — no-op. (B4 never reaches here: with PROACTIVE on,
+         * the uptime mark emits the digest directly and this call site is replaced.) */
+        {
+            const behavior_def_t *mn_beh = behavior_for_event(type);
+            if (mn_beh) proactive_mark(mn_beh->id);
+        }
+#endif
 #if JARVIS_WAKE
         /* 6-2/M1: stage a pending wake (§7.3). The stage guard lives INSIDE wake_gate_stage —
          * only a TEMPLATED type touches the latch (benign/unmapped = no-op; a second templated
@@ -4389,6 +4480,13 @@ static void *main_continued(void *arg UNUSED)
 #if JARVIS_MONITOR_PROBE
                         int64_t mon_epi_thr  = (int64_t)g_episodic.hdr.total_entries + 1;
                         int64_t mon_jact_thr = (int64_t)g_action_audit.hdr.total_entries + 1;
+#elif JARVIS_PROACTIVE_PROBE
+                        /* 6-3/M1 B3 probe: arm ONLY the episodic store at total+1 (the next
+                         * epi_commit trips it) — ONE deterministic B3 fire; jact stays at its
+                         * real capacity (arming it too would double-fire B3: this run's JACT
+                         * writes would trip a total+1 threshold within a window). */
+                        int64_t mon_epi_thr  = (int64_t)g_episodic.hdr.total_entries + 1;
+                        int64_t mon_jact_thr = (int64_t)ACT_AUDIT_MAX_ENTRIES;
 #else
                         int64_t mon_epi_thr  = (int64_t)EPI_STORE_MAX_ENTRIES;
                         int64_t mon_jact_thr = (int64_t)ACT_AUDIT_MAX_ENTRIES;
@@ -4478,6 +4576,28 @@ static void *main_continued(void *arg UNUSED)
                     }
                 }
 #endif
+#if JARVIS_PROACTIVE_PROBE
+                /* 6-3/M1 PROACTIVE-PROBE — the B1 + B5 legs (B2/B3/B4 are induced at their
+                 * own sites below/above). SELF-CONTAINED sequencing (§ flag doc): B1 synthetic
+                 * err-rate WINDOW deltas at windows 1-3 (crossing at the debounce window, one
+                 * fire); B5's terminal g_pb_dead latch waits until window 8 — strictly AFTER
+                 * B1's window-2 consult and B2's window-6 consult (the latch kills PB dispatch,
+                 * so it must come last — the M2 B5-LAST ordering, exercised early). */
+                {
+                    static uint32_t pro_probe_win = 0;
+                    pro_probe_win++;
+                    if (pro_probe_win <= 3) {
+                        mon_d += (uint64_t)(MON_ERRRATE_THRESHOLD * 2);
+                        puts_serial("[PROACTIVE-PROBE] window="); put_dec(pro_probe_win);
+                        puts_serial(" synthetic d="); put_dec((uint32_t)mon_d);
+                        puts_serial("\n");
+                    }
+                    if (pro_probe_win == 8 && !g_pb_dead) {
+                        g_pb_dead = 1;
+                        puts_serial("[PROACTIVE-PROBE] inducing g_pb_dead (B5 leg, terminal)\n");
+                    }
+                }
+#endif
                 if (monitor_sample(&g_mon_errrate, (int64_t)mon_d))
                     mon_notify(MON_EV_ERROR_RATE, (int64_t)mon_d, 100);
 
@@ -4488,6 +4608,28 @@ static void *main_continued(void *arg UNUSED)
                     if (monitor_sample(&g_mon_heal, (int64_t)heal_d))
                         mon_notify(MON_EV_SELF_HEAL_RATE, (int64_t)heal_d, 100);
                 }
+#if JARVIS_PROACTIVE_PROBE
+                /* 6-3/M1 B2 probe: TWO REAL back-to-back respawns in ONE window (the honest
+                 * MONITOR_PROBE technique — real km2b_do_respawn cycles, real JACT respawn
+                 * records, real restart_count) -> the NEXT window's heal delta = 2 -> B2 fires
+                 * once. Window 5, NOT 2: B1's window-2 crossing stages a wake that dispatches
+                 * at that window's end — respawning in the same window would race the staged
+                 * consult against the post-respawn handshake (the §7.9 hazard WAKE_PROBE's
+                 * #error exists for). The window reset between the two respawns isolates the
+                 * probe from the crash-loop bound (the ACTION_PROBE precedent). */
+                {
+                    static int pro_heal_win = 0, pro_heal_done = 0;
+                    pro_heal_win++;
+                    if (pro_heal_win == 5 && !pro_heal_done && !g_pb_dead) {
+                        pro_heal_done = 1;
+                        puts_serial("[PROACTIVE-PROBE] inducing 2 real respawns for B2\n");
+                        pa_restart_pb("hang", 0, 0, 0, 0, 0);
+                        g_restart_window = 0; g_healthy_since_restart = 0;
+                        pa_restart_pb("hang", 0, 0, 0, 0, 0);
+                        g_restart_window = 0; g_healthy_since_restart = 0;
+                    }
+                }
+#endif
 #if JARVIS_MONITOR_PROBE
                 /* W1 probe: TWO REAL back-to-back respawns in one window — an HONEST
                  * induction (real km2b_do_respawn cycles, real JACT respawn records, real
@@ -4525,10 +4667,32 @@ static void *main_continued(void *arg UNUSED)
                     uint32_t mon_up_ms = jarvis_uptime_ms();
                     if (mon_up_ms)
                         for (int mi = 0; mi < 3; mi++)
-                            if (monitor_sample(&g_mon_uptime[mi], (int64_t)mon_up_ms))
+                            if (monitor_sample(&g_mon_uptime[mi], (int64_t)mon_up_ms)) {
+#if JARVIS_PROACTIVE
+                                /* 6-3/M1 B4: the mark emits the STATUS DIGEST — REPLACING the
+                                 * bare uptime NOTIFY (§5, the ONE documented 6-1 behavior
+                                 * change; the 6-1 probe gate re-baselines to "4 [ANOMALY] +
+                                 * 3 [DIGEST]"). fire-once per mark, <=3/boot by construction. */
+                                proactive_digest_emit(mon_up_ms, q_total, q_errors);
+#else
                                 mon_notify(MON_EV_UPTIME_MILESTONE, (int64_t)mon_up_ms,
                                            g_mon_uptime_marks[mi]);
+#endif
+                            }
                 }
+#if JARVIS_PROACTIVE
+                /* 6-3/M1 B5: the degraded-mode alert — a FIRE-ONCE EDGE-DETECT at the watcher
+                 * tick (§5: NEVER a hook inside pa_restart_pb — the K/M4-verified funnel stays
+                 * untouched; next-[STATS] latency is fine for a terminal one-shot notice).
+                 * mon_notify routes it through the spine (ACTION_NOTIFY_ANOMALY -> "[ANOMALY]
+                 * mon degraded cache-only miss=N" + ONE JACT record) and the registry marks B5.
+                 * v1 = the miss counter at the latch (0 when the crash-loop bound tripped it —
+                 * honest either way; the snapshot carries system facts only). */
+                if (g_pb_dead && !g_b5_notified) {
+                    g_b5_notified = 1;
+                    mon_notify(MON_EV_DEGRADED, (int64_t)km2b_miss_count(&g_pb_miss), 0);
+                }
+#endif
 #if JARVIS_MONITOR_PROBE
                 /* 6-1/M3 (v8) box proof: after the probe inductions settle, print the exact
                  * globals jarvis_telemetry_emit fills into the v8 packet (fill/flag/CRC are
