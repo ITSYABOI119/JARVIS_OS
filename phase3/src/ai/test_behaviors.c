@@ -226,6 +226,45 @@ static void test_wake_seam(void)
     PASS("G consult/notify split matches the 6-2 lane (only B1/B2 consult)");
 }
 
+/* H. The O2 GLOBAL hourly inform cap (6-3/M2): N ALLOWs then SUPPRESS_BUDGET;
+ * a bucket-INDEX change resets (wrap-safe — never absolute marks, the wake-gate
+ * test-I precedent); a suppressed inform is a counted non-event (nothing else
+ * changes); cold start ALLOWs; NULL is a defensive suppress. */
+static void test_global_budget(void)
+{
+    behavior_budget_t b;
+    behavior_budget_init(&b);
+    uint32_t t0 = 10000;   /* bucket 0 */
+    for (uint32_t i = 0; i < BEHAVIOR_BUDGET_PER_HOUR; i++)
+        ASSERT(behavior_budget_try(&b, t0 + i) == BEHAVIOR_ALLOW, "inside the budget -> ALLOW");
+    ASSERT(behavior_budget_try(&b, t0 + 99) == BEHAVIOR_SUPPRESS_BUDGET,
+           "the (N+1)th inform this hour -> SUPPRESS_BUDGET");
+    ASSERT(b.suppressed == 1, "suppression counted");
+    ASSERT(b.bcount == BEHAVIOR_BUDGET_PER_HOUR,
+           "a suppressed inform is a non-event: the bucket count did not move");
+    ASSERT(behavior_budget_try(&b, t0 + 3600000u) == BEHAVIOR_ALLOW,
+           "advancing one bucket (3,600,000 ms) resets -> ALLOW");
+
+    /* Wrap crossing: bucket 1193 -> 0 is an INDEX CHANGE, never an absolute mark. */
+    behavior_budget_init(&b);
+    uint32_t tw = UINT32_MAX - 1000;   /* bucket 1193 */
+    for (uint32_t i = 0; i < BEHAVIOR_BUDGET_PER_HOUR; i++)
+        ASSERT(behavior_budget_try(&b, tw + i) == BEHAVIOR_ALLOW, "pre-wrap fills the bucket");
+    ASSERT(behavior_budget_try(&b, tw + 900) == BEHAVIOR_SUPPRESS_BUDGET,
+           "pre-wrap bucket exhausted");
+    ASSERT(behavior_budget_try(&b, 500) == BEHAVIOR_ALLOW,
+           "post-wrap (bucket 1193 -> 0) resets -> ALLOW (no absolute-mark bug)");
+
+    /* Cold start at t=0 (bucket 0 == the zero-init bucket): counts from 0, ALLOWs. */
+    behavior_budget_init(&b);
+    ASSERT(behavior_budget_try(&b, 0) == BEHAVIOR_ALLOW, "cold start at t=0 -> ALLOW");
+
+    behavior_budget_init(NULL);   /* no-op, no crash */
+    ASSERT(behavior_budget_try(NULL, 123) == BEHAVIOR_SUPPRESS_BUDGET,
+           "NULL budget -> defensive suppress");
+    PASS("H global hourly cap (N-then-suppress, bucket reset, wrap-safe, cold start, NULL)");
+}
+
 int main(void)
 {
     printf("=== JARVIS AI-OS: Behavior Registry Tests (Phase 6 6-3/M0) ===\n\n");
@@ -236,6 +275,7 @@ int main(void)
     test_digest_keyword_clean();
     test_digest_bounds();
     test_wake_seam();
+    test_global_budget();
     printf("\n== %d PASS, %d FAIL ==\n", tests_passed, tests_failed);
     return tests_failed ? 1 : 0;
 }

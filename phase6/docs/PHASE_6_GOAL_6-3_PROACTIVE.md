@@ -316,14 +316,33 @@ wire minimalism.
   image grows only by the linked-but-unused behaviors.o — the wake.c pre-flip pattern).
   Probe inductions all honest (synthetic deltas into the WINDOW delta only; real respawns; real
   wrap thresholds; short marks; a labeled probe latch).
-- **M2 (box):** all ≥5 firing in ONE gated run **with B5 ordered STRICTLY LAST** (pre-mortem F-e:
-  `g_pb_dead` is TERMINAL — once latched, `pa_restart_pb` early-returns so B2 can induce no more
-  respawns, and a cache-miss consult dies at `PB_DISPATCH_OK()`, killing B1's infer route; B2's own
-  induction resets `g_restart_window` between its two respawns precisely so it never trips the
-  bound — only the deliberate B5 induction does; if the ordering proves fragile, B5 splits into its
-  own run, the WAKE_PROBE mode-1/mode-2 precedent) + the anti-spam proof (sustained conditions →
-  fire-once each; budgets suppress; healthy-config run = digests-only/honest-0) + the FP baseline
-  measured + deployed-config regression (PROACTIVE=0: zero behavior lines, err=0).
+- **M2 (box) — ✅ DONE 2026-07-13 (KVM `-smp 6`, no deploy; + ONE host-pure addition):** the O2
+  GLOBAL inform cap landed host-first (`behavior_budget_t`/`behavior_budget_try` in behaviors.c/h —
+  hourly bucket-INDEX semantics, wrap-safe, suppressed = counted non-event; `test_behaviors.c` test H,
+  TDD RED→GREEN, rides the existing CI step → **8 PASS groups**) and wired at the TWO surfacing
+  sites (mon_notify top, mapped types only + the digest emit) — a capped inform is NOT surfaced,
+  NOT audited, NOT marked (the FP denominator stays "interrupts the user saw"); **the terminal B5
+  notice RE-ARMS on suppression** (retries each window, lands in the next budget bucket — every
+  other capped one-shot drops by design: a backstop, not a scheduler); the cap NEVER gates
+  `pa_restart_pb`. **G1 anti-spam (probe mode 2, cap sed-raised to 16):** B1's synthetic delta held
+  for 10 CONSECUTIVE windows → **exactly ONE `[ANOMALY] mon err-rate`** (fire-once held, not
+  per-sample); all 5 fired once each in one run, B5 STRICTLY LAST (`mask=31`, fired=7), consults
+  bounded by the 6-2 gate (2× route=infer OK), 0 suppressions, err=0 to q=25,500. **G2 the cap
+  (sed-shrunk to 3):** 3 digests ALLOWed then EVERY notice suppressed — B1/B3/B2 exactly once each
+  (`budget total=1/2/3`), 0 `[ANOMALY]`, 0 `[WAKE]`, B5 re-arm retrying every window (192 counted),
+  the 2 induction respawns EXECUTED un-capped; **JACT boot 36 = exactly 5 records (3× action=4 +
+  2× action=1) — ZERO records for the 195 suppressed informs** (counted, never audited). **G3 the
+  MEASURED healthy-config FP baseline (PROACTIVE=1, PROBE=0, committed defaults, real marks):** a
+  60.5-min run (q=938,500, err=0) fired **exactly ONE inform — the 1h digest**
+  (`digest up=1h q=930600 err=0 heal=0 mon=0 wake=0 tok=558`, JACT `action=4`, every counter ==
+  live truth, the uptime condition held) and honest-0 everywhere else (0 `[ANOMALY]`/suppress/wake/
+  restart) → **FP = 0 / 1 fired informs = 0% — the measured number the #7 <5% criterion rests on.**
+  **G4 deployed regression (PROACTIVE=0, all M2 code in-tree):** `main.c.obj` 3 sections + `nm`
+  byte-identical to the pre-M1 baseline; KVM smoke = zero `[BEHAVIOR]`/`[DIGEST]`/`[PROACTIVE*]`
+  lines, err=0. **O2 CALIBRATED: `BEHAVIOR_BUDGET_PER_HOUR 6u` stands** — 6× the measured healthy
+  hour (1 inform) and ≥ the worst-case degraded hour (2 consults + ≤3 wraps + 1 digest, with the
+  B5 re-arm covering the 7th-inform edge). (Box-driving note: detached KVM runs must escape the ssh
+  session CGROUP — `sudo systemd-run` a transient unit; setsid/nohup dies with the session scope.)
 - **M3 (telemetry v10 + console — REQUIRED):** the §7 slice, full v9-precedent lockstep (header →
   receiver decode+record BOTH → fixture → `gen_golden_pcap` → `golden.pcap` regen → console →
   honesty/logic/e2e value-pins).
@@ -375,6 +394,12 @@ registry + budgets = PA statics; v10 fields are the live surface.
   (≤N informs/hour across all behaviors, the 6-2 budget precedent).** The CONCRETE N is calibrated
   and lands with the box wiring at M1/M2 (measured, not guessed — the 6-1/6-2 discipline); M0
   deliberately ships no budget code (the gate state is PA-side, not registry-side).
+  **✅ CALIBRATED AT M2 (2026-07-13): `BEHAVIOR_BUDGET_PER_HOUR = 6u`** — the measured healthy hour
+  fires exactly 1 inform (the G3 baseline: 1 digest / 60.5 min, FP 0/1 = 0%), so 6/hr = 6× headroom
+  while still bounding a runaway watcher; the worst-case degraded hour (2 consults + ≤3 store-roll
+  notices + 1 digest ≈ 6, + the terminal B5 as a possible 7th) is covered by the B5 RE-ARM rule
+  (a suppressed terminal notice retries and lands in the next hour bucket — never lost). The cap
+  gates INFORMS only (mon_notify-mapped + the digest), never the self-heal funnel.
 - **O3 — telemetry: RESOLVED = v10 at M3** (`behaviors_fired` u16 + `behaviors_mask` u16 +
   `last_behavior` u8 + pad → 246 B, CRC@242, `TLM_F_PROACTIVE` 0x4000). The console needs a live
   per-row source; the u16 mask leaves 6-5/6-6 headroom (behaviors.h pins ids ≤ 16 for exactly this).

@@ -71,6 +71,33 @@ static int bb_tu64(char *buf, uint32_t cap, int p, uint64_t v)
     return p;
 }
 
+/* ---- the O2 GLOBAL inform cap (6-3/M2) — semantics in behaviors.h. The
+ * wake-gate budget pattern verbatim: bucket-INDEX change resets (wrap-safe);
+ * ALLOW commits, suppress counts and changes nothing else. ---- */
+void behavior_budget_init(behavior_budget_t *b)
+{
+    if (!b) return;
+    b->bucket     = 0;
+    b->bcount     = 0;
+    b->suppressed = 0;
+}
+
+behavior_verdict_t behavior_budget_try(behavior_budget_t *b, uint32_t now_ms)
+{
+    if (!b) return BEHAVIOR_SUPPRESS_BUDGET;   /* defensive */
+    uint32_t bucket = now_ms / 3600000u;
+    if (bucket != b->bucket) {
+        b->bucket = bucket;
+        b->bcount = 0;
+    }
+    if (b->bcount >= BEHAVIOR_BUDGET_PER_HOUR) {
+        b->suppressed++;
+        return BEHAVIOR_SUPPRESS_BUDGET;
+    }
+    b->bcount++;
+    return BEHAVIOR_ALLOW;
+}
+
 int behavior_build_digest(char *buf, uint32_t cap,
                           uint32_t up_hours, uint64_t q_total, uint64_t q_errors,
                           uint32_t restart_count, uint16_t monitors_fired,

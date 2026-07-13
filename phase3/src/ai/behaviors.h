@@ -63,4 +63,36 @@ int behavior_build_digest(char *buf, uint32_t cap,
                           uint32_t restart_count, uint16_t monitors_fired,
                           uint16_t wakes_fired, uint16_t tok_x100);
 
+/* ---- the O2 GLOBAL inform cap (6-3/M2) — one hourly budget ABOVE all five
+ * behaviors (the #7 <5%-FP criterion's backstop: it bounds USER INTERRUPTS,
+ * never the self-heal funnel). Semantics = the 6-2 wake-gate budget: hour
+ * bucket = now_ms / 3,600,000; a bucket-INDEX change resets (wrap-safe —
+ * never absolute marks); a suppressed inform is a COUNTED NON-EVENT (no
+ * surface, no JACT, no behavior-fire mark — the FP denominator stays
+ * "interrupts the user actually saw"). #ifndef-guarded so a gate build can
+ * probe-shrink/raise it (the WAKE_COOLDOWN_MS mechanism); the default is the
+ * M2-calibrated backstop: 2 consults + up to 4 notices in a worst-case hour
+ * (a healthy hour fires <= 1 digest). */
+#ifndef BEHAVIOR_BUDGET_PER_HOUR
+#define BEHAVIOR_BUDGET_PER_HOUR 6u
+#endif
+
+typedef enum {
+    BEHAVIOR_ALLOW           = 0,
+    BEHAVIOR_SUPPRESS_BUDGET = 1,
+} behavior_verdict_t;
+
+typedef struct {
+    uint32_t bucket;      /* now_ms / 3,600,000 hour bucket index          */
+    uint8_t  bcount;      /* informs ALLOWED in the current bucket         */
+    uint32_t suppressed;  /* counted non-events (never surfaced/audited)   */
+} behavior_budget_t;
+
+/* Initialize (bucket 0, counts 0 — zero-init is a valid cold state). NULL-safe (no-op). */
+void behavior_budget_init(behavior_budget_t *b);
+
+/* CHECK-AND-COMMIT at now_ms: on ALLOW, bcount++ (the inform surfaces); on
+ * suppress, suppressed++ and NOTHING else changes. NULL: defensive suppress. */
+behavior_verdict_t behavior_budget_try(behavior_budget_t *b, uint32_t now_ms);
+
 #endif /* BEHAVIORS_H */

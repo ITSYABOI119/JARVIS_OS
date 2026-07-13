@@ -561,6 +561,12 @@ static uint16_t        g_behaviors_fired = 0;
 static uint8_t         g_last_behavior = 0;      /* behavior id; 0 = none yet */
 static uint16_t        g_behaviors_mask = 0;     /* bit (id-1) set once id has fired this boot */
 static uint8_t         g_b5_notified = 0;        /* B5 fire-once edge-detect latch (per boot) */
+/* 6-3/M2: the O2 GLOBAL inform cap (behaviors.h — hourly bucket, wrap-safe). Sits ABOVE all
+ * five behaviors at the two surfacing sites (mon_notify + the digest emit); a suppressed inform
+ * is a counted non-event (no serial surface beyond the [BEHAVIOR-SUPPRESS] proof line, no JACT,
+ * no behavior-fire mark — the #7 FP denominator stays "interrupts the user actually saw").
+ * NEVER gates pa_restart_pb (self-healing is not an inform). Zero-init is a valid cold state. */
+static behavior_budget_t g_behavior_budget;
 #endif
 #endif
 #if JARVIS_SEMANTIC
@@ -1903,6 +1909,15 @@ static void proactive_mark(uint16_t behavior_id)
  * own FNV-1a (the wake-lane discipline — a real key so the learned-risk feed is non-vacuous). */
 static void proactive_digest_emit(uint32_t up_ms, uint64_t q_total, uint64_t q_errors)
 {
+    /* 6-3/M2: the O2 GLOBAL inform cap (B4's surfacing site — see mon_notify's cap note).
+     * A capped digest is dropped for its mark (fire-once already consumed) — acceptable for
+     * a backstop that a healthy hour (<= 1 digest) never approaches. */
+    if (behavior_budget_try(&g_behavior_budget, jarvis_uptime_ms())
+            == BEHAVIOR_SUPPRESS_BUDGET) {
+        puts_serial("[BEHAVIOR-SUPPRESS] b=4 budget total=");
+        put_dec(g_behavior_budget.suppressed); puts_serial("\n");
+        return;
+    }
     char dig[ACT_TRIGGER_MAX];
     int dlen = behavior_build_digest(dig, sizeof dig,
                                      up_ms / 3600000u, q_total, q_errors,
@@ -1948,6 +1963,27 @@ static void proactive_digest_emit(uint32_t up_ms, uint64_t q_total, uint64_t q_e
  * of the M1 q_errors fire block so the M2 watchers don't quadruplicate it. */
 static void mon_notify(monitor_event_type_t type, int64_t v1, int64_t v2)
 {
+#if JARVIS_PROACTIVE
+    /* 6-3/M2: the O2 GLOBAL inform cap — checked FIRST, for BEHAVIOR-MAPPED events only (an
+     * unmapped NOTIFY keeps pure 6-1 semantics). On suppress: counted, NOT surfaced, NOT
+     * audited, NO behavior-fire mark (a capped inform is not a user interrupt). The terminal
+     * B5 notice is special-cased to RE-ARM — it retries each window and lands in the next
+     * budget bucket instead of being lost forever (every other capped one-shot is dropped by
+     * design: the cap is a backstop, not a scheduler). */
+    {
+        const behavior_def_t *cap_beh = behavior_for_event(type);
+        if (cap_beh &&
+            behavior_budget_try(&g_behavior_budget, jarvis_uptime_ms())
+                == BEHAVIOR_SUPPRESS_BUDGET) {
+            puts_serial("[BEHAVIOR-SUPPRESS] b="); put_dec(cap_beh->id);
+            puts_serial(" budget total="); put_dec(g_behavior_budget.suppressed);
+            puts_serial("\n");
+            if (type == MON_EV_DEGRADED)
+                g_b5_notified = 0;   /* terminal notice: re-arm for the next budget window */
+            return;
+        }
+    }
+#endif
     monitor_event_t mev;
     if (monitor_build_snapshot(&mev, type, 1, v1, v2) <= 0) return;
 #if JARVIS_SHIELD_LEARN
@@ -4528,6 +4564,11 @@ static void *main_continued(void *arg UNUSED)
                     wake_gate_init(&g_wake_gate);
                     g_wake_inited = 1;   /* 6-2/M3: TLM_F_WAKE capability-live latch */
 #endif
+#if JARVIS_PROACTIVE
+                    /* 6-3/M2: init the global inform cap alongside (zero-init is already a
+                     * valid cold state — belt-and-suspenders, the wake_gate precedent). */
+                    behavior_budget_init(&g_behavior_budget);
+#endif
                     g_mon_inited = 1;
                 }
 
@@ -4577,22 +4618,30 @@ static void *main_continued(void *arg UNUSED)
                 }
 #endif
 #if JARVIS_PROACTIVE_PROBE
-                /* 6-3/M1 PROACTIVE-PROBE — the B1 + B5 legs (B2/B3/B4 are induced at their
-                 * own sites below/above). SELF-CONTAINED sequencing (§ flag doc): B1 synthetic
-                 * err-rate WINDOW deltas at windows 1-3 (crossing at the debounce window, one
-                 * fire); B5's terminal g_pb_dead latch waits until window 8 — strictly AFTER
-                 * B1's window-2 consult and B2's window-6 consult (the latch kills PB dispatch,
-                 * so it must come last — the M2 B5-LAST ordering, exercised early). */
+                /* 6-3/M1+M2 PROACTIVE-PROBE — the B1 + B5 legs (B2/B3/B4 are induced at their
+                 * own sites below/above). SELF-CONTAINED sequencing (§ flag doc); the flag
+                 * value is a MODE: 1 = the M1 sequenced demonstrator (B1 synthetic deltas
+                 * windows 1-3, one crossing at the debounce window; B5 latch window 8);
+                 * 2 = the M2 SUSTAINED anti-spam mode (B1's synthetic delta held for 10
+                 * CONSECUTIVE windows — the fire-once latch must fire EXACTLY ONCE across
+                 * all 10, the G1 crux; B5 latch window 12, still strictly LAST). In both
+                 * modes the terminal latch comes after B1/B2's consults (it kills PB
+                 * dispatch — the B5-LAST ordering). */
                 {
+#if JARVIS_PROACTIVE_PROBE == 2
+                    const uint32_t pro_syn_wins = 10, pro_b5_win = 12;
+#else
+                    const uint32_t pro_syn_wins = 3,  pro_b5_win = 8;
+#endif
                     static uint32_t pro_probe_win = 0;
                     pro_probe_win++;
-                    if (pro_probe_win <= 3) {
+                    if (pro_probe_win <= pro_syn_wins) {
                         mon_d += (uint64_t)(MON_ERRRATE_THRESHOLD * 2);
                         puts_serial("[PROACTIVE-PROBE] window="); put_dec(pro_probe_win);
                         puts_serial(" synthetic d="); put_dec((uint32_t)mon_d);
                         puts_serial("\n");
                     }
-                    if (pro_probe_win == 8 && !g_pb_dead) {
+                    if (pro_probe_win == pro_b5_win && !g_pb_dead) {
                         g_pb_dead = 1;
                         puts_serial("[PROACTIVE-PROBE] inducing g_pb_dead (B5 leg, terminal)\n");
                     }

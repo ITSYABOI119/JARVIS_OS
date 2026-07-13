@@ -235,16 +235,22 @@
 #error "JARVIS_PROACTIVE requires JARVIS_ACTIONS && JARVIS_MONITORS && JARVIS_WAKE (behaviors ride the monitor->spine->wake channels)"
 #endif
 
-/* Phase 6 6-3/M1 proactive probe (box-only, needs JARVIS_PROACTIVE=1): SELF-CONTAINED
- * per-behavior demonstrators — B1 via the synthetic err-rate WINDOW-DELTA technique (windows
- * 1-3; never the real q_errors), B2 via 2 REAL respawns at window 5 (sequenced AWAY from B1's
- * window-2 staged wake so the respawns never race a pending dispatch — the §7.9 hazard), B3
- * via the episodic wrap-threshold=total+1 (jact stays real — ONE deterministic B3 fire), B4
- * via the SHORT uptime marks (5/15/30 s), B5 via a LATE (window 8) g_pb_dead latch -> the
- * edge-detect (terminal — must come after B1/B2's consults). `[PROACTIVE-PROBE]` proof lines.
- * Its OWN flag (the one-flag-per-probe precedent); #error-forbidden from MONITOR_PROBE (its
- * heal-rate probe fires 2 real respawns that race the behavior fires) AND from WAKE_PROBE
- * (both drive the same synthetic err-rate delta). Default 0 -> compiles out. */
+/* Phase 6 6-3/M1+M2 proactive probe (box-only, needs JARVIS_PROACTIVE=1; the value is a MODE
+ * — 1 = the M1 sequenced per-behavior demonstrator, 2 = the M2 SUSTAINED anti-spam mode):
+ * SELF-CONTAINED — B1 via the synthetic err-rate WINDOW-DELTA technique (mode 1: windows 1-3;
+ * mode 2: 10 CONSECUTIVE windows — the fire-once latch must fire EXACTLY ONCE across all 10,
+ * the G1 anti-spam crux; never the real q_errors), B2 via 2 REAL respawns at window 5
+ * (sequenced AWAY from B1's window-2 staged wake so the respawns never race a pending dispatch
+ * — the §7.9 hazard), B3 via the episodic wrap-threshold=total+1 (jact stays real — ONE
+ * deterministic B3 fire), B4 via the SHORT uptime marks (5/15/30 s), B5 via a LATE g_pb_dead
+ * latch (mode 1: window 8; mode 2: window 12) -> the edge-detect (terminal — strictly LAST,
+ * after B1/B2's consults). M2 gate runs also box-side-sed the #ifndef-guarded
+ * BEHAVIOR_BUDGET_PER_HOUR (6u -> 16u for G1 so the cap never interferes with the all-5 proof;
+ * 6u -> 3u for G2 so exhaustion is observable — the WAKE_COOLDOWN_MS mechanism), restored
+ * after. `[PROACTIVE-PROBE]` proof lines. Its OWN flag (the one-flag-per-probe precedent);
+ * #error-forbidden from MONITOR_PROBE (its heal-rate probe fires 2 real respawns that race the
+ * behavior fires) AND from WAKE_PROBE (both drive the same synthetic err-rate delta).
+ * Default 0 -> compiles out. */
 #define JARVIS_PROACTIVE_PROBE 0
 #if JARVIS_PROACTIVE_PROBE && !JARVIS_PROACTIVE
 #error "JARVIS_PROACTIVE_PROBE requires JARVIS_PROACTIVE"
