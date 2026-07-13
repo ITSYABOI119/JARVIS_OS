@@ -32,7 +32,7 @@ static int pass = 0, fail = 0;
 
 static void test_layout(void)
 {
-    CHECK(sizeof(telemetry_packet_t) == 240, "sizeof(telemetry_packet_t) == 240 (v9)");
+    CHECK(sizeof(telemetry_packet_t) == 246, "sizeof(telemetry_packet_t) == 246 (v10)");
     OFF(magic, 0);
     OFF(flags, 6);
     OFF(boot_id, 8);
@@ -68,7 +68,11 @@ static void test_layout(void)
     OFF(wakes_fired, 232);               /* P6 6-2/M3: v9 fields appended before crc32 */
     OFF(last_wake_event, 234);
     OFF(wake_pad, 235);
-    OFF(crc32, 236);
+    OFF(behaviors_fired, 236);           /* P6 6-3/M3: v10 fields appended before crc32 */
+    OFF(behaviors_mask, 238);
+    OFF(last_behavior, 240);
+    OFF(beh_pad, 241);
+    OFF(crc32, 242);
 }
 
 static void test_crc_known_vector(void)
@@ -117,11 +121,14 @@ static void test_finalize_roundtrip(void)
     pkt.wakes_fired = 3;                    /* P6 6-2/M3 (v9): DISPATCHED wake consults */
     pkt.last_wake_event = 1;                /* err-rate */
     pkt.last_monitor_event = 3;             /* MON_EV_STORE_WRAP */
+    pkt.behaviors_fired = 3;                /* P6 6-3/M3 (v10): registry behavior fires (interrupts) */
+    pkt.behaviors_mask = 21;                /* 0b10101 = B1+B3+B5 have fired this boot */
+    pkt.last_behavior = 5;                  /* BEHAVIOR_DEGRADED_ALERT */
 
     jarvis_tlm_finalize(&pkt);
 
     CHECK(pkt.magic == JARVIS_TLM_MAGIC, "finalize sets magic == JTEL");
-    CHECK(pkt.version == JARVIS_TLM_VERSION, "finalize sets version == 9");
+    CHECK(pkt.version == JARVIS_TLM_VERSION, "finalize sets version == 10");
     CHECK(pkt.infer_active == 1 && pkt.infer_duty_pct == 42, "infer_active/infer_duty_pct survive finalize");
     CHECK(pkt.log_cursor == 137 && pkt.nvme_total_mb == 1953892u, "log_cursor/nvme_total_mb survive finalize");
     CHECK(pkt.total_ram_mb == 30000u, "total_ram_mb survives finalize");
@@ -150,10 +157,13 @@ static void test_finalize_roundtrip(void)
     CHECK(pkt.wakes_fired == 3u && pkt.last_wake_event == 1u,
           "wakes_fired/last_wake_event survive finalize (v9, CRC covers 232-235)");
     CHECK(TLM_F_WAKE == 0x2000, "TLM_F_WAKE == 0x2000 (flags is u16 — fits)");
+    CHECK(pkt.behaviors_fired == 3u && pkt.behaviors_mask == 21u && pkt.last_behavior == 5u,
+          "behaviors_fired/behaviors_mask/last_behavior survive finalize (v10, CRC covers 236-241)");
+    CHECK(TLM_F_PROACTIVE == 0x4000, "TLM_F_PROACTIVE == 0x4000 (flags is u16 — fits)");
 
-    /* The stored crc matches a recompute over the first 236 bytes (offsetof(crc32)). */
+    /* The stored crc matches a recompute over the first 242 bytes (offsetof(crc32)). */
     uint32_t recomputed = jarvis_tlm_crc32(&pkt, offsetof(telemetry_packet_t, crc32));
-    CHECK(pkt.crc32 == recomputed, "stored crc32 == recompute over first 236 B");
+    CHECK(pkt.crc32 == recomputed, "stored crc32 == recompute over first 242 B");
     CHECK(pkt.crc32 != 0u, "crc32 is non-zero for a populated packet");
 
     /* The magic bytes are "JTEL" little-endian: 4C 45 54 4A. */
@@ -161,7 +171,7 @@ static void test_finalize_roundtrip(void)
     CHECK(raw[0] == 0x4C && raw[1] == 0x45 && raw[2] == 0x54 && raw[3] == 0x4A,
           "magic on wire (LE) == 4C 45 54 4A (\"JTEL\")");
 
-    /* Flipping any byte in [0,236) must break the CRC check. */
+    /* Flipping any byte in [0,242) must break the CRC check. */
     int detected_all = 1;
     for (uint32_t i = 0; i < offsetof(telemetry_packet_t, crc32); i++) {
         raw[i] ^= 0xFF;
@@ -169,7 +179,7 @@ static void test_finalize_roundtrip(void)
             detected_all = 0;   /* a flip went undetected */
         raw[i] ^= 0xFF;         /* restore */
     }
-    CHECK(detected_all, "every single-byte flip in [0,236) breaks the CRC");
+    CHECK(detected_all, "every single-byte flip in [0,242) breaks the CRC");
 }
 
 int main(void)

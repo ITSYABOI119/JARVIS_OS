@@ -56,11 +56,14 @@ BANNED = [
     # the deployed box is TWO processes (A rootserver + B inference), not one.
     "single-process",
     # 6-2/M3: a wake is an event-triggered CONSULT of a fixed, human-reviewed template —
-    # never cognition. ("autonomous" is NOT banned here: the K/M3 ACTIONS row legitimately
-    # says "Self-healing / autonomous actions" of the bounded, allowlisted action gate.)
+    # never cognition. ("autonomous" is NOT banned globally: the K/M3 ACTIONS row legitimately
+    # says "Self-healing / autonomous actions" of the bounded, allowlisted action gate — but it
+    # IS banned inside the 6-3 Proactive-behaviors card, checked scoped below.)
     "thinking",
     "reasoning",
     "decided on its own",
+    # 6-3/M3: a behavior is a registry INFORM — the box never "decides" anything.
+    "the AI decided",
 ]
 
 # (b) Honest-framing markers that MUST stay present somewhere in the console
@@ -76,6 +79,7 @@ REQUIRED = [
     "5.46",
     "not the deployed build",
     "human-reviewed question",  # 6-2/M3: the wake consult framing (consults, not cognition)
+    "informs you",              # 6-3/M3: the proactive-behavior framing (informs, not decisions)
 ]
 
 # At least one spelling of the verification-stance marker must be present.
@@ -220,6 +224,42 @@ def main():
           "monitor stat notes the mix includes benign liveness events (not all 'problems')")
     check('Always-on monitors' in capb,
           "Capabilities labels the MONITORS flag (always-on monitors)")
+
+    # --- 6-3/M3: the Proactive-behaviors card — registry INFORMS, never cognition/agency. The
+    # card must source the REAL v10 fields, keep the manifest in sync with behaviors.c, use
+    # "informs you"/event-triggered wording, and NEVER use agency language INSIDE the card
+    # (scoped: "autonomous" stays legal for the K ACTIONS row elsewhere). It must also never
+    # present a combined wakes+behaviors total (the deliberate double-count is two views of
+    # ONE event — documented, never summed). ---
+    check('behaviors_fired' in sysb and 'behaviors_mask' in sysb and 'last_behavior' in sysb,
+          "System 'Proactive behaviors' sources the REAL v10 fields")
+    # The proactive scope = TWO disjoint slices: the data section (const proReported ... up to
+    # the 'const stat =' helper — the manifest with its "informs you" descs lives here) + the
+    # card JSX ('title="Proactive behaviors"' ... '</Card>'). Deliberately EXCLUDES the Memory
+    # card in between (its ACTIONS comment legitimately says "autonomous").
+    pro_start = sysb.find('const proReported')
+    pro_data_end = sysb.find('const stat =', pro_start if pro_start >= 0 else 0)
+    pro_jsx = sysb.find('title="Proactive behaviors"')
+    pro_end = sysb.find('</Card>', pro_jsx if pro_jsx >= 0 else 0)
+    pro_card = ''
+    if 0 <= pro_start < pro_data_end and 0 < pro_jsx < pro_end:
+        pro_card = sysb[pro_start:pro_data_end] + sysb[pro_jsx:pro_end]
+    check(len(pro_card) > 0, "Proactive-behaviors card block found in ConsoleSystem.jsx")
+    check('informs you' in pro_card.lower(),
+          "card wording is 'informs you ...' (informs, not decisions)")
+    check('event-triggered' in pro_card.lower(),
+          "card wording is event-triggered (never self-initiated cognition)")
+    for kw in ('autonomous', 'the ai decided', 'thinking', 'reasoning', 'decided on its own'):
+        check(kw not in pro_card.lower(),
+              "card block does NOT say '%s' (scoped agency-language ban)" % kw)
+    check('total activity' not in pro_card.lower() and 'wakes + behaviors' not in pro_card.lower(),
+          "card never presents a combined wakes+behaviors sum (two views of one event)")
+    for bname in ('anomaly-consult', 'self-heal-consult', 'store-roll', 'status-digest', 'degraded-alert'):
+        check(bname in pro_card, "card manifest carries the registry row '%s' (KEEP IN SYNC)" % bname)
+    check('KEEP IN SYNC' in sysb,
+          "the manifest carries the KEEP-IN-SYNC-with-behaviors.c marker")
+    check('Proactive behaviors (registry informs)' in capb,
+          "Capabilities labels the PROACTIVE flag (registry informs)")
 
     # --- uptime: box uptime is shown ONLY as the real boot-relative uptime_ms — ≈-marked and
     # TSC-caveated (the box has no RTC), never presented as wall-clock. ---

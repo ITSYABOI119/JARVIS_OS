@@ -3,10 +3,10 @@
 telemetry_receiver.py - JARVIS Remote Telemetry Console receiver (goal #2b N-c-2)
 
 Main-PC Python UDP receiver for the box-side telemetry stream. The JARVIS box
-(headless appliance) broadcasts a 240-byte (v9) binary `telemetry_packet_t` over UDP
+(headless appliance) broadcasts a 246-byte (v10) binary `telemetry_packet_t` over UDP
 to 255.255.255.255:51000 at ~1 Hz (see phase3/src/drivers/jarvis_telemetry.h and
 the N-c-1 emit site in phase3/src/sel4/main_x86.c). This tool binds the port,
-decodes each datagram, validates the zlib CRC-32 over the first 236 bytes (v9),
+decodes each datagram, validates the zlib CRC-32 over the first 242 bytes (v10),
 and pretty-prints honest live box state.
 
 Wire format (little-endian, packed, no padding — see FMT below; sizes are DERIVED,
@@ -39,7 +39,11 @@ degradation and benign liveness events, never "anomalies detected"). The v9
 wakes_fired/last_wake_event are the event-driven-wake CONSULT activity
 (DISPATCHED consults only — a consult is a fixed, human-reviewed question per
 monitor event, cache-served or one bounded inference — never
-"thinking"/"reasoning"). The uptime is from an uncalibrated TSC, shown with "≈".
+"thinking"/"reasoning"). The v10 behaviors_fired/behaviors_mask/last_behavior
+are the proactive-behavior INFORM activity (behaviors_fired = user interrupts;
+mask bit id-1 = behavior id has fired this boot; a B1/B2 consult bumps BOTH
+wakes_fired and behaviors_fired by design — two honest views of one event,
+never summed). The uptime is from an uncalibrated TSC, shown with "≈".
 """
 
 import argparse
@@ -56,8 +60,8 @@ import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MAGIC = 0x4A54454C            # "JTEL" (LE on the wire: 4C 45 54 4A)
-FMT = '<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHHHHIHHHBBHBBI'
-PKT_SIZE = struct.calcsize(FMT)   # v9: 240 (derived — never hardcode a wire size)
+FMT = '<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHHHHIHHHBBHBBHHBBI'
+PKT_SIZE = struct.calcsize(FMT)   # v10: 246 (derived — never hardcode a wire size)
 LOG_MAX_ENTRIES = 2700        # NVME_LOG_MAX_ENTRIES (no-wrap durable telemetry log)
 
 FLAG_NAMES = {
@@ -75,6 +79,7 @@ FLAG_NAMES = {
     0x800: 'ACTIONS',
     0x1000: 'MONITORS',
     0x2000: 'WAKE',
+    0x4000: 'PROACTIVE',
 }
 KIND_NAMES = {1: 'STATS', 2: 'INFER', 3: 'STATE'}
 
@@ -114,12 +119,13 @@ def decode_packet(data: bytes) -> dict:
      restart_count, actions_fired, actions_blocked,
      monitors_fired, last_monitor_event, _mon_pad,
      wakes_fired, last_wake_event, _wake_pad,
+     behaviors_fired, behaviors_mask, last_behavior, _beh_pad,
      crc32_field) = struct.unpack(FMT, data)
 
     if magic != MAGIC:
         raise ValueError("bad magic 0x%08X (expected 0x%08X)" % (magic, MAGIC))
 
-    crc_calc = zlib.crc32(data[:PKT_SIZE - 4]) & 0xFFFFFFFF   # v9: 236 (= offsetof(crc32))
+    crc_calc = zlib.crc32(data[:PKT_SIZE - 4]) & 0xFFFFFFFF   # v10: 242 (= offsetof(crc32))
     flags_list = [name for bit, name in FLAG_NAMES.items() if flags & bit]
 
     return {
@@ -165,6 +171,9 @@ def decode_packet(data: bytes) -> dict:
         'last_monitor_event': last_monitor_event,
         'wakes_fired': wakes_fired,
         'last_wake_event': last_wake_event,
+        'behaviors_fired': behaviors_fired,
+        'behaviors_mask': behaviors_mask,
+        'last_behavior': last_behavior,
         'cache_growth_count': cache_growth_count,
         'log_cursor': log_cursor,
         'infer_gen_tokens': infer_gen_tokens,
@@ -261,6 +270,9 @@ def packet_to_record(d: dict, recv_ts: float = 0) -> dict:
         'last_monitor_event': d['last_monitor_event'],
         'wakes_fired': d['wakes_fired'],
         'last_wake_event': d['last_wake_event'],
+        'behaviors_fired': d['behaviors_fired'],
+        'behaviors_mask': d['behaviors_mask'],
+        'last_behavior': d['last_behavior'],
         'cache_growth_count': d['cache_growth_count'],
         'log_cursor': d['log_cursor'],
         'infer_gen_tokens': d['infer_gen_tokens'],

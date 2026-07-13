@@ -74,6 +74,26 @@ function SystemView({ store }) {
   const wakeReported = !!(rec && rec.flags_list && rec.flags_list.indexOf('WAKE') >= 0);
   const wakesFired = rec ? Number(rec.wakes_fired) || 0 : null;
   const wakeLastEvent = rec ? (MON_EVENT_LABELS[Number(rec.last_wake_event) || 0] || 'none') : null;
+  // Proactive behaviors (Phase 6 6-3/M3): flag-gated on TLM_F_PROACTIVE. Each behavior is a
+  // named, bounded, rate-limited INFORM from the compile-time registry — event-triggered and
+  // JACT-audited, never free-form. behaviors_fired counts informs that reached the user; the
+  // mask bit (id-1) latches once behavior id has fired this boot. Deliberate double-count: a
+  // consult behavior bumps BOTH wakes_fired and behaviors_fired (two honest views of ONE event)
+  // — so this card never sums them with the wake stats.
+  const proReported = !!(rec && rec.flags_list && rec.flags_list.indexOf('PROACTIVE') >= 0);
+  const behaviorsFired = rec ? Number(rec.behaviors_fired) || 0 : null;
+  const behaviorsMask = rec ? Number(rec.behaviors_mask) || 0 : 0;
+  // KEEP IN SYNC with phase3/src/ai/behaviors.c g_behaviors[] (the compile-time, human-reviewed
+  // registry — ids/names mirror the reviewed table; additions there mean a row here, same change).
+  const BEHAVIOR_MANIFEST = [
+    { id: 1, name: 'anomaly-consult',   desc: 'informs you when the error rate spikes — files an event-triggered consult' },
+    { id: 2, name: 'self-heal-consult', desc: 'informs you when the self-repair lane has been busy — files a consult' },
+    { id: 3, name: 'store-roll',        desc: 'informs you once when a circular store starts rolling (oldest records overwritten)' },
+    { id: 4, name: 'status-digest',     desc: 'posts a boot-relative status digest at the uptime marks (1h / 24h / 7d)' },
+    { id: 5, name: 'degraded-alert',    desc: 'informs you once when inference is down and the box is serving cache-only' },
+  ];
+  const BEHAVIOR_LABELS = ['none', 'anomaly-consult', 'self-heal-consult', 'store-roll', 'status-digest', 'degraded-alert'];
+  const lastBehavior = rec ? (BEHAVIOR_LABELS[Number(rec.last_behavior) || 0] || 'none') : null;
 
   const stat = (label, value, sub) => (
     <div>
@@ -143,6 +163,39 @@ function SystemView({ store }) {
             wakeReported ? 'the monitor event that triggered the most recent consult' : 'event-driven wake not reported')}
         </div>
         {note('Live heap used/free is not tracked on the box, so it is not shown. The resident model size above is the only real lower bound.')}
+      </Card>
+
+      {/* Proactive behaviors (Phase 6 6-3/M3) — the butler map: one row per registry behavior,
+          per-row liveness from behaviors_mask, the live total + last-behavior label. All '—'
+          until TLM_F_PROACTIVE is live. Never summed with the wake stats (deliberate
+          double-count: one consult event = one wake consult AND one behavior fire). */}
+      <Card title="Proactive behaviors" subtitle="named, bounded informs from the compile-time registry — event-triggered, rate-limited, audited" padding="md">
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 'var(--space-5)' }}>
+          {stat('Behaviors fired', proReported ? num(behaviorsFired) : '—',
+            proReported ? 'informs that reached you this boot — each is one JACT-audited event' : 'proactive behaviors not reported')}
+          {stat('Last behavior', proReported ? lastBehavior : '—',
+            proReported ? 'the most recent registry behavior that fired' : 'proactive behaviors not reported')}
+        </div>
+        <div style={{ marginTop: 'var(--space-5)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {BEHAVIOR_MANIFEST.map((b) => {
+            const fired = proReported && (((behaviorsMask >> (b.id - 1)) & 1) === 1);
+            return (
+              <div key={b.id} style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+                <span style={{ font: '500 var(--text-xs)/1.3 var(--font-mono)', color: 'var(--text-secondary)', minWidth: 170 }}>
+                  B{b.id} · {b.name}
+                </span>
+                <span style={{ flex: 1, font: '400 var(--text-2xs)/1.4 var(--font-mono)', color: 'var(--text-muted)' }}>
+                  {b.desc}
+                </span>
+                <span style={{ font: '500 var(--text-2xs)/1 var(--font-mono)',
+                  color: fired ? 'var(--text-accent)' : 'var(--text-muted)' }}>
+                  {proReported ? (fired ? 'fired this boot' : 'quiet') : '—'}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+        {note('Each behavior is a row in a compile-time, human-reviewed registry — event-triggered informs, rate-limited by a global hourly cap and SHIELD-scored + JACT-audited per fire. A healthy box stays almost silent: the uptime status digest is usually the only fire.')}
       </Card>
 
       {/* Inference — real state + honest workload duty cycle */}

@@ -13,6 +13,8 @@
  *   restart_count / actions_fired / actions_blocked (v7 — self-heal/action-gate activity),
  *   monitors_fired / last_monitor_event (v8 — always-on-monitor NOTIFY activity, neutral),
  *   wakes_fired / last_wake_event (v9 — event-triggered CONSULT activity, never cognition),
+ *   behaviors_fired / behaviors_mask / last_behavior (v10 — registry INFORM activity; a consult
+ *   bumps both wakes_fired and behaviors_fired by design — two views of one event, never summed),
  *   log_cursor, infer_gen_tokens, model_name, last_text, crc_ok
  *
  * Liveness is genuine: a record is "live" only while a fresh CRC-valid packet
@@ -198,7 +200,7 @@
 
       return {
         recv_ts: Date.now() / 1000,
-        version: 9,
+        version: 10,
         kind, kind_name: kindName,
         flags: 0, flags_list: flags,
         boot_id: BOOT_ID,
@@ -230,6 +232,9 @@
         last_monitor_event: 0,
         wakes_fired: 0,                      // WAKE is default-ON in deploy (6-2 flip) — healthy preview box: no degradation crossings, 0 consults
         last_wake_event: 0,
+        behaviors_fired: 0,                  // PROACTIVE is gated OFF pre-flip — no PROACTIVE flag in the sim, so the card previews '—'
+        behaviors_mask: 0,
+        last_behavior: 0,
         infer_active: kind === 2 ? 1 : 0,
         infer_duty_pct: loading ? 0 : 12,  // preview workload duty cycle (badged SIMULATED)
         infer_gen_tokens: loading ? 0 : 50,                  // preview value (badged SIMULATED) — REAL on the box since v4

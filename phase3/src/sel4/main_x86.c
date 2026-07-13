@@ -561,6 +561,7 @@ static uint16_t        g_behaviors_fired = 0;
 static uint8_t         g_last_behavior = 0;      /* behavior id; 0 = none yet */
 static uint16_t        g_behaviors_mask = 0;     /* bit (id-1) set once id has fired this boot */
 static uint8_t         g_b5_notified = 0;        /* B5 fire-once edge-detect latch (per boot) */
+static uint8_t         g_proactive_inited = 0;   /* 6-3/M3: TLM_F_PROACTIVE capability-live latch */
 /* 6-3/M2: the O2 GLOBAL inform cap (behaviors.h — hourly bucket, wrap-safe). Sits ABOVE all
  * five behaviors at the two surfacing sites (mon_notify + the digest emit); a suppressed inform
  * is a counted non-event (no serial surface beyond the [BEHAVIOR-SUPPRESS] proof line, no JACT,
@@ -2352,6 +2353,19 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
     pkt.last_wake_event = g_last_wake_event;
     if (g_wake_inited) pkt.flags |= TLM_F_WAKE;
 #endif
+#if JARVIS_PROACTIVE
+    /* v10 (P6 6-3/M3): the proactive-behavior INFORM activity — behaviors_fired counts USER
+     * INTERRUPTS (the always-fires mark; a cap-suppressed inform never counts), behaviors_mask
+     * bit (id-1) latches per fired behavior (the console's live per-row source), last_behavior
+     * = the most recent id. A B1/B2 consult bumps BOTH wakes_fired and behaviors_fired BY
+     * DESIGN (two honest views of one event — documented, never summed). TLM_F_PROACTIVE set
+     * on g_proactive_inited (capability-live). Gated, so the flag-OFF deploy emits 0s + flag
+     * clear (the SAME honest pattern as v5..v9). */
+    pkt.behaviors_fired = g_behaviors_fired;
+    pkt.behaviors_mask  = g_behaviors_mask;
+    pkt.last_behavior   = g_last_behavior;
+    if (g_proactive_inited) pkt.flags |= TLM_F_PROACTIVE;
+#endif
     /* model display name (matches the on-screen panel) + last response, NUL-bounded (pkt is zeroed) */
     { const char *mn = "Gemma 4 E2B";
       for (int i = 0; i < (int)sizeof(pkt.model_name) - 1 && mn[i]; i++) pkt.model_name[i] = mn[i]; }
@@ -2359,7 +2373,7 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
         pkt.last_text[i] = g_fb_last_resp[i];
     jarvis_tlm_finalize(&pkt);
     /* wrap as a UDP broadcast to :51000 and fire-and-forget (no DD poll) */
-    static uint8_t tlm_frame[288];   /* 14+20+8+236 = 278 <= 288 (v8) */
+    static uint8_t tlm_frame[304];   /* 14+20+8+246 = 288 <= 304 (v10; headroom, never exact-fit) */
     int flen = net_build_udp_broadcast(tlm_frame, sizeof tlm_frame, g_net.nic.mac, JARVIS_BOX_IP,
                    JARVIS_TELEMETRY_PORT, JARVIS_TELEMETRY_PORT, &pkt, (uint16_t)sizeof pkt);
     if (flen > 0)
@@ -4568,6 +4582,7 @@ static void *main_continued(void *arg UNUSED)
                     /* 6-3/M2: init the global inform cap alongside (zero-init is already a
                      * valid cold state — belt-and-suspenders, the wake_gate precedent). */
                     behavior_budget_init(&g_behavior_budget);
+                    g_proactive_inited = 1;   /* 6-3/M3: TLM_F_PROACTIVE capability-live latch */
 #endif
                     g_mon_inited = 1;
                 }
@@ -4644,6 +4659,17 @@ static void *main_continued(void *arg UNUSED)
                     if (pro_probe_win == pro_b5_win && !g_pb_dead) {
                         g_pb_dead = 1;
                         puts_serial("[PROACTIVE-PROBE] inducing g_pb_dead (B5 leg, terminal)\n");
+                    }
+                    /* 6-3/M3 (v10) box proof: after the inductions settle, print the exact
+                     * globals jarvis_telemetry_emit fills into the v10 packet (fill/flag/CRC
+                     * are host-proven; on-wire I211 validation happens at the flip — no NIC
+                     * in QEMU; the [TLM-V8]/[TLM-V9] precedent). */
+                    if (pro_probe_win == pro_b5_win + 2) {
+                        puts_serial("[TLM-V10] behaviors_fired="); put_dec(g_behaviors_fired);
+                        puts_serial(" behaviors_mask="); put_dec(g_behaviors_mask);
+                        puts_serial(" last_behavior="); put_dec((uint32_t)g_last_behavior);
+                        puts_serial(" proactive_inited="); put_dec((uint32_t)g_proactive_inited);
+                        puts_serial(" (TLM_F_PROACTIVE would be set)\n");
                     }
                 }
 #endif

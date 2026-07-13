@@ -45,6 +45,7 @@ FLAG_LABEL = {
     'ACTIONS': 'Self-healing / autonomous actions',
     'MONITORS': 'Always-on monitors',
     'WAKE': 'Event-driven wake (templated consults)',
+    'PROACTIVE': 'Proactive behaviors (registry informs)',
 }
 
 _P = 0
@@ -559,6 +560,52 @@ def main():
                 time.sleep(0.1)
             check(wake_ok,
                   "(6-2/M3) System 'Event consults' renders == live wakes_fired (snap=%r)" % (wake_dbg,))
+
+            # (6-3/M3) PIN the 'Proactive behaviors' card — the total must equal the live
+            # behaviors_fired on a PROACTIVE-flagged frame (the golden 'infer' frame carries
+            # behaviors_fired=3, behaviors_mask=21 = 0b10101), AND the per-row liveness must
+            # derive from the mask: bit 0 set -> the B1 anomaly-consult row renders
+            # 'fired this boot' while bit 1 clear -> the B2 self-heal-consult row renders
+            # 'quiet'. TEETH: fails on a wrong total, a '—', or a broken mask decode.
+            beh_ok = False
+            beh_dbg = None
+            deadline = time.time() + 12
+            while time.time() < deadline:
+                snap = page.evaluate(
+                    "() => {"
+                    " const rec = (window.JarvisTelemetry.getState().latest) || {};"
+                    " const flags = rec.flags_list || [];"
+                    " const lab = Array.from(document.querySelectorAll('div'))"
+                    "   .find(d => d.textContent.trim() === 'Behaviors fired');"
+                    " let rendered = null;"
+                    " if (lab && lab.parentElement) {"
+                    "   const kids = Array.from(lab.parentElement.children);"
+                    "   const i = kids.indexOf(lab);"
+                    "   rendered = kids[i + 1] ? kids[i + 1].textContent.trim() : null;"
+                    " }"
+                    " const rowTxt = (name) => {"
+                    "   const el = Array.from(document.querySelectorAll('span'))"
+                    "     .find(s => s.textContent.indexOf(name) >= 0);"
+                    "   return el && el.parentElement ? el.parentElement.textContent : null;"
+                    " };"
+                    " return { pro: flags.indexOf('PROACTIVE') >= 0, count: rec.behaviors_fired,"
+                    "          mask: rec.behaviors_mask, rendered,"
+                    "          b1: rowTxt('anomaly-consult'), b2: rowTxt('self-heal-consult') };"
+                    "}")
+                beh_dbg = snap
+                if snap['pro'] and snap['rendered'] not in (None, '—'):
+                    try:
+                        rendered_n = int(str(snap['rendered']).replace(',', ''))
+                    except ValueError:
+                        rendered_n = None
+                    if (rendered_n == snap['count'] and snap['b1'] and snap['b2']
+                            and 'fired this boot' in snap['b1'] and 'quiet' in snap['b2']):
+                        beh_ok = True
+                        break
+                time.sleep(0.1)
+            check(beh_ok,
+                  "(6-3/M3) 'Proactive behaviors' total == live behaviors_fired AND per-row "
+                  "liveness derives from behaviors_mask (B1 fired / B2 quiet; snap=%r)" % (beh_dbg,))
 
             # (#5/M2) PIN the SHIELD 'Actions with learned risk' VALUE — must equal the live
             # shield_learn_keys on a SHIELD_LEARN-flagged frame (flag-gated; '—' otherwise). The

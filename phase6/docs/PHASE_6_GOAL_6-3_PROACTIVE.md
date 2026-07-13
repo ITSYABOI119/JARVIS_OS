@@ -343,9 +343,31 @@ wire minimalism.
   hour (1 inform) and ≥ the worst-case degraded hour (2 consults + ≤3 wraps + 1 digest, with the
   B5 re-arm covering the 7th-inform edge). (Box-driving note: detached KVM runs must escape the ssh
   session CGROUP — `sudo systemd-run` a transient unit; setsid/nohup dies with the session scope.)
-- **M3 (telemetry v10 + console — REQUIRED):** the §7 slice, full v9-precedent lockstep (header →
-  receiver decode+record BOTH → fixture → `gen_golden_pcap` → `golden.pcap` regen → console →
-  honesty/logic/e2e value-pins).
+- **M3 (telemetry v10 + console — REQUIRED) — ✅ DONE 2026-07-13 (full v9-precedent lockstep):**
+  **v10 = 246 B, CRC@242, version 10** — appends `behaviors_fired` u16@236 (USER INTERRUPTS; a
+  cap-suppressed inform never counts) + `behaviors_mask` u16@238 (bit id−1 latches per fired
+  behavior — the console's live per-row source) + `last_behavior` u8@240 + `beh_pad` u8@241,
+  +`TLM_F_PROACTIVE` 0x4000 set on `g_proactive_inited` (`jarvis_telemetry.c` untouched —
+  offsetof-based finalize, verified); gated fill in `jarvis_telemetry_emit` → the PROACTIVE=0
+  deploy emits 0s + flag clear (the v5..v9 honest pattern); UDP frame buffer 288→304 (headroom —
+  the v10 frame is exactly 288). Lockstep: receiver FMT `…HBBHBBHHBBI` + `FLAG_NAMES[0x4000]` +
+  decode+record BOTH; fixture `_DEFAULTS`/`FLAG_BITS`; `gen_golden_pcap` guards 246;
+  `golden_telemetry.json` meta + the infer frame (`behaviors_fired=3`, `behaviors_mask=21` =
+  0b10101 B1+B3+B5, `last_behavior=5`) + `golden.pcap` regenerated (2456 B, idempotent). Console:
+  the **"Proactive behaviors" System-screen card (O5)** — a static 5-row manifest (KEEP IN SYNC
+  with behaviors.c) with per-row fired/quiet from the mask bit, the live total + last-behavior
+  label, all `—` until `TLM_F_PROACTIVE`; + the Capabilities "Proactive behaviors (registry
+  informs)" row (flag-parity); sim = 0s + no flag (previews `—`). Honesty: "informs you"/
+  "event-triggered" REQUIRED; "the AI decided" banned globally; "autonomous" banned SCOPED to the
+  card (the K ACTIONS row keeps it); the card never sums wakes+behaviors (the documented
+  double-count). Host green: telemetry C **71/71**, receiver **145/145**, honesty **111/111**,
+  logic 14/14, e2e **35/35** (the new pin: total==3 AND B1-fired/B2-quiet derived from mask 21).
+  Box: OFF = zero v10/behavior lines + **[INFER] overlap 16/16 byte-identical** vs the pre-v10 OFF
+  baseline, err=0 (obj-identity is NOT the M3 gate — the wire bump legitimately changes the
+  telemetry emit code); transient ON (probe mode 1) = **`[TLM-V10] behaviors_fired=6
+  behaviors_mask=15 last_behavior=2 proactive_inited=1`** climbing + the committed cap-6
+  suppressing the probe's 7th inform (B5 re-arm ×281 — the M2 semantics in compressed probe-land,
+  correct); on-wire I211 v10 validates at the flip (no NIC in QEMU — the v8/v9 precedent).
 - **Flip:** `JARVIS_PROACTIVE` default-ON — deliberate, after a supervised healthy run (expected
   shape: the uptime digests fire, everything else honest-0) + first on-wire v10.
 
