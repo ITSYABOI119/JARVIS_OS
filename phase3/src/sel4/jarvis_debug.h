@@ -220,17 +220,21 @@
 #endif
 
 /* Phase 6 goal 6-3: proactive behaviors — the M0 registry (behaviors.c) wired over the spine.
- * When 1, PA marks a registry behavior at every mon_notify EXECUTED crossing (B1 err-rate /
- * B2 heal-rate / B3 store-wrap / B5 degraded — the always-fires §6/F-a counter site, never the
- * gate-suppressible consult dispatch), REPLACES the bare uptime NOTIFY with the B4 status
- * digest (behavior_build_digest -> spine ACTION_STATUS_DIGEST=4 -> [DIGEST] + JACT action=4 —
- * the ONE documented 6-1 behavior change: a milestone was never an anomaly; the 6-1 probe gate
- * re-baselines "7 [ANOMALY]" -> "4 [ANOMALY] + 3 [DIGEST]"), and runs the B5 fire-once
- * degraded-mode edge-detect at the watcher tick (g_pb_dead && !notified — pa_restart_pb is
- * NEVER touched). INFORM-only v1 (O4); per-behavior budgets INHERITED at M1 (the O2 aggregate
- * cap lands with the M2 anti-spam proof). Default 0 -> everything compiles out (object-level
- * byte-identical); the flip is a deliberate post-M3 decision. */
-#define JARVIS_PROACTIVE 0
+ * **6-3 FLIPPED DEFAULT-ON 2026-07-13** — the deployed image runs the ≥5 butler INFORM
+ * behaviors live (box-gated M1/M2/M3: all-5-demonstrated + anti-spam fire-once-under-sustain +
+ * the calibrated O2 global cap BEHAVIOR_BUDGET_PER_HOUR 6/hr + the MEASURED healthy FP
+ * baseline 0/1 = 0% + telemetry v10; a HEALTHY box fires ~only the uptime digests — honest
+ * near-silence is the design working). When 1, PA marks a registry behavior at every
+ * mon_notify EXECUTED crossing (B1 err-rate / B2 heal-rate / B3 store-wrap / B5 degraded —
+ * the always-fires §6/F-a counter site, never the gate-suppressible consult dispatch),
+ * REPLACES the bare uptime NOTIFY with the B4 status digest (behavior_build_digest -> spine
+ * ACTION_STATUS_DIGEST=4 -> [DIGEST] + JACT action=4 — the ONE documented 6-1 behavior change:
+ * a milestone was never an anomaly; the 6-1 probe gate re-baselines "7 [ANOMALY]" ->
+ * "4 [ANOMALY] + 3 [DIGEST]"), and runs the B5 fire-once degraded-mode edge-detect at the
+ * watcher tick (g_pb_dead && !notified — pa_restart_pb is NEVER touched). INFORM-only v1 (O4);
+ * every fire is one JACT-audited line. When 0 everything compiles out (object-level
+ * byte-identical). */
+#define JARVIS_PROACTIVE 1
 #if JARVIS_PROACTIVE && !(JARVIS_ACTIONS && JARVIS_MONITORS && JARVIS_WAKE)
 #error "JARVIS_PROACTIVE requires JARVIS_ACTIONS && JARVIS_MONITORS && JARVIS_WAKE (behaviors ride the monitor->spine->wake channels)"
 #endif

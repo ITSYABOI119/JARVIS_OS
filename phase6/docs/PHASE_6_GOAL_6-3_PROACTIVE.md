@@ -1,8 +1,10 @@
 # Phase 6 Goal 6-3 — Proactive Actions: ≥5 Butler Behaviors (PLAN-FIRST)
 
-**Status: APPROVED (strategist review 2026-07-12 — O1–O5 resolved, §12) — M0 DONE 2026-07-12
-(host-only: the behavior registry + integer-only digest + the two append-only edits; NO box wiring,
-NO flags, NO wire changes — M1 is next).**
+**Status: ✅ GOAL 6-3 COMPLETE 2026-07-13 — M0/M1 (2026-07-12) + M2/M3 (2026-07-13) all box-gated,
+then the deliberate `JARVIS_PROACTIVE` default-ON flip (KVM healthy gate → ESP deploy
+`.bak-pre63flip` → supervised boot_id=19 + FIRST on-wire v10, honest-0 behaviors on the healthy
+run + the live console card). The deployed image runs the full proactive butler. Next Phase-6
+goals: 6-5 (control-IN) / 6-6 (routing) / 6-7 (the 7-day supervised exit).**
 **Depends on:** keystone K (✅ the live action spine: allowlist + `shield_assess` + `trust_policy` +
 JACT, `JARVIS_ACTIONS` default-ON since 2026-07-08), goal 6-1 (✅ the live always-on monitors,
 `JARVIS_MONITORS` default-ON since 2026-07-09), and goal 6-2 (✅ COMPLETE 2026-07-12 — the event-driven
@@ -368,8 +370,23 @@ wire minimalism.
   behaviors_mask=15 last_behavior=2 proactive_inited=1`** climbing + the committed cap-6
   suppressing the probe's 7th inform (B5 re-arm ×281 — the M2 semantics in compressed probe-land,
   correct); on-wire I211 v10 validates at the flip (no NIC in QEMU — the v8/v9 precedent).
-- **Flip:** `JARVIS_PROACTIVE` default-ON — deliberate, after a supervised healthy run (expected
-  shape: the uptime digests fire, everything else honest-0) + first on-wire v10.
+- **Flip — ✅ DONE 2026-07-13: `JARVIS_PROACTIVE` default-ON — GOAL 6-3 COMPLETE.** The
+  K/M4 / 6-1 / 6-2 pattern: **KVM healthy gate** of the flipped-default image (q=13,000 across
+  130 windows — ZERO `[BEHAVIOR]`/`[DIGEST]`/`[ANOMALY]`/`[WAKE]`/`[RESTART]` lines, err=0,
+  coherent; a sub-1h healthy box honestly fires nothing) → **ESP deploy** (image md5
+  `379f6bdb…`, backup `.bak-pre63flip` = the 6-2 image `fa1e4e49…`; Ubuntu kept `BootOrder[0]`,
+  one-shot BootNext consumed by the supervised boot) → **supervised bare-metal boot_id=19 +
+  FIRST on-wire v10**: 322+ packets ALL `version=10`/246 B crc_ok; `TLM_F_PROACTIVE` latched at
+  the FIRST [STATS] window (seq 220, q=135 — early-boot packets honestly lack it, the
+  documented latch shape) and persisted; `behaviors_fired`/`behaviors_mask`/`last_behavior`
+  **HONEST-0 on every flagged record** (the healthy sub-1h shape — the 1h digest fires later,
+  real not induced); err=0 to q=83,100+, NN=6, coherent Gemma, 5.41 tok/s live; **the COMPLETE
+  Phase-6 flag set co-live on one wire** (MEMORY/CONTEXT/RETRIEVAL/CACHE_GROWTH/ACTIONS/
+  MONITORS/WAKE/PROACTIVE) → **the live console card rendered from the real feed** (Playwright
+  against the live SSE: PROACTIVE flag live, total "0" not "—", all 5 manifest rows "quiet",
+  `simulated=false`). The deployed image now runs the FULL proactive butler: memory + the K
+  self-heal action gate + always-on monitors + the event-driven wake lane + the ≥5 registry
+  INFORM behaviors.
 
 ## 10. Storage / state
 
