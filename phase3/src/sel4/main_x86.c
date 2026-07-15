@@ -87,6 +87,11 @@
 #include "behaviors.h"          /* Phase 6 6-3/M1: the compile-time behavior registry (B1-B5 + digest; host-tested) */
 #endif
 #endif
+#if JARVIS_CONTROL_IN
+#include "control_verify.h"      /* Phase 6 6-5/M2a: the M1 security core orchestrator (parse->ratelimit->HMAC->replay) */
+#include "control_key.h"         /* Phase 6 6-5/M2a: the NVMe JKEY slot (@ LBA 21,130,000; key lives in PA) */
+#include "hmac_sha256.h"         /* Phase 6 6-5/M2a: for the PROBE self-test's synthetic-frame signing */
+#endif
 #include "jarvis_ui_tokens.h"   /* Step 2c-2b: FBP_ and JUI_ palette + geometry (single source) */
 
 #if JARVIS_AVX2_PROBE
@@ -377,6 +382,54 @@ static uint8_t  g_model_load_pct = 0;   /* N-c-1: 0..100, set by model_load_prog
  * this on the "first-light OK" path (mac_valid && a DD); ready stays 0 on QEMU / NIC-absent
  * so the emitter is a strict no-op. */
 static struct { i211_nic_t nic; void *tx_buf_v; uint64_t tx_buf_p; int ready; } g_net;
+
+#if JARVIS_CONTROL_IN
+/* ── Phase 6 6-5/M2a: control-IN RX data-path state (deploy-inert at default 0) ──────
+ * The RX ring feeds the M1 security core (control_verify) running in PA. The HMAC key
+ * lives HERE, in PA — never the future SEC-014 input process, never BAR0 (goal-doc §5).
+ * M2a proves RX -> verify -> extract + LOG only; routing to inference + the real query
+ * SHIELD is M3 (the M3 BOUNDARY at the poll site). */
+#define CONTROL_TEST_EPOCH 0x4A320001u   /* M2a compile-time epoch; M3 = a real per-boot epoch */
+static uint8_t             g_ctrl_key[CTRL_KEY_LEN];
+static int                 g_ctrl_key_ok   = 0;   /* FAIL-CLOSED: 0 => never call control_verify */
+static int                 g_ctrl_rx_ready = 0;   /* set by [NET] once the RX ring is armed */
+static control_replay_t    g_ctrl_replay;
+static control_ratelimit_t g_ctrl_rl;
+static uint32_t g_ctrl_accepted, g_ctrl_dropped;
+static uint32_t g_ctrl_d_parse, g_ctrl_d_rl, g_ctrl_d_auth, g_ctrl_d_replay;
+/* RX ring (1 page) + 256 buffers (128 pages, 2x2KB/page) — file-scope so the [NET]
+ * block allocs them and the later same-block wiring reads them; UC-mapped, persistent. */
+static void     *g_ctrl_rx_ring_v;
+static uint64_t  g_ctrl_rx_ring_p;
+static void     *g_ctrl_rx_buf_v[128];
+static uint64_t  g_ctrl_rx_buf_p[128];
+
+#if JARVIS_CONTROL_IN_PROBE
+static void ctrl_put_be16(uint8_t *p, uint16_t v){ p[0]=(uint8_t)(v>>8); p[1]=(uint8_t)v; }
+static void ctrl_put_be32(uint8_t *p, uint32_t v){ p[0]=(uint8_t)(v>>24); p[1]=(uint8_t)(v>>16); p[2]=(uint8_t)(v>>8); p[3]=(uint8_t)v; }
+static void ctrl_put_be64(uint8_t *p, uint64_t v){ for(int i=0;i<8;i++) p[i]=(uint8_t)(v>>(56-8*i)); }
+/* Build one VALID signed JCTL message (36B header + query + 32B HMAC tag, big-endian)
+ * into `msg`, signed over [0, 36+qlen) with `key`. Returns the message length. Nonce is
+ * a fixed deterministic pattern (a self-test, not a real client). */
+static uint16_t build_probe_jctl(uint8_t *msg, const uint8_t key[CTRL_KEY_LEN],
+                                 uint64_t seq, uint8_t nonce_seed, const char *query)
+{
+    uint16_t qlen = 0; while (query[qlen]) qlen++;
+    ctrl_put_be32(msg + CTRL_OFF_MAGIC, CONTROL_MAGIC);
+    msg[CTRL_OFF_VERSION] = (uint8_t)CONTROL_VERSION;
+    msg[CTRL_OFF_FLAGS]   = 0;
+    ctrl_put_be64(msg + CTRL_OFF_SEQ, seq);
+    ctrl_put_be32(msg + CTRL_OFF_EPOCH, CONTROL_TEST_EPOCH);
+    for (int i = 0; i < (int)CONTROL_NONCE_LEN; i++)
+        msg[CTRL_OFF_NONCE + i] = (uint8_t)(nonce_seed + i);
+    ctrl_put_be16(msg + CTRL_OFF_QLEN, qlen);
+    for (uint16_t i = 0; i < qlen; i++) msg[CTRL_OFF_QUERY + i] = (uint8_t)query[i];
+    hmac_sha256(key, CTRL_KEY_LEN, msg, (size_t)CONTROL_HDR_LEN + qlen,
+                msg + CONTROL_HDR_LEN + qlen);
+    return (uint16_t)(CONTROL_HDR_LEN + qlen + CONTROL_TAG_LEN);
+}
+#endif /* JARVIS_CONTROL_IN_PROBE */
+#endif /* JARVIS_CONTROL_IN */
 
 /* N-c-1 cadence: hoisted 1 Hz gate + last-known counter snapshot, so the keepalive can tick
  * from BOTH the loop top AND the inference response-poll. A single inference blocks the
@@ -3337,6 +3390,39 @@ static void *main_continued(void *arg UNUSED)
                     nic.tx_ring      = (i211_tx_desc_t *)tx_ring_v;
                     nic.tx_ring_phys = tx_ring_p;
                     nic.rx_ring      = NULL;   /* TX-only first-light */
+#if JARVIS_CONTROL_IN
+                    /* 6-5/M2a: alloc the RX ring (1 page UC) + 256 buffers (128 pages,
+                     * 2x2KB/page, UC) BEFORE init so i211_nic_init step 6 programs the RX
+                     * registers. Buffers are wired + RDT armed AFTER init (below). */
+                    {
+                        vka_object_t ro;
+                        if (vka_alloc_frame(&vka, seL4_PageBits, &ro) == 0) {
+                            g_ctrl_rx_ring_v = vspace_map_pages(&vspace, &ro.cptr, NULL,
+                                seL4_AllRights, 1, seL4_PageBits, 0);
+                            if (g_ctrl_rx_ring_v) {
+                                seL4_X86_Page_GetAddress_t rp = seL4_X86_Page_GetAddress(ro.cptr);
+                                g_ctrl_rx_ring_p = rp.paddr;
+                            }
+                        }
+                        for (int f = 0; f < 128; f++) {
+                            vka_object_t bo; g_ctrl_rx_buf_v[f] = NULL; g_ctrl_rx_buf_p[f] = 0;
+                            if (vka_alloc_frame(&vka, seL4_PageBits, &bo) == 0) {
+                                g_ctrl_rx_buf_v[f] = vspace_map_pages(&vspace, &bo.cptr, NULL,
+                                    seL4_AllRights, 1, seL4_PageBits, 0);
+                                if (g_ctrl_rx_buf_v[f]) {
+                                    seL4_X86_Page_GetAddress_t bp = seL4_X86_Page_GetAddress(bo.cptr);
+                                    g_ctrl_rx_buf_p[f] = bp.paddr;
+                                }
+                            }
+                        }
+                    }
+                    if (g_ctrl_rx_ring_v && g_ctrl_rx_ring_p) {
+                        nic.rx_ring      = (i211_rx_desc_t *)g_ctrl_rx_ring_v;
+                        nic.rx_ring_phys = g_ctrl_rx_ring_p;
+                    } else {
+                        puts_serial("[CTRL-IN] RX ring alloc FAILED - RX inert\n");
+                    }
+#endif
                     if (i211_nic_init(&nic, (uint64_t)(uintptr_t)nic_bar_vaddr) != 0) {
                         puts_serial("[NET] i211_nic_init failed (reset timeout, non-fatal)\n");
                         nic_ok = 0;
@@ -3359,6 +3445,46 @@ static void *main_continued(void *arg UNUSED)
                     puts_serial("[NET] link LU="); put_dec((uint32_t)lu);
                     puts_serial(" speed="); put_dec(nic.link_speed); puts_serial("\n");
 
+#if JARVIS_CONTROL_IN
+                    /* 6-5/M2a: wire all 256 RX buffers AFTER init (init memset zeroed
+                     * rx_bufs_phys[]); bounded ~4s link-up poll; then ARM RDT LAST — and
+                     * ONLY if every descriptor got a buffer (an addr=0 descriptor exposed
+                     * to the NIC would DMA to physical 0). RX is independent of the TX
+                     * first-light result, so capture the RX-armed nic into g_net.nic here. */
+                    if (nic.rx_ring) {
+                        int wired = 0;
+                        for (int f = 0; f < 128; f++) {
+                            if (g_ctrl_rx_buf_v[f] && g_ctrl_rx_buf_p[f]) {
+                                i211_nic_set_rx_buffer(&nic, (uint32_t)(f*2),
+                                    g_ctrl_rx_buf_v[f], g_ctrl_rx_buf_p[f], I211_RX_BUF_SIZE);
+                                i211_nic_set_rx_buffer(&nic, (uint32_t)(f*2+1),
+                                    (uint8_t *)g_ctrl_rx_buf_v[f] + 2048,
+                                    g_ctrl_rx_buf_p[f] + 2048, I211_RX_BUF_SIZE);
+                                wired += 2;
+                            }
+                        }
+                        {
+                            uint64_t rx_dl = jarvis_rdtsc() + 4000ULL * TSC_PER_MS;
+                            int lu2 = 0;
+                            while (jarvis_rdtsc() < rx_dl) {
+                                if (i211_nic_link_status(&nic)) { lu2 = 1; break; }
+                            }
+                            puts_serial("[CTRL-IN] RX wired="); put_dec((uint32_t)wired);
+                            puts_serial("/256 link LU="); put_dec((uint32_t)lu2);
+                            puts_serial(" speed="); put_dec(nic.link_speed); puts_serial("\n");
+                        }
+                        if (wired == I211_RX_RING_SIZE) {
+                            /* ARM the ring: RDT = last index (all descriptors available). */
+                            *(volatile uint32_t *)(uintptr_t)((uint64_t)(uintptr_t)nic_bar_vaddr
+                                + I211_RDT) = I211_RX_RING_SIZE - 1;
+                            g_net.nic = nic;          /* capture the RX-armed struct (poll uses g_net.nic) */
+                            g_ctrl_rx_ready = 1;      /* independent of TX first-light below */
+                            puts_serial("[CTRL-IN] RX armed\n");
+                        } else {
+                            puts_serial("[CTRL-IN] RX NOT armed (short buffer alloc) - inert\n");
+                        }
+                    }
+#endif
                     /* N-b: a valid UDP broadcast frame (Eth/IPv4/UDP) around the TX path.
                      * 255.255.255.255:51000 — limited broadcast, no ARP needed. The L2 proof
                      * (raw 0x88b5) was banked at N-a; this is Wireshark-decodable UDP. The real
@@ -3861,6 +3987,62 @@ static void *main_continued(void *arg UNUSED)
     puts_serial("[PROBE] seeded synthetic fact (marker SYNTHPROBEZX9Q7)\n");
 #endif
 
+#if JARVIS_CONTROL_IN
+    /* 6-5/M2a: read the HMAC key from the NVMe JKEY slot (FAIL-CLOSED), then init the
+     * replay + rate-limit state. The key lives in PA; the poll (workload loop) never
+     * calls control_verify unless both the RX ring is armed AND a valid key loaded. */
+    {
+        ctrl_key_slot_t ks;
+        int loaded = 0;
+        if (epi_nvme_read(CTRL_KEY_BASE_LBA, 1, &ks) == 0 &&
+            ks.magic == CTRL_KEY_MAGIC) {
+            int nz = 0;
+            for (int i = 0; i < (int)CTRL_KEY_LEN; i++) nz |= ks.key[i];
+            if (nz) { memcpy(g_ctrl_key, ks.key, CTRL_KEY_LEN); g_ctrl_key_ok = 1; loaded = 1; }
+        }
+        puts_serial(loaded ? "[CTRL-IN] key loaded - armed\n"
+                           : "[CTRL-IN] no key (fail-closed) - inert\n");
+    }
+    control_replay_init(&g_ctrl_replay, CONTROL_TEST_EPOCH);   /* seq_floor = 0 (per-boot; M3 persists) */
+    control_ratelimit_init(&g_ctrl_rl, (uint32_t)(jarvis_rdtsc() / TSC_PER_MS));
+#if JARVIS_CONTROL_IN_PROBE
+    /* Synthetic-frame self-test (KVM has no NIC): a valid signed JCTL -> CV_ACCEPT,
+     * then a one-bit-tampered tag -> CV_DROP_AUTH. Uses the loaded key; resets the
+     * replay + rate-limit state afterward so the live poll starts clean. */
+    if (g_ctrl_key_ok) {
+        static uint8_t pj[CONTROL_MSG_MAX];
+        static uint8_t pf[512];
+        control_result_t pr;
+        uint16_t pjl = build_probe_jctl(pj, g_ctrl_key, 1u, 0xA0, "status");
+        int pfl = net_build_udp_broadcast(pf, sizeof pf, g_net.nic.mac, JARVIS_BOX_IP,
+                                          40000, (uint16_t)CONTROL_PORT, pj, pjl);
+        uint32_t pnm = (uint32_t)(jarvis_rdtsc() / TSC_PER_MS);
+        control_verdict_t pv = (pfl > 0)
+            ? control_verify(pf, (size_t)pfl, g_ctrl_key, CTRL_KEY_LEN,
+                             &g_ctrl_replay, &g_ctrl_rl, pnm, &pr)
+            : CV_DROP_PARSE;
+        puts_serial(pv == CV_ACCEPT ? "[CTRL-IN-PROBE] accept q=status\n"
+                                    : "[CTRL-IN-PROBE] FAIL expected accept\n");
+        /* tamper: flip one tag byte; re-init replay so the seq isn't the reject cause */
+        control_replay_init(&g_ctrl_replay, CONTROL_TEST_EPOCH);
+        pj[pjl - 1] ^= 0x01;
+        pfl = net_build_udp_broadcast(pf, sizeof pf, g_net.nic.mac, JARVIS_BOX_IP,
+                                      40000, (uint16_t)CONTROL_PORT, pj, pjl);
+        pnm = (uint32_t)(jarvis_rdtsc() / TSC_PER_MS);
+        pv = (pfl > 0)
+            ? control_verify(pf, (size_t)pfl, g_ctrl_key, CTRL_KEY_LEN,
+                             &g_ctrl_replay, &g_ctrl_rl, pnm, &pr)
+            : CV_DROP_PARSE;
+        puts_serial(pv == CV_DROP_AUTH ? "[CTRL-IN-PROBE] tamper=DROP_AUTH\n"
+                                       : "[CTRL-IN-PROBE] FAIL tamper not caught\n");
+    } else {
+        puts_serial("[CTRL-IN-PROBE] SKIPPED (no key)\n");
+    }
+    control_replay_init(&g_ctrl_replay, CONTROL_TEST_EPOCH);   /* reset for the live poll */
+    control_ratelimit_init(&g_ctrl_rl, (uint32_t)(jarvis_rdtsc() / TSC_PER_MS));
+#endif /* JARVIS_CONTROL_IN_PROBE */
+#endif /* JARVIS_CONTROL_IN */
+
     while (1) {
         q_total++;
 
@@ -3869,6 +4051,66 @@ static void *main_continued(void *arg UNUSED)
          * ~12 s inference spin doesn't starve the stream. No-op until the NIC is up. */
         jarvis_telemetry_set_counters(q_total, q_hits, q_infer, q_heartbeat, q_shield, q_errors);
         jarvis_telemetry_tick();
+
+#if JARVIS_CONTROL_IN
+        /* 6-5/M2a: poll ONE inbound control frame (non-blocking — i211_nic_recv returns
+         * 0 instantly on an empty ring) and run it through the M1 security core. On
+         * ACCEPT, LOG the sanitized query ONLY. Every drop is SILENT (attacker-controlled);
+         * totals surface at the [STATS] cadence. */
+        if (g_ctrl_rx_ready && g_ctrl_key_ok) {
+            static uint8_t rxf[2048];
+            int rn = i211_nic_recv(&g_net.nic, rxf, sizeof rxf);
+            if (rn > 0) {
+                control_result_t cres;
+                uint32_t cnow = (uint32_t)(jarvis_rdtsc() / TSC_PER_MS);
+                control_verdict_t cv = control_verify(rxf, (size_t)rn, g_ctrl_key,
+                    CTRL_KEY_LEN, &g_ctrl_replay, &g_ctrl_rl, cnow, &cres);
+                if (cv == CV_ACCEPT) {
+                    g_ctrl_accepted++;
+                    /* Log-sanitize: query bytes are ATTACKER-CONTROLLED — map non-printables
+                     * to '.', bound the copy, NUL-terminate; NEVER puts_serial raw bytes. */
+                    char qs[121];
+                    uint32_t qm = cres.query_len < 120 ? cres.query_len : 120;
+                    for (uint32_t i = 0; i < qm; i++) {
+                        uint8_t c = cres.query[i];
+                        qs[i] = (c >= 0x20 && c < 0x7f) ? (char)c : '.';
+                    }
+                    qs[qm] = 0;
+                    puts_serial("[CTRL-IN] ACCEPT seq="); put_dec((uint32_t)cres.seq);
+                    puts_serial(" qlen="); put_dec((uint32_t)cres.query_len);
+                    puts_serial(" q=\""); puts_serial(qs); puts_serial("\"\n");
+                    /* DURABLE (bounded to the first 8 — an authenticated, rate-limited path,
+                     * never attacker-floodable past 8): the ACCEPT proof survives BOOT_LOG=0
+                     * + circular-log wrap. qs is already printable-sanitized. */
+                    if (g_ctrl_accepted <= 8 && g_nvme_ptr) {
+                        char al[200]; char *ap = al;
+                        ap = fbp_str(ap, "[CTRL-IN] ACCEPT seq="); ap = fbp_u32(ap, (uint32_t)cres.seq);
+                        ap = fbp_str(ap, " qlen="); ap = fbp_u32(ap, (uint32_t)cres.query_len);
+                        ap = fbp_str(ap, " q=\""); ap = fbp_str(ap, qs); *ap++ = '"'; *ap = '\0';
+                        nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr, g_nvme_bounce_paddr,
+                                       LOG_BOOT, al);
+                    }
+                    /* ==================== M3 BOUNDARY — DO NOT ROUTE ====================
+                     * Do NOT shmem_ipc_send(shared_request_ring, MSG_QUERY, ...) here.
+                     * M2a proves RX -> verify -> extract ONLY. Routing to inference + the
+                     * real QUERY SHIELD (closing SEC-039-for-queries) is M3; a send here
+                     * without that SHIELD is the goal-doc §8 forbidden "flip-an-item-unmet"
+                     * state. The authenticated query is logged and dropped.
+                     * ================================================================== */
+                } else {
+                    g_ctrl_dropped++;
+                    switch (cv) {
+                        case CV_DROP_PARSE:     g_ctrl_d_parse++;  break;
+                        case CV_DROP_RATELIMIT: g_ctrl_d_rl++;     break;
+                        case CV_DROP_AUTH:      g_ctrl_d_auth++;   break;
+                        case CV_DROP_REPLAY:    g_ctrl_d_replay++; break;
+                        default: break;
+                    }
+                    /* SILENT — no per-drop log (attacker could flood it). Totals at [STATS]. */
+                }
+            }
+        }
+#endif
 #if JARVIS_AVX2_PROBE
         /* M0: dirty YMM in PA each iteration so the kernel's lazy per-TCB FPU
          * path exercises cross-thread YMM save/restore against PB's probe. */
@@ -4506,6 +4748,24 @@ static void *main_continued(void *arg UNUSED)
             puts_serial(" shield="); put_dec(q_shield);
             puts_serial(" err="); put_dec(q_errors);
             puts_serial("\n");
+#if JARVIS_CONTROL_IN
+            /* 6-5/M2a: control-IN totals (honest counters; every drop is silent per-frame).
+             * DURABLE via nvme_log_write so the acc/drop proof survives BOOT_LOG=0 + wrap. */
+            {
+                char cl[160]; char *cp = cl;
+                cp = fbp_str(cp, "[CTRL-IN-STATS] acc="); cp = fbp_u32(cp, g_ctrl_accepted);
+                cp = fbp_str(cp, " drop=");   cp = fbp_u32(cp, g_ctrl_dropped);
+                cp = fbp_str(cp, " (parse="); cp = fbp_u32(cp, g_ctrl_d_parse);
+                cp = fbp_str(cp, " rl=");     cp = fbp_u32(cp, g_ctrl_d_rl);
+                cp = fbp_str(cp, " auth=");   cp = fbp_u32(cp, g_ctrl_d_auth);
+                cp = fbp_str(cp, " replay="); cp = fbp_u32(cp, g_ctrl_d_replay);
+                *cp++ = ')'; *cp = '\0';
+                puts_serial(cl); puts_serial("\n");
+                if (g_nvme_ptr)
+                    nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr, g_nvme_bounce_paddr,
+                                   LOG_IPC_STATS, cl);
+            }
+#endif
             jarvis_log_snapshot(q_total, q_errors);   /* Step 2c-2a: full-state [SNAP] at the [STATS] cadence */
             jarvis_telemetry_emit(TLM_K_STATS, q_total, q_hits, q_infer, q_heartbeat, q_shield, q_errors);  /* N-c-1 */
             g_tlm_last_tsc = jarvis_rdtsc();   /* N-c-1: re-base the 1 Hz gate so the next tick isn't a near-dup */

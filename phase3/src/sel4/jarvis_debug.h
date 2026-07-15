@@ -263,6 +263,32 @@
 #error "JARVIS_PROACTIVE_PROBE must not ride JARVIS_MONITOR_PROBE or JARVIS_WAKE_PROBE (respawn races + a shared synthetic delta)"
 #endif
 
+/* Phase 6 6-5/M2a control-IN RX data path (the box's FIRST untrusted network inbound).
+ * When 1, Process A brings up the I211 RX ring, reads the HMAC key from the NVMe JKEY
+ * slot (fail-closed), and runs each captured frame through the M1 security core
+ * (control_verify: parse -> ratelimit -> constant-time HMAC -> replay) — logging the
+ * validated query ONLY (M2a proves RX->verify->extract; routing to inference + the real
+ * query SHIELD closing SEC-039-for-queries is M3; the SEC-014 less-privileged input
+ * process is M2b). Default 0 -> compiles out entirely (deploy-inert; main.c.obj +
+ * nic_i211.c.obj object-identical to pre-M2a). STANDALONE — no ACTIONS/MONITORS dep.
+ * NEVER flipped in M2a: the box test flips it TRANSIENTLY only; a committed flip with the
+ * SEC-014 process + query SHIELD unmet is the goal-doc §8 FORBIDDEN "mostly-gated" state.
+ * #ifndef-guarded so the build script can propagate it as -DJARVIS_CONTROL_IN=1 to the
+ * whole target: nic_i211.c does NOT include this header, so the RX-programming gate there
+ * relies on that -D (undefined -> 0 -> the OFF/HEAD path, object-identical + host-test-safe). */
+#ifndef JARVIS_CONTROL_IN
+#define JARVIS_CONTROL_IN 0
+#endif
+/* Box/KVM synthetic-frame self-test: builds a valid signed JCTL message with the loaded
+ * key and asserts control_verify ACCEPT + a tamper -> DROP_AUTH. Its OWN flag (the
+ * per-probe precedent). Default 0 -> compiles out. */
+#ifndef JARVIS_CONTROL_IN_PROBE
+#define JARVIS_CONTROL_IN_PROBE 0
+#endif
+#if JARVIS_CONTROL_IN_PROBE && !JARVIS_CONTROL_IN
+#error "JARVIS_CONTROL_IN_PROBE requires JARVIS_CONTROL_IN"
+#endif
+
 /* Phase 6 K/M2a-2 reuse-in-place respawn spike (box-only KVM measurement; SYSTEM_DESIGN
  * §4.1/§4.2). When 1, Process B gains a muslc-init-safe `pb_restart_entry` (re-enters PAST
  * musl's one-time init on a dedicated ABI-aligned restart stack, REUSING the warm model

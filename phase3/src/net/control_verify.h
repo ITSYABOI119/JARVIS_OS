@@ -73,6 +73,8 @@ typedef struct {
     cr_verdict_t      replay_verdict;  /* replay outcome; CR_ACCEPT until reached */
     const uint8_t    *query;           /* aliases the frame; set ONLY on ACCEPT   */
     uint16_t          query_len;       /* set ONLY on ACCEPT                      */
+    uint64_t          seq;             /* authenticated seq;   set ONLY on ACCEPT */
+    uint32_t          boot_epoch;      /* authenticated epoch; set ONLY on ACCEPT */
 } control_result_t;
 
 /*

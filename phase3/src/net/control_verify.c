@@ -25,6 +25,8 @@ control_verdict_t control_verify(const uint8_t *frame, size_t len,
     out->replay_verdict = CR_ACCEPT;
     out->query          = NULL;
     out->query_len      = 0;
+    out->seq            = 0;
+    out->boot_epoch     = 0;
 
     if (!frame || !key || !replay || !rl) {
         out->verdict = CV_DROP_PARSE;
@@ -72,9 +74,13 @@ control_verdict_t control_verify(const uint8_t *frame, size_t len,
         return out->verdict;
     }
 
-    /* ACCEPT — expose the authenticated query (copy-free view into `frame`). */
-    out->query     = msg.query;
-    out->query_len = msg.query_len;
-    out->verdict   = CV_ACCEPT;
+    /* ACCEPT — expose the authenticated query (copy-free view into `frame`) plus
+     * the authenticated seq/epoch (set ONLY here — a caller reads them only on
+     * CV_ACCEPT; 6-5/M2a logs seq, M3 uses epoch for cross-reboot replay). */
+    out->query      = msg.query;
+    out->query_len  = msg.query_len;
+    out->seq        = msg.seq;
+    out->boot_epoch = msg.boot_epoch;
+    out->verdict    = CV_ACCEPT;
     return out->verdict;
 }

@@ -1,6 +1,6 @@
 # Phase 6 Goal 6-5 — Control-IN / Natural-Language Primary (PLAN-FIRST)
 
-**Status: IN PROGRESS — strategist-APPROVED; M0 (RX spike) DONE/PASS + M1 (host security core) DONE, both 2026-07-15 (see §9). M2+ (box inbound path, SEC-014 input process, query SHIELD, the hard-gated `JARVIS_CONTROL_IN` flip) not started.**
+**Status: IN PROGRESS — M0 (RX spike) + M1 (host security core) + M2a (I211 RX → control_verify data path in PA, gated `JARVIS_CONTROL_IN` default-0) all DONE 2026-07-15 (see §9; full box gate: OFF-identity + KVM probe + bare-metal signed-frame ACCEPT/DROP_AUTH/DROP_REPLAY). Next: M2b (SEC-014 input process) → M3 (route query + query SHIELD + response + two-way UI) → M4 → the hard-gated flip.**
 **This is the phase's LONG POLE and its single hardest security gate:** it turns the read-only
 telemetry console two-way and opens the box to the **FIRST untrusted inbound it has ever accepted**.
 Every prior Phase-6 trigger was internal state; 6-5's first trigger is a hostile network frame.
@@ -446,14 +446,31 @@ until the deliberate, checklist-complete, security-reviewed flip.
   1-byte parser OOB read (fixed + the fuzz hardened to exact-len heap buffers so ASan now catches the
   class — teeth-proven against a guard-removed mutant). 7 CI steps, all green. Channel-agnostic; NOT
   wasted if M0 had failed. Nothing ships (`JARVIS_CONTROL_IN` does not exist yet — that is M2+).
-- **M2 — the box inbound path (box, gated `JARVIS_CONTROL_IN` default-0):** the full I211 RX driver
-  (the M0 spike hardened) + the SEC-014 less-privileged input process (cap-subtracted per §3/§5 —
-  RX buffer pages + doorbell + one shmem ring, NO BAR0), pinned off the PA core (O-Q13), running the
-  M1-fuzzed parser+auth in isolation and handing PA a validated query. Box smoke: a signed query is
-  received, validated, delivered; a bad-MAC/replayed/flood message is dropped SILENTLY; **an oversized
-  (>2 KB) frame + a descriptor-ring-wrap sequence are handled without OOB copy or ring desync (the
-  SEC-033 clamp exercised on the box — the one adversarial case host-fuzzing cannot reach).** OFF =
-  object-level byte-identical.
+- **M2a — DONE 2026-07-15 (box, gated `JARVIS_CONTROL_IN` default-0; the RX-productization half of
+  M2).** Real I211 RX ring → the M1 security core (`control_verify` running in PA for now) → LOG the
+  validated query ONLY (the M3 BOUNDARY: no routing to inference; that + the query SHIELD is M3). The
+  HMAC key lives in PA, read fail-closed from the NVMe JKEY slot @ LBA 21,130,000 (`control_key.h`).
+  Full box gate PASSED: **(a) OFF-identity** — `main.c.obj` + `nic_i211.c.obj` `.text`/`.rodata`/`.data`
+  + `nm` byte-identical to the pre-M2a baseline (proven 3×, incl. after a 1→0 teardown rebuild).
+  **(b) KVM probe** (`JARVIS_CONTROL_IN_PROBE`) — key-loaded → a synthetic signed frame `CV_ACCEPT`
+  + a tampered tag `CV_DROP_AUTH`, `[STATS] q=100 err=0`, coherent Gemma. **(c) bare-metal signed
+  frames** (boot_id=22 unicast + boot_id=23 broadcast, both work — the deploy `RCTL.BAM` accepts
+  broadcast, the exact-MAC filter accepts unicast; no promiscuous): `[CTRL-IN] ACCEPT seq=1/2/3
+  q="status"/"uptime"/"errors"` + `[CTRL-IN-STATS] acc=3 drop=… (auth=1 replay=1)` — a real
+  HMAC-signed frame ACCEPTED, a tampered tag DROP_AUTH, a replayed seq DROP_REPLAY, all LAN/telemetry
+  broadcast correctly parse-dropped on the wrong port, err=0, no faults, workload unregressed. A
+  4-lens adversarial-review workflow found + fixed 1 HIGH (the gated CMake injection was add-only →
+  the persistent `-D` overrode the header on an OFF rebuild = a silent "OFF-stays-ON"; fixed with a
+  symmetric teardown `else`, box-proven). Additive `control_result_t.seq/boot_epoch` (M1 CI still
+  green). **Honest limitations (deferred, safe because gated): fixed `CONTROL_TEST_EPOCH` ⇒ per-boot
+  replay floor 0 (M3 = real epoch + NVMe-persisted floor); RX poll + HMAC on PA's core 0 (M2b's
+  SEC-014 scheduling); the box ingests all LAN broadcast → parse-drop churn.**
+- **M2b — the SEC-014 less-privileged input process (box, gated):** the parser+HMAC-verify... wait,
+  verify stays in PA (O-Q3c) — the input process is the untrusted parser + rate-limiter holding NO key
+  and NO BAR0 (RX buffer pages + doorbell + one shmem ring, cap-subtracted per §3/§5), pinned off the
+  PA core (O-Q13), handing PA a rate-limited candidate. Box smoke: an oversized (>2 KB) frame + a
+  descriptor-ring-wrap sequence handled without OOB copy or ring desync (the SEC-033 clamp on the box
+  — the one adversarial case host-fuzzing cannot reach). OFF = object-level byte-identical.
 - **M3 — wire the query through PA + close SEC-039 for queries + response + two-way UI (box, gated):**
   the validated query hits the real query SHIELD (the O-Q4 threat model — the induced-BLOCK proof
   that a genuinely-hostile query is refused), then the cache/inference path (retrieval preamble =

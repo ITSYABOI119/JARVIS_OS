@@ -125,6 +125,15 @@
  * queue-enable bit is set (the #1 silent-TX cause). */
 #define I211_TXDCTL_ENABLE      (1U << 25)  /* TX queue 0 enable */
 
+/* RX Descriptor Control (I211_RXDCTL, offset 0xC028) — per-queue RX enable.
+ * The RX analog of TXDCTL.ENABLE: like TX, the I210/I211 silently receives NOTHING
+ * unless this queue-enable bit is set (proven on the box in the 6-5/M0 spike).
+ * Deploy RX (6-5/M2a) relies on the factory MAC filter — NO promiscuous (no UPE/MPE). */
+#define I211_RXDCTL_ENABLE      (1U << 25)  /* RX queue 0 enable */
+#define I211_RXDCTL_PTHRESH     8U          /* prefetch threshold  [4:0]   */
+#define I211_RXDCTL_HTHRESH     (8U << 8)   /* host threshold      [12:8]  */
+#define I211_RXDCTL_WTHRESH     (1U << 16)  /* writeback-after-each-descriptor [20:16] */
+
 /* ========================================================================
  * Legacy TX Descriptor (16 bytes)
  *

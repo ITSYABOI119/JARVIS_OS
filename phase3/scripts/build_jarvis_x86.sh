@@ -234,6 +234,33 @@ copy_file "$DRV_SRC/net_udp.h" "$DRV_DST/net_udp.h"
 copy_file "$DRV_SRC/jarvis_telemetry.c" "$DRV_DST/jarvis_telemetry.c"
 copy_file "$DRV_SRC/jarvis_telemetry.h" "$DRV_DST/jarvis_telemetry.h"
 
+# ── Phase 6 6-5/M2a: control-IN security core (GATED — synced ONLY when the header
+# flag JARVIS_CONTROL_IN=1; keeps the OFF deploy image clean of any dead crypto). The
+# flag values are read once here and reused by the CMake patch in [5/5]. ──
+DBG_HDR="$JARVIS_DIR/phase3/src/sel4/jarvis_debug.h"
+CONTROL_IN=$(awk '/^#define JARVIS_CONTROL_IN /{print $3; exit}' "$DBG_HDR" 2>/dev/null)
+CONTROL_IN_PROBE=$(awk '/^#define JARVIS_CONTROL_IN_PROBE /{print $3; exit}' "$DBG_HDR" 2>/dev/null)
+[ -z "$CONTROL_IN" ] && CONTROL_IN=0
+[ -z "$CONTROL_IN_PROBE" ] && CONTROL_IN_PROBE=0
+if [ "$CONTROL_IN" = "1" ]; then
+    echo -e "${GREEN}Control-IN security core (JARVIS_CONTROL_IN=1)${NC}"
+    CRYPTO_SRC="$JARVIS_DIR/phase3/src/crypto"; CRYPTO_DST="$DEST/src/crypto"
+    NET_SRC="$JARVIS_DIR/phase3/src/net";       NET_DST="$DEST/src/net"
+    mkdir -p "$CRYPTO_DST" "$NET_DST" 2>/dev/null || true
+    for f in sha256.c sha256.h hmac_sha256.c hmac_sha256.h; do
+        copy_file "$CRYPTO_SRC/$f" "$CRYPTO_DST/$f"
+    done
+    for f in control_msg.h control_parser.c control_parser.h control_replay.c control_replay.h \
+             control_ratelimit.c control_ratelimit.h control_verify.c control_verify.h control_key.h; do
+        copy_file "$NET_SRC/$f" "$NET_DST/$f"
+    done
+    echo ""
+else
+    # TEARDOWN (symmetric gate): remove any copied control-IN sources a PRIOR ON build
+    # left in this PERSISTENT out-of-tree $DEST, so an OFF build carries no crypto/net.
+    rm -rf "$DEST/src/crypto" "$DEST/src/net" 2>/dev/null || true
+fi
+
 # Inference server (Process B — lives in jarvis-inference app, NOT sel4test-driver)
 PROC_B_DIR="$SEL4_DIR/projects/jarvis-x86/apps/jarvis-inference/src"
 mkdir -p "$PROC_B_DIR/ai" 2>/dev/null || true
@@ -607,6 +634,48 @@ if [ -f "$CMAKE_FILE" ]; then
         fi
     else
         echo -e "  ${CYAN}OK${NC}  src/drivers already in include directories"
+    fi
+
+    # ── Phase 6 6-5/M2a: control-IN sources + include dirs + compile-def (GATED) ──
+    if [ "$CONTROL_IN" = "1" ]; then
+        for cf in src/crypto/sha256.c src/crypto/hmac_sha256.c src/net/control_parser.c \
+                  src/net/control_replay.c src/net/control_ratelimit.c src/net/control_verify.c; do
+            if ! grep -q "$cf" "$CMAKE_FILE"; then
+                sed -i "/src\/ai\/behaviors.c/a\\    $cf" "$CMAKE_FILE" 2>/dev/null
+                if grep -q "$cf" "$CMAKE_FILE"; then
+                    echo -e "  ${GREEN}ADDED${NC}  $cf to source list"; PATCHED=1
+                else
+                    echo -e "  ${RED}FAILED${NC}  Could not add $cf — edit CMakeLists.txt manually"
+                fi
+            fi
+        done
+        if ! grep -q '"src/net"' "$CMAKE_FILE"; then
+            sed -i 's|"src/drivers"|"src/drivers" "src/crypto" "src/net"|' "$CMAKE_FILE"
+            grep -q '"src/net"' "$CMAKE_FILE" && { echo -e "  ${GREEN}ADDED${NC}  src/crypto + src/net includes"; PATCHED=1; }
+        fi
+        if ! grep -q "JARVIS_CONTROL_IN=1" "$CMAKE_FILE"; then
+            sed -i '/target_compile_options/a\target_compile_definitions(sel4test-driver PRIVATE JARVIS_CONTROL_IN=1)' "$CMAKE_FILE" 2>/dev/null
+            grep -q "JARVIS_CONTROL_IN=1" "$CMAKE_FILE" && { echo -e "  ${GREEN}ADDED${NC}  JARVIS_CONTROL_IN=1 compile def"; PATCHED=1; }
+        fi
+        if [ "$CONTROL_IN_PROBE" = "1" ] && ! grep -q "JARVIS_CONTROL_IN_PROBE=1" "$CMAKE_FILE"; then
+            sed -i '/target_compile_options/a\target_compile_definitions(sel4test-driver PRIVATE JARVIS_CONTROL_IN_PROBE=1)' "$CMAKE_FILE" 2>/dev/null
+            grep -q "JARVIS_CONTROL_IN_PROBE=1" "$CMAKE_FILE" && { echo -e "  ${GREEN}ADDED${NC}  JARVIS_CONTROL_IN_PROBE=1 compile def"; PATCHED=1; }
+        fi
+    else
+        # TEARDOWN (symmetric gate — the load-bearing OFF-is-really-OFF guarantee). The
+        # -DJARVIS_CONTROL_IN=1 lives in this PERSISTENT CMakeLists and OVERRIDES the
+        # header's #ifndef/#define 0, so flipping the header to 0 ALONE is NOT enough:
+        # a prior ON build would otherwise leave the OFF/deploy image compiled with the
+        # control-IN path ACTIVE (the §8 forbidden 'mostly-gated' state). Strip every
+        # injected line so an OFF build is genuinely OFF + object-identical to pre-M2a.
+        if grep -qE 'JARVIS_CONTROL_IN(_PROBE)?=1|src/(crypto|net)/' "$CMAKE_FILE"; then
+            sed -i '/target_compile_definitions(sel4test-driver PRIVATE JARVIS_CONTROL_IN=1)/d' "$CMAKE_FILE"
+            sed -i '/target_compile_definitions(sel4test-driver PRIVATE JARVIS_CONTROL_IN_PROBE=1)/d' "$CMAKE_FILE"
+            sed -i '/^[[:space:]]*src\/crypto\//d; /^[[:space:]]*src\/net\/.*\.c/d' "$CMAKE_FILE"
+            sed -i 's| "src/crypto" "src/net"||' "$CMAKE_FILE"
+            echo -e "  ${YELLOW}TORE DOWN${NC}  control-IN CMake state (OFF build is genuinely OFF)"
+            PATCHED=1
+        fi
     fi
 
     [ "$PATCHED" -eq 0 ] && echo -e "  ${CYAN}OK${NC}  CMakeLists.txt already up to date"

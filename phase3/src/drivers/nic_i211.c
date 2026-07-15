@@ -205,7 +205,29 @@ int i211_nic_init(i211_nic_t *nic, uint64_t mmio_base)
         nic_write32(mmio_base, I211_RDLEN,
                     (uint32_t)(I211_RX_RING_SIZE * sizeof(i211_rx_desc_t)));
         nic_write32(mmio_base, I211_RDH, 0);
+#if JARVIS_CONTROL_IN
+        /* 6-5/M2a: force legacy 16-byte descriptors + enable the RX queue (the M0
+         * silent-RX fix: RXDCTL.ENABLE bit 25, the RX analog of TXDCTL.ENABLE), and
+         * leave the ring EMPTY (RDT=0). RDT is armed LAST by the [NET] block, only
+         * after every descriptor has a buffer AND the link is up — an armed ring with
+         * addr=0 descriptors would DMA to physical 0. Gated on JARVIS_CONTROL_IN (a -D
+         * from the build script when the header flag is 1); undefined -> the #else path
+         * below, which is byte-identical to the pre-M2a HEAD line. */
+        nic_write32(mmio_base, I211_SRRCTL, 0);
+        nic_write32(mmio_base, I211_RDT, 0);
+        {
+            uint32_t rxdctl = I211_RXDCTL_ENABLE | I211_RXDCTL_WTHRESH |
+                              I211_RXDCTL_HTHRESH | I211_RXDCTL_PTHRESH;
+            nic_write32(mmio_base, I211_RXDCTL, rxdctl);
+            int t = I211_RESET_TIMEOUT;
+            while (t-- > 0) {
+                if (nic_read32(mmio_base, I211_RXDCTL) & I211_RXDCTL_ENABLE)
+                    break;
+            }
+        }
+#else
         nic_write32(mmio_base, I211_RDT, I211_RX_RING_SIZE - 1);
+#endif
     }
 
     /* 7. Enable RX: EN | BAM | BSIZE_2K | SECRC */
