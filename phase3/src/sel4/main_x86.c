@@ -90,7 +90,8 @@
 #if JARVIS_CONTROL_IN
 #include "control_verify.h"      /* Phase 6 6-5/M2a: the M1 security core orchestrator (parse->ratelimit->HMAC->replay) */
 #include "control_key.h"         /* Phase 6 6-5/M2a: the NVMe JKEY slot (@ LBA 21,130,000; key lives in PA) */
-#include "hmac_sha256.h"         /* Phase 6 6-5/M2a: for the PROBE self-test's synthetic-frame signing */
+#include "hmac_sha256.h"         /* Phase 6 6-5/M2a: for the PROBE + the M2b-1 PA-side HMAC (verify-in-PA) */
+#include "control_mailbox.h"     /* Phase 6 6-5/M2b-1: PA<->jarvis-input mailbox layout (Model 2) */
 #endif
 #include "jarvis_ui_tokens.h"   /* Step 2c-2b: FBP_ and JUI_ palette + geometry (single source) */
 
@@ -348,6 +349,9 @@ extern char _cpio_archive[];
 extern char _cpio_archive_end[];
 
 #define INFERENCE_APP "jarvis-inference"
+#if JARVIS_CONTROL_IN
+#define INPUT_APP     "jarvis-input"   /* 6-5/M2b-1: the SEC-014 least-privileged control-IN parser */
+#endif
 
 /* ---- Allocman bootstrap for process spawning ---- */
 /* Process B's ELF has 771MB .rodata + 128MB BSS = ~230K frames.
@@ -393,8 +397,9 @@ static struct { i211_nic_t nic; void *tx_buf_v; uint64_t tx_buf_p; int ready; } 
 static uint8_t             g_ctrl_key[CTRL_KEY_LEN];
 static int                 g_ctrl_key_ok   = 0;   /* FAIL-CLOSED: 0 => never call control_verify */
 static int                 g_ctrl_rx_ready = 0;   /* set by [NET] once the RX ring is armed */
-static control_replay_t    g_ctrl_replay;
-static control_ratelimit_t g_ctrl_rl;
+static control_replay_t    g_ctrl_replay;   /* PA-side replay defense (verify-in-PA) */
+/* M2b-1: the token bucket moved INTO the jarvis-input process (Model 2); PA holds no
+ * rate limiter. control_ratelimit.c is still compiled (control_verify.c references it). */
 static uint32_t g_ctrl_accepted, g_ctrl_dropped;
 static uint32_t g_ctrl_d_parse, g_ctrl_d_rl, g_ctrl_d_auth, g_ctrl_d_replay;
 /* RX ring (1 page) + 256 buffers (128 pages, 2x2KB/page) — file-scope so the [NET]
@@ -403,6 +408,20 @@ static void     *g_ctrl_rx_ring_v;
 static uint64_t  g_ctrl_rx_ring_p;
 static void     *g_ctrl_rx_buf_v[128];
 static uint64_t  g_ctrl_rx_buf_p[128];
+
+/* ── 6-5/M2b-1: the SEC-014 jarvis-input process + the two PA<->input mailboxes ──
+ * Model 2 (goal-doc §5): PA owns the NIC + the HMAC key; the input process runs
+ * parse + ratelimit ONLY. PA copies each raw frame into g_raw_mbx, signals
+ * g_input_wake; input publishes a candidate into g_cand_mbx + signals g_input_ack;
+ * PA re-parses the candidate + does the HMAC + replay itself (verify-in-PA). */
+static sel4utils_process_t input_process;
+static ctrl_raw_mbx_t  *g_raw_mbx;            /* PA view of the raw mailbox         */
+static ctrl_cand_mbx_t *g_cand_mbx;           /* PA view of the candidate mailbox   */
+static seL4_CPtr g_input_wake, g_input_ack;   /* PA-side notification cptrs         */
+static uint32_t  g_ctrl_raw_seq;              /* PA's raw-mailbox publish counter   */
+static uint32_t  g_ctrl_cand_last;            /* last candidate seq PA consumed     */
+static int       g_ctrl_inflight;             /* 1 => a frame is with input         */
+static int       g_input_ready;               /* 1 => input spawned + mailboxes live */
 
 #if JARVIS_CONTROL_IN_PROBE
 static void ctrl_put_be16(uint8_t *p, uint16_t v){ p[0]=(uint8_t)(v>>8); p[1]=(uint8_t)v; }
@@ -1706,6 +1725,177 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
 
     return 0;
 }
+
+#if JARVIS_CONTROL_IN
+/* ── 6-5/M2b-1: spawn the SEC-014 jarvis-input process + the two PA<->input mailboxes.
+ * Model 2 (goal-doc §5): the input process gets ONLY its TCB/CSpace/VSpace/IPC buffer
+ * + the 2 mailbox frames + the 2 notifications + CPU — NO NIC caps, NO key, NO
+ * request/response ring, NO model caps (the cap-subtraction from spawn_inference_process
+ * that IS SEC-014). Returns 0 on success (g_input_ready=1), -1 on any failure
+ * (fail-closed: the control-IN path stays inert if input can't come up). */
+static int spawn_input_process(void)
+{
+    unsigned long cpio_len = _cpio_archive_end - _cpio_archive;
+    unsigned long in_elf_size = 0;
+    if (!cpio_get_file(_cpio_archive, cpio_len, INPUT_APP, &in_elf_size)) {
+        puts_serial("[CTRL-IN] CPIO: jarvis-input NOT FOUND — input process disabled\n");
+        return -1;
+    }
+
+    /* Less privileged than PA/PB: MaxPrio-1 so it never steals inference cycles. */
+    sel4utils_process_config_t cfg =
+        process_config_default_simple(&simple, INPUT_APP, seL4_MaxPrio - 1);
+    cfg = process_config_auth(cfg, simple_get_tcb(&simple));
+    if (sel4utils_configure_process_custom(&input_process, &vka, &vspace, cfg) != 0) {
+        puts_serial("[CTRL-IN] input process configure failed\n");
+        return -1;
+    }
+
+    /* Two 4 KB mailbox frames: [0] raw (PA->input), [1] candidate (input->PA). Map
+     * each into PA (fixed vaddr) AND — via a cap dup — into the input process. */
+    seL4_CPtr pd_a  = simple_get_pd(&simple);
+    seL4_CPtr pd_in = input_process.pd.cptr;
+    const seL4_Word pa_va[2] = { CTRL_MBX_RAW_VADDR_PA, CTRL_MBX_CAND_VADDR_PA };
+    const seL4_Word in_va[2] = { CTRL_MBX_RAW_VADDR_IN, CTRL_MBX_CAND_VADDR_IN };
+    for (int i = 0; i < 2; i++) {
+        vka_object_t f;
+        if (vka_alloc_frame(&vka, seL4_PageBits, &f) != 0) {
+            puts_serial("[CTRL-IN] mailbox frame alloc failed\n"); return -1;
+        }
+        if (map_frame_direct(f.cptr, pd_a, pa_va[i], seL4_AllRights) != 0) {
+            puts_serial("[CTRL-IN] mailbox map in PA failed\n"); return -1;
+        }
+        cspacepath_t src, dst;
+        vka_cspace_make_path(&vka, f.cptr, &src);
+        if (vka_cspace_alloc_path(&vka, &dst) != 0) {
+            puts_serial("[CTRL-IN] mailbox cslot alloc failed\n"); return -1;
+        }
+        if (vka_cnode_copy(&dst, &src, seL4_AllRights) != 0) {
+            puts_serial("[CTRL-IN] mailbox cap dup failed\n"); return -1;
+        }
+        if (map_frame_direct(dst.capPtr, pd_in, in_va[i], seL4_AllRights) != 0) {
+            puts_serial("[CTRL-IN] mailbox map in input failed\n"); return -1;
+        }
+    }
+    g_raw_mbx  = (ctrl_raw_mbx_t  *)CTRL_MBX_RAW_VADDR_PA;
+    g_cand_mbx = (ctrl_cand_mbx_t *)CTRL_MBX_CAND_VADDR_PA;
+    memset(g_raw_mbx,  0, sizeof *g_raw_mbx);
+    memset(g_cand_mbx, 0, sizeof *g_cand_mbx);
+
+    /* Two notifications: wake (PA->input) + ack (input->PA). Copy both into the
+     * input CSpace; sel4utils_copy_cap_to_process returns 0 on FAILURE (the M3
+     * null-cap-deadlock lesson) — bail rather than pass a null cap to the child. */
+    vka_object_t wake_obj, ack_obj;
+    if (vka_alloc_notification(&vka, &wake_obj) != 0 ||
+        vka_alloc_notification(&vka, &ack_obj) != 0) {
+        puts_serial("[CTRL-IN] notification alloc failed\n"); return -1;
+    }
+    g_input_wake = wake_obj.cptr;
+    g_input_ack  = ack_obj.cptr;
+    seL4_CPtr child_wake = sel4utils_copy_cap_to_process(&input_process, &vka, wake_obj.cptr);
+    seL4_CPtr child_ack  = sel4utils_copy_cap_to_process(&input_process, &vka, ack_obj.cptr);
+    if (child_wake == 0 || child_ack == 0) {
+        puts_serial("[CTRL-IN] notification cap copy failed\n"); return -1;
+    }
+
+    /* argv = { wake cslot, ack cslot } (child-CSpace slots). */
+    char abuf[2][32];
+    snprintf(abuf[0], 32, "%lu", (unsigned long)child_wake);
+    snprintf(abuf[1], 32, "%lu", (unsigned long)child_ack);
+    char *argv[2] = { abuf[0], abuf[1] };
+    if (sel4utils_spawn_process_v(&input_process, &vka, &vspace, 2, argv, 1) != 0) {
+        puts_serial("[CTRL-IN] input process spawn failed\n"); return -1;
+    }
+#ifdef CONFIG_ENABLE_SMP_SUPPORT
+    /* Pin OFF PA's core (core 0). Highest index shares core (g_num_nodes-1) with an
+     * inference worker (MaxPrio); input at MaxPrio-1 runs only in that worker's idle
+     * gaps, so a flooded parser never steals inference cycles. Final core budget is
+     * M2b-2. Same-core-as-PA would starve under PA's busy-poll, so SMP is required. */
+    if (g_num_nodes > 1) {
+        if (seL4_TCB_SetAffinity(input_process.thread.tcb.cptr,
+                                 (seL4_Word)(g_num_nodes - 1)) != seL4_NoError)
+            puts_serial("[CTRL-IN] input SetAffinity failed (left on core 0)\n");
+    }
+#endif
+    g_input_ready = 1;
+    puts_serial("[CTRL-IN] input process spawned (SEC-014, parse+ratelimit only)\n");
+    return 0;
+}
+
+/* PA side of consuming ONE input-produced candidate: re-parse the forwarded JCTL
+ * bytes ITSELF (never trusting input's offsets), then HMAC + replay (verify-in-PA).
+ * The caller has already confirmed a fresh candidate. Fills *out like control_verify. */
+static control_verdict_t pa_verify_candidate(control_result_t *out)
+{
+    out->verdict        = CV_DROP_PARSE;
+    out->parse_status   = CTRL_TOO_SHORT;
+    out->replay_verdict = CR_ACCEPT;
+    out->query          = NULL;
+    out->query_len      = 0;
+    out->seq            = 0;
+    out->boot_epoch     = 0;
+
+    uint16_t st = g_cand_mbx->status;
+    if (st != CTRL_CAND_OK) {
+        out->verdict = (st == CTRL_CAND_DROP_RATELIMIT) ? CV_DROP_RATELIMIT : CV_DROP_PARSE;
+        return out->verdict;
+    }
+    uint16_t n = g_cand_mbx->jctl_len;
+    if (n > CONTROL_MSG_MAX) n = CONTROL_MSG_MAX;   /* CLAMP the attacker-influenced length */
+    static uint8_t jb[CONTROL_MSG_MAX];
+    memcpy(jb, g_cand_mbx->jctl, n);
+
+    control_msg_t msg;
+    control_status_t ps = control_parse_msg(jb, n, &msg);
+    out->parse_status = ps;
+    if (ps != CTRL_OK) { out->verdict = CV_DROP_PARSE; return out->verdict; }
+
+    if (!hmac_sha256_verify(g_ctrl_key, CTRL_KEY_LEN, msg.mac_base, msg.mac_len, msg.tag)) {
+        out->verdict = CV_DROP_AUTH; return out->verdict;
+    }
+    cr_verdict_t rv = control_replay_check(&g_ctrl_replay, msg.seq, msg.boot_epoch, msg.nonce);
+    out->replay_verdict = rv;
+    if (rv != CR_ACCEPT) { out->verdict = CV_DROP_REPLAY; return out->verdict; }
+
+    out->query      = msg.query;   /* aliases jb (static) — used immediately by the caller */
+    out->query_len  = msg.query_len;
+    out->seq        = msg.seq;
+    out->boot_epoch = msg.boot_epoch;
+    out->verdict    = CV_ACCEPT;
+    return out->verdict;
+}
+
+/* SYNCHRONOUS round trip through the input process (used by the PROBE — the live poll
+ * does the same two steps non-blocking). Stage `frame` in the raw mailbox, signal the
+ * input process, bounded-poll the candidate seq (input runs on another core), then
+ * verify the candidate in PA. Returns CV_DROP_PARSE on timeout / input-not-ready. */
+static control_verdict_t ctrl_roundtrip_sync(const uint8_t *frame, size_t len,
+                                             control_result_t *out)
+{
+    if (!g_input_ready) {
+        out->verdict = CV_DROP_PARSE; out->query = NULL; out->query_len = 0;
+        return out->verdict;
+    }
+    uint16_t cl = (uint16_t)(len > CTRL_MBX_MAX_FRAME ? CTRL_MBX_MAX_FRAME : len);
+    memcpy(g_raw_mbx->bytes, frame, cl);
+    g_raw_mbx->len = cl;
+    __atomic_store_n(&g_raw_mbx->seq, ++g_ctrl_raw_seq, __ATOMIC_RELEASE);
+    seL4_Signal(g_input_wake);
+    g_ctrl_inflight = 1;
+    for (uint32_t spins = 0; spins < 20000000u; spins++) {
+        uint32_t cs = __atomic_load_n(&g_cand_mbx->seq, __ATOMIC_ACQUIRE);
+        if (cs != g_ctrl_cand_last) {
+            g_ctrl_cand_last = cs;
+            g_ctrl_inflight  = 0;
+            return pa_verify_candidate(out);
+        }
+        seL4_Yield();
+    }
+    g_ctrl_inflight = 0;
+    out->verdict = CV_DROP_PARSE;   /* timeout — the input process never answered */
+    return out->verdict;
+}
+#endif /* JARVIS_CONTROL_IN */
 
 /* Poll the response ring for a specific message type, draining/discarding any
  * stale or non-matching messages (MSG_DEBUG, leftover MSG_RESPONSE, etc.).
@@ -3597,6 +3787,14 @@ static void *main_continued(void *arg UNUSED)
         }
     }
 
+#if JARVIS_CONTROL_IN
+    /* 6-5/M2b-1: spawn the SEC-014 jarvis-input parser process now that PB is up.
+     * Fail-open for the box (a spawn failure leaves g_input_ready=0 -> the control-IN
+     * path stays inert; the rest of the system is unaffected). */
+    if (spawn_input_process() != 0)
+        puts_serial("[CTRL-IN] input process unavailable — control-IN inert this boot\n");
+#endif
+
 #if JARVIS_ACTIONS
     g_pa_req_notif = req_notif; g_pa_resp_notif = resp_notif;   /* K/M2b-2: hoist the notif cptrs for the funnel */
 #endif
@@ -4004,42 +4202,44 @@ static void *main_continued(void *arg UNUSED)
                            : "[CTRL-IN] no key (fail-closed) - inert\n");
     }
     control_replay_init(&g_ctrl_replay, CONTROL_TEST_EPOCH);   /* seq_floor = 0 (per-boot; M3 persists) */
-    control_ratelimit_init(&g_ctrl_rl, (uint32_t)(jarvis_rdtsc() / TSC_PER_MS));
+    /* M2b-1: the token bucket now lives INSIDE the jarvis-input process (Model 2). PA
+     * does only re-parse + HMAC + replay on the returned candidate, so PA holds no rate
+     * limiter of its own. */
 #if JARVIS_CONTROL_IN_PROBE
-    /* Synthetic-frame self-test (KVM has no NIC): a valid signed JCTL -> CV_ACCEPT,
-     * then a one-bit-tampered tag -> CV_DROP_AUTH. Uses the loaded key; resets the
-     * replay + rate-limit state afterward so the live poll starts clean. */
-    if (g_ctrl_key_ok) {
+    /* Synthetic-frame self-test (KVM has no NIC) driving the M2b-1 SPLIT pipeline:
+     * PA stages a signed JCTL frame in the raw mailbox -> the jarvis-input process
+     * parses + rate-limits it -> PA re-parses + HMACs the returned candidate. A valid
+     * frame -> CV_ACCEPT; a one-bit-tampered tag -> CV_DROP_AUTH. The ACCEPT PROVES the
+     * cross-process round trip (PA only ever re-parses a candidate the input process
+     * produced; cand_seq is input's monotonic publish counter). */
+    if (g_ctrl_key_ok && g_input_ready) {
         static uint8_t pj[CONTROL_MSG_MAX];
         static uint8_t pf[512];
         control_result_t pr;
         uint16_t pjl = build_probe_jctl(pj, g_ctrl_key, 1u, 0xA0, "status");
         int pfl = net_build_udp_broadcast(pf, sizeof pf, g_net.nic.mac, JARVIS_BOX_IP,
                                           40000, (uint16_t)CONTROL_PORT, pj, pjl);
-        uint32_t pnm = (uint32_t)(jarvis_rdtsc() / TSC_PER_MS);
-        control_verdict_t pv = (pfl > 0)
-            ? control_verify(pf, (size_t)pfl, g_ctrl_key, CTRL_KEY_LEN,
-                             &g_ctrl_replay, &g_ctrl_rl, pnm, &pr)
-            : CV_DROP_PARSE;
-        puts_serial(pv == CV_ACCEPT ? "[CTRL-IN-PROBE] accept q=status\n"
-                                    : "[CTRL-IN-PROBE] FAIL expected accept\n");
+        control_verdict_t pv = (pfl > 0) ? ctrl_roundtrip_sync(pf, (size_t)pfl, &pr)
+                                         : CV_DROP_PARSE;
+        if (pv == CV_ACCEPT) {
+            puts_serial("[CTRL-IN-PROBE] accept q=status cand_seq=");
+            put_dec(g_ctrl_cand_last); puts_serial("\n");
+        } else {
+            puts_serial("[CTRL-IN-PROBE] FAIL expected accept (input round trip)\n");
+        }
         /* tamper: flip one tag byte; re-init replay so the seq isn't the reject cause */
         control_replay_init(&g_ctrl_replay, CONTROL_TEST_EPOCH);
         pj[pjl - 1] ^= 0x01;
         pfl = net_build_udp_broadcast(pf, sizeof pf, g_net.nic.mac, JARVIS_BOX_IP,
                                       40000, (uint16_t)CONTROL_PORT, pj, pjl);
-        pnm = (uint32_t)(jarvis_rdtsc() / TSC_PER_MS);
-        pv = (pfl > 0)
-            ? control_verify(pf, (size_t)pfl, g_ctrl_key, CTRL_KEY_LEN,
-                             &g_ctrl_replay, &g_ctrl_rl, pnm, &pr)
-            : CV_DROP_PARSE;
+        pv = (pfl > 0) ? ctrl_roundtrip_sync(pf, (size_t)pfl, &pr) : CV_DROP_PARSE;
         puts_serial(pv == CV_DROP_AUTH ? "[CTRL-IN-PROBE] tamper=DROP_AUTH\n"
                                        : "[CTRL-IN-PROBE] FAIL tamper not caught\n");
     } else {
-        puts_serial("[CTRL-IN-PROBE] SKIPPED (no key)\n");
+        puts_serial(g_ctrl_key_ok ? "[CTRL-IN-PROBE] SKIPPED (input process down)\n"
+                                  : "[CTRL-IN-PROBE] SKIPPED (no key)\n");
     }
     control_replay_init(&g_ctrl_replay, CONTROL_TEST_EPOCH);   /* reset for the live poll */
-    control_ratelimit_init(&g_ctrl_rl, (uint32_t)(jarvis_rdtsc() / TSC_PER_MS));
 #endif /* JARVIS_CONTROL_IN_PROBE */
 #endif /* JARVIS_CONTROL_IN */
 
@@ -4053,18 +4253,20 @@ static void *main_continued(void *arg UNUSED)
         jarvis_telemetry_tick();
 
 #if JARVIS_CONTROL_IN
-        /* 6-5/M2a: poll ONE inbound control frame (non-blocking — i211_nic_recv returns
-         * 0 instantly on an empty ring) and run it through the M1 security core. On
-         * ACCEPT, LOG the sanitized query ONLY. Every drop is SILENT (attacker-controlled);
-         * totals surface at the [STATS] cadence. */
-        if (g_ctrl_rx_ready && g_ctrl_key_ok) {
-            static uint8_t rxf[2048];
-            int rn = i211_nic_recv(&g_net.nic, rxf, sizeof rxf);
-            if (rn > 0) {
+        /* 6-5/M2b-1: the SPLIT inbound path (Model 2). PA (1) consumes any candidate the
+         * jarvis-input process produced — RE-PARSING + HMAC + replay ITSELF (verify-in-PA,
+         * never trusting a forwarded offset) — then (2) forwards ONE new raw frame if the
+         * input process is idle (single-frame-in-flight backpressure). PA NEVER blocks on
+         * the input process. On ACCEPT, LOG the sanitized query ONLY; every drop is SILENT
+         * (attacker-controlled); totals surface at the [STATS] cadence. */
+        if (g_ctrl_rx_ready && g_ctrl_key_ok && g_input_ready) {
+            /* (1) consume a candidate (non-blocking): acquire-load the publish seq. */
+            uint32_t cs = __atomic_load_n(&g_cand_mbx->seq, __ATOMIC_ACQUIRE);
+            if (cs != g_ctrl_cand_last) {
+                g_ctrl_cand_last = cs;
+                g_ctrl_inflight  = 0;                    /* input answered — free to forward again */
                 control_result_t cres;
-                uint32_t cnow = (uint32_t)(jarvis_rdtsc() / TSC_PER_MS);
-                control_verdict_t cv = control_verify(rxf, (size_t)rn, g_ctrl_key,
-                    CTRL_KEY_LEN, &g_ctrl_replay, &g_ctrl_rl, cnow, &cres);
+                control_verdict_t cv = pa_verify_candidate(&cres);
                 if (cv == CV_ACCEPT) {
                     g_ctrl_accepted++;
                     /* Log-sanitize: query bytes are ATTACKER-CONTROLLED — map non-printables
@@ -4092,10 +4294,10 @@ static void *main_continued(void *arg UNUSED)
                     }
                     /* ==================== M3 BOUNDARY — DO NOT ROUTE ====================
                      * Do NOT shmem_ipc_send(shared_request_ring, MSG_QUERY, ...) here.
-                     * M2a proves RX -> verify -> extract ONLY. Routing to inference + the
-                     * real QUERY SHIELD (closing SEC-039-for-queries) is M3; a send here
-                     * without that SHIELD is the goal-doc §8 forbidden "flip-an-item-unmet"
-                     * state. The authenticated query is logged and dropped.
+                     * M2b-1 proves RX -> input-parse -> PA-verify -> extract ONLY. Routing to
+                     * inference + the real QUERY SHIELD (closing SEC-039-for-queries) is M3; a
+                     * send here without that SHIELD is the goal-doc §8 forbidden
+                     * "flip-an-item-unmet" state. The authenticated query is logged and dropped.
                      * ================================================================== */
                 } else {
                     g_ctrl_dropped++;
@@ -4107,6 +4309,18 @@ static void *main_continued(void *arg UNUSED)
                         default: break;
                     }
                     /* SILENT — no per-drop log (attacker could flood it). Totals at [STATS]. */
+                }
+            }
+            /* (2) forward ONE new frame if the input process is idle. PA copies the captured
+             * frame DIRECTLY into the raw mailbox (i211_nic_recv clamps to CTRL_MBX_MAX_FRAME),
+             * publishes the seq (release), and signals the input process. */
+            if (!g_ctrl_inflight) {
+                int rn = i211_nic_recv(&g_net.nic, g_raw_mbx->bytes, CTRL_MBX_MAX_FRAME);
+                if (rn > 0) {
+                    g_raw_mbx->len = (uint16_t)rn;
+                    __atomic_store_n(&g_raw_mbx->seq, ++g_ctrl_raw_seq, __ATOMIC_RELEASE);
+                    seL4_Signal(g_input_wake);
+                    g_ctrl_inflight = 1;
                 }
             }
         }

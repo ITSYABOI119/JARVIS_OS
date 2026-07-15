@@ -1,6 +1,6 @@
 # Phase 6 Goal 6-5 — Control-IN / Natural-Language Primary (PLAN-FIRST)
 
-**Status: IN PROGRESS — M0 (RX spike) + M1 (host security core) + M2a (I211 RX → control_verify data path in PA, gated `JARVIS_CONTROL_IN` default-0) all DONE 2026-07-15 (see §9; full box gate: OFF-identity + KVM probe + bare-metal signed-frame ACCEPT/DROP_AUTH/DROP_REPLAY). Next: M2b (SEC-014 input process) → M3 (route query + query SHIELD + response + two-way UI) → M4 → the hard-gated flip.**
+**Status: IN PROGRESS — M0 (RX spike) + M1 (host security core) + M2a (I211 RX → control_verify data path in PA) + M2b-1 (the SEC-014 isolation split — parse/ratelimit moved off PA into the new least-privileged `jarvis-input` process, Model 2; PA re-parses + HMAC + replay) all DONE 2026-07-15 (see §9; gated `JARVIS_CONTROL_IN` default-0; M2b-1 box gate: OFF object-identity + KVM split-pipeline PROBE ACCEPT/DROP_AUTH). Next: M2b-2 (bare-metal + flood/liveness/RCTL.BAM hardening) → M3 (route query + query SHIELD + response + two-way UI) → M4 → the hard-gated flip.**
 **This is the phase's LONG POLE and its single hardest security gate:** it turns the read-only
 telemetry console two-way and opens the box to the **FIRST untrusted inbound it has ever accepted**.
 Every prior Phase-6 trigger was internal state; 6-5's first trigger is a hostile network frame.
@@ -286,13 +286,29 @@ survives reboot, + the retained `=0` rollback ESP image) is a MANDATORY M4 sign-
 
 ## 5. Architecture — the inbound path, end to end
 
+> **ARCHITECTURE DECISION — ratified M2b (2026-07-15): Model 2 — PA polls the NIC; the input process is a
+> PURE OVER-SHMEM PARSER holding ZERO NIC caps.** The earlier "the input process gets the RX buffer pages +
+> an RDT doorbell" design (the diagram just below, plus the wording in §2/§3/§4/§10/§12/§13 and O-Q3/O-Q3b)
+> is **SUPERSEDED**: `RDT` (0xC018) shares its 4 KB MMIO page with the DMA-base registers `RDBAL`/`RDBAH`
+> (0xC000/0xC004), and seL4 maps at 4 KB granularity — so a "doorbell page" would ALSO grant the descriptor
+> bases → under KernelIOMMU=OFF a bus-master write there is DMA-to-any-physical = root-equivalent (the exact
+> hole SEC-014 exists to close). **Corrected flow:** PROCESS A keeps BAR0, polls `i211_nic_recv`, re-arms
+> `RDT`, and copies each raw frame into a PA→input shmem mailbox. The input process runs ONLY the untrusted
+> parse (`control_parse_frame`/`control_parse_msg`) + `control_ratelimit` (caps = two mailbox frames + two
+> notifications + CPU pinned off PA's core; NO BAR0, NO NIC/RX frames, NO key, NO request/response ring, NO
+> model caps, NO privileged EP) and returns a candidate = the raw JCTL bytes (≤240 B) + a status hint.
+> **PROCESS A holds the key and does the HMAC + replay** (verify-in-PA, O-Q3c), **re-parsing the candidate
+> itself** so it never trusts a forwarded offset/length. NB: the diagram below still shows HMAC inside the
+> input box and "RX buffer pages" caps — BOTH stale per this note (parse+ratelimit only; zero NIC caps).
+
 ```
    [ network ]  ← the UNTRUSTED FRONTIER (every byte hostile)
         │  a UDP frame arrives on the I211
         ▼
-   PA owns BAR0 + programs the RX descriptor bases (NO IOMMU → the DMA
-   engine must stay under the trusted owner; §3/O-Q3b). The input process
-   below never touches BAR0 — only the RX buffer pages + an RDT doorbell.
+   PROCESS A owns BAR0 + the RX ring. PA polls i211_nic_recv, re-arms RDT,
+   and COPIES each raw frame into the PA→input mailbox (a stable snapshot).
+   The input process below touches the NIC through NOTHING — no BAR0, no RX
+   frames, no doorbell (Model 2 — see the decision note above; §3/O-Q3b).
         ▼
    ┌─────────────────────────────────────────────────────────────────┐
    │  THE LESS-PRIVILEGED INPUT PROCESS (SEC-014, item 5)             │
@@ -340,14 +356,15 @@ survives reboot, + the retained `=0` rollback ESP image) is a MANDATORY M4 sign-
 **Trust boundaries, named:**
 - **The RX→parser edge is THE untrusted frontier** — everything upstream is attacker-controlled;
   everything the parser emits is still suspect until auth+replay clear it.
-- **The input-process→PA shmem ring is the trust boundary** — PA trusts ONLY a validated query that
-  crossed it (CRC-checked). A parser compromise is contained **AT THE CAPABILITY LEVEL** (no model
-  caps, no response ring, no privileged EP). **CAVEAT (KernelIOMMU=OFF):** CSpace cap-subtraction
-  does NOT bound a bus-master DMA engine — so containment holds against a parser LOGIC bug
-  (crash/refuse) ONLY BECAUSE the input process does NOT hold BAR0 (§3/O-Q3b); if it held BAR0, a
-  code-exec compromise could reprogram RDBAL/RDBAH and DMA anywhere (root-equivalent). Keeping BAR0
-  in PA is what makes "contained, not root" true here. (Enabling VT-d/IOMMU is the alternative that
-  would make BAR0-in-parser safe — a build-config change with its own perf/verification cost, O-Q3b.)
+- **The input→PA candidate mailbox is the trust boundary** — PA trusts NOTHING that crosses it: it
+  **re-parses (`control_parse_msg`) and re-bounds-checks the raw candidate bytes itself**, then runs the
+  HMAC + replay (verify-in-PA). A parser code-exec can only (a) write garbage PA HMAC-drops, or (b) stop
+  forwarding (self-DoS) — it holds NO NIC caps, NO BAR0, NO key, NO request/response ring, NO model caps,
+  NO privileged EP (Model 2). **CAVEAT (KernelIOMMU=OFF):** CSpace cap-subtraction does NOT bound a
+  bus-master DMA engine — so containment holds ONLY BECAUSE the input process holds zero device-MMIO caps;
+  the instant it held BAR0 it could reprogram RDBAL/RDBAH and DMA anywhere (root-equivalent). Keeping BAR0
+  in PA is what makes "contained, not root" true here. (Enabling VT-d/IOMMU is the alternative that would
+  make BAR0-in-parser safe — a build-config change with its own perf/verification cost, O-Q3b.)
 - **Silent on reject (anti-reflection invariant):** the box emits NO packet for any frame that fails
   parse, HMAC/replay, or rate-limit. The ONLY inbound-triggered packets it ever sends are a post-auth
   query answer and a post-auth SHIELD refusal — both downstream of the trust boundary. So the box is
@@ -465,12 +482,32 @@ until the deliberate, checklist-complete, security-reviewed flip.
   green). **Honest limitations (deferred, safe because gated): fixed `CONTROL_TEST_EPOCH` ⇒ per-boot
   replay floor 0 (M3 = real epoch + NVMe-persisted floor); RX poll + HMAC on PA's core 0 (M2b's
   SEC-014 scheduling); the box ingests all LAN broadcast → parse-drop churn.**
-- **M2b — the SEC-014 less-privileged input process (box, gated):** the parser+HMAC-verify... wait,
-  verify stays in PA (O-Q3c) — the input process is the untrusted parser + rate-limiter holding NO key
-  and NO BAR0 (RX buffer pages + doorbell + one shmem ring, cap-subtracted per §3/§5), pinned off the
-  PA core (O-Q13), handing PA a rate-limited candidate. Box smoke: an oversized (>2 KB) frame + a
-  descriptor-ring-wrap sequence handled without OOB copy or ring desync (the SEC-033 clamp on the box
-  — the one adversarial case host-fuzzing cannot reach). OFF = object-level byte-identical.
+- **M2b-1 — DONE 2026-07-15 (box KVM, gated `JARVIS_CONTROL_IN` default-0). The isolation split: the
+  untrusted PARSE moves off PA into a NEW least-privileged third seL4 process, `jarvis-input`.** Model 2
+  (§5, ratified): PA keeps BAR0 + polls the NIC and copies each raw frame into a PA→input shmem mailbox;
+  `jarvis-input` runs ONLY `control_parse_frame`/`control_parse_msg` + `control_ratelimit` — ZERO NIC caps,
+  no key, no request/response ring, no model caps (a cap-subtraction from the PB-spawn flow: it gets only
+  its TCB/CSpace/VSpace/IPC buffer + 2 mailbox frames + 2 notifications + CPU, pinned off PA's core) —
+  and returns a candidate (the isolated JCTL bytes + a status hint) via the input→PA mailbox; **PA
+  re-parses the candidate ITSELF and does the HMAC + replay** (verify-in-PA, O-Q3c — never trusts a
+  forwarded offset/length). New files: `phase3/src/net/control_mailbox.h` (the two release/acquire
+  mailboxes, x86-TSO handshake) + `phase3/src/sel4/input_server.c` (the process main; a sel4utils
+  process, `_start` self-installs the IPC buffer). KVM gate PASSED (`-smp 6`, `CONTROL_IN=1`/`PROBE=1`):
+  the split-pipeline PROBE stages a signed frame → the input process parses it → PA HMACs the returned
+  candidate → `[CTRL-IN-PROBE] accept q=status cand_seq=1` (the `cand_seq` PROVES the cross-process round
+  trip — PA only ever re-parses a candidate the input process produced) + a tampered tag →
+  `[CTRL-IN-PROBE] tamper=DROP_AUTH`; `[CTRL-IN] input process spawned (SEC-014, parse+ratelimit only)`,
+  `M3: started 5 workers` (numNodes 6, inference unregressed), coherent Gemma, err=0, 0 faults/restarts.
+  **OFF-identity** — `main.c.obj` `.text`/`.rodata`/`.data` + `nm` byte-identical to the pre-M2b-1
+  baseline; the `jarvis-input` ELF + `crypto`/`net` objects are NOT built/linked when off (the build
+  script creates the app only under the gate + tears it down in the OFF `else`). Deploy-inert.
+- **M2b-2 — the bare-metal + hardening half (box, gated):** a real bare-metal signed-frame round trip
+  through the split; the **flood-doesn't-starve-PA scheduling proof** (err=0 + q advancing under a frame
+  flood); a **liveness heartbeat** (a consecutive-input-miss counter → quarantine/respawn, since M2b-1
+  grants no fault EP so a dead input process is otherwise undetectable); an oversized (>2 KB) frame + a
+  descriptor-ring-wrap sequence handled without OOB copy or ring desync (the SEC-033 clamp on the box —
+  the one adversarial case host-fuzzing cannot reach); **drop `RCTL.BAM`** in deploy (unicast-to-box-MAC
+  only); and the final priority/core-budget decision (O-Q13). OFF = object-level byte-identical.
 - **M3 — wire the query through PA + close SEC-039 for queries + response + two-way UI (box, gated):**
   the validated query hits the real query SHIELD (the O-Q4 threat model — the induced-BLOCK proof
   that a genuinely-hostile query is refused), then the cache/inference path (retrieval preamble =
