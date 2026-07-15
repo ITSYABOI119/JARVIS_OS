@@ -1,6 +1,6 @@
 # Phase 6 Goal 6-5 — Control-IN / Natural-Language Primary (PLAN-FIRST)
 
-**Status: PLAN-FIRST — for strategist review BEFORE any M0 code. Nothing in this doc is implemented.**
+**Status: IN PROGRESS — strategist-APPROVED; M0 (RX spike) DONE/PASS + M1 (host security core) DONE, both 2026-07-15 (see §9). M2+ (box inbound path, SEC-014 input process, query SHIELD, the hard-gated `JARVIS_CONTROL_IN` flip) not started.**
 **This is the phase's LONG POLE and its single hardest security gate:** it turns the read-only
 telemetry console two-way and opens the box to the **FIRST untrusted inbound it has ever accepted**.
 Every prior Phase-6 trigger was internal state; 6-5's first trigger is a hostile network frame.
@@ -427,14 +427,25 @@ until the deliberate, checklist-complete, security-reviewed flip.
 
 ## 9. Proposed milestones (the strategist reviews the shape)
 
-- **M0 — the I211 RX-feasibility spike (box, throwaway):** §6. One frame received on real hardware,
-  hex-verified, WITH the `RXDCTL.ENABLE` queue-enable added. PASS gates the arc; a still-silent RX
-  after the driver-config analog pivots the transport. No flag, no ship.
-- **M1 — the host-fuzzable security core (host + CI — the big CI win):** the inbound frame parser
-  (fragment-reject) + the ported HMAC-SHA256 (test-vector-conformant, constant-time verify) + nonce/
-  sequence replay (with the persisted-floor contract) + the rate-limiter, all host-pure + a
-  `fuzz_harness`-style ASan/UBSan CI target (§7). TDD + fuzz; channel-agnostic; NOT wasted if M0
-  fails. Nothing ships.
+- **M0 — DONE / PASS 2026-07-15 (box, throwaway/reverted; boot_id=21).** RX first-light on real
+  bare-metal seL4: `[NET-RX] wired=256/256`, `link LU=1 speed=1000`, `frame len=66 MAGIC=1`,
+  `[NET-RX] PASS: RX first-light — DMA landed, magic matched`. The captured frame byte-decodes as the
+  Main-PC probe (src 192.168.100.146 → box .143, UDP 40000→51000, `JARVIS-RX-PROBE-…`) — genuinely the
+  sender's frame in box RX DMA, not a loopback. `RXDCTL.ENABLE` (bit 25 @ 0xC028) + `SRRCTL`-legacy +
+  RDT-armed-last was the fix; legacy 16-byte descriptors work (no advanced-descriptor pivot). TX
+  unregressed. **The transport does NOT pivot; the arc proceeds.** No flag, no ship; all spike edits
+  reverted, the deployed image restored.
+- **M1 — DONE 2026-07-15 (host + CI; deploy-inert, nothing links into the box).** The host-pure
+  security core landed under `phase3/src/crypto/` (SHA-256 copied + 3 NIST vectors; HMAC-SHA256 +
+  **constant-time** verify, RFC 4231 cases 1/2/4/6 + a 32-position bit-flip coverage test) and
+  `phase3/src/net/` (`control_msg.h` wire format; `control_parser` hardened frame+msg parse w/
+  fragment-reject + exact length math; `control_replay` seq-floor+epoch+nonce-ring w/ persistence
+  contract; `control_ratelimit` wrap-safe token bucket; `control_verify` orchestrator — replay mutates
+  ONLY after a valid HMAC) + `fuzz_control_in.c` (300K-iter ASan/UBSan: raw/short-IPv4/structured/
+  differential). Built by a 5-phase workflow + adversarial review; the review caught a `len==14`
+  1-byte parser OOB read (fixed + the fuzz hardened to exact-len heap buffers so ASan now catches the
+  class — teeth-proven against a guard-removed mutant). 7 CI steps, all green. Channel-agnostic; NOT
+  wasted if M0 had failed. Nothing ships (`JARVIS_CONTROL_IN` does not exist yet — that is M2+).
 - **M2 — the box inbound path (box, gated `JARVIS_CONTROL_IN` default-0):** the full I211 RX driver
   (the M0 spike hardened) + the SEC-014 less-privileged input process (cap-subtracted per §3/§5 —
   RX buffer pages + doorbell + one shmem ring, NO BAR0), pinned off the PA core (O-Q13), running the
