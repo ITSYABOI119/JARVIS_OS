@@ -1,6 +1,6 @@
 # Phase 6 Goal 6-5 — Control-IN / Natural-Language Primary (PLAN-FIRST)
 
-**Status: IN PROGRESS — M0 (RX spike) + M1 (host security core) + M2a (I211 RX → control_verify data path in PA) + M2b-1 (the SEC-014 isolation split — parse/ratelimit moved off PA into the new least-privileged `jarvis-input` process, Model 2; PA re-parses + HMAC + replay) DONE 2026-07-15; M2b-2 (input-process liveness + graceful degrade via the monitor spine, drop-`RCTL.BAM` unicast-only, SEC-033 + backpressure/flood, Option-A scheduling) CODE DONE + KVM-proven 2026-07-16 — all gated `JARVIS_CONTROL_IN` default-0 (see §9; box gate: OFF 4-object-identity + KVM induced-death PROBE → `[ANOMALY] input-dead` + degrade; pre-mortem + diff-review workflows clean). M2b-2's bare-metal on-wire leg (signer-driven ACCEPT/DROP_REPLAY/DROP_AUTH + flood/SEC-033/BAM-filter) is the remaining SUPERVISED validation that fully closes item-5. Next: M3 (route query + query SHIELD + response + two-way UI) → M4 → the hard-gated flip.**
+**Status: IN PROGRESS — M0 (RX spike) + M1 (host security core) + M2a (I211 RX → control_verify data path in PA) + M2b-1 (the SEC-014 isolation split — parse/ratelimit moved off PA into the new least-privileged `jarvis-input` process, Model 2; PA re-parses + HMAC + replay) DONE 2026-07-15; M2b-2 (input-process liveness + graceful degrade via the monitor spine, drop-`RCTL.BAM` unicast-only, SEC-033 + backpressure/flood, Option-A scheduling) DONE 2026-07-16 — all gated `JARVIS_CONTROL_IN` default-0 (see §9; box gate: OFF 4-object-identity + KVM induced-death PROBE → `[ANOMALY] input-dead` + degrade + the **supervised bare-metal WIRE PROOF, boot_id=24**: acc=3 / DROP_REPLAY / DROP_AUTH, the flood rate-limited (rl→488) with err=0 to q=13,700 / 0 faults, `parse=0` BAM-drop = broadcast hardware-filtered; pre-mortem + diff-review workflows clean). **→ goal-doc item-5 (the SEC-014 less-privileged input process) is FULLY CLOSED.** Next: M3 (route query + query SHIELD closing SEC-039-for-queries + response + two-way UI) → M4 → the hard-gated flip.**
 **This is the phase's LONG POLE and its single hardest security gate:** it turns the read-only
 telemetry console two-way and opens the box to the **FIRST untrusted inbound it has ever accepted**.
 Every prior Phase-6 trigger was internal state; 6-5's first trigger is a hostile network frame.
@@ -531,11 +531,20 @@ until the deliberate, checklist-complete, security-reviewed flip.
   AND `-DJARVIS_CONTROL_IN=1` both 44 PASS, `test_km2b_miss` 22 PASS, M1 control 7 green) + the **KVM
   induced-death PROBE** (`CONTROL_IN=1`/`PROBE=2`, `-smp 6`): the accept/tamper split + input SUSPENDED →
   3 deadline windows → `[ANOMALY] mon input-dead` + degrade + JACT, q_infer advancing while degraded, err=0.
-  **REMAINING (SUPERVISED, needs the user to run the scapy signer + power-cycle):** the bare-metal on-wire
-  leg — real unicast signed frame `ACCEPT seq=1..3` / resend `DROP_REPLAY` / tamper `DROP_AUTH`; the
-  flood-doesn't-starve proof (`q` advancing + err=0 + `g_ctrl_bp_drops` climbing + a transient tok/s dip);
-  the oversized + ring-wrap SEC-033 leg; and the BAM-drop confirm (broadcast flood hardware-filtered / zero
-  reach the ring; unicast accepted). Item-5 fully closes on that supervised wire proof.
+  **BARE-METAL WIRE PROOF — PASSED 2026-07-16 (supervised boot_id=24; ITEM-5 CLOSED).** The ON image
+  (md5 `590ca2e7…`, CONTROL_IN=1) was deployed to the ESP over a backup of the 6-3 image, the JKEY
+  provisioned on `/dev/nvme0n1` @ LBA 21,130,000, and the Main-PC scapy signer drove four legs (unicast to
+  the box MAC — BAM dropped). Durable NVMe read-back (`[CTRL-IN-STATS] acc=3 drop=… (parse=0 rl=488 auth=4
+  replay=1) bp=0 down=0`): **wire** = `acc=3` (3 signed unicast ACCEPTs) + `replay=1` (resend → DROP_REPLAY)
+  + `auth=4` (tamper + unsigned-flood → DROP_AUTH); **flood** = `rl` climbed 55→488 (rate-limited IN the
+  input process — the DoS shield gates the HMAC) with `err=0` sustained to **q=13,700**, `bp=0`, 0 faults
+  (q keeps advancing through the flood — PA is never starved); **SEC-033 oversized** = 0 faults/FATAL (the
+  clamp held, no OOB); **BAM-drop** = `parse=0` CONSTANT — with BAM cleared, ALL broadcast (the `bam`-leg
+  flood + the box's own telemetry-OUT + LAN broadcast) was **hardware-filtered** and never reached the
+  parser (vs M2a's BAM-on ~13/s parse-drop churn) = unicast-only confirmed. Plus **0 `[ANOMALY] input-dead`**
+  (the liveness lane correctly did NOT false-trip a healthy input), **0 `[RESTART]`**, err=0 throughout,
+  NN=6. Box reverted clean: 6-3 image restored (`379f6bdb…`), JKEY zeroed, flag 0, BootOrder `0001,0000`, on
+  Ubuntu. **→ goal-doc item-5 (the less-privileged SEC-014 input process) is FULLY CLOSED.**
 - **M3 — wire the query through PA + close SEC-039 for queries + response + two-way UI (box, gated):**
   the validated query hits the real query SHIELD (the O-Q4 threat model — the induced-BLOCK proof
   that a genuinely-hostile query is refused), then the cache/inference path (retrieval preamble =
