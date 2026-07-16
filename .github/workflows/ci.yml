@@ -451,6 +451,21 @@ jobs:
           phase3/src/crypto/hmac_sha256.c phase3/src/crypto/sha256.c -lm -o /tmp/fuzz_control_in
         /tmp/fuzz_control_in
 
+    - name: "Phase 6: 6-5/M3-1 Query SHIELD (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
+          phase3/src/ai/test_query_shield.c phase3/src/ai/query_shield.c \
+          phase3/src/ai/shield_action.c phase3/src/ai/action_allowlist.c \
+          phase3/src/ai/shield_learn.c -o /tmp/t_qs
+        /tmp/t_qs
+
+    - name: "Phase 6: 6-5/M3-1 Query SHIELD Fuzz (C, ASAN)"
+      run: |
+        gcc -Wall -Werror -O1 -std=c11 -fsanitize=address,undefined -I phase3/src/ai \
+          phase3/src/ai/fuzz_query_shield.c phase3/src/ai/query_shield.c \
+          -lm -o /tmp/fuzz_qs
+        /tmp/fuzz_qs
+
     - name: "Phase 5: Decision-cache LRU eviction (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
