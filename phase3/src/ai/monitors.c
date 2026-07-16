@@ -91,6 +91,15 @@ int monitor_build_snapshot(monitor_event_t *ev, monitor_event_type_t type,
         n = snprintf(ev->snap, MON_SNAP_MAX, "mon degraded cache-only miss=%lld",
                      (long long)v1);
         break;
+#if JARVIS_CONTROL_IN
+    case MON_EV_INPUT_DEAD:
+        /* 6-5/M2b-2: the SEC-014 control-IN input process wedged/dead. v1 = the miss
+         * lane (KM2B_LANE_INPUT=5), v2 = the consecutive-miss count that tripped the
+         * latch. System facts only — keyword-clean (T7 pins it under -DJARVIS_CONTROL_IN). */
+        n = snprintf(ev->snap, MON_SNAP_MAX, "mon input-dead lane=%lld miss=%lld",
+                     (long long)v1, (long long)v2);
+        break;
+#endif
     default:
         return -1;
     }

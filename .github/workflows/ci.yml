@@ -386,6 +386,11 @@ jobs:
         cd phase3/src/ai
         gcc -Wall -Werror -O2 -std=c11 -I. test_monitors.c monitors.c shield_action.c action_allowlist.c shield_learn.c -o /tmp/t_monitors
         /tmp/t_monitors
+        # 6-5/M2b-2: the MON_EV_INPUT_DEAD event + its snapshot case are #if JARVIS_CONTROL_IN,
+        # so the host-pure build above folds them out — recompile WITH the flag so the T7
+        # both-ways teeth (snapshot keyword-clean AND un-BLOCKED through shield_assess) cover it.
+        gcc -Wall -Werror -O2 -std=c11 -DJARVIS_CONTROL_IN=1 -I. test_monitors.c monitors.c shield_action.c action_allowlist.c shield_learn.c -o /tmp/t_monitors_ctrlin
+        /tmp/t_monitors_ctrlin
 
     - name: "Phase 6: 6-2 Wake decision core (C)"
       run: |

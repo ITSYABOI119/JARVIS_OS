@@ -1,6 +1,6 @@
 # Phase 6 Goal 6-5 — Control-IN / Natural-Language Primary (PLAN-FIRST)
 
-**Status: IN PROGRESS — M0 (RX spike) + M1 (host security core) + M2a (I211 RX → control_verify data path in PA) + M2b-1 (the SEC-014 isolation split — parse/ratelimit moved off PA into the new least-privileged `jarvis-input` process, Model 2; PA re-parses + HMAC + replay) all DONE 2026-07-15 (see §9; gated `JARVIS_CONTROL_IN` default-0; M2b-1 box gate: OFF object-identity + KVM split-pipeline PROBE ACCEPT/DROP_AUTH). Next: M2b-2 (bare-metal + flood/liveness/RCTL.BAM hardening) → M3 (route query + query SHIELD + response + two-way UI) → M4 → the hard-gated flip.**
+**Status: IN PROGRESS — M0 (RX spike) + M1 (host security core) + M2a (I211 RX → control_verify data path in PA) + M2b-1 (the SEC-014 isolation split — parse/ratelimit moved off PA into the new least-privileged `jarvis-input` process, Model 2; PA re-parses + HMAC + replay) DONE 2026-07-15; M2b-2 (input-process liveness + graceful degrade via the monitor spine, drop-`RCTL.BAM` unicast-only, SEC-033 + backpressure/flood, Option-A scheduling) CODE DONE + KVM-proven 2026-07-16 — all gated `JARVIS_CONTROL_IN` default-0 (see §9; box gate: OFF 4-object-identity + KVM induced-death PROBE → `[ANOMALY] input-dead` + degrade; pre-mortem + diff-review workflows clean). M2b-2's bare-metal on-wire leg (signer-driven ACCEPT/DROP_REPLAY/DROP_AUTH + flood/SEC-033/BAM-filter) is the remaining SUPERVISED validation that fully closes item-5. Next: M3 (route query + query SHIELD + response + two-way UI) → M4 → the hard-gated flip.**
 **This is the phase's LONG POLE and its single hardest security gate:** it turns the read-only
 telemetry console two-way and opens the box to the **FIRST untrusted inbound it has ever accepted**.
 Every prior Phase-6 trigger was internal state; 6-5's first trigger is a hostile network frame.
@@ -501,13 +501,41 @@ until the deliberate, checklist-complete, security-reviewed flip.
   **OFF-identity** — `main.c.obj` `.text`/`.rodata`/`.data` + `nm` byte-identical to the pre-M2b-1
   baseline; the `jarvis-input` ELF + `crypto`/`net` objects are NOT built/linked when off (the build
   script creates the app only under the gate + tears it down in the OFF `else`). Deploy-inert.
-- **M2b-2 — the bare-metal + hardening half (box, gated):** a real bare-metal signed-frame round trip
-  through the split; the **flood-doesn't-starve-PA scheduling proof** (err=0 + q advancing under a frame
-  flood); a **liveness heartbeat** (a consecutive-input-miss counter → quarantine/respawn, since M2b-1
-  grants no fault EP so a dead input process is otherwise undetectable); an oversized (>2 KB) frame + a
-  descriptor-ring-wrap sequence handled without OOB copy or ring desync (the SEC-033 clamp on the box —
-  the one adversarial case host-fuzzing cannot reach); **drop `RCTL.BAM`** in deploy (unicast-to-box-MAC
-  only); and the final priority/core-budget decision (O-Q13). OFF = object-level byte-identical.
+- **M2b-2 — CODE DONE + KVM-proven 2026-07-16 (gated `JARVIS_CONTROL_IN` default-0); the on-the-wire
+  bare-metal leg is the remaining SUPERVISED validation.** The SEC-014 hardening that closes item-5:
+  **(a) input-process LIVENESS + graceful DEGRADE** — a new `km2b_miss` DEADLINE-WINDOW lane
+  (`KM2B_LANE_INPUT=5`): the crux is that a wedged input sticks `g_ctrl_inflight=1` so PA stops forwarding
+  (no more frames), so a *frame-counted* miss would never trip → the miss advances once per
+  `CTRL_IN_DEADLINE_ITERS=32` PA-active iterations while a single in-flight frame stays unanswered
+  (q_total-keyed — the deadline FREEZES during an inference, so a live input starved by worker-5 on the
+  shared core never false-trips; idle-safe: `g_ctrl_inflight==0` ⇒ the counter never leaves 0). At
+  `CTRL_IN_MISS_THRESHOLD=3` (~96 iters) → latch `g_ctrl_in_down` (the outer poll gate then stops the whole
+  lane) + `mon_notify(MON_EV_INPUT_DEAD)` → `[ANOMALY] mon input-dead` + JACT `action=2` + `monitors_fired++`
+  through the existing K spine (zero new plumbing; the snapshot is keyword-clean, T7-pinned under
+  `-DJARVIS_CONTROL_IN=1`). **DETECT + DEGRADE only** — a jarvis-input RESPAWN is deferred to M3 (the
+  forward-only leaky allocator makes naive respawn unsafe; reuse-in-place is the end state). Honest
+  limitation: a dead input = control-IN unavailable until reboot. **(b) drop `RCTL.BAM`** — deploy control
+  RX is unicast-to-box-MAC only (the RA[0]/AV exact-MAC filter, independent of BAM; BAM is RX-accept-only, TX
+  telemetry unaffected); `JARVIS_CONTROL_IN_BAM` re-accepts broadcast for signer bring-up. **(c) SEC-033 +
+  backpressure** — a flood can't starve PA (the poll is bounded, one recv/iter, never blocks); a frame
+  arriving while input is busy is drained into a PA-private scratch + counted (`g_ctrl_bp_drops`) — the RX
+  ring self-limits (RDH catches RDT, no desync), so the drain is head-of-line-blocking mitigation + the
+  honest flood metric (an out-of-spec pipelined frame during a request/response exchange is a flood/attack,
+  so the drop is correct). **(d) Option-A scheduling confirmed** — input stays pinned MaxPrio-1 on core
+  `g_num_nodes-1` (Option B's dedicated core is a permanent ~15–20% Gemma throughput hit for a rare feature —
+  documented fallback only). Pre-mortem-hardened (a 6-lens adversarial-review WORKFLOW, 33 findings, 9 folded:
+  the `#error` cross-guards, the mode-2 probe inside the `g_input_ready` guard, the T7 CI coverage, the
+  `#if JARVIS_MONITORS` NOTIFY wrapper) + a 3-lens diff-review (clean). **Autonomously verified:** OFF
+  **4-object identity** (`main.c.obj` + `nic_i211.c.obj` + `monitors.c.obj` + `km2b_miss.c.obj` `.text`/
+  `.rodata`/`.data` + `nm` byte-identical to the pre-M2b-2 baseline) + host tests (`test_monitors` host-pure
+  AND `-DJARVIS_CONTROL_IN=1` both 44 PASS, `test_km2b_miss` 22 PASS, M1 control 7 green) + the **KVM
+  induced-death PROBE** (`CONTROL_IN=1`/`PROBE=2`, `-smp 6`): the accept/tamper split + input SUSPENDED →
+  3 deadline windows → `[ANOMALY] mon input-dead` + degrade + JACT, q_infer advancing while degraded, err=0.
+  **REMAINING (SUPERVISED, needs the user to run the scapy signer + power-cycle):** the bare-metal on-wire
+  leg — real unicast signed frame `ACCEPT seq=1..3` / resend `DROP_REPLAY` / tamper `DROP_AUTH`; the
+  flood-doesn't-starve proof (`q` advancing + err=0 + `g_ctrl_bp_drops` climbing + a transient tok/s dip);
+  the oversized + ring-wrap SEC-033 leg; and the BAM-drop confirm (broadcast flood hardware-filtered / zero
+  reach the ring; unicast accepted). Item-5 fully closes on that supervised wire proof.
 - **M3 — wire the query through PA + close SEC-039 for queries + response + two-way UI (box, gated):**
   the validated query hits the real query SHIELD (the O-Q4 threat model — the induced-BLOCK proof
   that a genuinely-hostile query is refused), then the cache/inference path (retrieval preamble =

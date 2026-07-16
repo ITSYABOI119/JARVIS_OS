@@ -230,10 +230,21 @@ int i211_nic_init(i211_nic_t *nic, uint64_t mmio_base)
 #endif
     }
 
-    /* 7. Enable RX: EN | BAM | BSIZE_2K | SECRC */
+    /* 7. Enable RX. 6-5/M2b-2 control-IN: drop BAM (Broadcast Accept Mode) so the box
+     * accepts ONLY unicast to its own MAC (the RA[0]/AV exact-MAC filter, auto-loaded from
+     * NVM, is independent of BAM). BAM is RX-accept ONLY — clearing it does NOT affect the
+     * box's own UDP-broadcast telemetry TX (that uses TCTL/TDT). JARVIS_CONTROL_IN_BAM is a
+     * diagnostic escape hatch (re-accept broadcast during signer bring-up). The gate rides a
+     * build-script -DJARVIS_CONTROL_IN=1 (this file does not include jarvis_debug.h); when
+     * undefined the #else is the verbatim HEAD write -> nic_i211.c.obj object-identical. */
+#if JARVIS_CONTROL_IN && !defined(JARVIS_CONTROL_IN_BAM)
+    nic_write32(mmio_base, I211_RCTL,
+                I211_RCTL_EN | I211_RCTL_BSIZE_2K | I211_RCTL_SECRC);   /* unicast-only (no BAM) */
+#else
     nic_write32(mmio_base, I211_RCTL,
                 I211_RCTL_EN | I211_RCTL_BAM |
                 I211_RCTL_BSIZE_2K | I211_RCTL_SECRC);
+#endif
 
     /* 8. Setup TX descriptor ring */
     if (nic->tx_ring) {

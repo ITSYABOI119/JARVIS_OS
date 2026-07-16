@@ -263,30 +263,54 @@
 #error "JARVIS_PROACTIVE_PROBE must not ride JARVIS_MONITOR_PROBE or JARVIS_WAKE_PROBE (respawn races + a shared synthetic delta)"
 #endif
 
-/* Phase 6 6-5/M2a control-IN RX data path (the box's FIRST untrusted network inbound).
+/* Phase 6 6-5/M2a+M2b control-IN RX data path (the box's FIRST untrusted network inbound).
  * When 1, Process A brings up the I211 RX ring, reads the HMAC key from the NVMe JKEY
- * slot (fail-closed), and runs each captured frame through the M1 security core
- * (control_verify: parse -> ratelimit -> constant-time HMAC -> replay) — logging the
- * validated query ONLY (M2a proves RX->verify->extract; routing to inference + the real
- * query SHIELD closing SEC-039-for-queries is M3; the SEC-014 less-privileged input
- * process is M2b). Default 0 -> compiles out entirely (deploy-inert; main.c.obj +
- * nic_i211.c.obj object-identical to pre-M2a). STANDALONE — no ACTIONS/MONITORS dep.
- * NEVER flipped in M2a: the box test flips it TRANSIENTLY only; a committed flip with the
- * SEC-014 process + query SHIELD unmet is the goal-doc §8 FORBIDDEN "mostly-gated" state.
+ * slot (fail-closed), and (M2b-1) copies each captured frame into a mailbox for the
+ * least-privileged jarvis-input process (parse + ratelimit only), then re-parses + HMAC +
+ * replay ITSELF — logging the validated query ONLY (M2a/M2b prove RX->verify->extract;
+ * routing to inference + the real query SHIELD closing SEC-039-for-queries is M3).
+ * M2b-2 adds: input-process liveness (a km2b_miss deadline-window lane -> mon_notify
+ * degrade), the drop-`RCTL.BAM` (unicast-only RX), SEC-033 robustness, and the
+ * flood-doesn't-starve-PA backpressure drain. Default 0 -> compiles out entirely
+ * (deploy-inert; main.c.obj + nic_i211.c.obj + monitors.c.obj + km2b_miss.c.obj
+ * object-identical to pre-6-5). STANDALONE — no ACTIONS/MONITORS dep at flag level (but the
+ * M2b-2 input-dead NOTIFY rides mon_notify; PROBE==2 #error-requires MONITORS+ACTIONS below).
+ * NEVER committed-flipped before M3+M4: the box test flips it TRANSIENTLY only; a committed
+ * flip with the query SHIELD unmet is the goal-doc §8 FORBIDDEN "mostly-gated" state.
  * #ifndef-guarded so the build script can propagate it as -DJARVIS_CONTROL_IN=1 to the
  * whole target: nic_i211.c does NOT include this header, so the RX-programming gate there
  * relies on that -D (undefined -> 0 -> the OFF/HEAD path, object-identical + host-test-safe). */
 #ifndef JARVIS_CONTROL_IN
 #define JARVIS_CONTROL_IN 0
 #endif
-/* Box/KVM synthetic-frame self-test: builds a valid signed JCTL message with the loaded
- * key and asserts control_verify ACCEPT + a tamper -> DROP_AUTH. Its OWN flag (the
- * per-probe precedent). Default 0 -> compiles out. */
+/* 6-5/M2b-2 diagnostic escape hatch: JARVIS_CONTROL_IN_BAM (a build-script -D, NOT #defined
+ * here — nic_i211.c gates the RCTL BAM bit on `!defined(JARVIS_CONTROL_IN_BAM)`). Deploy
+ * control RX is unicast-to-box-MAC only (BAM dropped); define this to re-accept broadcast
+ * during signer bring-up (reproduces the M2a broadcast vector). */
+/* Box/KVM synthetic-frame self-test. MODE (the flag VALUE, the JARVIS_WAKE_PROBE precedent):
+ *   1 = the M2b-1 SPLIT-pipeline accept/tamper probe: PA stages a signed JCTL frame through
+ *       the mailbox -> jarvis-input parses -> PA HMACs the candidate -> ACCEPT + a tamper ->
+ *       DROP_AUTH (proves the cross-process round trip).
+ *   2 = ALSO the M2b-2 induced-death probe: after the accept, seL4_TCB_Suspend the input
+ *       process, forward a synthetic frame, drive ctrl_in_liveness_tick over 3 deadline
+ *       windows -> [ANOMALY] input-dead + degrade + JACT (proves the liveness/degrade lane).
+ * Its OWN flag (the per-probe precedent). Default 0 -> compiles out. */
 #ifndef JARVIS_CONTROL_IN_PROBE
 #define JARVIS_CONTROL_IN_PROBE 0
 #endif
 #if JARVIS_CONTROL_IN_PROBE && !JARVIS_CONTROL_IN
 #error "JARVIS_CONTROL_IN_PROBE requires JARVIS_CONTROL_IN"
+#endif
+/* Cross-guards (the WAKE_PROBE/PROACTIVE_PROBE precedent): CONTROL_IN_PROBE fires synthetic
+ * frames + (mode 2) a mon_notify NOTIFY at BOOT — the same boot window the other *_PROBE
+ * flags fire synthetic anomalies + real respawns, so co-building them cross-pollutes the
+ * [ANOMALY]/JACT gate counts. And mode 2 asserts its result via mon_notify -> the spine, so
+ * it needs MONITORS+ACTIONS or the assertion compiles out vacuously (false-green). */
+#if JARVIS_CONTROL_IN_PROBE && (JARVIS_MONITOR_PROBE || JARVIS_WAKE_PROBE || JARVIS_PROACTIVE_PROBE || JARVIS_ACTION_PROBE)
+#error "JARVIS_CONTROL_IN_PROBE must not co-run with the other *_PROBE flags (boot-time synthetic-anomaly/respawn collisions)"
+#endif
+#if (JARVIS_CONTROL_IN_PROBE == 2) && !(JARVIS_MONITORS && JARVIS_ACTIONS)
+#error "JARVIS_CONTROL_IN_PROBE mode 2 asserts [ANOMALY]/JACT via mon_notify -> requires JARVIS_MONITORS && JARVIS_ACTIONS"
 #endif
 
 /* Phase 6 K/M2a-2 reuse-in-place respawn spike (box-only KVM measurement; SYSTEM_DESIGN

@@ -423,6 +423,22 @@ static uint32_t  g_ctrl_cand_last;            /* last candidate seq PA consumed 
 static int       g_ctrl_inflight;             /* 1 => a frame is with input         */
 static int       g_input_ready;               /* 1 => input spawned + mailboxes live */
 
+/* 6-5/M2b-2: input-process liveness (deadline-window miss counter + degrade-on-trip) plus
+ * the backpressure/flood metric. THE DEADLINE IS q_total-KEYED (iteration-based, NOT
+ * wall-clock): q_total freezes for the whole ~12 s of an inference (PA blocks in the
+ * response-poll), so a live input starved by worker-5 on the shared core 5 never false-trips
+ * — the window counts only PA-ACTIVE iterations, structurally excluding legitimate inference
+ * preemption. (A future switch to async inference dispatch would break this lockstep — re-check.)
+ * g_ctrl_in_down latches control-IN OFF until reboot: M2b-2 is DETECT + DEGRADE only; a
+ * jarvis-input RESPAWN is deferred to M3 (the forward-only leaky allocator makes naive respawn
+ * unsafe — K/M2a-proven; reuse-in-place is the correct end state). */
+#define CTRL_IN_DEADLINE_ITERS 32u    /* PA-active iterations one in-flight frame may go unanswered */
+#define CTRL_IN_MISS_THRESHOLD 3u     /* consecutive deadline windows (~96 iters) => input declared dead */
+static km2b_miss_t g_ctrl_in_miss;            /* consecutive unanswered-frame windows            */
+static uint64_t    g_ctrl_infl_since;         /* q_total when the in-flight frame was forwarded  */
+static int         g_ctrl_in_down;            /* latched: input dead -> stop forward/consume     */
+static uint32_t    g_ctrl_bp_drops;           /* inbound frames dropped while input busy (flood metric) */
+
 #if JARVIS_CONTROL_IN_PROBE
 static void ctrl_put_be16(uint8_t *p, uint16_t v){ p[0]=(uint8_t)(v>>8); p[1]=(uint8_t)v; }
 static void ctrl_put_be32(uint8_t *p, uint32_t v){ p[0]=(uint8_t)(v>>24); p[1]=(uint8_t)(v>>16); p[2]=(uint8_t)(v>>8); p[3]=(uint8_t)v; }
@@ -2276,6 +2292,35 @@ static void mon_notify(monitor_event_type_t type, int64_t v1, int64_t v2)
     }
 }
 #endif /* JARVIS_MONITORS */
+
+#if JARVIS_CONTROL_IN
+/* 6-5/M2b-2: one liveness tick on the in-flight control-IN frame — ONE shared code path
+ * called from the poll site with q_total AND from the PROBE with synthetic iteration counts.
+ * Idle-safe: g_ctrl_inflight==0 => no-op => the miss counter never leaves 0 (the km2b_miss
+ * "absence is never an event" discipline; a normal parse-drop still publishes a candidate, so
+ * PA's consume resets the counter — only a genuinely UNANSWERED frame advances it). On the
+ * DEADLINE-th consecutive window with no candidate back, declare input dead + degrade (latch
+ * g_ctrl_in_down -> the outer poll gate stops forwarding/consuming) + NOTIFY through the
+ * monitor spine. Fire-once via the latch. */
+static void ctrl_in_liveness_tick(uint64_t now_iters)
+{
+    if (g_ctrl_inflight && (now_iters - g_ctrl_infl_since) >= CTRL_IN_DEADLINE_ITERS) {
+        km2b_miss_on_pb_timeout(&g_ctrl_in_miss, KM2B_LANE_INPUT);
+        g_ctrl_infl_since = now_iters;                 /* re-arm the window */
+        if (!g_ctrl_in_down && km2b_miss_tripped(&g_ctrl_in_miss, CTRL_IN_MISS_THRESHOLD)) {
+            g_ctrl_in_down = 1;
+#if JARVIS_MONITORS
+            /* keyword-clean system-facts snapshot -> spine -> "[ANOMALY] mon input-dead..." +
+             * JACT action=2 + monitors_fired++ (the same path every watcher uses; T7-pinned). */
+            mon_notify(MON_EV_INPUT_DEAD, (int64_t)KM2B_LANE_INPUT,
+                       (int64_t)km2b_miss_count(&g_ctrl_in_miss));
+#else
+            puts_serial("[CTRL-IN] input-dead — degraded (monitors off; no NOTIFY)\n");
+#endif
+        }
+    }
+}
+#endif /* JARVIS_CONTROL_IN */
 
 /* §5-D/E: the SINGLE restart funnel. Idempotent via g_restart_in_progress. First LIVE shield_assess
  * -> trust_policy; execute on EXECUTE/NOTIFY; exactly ONE JACT record; restart_count bump; windowed
@@ -4235,6 +4280,31 @@ static void *main_continued(void *arg UNUSED)
         pv = (pfl > 0) ? ctrl_roundtrip_sync(pf, (size_t)pfl, &pr) : CV_DROP_PARSE;
         puts_serial(pv == CV_DROP_AUTH ? "[CTRL-IN-PROBE] tamper=DROP_AUTH\n"
                                        : "[CTRL-IN-PROBE] FAIL tamper not caught\n");
+#if JARVIS_CONTROL_IN_PROBE == 2
+        /* M2b-2 induced-death: deterministically wedge the input process (Suspend its TCB —
+         * INSIDE this g_input_ready guard so the cptr is valid), stage a synthetic frame it
+         * can never answer, and drive the REAL ctrl_in_liveness_tick over 3 deadline windows
+         * -> declare-dead + degrade + [ANOMALY] mon input-dead + JACT action=2. Afterward the
+         * workload runs with control-IN latched OFF (input Inactive on core 5) and q_infer must
+         * still advance — the KVM assertion (KVM has no NIC, so the live poll is inert). */
+        seL4_TCB_Suspend(input_process.thread.tcb.cptr);
+        puts_serial("[CTRL-IN-PROBE] input SUSPENDED (induced death)\n");
+        pfl = net_build_udp_broadcast(pf, sizeof pf, g_net.nic.mac, JARVIS_BOX_IP,
+                                      40000, (uint16_t)CONTROL_PORT, pj, pjl);
+        if (pfl > 0) {
+            uint16_t sc = (uint16_t)((size_t)pfl > CTRL_MBX_MAX_FRAME ? CTRL_MBX_MAX_FRAME : (size_t)pfl);
+            memcpy(g_raw_mbx->bytes, pf, sc);
+            g_raw_mbx->len = sc;
+            __atomic_store_n(&g_raw_mbx->seq, ++g_ctrl_raw_seq, __ATOMIC_RELEASE);
+            seL4_Signal(g_input_wake);   /* harmless — the suspended input never wakes */
+        }
+        g_ctrl_inflight = 1; g_ctrl_infl_since = 0;
+        ctrl_in_liveness_tick(CTRL_IN_DEADLINE_ITERS);        /* window 1 -> miss=1 */
+        ctrl_in_liveness_tick(2u * CTRL_IN_DEADLINE_ITERS);   /* window 2 -> miss=2 */
+        ctrl_in_liveness_tick(3u * CTRL_IN_DEADLINE_ITERS);   /* window 3 -> miss=3 -> trip -> degrade */
+        puts_serial(g_ctrl_in_down ? "[CTRL-IN-PROBE] input-dead DEGRADED (miss=3; [ANOMALY] above)\n"
+                                   : "[CTRL-IN-PROBE] FAIL input-dead not detected\n");
+#endif
     } else {
         puts_serial(g_ctrl_key_ok ? "[CTRL-IN-PROBE] SKIPPED (input process down)\n"
                                   : "[CTRL-IN-PROBE] SKIPPED (no key)\n");
@@ -4258,13 +4328,17 @@ static void *main_continued(void *arg UNUSED)
          * never trusting a forwarded offset) — then (2) forwards ONE new raw frame if the
          * input process is idle (single-frame-in-flight backpressure). PA NEVER blocks on
          * the input process. On ACCEPT, LOG the sanitized query ONLY; every drop is SILENT
-         * (attacker-controlled); totals surface at the [STATS] cadence. */
-        if (g_ctrl_rx_ready && g_ctrl_key_ok && g_input_ready) {
+         * (attacker-controlled); totals surface at the [STATS] cadence.
+         * 6-5/M2b-2: the outer !g_ctrl_in_down gate stops the whole lane once the input
+         * process is declared dead (degrade); a candidate-consume ACKs the liveness counter;
+         * a deadline tick + a backpressure drain (else-branch) are the flood/liveness edits. */
+        if (g_ctrl_rx_ready && g_ctrl_key_ok && g_input_ready && !g_ctrl_in_down) {
             /* (1) consume a candidate (non-blocking): acquire-load the publish seq. */
             uint32_t cs = __atomic_load_n(&g_cand_mbx->seq, __ATOMIC_ACQUIRE);
             if (cs != g_ctrl_cand_last) {
                 g_ctrl_cand_last = cs;
                 g_ctrl_inflight  = 0;                    /* input answered — free to forward again */
+                km2b_miss_on_pb_ack(&g_ctrl_in_miss);   /* M2b-2: a genuine candidate -> input alive -> reset */
                 control_result_t cres;
                 control_verdict_t cv = pa_verify_candidate(&cres);
                 if (cv == CV_ACCEPT) {
@@ -4311,17 +4385,36 @@ static void *main_continued(void *arg UNUSED)
                     /* SILENT — no per-drop log (attacker could flood it). Totals at [STATS]. */
                 }
             }
+            /* M2b-2: tick the input-process liveness on the (possibly unanswered) in-flight
+             * frame. Idle-safe (no-op when nothing is in flight). q_total is the deadline
+             * clock; it freezes during an inference, so a live-but-preempted input never
+             * false-trips (see the CTRL_IN_DEADLINE_ITERS note). */
+            ctrl_in_liveness_tick(q_total);
             /* (2) forward ONE new frame if the input process is idle. PA copies the captured
              * frame DIRECTLY into the raw mailbox (i211_nic_recv clamps to CTRL_MBX_MAX_FRAME),
-             * publishes the seq (release), and signals the input process. */
+             * publishes the seq (release), signals the input process, and STAMPS the deadline. */
             if (!g_ctrl_inflight) {
                 int rn = i211_nic_recv(&g_net.nic, g_raw_mbx->bytes, CTRL_MBX_MAX_FRAME);
                 if (rn > 0) {
                     g_raw_mbx->len = (uint16_t)rn;
                     __atomic_store_n(&g_raw_mbx->seq, ++g_ctrl_raw_seq, __ATOMIC_RELEASE);
                     seL4_Signal(g_input_wake);
-                    g_ctrl_inflight = 1;
+                    g_ctrl_inflight   = 1;
+                    g_ctrl_infl_since = q_total;         /* M2b-2: arm the liveness deadline */
                 }
+            } else {
+                /* M2b-2 backpressure: the input process is busy with the in-flight frame, so
+                 * PA can't hand off a newly-arrived one. DRAIN it into a PA-private scratch (one
+                 * recv/iter — never into g_raw_mbx, which the input process is still reading) and
+                 * COUNT it. This is a real semantics change vs M2b-1 (which left the frame queued
+                 * in the RX ring): a control-IN sender is request/response (it waits for the
+                 * reply), so a frame arriving while a prior one is in flight is a flood/attack or
+                 * an out-of-spec pipeline — dropping it is correct. The RX ring is self-limiting
+                 * either way (RDH catches RDT -> the NIC stops, no desync); the drain's real value
+                 * is head-of-line-blocking mitigation under a flood + the honest flood metric. */
+                static uint8_t bp_scratch[CTRL_MBX_MAX_FRAME];
+                int rn = i211_nic_recv(&g_net.nic, bp_scratch, CTRL_MBX_MAX_FRAME);
+                if (rn > 0) g_ctrl_bp_drops++;
             }
         }
 #endif
@@ -4973,7 +5066,10 @@ static void *main_continued(void *arg UNUSED)
                 cp = fbp_str(cp, " rl=");     cp = fbp_u32(cp, g_ctrl_d_rl);
                 cp = fbp_str(cp, " auth=");   cp = fbp_u32(cp, g_ctrl_d_auth);
                 cp = fbp_str(cp, " replay="); cp = fbp_u32(cp, g_ctrl_d_replay);
-                *cp++ = ')'; *cp = '\0';
+                *cp++ = ')';
+                cp = fbp_str(cp, " bp=");   cp = fbp_u32(cp, g_ctrl_bp_drops);   /* M2b-2: backpressure/flood drops */
+                cp = fbp_str(cp, " down="); cp = fbp_u32(cp, (uint32_t)g_ctrl_in_down);  /* 1 = input declared dead */
+                *cp = '\0';
                 puts_serial(cl); puts_serial("\n");
                 if (g_nvme_ptr)
                     nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr, g_nvme_bounce_paddr,

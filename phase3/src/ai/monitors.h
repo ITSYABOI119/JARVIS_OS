@@ -36,6 +36,9 @@ typedef enum {
     MON_EV_HEARTBEAT_AGE,     /* PB heartbeat age exceeded the calibrated threshold */
     MON_EV_UPTIME_MILESTONE,  /* boot-relative uptime crossed a milestone mark      */
     MON_EV_DEGRADED,          /* PB dead — the box latched cache-only (6-3 B5)      */
+#if JARVIS_CONTROL_IN
+    MON_EV_INPUT_DEAD,        /* 6-5/M2b-2: the SEC-014 input process wedged/dead   */
+#endif
     MON_EV__COUNT
 } monitor_event_type_t;
 
