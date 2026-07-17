@@ -558,7 +558,10 @@ until the deliberate, checklist-complete, security-reviewed flip.
   `JARVIS_CONTROL_IN` default-0). → CLOSES checklist ITEM-4 (real query SHIELD, SEC-039-for-queries) at the
   logic + box level.** `pa_ctrl_gate` (`main_x86.c`, the ONE choke point at the CV_ACCEPT branch) runs
   `query_shield_assess` on the validated (post-auth/replay) query: **QS_ALLOW → routes ONE inference** on the
-  6-2 wake-lane discipline (fold-duty / F9 drain / **PREAMBLE-CLEAR** so a stale workload preamble can't
+  6-2 wake-lane discipline (**§5-F DEGRADED GATE** — skip the route when `g_pb_dead`: `[CTRL-IN-RESP] …
+  DEGRADED (no dispatch)` + episodic ERROR + JACT EXECUTED/FAIL, no ~60-120 s dispatch burn — added in
+  M3-2a-fix, the ONE lane that had been missing `PB_DISPATCH_OK()`, a D1-class regression the 5-lens review
+  caught / fold-duty / F9 drain / **PREAMBLE-CLEAR** so a stale workload preamble can't
   contaminate the user query / **strict `pk_seq==cseq` first-chunk correlation** + a permissive multi-chunk
   drain since PB renumbers chunks / the 3 wake deviations: a fault funnels the self-heal + `break` (never
   `goto next_query`), a timeout NEVER bumps `q_errors` (feeds the PB miss under new `KM2B_LANE_CTRL=6`)) →

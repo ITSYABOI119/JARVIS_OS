@@ -2410,10 +2410,11 @@ static void ctrl_in_jact(uint16_t verdict, uint16_t outcome, const char *trig, u
  * query_shield_assess (length-carried, the raw attacker bytes) decides:
  *   QS_REFUSE -> [CTRL-IN-REFUSE] + ONE JACT(BLOCKED, reason-label ONLY) + g_ctrl_in_blocked++;
  *                NO ring traffic, q_infer unchanged.
- *   QS_ALLOW  -> route ONE inference on the 6-2 wake-lane discipline (fold-duty / F9 drain /
+ *   QS_ALLOW  -> route ONE inference on the 6-2 wake-lane discipline (§5-F DEGRADED GATE: skip the
+ *                route when g_pb_dead — DEGRADED/FAIL, no dispatch burn; fold-duty / F9 drain /
  *                PREAMBLE-CLEAR so a stale workload preamble can't contaminate the user query /
- *                STRICT pk_seq==cseq correlation / the 3 wake deviations: a fault funnels the
- *                self-heal + breaks — never goto; a timeout NEVER bumps q_errors, it feeds the PB
+ *                STRICT pk_seq==cseq first-chunk correlation / the 3 wake deviations: a fault funnels
+ *                the self-heal + breaks — never goto; a timeout NEVER bumps q_errors, it feeds the PB
  *                miss-counter under KM2B_LANE_CTRL) -> [CTRL-IN-RESP] + episodic write
  *                (EPI_ACT_CONTROL_IN, store-isolated by tag) + ONE JACT(EXECUTED).
  * K-b holds: the routed query returns TEXT ONLY — it can never mint/select an action. Called from
@@ -2442,6 +2443,23 @@ static void pa_ctrl_gate(const control_result_t *cres)
         qs[i] = (c >= 0x20 && c < 0x7f) ? (char)c : '.';
     }
     qs[qm] = 0;
+
+    /* §5-F degraded gate (the wake-lane leg at :5783 this function omitted — a D1-class
+     * regression, the SAME miss as K/M2c D1). Once the crash-loop bound latches g_pb_dead, do
+     * NOT dispatch into a dead PB: pa_fault_check() returns 0 immediately under g_pb_dead, so a
+     * send here would burn the FULL ~60-120 s poll_max per inbound frame and stall the whole
+     * workload loop, making the "PB dispatch STOPPED" log a lie. Suppress ONLY the route — the
+     * QS_REFUSE branch above already ran + audited (it touches no PB state); honest FAIL, audited
+     * EXECUTED/FAIL to mirror the wake lane's degraded semantics. Placed BEFORE the duty fold so
+     * no window opens, no F9 drain / preamble-clear runs, no g_ctrl_route_seq is consumed. Folds
+     * out OFF (PB_DISPATCH_OK()==1 when !JARVIS_ACTIONS). */
+    if (!PB_DISPATCH_OK()) {
+        puts_serial("[CTRL-IN-RESP] q=\""); puts_serial(qs);
+        puts_serial("\" -> DEGRADED (no dispatch)\n");
+        epi_batch_add(qs, EPI_ACT_CONTROL_IN, EPI_OUT_ERROR, NULL);
+        ctrl_in_jact(AUDIT_EXECUTED, AUDIT_OUT_FAIL, "control-in degraded", 19);
+        return;
+    }
 
     /* (§7.5c) fold any open duty window, open the control-IN one. */
     if (g_infer_active) g_infer_cycles += jarvis_rdtsc() - g_infer_t0;
@@ -4459,6 +4477,25 @@ static void *main_continued(void *arg UNUSED)
             pa_ctrl_gate(&pr);            /* QS_REFUSE -> [CTRL-IN-REFUSE], no route */
         } else {
             puts_serial("[CTRL-IN-PROBE] FAIL hostile frame not accepted (should reach the SHIELD)\n");
+        }
+        /* THIRD leg — STRICTLY LAST (g_pb_dead is a TERMINAL latch that kills ALL PB dispatch for
+         * the rest of the boot; sequencing it before the route/refuse legs would starve them — the
+         * 6-3/M1 "B5 terminal latch LAST" lesson). Induce degraded, then a benign frame proves the
+         * §5-F gate SUPPRESSES the route (no dispatch, no ~60-120 s stall). The workload then runs
+         * cache-only with q_infer frozen (the degraded steady state). PB stays ALIVE; PA just stops
+         * dispatching (the WAKE_PROBE mode-2 latch semantics, :5393). */
+        g_pb_dead = 1;
+        puts_serial("[CTRL-IN-PROBE] induced g_pb_dead (degraded)\n");
+        control_replay_init(&g_ctrl_replay, CONTROL_TEST_EPOCH);
+        pjl = build_probe_jctl(pj, g_ctrl_key, 12u, 0xD0, "what is virtual memory?");
+        pfl = net_build_udp_broadcast(pf, sizeof pf, g_net.nic.mac, JARVIS_BOX_IP,
+                                      40000, (uint16_t)CONTROL_PORT, pj, pjl);
+        pv = (pfl > 0) ? ctrl_roundtrip_sync(pf, (size_t)pfl, &pr) : CV_DROP_PARSE;
+        if (pv == CV_ACCEPT) {
+            puts_serial("[CTRL-IN-PROBE] degraded benign q=\"what is virtual memory?\"\n");
+            pa_ctrl_gate(&pr);            /* QS_ALLOW but g_pb_dead -> DEGRADED (no dispatch) */
+        } else {
+            puts_serial("[CTRL-IN-PROBE] FAIL degraded frame not accepted\n");
         }
 #endif
 #if JARVIS_CONTROL_IN_PROBE == 2

@@ -726,9 +726,14 @@ if [ -f "$CMAKE_FILE" ]; then
             sed -i '/target_compile_options/a\target_compile_definitions(sel4test-driver PRIVATE JARVIS_CONTROL_IN=1)' "$CMAKE_FILE" 2>/dev/null
             grep -q "JARVIS_CONTROL_IN=1" "$CMAKE_FILE" && { echo -e "  ${GREEN}ADDED${NC}  JARVIS_CONTROL_IN=1 compile def"; PATCHED=1; }
         fi
-        if [ "$CONTROL_IN_PROBE" = "1" ] && ! grep -q "JARVIS_CONTROL_IN_PROBE=1" "$CMAKE_FILE"; then
-            sed -i '/target_compile_options/a\target_compile_definitions(sel4test-driver PRIVATE JARVIS_CONTROL_IN_PROBE=1)' "$CMAKE_FILE" 2>/dev/null
-            grep -q "JARVIS_CONTROL_IN_PROBE=1" "$CMAKE_FILE" && { echo -e "  ${GREEN}ADDED${NC}  JARVIS_CONTROL_IN_PROBE=1 compile def"; PATCHED=1; }
+        # 6-5/M3-2a-fix: JARVIS_CONTROL_IN_PROBE is consumed ONLY by main_x86.c, which includes
+        # jarvis_debug.h — the header VALUE governs directly (no -D needed; contrast JARVIS_CONTROL_IN,
+        # whose -D MUST stay because nic_i211.c does not include the header). Strip any -D injected by
+        # an older build: a persistent -DJARVIS_CONTROL_IN_PROBE=1 defeats the header's #ifndef and
+        # silently pins the MODE to 1, so a mode-2/3 gate would compile out and fail by absence.
+        if grep -q "JARVIS_CONTROL_IN_PROBE=" "$CMAKE_FILE"; then
+            sed -i '/target_compile_definitions(sel4test-driver PRIVATE JARVIS_CONTROL_IN_PROBE=/d' "$CMAKE_FILE"
+            echo -e "  ${YELLOW}STRIPPED${NC}  stale JARVIS_CONTROL_IN_PROBE def (header is the source of truth)"; PATCHED=1
         fi
         # 6-5/M2b-1: register the SEC-014 jarvis-input app (add_subdirectory) + pack its
         # ELF into the rootserver CPIO (extend MakeCPIO). These two lines live in the base
@@ -748,9 +753,10 @@ if [ -f "$CMAKE_FILE" ]; then
         # a prior ON build would otherwise leave the OFF/deploy image compiled with the
         # control-IN path ACTIVE (the §8 forbidden 'mostly-gated' state). Strip every
         # injected line so an OFF build is genuinely OFF + object-identical to pre-M2a.
-        if grep -qE 'JARVIS_CONTROL_IN(_PROBE)?=1|src/(crypto|net)/|src/ai/query_shield.c|jarvis-input' "$CMAKE_FILE"; then
+        if grep -qE 'JARVIS_CONTROL_IN(_PROBE)?=|src/(crypto|net)/|src/ai/query_shield.c|jarvis-input' "$CMAKE_FILE"; then
             sed -i '/target_compile_definitions(sel4test-driver PRIVATE JARVIS_CONTROL_IN=1)/d' "$CMAKE_FILE"
-            sed -i '/target_compile_definitions(sel4test-driver PRIVATE JARVIS_CONTROL_IN_PROBE=1)/d' "$CMAKE_FILE"
+            # 6-5/M3-2a-fix: value-agnostic (=, not =1) so a stale mode-2/3 -D is torn down too.
+            sed -i '/target_compile_definitions(sel4test-driver PRIVATE JARVIS_CONTROL_IN_PROBE=/d' "$CMAKE_FILE"
             sed -i '/^[[:space:]]*src\/crypto\//d; /^[[:space:]]*src\/net\/.*\.c/d' "$CMAKE_FILE"
             sed -i '/^[[:space:]]*src\/ai\/query_shield.c/d' "$CMAKE_FILE"   # 6-5/M3-2a: strip the gated query SHIELD
             sed -i 's| "src/crypto" "src/net"||' "$CMAKE_FILE"
