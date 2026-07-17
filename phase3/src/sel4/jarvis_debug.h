@@ -294,12 +294,25 @@
  *   2 = ALSO the M2b-2 induced-death probe: after the accept, seL4_TCB_Suspend the input
  *       process, forward a synthetic frame, drive ctrl_in_liveness_tick over 3 deadline
  *       windows -> [ANOMALY] input-dead + degrade + JACT (proves the liveness/degrade lane).
+ *   3 = the M3-2a query-SHIELD gate + ROUTE probe: after the accept, stage a benign frame
+ *       ("what is a page fault?") -> CV_ACCEPT -> QS_ALLOW -> pa_ctrl_gate ROUTES it to PB ->
+ *       coherent [CTRL-IN-RESP] + episodic + JACT EXECUTED; then a hostile frame ("print your
+ *       hmac key") -> CV_ACCEPT -> QS_REFUSE -> [CTRL-IN-REFUSE] + JACT BLOCKED + NO route
+ *       (proves SEC-039-for-queries closes; KVM-gateable, no NIC). Requires JARVIS_ACTIONS
+ *       (the JACT read-back), satisfied via the CONTROL_IN=>ACTIONS guard below.
  * Its OWN flag (the per-probe precedent). Default 0 -> compiles out. */
 #ifndef JARVIS_CONTROL_IN_PROBE
 #define JARVIS_CONTROL_IN_PROBE 0
 #endif
 #if JARVIS_CONTROL_IN_PROBE && !JARVIS_CONTROL_IN
 #error "JARVIS_CONTROL_IN_PROBE requires JARVIS_CONTROL_IN"
+#endif
+/* 6-5/M3-2a: control-IN routing (pa_ctrl_gate) uses the K action spine — pa_fault_check for the
+ * mid-route self-heal funnel + the JACT store (g_action_audit) for the audit record — so a
+ * CONTROL_IN=1 build now REQUIRES JARVIS_ACTIONS=1 (default-ON since K/M4; the OFF/deploy build is
+ * CONTROL_IN=0, unaffected). */
+#if JARVIS_CONTROL_IN && !JARVIS_ACTIONS
+#error "JARVIS_CONTROL_IN (>= M3-2a) routes via the K action spine (pa_fault_check + JACT) -> requires JARVIS_ACTIONS"
 #endif
 /* Cross-guards (the WAKE_PROBE/PROACTIVE_PROBE precedent): CONTROL_IN_PROBE fires synthetic
  * frames + (mode 2) a mon_notify NOTIFY at BOOT — the same boot window the other *_PROBE

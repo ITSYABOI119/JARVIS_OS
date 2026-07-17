@@ -167,6 +167,8 @@ AI_FILES=(
     "monitors.c"          "monitors.h"
     "wake.c"              "wake.h"
     "behaviors.c"         "behaviors.h"
+    "query_shield.c"      "query_shield.h"
+    "hostile_queries.h"   "benign_queries.h"
 )
 
 for f in "${AI_FILES[@]}"; do
@@ -706,6 +708,16 @@ if [ -f "$CMAKE_FILE" ]; then
                 fi
             fi
         done
+        # 6-5/M3-2a: the query SHIELD (src/ai, already an include dir) — gated so an OFF build
+        # neither compiles nor links it (the teardown else-branch strips it).
+        if ! grep -q "src/ai/query_shield.c" "$CMAKE_FILE"; then
+            sed -i "/src\/ai\/behaviors.c/a\\    src/ai/query_shield.c" "$CMAKE_FILE" 2>/dev/null
+            if grep -q "src/ai/query_shield.c" "$CMAKE_FILE"; then
+                echo -e "  ${GREEN}ADDED${NC}  src/ai/query_shield.c (6-5/M3-2a)"; PATCHED=1
+            else
+                echo -e "  ${RED}FAILED${NC}  Could not add src/ai/query_shield.c — edit CMakeLists.txt manually"
+            fi
+        fi
         if ! grep -q '"src/net"' "$CMAKE_FILE"; then
             sed -i 's|"src/drivers"|"src/drivers" "src/crypto" "src/net"|' "$CMAKE_FILE"
             grep -q '"src/net"' "$CMAKE_FILE" && { echo -e "  ${GREEN}ADDED${NC}  src/crypto + src/net includes"; PATCHED=1; }
@@ -736,10 +748,11 @@ if [ -f "$CMAKE_FILE" ]; then
         # a prior ON build would otherwise leave the OFF/deploy image compiled with the
         # control-IN path ACTIVE (the §8 forbidden 'mostly-gated' state). Strip every
         # injected line so an OFF build is genuinely OFF + object-identical to pre-M2a.
-        if grep -qE 'JARVIS_CONTROL_IN(_PROBE)?=1|src/(crypto|net)/|jarvis-input' "$CMAKE_FILE"; then
+        if grep -qE 'JARVIS_CONTROL_IN(_PROBE)?=1|src/(crypto|net)/|src/ai/query_shield.c|jarvis-input' "$CMAKE_FILE"; then
             sed -i '/target_compile_definitions(sel4test-driver PRIVATE JARVIS_CONTROL_IN=1)/d' "$CMAKE_FILE"
             sed -i '/target_compile_definitions(sel4test-driver PRIVATE JARVIS_CONTROL_IN_PROBE=1)/d' "$CMAKE_FILE"
             sed -i '/^[[:space:]]*src\/crypto\//d; /^[[:space:]]*src\/net\/.*\.c/d' "$CMAKE_FILE"
+            sed -i '/^[[:space:]]*src\/ai\/query_shield.c/d' "$CMAKE_FILE"   # 6-5/M3-2a: strip the gated query SHIELD
             sed -i 's| "src/crypto" "src/net"||' "$CMAKE_FILE"
             # 6-5/M2b-1: revert the jarvis-input registration so an OFF build packs no
             # input ELF (MakeCPIO back to jarvis-inference only; drop add_subdirectory).

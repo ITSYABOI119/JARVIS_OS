@@ -57,8 +57,12 @@ typedef struct __attribute__((packed)) {
 _Static_assert(sizeof(epi_store_header_t) <= 512, "episodic header must fit one sector");
 
 /* Action / route codes — the routes that produce a memory */
-#define EPI_ACT_CACHE  1
-#define EPI_ACT_INFER  2
+#define EPI_ACT_CACHE       1
+#define EPI_ACT_INFER       2
+#define EPI_ACT_CONTROL_IN  3   /* 6-5/M3-2a: an inbound control-IN Q&A. Excluded from cache-growth
+                                 * promotion + retrieval-sourcing + semantic distill BY THE TAG VALUE
+                                 * ALONE (all three filter == EPI_ACT_INFER) — the O-Q12 store-
+                                 * contamination surface is closed by construction, no extra filter. */
 
 /* Outcome codes */
 #define EPI_OUT_OK       0
