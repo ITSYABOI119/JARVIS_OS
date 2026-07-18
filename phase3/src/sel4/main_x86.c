@@ -93,6 +93,7 @@
 #include "hmac_sha256.h"         /* Phase 6 6-5/M2a: for the PROBE + the M2b-1 PA-side HMAC (verify-in-PA) */
 #include "control_mailbox.h"     /* Phase 6 6-5/M2b-1: PA<->jarvis-input mailbox layout (Model 2) */
 #include "query_shield.h"        /* Phase 6 6-5/M3-2a: the query SHIELD gate (closes SEC-039-for-queries) */
+#include "control_console.h"     /* Phase 6 6-5/M3-2b: the provisioned reply address (M4 -> NVMe slot) */
 #endif
 #include "jarvis_ui_tokens.h"   /* Step 2c-2b: FBP_ and JUI_ palette + geometry (single source) */
 
@@ -2406,6 +2407,64 @@ static void ctrl_in_jact(uint16_t verdict, uint16_t outcome, const char *trig, u
     act_audit_append(&g_action_audit, &rec);
 }
 
+/* 6-5/M3-2b: the unicast reply-to-console. EVERY pa_ctrl_gate exit path sends exactly ONE reply
+ * (no silent drops) — verdict 0=answered / 1=refused / 2=degraded / 3=failed. Payload wire (LE):
+ *   [magic 'JRPL'][ver=1][verdict][seq:u16][text_len:u16][text: sanitized, <=512][crc32 over all before it].
+ * CONFIDENTIALITY (the point of the milestone): the frame is built with net_build_udp_unicast to
+ * the PROVISIONED CONTROL_CONSOLE_MAC/IP ONLY — never broadcast, never derived from the request
+ * frame's source (a spoofed source would redirect the answer). A defensive box-side check re-reads
+ * the built frame's L2 dst and DROPS the TX if it is not the console MAC / is broadcast. The reply
+ * is CRC'd (integrity), NOT HMAC'd (box->console is unauthenticated — a NAMED limitation, an M4
+ * /security-review item; consistent with the CRC-only telemetry-OUT direction). The frame is BUILT
+ * + LOGGED even with no NIC (the KVM frame-construction assertion); the actual TX is g_net.ready-gated
+ * (fire-and-forget, the telemetry precedent). Refuse carries the reason LABEL only — never the query. */
+#define CTRL_REPLY_TEXT_MAX 512u
+static void ctrl_send_reply(uint16_t seq, uint8_t verdict, const char *text, int text_len)
+{
+    int t = text_len; if (t < 0) t = 0; if ((uint32_t)t > CTRL_REPLY_TEXT_MAX) t = (int)CTRL_REPLY_TEXT_MAX;
+
+    static uint8_t pl[10u + CTRL_REPLY_TEXT_MAX + 4u];   /* header(10) + text(<=512) + crc(4) */
+    pl[0] = 'J'; pl[1] = 'R'; pl[2] = 'P'; pl[3] = 'L';
+    pl[4] = 1;                 /* version */
+    pl[5] = verdict;
+    pl[6] = (uint8_t)(seq & 0xFF);      pl[7] = (uint8_t)((seq >> 8) & 0xFF);
+    pl[8] = (uint8_t)((uint16_t)t & 0xFF); pl[9] = (uint8_t)(((uint16_t)t >> 8) & 0xFF);
+    for (int i = 0; i < t; i++) {                        /* printable-sanitize (attacker text on the answered path) */
+        uint8_t c = text ? (uint8_t)text[i] : 0;
+        pl[10 + i] = (c >= 0x20 && c < 0x7f) ? (char)c : '.';
+    }
+    uint32_t body_len = 10u + (uint32_t)t;
+    uint32_t crc = jarvis_tlm_crc32(pl, body_len);
+    pl[body_len + 0] = (uint8_t)(crc & 0xFF);        pl[body_len + 1] = (uint8_t)((crc >> 8) & 0xFF);
+    pl[body_len + 2] = (uint8_t)((crc >> 16) & 0xFF); pl[body_len + 3] = (uint8_t)((crc >> 24) & 0xFF);
+    uint16_t payload_len = (uint16_t)(body_len + 4u);
+
+    static const uint8_t cmac[6] = CONTROL_CONSOLE_MAC;
+    static uint8_t reply_frame[640];
+    int flen = net_build_udp_unicast(reply_frame, sizeof reply_frame, g_net.nic.mac, JARVIS_BOX_IP,
+                                     cmac, CONTROL_CONSOLE_IP, JARVIS_TELEMETRY_PORT,
+                                     CONTROL_REPLY_PORT, pl, payload_len);
+
+    /* Defensive confidentiality assertion: the BUILT frame's L2 dst MUST be the console MAC and
+     * MUST NOT be broadcast — a reply that cannot be proven unicast never leaves the box. */
+    static const uint8_t bcast[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+    int dst_ok = (flen > 0) && (memcmp(reply_frame, cmac, 6) == 0) &&
+                 (memcmp(reply_frame, bcast, 6) != 0);
+
+    static const char HEXD[] = "0123456789abcdef";
+    puts_serial("[CTRL-IN-REPLY] verdict="); put_dec(verdict);
+    puts_serial(" seq="); put_dec(seq);
+    puts_serial(" len="); put_dec((uint32_t)t);
+    puts_serial(" -> ");
+    for (int i = 0; i < 6; i++) { putc_serial(HEXD[(cmac[i] >> 4) & 0xF]); putc_serial(HEXD[cmac[i] & 0xF]);
+                                  if (i < 5) putc_serial(':'); }
+    putc_serial(':'); put_dec(CONTROL_REPLY_PORT);
+    puts_serial(dst_ok ? "\n" : " DROP (not unicast — reply withheld)\n");
+
+    if (dst_ok && g_net.ready)
+        (void)i211_send_phys(&g_net.nic, g_net.tx_buf_v, g_net.tx_buf_p, reply_frame, (uint32_t)flen);
+}
+
 /* 6-5/M3-2a: THE M3 boundary — the ONLY place a validated control-IN query is gated + routed.
  * query_shield_assess (length-carried, the raw attacker bytes) decides:
  *   QS_REFUSE -> [CTRL-IN-REFUSE] + ONE JACT(BLOCKED, reason-label ONLY) + g_ctrl_in_blocked++;
@@ -2431,6 +2490,7 @@ static void pa_ctrl_gate(const control_result_t *cres)
         puts_serial("[CTRL-IN-REFUSE] reason="); puts_serial(label); puts_serial("\n");
         g_ctrl_in_blocked++;
         ctrl_in_jact(AUDIT_BLOCKED, AUDIT_OUT_NA, label, (uint16_t)strlen(label));
+        ctrl_send_reply((uint16_t)cres->seq, 1 /*refused*/, label, (int)strlen(label)); /* LABEL only, never the query */
         return;
     }
 
@@ -2458,6 +2518,7 @@ static void pa_ctrl_gate(const control_result_t *cres)
         puts_serial("\" -> DEGRADED (no dispatch)\n");
         epi_batch_add(qs, EPI_ACT_CONTROL_IN, EPI_OUT_ERROR, NULL);
         ctrl_in_jact(AUDIT_EXECUTED, AUDIT_OUT_FAIL, "control-in degraded", 19);
+        ctrl_send_reply((uint16_t)cres->seq, 2 /*degraded*/, "degraded", 8);
         return;
     }
 
@@ -2483,6 +2544,13 @@ static void pa_ctrl_gate(const control_result_t *cres)
     char resp[1024]; int roff = 0;
     int got = 0, faulted = 0;
     uint32_t polls = 0, poll_max = 5000000;   /* the wake lane's POLL_TIMEOUT */
+#if JARVIS_CONTROL_IN_PROBE == 3
+    /* M3-2b: force the SECOND routed query into its timeout leg (the verdict=3 reply proof) — shrink
+     * this dispatch's poll budget so it expires while PB is genuinely generating (the honest failed-
+     * route leg; the JARVIS_WAKE_PROBE wpoll_max=2000 technique). Route 1 (the benign proof) keeps
+     * the full budget. Deploy-inert (PROBE=0). */
+    { static int cin_route_n = 0; if (++cin_route_n == 2) poll_max = 2000; }
+#endif
     while (!got && !faulted && polls < poll_max) {
         uint8_t pk_type; uint16_t pk_seq, pk_len; uint8_t pk_pay[SHMEM_MAX_PAYLOAD];
         while (shmem_ipc_recv(shared_response_ring, &pk_type, &pk_seq, pk_pay, &pk_len) == 0) {
@@ -2534,6 +2602,7 @@ static void pa_ctrl_gate(const control_result_t *cres)
         puts_serial("\"\n");
         epi_batch_add(qs, EPI_ACT_CONTROL_IN, roff > 0 ? EPI_OUT_OK : EPI_OUT_ERROR,
                       roff > 0 ? resp : NULL);
+        ctrl_send_reply((uint16_t)cres->seq, 0 /*answered*/, resp, roff);   /* the sanitized, bounded answer */
     } else {
         /* (§7.5b) timeout or fault-mid-route: honest FAIL. NEVER q_errors++ — a control-IN failure
          * is not a workload error. A pure timeout feeds the PB miss-counter under KM2B_LANE_CTRL
@@ -2543,6 +2612,7 @@ static void pa_ctrl_gate(const control_result_t *cres)
         puts_serial("[CTRL-IN-RESP] q=\""); puts_serial(qs);
         puts_serial(faulted ? "\" -> FAULT (self-heal)\n" : "\" -> TIMEOUT\n");
         epi_batch_add(qs, EPI_ACT_CONTROL_IN, EPI_OUT_ERROR, NULL);
+        ctrl_send_reply((uint16_t)cres->seq, 3 /*failed*/, faulted ? "fault" : "timeout", faulted ? 5 : 7);
     }
 
     /* close the control-IN duty window (a fault path may have cleared it via pa_restart_pb). */
@@ -4478,7 +4548,23 @@ static void *main_continued(void *arg UNUSED)
         } else {
             puts_serial("[CTRL-IN-PROBE] FAIL hostile frame not accepted (should reach the SHIELD)\n");
         }
-        /* THIRD leg — STRICTLY LAST (g_pb_dead is a TERMINAL latch that kills ALL PB dispatch for
+        /* 6-5/M3-2b — the FAILED-route reply leg (verdict 3): route a benign query, but pa_ctrl_gate's
+         * PROBE==3 hook shrinks THIS (the 2nd) route's poll budget so it TIMES OUT while PB is still
+         * generating -> [CTRL-IN-RESP] TIMEOUT + [CTRL-IN-REPLY] verdict=3. Sequenced BEFORE the
+         * degraded latch (PB still alive). PB's late response is never polled by the degraded workload
+         * (harmless). This gives the 4th verdict so the reply is proven on ALL exit paths. */
+        control_replay_init(&g_ctrl_replay, CONTROL_TEST_EPOCH);
+        pjl = build_probe_jctl(pj, g_ctrl_key, 13u, 0xE0, "explain paging in one line");
+        pfl = net_build_udp_broadcast(pf, sizeof pf, g_net.nic.mac, JARVIS_BOX_IP,
+                                      40000, (uint16_t)CONTROL_PORT, pj, pjl);
+        pv = (pfl > 0) ? ctrl_roundtrip_sync(pf, (size_t)pfl, &pr) : CV_DROP_PARSE;
+        if (pv == CV_ACCEPT) {
+            puts_serial("[CTRL-IN-PROBE] failed-route (forced timeout) q=\"explain paging in one line\"\n");
+            pa_ctrl_gate(&pr);            /* poll_max=2000 -> timeout -> [CTRL-IN-REPLY] verdict=3 */
+        } else {
+            puts_serial("[CTRL-IN-PROBE] FAIL timeout-leg frame not accepted\n");
+        }
+        /* FINAL leg — STRICTLY LAST (g_pb_dead is a TERMINAL latch that kills ALL PB dispatch for
          * the rest of the boot; sequencing it before the route/refuse legs would starve them — the
          * 6-3/M1 "B5 terminal latch LAST" lesson). Induce degraded, then a benign frame proves the
          * §5-F gate SUPPRESSES the route (no dispatch, no ~60-120 s stall). The workload then runs

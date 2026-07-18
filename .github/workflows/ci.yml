@@ -197,11 +197,19 @@ jobs:
 
     - name: "Phase 3: Net UDP Builder (C)"
       run: |
+        # broadcast-only (the OFF/deploy path — net_udp.c is ungated; the M3-2b unicast folds out)
         gcc -Wall -Werror -O2 -std=c11 \
           -I phase3/src/drivers \
           phase3/src/drivers/test_net_udp.c phase3/src/drivers/net_udp.c \
           -o /tmp/test_net_udp
         /tmp/test_net_udp
+        # 6-5/M3-2b: net_build_udp_unicast + the T-a..T-g tests are #if JARVIS_CONTROL_IN, so the
+        # build above folds them out — recompile WITH the flag (the test_monitors precedent).
+        gcc -Wall -Werror -O2 -std=c11 -DJARVIS_CONTROL_IN=1 \
+          -I phase3/src/drivers \
+          phase3/src/drivers/test_net_udp.c phase3/src/drivers/net_udp.c \
+          -o /tmp/test_net_udp_ctrlin
+        /tmp/test_net_udp_ctrlin
 
     - name: "Phase 3: Telemetry Packet (C)"
       run: |

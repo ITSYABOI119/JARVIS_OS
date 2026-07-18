@@ -253,7 +253,7 @@ if [ "$CONTROL_IN" = "1" ]; then
         copy_file "$CRYPTO_SRC/$f" "$CRYPTO_DST/$f"
     done
     for f in control_msg.h control_mailbox.h control_parser.c control_parser.h control_replay.c control_replay.h \
-             control_ratelimit.c control_ratelimit.h control_verify.c control_verify.h control_key.h; do
+             control_ratelimit.c control_ratelimit.h control_verify.c control_verify.h control_key.h control_console.h; do
         copy_file "$NET_SRC/$f" "$NET_DST/$f"
     done
 

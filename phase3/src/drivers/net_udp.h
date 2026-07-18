@@ -51,4 +51,23 @@ int net_build_udp_broadcast(uint8_t *out, uint32_t out_cap,
                             uint16_t src_port, uint16_t dst_port,
                             const void *payload, uint16_t payload_len);
 
+/**
+ * net_build_udp_unicast - Build Eth(unicast)+IPv4+UDP+payload into `out` (6-5/M3-2b).
+ * Unicast sibling of net_build_udp_broadcast: the caller PROVISIONS both the dst MAC and
+ * dst IP (the box has NO ARP, so dst_mac must never be resolved, and MUST NOT be derived
+ * from a received frame's source — a spoofed source would redirect the reply). This is the
+ * confidentiality address: the box's control-IN reply goes ONLY to the provisioned console.
+ * dst_mac == NULL -> -1 (FAIL-CLOSED: a NULL/absent dst must NEVER fall back to broadcast).
+ * Same framing/checksum/padding contract + return values as the broadcast builder; the
+ * broadcast==unicast(FF..,255.255.255.255) equivalence is test-pinned so they cannot drift.
+ *
+ * DEFINITION GATED on JARVIS_CONTROL_IN (net_udp.c is ungated/telemetry, so gating the
+ * definition keeps the OFF/deploy net_udp.c.obj byte-identical). No OFF caller references it.
+ */
+int net_build_udp_unicast(uint8_t *out, uint32_t out_cap,
+                          const uint8_t src_mac[6], uint32_t src_ip,
+                          const uint8_t dst_mac[6], uint32_t dst_ip,
+                          uint16_t src_port, uint16_t dst_port,
+                          const void *payload, uint16_t payload_len);
+
 #endif /* JARVIS_NET_UDP_H */

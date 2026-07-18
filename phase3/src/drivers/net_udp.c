@@ -111,3 +111,100 @@ int net_build_udp_broadcast(uint8_t *out, uint32_t out_cap,
 
     return (int)frame_len;
 }
+
+#if JARVIS_CONTROL_IN
+/*
+ * 6-5/M3-2b: the unicast reply builder. GATED on JARVIS_CONTROL_IN so an OFF/deploy build's
+ * net_udp.c.obj stays byte-identical (net_udp.c is ungated — telemetry uses the broadcast
+ * builder above, which is UNTOUCHED). The build-script propagates -DJARVIS_CONTROL_IN=1 to
+ * the whole target when the flag is 1 (the nic_i211.c RX-gate precedent), so this compiles
+ * only in a control-IN build + the -DJARVIS_CONTROL_IN=1 host test.
+ *
+ * build_udp_frame() is the shared framing core parameterized by dst_mac + dst_ip. It is a
+ * byte-for-byte generalization of net_build_udp_broadcast: broadcast == build_udp_frame with
+ * dst_mac = FF:FF:FF:FF:FF:FF and dst_ip = 255.255.255.255 — an equivalence PINNED by
+ * test_net_udp.c so the two paths can never drift. (broadcast itself is left inline/unchanged
+ * to preserve its .obj; the test proves the outputs agree.)
+ */
+static int build_udp_frame(uint8_t *out, uint32_t out_cap,
+                           const uint8_t dst_mac[6], const uint8_t src_mac[6],
+                           uint32_t dst_ip, uint32_t src_ip,
+                           uint16_t src_port, uint16_t dst_port,
+                           const void *payload, uint16_t payload_len)
+{
+    if (!out || !src_mac || !dst_mac)
+        return -1;
+    if (payload_len > UDP_MAX_PAYLOAD)
+        return -1;
+    if (payload_len > 0 && !payload)
+        return -1;
+
+    uint32_t total     = HDRS_LEN + (uint32_t)payload_len;
+    uint32_t frame_len = total < ETH_MIN_FRAME ? ETH_MIN_FRAME : total;
+    if (out_cap < frame_len)
+        return -1;
+
+    /* --- Ethernet (14B) --- */
+    uint8_t *eth = out;
+    memcpy(eth, dst_mac, 6);           /* dst = provisioned console MAC */
+    memcpy(eth + 6, src_mac, 6);       /* src */
+    eth[12] = 0x08; eth[13] = 0x00;    /* ethertype = IPv4 */
+
+    /* --- IPv4 (20B, no options) --- */
+    uint8_t *ip = out + ETH_HDR_LEN;
+    uint16_t ip_total = (uint16_t)(IP_HDR_LEN + UDP_HDR_LEN + payload_len);
+    ip[0]  = 0x45;
+    ip[1]  = 0x00;
+    ip[2]  = (uint8_t)(ip_total >> 8);
+    ip[3]  = (uint8_t)(ip_total & 0xFF);
+    ip[4]  = 0x00; ip[5] = 0x00;
+    ip[6]  = 0x00; ip[7] = 0x00;
+    ip[8]  = IP_TTL;
+    ip[9]  = IP_PROTO_UDP;
+    ip[10] = 0x00; ip[11] = 0x00;
+    ip[12] = (uint8_t)((src_ip >> 24) & 0xFF);
+    ip[13] = (uint8_t)((src_ip >> 16) & 0xFF);
+    ip[14] = (uint8_t)((src_ip >> 8)  & 0xFF);
+    ip[15] = (uint8_t)( src_ip        & 0xFF);
+    ip[16] = (uint8_t)((dst_ip >> 24) & 0xFF);   /* dst = provisioned console IP */
+    ip[17] = (uint8_t)((dst_ip >> 16) & 0xFF);
+    ip[18] = (uint8_t)((dst_ip >> 8)  & 0xFF);
+    ip[19] = (uint8_t)( dst_ip        & 0xFF);
+    {
+        uint16_t ck = net_ip_checksum(ip, IP_HDR_LEN);
+        ip[10] = (uint8_t)(ck >> 8);
+        ip[11] = (uint8_t)(ck & 0xFF);
+    }
+
+    /* --- UDP (8B) --- */
+    uint8_t *udp = ip + IP_HDR_LEN;
+    uint16_t udp_len = (uint16_t)(UDP_HDR_LEN + payload_len);
+    udp[0] = (uint8_t)(src_port >> 8); udp[1] = (uint8_t)(src_port & 0xFF);
+    udp[2] = (uint8_t)(dst_port >> 8); udp[3] = (uint8_t)(dst_port & 0xFF);
+    udp[4] = (uint8_t)(udp_len  >> 8); udp[5] = (uint8_t)(udp_len  & 0xFF);
+    udp[6] = 0x00; udp[7] = 0x00;
+
+    /* --- payload --- */
+    if (payload_len > 0)
+        memcpy(udp + UDP_HDR_LEN, payload, payload_len);
+
+    /* --- zero-pad to the 60-byte Ethernet minimum --- */
+    if (total < ETH_MIN_FRAME)
+        memset(out + total, 0, (size_t)(ETH_MIN_FRAME - total));
+
+    return (int)frame_len;
+}
+
+int net_build_udp_unicast(uint8_t *out, uint32_t out_cap,
+                          const uint8_t src_mac[6], uint32_t src_ip,
+                          const uint8_t dst_mac[6], uint32_t dst_ip,
+                          uint16_t src_port, uint16_t dst_port,
+                          const void *payload, uint16_t payload_len)
+{
+    /* FAIL-CLOSED: a NULL/absent dst must NEVER silently broadcast. */
+    if (!dst_mac)
+        return -1;
+    return build_udp_frame(out, out_cap, dst_mac, src_mac, dst_ip, src_ip,
+                           src_port, dst_port, payload, payload_len);
+}
+#endif /* JARVIS_CONTROL_IN */

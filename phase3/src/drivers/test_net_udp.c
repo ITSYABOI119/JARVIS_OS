@@ -116,12 +116,94 @@ static void test_guards(void)
     CHECK(flen == 60, "zero payload -> padded to 60");
 }
 
+#if JARVIS_CONTROL_IN
+/* ---- 6-5/M3-2b: the unicast builder (net_build_udp_unicast) — the confidentiality address.
+ * Compiled only under JARVIS_CONTROL_IN (the CI step adds -DJARVIS_CONTROL_IN=1). ---- */
+static void test_build_udp_unicast(void)
+{
+    uint8_t out[2048];
+    const uint8_t src[6] = { 0x0c, 0x9d, 0x92, 0x0e, 0x39, 0x9a };  /* box NIC */
+    const uint8_t dst[6] = { 0x9C, 0x6B, 0x00, 0xAE, 0x6A, 0xFF };  /* provisioned console */
+    const uint32_t dst_ip = (192u<<24)|(168u<<16)|(100u<<8)|146u;   /* 192.168.100.146 */
+    const char *payload = "JARVIS-CTRL-REPLY";
+    uint16_t plen = (uint16_t)strlen(payload);
+
+    memset(out, 0xCC, sizeof out);
+    int flen = net_build_udp_unicast(out, sizeof out, src, JARVIS_BOX_IP,
+                                     dst, dst_ip, 51000, 51002, payload, plen);
+    int expect = 14 + 20 + 8 + (int)plen;                 /* 59; padded up to the 60B Eth minimum */
+    CHECK(flen == (expect >= 60 ? expect : 60), "unicast frame length correct (>=60)");
+
+    /* T-a: dst MAC == the passed dst_mac EXACTLY; dst IP == dst_ip. */
+    CHECK(memcmp(out, dst, 6) == 0, "T-a Eth dst == provisioned console MAC (exact)");
+    CHECK(memcmp(out + 6, src, 6) == 0, "T-a Eth src == box NIC MAC");
+    const uint8_t *ip = out + 14;
+    CHECK(ip[16] == 192 && ip[17] == 168 && ip[18] == 100 && ip[19] == 146,
+          "T-a IP dst == 192.168.100.146 (provisioned)");
+
+    /* T-b: TEETH — the built frame is NOT broadcast (the confidentiality property in code). */
+    const uint8_t bcast[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+    CHECK(memcmp(out, bcast, 6) != 0, "T-b dst MAC is NOT ff:ff:ff:ff:ff:ff");
+    CHECK(!(ip[16] == 0xFF && ip[17] == 0xFF && ip[18] == 0xFF && ip[19] == 0xFF),
+          "T-b dst IP is NOT 255.255.255.255");
+
+    /* T-c: IP header checksum valid over the unicast header. */
+    CHECK(net_ip_checksum(ip, 20) == 0, "T-c IP header checksum valid (sums to 0)");
+    CHECK(be16(ip + 2) == (uint16_t)(20 + 8 + plen), "T-c IP total_len correct");
+    const uint8_t *udp = ip + 20;
+    CHECK(be16(udp + 2) == 51002, "T-c UDP dst port == 51002 (reply port)");
+    CHECK(memcmp(udp + 8, payload, plen) == 0, "T-c payload copied");
+
+    /* T-d: NO DRIFT — broadcast output == unicast(FF.., 255.255.255.255) byte-for-byte. */
+    {
+        uint8_t ba[512], ua[512];
+        memset(ba, 0x11, sizeof ba); memset(ua, 0x22, sizeof ua);
+        int bl = net_build_udp_broadcast(ba, sizeof ba, src, JARVIS_BOX_IP, 51000, 51000, payload, plen);
+        int ul = net_build_udp_unicast(ua, sizeof ua, src, JARVIS_BOX_IP, bcast, 0xFFFFFFFFu,
+                                       51000, 51000, payload, plen);
+        CHECK(bl > 0 && bl == ul, "T-d broadcast/unicast(bcast) same length");
+        CHECK(bl > 0 && memcmp(ba, ua, (size_t)bl) == 0,
+              "T-d broadcast == unicast(FF.., 255.255.255.255) byte-for-byte (no drift)");
+    }
+
+    /* T-e: out_cap too small -> -1, NO write past out_cap (0xAA canary). */
+    {
+        uint8_t small[256];
+        memset(small, 0xAA, sizeof small);
+        int rc = net_build_udp_unicast(small, 40, src, JARVIS_BOX_IP, dst, dst_ip, 1, 1, "x", 1);
+        int untouched = 1;
+        for (size_t i = 0; i < sizeof small; i++) if (small[i] != 0xAA) { untouched = 0; break; }
+        CHECK(rc == -1, "T-e too-small out_cap rejected");
+        CHECK(untouched, "T-e canary intact — no write on rejection");
+    }
+
+    /* T-f: payload_len 0 (padded to 60) and payload_len max (1472). */
+    CHECK(net_build_udp_unicast(out, sizeof out, src, JARVIS_BOX_IP, dst, dst_ip, 1, 1, NULL, 0) == 60,
+          "T-f zero payload -> padded to 60");
+    {
+        uint8_t big[1600]; static uint8_t maxpl[1472];
+        memset(maxpl, 0x5A, sizeof maxpl);
+        CHECK(net_build_udp_unicast(big, sizeof big, src, JARVIS_BOX_IP, dst, dst_ip, 1, 1, maxpl, 1472)
+              == 14 + 20 + 8 + 1472, "T-f max payload (1472) accepted");
+        CHECK(net_build_udp_unicast(big, sizeof big, src, JARVIS_BOX_IP, dst, dst_ip, 1, 1, maxpl, 1473)
+              == -1, "T-f over-max payload (1473) rejected");
+    }
+
+    /* T-g: dst_mac == NULL -> -1 (FAIL-CLOSED — must NEVER fall back to broadcast). */
+    CHECK(net_build_udp_unicast(out, sizeof out, src, JARVIS_BOX_IP, NULL, dst_ip, 1, 1, "x", 1) == -1,
+          "T-g NULL dst_mac fails closed (never broadcasts)");
+}
+#endif /* JARVIS_CONTROL_IN */
+
 int main(void)
 {
     printf("=== JARVIS AI-OS: net_udp (Eth/IPv4/UDP builder) Tests ===\n\n");
     test_ip_checksum_known_vector();
     test_build_udp_broadcast();
     test_guards();
+#if JARVIS_CONTROL_IN
+    test_build_udp_unicast();
+#endif
     printf("\n=== Results: %d PASS, %d FAIL ===\n", pass, fail);
     return fail ? 1 : 0;
 }
