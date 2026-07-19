@@ -1,6 +1,6 @@
 # Phase 6 Goal 6-5 — Control-IN / Natural-Language Primary (PLAN-FIRST)
 
-**Status: IN PROGRESS — M0 (RX spike) + M1 (host security core) + M2a (I211 RX → control_verify data path in PA) + M2b-1 (the SEC-014 isolation split — parse/ratelimit moved off PA into the new least-privileged `jarvis-input` process, Model 2; PA re-parses + HMAC + replay) DONE 2026-07-15; M2b-2 (input-process liveness + graceful degrade via the monitor spine, drop-`RCTL.BAM` unicast-only, SEC-033 + backpressure/flood, Option-A scheduling) DONE 2026-07-16 — all gated `JARVIS_CONTROL_IN` default-0 (see §9; box gate: OFF 4-object-identity + KVM induced-death PROBE → `[ANOMALY] input-dead` + degrade + the **supervised bare-metal WIRE PROOF, boot_id=24**: acc=3 / DROP_REPLAY / DROP_AUTH, the flood rate-limited (rl→488) with err=0 to q=13,700 / 0 faults, `parse=0` BAM-drop = broadcast hardware-filtered; pre-mortem + diff-review workflows clean). **→ goal-doc item-5 (the SEC-014 less-privileged input process) is FULLY CLOSED.** **M3-1 (host-fuzzable query SHIELD, FP=0/100 + 300K fuzz) DONE 2026-07-16 (`af20ddb`, host+CI); M3-2a (`pa_ctrl_gate` SHIELD-gates + routes QS_ALLOW to inference / audits+drops QS_REFUSE) CODE DONE + KVM-proven 2026-07-17 (gated default-0; OFF 4-object identity + KVM PROBE-mode-3 route/refuse + JACT read-back, teeth-clean) → checklist ITEM-4 (real query SHIELD, SEC-039-for-queries) CLOSED at the logic + box level. M3-2b (unicast reply-to-console + confidentiality) CODE DONE + KVM-proven 2026-07-18 (gated default-0; OFF object-identity `main.c.obj`+`net_udp.c.obj` byte-identical to `7fd1b34`; KVM PROBE-mode-3: 4 `[CTRL-IN-REPLY]` verdicts all unicast to the console MAC, 0 DROP; O-Q11 tag-3 write KVM-DISK-PROVEN via an EARLY read — the boot's 3 `EPI_ACT_CONTROL_IN` records read back before the 8192-slot circular store wraps). M3-2b bare-metal WIRE PROOF PASSED 2026-07-18 (boot_id=25, supervised — the box's FIRST two-way round-trip on the wire: benign `seq=50` → verdict=0 answered CRC-OK coherent + dual-check PASS; hostile `seq=51` → verdict=1 refused LABEL-only + dual-check PASS; durable JACT `action=5` EXECUTED + BLOCKED; reverted to the 6-3 image, md5 re-verified).** Next: M3-3 (cross-reboot persisted replay floor) → M3-4 (telemetry v11 + console) → M4 (`/security-review` + emergency-disable) → the hard-gated flip.**
+**Status: IN PROGRESS — M0 (RX spike) + M1 (host security core) + M2a (I211 RX → control_verify data path in PA) + M2b-1 (the SEC-014 isolation split — parse/ratelimit moved off PA into the new least-privileged `jarvis-input` process, Model 2; PA re-parses + HMAC + replay) DONE 2026-07-15; M2b-2 (input-process liveness + graceful degrade via the monitor spine, drop-`RCTL.BAM` unicast-only, SEC-033 + backpressure/flood, Option-A scheduling) DONE 2026-07-16 — all gated `JARVIS_CONTROL_IN` default-0 (see §9; box gate: OFF 4-object-identity + KVM induced-death PROBE → `[ANOMALY] input-dead` + degrade + the **supervised bare-metal WIRE PROOF, boot_id=24**: acc=3 / DROP_REPLAY / DROP_AUTH, the flood rate-limited (rl→488) with err=0 to q=13,700 / 0 faults, `parse=0` BAM-drop = broadcast hardware-filtered; pre-mortem + diff-review workflows clean). **→ goal-doc item-5 (the SEC-014 less-privileged input process) is FULLY CLOSED.** **M3-1 (host-fuzzable query SHIELD, FP=0/100 + 300K fuzz) DONE 2026-07-16 (`af20ddb`, host+CI); M3-2a (`pa_ctrl_gate` SHIELD-gates + routes QS_ALLOW to inference / audits+drops QS_REFUSE) CODE DONE + KVM-proven 2026-07-17 (gated default-0; OFF 4-object identity + KVM PROBE-mode-3 route/refuse + JACT read-back, teeth-clean) → checklist ITEM-4 (real query SHIELD, SEC-039-for-queries) CLOSED at the logic + box level. M3-2b (unicast reply-to-console + confidentiality) CODE DONE + KVM-proven 2026-07-18 (gated default-0; OFF object-identity `main.c.obj`+`net_udp.c.obj` byte-identical to `7fd1b34`; KVM PROBE-mode-3: 4 `[CTRL-IN-REPLY]` verdicts all unicast to the console MAC, 0 DROP; O-Q11 tag-3 write KVM-DISK-PROVEN via an EARLY read — the boot's 3 `EPI_ACT_CONTROL_IN` records read back before the 8192-slot circular store wraps). M3-2b bare-metal WIRE PROOF PASSED 2026-07-18 (boot_id=25, supervised — the box's FIRST two-way round-trip on the wire: benign `seq=50` → verdict=0 answered CRC-OK coherent + dual-check PASS; hostile `seq=51` → verdict=1 refused LABEL-only + dual-check PASS; durable JACT `action=5` EXECUTED + BLOCKED; reverted to the 6-3 image, md5 re-verified). M3-3 (cross-reboot persisted replay floor, Option A: a separate double-buffered checksummed NVMe floor sector, key stays write-once; WRITE-AHEAD reservation → zero cross-reboot replay window) CODE DONE + KVM-2-boot-proven 2026-07-19 (gated default-0; host 48/48 + OFF object-identity + KVM: boot1 write-ahead persist resv=1256 / boot2 resume floor=1256 + replay seq=1000→DROP_REPLAY + fresh accept / torn-both→FLOOR_CORRUPT fail-safe; adversarial-review workflow caught + fixed a persist-behind flaw) → CLOSES checklist ITEM-2 (replay incl. cross-reboot).** Next: M3-4 (telemetry v11 + two-way console UI) → M4 (`/security-review` + emergency-disable) → the hard-gated flip.**
 **This is the phase's LONG POLE and its single hardest security gate:** it turns the read-only
 telemetry console two-way and opens the box to the **FIRST untrusted inbound it has ever accepted**.
 Every prior Phase-6 trigger was internal state; 6-5's first trigger is a hostile network frame.
@@ -644,6 +644,41 @@ until the deliberate, checklist-complete, security-reviewed flip.
   code; deferred to M4). **NAMED LIMITATION:** the reply is CRC'd, NOT HMAC'd — box→console is unauthenticated
   (an M4 `/security-review` item). → **checklist item-4 (the query SHIELD / SEC-039-for-queries) and the
   M3-2b two-way round-trip are now BOTH bare-metal-proven.**
+- **M3-3 — CROSS-REBOOT PERSISTED REPLAY FLOOR — CODE DONE + KVM-2-boot-proven 2026-07-19 (gated
+  `JARVIS_CONTROL_IN` default-0). → CLOSES checklist ITEM-2 (replay incl. cross-reboot / cross-crash).**
+  Today the replay floor reset to 0 each boot (`control_replay_init(&g_ctrl_replay, CONTROL_TEST_EPOCH)`), so
+  a frame captured in boot N could replay in boot N+1. **Option A (box-side only, no sender/epoch
+  coordination; epoch STAYS `CONTROL_TEST_EPOCH`):** persist the sequence floor to NVMe. `control_floor.c/h`
+  (host-pure, the `control_replay.c` precedent — the CALLER does the I/O) is the 512 B double-buffered
+  **A/B floor-sector pair** (`ctrl_floor_slot_t`: magic `JFLR`, version, `reserved_floor` u64, `write_count`
+  u32, checksum; @ **LBA 21,130,001/2**, right after the JKEY key sector) with `ctrl_floor_build/parse/
+  select/due/next_lba` — **the key sector stays WRITE-ONCE-FOREVER** (zero torn-write risk on the crown-jewel
+  key; its `seq_floor`/`boot_epoch` reserved fields left unused). PA wiring (`main_x86.c`, all `#if
+  JARVIS_CONTROL_IN`): a BOOT floor-read after `control_replay_init` (`ctrl_floor_select` → FLOOR_OK resume
+  `g_ctrl_replay.seq_floor` / FLOOR_FRESH floor 0 / **FLOOR_CORRUPT → FAIL-SAFE `g_ctrl_floor_ok=0`**, a
+  SEPARATE gate from the JKEY read — key-OK + floor-corrupt still REFUSES control-IN) + the live poll gate
+  gains `&& g_ctrl_floor_ok`. **WRITE-AHEAD reservation (the review fix — see below):** `ctrl_floor_persist_ahead`
+  runs INSIDE `pa_verify_candidate` BEFORE `control_replay_check` accepts a seq — it persists a durable
+  reservation = `seq + CTRL_FLOOR_RESERVE` (eager, ~one NVMe write per RESERVE accepts, alternating A/B)
+  when `seq` exceeds the durable floor, and **FAIL-CLOSES** (disable control-IN + drop) on a write failure —
+  so an accepted seq is ALWAYS covered by a durable on-disk floor (a crash right after the accept resumes
+  at floor ≥ seq → **zero cross-reboot replay window**). `test_control_floor.c` **48/48** (round-trip /
+  checksum 1-bit-flip / all-zero→FRESH / select newest-wc-wins + torn-write survival + both-garbage→CORRUPT /
+  write_count-wrap tie-break / due / next_lba parity) + CI step. **Adversarial-review WORKFLOW (4 opus/high
+  lenses) caught the ORIGINAL persist-BEHIND design (1 HIGH + 1 MEDIUM CONFIRMED)** — persisting AFTER the
+  accept left a crash window (the boot's first accept advanced the in-memory floor before the durable write),
+  refuting "zero window"; the fix = the write-ahead restructure above (persist-before-accept + fail-closed),
+  which closes all three findings. **Box gate PASSED 2026-07-19:** OFF **object-identity** (`main.c.obj`
+  .text/.rodata/.data + nm byte-identical to the `da330c5` baseline; `control_floor.c` stripped from the OFF
+  build) + **KVM 2-BOOT replay proof** (one persistent NVMe image, PROBE mode 4): **BOOT 1** provisioned
+  fresh floor(0) → `resumed floor=0` → accept seq=1000 → `persist resv=1256 lba=B` (write-ahead, BEFORE the
+  accept); **BOOT 2** (same image) → `resumed floor=1256` → **replay seq=1000 (fresh nonce) → DROP_REPLAY
+  (the cross-reboot proof — the persisted SEQ FLOOR, not the per-boot nonce ring, rejects it)** → fresh
+  seq=1257 → `persist resv=1513 lba=A` + accept; **torn-sector fail-safe** (corrupt BOTH floor sectors) →
+  `[CTRL-FLOOR] CORRUPT - control-IN DISABLED` + the probe SKIPs (the corrupt-ONE double-buffer survival is
+  host-proven by `select` T6 + exercised by boot 2's newest-valid selection). `make_ctrl_floor_slot.py`
+  provisions the initial floor(0) sectors (C-parse-verified VALID). NO console change (v11 + surfacing the
+  floor is M3-4). Remaining: **M3-4** (telemetry v11 `control_in_blocked` + two-way console UI).
 - **M3 — wire the query through PA + close SEC-039 for queries + response + two-way UI (box, gated):**
   the validated query hits the real query SHIELD (the O-Q4 threat model — the induced-BLOCK proof
   that a genuinely-hostile query is refused), then the cache/inference path (retrieval preamble =

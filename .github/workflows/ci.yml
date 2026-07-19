@@ -445,6 +445,9 @@ jobs:
     - name: "Phase 6: 6-5/M1 Control replay (C)"
       run: gcc -Wall -Werror -O2 -std=c11 -I phase3/src/net phase3/src/net/test_control_replay.c phase3/src/net/control_replay.c -o /tmp/t_cr && /tmp/t_cr
 
+    - name: "Phase 6: 6-5/M3-3 Control floor (C)"
+      run: gcc -Wall -Werror -O2 -std=c11 -I phase3/src/net phase3/src/net/test_control_floor.c phase3/src/net/control_floor.c -o /tmp/test_control_floor && /tmp/test_control_floor
+
     - name: "Phase 6: 6-5/M1 Control rate-limit (C)"
       run: gcc -Wall -Werror -O2 -std=c11 -I phase3/src/net phase3/src/net/test_control_ratelimit.c phase3/src/net/control_ratelimit.c -o /tmp/t_rl && /tmp/t_rl
 

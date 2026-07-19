@@ -253,7 +253,8 @@ if [ "$CONTROL_IN" = "1" ]; then
         copy_file "$CRYPTO_SRC/$f" "$CRYPTO_DST/$f"
     done
     for f in control_msg.h control_mailbox.h control_parser.c control_parser.h control_replay.c control_replay.h \
-             control_ratelimit.c control_ratelimit.h control_verify.c control_verify.h control_key.h control_console.h; do
+             control_ratelimit.c control_ratelimit.h control_verify.c control_verify.h control_key.h control_console.h \
+             control_floor.c control_floor.h; do
         copy_file "$NET_SRC/$f" "$NET_DST/$f"
     done
 
@@ -698,7 +699,8 @@ if [ -f "$CMAKE_FILE" ]; then
     # ── Phase 6 6-5/M2a: control-IN sources + include dirs + compile-def (GATED) ──
     if [ "$CONTROL_IN" = "1" ]; then
         for cf in src/crypto/sha256.c src/crypto/hmac_sha256.c src/net/control_parser.c \
-                  src/net/control_replay.c src/net/control_ratelimit.c src/net/control_verify.c; do
+                  src/net/control_replay.c src/net/control_ratelimit.c src/net/control_verify.c \
+                  src/net/control_floor.c; do
             if ! grep -q "$cf" "$CMAKE_FILE"; then
                 sed -i "/src\/ai\/behaviors.c/a\\    $cf" "$CMAKE_FILE" 2>/dev/null
                 if grep -q "$cf" "$CMAKE_FILE"; then

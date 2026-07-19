@@ -90,6 +90,7 @@
 #if JARVIS_CONTROL_IN
 #include "control_verify.h"      /* Phase 6 6-5/M2a: the M1 security core orchestrator (parse->ratelimit->HMAC->replay) */
 #include "control_key.h"         /* Phase 6 6-5/M2a: the NVMe JKEY slot (@ LBA 21,130,000; key lives in PA) */
+#include "control_floor.h"       /* Phase 6 6-5/M3-3: the persisted replay-floor sector pair (@ 21,130,001/2) */
 #include "hmac_sha256.h"         /* Phase 6 6-5/M2a: for the PROBE + the M2b-1 PA-side HMAC (verify-in-PA) */
 #include "control_mailbox.h"     /* Phase 6 6-5/M2b-1: PA<->jarvis-input mailbox layout (Model 2) */
 #include "query_shield.h"        /* Phase 6 6-5/M3-2a: the query SHIELD gate (closes SEC-039-for-queries) */
@@ -400,6 +401,12 @@ static uint8_t             g_ctrl_key[CTRL_KEY_LEN];
 static int                 g_ctrl_key_ok   = 0;   /* FAIL-CLOSED: 0 => never call control_verify */
 static int                 g_ctrl_rx_ready = 0;   /* set by [NET] once the RX ring is armed */
 static control_replay_t    g_ctrl_replay;   /* PA-side replay defense (verify-in-PA) */
+/* 6-5/M3-3: cross-reboot persisted replay-floor state. g_ctrl_floor_ok is a fail-safe gate —
+ * a corrupt/unreadable floor sector disables control-IN for the boot (key-OK alone is NOT enough). */
+static uint64_t            g_ctrl_floor_resv = 0;   /* current persisted floor RESERVATION (>= any accepted seq) */
+static uint32_t            g_ctrl_floor_wc   = 1;   /* next floor-sector write_count (A/B alternates by parity)   */
+static int                 g_ctrl_floor_ok   = 0;   /* 0 => corrupt/unread floor => control-IN OFF (fail-safe)     */
+static int ctrl_floor_persist_ahead(uint64_t seq);   /* 6-5/M3-3 write-ahead; defined below, called by pa_verify_candidate */
 /* M2b-1: the token bucket moved INTO the jarvis-input process (Model 2); PA holds no
  * rate limiter. control_ratelimit.c is still compiled (control_verify.c references it). */
 static uint32_t g_ctrl_accepted, g_ctrl_dropped;
@@ -1878,6 +1885,16 @@ static control_verdict_t pa_verify_candidate(control_result_t *out)
     if (!hmac_sha256_verify(g_ctrl_key, CTRL_KEY_LEN, msg.mac_base, msg.mac_len, msg.tag)) {
         out->verdict = CV_DROP_AUTH; return out->verdict;
     }
+    /* 6-5/M3-3 WRITE-AHEAD replay floor: BEFORE control_replay_check accepts this seq, persist a durable
+     * on-disk reservation >= seq. So an accepted seq is ALWAYS covered by the durable floor -> a crash
+     * right after the accept resumes at a floor >= that seq (zero cross-reboot replay window). FAIL-CLOSED:
+     * if the persist write fails, disable control-IN for the boot and DROP — never accept a seq we cannot
+     * durably back. (Amortized: ~one NVMe write per CTRL_FLOOR_RESERVE accepts.) */
+    if (g_ctrl_floor_ok && !ctrl_floor_persist_ahead(msg.seq)) {
+        g_ctrl_floor_ok = 0;
+        out->verdict = CV_DROP_REPLAY;   /* replay defense unavailable -> drop (the poll gate then stops the lane) */
+        return out->verdict;
+    }
     cr_verdict_t rv = control_replay_check(&g_ctrl_replay, msg.seq, msg.boot_epoch, msg.nonce);
     out->replay_verdict = rv;
     if (rv != CR_ACCEPT) { out->verdict = CV_DROP_REPLAY; return out->verdict; }
@@ -2328,6 +2345,50 @@ static void ctrl_in_liveness_tick(uint64_t now_iters)
 #endif
         }
     }
+}
+
+/* 6-5/M3-3: persist the replay floor to NVMe iff a reservation boundary was crossed.
+ * control_replay_check (inside pa_verify_candidate) already advanced g_ctrl_replay.seq_floor to the
+ * accepted seq; control_replay itself never touches NVMe. Eager reservation (fail-high) => one write
+ * per ~CTRL_FLOOR_RESERVE accepts, alternating the A/B sector so a torn write never loses both.
+ * Called after EVERY accept (the live poll + the M3-3 gate probe). No-op unless due / floor OK. */
+/* u64 decimal via putc_serial (NVMe-log-capturing, the control-IN logging convention) — put_dec is
+ * u32 and the embedded-model put_u64 (seL4_DebugPutChar, #ifdef JARVIS_HAS_MODEL) is unavailable in the
+ * NVMe-load deploy build. Floors/reservations are u64. */
+static void put_u64_dec(uint64_t v)
+{
+    char d[21]; int i = 0;
+    if (v == 0) { putc_serial('0'); return; }
+    while (v) { d[i++] = (char)('0' + (int)(v % 10)); v /= 10; }
+    while (--i >= 0) putc_serial(d[i]);
+}
+
+/* 6-5/M3-3: WRITE-AHEAD replay-floor persist. Called from pa_verify_candidate BEFORE control_replay_check
+ * accepts `seq`, so an accepted seq is ALWAYS covered by a DURABLE on-disk reservation (a crash right after
+ * the accept resumes at a floor >= seq -> zero cross-reboot replay window). If `seq` already sits at/below
+ * the durable reservation, nothing is written (eager reservation => ~one write per CTRL_FLOOR_RESERVE
+ * accepts). Alternates the A/B sector so a lost single-sector write leaves the OTHER sector holding a
+ * reservation >= every previously-accepted seq. Returns 1 when the floor durably covers `seq` (or already
+ * did); 0 on an NVMe write FAILURE — the caller then FAIL-CLOSES (disable control-IN + drop) rather than
+ * accept a seq it cannot durably back (the review HIGH: never keep accepting above the frozen floor). */
+static int ctrl_floor_persist_ahead(uint64_t seq)
+{
+    uint64_t new_resv;
+    if (!ctrl_floor_due(seq, g_ctrl_floor_resv, &new_resv)) return 1;   /* already durably covered */
+    static uint8_t fbuf[512];
+    uint32_t wc  = g_ctrl_floor_wc;
+    uint64_t lba = ctrl_floor_next_lba(wc);
+    ctrl_floor_build(fbuf, new_resv, wc);
+    if (epi_nvme_write(lba, 1, fbuf) != 0) {
+        puts_serial("[CTRL-FLOOR] persist WRITE FAILED - control-IN fail-closed (seq not accepted)\n");
+        return 0;
+    }
+    g_ctrl_floor_resv = new_resv;
+    g_ctrl_floor_wc   = wc + 1u;
+    puts_serial("[CTRL-FLOOR] persist resv="); put_u64_dec(new_resv);
+    puts_serial(lba == CTRL_FLOOR_LBA_A ? " lba=A wc=" : " lba=B wc=");
+    put_dec(wc); puts_serial("\n");
+    return 1;
 }
 #endif /* JARVIS_CONTROL_IN */
 
@@ -4487,11 +4548,42 @@ static void *main_continued(void *arg UNUSED)
         puts_serial(loaded ? "[CTRL-IN] key loaded - armed\n"
                            : "[CTRL-IN] no key (fail-closed) - inert\n");
     }
-    control_replay_init(&g_ctrl_replay, CONTROL_TEST_EPOCH);   /* seq_floor = 0 (per-boot; M3 persists) */
+    control_replay_init(&g_ctrl_replay, CONTROL_TEST_EPOCH);   /* seq_floor = 0 (per-boot; M3-3 persists) */
+    /* 6-5/M3-3: RESUME the persisted replay floor across reboot (Option A). control_replay_init above
+     * reset seq_floor to 0; override it from the durable double-buffered A/B floor sectors. This is a
+     * SEPARATE gate from the JKEY read — a key-OK boot with a CORRUPT floor still REFUSES control-IN (a
+     * corrupt floor must never silently reopen the cross-reboot replay window). FAIL-SAFE: on corruption
+     * or an NVMe read error, g_ctrl_floor_ok stays 0 and the live poll gate below disables control-IN. */
+    if (g_ctrl_key_ok) {
+        static uint8_t fa[512], fb[512];
+        if (epi_nvme_read(CTRL_FLOOR_LBA_A, 1, fa) == 0 &&
+            epi_nvme_read(CTRL_FLOOR_LBA_B, 1, fb) == 0) {
+            uint64_t rf = 0; uint32_t nwc = 1;
+            ctrl_floor_status_t fs = ctrl_floor_select(fa, fb, &rf, &nwc);
+            if (fs == FLOOR_OK) {
+                g_ctrl_replay.seq_floor = rf;
+                g_ctrl_floor_resv = rf; g_ctrl_floor_wc = nwc; g_ctrl_floor_ok = 1;
+                puts_serial("[CTRL-FLOOR] resumed floor="); put_u64_dec(rf);
+                puts_serial(" wc="); put_dec(nwc); puts_serial("\n");
+            } else if (fs == FLOOR_FRESH) {
+                g_ctrl_floor_resv = 0; g_ctrl_floor_wc = 1; g_ctrl_floor_ok = 1;
+                puts_serial("[CTRL-FLOOR] fresh (unprovisioned) floor=0\n");
+            } else {   /* FLOOR_CORRUPT */
+                g_ctrl_floor_ok = 0;
+                puts_serial("[CTRL-FLOOR] CORRUPT - control-IN DISABLED this boot (fail-safe)\n");
+            }
+        } else {
+            g_ctrl_floor_ok = 0;
+            puts_serial("[CTRL-FLOOR] read FAILED - control-IN DISABLED this boot (fail-safe)\n");
+        }
+    }
     /* M2b-1: the token bucket now lives INSIDE the jarvis-input process (Model 2). PA
      * does only re-parse + HMAC + replay on the returned candidate, so PA holds no rate
      * limiter of its own. */
-#if JARVIS_CONTROL_IN_PROBE
+/* Mode 4 (the M3-3 floor 2-boot gate) is a SEPARATE block below — it must NOT run the accept/tamper +
+ * mode-2/3 body, whose control_replay_init calls (here + the live-poll reset) would clobber the RESUMED
+ * floor this gate depends on. Exclude the whole classic-probe body under mode 4. */
+#if JARVIS_CONTROL_IN_PROBE && JARVIS_CONTROL_IN_PROBE != 4
     /* Synthetic-frame self-test (KVM has no NIC) driving the M2b-1 SPLIT pipeline:
      * PA stages a signed JCTL frame in the raw mailbox -> the jarvis-input process
      * parses + rate-limits it -> PA re-parses + HMACs the returned candidate. A valid
@@ -4614,7 +4706,54 @@ static void *main_continued(void *arg UNUSED)
                                   : "[CTRL-IN-PROBE] SKIPPED (no key)\n");
     }
     control_replay_init(&g_ctrl_replay, CONTROL_TEST_EPOCH);   /* reset for the live poll */
-#endif /* JARVIS_CONTROL_IN_PROBE */
+#endif /* JARVIS_CONTROL_IN_PROBE (classic modes 1/2/3) */
+
+#if JARVIS_CONTROL_IN_PROBE == 4
+    /* 6-5/M3-3 floor 2-BOOT GATE (KVM, no NIC — synthetic frames via the split pipeline). Branches on the
+     * RESUMED floor set by the boot floor-read above, so ONE persistent NVMe image booted twice proves the
+     * cross-reboot floor: BOOT 1 (floor 0) accepts a high-seq frame + persists the reservation; BOOT 2
+     * (floor resumed > 0, SAME image) proves a replay of the boot-1 seq is DROP_REPLAY'd by the persisted
+     * floor, then a fresh higher seq ACCEPTs. NOTE the boot floor-read runs for ALL modes; only mode 4
+     * refrains from resetting the floor (the classic block above is excluded under != 4). */
+    if (g_ctrl_key_ok && g_input_ready && g_ctrl_floor_ok) {
+        static uint8_t pj4[CONTROL_MSG_MAX], pf4[512];
+        control_result_t pr4;
+        control_verdict_t pv4;
+        if (g_ctrl_replay.seq_floor == 0) {
+            uint16_t pjl = build_probe_jctl(pj4, g_ctrl_key, 1000u, 0xF0, "status");
+            int pfl = net_build_udp_broadcast(pf4, sizeof pf4, g_net.nic.mac, JARVIS_BOX_IP,
+                                              40000, (uint16_t)CONTROL_PORT, pj4, pjl);
+            pv4 = (pfl > 0) ? ctrl_roundtrip_sync(pf4, (size_t)pfl, &pr4) : CV_DROP_PARSE;
+            /* the write-ahead persist already fired INSIDE pa_verify_candidate (via ctrl_roundtrip_sync)
+             * BEFORE the accept, emitting its own [CTRL-FLOOR] persist line. */
+            puts_serial(pv4 == CV_ACCEPT ? "[CTRL-FLOOR-PROBE] boot1 accept seq=1000 (floor persisted write-ahead)\n"
+                                         : "[CTRL-FLOOR-PROBE] boot1 FAIL (expected accept)\n");
+        } else {
+            puts_serial("[CTRL-FLOOR-PROBE] boot2 resumed floor="); put_u64_dec(g_ctrl_replay.seq_floor);
+            puts_serial("\n");
+            /* replay the boot-1 seq with a FRESH nonce (0xF1 != boot1's 0xF0) so it is the persisted
+             * SEQ FLOOR, not the per-boot nonce ring, that rejects it. */
+            uint16_t pjl = build_probe_jctl(pj4, g_ctrl_key, 1000u, 0xF1, "status");
+            int pfl = net_build_udp_broadcast(pf4, sizeof pf4, g_net.nic.mac, JARVIS_BOX_IP,
+                                              40000, (uint16_t)CONTROL_PORT, pj4, pjl);
+            pv4 = (pfl > 0) ? ctrl_roundtrip_sync(pf4, (size_t)pfl, &pr4) : CV_DROP_PARSE;
+            puts_serial(pv4 == CV_DROP_REPLAY
+                        ? "[CTRL-FLOOR-PROBE] boot2 replay seq=1000 -> DROP_REPLAY (CROSS-REBOOT PROOF)\n"
+                        : "[CTRL-FLOOR-PROBE] boot2 replay seq=1000 NOT dropped -> FAIL\n");
+            uint64_t fresh = g_ctrl_replay.seq_floor + 1u;
+            pjl = build_probe_jctl(pj4, g_ctrl_key, fresh, 0xF2, "status");
+            pfl = net_build_udp_broadcast(pf4, sizeof pf4, g_net.nic.mac, JARVIS_BOX_IP,
+                                          40000, (uint16_t)CONTROL_PORT, pj4, pjl);
+            pv4 = (pfl > 0) ? ctrl_roundtrip_sync(pf4, (size_t)pfl, &pr4) : CV_DROP_PARSE;
+            puts_serial(pv4 == CV_ACCEPT
+                        ? "[CTRL-FLOOR-PROBE] boot2 fresh seq accept OK\n"
+                        : "[CTRL-FLOOR-PROBE] boot2 fresh seq NOT accepted -> FAIL\n");
+        }
+    } else {
+        puts_serial(g_ctrl_floor_ok ? "[CTRL-FLOOR-PROBE] SKIPPED (key/input down)\n"
+                                    : "[CTRL-FLOOR-PROBE] SKIPPED (floor CORRUPT/not-ready — fail-safe)\n");
+    }
+#endif /* JARVIS_CONTROL_IN_PROBE == 4 */
 #endif /* JARVIS_CONTROL_IN */
 
     while (1) {
@@ -4636,7 +4775,7 @@ static void *main_continued(void *arg UNUSED)
          * 6-5/M2b-2: the outer !g_ctrl_in_down gate stops the whole lane once the input
          * process is declared dead (degrade); a candidate-consume ACKs the liveness counter;
          * a deadline tick + a backpressure drain (else-branch) are the flood/liveness edits. */
-        if (g_ctrl_rx_ready && g_ctrl_key_ok && g_input_ready && !g_ctrl_in_down) {
+        if (g_ctrl_rx_ready && g_ctrl_key_ok && g_ctrl_floor_ok && g_input_ready && !g_ctrl_in_down) {
             /* (1) consume a candidate (non-blocking): acquire-load the publish seq. */
             uint32_t cs = __atomic_load_n(&g_cand_mbx->seq, __ATOMIC_ACQUIRE);
             if (cs != g_ctrl_cand_last) {
@@ -4646,6 +4785,9 @@ static void *main_continued(void *arg UNUSED)
                 control_result_t cres;
                 control_verdict_t cv = pa_verify_candidate(&cres);
                 if (cv == CV_ACCEPT) {
+                    /* 6-5/M3-3: the durable floor was already advanced write-ahead in pa_verify_candidate
+                     * (a persist failure there fail-closes to CV_DROP_REPLAY, never CV_ACCEPT), so a
+                     * CV_ACCEPT here is guaranteed backed by a durable reservation >= this seq. */
                     g_ctrl_accepted++;
                     /* Log-sanitize: query bytes are ATTACKER-CONTROLLED — map non-printables
                      * to '.', bound the copy, NUL-terminate; NEVER puts_serial raw bytes. */
