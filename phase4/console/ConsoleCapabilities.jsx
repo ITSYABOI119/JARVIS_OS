@@ -38,6 +38,9 @@ function Capabilities({ store }) {
     MONITORS:      { label: 'Always-on monitors', tone: 'ok' },
     WAKE:          { label: 'Event-driven wake (templated consults)', tone: 'ok' },
     PROACTIVE:     { label: 'Proactive behaviors (registry informs)', tone: 'ok' },
+    // 6-5/M3-4a: the two-way control-IN channel. Refuses defined abuse classes; general injection is
+    // contained structurally, not detected. Gated OFF in the deploy (no flag) until the M4 flip.
+    CONTROL_IN:    { label: 'Control-IN — two-way conversation (gated)', tone: 'ok' },
   };
 
   // The live capability set IS the record's flags_list — iterate it, never a

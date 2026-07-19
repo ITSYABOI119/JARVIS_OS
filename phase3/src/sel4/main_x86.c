@@ -2956,6 +2956,18 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
     pkt.last_behavior   = g_last_behavior;
     if (g_proactive_inited) pkt.flags |= TLM_F_PROACTIVE;
 #endif
+#if JARVIS_CONTROL_IN
+    /* v11 (P6 6-5/M3-4a): the control-IN two-way channel. answered = routed+answered queries;
+     * blocked = a DEFINED-ABUSE-CLASS refuse count from the query SHIELD (NEVER "injection blocked" —
+     * general injection is contained STRUCTURALLY, not detected); dropped = frames rejected pre-SHIELD
+     * (auth/replay/parse/ratelimit). TLM_F_CONTROL_IN means the CHANNEL is UP (key + floor + RX ring),
+     * NOT that a query arrived — never gated on a nonzero counter. Gated, so the CONTROL_IN=0 deploy
+     * emits v11 with all three 0 + the flag CLEAR (honest "channel gated off"; the v5..v10 pattern). */
+    pkt.control_in_answered = g_ctrl_in_answered > 0xFFFFu ? 0xFFFFu : (uint16_t)g_ctrl_in_answered;
+    pkt.control_in_blocked  = g_ctrl_in_blocked  > 0xFFFFu ? 0xFFFFu : (uint16_t)g_ctrl_in_blocked;
+    pkt.control_in_dropped  = g_ctrl_dropped;
+    if (g_ctrl_key_ok && g_ctrl_floor_ok && g_ctrl_rx_ready) pkt.flags |= TLM_F_CONTROL_IN;
+#endif
     /* model display name (matches the on-screen panel) + last response, NUL-bounded (pkt is zeroed) */
     { const char *mn = "Gemma 4 E2B";
       for (int i = 0; i < (int)sizeof(pkt.model_name) - 1 && mn[i]; i++) pkt.model_name[i] = mn[i]; }
@@ -2963,7 +2975,7 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
         pkt.last_text[i] = g_fb_last_resp[i];
     jarvis_tlm_finalize(&pkt);
     /* wrap as a UDP broadcast to :51000 and fire-and-forget (no DD poll) */
-    static uint8_t tlm_frame[304];   /* 14+20+8+246 = 288 <= 304 (v10; headroom, never exact-fit) */
+    static uint8_t tlm_frame[304];   /* 14+20+8+254 = 296 <= 304 (v11; headroom, never exact-fit) */
     int flen = net_build_udp_broadcast(tlm_frame, sizeof tlm_frame, g_net.nic.mac, JARVIS_BOX_IP,
                    JARVIS_TELEMETRY_PORT, JARVIS_TELEMETRY_PORT, &pkt, (uint16_t)sizeof pkt);
     if (flen > 0)
@@ -5525,6 +5537,18 @@ static void *main_continued(void *arg UNUSED)
             jarvis_log_snapshot(q_total, q_errors);   /* Step 2c-2a: full-state [SNAP] at the [STATS] cadence */
             jarvis_telemetry_emit(TLM_K_STATS, q_total, q_hits, q_infer, q_heartbeat, q_shield, q_errors);  /* N-c-1 */
             g_tlm_last_tsc = jarvis_rdtsc();   /* N-c-1: re-base the 1 Hz gate so the next tick isn't a near-dup */
+#if JARVIS_CONTROL_IN
+            /* 6-5/M3-4a (v11) box proof: the exact control-IN counters + channel-up gate that
+             * jarvis_telemetry_emit fills into the v11 packet (fill/flag/CRC host-proven; on-wire I211
+             * validation is DEFERRED to the flip — no NIC in QEMU; the [TLM-V8]/-V9/-V10 precedent).
+             * b= is a DEFINED-ABUSE-CLASS refuse count, NOT "injection blocked". */
+            puts_serial("[TLM-V11] control_in a="); put_dec(g_ctrl_in_answered);
+            puts_serial(" b="); put_dec(g_ctrl_in_blocked);
+            puts_serial(" d="); put_dec(g_ctrl_dropped);
+            puts_serial(" flag=");
+            put_dec((uint32_t)(g_ctrl_key_ok && g_ctrl_floor_ok && g_ctrl_rx_ready));
+            puts_serial("\n");
+#endif
 #if JARVIS_MONITORS
             /* 6-1/M1: the q_errors-delta watcher -> ACTION_NOTIFY_ANOMALY through the shared
              * spine. Deliberately NO g_restart_in_progress latch and NO g_pb_dead gate (a NOTIFY

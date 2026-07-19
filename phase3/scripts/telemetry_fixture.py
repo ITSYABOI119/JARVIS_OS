@@ -2,7 +2,7 @@
 """
 telemetry_fixture.py - shared packer for the telemetry_packet_t (jarvis_telemetry.h).
 
-Single source for building 246-byte (v10) telemetry packets and legacy-pcap captures,
+Single source for building 254-byte (v11) telemetry packets and legacy-pcap captures,
 used by both test_telemetry_receiver.py (host wire-compat) and gen_golden_pcap.py
 (the golden fixture). Stdlib only.
 
@@ -18,11 +18,11 @@ import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from telemetry_receiver import (  # noqa: E402
-    FMT, MAGIC, PKT_SIZE, decode_packet, packet_to_record)
+    FMT_V10, FMT_V11, MAGIC, PKT_SIZE_V10, PKT_SIZE_V11, decode_packet, packet_to_record)
 
-# Field order matches FMT / jarvis_telemetry.h exactly.
+# Field order matches FMT_V11 / jarvis_telemetry.h exactly.
 _DEFAULTS = dict(
-    magic=MAGIC, version=10, kind=1, flags=0x01 | 0x10, boot_id=1, seq=42,
+    magic=MAGIC, version=11, kind=1, flags=0x01 | 0x10, boot_id=1, seq=42,
     uptime_ms=120000, infer_active=0, infer_duty_pct=18, log_cursor=137,
     q_total=289, q_hits=211, q_infer=29, q_heartbeat=40, q_shield=9, q_errors=0,
     num_nodes=6, model_load_pct=100, fb_bpp=32, selftest_score=5,
@@ -35,23 +35,30 @@ _DEFAULTS = dict(
     restart_count=0, actions_fired=0, actions_blocked=0,
     monitors_fired=0, last_monitor_event=0, mon_pad=0,
     wakes_fired=0, last_wake_event=0, wake_pad=0,
-    behaviors_fired=0, behaviors_mask=0, last_behavior=0, beh_pad=0, crc32=0,
+    behaviors_fired=0, behaviors_mask=0, last_behavior=0, beh_pad=0,
+    control_in_answered=0, control_in_blocked=0, control_in_dropped=0,   # v11 (6-5/M3-4a)
+    crc32=0,
 )
 
 
-def build_packet(finalize=True, **overrides):
-    """Pack a 246-byte (v10) packet; when finalize, stamp a valid zlib CRC over [:PKT_SIZE-4].
+def build_packet(finalize=True, wire_version=11, **overrides):
+    """Pack a telemetry packet; when finalize, stamp a valid zlib CRC over [:size-4].
 
+    wire_version=11 (default) -> a 254-byte v11 packet (+ control_in_answered/blocked/dropped);
+    wire_version=10 -> a 246-byte v10 packet (the live deployed box's shape, for the deploy-deferral
+    version-tolerance test). The version BYTE tracks wire_version unless explicitly overridden.
     Pass finalize=False (with an explicit crc32=...) to forge a corrupt packet.
     String fields (last_text/model_name) accept bytes or str.
     """
     v = dict(_DEFAULTS)
     v.update(overrides)
+    if 'version' not in overrides:
+        v['version'] = wire_version
     for k in ('last_text', 'model_name'):
         if isinstance(v[k], str):
             v[k] = v[k].encode('ascii', 'replace')
-    body = struct.pack(
-        FMT, v['magic'], v['version'], v['kind'], v['flags'], v['boot_id'], v['seq'],
+    common = (
+        v['magic'], v['version'], v['kind'], v['flags'], v['boot_id'], v['seq'],
         v['uptime_ms'], v['infer_active'], v['infer_duty_pct'], v['log_cursor'],
         v['q_total'], v['q_hits'], v['q_infer'], v['q_heartbeat'], v['q_shield'], v['q_errors'],
         v['num_nodes'], v['model_load_pct'], v['fb_bpp'], v['selftest_score'],
@@ -63,11 +70,18 @@ def build_packet(finalize=True, **overrides):
         v['restart_count'], v['actions_fired'], v['actions_blocked'],
         v['monitors_fired'], v['last_monitor_event'], v['mon_pad'],
         v['wakes_fired'], v['last_wake_event'], v['wake_pad'],
-        v['behaviors_fired'], v['behaviors_mask'], v['last_behavior'], v['beh_pad'],
-        v['crc32'])
+        v['behaviors_fired'], v['behaviors_mask'], v['last_behavior'], v['beh_pad'])
+    if wire_version == 10:
+        body = struct.pack(FMT_V10, *common, v['crc32'])
+        size = PKT_SIZE_V10
+    else:
+        body = struct.pack(FMT_V11, *common,
+                           v['control_in_answered'], v['control_in_blocked'],
+                           v['control_in_dropped'], v['crc32'])
+        size = PKT_SIZE_V11
     if finalize:
-        crc = zlib.crc32(body[:PKT_SIZE - 4]) & 0xFFFFFFFF   # v10: 242
-        body = body[:PKT_SIZE - 4] + struct.pack('<I', crc)
+        crc = zlib.crc32(body[:size - 4]) & 0xFFFFFFFF   # v11: 250 / v10: 242
+        body = body[:size - 4] + struct.pack('<I', crc)
     return body
 
 
@@ -103,6 +117,7 @@ FLAG_BITS = {
     'MONITORS': 0x1000,
     'WAKE': 0x2000,
     'PROACTIVE': 0x4000,
+    'CONTROL_IN': 0x8000,   # v11 (6-5/M3-4a)
 }
 _CORRUPT_CRC = 0xDEADBEEF  # deliberately wrong CRC for "corrupt" golden frames
 

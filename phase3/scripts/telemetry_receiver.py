@@ -3,10 +3,10 @@
 telemetry_receiver.py - JARVIS Remote Telemetry Console receiver (goal #2b N-c-2)
 
 Main-PC Python UDP receiver for the box-side telemetry stream. The JARVIS box
-(headless appliance) broadcasts a 246-byte (v10) binary `telemetry_packet_t` over UDP
+(headless appliance) broadcasts a 254-byte (v11) binary `telemetry_packet_t` over UDP
 to 255.255.255.255:51000 at ~1 Hz (see phase3/src/drivers/jarvis_telemetry.h and
 the N-c-1 emit site in phase3/src/sel4/main_x86.c). This tool binds the port,
-decodes each datagram, validates the zlib CRC-32 over the first 242 bytes (v10),
+decodes each datagram, validates the zlib CRC-32 over the first 250 bytes (v11) / 242 (v10),
 and pretty-prints honest live box state.
 
 Wire format (little-endian, packed, no padding — see FMT below; sizes are DERIVED,
@@ -60,8 +60,18 @@ import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MAGIC = 0x4A54454C            # "JTEL" (LE on the wire: 4C 45 54 4A)
-FMT = '<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHHHHIHHHBBHBBHHBBI'
-PKT_SIZE = struct.calcsize(FMT)   # v10: 246 (derived — never hardcode a wire size)
+# VERSION-TOLERANT (6-5/M3-4a): the wire is APPEND-ONLY, so the common prefix through beh_pad is
+# shared; v10 appends only crc32, v11 also appends control_in_answered/blocked/dropped before crc32.
+# The deploy-deferral keeps a LIVE v10 box on the wire while the code emits v11 — the receiver must
+# decode BOTH by length, and a v10 (246 B) packet must NOT misparse (control_in fields -> None).
+FMT_COMMON = '<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHHHHIHHHBBHBBHHBB'   # through beh_pad, NO crc
+FMT_V10 = FMT_COMMON + 'I'      # v10: + crc32
+FMT_V11 = FMT_COMMON + 'HHII'   # v11: + control_in_answered(H)/blocked(H)/dropped(I) + crc32(I)
+PKT_SIZE_V10 = struct.calcsize(FMT_V10)   # 246
+PKT_SIZE_V11 = struct.calcsize(FMT_V11)   # 254
+# CURRENT-wire aliases (the code emits v11 now) — derived, never a hardcoded size.
+FMT = FMT_V11
+PKT_SIZE = PKT_SIZE_V11
 LOG_MAX_ENTRIES = 2700        # NVME_LOG_MAX_ENTRIES (no-wrap durable telemetry log)
 
 FLAG_NAMES = {
@@ -80,6 +90,7 @@ FLAG_NAMES = {
     0x1000: 'MONITORS',
     0x2000: 'WAKE',
     0x4000: 'PROACTIVE',
+    0x8000: 'CONTROL_IN',   # v11 (6-5/M3-4a): the two-way control-IN channel is up (gated off in the deploy)
 }
 KIND_NAMES = {1: 'STATS', 2: 'INFER', 3: 'STATE'}
 
@@ -104,8 +115,22 @@ def decode_packet(data: bytes) -> dict:
     returns the dict with 'crc_ok' == False (so the caller can distinguish noise
     on the port from genuine corruption).
     """
-    if len(data) != PKT_SIZE:
-        raise ValueError("bad length %d (expected %d)" % (len(data), PKT_SIZE))
+    # Version-tolerant by LENGTH (the append-only wire): v11 (254 B) has the 3 control_in fields, v10
+    # (246 B, still emitted by the live deployed box until the flip) does not. A v10 packet decodes
+    # cleanly with control_in_* == None; the CRC region differs (@242 v10 / @250 v11).
+    n = len(data)
+    if n == PKT_SIZE_V11:
+        fields = struct.unpack(FMT_V11, data)
+        control_in_answered, control_in_blocked, control_in_dropped = fields[-4:-1]
+        crc32_field = fields[-1]
+        common = fields[:-4]
+    elif n == PKT_SIZE_V10:
+        fields = struct.unpack(FMT_V10, data)
+        control_in_answered = control_in_blocked = control_in_dropped = None
+        crc32_field = fields[-1]
+        common = fields[:-1]
+    else:
+        raise ValueError("bad length %d (expected %d or %d)" % (n, PKT_SIZE_V10, PKT_SIZE_V11))
 
     (magic, version, kind, flags, boot_id, seq,
      uptime_ms, infer_active, infer_duty_pct, log_cursor,
@@ -119,13 +144,12 @@ def decode_packet(data: bytes) -> dict:
      restart_count, actions_fired, actions_blocked,
      monitors_fired, last_monitor_event, _mon_pad,
      wakes_fired, last_wake_event, _wake_pad,
-     behaviors_fired, behaviors_mask, last_behavior, _beh_pad,
-     crc32_field) = struct.unpack(FMT, data)
+     behaviors_fired, behaviors_mask, last_behavior, _beh_pad) = common
 
     if magic != MAGIC:
         raise ValueError("bad magic 0x%08X (expected 0x%08X)" % (magic, MAGIC))
 
-    crc_calc = zlib.crc32(data[:PKT_SIZE - 4]) & 0xFFFFFFFF   # v10: 242 (= offsetof(crc32))
+    crc_calc = zlib.crc32(data[:n - 4]) & 0xFFFFFFFF   # offsetof(crc32): 242 (v10) / 250 (v11)
     flags_list = [name for bit, name in FLAG_NAMES.items() if flags & bit]
 
     return {
@@ -174,6 +198,11 @@ def decode_packet(data: bytes) -> dict:
         'behaviors_fired': behaviors_fired,
         'behaviors_mask': behaviors_mask,
         'last_behavior': last_behavior,
+        # v11 (6-5/M3-4a): None on a v10 packet from the live deployed box (append-only, deploy-deferred).
+        # control_in_blocked is a DEFINED-ABUSE-CLASS refuse count, NEVER "injection blocked".
+        'control_in_answered': control_in_answered,
+        'control_in_blocked': control_in_blocked,
+        'control_in_dropped': control_in_dropped,
         'cache_growth_count': cache_growth_count,
         'log_cursor': log_cursor,
         'infer_gen_tokens': infer_gen_tokens,
@@ -273,6 +302,9 @@ def packet_to_record(d: dict, recv_ts: float = 0) -> dict:
         'behaviors_fired': d['behaviors_fired'],
         'behaviors_mask': d['behaviors_mask'],
         'last_behavior': d['last_behavior'],
+        'control_in_answered': d['control_in_answered'],
+        'control_in_blocked': d['control_in_blocked'],
+        'control_in_dropped': d['control_in_dropped'],
         'cache_growth_count': d['cache_growth_count'],
         'log_cursor': d['log_cursor'],
         'infer_gen_tokens': d['infer_gen_tokens'],

@@ -21,7 +21,7 @@ import zlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from telemetry_receiver import (  # noqa: E402
     decode_packet, packet_to_record, iter_pcap_telemetry, FMT, MAGIC, PKT_SIZE, FLAG_NAMES,
-    BANNED_RECORD_KEYS)
+    FMT_V10, FMT_V11, PKT_SIZE_V10, PKT_SIZE_V11, BANNED_RECORD_KEYS)
 from telemetry_fixture import (  # noqa: E402  -- shared packer (moved out of this file)
     _DEFAULTS, build_packet, _build_pcap_one, build_pcap_many, REQUIRED_RECORD_KEYS,
     frame_to_packet, FLAG_BITS)
@@ -51,9 +51,10 @@ def raises_valueerror(fn):
 def main():
     print("== telemetry receiver wire-compat ==")
 
-    # Layout
-    check(struct.calcsize(FMT) == 246, "struct.calcsize(FMT) == 246 (v10)")
-    check(PKT_SIZE == 246, "PKT_SIZE == 246 (v10)")
+    # Layout (v11 = the current wire)
+    check(struct.calcsize(FMT) == 254, "struct.calcsize(FMT) == 254 (v11)")
+    check(PKT_SIZE == 254, "PKT_SIZE == 254 (v11)")
+    check(PKT_SIZE_V10 == 246 and PKT_SIZE_V11 == 254, "version-tolerant sizes: v10=246, v11=254")
 
     # Canonical zlib CRC vector — same CRC the C side proved (jarvis_telemetry.c)
     check(zlib.crc32(b"123456789") & 0xFFFFFFFF == 0xCBF43926,
@@ -61,7 +62,7 @@ def main():
 
     # Valid packet round-trips
     pkt = build_packet()
-    check(len(pkt) == 246, "built packet is 246 bytes (v10)")
+    check(len(pkt) == 254, "built packet is 254 bytes (v11)")
     d = decode_packet(pkt)
     check(d['crc_ok'] is True, "valid packet crc_ok True")
     check(d['kind_name'] == 'STATS', "kind_name == STATS")
@@ -132,7 +133,7 @@ def main():
     pkt_retr = build_packet(retrieval_hits=3, retrieval_latency_us=40, flags=0x01 | 0x10 | 0x80)
     dretr = decode_packet(pkt_retr)
     check(dretr['crc_ok'] is True, "retrieval packet crc_ok True (CRC over [:PKT_SIZE-4])")
-    check(dretr["version"] == 10, "v10 packet version == 10")
+    check(dretr["version"] == 11, "v11 packet version == 11")
     check(dretr['retrieval_hits'] == 3 and dretr['retrieval_latency_us'] == 40,
           "retrieval_hits/retrieval_latency_us decode")
     check('RETRIEVAL' in dretr['flags_list'], "TLM_F_RETRIEVAL 0x80 -> 'RETRIEVAL' in flags_list")
@@ -207,7 +208,7 @@ def main():
                            flags=0x01 | 0x10 | 0x1000)
     dmon = decode_packet(pkt_mon)
     check(dmon['crc_ok'] is True, "v8 monitors packet crc_ok True (CRC over [:PKT_SIZE-4])")
-    check(dmon['version'] == 10, "monitors packet version == 10 (v10 wire)")
+    check(dmon['version'] == 11, "monitors packet version == 11 (v11 wire)")
     check(dmon['monitors_fired'] == 5 and dmon['last_monitor_event'] == 3,
           "monitors_fired/last_monitor_event decode")
     check('MONITORS' in dmon['flags_list'], "TLM_F_MONITORS 0x1000 -> 'MONITORS' in flags_list")
@@ -227,7 +228,7 @@ def main():
                             flags=0x01 | 0x10 | 0x2000)
     dwake = decode_packet(pkt_wake)
     check(dwake['crc_ok'] is True, "wake packet crc_ok True (CRC over [:PKT_SIZE-4])")
-    check(dwake['version'] == 10, "v10 packet version == 10")
+    check(dwake['version'] == 11, "v11 packet version == 11")
     check(dwake['wakes_fired'] == 3 and dwake['last_wake_event'] == 1,
           "wakes_fired/last_wake_event decode")
     check('WAKE' in dwake['flags_list'], "TLM_F_WAKE 0x2000 -> 'WAKE' in flags_list")
@@ -246,12 +247,12 @@ def main():
     # INTERRUPTS (cap-suppressed never counts), mask bit id-1 = behavior fired this boot;
     # a B1/B2 consult bumps BOTH wakes_fired and behaviors_fired BY DESIGN — two honest
     # views of one event, never summed; REAL allowed keys, distinct from every ban) ---
-    check(PKT_SIZE == 246, "v10 size-bump: PKT_SIZE == 246")
+    check(PKT_SIZE >= 246, "v10 behavior fields present (the v11 bump keeps them at the same offsets)")
     pkt_beh = build_packet(behaviors_fired=3, behaviors_mask=21, last_behavior=5,
                            flags=0x01 | 0x10 | 0x4000)
     dbeh = decode_packet(pkt_beh)
     check(dbeh['crc_ok'] is True, "v10 behavior packet crc_ok True (CRC over [:242])")
-    check(dbeh['version'] == 10, "v10 packet version == 10")
+    check(dbeh['version'] == 11, "v11 packet version == 11")
     check(dbeh['behaviors_fired'] == 3 and dbeh['behaviors_mask'] == 21
           and dbeh['last_behavior'] == 5,
           "behaviors_fired/behaviors_mask/last_behavior decode (mask 21 = 0b10101 = B1+B3+B5)")
@@ -267,6 +268,45 @@ def main():
           "FLAG_NAMES/FLAG_BITS both carry 0x4000 PROACTIVE")
     check('behaviors_fired' not in BANNED_RECORD_KEYS and 'behaviors_mask' not in BANNED_RECORD_KEYS,
           "behaviors_fired/behaviors_mask are REAL allowed keys (NOT banned — the wakes_fired precedent)")
+
+    # --- P6 6-5/M3-4a: control_in_answered/blocked/dropped + TLM_F_CONTROL_IN (the v11 246->254
+    # size-bump). control_in_blocked is a DEFINED-ABUSE-CLASS refuse count, NEVER "injection blocked";
+    # the flag means the CHANNEL is up. Fill gated -> the deploy emits v11 with 0s + flag clear. ---
+    pkt_ci = build_packet(control_in_answered=3, control_in_blocked=1, control_in_dropped=5,
+                          flags=0x01 | 0x10 | 0x8000)
+    dci = decode_packet(pkt_ci)
+    check(len(pkt_ci) == 254, "v11 control-IN packet is 254 bytes")
+    check(dci['crc_ok'] is True, "v11 control-IN packet crc_ok True (CRC over [:250])")
+    check(dci['control_in_answered'] == 3 and dci['control_in_blocked'] == 1
+          and dci['control_in_dropped'] == 5,
+          "control_in_answered/blocked/dropped decode (3/1/5)")
+    check('CONTROL_IN' in dci['flags_list'], "TLM_F_CONTROL_IN 0x8000 -> 'CONTROL_IN' in flags_list")
+    rec_ci = packet_to_record(dci)
+    check(rec_ci['control_in_answered'] == 3 and rec_ci['control_in_blocked'] == 1
+          and rec_ci['control_in_dropped'] == 5, "record carries the 3 control_in fields")
+    check(all(k in REQUIRED_RECORD_KEYS for k in
+              ('control_in_answered', 'control_in_blocked', 'control_in_dropped')),
+          "control_in_answered/blocked/dropped are REQUIRED_RECORD_KEYs")
+    check(FLAG_NAMES.get(0x8000) == 'CONTROL_IN' and FLAG_BITS.get('CONTROL_IN') == 0x8000,
+          "FLAG_NAMES/FLAG_BITS both carry 0x8000 CONTROL_IN")
+    check('control_in_blocked' not in BANNED_RECORD_KEYS,
+          "control_in_blocked is a REAL allowed key (a defined-abuse-class refuse count, not a ban)")
+
+    # VERSION-TOLERANCE (the deploy-deferral requirement): the LIVE deployed box stays on v10 (246 B)
+    # while the code emits v11 — a v10 packet must decode CLEANLY with the 3 control_in fields ABSENT
+    # (None) and TLM_F_CONTROL_IN not set. Append-only layout makes this a pure length/version guard.
+    pkt_v10 = build_packet(wire_version=10, flags=0x01 | 0x10)
+    dv10 = decode_packet(pkt_v10)
+    check(len(pkt_v10) == 246, "synthetic v10 packet is 246 bytes")
+    check(dv10['crc_ok'] is True, "v10 packet crc_ok True (CRC over [:242], NOT [:250] — per-version)")
+    check(dv10['version'] == 10, "v10 packet version byte == 10")
+    check(dv10['control_in_answered'] is None and dv10['control_in_blocked'] is None
+          and dv10['control_in_dropped'] is None,
+          "v10 packet: control_in fields ABSENT (None) — no misparse of the live deployed box")
+    check('CONTROL_IN' not in dv10['flags_list'], "v10 packet: TLM_F_CONTROL_IN not set")
+    rec_v10 = packet_to_record(dv10)
+    check(set(rec_v10.keys()) == set(REQUIRED_RECORD_KEYS),
+          "v10 record still carries the full key contract (control_in keys present, valued None)")
 
     # --- N-c-3a: iter_pcap_telemetry on a synthetic 1-packet pcap ---
     pcap = _build_pcap_one(pkt, ts_s=1700000001)
@@ -293,7 +333,7 @@ def main():
     meta_keys = set(golden['meta']['keys'])
     check(meta_keys == set(REQUIRED_RECORD_KEYS),
           "golden meta.keys == REQUIRED_RECORD_KEYS (fixture matches receiver output)")
-    check(golden['meta']['size'] == 246 and golden['meta']['fmt'] == FMT,
+    check(golden['meta']['size'] == 254 and golden['meta']['fmt'] == FMT,
           "golden meta fmt/size match the wire format")
 
     kind_expect = {1: 'STATS', 2: 'INFER', 3: 'STATE'}

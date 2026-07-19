@@ -1,8 +1,8 @@
 {
   "meta": {
-    "comment": "Golden /events contract for phase4/console. 'keys' MUST equal set(packet_to_record(...).keys()); the key-contract test (test_telemetry_receiver.py) enforces it. Regenerate golden.pcap via phase3/scripts/gen_golden_pcap.py (CI gates drift). 'flags' are names (telemetry_fixture.FLAG_BITS); other fields are build_packet overrides; label/ts_s/ts_frac/corrupt are fixture-only. NOTE: the 'infer' frame is a SYNTHETIC all-features-on pin frame (SHIELD_LEARN/SEMANTIC are gated-off in the shipped deploy; its nonzero action/monitor counts exist to give the e2e value-pins teeth) — it is NOT a real capture.",
-    "fmt": "<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHHHHIHHHBBHBBHHBBI",
-    "size": 246,
+    "comment": "Golden /events contract for phase4/console. 'keys' MUST equal set(packet_to_record(...).keys()); the key-contract test (test_telemetry_receiver.py) enforces it. Regenerate golden.pcap via phase3/scripts/gen_golden_pcap.py (CI gates drift). 'flags' are names (telemetry_fixture.FLAG_BITS); other fields are build_packet overrides; label/ts_s/ts_frac/corrupt are fixture-only. NOTE: the 'infer' frame is a SYNTHETIC all-features-on pin frame (SHIELD_LEARN/SEMANTIC are gated-off in the shipped deploy; its nonzero action/monitor counts exist to give the e2e value-pins teeth) \u00e2\u20ac\u201d it is NOT a real capture.",
+    "fmt": "<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHHHHIHHHBBHBBHHBBHHII",
+    "size": 254,
     "keys": [
       "recv_ts",
       "version",
@@ -49,6 +49,9 @@
       "behaviors_fired",
       "behaviors_mask",
       "last_behavior",
+      "control_in_answered",
+      "control_in_blocked",
+      "control_in_dropped",
       "cache_growth_count",
       "log_cursor",
       "infer_gen_tokens",
@@ -152,7 +155,8 @@
         "ACTIONS",
         "MONITORS",
         "WAKE",
-        "PROACTIVE"
+        "PROACTIVE",
+        "CONTROL_IN"
       ],
       "boot_id": 1,
       "seq": 4,
@@ -186,7 +190,10 @@
       "last_wake_event": 1,
       "behaviors_fired": 3,
       "behaviors_mask": 21,
-      "last_behavior": 5
+      "last_behavior": 5,
+      "control_in_answered": 3,
+      "control_in_blocked": 1,
+      "control_in_dropped": 5
     },
     {
       "label": "state",

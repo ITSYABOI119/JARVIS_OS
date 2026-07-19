@@ -32,7 +32,7 @@ static int pass = 0, fail = 0;
 
 static void test_layout(void)
 {
-    CHECK(sizeof(telemetry_packet_t) == 246, "sizeof(telemetry_packet_t) == 246 (v10)");
+    CHECK(sizeof(telemetry_packet_t) == 254, "sizeof(telemetry_packet_t) == 254 (v11)");
     OFF(magic, 0);
     OFF(flags, 6);
     OFF(boot_id, 8);
@@ -72,7 +72,10 @@ static void test_layout(void)
     OFF(behaviors_mask, 238);
     OFF(last_behavior, 240);
     OFF(beh_pad, 241);
-    OFF(crc32, 242);
+    OFF(control_in_answered, 242);       /* P6 6-5/M3-4a: v11 fields appended before crc32 */
+    OFF(control_in_blocked, 244);
+    OFF(control_in_dropped, 246);
+    OFF(crc32, 250);
 }
 
 static void test_crc_known_vector(void)
@@ -124,11 +127,14 @@ static void test_finalize_roundtrip(void)
     pkt.behaviors_fired = 3;                /* P6 6-3/M3 (v10): registry behavior fires (interrupts) */
     pkt.behaviors_mask = 21;                /* 0b10101 = B1+B3+B5 have fired this boot */
     pkt.last_behavior = 5;                  /* BEHAVIOR_DEGRADED_ALERT */
+    pkt.control_in_answered = 3;            /* P6 6-5/M3-4a (v11): control-IN routed+answered */
+    pkt.control_in_blocked = 1;             /* a DEFINED-ABUSE-CLASS refuse count, NOT "injection blocked" */
+    pkt.control_in_dropped = 5;             /* frames rejected pre-SHIELD (auth/replay/parse/ratelimit) */
 
     jarvis_tlm_finalize(&pkt);
 
     CHECK(pkt.magic == JARVIS_TLM_MAGIC, "finalize sets magic == JTEL");
-    CHECK(pkt.version == JARVIS_TLM_VERSION, "finalize sets version == 10");
+    CHECK(pkt.version == JARVIS_TLM_VERSION, "finalize sets version == 11");
     CHECK(pkt.infer_active == 1 && pkt.infer_duty_pct == 42, "infer_active/infer_duty_pct survive finalize");
     CHECK(pkt.log_cursor == 137 && pkt.nvme_total_mb == 1953892u, "log_cursor/nvme_total_mb survive finalize");
     CHECK(pkt.total_ram_mb == 30000u, "total_ram_mb survives finalize");
@@ -160,10 +166,13 @@ static void test_finalize_roundtrip(void)
     CHECK(pkt.behaviors_fired == 3u && pkt.behaviors_mask == 21u && pkt.last_behavior == 5u,
           "behaviors_fired/behaviors_mask/last_behavior survive finalize (v10, CRC covers 236-241)");
     CHECK(TLM_F_PROACTIVE == 0x4000, "TLM_F_PROACTIVE == 0x4000 (flags is u16 — fits)");
+    CHECK(pkt.control_in_answered == 3u && pkt.control_in_blocked == 1u && pkt.control_in_dropped == 5u,
+          "control_in_answered/blocked/dropped survive finalize (v11, CRC covers 242-249)");
+    CHECK(TLM_F_CONTROL_IN == 0x8000, "TLM_F_CONTROL_IN == 0x8000 (the LAST u16 flag bit — flags now exhausted)");
 
-    /* The stored crc matches a recompute over the first 242 bytes (offsetof(crc32)). */
+    /* The stored crc matches a recompute over the first 250 bytes (offsetof(crc32)). */
     uint32_t recomputed = jarvis_tlm_crc32(&pkt, offsetof(telemetry_packet_t, crc32));
-    CHECK(pkt.crc32 == recomputed, "stored crc32 == recompute over first 242 B");
+    CHECK(pkt.crc32 == recomputed, "stored crc32 == recompute over first 250 B");
     CHECK(pkt.crc32 != 0u, "crc32 is non-zero for a populated packet");
 
     /* The magic bytes are "JTEL" little-endian: 4C 45 54 4A. */
@@ -171,7 +180,7 @@ static void test_finalize_roundtrip(void)
     CHECK(raw[0] == 0x4C && raw[1] == 0x45 && raw[2] == 0x54 && raw[3] == 0x4A,
           "magic on wire (LE) == 4C 45 54 4A (\"JTEL\")");
 
-    /* Flipping any byte in [0,242) must break the CRC check. */
+    /* Flipping any byte in [0,250) must break the CRC check. */
     int detected_all = 1;
     for (uint32_t i = 0; i < offsetof(telemetry_packet_t, crc32); i++) {
         raw[i] ^= 0xFF;
@@ -179,7 +188,20 @@ static void test_finalize_roundtrip(void)
             detected_all = 0;   /* a flip went undetected */
         raw[i] ^= 0xFF;         /* restore */
     }
-    CHECK(detected_all, "every single-byte flip in [0,242) breaks the CRC");
+    CHECK(detected_all, "every single-byte flip in [0,250) breaks the CRC");
+
+    /* CONTROL_IN=0 honest-deploy shape: the control-IN fields left 0 + TLM_F_CONTROL_IN NOT set is the
+     * deployed CONTROL_IN=0 box's honest v11 shape ("channel gated off"). The struct is STILL v11/254 B
+     * for everyone (no OFF-object-identity claim at v11 — the honest-deploy check is this zero-fill +
+     * flag-clear, not byte-identity). The FILL itself is gated in main_x86.c. */
+    telemetry_packet_t z = {0};
+    z.flags = TLM_F_MODEL_LOADED | TLM_F_SELFTEST_PASS;   /* deploy flags, NO CONTROL_IN */
+    jarvis_tlm_finalize(&z);
+    CHECK(sizeof z == 254u, "honest-0: still v11/254 B for everyone (no OFF-identity claim at v11)");
+    CHECK(z.control_in_answered == 0u && z.control_in_blocked == 0u && z.control_in_dropped == 0u,
+          "honest-0: control_in fields all 0 (the CONTROL_IN=0 deploy fill)");
+    CHECK((z.flags & TLM_F_CONTROL_IN) == 0, "honest-0: TLM_F_CONTROL_IN clear (channel gated off)");
+    CHECK(z.version == JARVIS_TLM_VERSION, "honest-0: version stamped == 11");
 }
 
 int main(void)

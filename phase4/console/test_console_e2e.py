@@ -46,6 +46,7 @@ FLAG_LABEL = {
     'MONITORS': 'Always-on monitors',
     'WAKE': 'Event-driven wake (templated consults)',
     'PROACTIVE': 'Proactive behaviors (registry informs)',
+    'CONTROL_IN': 'Control-IN — two-way conversation (gated)',
 }
 
 _P = 0
@@ -606,6 +607,53 @@ def main():
             check(beh_ok,
                   "(6-3/M3) 'Proactive behaviors' total == live behaviors_fired AND per-row "
                   "liveness derives from behaviors_mask (B1 fired / B2 quiet; snap=%r)" % (beh_dbg,))
+
+            # (6-5/M3-4a) PIN the System 'Queries answered' VALUE — must equal the live
+            # control_in_answered on a CONTROL_IN-flagged frame (flag-gated; '—' otherwise). The golden
+            # 'infer' frame carries control_in_answered=3 (+ blocked=1 / dropped=5). TEETH: fails if the
+            # control-IN rendering breaks. The channel is gated OFF in the deploy (no flag -> '—').
+            ci_ok = False
+            ci_dbg = None
+            deadline = time.time() + 12
+            while time.time() < deadline:
+                snap = page.evaluate(
+                    "() => {"
+                    " const rec = (window.JarvisTelemetry.getState().latest) || {};"
+                    " const flags = rec.flags_list || [];"
+                    " const lab = Array.from(document.querySelectorAll('div'))"
+                    "   .find(d => d.textContent.trim() === 'Queries answered');"
+                    " let rendered = null;"
+                    " if (lab && lab.parentElement) {"
+                    "   const kids = Array.from(lab.parentElement.children);"
+                    "   const i = kids.indexOf(lab);"
+                    "   rendered = kids[i + 1] ? kids[i + 1].textContent.trim() : null;"
+                    " }"
+                    " return { ci: flags.indexOf('CONTROL_IN') >= 0, count: rec.control_in_answered, rendered };"
+                    "}")
+                ci_dbg = snap
+                if snap['ci'] and snap['rendered'] not in (None, '—'):
+                    try:
+                        rendered_num = int(str(snap['rendered']).replace(',', ''))
+                    except (ValueError, TypeError):
+                        rendered_num = None
+                    if rendered_num is not None and rendered_num == snap['count'] and rendered_num > 0:
+                        ci_ok = True
+                        break
+                time.sleep(0.1)
+            check(ci_ok,
+                  "(6-5/M3-4a) System 'Queries answered' renders == live control_in_answered (snap=%r)" % (ci_dbg,))
+            # HONESTY on-screen: the abuse-class refusals stat frames it as a defined abuse class /
+            # not detected, and NEVER as injection/attack detection or blocking.
+            ci_words = page.evaluate(
+                "() => { const t = document.body.innerText.toLowerCase();"
+                " return { abuse: t.indexOf('defined abuse class') >= 0,"
+                "          notdet: t.indexOf('not detected') >= 0,"
+                "          banned: (t.indexOf('injection blocked') >= 0)"
+                "                  || (t.indexOf('attacks blocked') >= 0)"
+                "                  || (t.indexOf('threats detected') >= 0) }; }")
+            check(ci_words['abuse'] and ci_words['notdet'] and not ci_words['banned'],
+                  "(6-5/M3-4a) control-IN renders the honest 'defined abuse class'/'not detected' framing, "
+                  "no injection/attack-block claim (snap=%r)" % (ci_words,))
 
             # (#5/M2) PIN the SHIELD 'Actions with learned risk' VALUE — must equal the live
             # shield_learn_keys on a SHIELD_LEARN-flagged frame (flag-gated; '—' otherwise). The

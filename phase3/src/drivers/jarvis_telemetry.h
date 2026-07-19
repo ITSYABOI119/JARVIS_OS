@@ -1,7 +1,7 @@
 /**
  * jarvis_telemetry.h - JARVIS binary telemetry packet (goal #2b N-c)
  *
- * A versioned, CRC'd, fixed-246-byte (v10) binary packet the box emits over UDP
+ * A versioned, CRC'd, fixed-254-byte (v11) binary packet the box emits over UDP
  * (255.255.255.255:51000, via net_udp.c + the I211) so a remote console can
  * render live, honest box state. Pure logic / host-testable (CRC + finalize);
  * the emit site is in main_x86.c.
@@ -20,7 +20,7 @@
 #include <stdint.h>
 
 #define JARVIS_TLM_MAGIC   0x4A54454Cu  /* "JTEL" (LE on wire: 4C 45 54 4A) */
-#define JARVIS_TLM_VERSION 10
+#define JARVIS_TLM_VERSION 11
 
 /* flags (bitfield) */
 #define TLM_F_MODEL_LOADED  0x01
@@ -38,6 +38,7 @@
 #define TLM_F_MONITORS      0x1000 /* Phase 6 6-1/M3: the always-on monitors are live (g_mon_inited) — a NEUTRAL monitor-event count (a mix of degradation + benign liveness events), never "anomalies/problems detected" */
 #define TLM_F_WAKE          0x2000 /* Phase 6 6-2/M3: the event-driven wake lane is live (g_wake_inited) — event-triggered CONSULTS (a fixed, human-reviewed question per monitor event; cache-served or one bounded inference), never "thinking"/"reasoning" */
 #define TLM_F_PROACTIVE     0x4000 /* Phase 6 6-3/M3: the behavior registry is live (g_proactive_inited) — named, bounded, rate-limited INFORM behaviors (behaviors_fired = interrupts the user saw; a B1/B2 consult bumps BOTH wakes_fired and behaviors_fired — two honest views of one event, never summed), never "decided on its own" */
+#define TLM_F_CONTROL_IN    0x8000 /* Phase 6 6-5/M3-4a (v11): the control-IN two-way channel is UP (key + floor + RX ring live). control_in_blocked is a DEFINED-ABUSE-CLASS refuse count from the query SHIELD, NEVER "injection blocked"/"attacks blocked" (general injection is contained STRUCTURALLY, not detected). The LAST u16 flag bit — flags is now exhausted; a future flag needs a flags-width bump. Fill gated JARVIS_CONTROL_IN -> the CONTROL_IN=0 deploy emits v11 with the 3 counters 0 + this flag CLEAR (honest "channel gated off"). */
 
 /* kind */
 #define TLM_K_STATS 1
@@ -81,7 +82,16 @@
  * last_behavior = the most recent behavior id; a B1/B2 consult bumps BOTH
  * wakes_fired AND behaviors_fired BY DESIGN — two honest views of one event,
  * documented, never summed; TLM_F_PROACTIVE set on g_proactive_inited; 0s +
- * flag clear in the flag-OFF deploy). */
+ * flag clear in the flag-OFF deploy); v11 (P6 6-5/M3-4a) appends
+ * control_in_answered/control_in_blocked/control_in_dropped -> 254 B, CRC@250,
+ * +TLM_F_CONTROL_IN 0x8000 (the two-way control-IN channel — answered =
+ * routed+answered queries, blocked = a DEFINED-ABUSE-CLASS refuse count from the
+ * query SHIELD (NEVER "injection blocked"; general injection is contained
+ * STRUCTURALLY, not detected), dropped = frames rejected pre-SHIELD by
+ * auth/replay/parse/ratelimit; the fill is gated JARVIS_CONTROL_IN so the
+ * CONTROL_IN=0 deploy emits v11 with all three 0 + the flag CLEAR — honest
+ * "channel gated off"; the flag means the CHANNEL is up, not that a query
+ * arrived). */
 typedef struct __attribute__((packed)) {
     uint32_t magic; uint8_t version; uint8_t kind; uint16_t flags; uint32_t boot_id; uint32_t seq;  /* 16 */
     uint32_t uptime_ms;                                                                              /*  4 */
@@ -112,15 +122,18 @@ typedef struct __attribute__((packed)) {
     uint16_t behaviors_mask;     /* v10 @238 — bit (id-1) latched once behavior id fired this boot (per-row console source) */ /* 2 */
     uint8_t  last_behavior;      /* v10 @240 — most recent behavior id (0 = none yet) */ /* 1 */
     uint8_t  beh_pad;            /* v10 @241 — alignment pad, always 0 */ /* 1 */
-    uint32_t crc32;          /* zlib CRC-32 over the first 242 bytes [0 .. offsetof(crc32)) */       /*  4 */
+    uint16_t control_in_answered; /* v11 (P6 6-5/M3-4a) @242 — control-IN queries routed + answered (g_ctrl_in_answered, sat 0xFFFF) */ /* 2 */
+    uint16_t control_in_blocked;  /* v11 @244 — queries the QUERY SHIELD REFUSED = a DEFINED-ABUSE-CLASS refuse count, NEVER "injection blocked" (g_ctrl_in_blocked, sat 0xFFFF) */ /* 2 */
+    uint32_t control_in_dropped;  /* v11 @246 — inbound frames dropped PRE-SHIELD (auth/replay/parse/ratelimit; g_ctrl_dropped) */ /* 4 */
+    uint32_t crc32;          /* zlib CRC-32 over the first 250 bytes [0 .. offsetof(crc32)) */       /*  4 */
 } telemetry_packet_t;
 
-_Static_assert(sizeof(telemetry_packet_t) == 246, "telemetry packet must be 246 bytes (v10)");
+_Static_assert(sizeof(telemetry_packet_t) == 254, "telemetry packet must be 254 bytes (v11)");
 
 /* Standard zlib/IEEE CRC-32 (poly 0xEDB88320, init/xorout 0xFFFFFFFF) — equals Python zlib.crc32. */
 uint32_t jarvis_tlm_crc32(const void *data, uint32_t len);
 
-/* Stamp magic/version and compute+store crc32 over the first 242 bytes (v10). */
+/* Stamp magic/version and compute+store crc32 over the first 250 bytes (v11). */
 void jarvis_tlm_finalize(telemetry_packet_t *pkt);
 
 #endif /* JARVIS_TELEMETRY_H */

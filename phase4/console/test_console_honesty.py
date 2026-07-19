@@ -64,6 +64,16 @@ BANNED = [
     "decided on its own",
     # 6-3/M3: a behavior is a registry INFORM — the box never "decides" anything.
     "the AI decided",
+    # 6-5/M3-4a: control_in_blocked is a DEFINED-ABUSE-CLASS refuse count. The console must NEVER
+    # claim the box detects/blocks injection or attacks — general injection is contained STRUCTURALLY,
+    # not detected. (The honest framing "defined abuse class" / "not detected" is REQUIRED below.)
+    "injection blocked",
+    "attacks blocked",
+    "threats detected",
+    "prevents injection",
+    "detects malicious",
+    "malicious queries stopped",
+    "blocks injection",
 ]
 
 # (b) Honest-framing markers that MUST stay present somewhere in the console
@@ -80,6 +90,8 @@ REQUIRED = [
     "not the deployed build",
     "human-reviewed question",  # 6-2/M3: the wake consult framing (consults, not cognition)
     "informs you",              # 6-3/M3: the proactive-behavior framing (informs, not decisions)
+    "defined abuse class",      # 6-5/M3-4a: control_in_blocked is an abuse-class refuse count...
+    "not detected",             # ...and general injection is contained STRUCTURALLY, not detected
 ]
 
 # At least one spelling of the verification-stance marker must be present.
@@ -260,6 +272,18 @@ def main():
           "the manifest carries the KEEP-IN-SYNC-with-behaviors.c marker")
     check('Proactive behaviors (registry informs)' in capb,
           "Capabilities labels the PROACTIVE flag (registry informs)")
+
+    # --- 6-5/M3-4a: control-IN two-way channel. control_in_blocked is a DEFINED-ABUSE-CLASS refuse
+    # count; the console frames it honestly (defined abuse class / not detected) and NEVER as
+    # injection/attack detection (the BANNED list above). Gated off in the deploy until the M4 flip. ---
+    check('Control-IN — two-way conversation (gated)' in capb,
+          "Capabilities labels the CONTROL_IN flag (two-way, gated)")
+    check('Abuse-class refusals' in sysb,
+          "System shows the control-IN 'Abuse-class refusals' stat (not a block/threat claim)")
+    check('defined abuse class' in sysb.lower(),
+          "control-IN refusals stat carries the 'defined abuse class' framing")
+    check('contained structurally, not detected' in sysb.lower(),
+          "control-IN stat carries the 'contained structurally, not detected' honesty ceiling")
 
     # --- uptime: box uptime is shown ONLY as the real boot-relative uptime_ms — ≈-marked and
     # TSC-caveated (the box has no RTC), never presented as wall-clock. ---

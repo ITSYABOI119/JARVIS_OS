@@ -83,6 +83,15 @@ function SystemView({ store }) {
   const proReported = !!(rec && rec.flags_list && rec.flags_list.indexOf('PROACTIVE') >= 0);
   const behaviorsFired = rec ? Number(rec.behaviors_fired) || 0 : null;
   const behaviorsMask = rec ? Number(rec.behaviors_mask) || 0 : 0;
+  // Control-IN two-way channel (Phase 6 6-5/M3-4a): flag-gated on TLM_F_CONTROL_IN. The flag means the
+  // CHANNEL is up (key + floor + RX ring) — GATED OFF in the deploy until the M4 flip. control_in_blocked
+  // is a DEFINED-ABUSE-CLASS refuse count from the query SHIELD: it refuses defined abuse classes, and
+  // general injection is contained structurally, not detected. (The console never claims the box
+  // detects or stops injection/attacks/threats — that framing is banned by the honesty gate.)
+  const ciReported = !!(rec && rec.flags_list && rec.flags_list.indexOf('CONTROL_IN') >= 0);
+  const ciAnswered = rec ? Number(rec.control_in_answered) || 0 : null;
+  const ciBlocked = rec ? Number(rec.control_in_blocked) || 0 : null;
+  const ciDropped = rec ? Number(rec.control_in_dropped) || 0 : null;
   // KEEP IN SYNC with phase3/src/ai/behaviors.c g_behaviors[] (the compile-time, human-reviewed
   // registry — ids/names mirror the reviewed table; additions there mean a row here, same change).
   const BEHAVIOR_MANIFEST = [
@@ -161,6 +170,16 @@ function SystemView({ store }) {
             wakeReported ? 'cache-served or one bounded inference per monitor event — a fixed, human-reviewed question' : 'event-driven wake not reported')}
           {stat('Last wake event', wakeReported ? wakeLastEvent : '—',
             wakeReported ? 'the monitor event that triggered the most recent consult' : 'event-driven wake not reported')}
+          {/* Control-IN two-way channel (Phase 6 6-5/M3-4a) — flag-gated on TLM_F_CONTROL_IN; GATED OFF
+              in the deploy until the M4 flip. "Abuse-class refusals" refuses defined abuse classes;
+              general injection is contained structurally, not detected (never an injection/attack
+              detection or block claim — that framing is banned by the honesty gate). */}
+          {stat('Queries answered', ciReported ? num(ciAnswered) : '—',
+            ciReported ? 'control-IN queries routed to inference and answered' : 'control-IN channel gated off (not reported)')}
+          {stat('Abuse-class refusals', ciReported ? num(ciBlocked) : '—',
+            ciReported ? 'queries refused for a defined abuse class — general injection is contained structurally, not detected' : 'control-IN channel gated off (not reported)')}
+          {stat('Frames dropped (auth/replay/rate)', ciReported ? num(ciDropped) : '—',
+            ciReported ? 'inbound frames rejected before the SHIELD by auth / replay / parse / rate-limit' : 'control-IN channel gated off (not reported)')}
         </div>
         {note('Live heap used/free is not tracked on the box, so it is not shown. The resident model size above is the only real lower bound.')}
       </Card>
