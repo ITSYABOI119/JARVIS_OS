@@ -11,17 +11,29 @@ input the right way (crc_ok=False vs ValueError).
 Run: python3 phase3/scripts/test_telemetry_receiver.py  (exit nonzero on FAIL)
 """
 
+import argparse
+import hashlib
+import hmac
+import io
 import json
 import os
+import re
 import struct
 import sys
 import tempfile
+import time
 import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import telemetry_receiver as tr_mod  # noqa: E402  (module handle: guard-#2 wiring test stubs into it)
 from telemetry_receiver import (  # noqa: E402
     decode_packet, packet_to_record, iter_pcap_telemetry, FMT, MAGIC, PKT_SIZE, FLAG_NAMES,
-    FMT_V10, FMT_V11, PKT_SIZE_V10, PKT_SIZE_V11, BANNED_RECORD_KEYS)
+    FMT_V10, FMT_V11, PKT_SIZE_V10, PKT_SIZE_V11, BANNED_RECORD_KEYS,
+    # --- 6-5/M3-4b: the two-way SEND path ---
+    build_control_frame, decode_control_reply, validate_query, resolve_http_bind,
+    reply_to_record, ControlSender, TelemetryHub, _SSEHandler,
+    CONTROL_MAGIC, CONTROL_QUERY_MAX, CONTROL_HDR_LEN, CONTROL_TEST_EPOCH, VERDICT_NAMES,
+    host_is_loopback, allowed_origins, CONTROL_REPLY_PORT, BOX_MAC, BOX_IP)
 from telemetry_fixture import (  # noqa: E402  -- shared packer (moved out of this file)
     _DEFAULTS, build_packet, _build_pcap_one, build_pcap_many, REQUIRED_RECORD_KEYS,
     frame_to_packet, FLAG_BITS)
@@ -46,6 +58,68 @@ def raises_valueerror(fn):
         return False
     except ValueError:
         return True
+
+
+# --- 6-5/M3-4b helpers -----------------------------------------------------
+class _FakeSender:
+    """Records what it was asked to sign/send, so a guard test can prove NOTHING was."""
+
+    def __init__(self, key=bytes(range(1, 33))):
+        self.key = key
+        self.calls = []
+
+    def send(self, query_bytes):
+        self.calls.append(query_bytes)
+        return 4242
+
+
+class _FakeServer:
+    """Minimal stand-in so do_POST can read the bound port for allowed_origins()."""
+
+    def __init__(self, port=8800):
+        self.server_address = ('127.0.0.1', port)
+
+
+def _fake_post(peer, sender, body=None, path='/send', raw=None, headers=None, port=8800):
+    """Drive _SSEHandler.do_POST without a socket/server.
+
+    __new__ (never __init__ — BaseHTTPRequestHandler.__init__ would try to serve a real
+    request). _send_json is shadowed per instance to capture (status, json-body).
+
+    Defaults model a WELL-FORMED same-origin request from the real console (loopback Host +
+    application/json), so a test that is not about guard #3 does not have to restate them.
+    `headers` overrides/extends them — pass a value of None to DELETE a default header, which
+    is how the guard-#3 tests build hostile requests."""
+    h = _SSEHandler.__new__(_SSEHandler)
+    h.client_address = peer
+    h.path = path
+    h.sender = sender
+    h.server = _FakeServer(port)
+    if raw is None:
+        raw = b'' if body is None else json.dumps(body).encode('utf-8')
+    hdrs = {'Content-Length': str(len(raw)),
+            'Host': '127.0.0.1:%d' % port,
+            'Content-Type': 'application/json'}
+    for k, v in (headers or {}).items():
+        if v is None:
+            hdrs.pop(k, None)
+        else:
+            hdrs[k] = v
+    h.headers = hdrs
+    h.rfile = io.BytesIO(raw)
+    out = []
+    h._send_json = lambda code, obj: out.append((code, obj))
+    h.do_POST()
+    return out[0] if out else (None, None)
+
+
+def _build_reply(verdict, seq, text, corrupt_crc=False):
+    """Build a JRPL reply datagram exactly as ctrl_send_reply() does (LITTLE-endian)."""
+    body = b'JRPL' + bytes([1, verdict]) + struct.pack('<HH', seq, len(text)) + text
+    crc = zlib.crc32(body) & 0xFFFFFFFF
+    if corrupt_crc:
+        crc ^= 0xFFFFFFFF
+    return body + struct.pack('<I', crc)
 
 
 def main():
@@ -353,6 +427,277 @@ def main():
                     if k not in ('label', 'ts_s', 'ts_frac', 'corrupt', 'flags') and k in rec)
         check(rt_ok, "[%s] scalar fields round-trip value-exactly" % label)
         check(not any(k in rec for k in internal), "[%s] no internal keys leak into record" % label)
+
+    # =====================================================================
+    # P6 6-5/M3-4b: the two-way SEND path (RECEIVER-AS-SIGNER).
+    # The browser can hold neither the HMAC key nor a raw L2 socket, so the receiver
+    # signs. These tests pin the wire bytes, the HMAC, both localhost guards, the reply
+    # decode, and the hub-state isolation.
+    # =====================================================================
+    print("\n== 6-5/M3-4b: control-IN signing + /send + reply decode ==")
+
+    # (a) SIGNING GOLDEN + HMAC CORRECTNESS.
+    # WHY this proves box-acceptability: the box accepts a frame iff it is structurally
+    # correct AND the HMAC over payload[0 : 36+qlen] verifies (control_verify.c). The M1
+    # host suite already proves the C side ACCEPTS any such frame (test_control_verify +
+    # the 300K-iteration differential fuzz vs Python HMAC vectors). So pinning the exact
+    # offsets + an independently recomputed tag here pins box-acceptability without a box.
+    KEY = bytes(range(1, 33))            # == the box JKEY test slot
+    NONCE = bytes(range(0x10, 0x20))     # fixed -> deterministic frame
+    SEQ = 1700000000123
+    QUERY = b'status'
+    frame = build_control_frame(KEY, SEQ, CONTROL_TEST_EPOCH, QUERY, NONCE)
+    check(len(frame) == CONTROL_HDR_LEN + len(QUERY) + 32, "frame is 36 + qlen + 32 bytes")
+    check(struct.unpack_from('>I', frame, 0)[0] == CONTROL_MAGIC,
+          "magic@0 (BE) == 0x4A43544C 'JCTL'")
+    check(frame[4] == 1, "version@4 == 1")
+    check(frame[5] == 0, "flags@5 == 0 (reserved, MUST be 0)")
+    check(struct.unpack_from('>Q', frame, 6)[0] == SEQ, "seq@6 (BE u64) round-trips")
+    check(struct.unpack_from('>I', frame, 14)[0] == CONTROL_TEST_EPOCH,
+          "boot_epoch@14 (BE u32) == CONTROL_TEST_EPOCH")
+    check(frame[18:34] == NONCE, "nonce@18 (16 B) round-trips")
+    check(struct.unpack_from('>H', frame, 34)[0] == len(QUERY), "query_len@34 (BE u16) correct")
+    check(frame[36:36 + len(QUERY)] == QUERY, "query@36 round-trips")
+    indep_tag = hmac.new(KEY, frame[:CONTROL_HDR_LEN + len(QUERY)], hashlib.sha256).digest()
+    check(frame[-32:] == indep_tag,
+          "tag == INDEPENDENTLY recomputed HMAC-SHA256(key, payload[0:36+qlen])")
+    check(len(indep_tag) == 32 and frame[:-32] == frame[:CONTROL_HDR_LEN + len(QUERY)],
+          "the tag is never part of its own HMAC input")
+    GOLDEN = ('4a43544c01000000018bcfe5687b4a320001101112131415161718191a1b1c1d1e1f'
+              '000673746174757355c3948581fd8580cd1fad222e8e7e370b00586270cf8ffdd802722721e7d13d')
+    check(frame.hex() == GOLDEN, "GOLDEN full-frame byte match (deterministic signing)")
+    check(build_control_frame(KEY, SEQ, CONTROL_TEST_EPOCH, QUERY, NONCE) == frame,
+          "signing is deterministic for a fixed (key, seq, epoch, query, nonce)")
+
+    # (a2) CROSS-LANGUAGE COUPLING — the C differential test (test_control_signer_differential.c)
+    # feeds a HAND-COPIED constant to the real box verifier. If the signer changes and only this
+    # Python golden is regenerated, BOTH suites stay green while the C side keeps blessing a frame
+    # the live signer no longer emits — the drift would surface only at the flip, on hardware.
+    # So assert the two constants are the same bytes, mechanically.
+    _cpath = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          '..', 'src', 'net', 'test_control_signer_differential.c')
+    if os.path.isfile(_cpath):
+        with open(_cpath, encoding='utf-8') as _fh:
+            _csrc = _fh.read()
+        _m = re.search(r'GOLDEN_JCTL\[\]\s*=\s*\{(.*?)\}\s*;', _csrc, re.S)
+        _cbytes = bytes(int(b, 16) for b in re.findall(r'0[xX]([0-9a-fA-F]{2})', _m.group(1))) \
+            if _m else b''
+        check(_cbytes == frame,
+              "C differential GOLDEN_JCTL[] is byte-identical to the Python signer's output "
+              "(%d vs %d bytes)" % (len(_cbytes), len(frame)))
+    else:
+        check(False, "test_control_signer_differential.c not found (the C coupling is unchecked)")
+
+    # (b) Bounds: the exact box limits, enforced BEFORE anything reaches the wire.
+    check(CONTROL_QUERY_MAX == 172, "CONTROL_QUERY_MAX == 172 (240 - 36 - 32)")
+    check(raises_valueerror(lambda: build_control_frame(KEY, 1, 0, b'x' * 173, NONCE)),
+          "query > 172 bytes raises ValueError")
+    check(build_control_frame(KEY, 1, 0, b'x' * 172, NONCE)[-32:] != b'',
+          "query == 172 bytes (the boundary) is accepted")
+    check(raises_valueerror(lambda: build_control_frame(b'short', 1, 0, b'x', NONCE)),
+          "key != 32 bytes raises ValueError")
+    check(raises_valueerror(lambda: build_control_frame(KEY, 1, 0, b'x', b'\x00' * 15)),
+          "nonce != 16 bytes raises ValueError")
+
+    # (c) Sequence monotonicity. Timestamp-derived (ms), so it always lands far above the
+    # box's persisted replay floor (M3-3) — but two sends in the SAME millisecond must
+    # still strictly increase, or the second would be dropped as a replay.
+    snd = ControlSender(KEY)
+    s1, s2 = snd.next_seq(), snd.next_seq()
+    check(s2 > s1, "two rapid next_seq() calls strictly increase")
+    snd._last_seq = int(time.time() * 1000) + 100000  # force a same-ms collision
+    c1, c2, c3 = snd.next_seq(), snd.next_seq(), snd.next_seq()
+    check(c1 < c2 < c3, "same-millisecond next_seq() still strictly increases (no replay drop)")
+
+    # (d) LOCALHOST GUARD #1 (per-request peer check).
+    fs = _FakeSender()
+    code, body = _fake_post(('192.168.100.50', 51234), fs, {'query': 'status'})
+    check(code == 403, "non-loopback POST /send -> 403")
+    check('error' in body, "403 body is JSON with an 'error' key")
+    check(fs.calls == [], "GUARD #1: non-loopback request signed/sent NOTHING")
+    code, body = _fake_post(('10.0.0.7', 40000), fs, {'query': 'status'})
+    check(code == 403 and fs.calls == [], "a second non-loopback peer is refused too, still nothing sent")
+    code, body = _fake_post(('127.0.0.1', 51234), fs, {'query': 'status'})
+    check(code == 200 and body.get('sent') is True and body.get('seq') == 4242,
+          "127.0.0.1 reaches the send stage -> 200 {'sent': true, 'seq': N}")
+    check(fs.calls == [b'status'], "the loopback request signed exactly the posted query")
+    code, body = _fake_post(('127.0.0.1', 1), fs, {'query': 'x'}, path='/nope')
+    check(code == 404, "a non-/send POST path -> 404")
+    code, body = _fake_post(('127.0.0.1', 1), None, {'query': 'x'})
+    check(code == 503 and 'error' in body, "no sender configured (--send absent) -> 503")
+    code, body = _fake_post(('127.0.0.1', 1), _FakeSender(key=None), {'query': 'x'})
+    check(code == 500 and 'error' in body, "sender present but NO valid key -> 500 (fail-closed)")
+
+    # (e) LOCALHOST GUARD #2 (bind).
+    addr, err = resolve_http_bind(True, '0.0.0.0', '')
+    check(addr is None and err, "--send + explicit --http-bind 0.0.0.0 -> refused (error)")
+    addr, err = resolve_http_bind(True, '', '192.168.100.146')
+    check(addr is None and err, "--send + a non-loopback --bind for HTTP -> refused (error)")
+    addr, err = resolve_http_bind(True, '', '')
+    check(addr == '127.0.0.1' and err is None, "--send + default bind -> FORCED to 127.0.0.1")
+    addr, err = resolve_http_bind(True, '127.0.0.1', '0.0.0.0')
+    check(addr == '127.0.0.1' and err is None, "--send + explicit loopback --http-bind is honored")
+    addr, err = resolve_http_bind(False, '', '')
+    check(addr == '' and err is None, "no --send: default bind unchanged (legacy behaviour)")
+    addr, err = resolve_http_bind(False, '', '0.0.0.0')
+    check(addr == '0.0.0.0' and err is None, "no --send: --bind still drives HTTP (legacy)")
+    addr, err = resolve_http_bind(True, '::1', '')
+    check(addr is None and err,
+          "--send + '::1' refused (the server is AF_INET; accepting it would crash in bind())")
+
+    # (e2) GUARD #2 IS ACTUALLY WIRED — resolve_http_bind() is useless if _run_sse ignores it.
+    # Without this, deleting the wiring leaves the suite green while the signing endpoint binds
+    # every interface and the two-layer defence silently degrades to one.
+    captured = {}
+
+    class _StubHTTPD:
+        def __init__(self, addr_port, handler):
+            captured['addr'] = addr_port
+            raise KeyboardInterrupt   # unwind before serve_forever(); _run_sse must not hang
+
+        def server_close(self):
+            pass
+
+    _real_httpd = tr_mod._QuietThreadingHTTPServer
+    _real_listener = tr_mod._reply_listener
+    tr_mod._QuietThreadingHTTPServer = _StubHTTPD
+    tr_mod._reply_listener = lambda *a, **k: None          # never bind :51002 in a test
+    try:
+        keyf = os.path.join(tempfile.gettempdir(), 'm34b_bindwire_key.bin')
+        with open(keyf, 'wb') as fh:
+            fh.write(bytes(range(1, 33)))
+        args = argparse.Namespace(
+            replay=None, replay_rate=1.0, bind='', port=51000, http_port=8801,
+            http_bind='', web_dir='.', send=True, key_file=keyf,
+            epoch=CONTROL_TEST_EPOCH, box_mac=BOX_MAC, box_ip=BOX_IP,
+            reply_port=CONTROL_REPLY_PORT)
+        try:
+            tr_mod._run_sse(args)
+        except KeyboardInterrupt:
+            pass
+        os.remove(keyf)
+    finally:
+        tr_mod._QuietThreadingHTTPServer = _real_httpd
+        tr_mod._reply_listener = _real_listener
+    check(captured.get('addr') == ('127.0.0.1', 8801),
+          "GUARD #2 WIRED: --send + default --bind actually binds HTTP to 127.0.0.1 (got %r)"
+          % (captured.get('addr'),))
+
+    # (e3) LOCALHOST GUARD #3 — the confused-deputy / CSRF guard.
+    # Guards #1/#2 only prove the TCP peer is local. A page on ANY site the operator visits can
+    # make their BROWSER post here; that request has peer 127.0.0.1 and passes both. These
+    # assertions pin the request-provenance checks that stop it. Each hostile request must sign
+    # NOTHING (fs.calls stays empty) — a 403/415 that still signed would be worthless.
+    fs3 = _FakeSender()
+    code, body = _fake_post(('127.0.0.1', 51234), fs3, {'query': 'x'},
+                            headers={'Origin': 'https://evil.example'})
+    check(code == 403 and fs3.calls == [],
+          "GUARD #3: cross-origin POST (hostile Origin) -> 403, signed NOTHING")
+    code, body = _fake_post(('127.0.0.1', 51234), fs3, {'query': 'x'},
+                            headers={'Sec-Fetch-Site': 'cross-site'})
+    check(code == 403 and fs3.calls == [],
+          "GUARD #3: Sec-Fetch-Site cross-site -> 403, signed NOTHING")
+    # The exact browser vector: text/plain is CORS-safelisted, so a cross-origin POST carrying a
+    # JSON body is a SIMPLE request and is delivered with no preflight. Requiring application/json
+    # forces a preflight, and there is no do_OPTIONS, so it never lands.
+    code, body = _fake_post(('127.0.0.1', 51234), fs3, {'query': 'x'},
+                            headers={'Content-Type': 'text/plain;charset=UTF-8'})
+    check(code == 415 and fs3.calls == [],
+          "GUARD #3: text/plain simple-request POST -> 415, signed NOTHING (the CSRF vector)")
+    code, body = _fake_post(('127.0.0.1', 51234), fs3, {'query': 'x'},
+                            headers={'Content-Type': None})
+    check(code == 415 and fs3.calls == [],
+          "GUARD #3: a missing Content-Type -> 415, signed NOTHING")
+    code, body = _fake_post(('127.0.0.1', 51234), fs3, {'query': 'x'},
+                            headers={'Host': 'rebind.evil.example:8800'})
+    check(code == 403 and fs3.calls == [],
+          "GUARD #3: DNS-rebinding Host -> 403, signed NOTHING")
+    check(not host_is_loopback('rebind.evil.example:8800') and host_is_loopback('127.0.0.1:8800')
+          and host_is_loopback('localhost') and host_is_loopback('[::1]:8800'),
+          "host_is_loopback: loopback literals accepted, a rebound name refused")
+    # ...and the LEGITIMATE console request (same-origin, application/json) still works.
+    code, body = _fake_post(('127.0.0.1', 51234), fs3, {'query': 'status'},
+                            headers={'Origin': 'http://127.0.0.1:8800',
+                                     'Sec-Fetch-Site': 'same-origin'})
+    check(code == 200 and fs3.calls == [b'status'],
+          "GUARD #3: the real console's same-origin JSON POST is still served")
+    # A non-browser local client (curl / a script) sends no Origin or Sec-Fetch-Site.
+    fs3.calls = []
+    code, body = _fake_post(('127.0.0.1', 51234), fs3, {'query': 'uptime'},
+                            headers={'Origin': None, 'Sec-Fetch-Site': None})
+    check(code == 200 and fs3.calls == [b'uptime'],
+          "GUARD #3: a local non-browser client (no Origin/Sec-Fetch-Site) is still served")
+
+    # (f) JRPL reply decode (LITTLE-endian + trailing zlib CRC-32).
+    rep, err = decode_control_reply(_build_reply(0, 50, b'a page fault is ...'))
+    check(err is None and rep is not None, "valid JRPL reply decodes")
+    check(rep['verdict'] == 0 and rep['verdict_name'] == 'answered', "verdict 0 -> 'answered'")
+    check(rep['seq'] == 50 and rep['tlen'] == 19, "reply seq/tlen decode")
+    check(rep['text_bytes'] == b'a page fault is ...' and rep['crc_ok'] is True,
+          "reply text round-trips + crc_ok True")
+    rep1, _ = decode_control_reply(_build_reply(1, 51, b'refuse key-extraction'))
+    check(rep1['verdict_name'] == 'refused' and rep1['text_bytes'] == b'refuse key-extraction',
+          "verdict 1 -> 'refused'; the reason-class LABEL is the whole payload (never the query)")
+    check(VERDICT_NAMES == {0: 'answered', 1: 'refused', 2: 'degraded', 3: 'failed'},
+          "VERDICT_NAMES matches the box's 4 exit paths")
+    rep2, _ = decode_control_reply(_build_reply(2, 52, b'degraded'))
+    rep3, _ = decode_control_reply(_build_reply(3, 53, b'timeout'))
+    check(rep2['verdict_name'] == 'degraded' and rep3['verdict_name'] == 'failed',
+          "verdicts 2/3 -> 'degraded'/'failed'")
+    repc, errc = decode_control_reply(_build_reply(0, 54, b'hi', corrupt_crc=True))
+    check(errc is None and repc['crc_ok'] is False,
+          "corrupted CRC -> crc_ok False (still decoded, shown honestly)")
+    trunc = _build_reply(0, 55, b'hello world')[:-6]
+    check(decode_control_reply(trunc) == (None, 'truncated text'), "truncated reply -> (None, err)")
+    check(decode_control_reply(b'NOPE' + b'\x00' * 20)[0] is None, "bad magic -> (None, err)")
+    check(decode_control_reply(b'JRPL')[0] is None, "short datagram -> (None, err)")
+    srec = reply_to_record(rep, 1700000000.5)
+    json.dumps(srec)
+    check(srec['kind'] == 'control_reply', "SSE record kind is the STRING 'control_reply'")
+    check(isinstance(srec['kind'], str) and not isinstance(rec['kind'], str),
+          "a reply record can never be mistaken for a telemetry packet (str kind vs int kind)")
+    check(srec['verdict'] == 0 and srec['verdict_name'] == 'answered'
+          and srec['seq'] == 50 and srec['crc_ok'] is True and srec['recv_ts'] == 1700000000.5,
+          "SSE reply record carries the contract fields")
+    check(srec['text'] == 'a page fault is ...', "SSE reply record text decodes to str")
+
+    # (g) hub.publish_event must NOT poison the telemetry replay state.
+    # self.latest is replayed to every NEW subscriber; a one-shot reply landing there would
+    # be re-delivered as stale 'state' to every later page load.
+    hub = TelemetryHub()
+    hub.publish(rec)                       # a real telemetry record
+    q, latest0 = hub.subscribe()
+    hub.publish_event(srec)
+    check(hub.latest is rec, "publish_event does NOT change hub.latest (still the telemetry record)")
+    check(latest0 is rec, "a new subscriber replays the TELEMETRY record, not a reply")
+    check(q.get_nowait() is srec, "publish_event DOES reach a live subscriber queue")
+    check(q.empty(), "exactly one event delivered")
+
+    # (h) Query validation (the /send 400 class).
+    check(validate_query('')[0] is None and validate_query('   ')[0] is None,
+          "empty / whitespace-only query rejected")
+    check(validate_query(None)[0] is None and validate_query(123)[0] is None,
+          "non-string query rejected")
+    check(validate_query('what is a page fault?')[0] == b'what is a page fault?',
+          "a normal query validates to its utf-8 bytes")
+    multibyte = 'é' * 100          # 100 chars but 200 utf-8 BYTES -> over the 172-byte limit
+    check(len(multibyte) < CONTROL_QUERY_MAX < len(multibyte.encode('utf-8')),
+          "the multibyte fixture has len(str) < 172 < len(bytes) (the trap this guards)")
+    check(validate_query(multibyte)[0] is None, "query > 172 BYTES rejected (bytes, not chars)")
+    check(validate_query('a' * 172)[0] == b'a' * 172, "exactly 172 bytes accepted")
+    check(validate_query('drop\x01table')[0] is None, "embedded control character rejected")
+    check(validate_query('line\nbreak')[0] is None, "embedded newline rejected")
+    fs2 = _FakeSender()
+    for bad, label in ((None, 'missing key'), ('', 'empty'), (multibyte, '>172 bytes'),
+                       ('a\x07b', 'control char'), (5, 'non-string')):
+        code, body = _fake_post(('127.0.0.1', 1), fs2,
+                                {} if bad is None else {'query': bad})
+        check(code == 400 and 'error' in body, "POST /send rejects %s -> 400 JSON" % label)
+    code, body = _fake_post(('127.0.0.1', 1), fs2, raw=b'{not json')
+    check(code == 400 and 'error' in body, "POST /send rejects a non-JSON body -> 400")
+    code, body = _fake_post(('127.0.0.1', 1), fs2, raw=b'"a string"')
+    check(code == 400 and 'error' in body, "POST /send rejects a non-object JSON body -> 400")
+    check(fs2.calls == [], "no invalid request ever reached the signer")
 
     print("\n== Results: %d PASS, %d FAIL ==" % (_PASS, _FAIL))
     return 1 if _FAIL else 0

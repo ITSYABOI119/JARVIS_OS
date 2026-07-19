@@ -17,6 +17,12 @@
  *   bumps both wakes_fired and behaviors_fired by design — two views of one event, never summed),
  *   log_cursor, infer_gen_tokens, model_name, last_text, crc_ok
  *
+ * The SAME stream also carries control-IN replies (6-5/M3-4b), tagged with the
+ * STRING kind 'control_reply' — {verdict, verdict_name, seq, text, crc_ok,
+ * recv_ts}. They are routed to a separate bounded ring (state.replies) and never
+ * through ingest(): a reply is not a telemetry packet and must not become
+ * state.latest or disturb connState / seq-gap accounting.
+ *
  * Liveness is genuine: a record is "live" only while a fresh CRC-valid packet
  * arrived within STALE_MS. seq gaps => dropped packets. No fabricated fields.
  *
@@ -27,6 +33,7 @@
   const STALE_MS = 2800;            // no fresh CRC-valid packet within this => stale
   const MAX_RECORDS = 60;           // activity feed ring
   const RATE_BUF = 30;              // rolling buffer length for the q/s sparkline
+  const MAX_REPLIES = 30;           // bounded control-IN reply ring
 
   const listeners = new Set();
   const state = {
@@ -39,6 +46,7 @@
     lastSeq: null,
     lastArrival: 0,                 // client-clock ms of last fresh CRC-valid arrival
     rateBuf: [],                    // [{t, q}] rolling buffer for queries/sec
+    replies: [],                    // bounded control-IN reply ring (oldest -> newest)
   };
 
   function emit() { listeners.forEach((fn) => fn(snapshot())); }
@@ -51,8 +59,23 @@
       records: state.records.slice(),
       droppedPackets: state.droppedPackets,
       rateSamples: state.rateBuf.slice(),
+      replies: state.replies.slice(),
       live: state.connState === 'live',
     };
+  }
+
+  /* ---- control-IN replies (6-5/M3-4b) -------------------------------------
+   * A box->console JRPL reply arrives on the SAME SSE stream, tagged with the
+   * STRING kind 'control_reply' (telemetry packets carry an INTEGER kind). It is
+   * NOT a telemetry packet: it must never become state.latest, never touch
+   * connState/lastArrival, and never enter the seq-gap accounting — its seq is
+   * the control-IN request sequence, an unrelated counter from the packet seq.
+   * So it lands here, in its own bounded ring, and nowhere else.
+   */
+  function ingestReply(rec) {
+    state.replies.push(rec);
+    if (state.replies.length > MAX_REPLIES) state.replies.shift();
+    emit();
   }
 
   function ingest(rec) {
@@ -130,7 +153,13 @@
 
     es.onopen = () => { opened = true; clearTimeout(failTimer); state.simulated = false; };
     es.onmessage = (ev) => {
-      try { ingest(JSON.parse(ev.data)); } catch (_) { /* ignore non-JSON keepalive */ }
+      try {
+        const rec = JSON.parse(ev.data);
+        // Discriminator: the reply record's kind is the STRING 'control_reply';
+        // every telemetry packet's kind is an integer. Route, never merge.
+        if (rec && rec.kind === 'control_reply') ingestReply(rec);
+        else ingest(rec);
+      } catch (_) { /* ignore non-JSON keepalive */ }
     };
     es.onerror = () => {
       clearTimeout(failTimer);
@@ -179,6 +208,8 @@
       // ACTIONS + MONITORS + WAKE are default-ON in the deploy (Phase 6 K/M4 + 6-1 + 6-2) — the preview
       // mirrors a healthy live box: flags set, counters honest-0 (no faults, no crossings yet).
       if (!loading) flags.push('ACTIONS', 'MONITORS', 'WAKE');
+      // CONTROL_IN is deliberately NOT pushed: the deployed box runs the channel gated
+      // off, so the preview must show the Control-IN composer DISABLED, like the box.
 
       let kind = 1, kindName = 'STATS';
       if (!loading) {

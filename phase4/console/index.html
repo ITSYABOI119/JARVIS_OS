@@ -46,6 +46,7 @@
   <script type="text/babel" src="ConsoleShield.jsx"></script>
   <script type="text/babel" src="ConsoleCapabilities.jsx"></script>
   <script type="text/babel" src="ConsoleSystem.jsx"></script>
+  <script type="text/babel" src="ConsoleControl.jsx"></script>
   <script type="text/babel">
     const { Rail, Sidebar, Topbar } = window.JarvisShell;
 
@@ -57,6 +58,7 @@
       models:  { title: 'Models',         render: (s) => <window.Models store={s} /> },
       capabilities: { title: 'Capabilities', render: (s) => <window.Capabilities store={s} /> },
       system:  { title: 'System',        render: (s) => <window.SystemView store={s} /> },
+      control: { title: 'Control-IN',    render: (s) => <window.ControlIn store={s} /> },
     };
 
     function App() {

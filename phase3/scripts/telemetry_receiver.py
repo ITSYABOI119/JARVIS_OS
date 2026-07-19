@@ -21,6 +21,27 @@ Usage:
       --follow  stream continuously (default behaviour)
       --json    emit one JSON object per line (for the N-c-3 console bridge)
 
+    Two-way SEND path (Phase 6 goal 6-5 / M3-4b — RECEIVER-AS-SIGNER):
+    python3 telemetry_receiver.py --sse --send --key-file <32-byte key>
+      --send      enable POST /send: sign a JCTL control-IN frame and transmit it to the box,
+                  and listen on UDP 51002 for the box's JRPL reply (pushed to the browser over
+                  the SAME /events SSE stream). Requires --sse.
+      --key-file  path to the 32-byte raw HMAC-SHA256 key (the box's JKEY slot). FAIL-CLOSED:
+                  without a valid key the send path is disabled and the DISPLAY half still runs.
+      --epoch     sender boot epoch (default: 0x4A320001 == CONTROL_TEST_EPOCH)
+      --box-mac / --box-ip / --reply-port / --http-bind
+
+    NOTE --send needs ELEVATION: the frame is transmitted as a raw L2 Ethernet frame via scapy
+    (Windows also needs Npcap), because the box has no ARP and the destination MAC is provisioned.
+    The signing endpoint is bound to LOOPBACK ONLY and additionally refuses any non-loopback
+    client per request — the browser talks to it over 127.0.0.1, never the LAN. The browser never
+    sees the key. Only the telemetry UDP socket keeps listening on the LAN.
+
+HONESTY (send path): a 'refused' verdict from the box is a DEFINED-ABUSE-CLASS refusal. General
+prompt injection is contained STRUCTURALLY (inbound text can never mint an action; answers go only
+to the provisioned console) — it is NOT detected. The box->console reply is CRC'd, not
+authenticated; that direction is unauthenticated by design (same as telemetry-OUT).
+
 HONESTY: only real fields are shown — no GPU, no "SHIELD blocked" (shield= is
 a check COUNT, not a block count), no "formally verified". Since v4 a REAL
 measured last-inference tok/s exists (infer_last_tok_x100, RDTSC-measured in
@@ -47,10 +68,13 @@ never summed). The uptime is from an uncalibrated TSC, shown with "≈".
 """
 
 import argparse
+import hashlib
+import hmac
 import json
 import mimetypes
 import os
 import queue
+import random
 import socket
 import struct
 import sys
@@ -95,6 +119,62 @@ FLAG_NAMES = {
 KIND_NAMES = {1: 'STATS', 2: 'INFER', 3: 'STATE'}
 
 DEFAULT_PORT = 51000
+
+# ---------------------------------------------------------------------------
+# 6-5/M3-4b: control-IN wire constants.
+# AUTHORITATIVE SOURCE: phase3/src/net/control_msg.h (outbound JCTL request) and the
+# ctrl_send_reply() builder in phase3/src/sel4/main_x86.c (inbound JRPL reply). Keep in sync.
+# ---------------------------------------------------------------------------
+CONTROL_MAGIC = 0x4A43544C        # "JCTL", BIG-endian on the wire
+CONTROL_VERSION = 1
+CONTROL_HDR_LEN = 36              # magic..query_len inclusive; query starts at 36
+CONTROL_NONCE_LEN = 16
+CONTROL_TAG_LEN = 32
+CONTROL_KEY_LEN = 32              # HMAC-SHA256 key (the box's JKEY slot)
+CONTROL_MSG_MAX = 240
+CONTROL_QUERY_MAX = CONTROL_MSG_MAX - CONTROL_HDR_LEN - CONTROL_TAG_LEN   # 172
+CONTROL_PORT = 51001              # box inbound (console -> box)
+CONTROL_REPLY_PORT = 51002        # box -> console
+CONTROL_TEST_EPOCH = 0x4A320001   # == CONTROL_TEST_EPOCH in main_x86.c
+REPLY_MAGIC = b'JRPL'             # reply header is LITTLE-endian
+REPLY_HDR_LEN = 10                # magic(4) ver(1) verdict(1) seq(2) tlen(2); text follows
+BOX_MAC = '0c:9d:92:0e:39:9a'     # the box I211 MAC (RAL0/RAH0) — provisioned, never resolved
+BOX_IP = '192.168.100.143'
+
+# A refused verdict is a DEFINED-ABUSE-CLASS refusal (the box's query SHIELD), never a claim
+# that an attack or an injection was detected.
+VERDICT_NAMES = {0: 'answered', 1: 'refused', 2: 'degraded', 3: 'failed'}
+
+# LOCALHOST GUARD #1 (per-request peer): the peer addresses the signing endpoint will serve.
+LOOPBACK_PEERS = ('127.0.0.1', '::1', '::ffff:127.0.0.1')
+# LOCALHOST GUARD #2 (bind): addresses accepted as an explicit loopback HTTP bind. The server
+# is AF_INET, so '::1' would pass this check and then fail in bind() with a gaierror — it is
+# deliberately NOT listed.
+LOOPBACK_BINDS = ('127.0.0.1', 'localhost')
+# LOCALHOST GUARD #3 (request provenance): Host names accepted for the signing endpoint.
+LOOPBACK_HOSTS = ('127.0.0.1', 'localhost', '[::1]')
+
+
+def host_is_loopback(host_header):
+    """True iff a Host header names a loopback literal (the DNS-rebinding guard).
+
+    Guards #1/#2 prove the TCP connection is local; they cannot tell whether the OPERATOR
+    asked for the request. A hostile DNS name that resolves to 127.0.0.1 makes an attacker's
+    page genuinely same-origin with this endpoint, so its Origin header would be legitimate
+    and pass. Only the Host NAME exposes the rebind.
+    """
+    h = (host_header or '').strip()
+    if h.startswith('['):                 # bracketed IPv6 literal, e.g. [::1]:8800
+        h = h.split(']', 1)[0] + ']'
+    elif h.count(':') == 1:               # host:port
+        h = h.rsplit(':', 1)[0]
+    return h.lower() in LOOPBACK_HOSTS
+
+
+def allowed_origins(port):
+    """The only Origins the signing endpoint accepts — the console is served from, and is
+    therefore same-origin with, this very endpoint."""
+    return ('http://127.0.0.1:%d' % port, 'http://localhost:%d' % port)
 
 # Script-relative default so the console serves from ANY working directory
 # (repo/phase4/console). An explicit --web-dir is honored as-is.
@@ -360,6 +440,273 @@ def iter_pcap_telemetry(path):
             yield (ts_s + ts_frac / divisor, d)
 
 
+# ---------------------------------------------------------------------------
+# 6-5/M3-4b: the SEND half — sign a JCTL control-IN frame, transmit it, decode the
+# box's JRPL reply. RECEIVER-AS-SIGNER: the browser cannot hold the HMAC key and cannot
+# emit raw L2 frames, so the signing lives here behind a loopback-only endpoint.
+# ---------------------------------------------------------------------------
+
+
+class ScapyUnavailable(RuntimeError):
+    """Raised when the raw L2 send path is unusable (scapy/Npcap missing, no route,
+    not elevated). Mapped to HTTP 503 — an environment fact, not a bad request."""
+
+
+def build_control_frame(key: bytes, seq: int, epoch: int, query: bytes, nonce: bytes) -> bytes:
+    """Build a signed JCTL control-IN datagram.
+
+    Layout is AUTHORITATIVELY defined by phase3/src/net/control_msg.h (all multi-byte
+    header fields network BIG-endian):
+
+        0   4   magic "JCTL" | 4  1  version=1 | 5  1  flags=0 | 6  8  seq (u64)
+        14  4   boot_epoch   | 18 16 nonce     | 34 2  query_len (u16) | 36 Q query
+        36+Q 32 tag = HMAC-SHA256(key, payload[0 : 36+Q])   <- the tag is never in its own input
+
+    Deterministic: the caller supplies the nonce, so a fixed (key, seq, epoch, query,
+    nonce) always yields a byte-identical frame (pinned by the golden test).
+    """
+    if not isinstance(query, (bytes, bytearray)):
+        raise ValueError("query must be bytes")
+    if not isinstance(key, (bytes, bytearray)) or len(key) != CONTROL_KEY_LEN:
+        raise ValueError("key must be exactly %d bytes" % CONTROL_KEY_LEN)
+    if not isinstance(nonce, (bytes, bytearray)) or len(nonce) != CONTROL_NONCE_LEN:
+        raise ValueError("nonce must be exactly %d bytes" % CONTROL_NONCE_LEN)
+    if len(query) > CONTROL_QUERY_MAX:
+        raise ValueError("query is %d bytes (max %d)" % (len(query), CONTROL_QUERY_MAX))
+    if not (0 <= int(seq) <= 0xFFFFFFFFFFFFFFFF):
+        raise ValueError("seq out of u64 range")
+    if not (0 <= int(epoch) <= 0xFFFFFFFF):
+        raise ValueError("epoch out of u32 range")
+
+    payload = struct.pack('>IBB', CONTROL_MAGIC, CONTROL_VERSION, 0)
+    payload += struct.pack('>Q', int(seq))
+    payload += struct.pack('>I', int(epoch))
+    payload += bytes(nonce)
+    payload += struct.pack('>H', len(query))
+    payload += bytes(query)
+    tag = hmac.new(bytes(key), payload, hashlib.sha256).digest()
+    return payload + tag
+
+
+def decode_control_reply(payload: bytes):
+    """Decode a JRPL reply datagram -> (dict, None) or (None, 'reason').
+
+    LITTLE-endian (the reply is built box-side by ctrl_send_reply):
+        0 4 "JRPL" | 4 1 ver | 5 1 verdict | 6 2 seq (u16) | 8 2 tlen (u16)
+        10 tlen text | 10+tlen 4 crc32 = zlib.crc32(payload[:10+tlen])
+
+    A bad CRC is NOT an error: the dict comes back with crc_ok False so the console can
+    show the reply honestly. Only structurally undecodable input returns (None, reason).
+    """
+    if payload is None or len(payload) < REPLY_HDR_LEN + 4:
+        return None, 'short'
+    if payload[0:4] != REPLY_MAGIC:
+        return None, 'bad magic'
+    ver = payload[4]
+    verdict = payload[5]
+    seq, tlen = struct.unpack_from('<HH', payload, 6)
+    crc_off = REPLY_HDR_LEN + tlen
+    if len(payload) < crc_off + 4:
+        return None, 'truncated text'
+    text_bytes = bytes(payload[REPLY_HDR_LEN:crc_off])
+    got_crc = struct.unpack_from('<I', payload, crc_off)[0]
+    calc_crc = zlib.crc32(payload[:crc_off]) & 0xFFFFFFFF
+    return {
+        'ver': ver,
+        'verdict': verdict,
+        'verdict_name': VERDICT_NAMES.get(verdict, '?%d' % verdict),
+        'seq': seq,
+        'tlen': tlen,
+        'text_bytes': text_bytes,
+        'crc_ok': got_crc == calc_crc,
+    }, None
+
+
+def load_control_key(path):
+    """Read the 32-byte raw HMAC key. Returns bytes, or None with an honest printed
+    reason. FAIL-CLOSED: no key => the send path is disabled (the display half is
+    unaffected). The key bytes are NEVER printed or logged."""
+    if not path:
+        print("[send] no --key-file given: POST /send disabled (display half unaffected)", flush=True)
+        return None
+    try:
+        with open(path, 'rb') as fh:
+            raw = fh.read()
+    except OSError as e:
+        print("[send] cannot read key file '%s': %s -- POST /send disabled" % (path, e), flush=True)
+        return None
+    if len(raw) != CONTROL_KEY_LEN:
+        print("[send] key file '%s' is %d bytes, expected exactly %d -- POST /send disabled"
+              % (path, len(raw), CONTROL_KEY_LEN), flush=True)
+        return None
+    return raw
+
+
+def validate_query(value):
+    """Validate a browser-supplied query -> (bytes, None) or (None, 'reason').
+
+    Bounded, printable, and <= CONTROL_QUERY_MAX *bytes* (never characters — a multibyte
+    string is longer on the wire than len() suggests)."""
+    if not isinstance(value, str):
+        return None, "'query' must be a string"
+    q = value.strip()
+    if not q:
+        return None, "'query' is empty"
+    if not q.isprintable():
+        return None, "'query' contains control characters"
+    qb = q.encode('utf-8')
+    if len(qb) > CONTROL_QUERY_MAX:
+        return None, "'query' is %d bytes (max %d)" % (len(qb), CONTROL_QUERY_MAX)
+    return qb, None
+
+
+def resolve_http_bind(send, http_bind, bind):
+    """LOCALHOST GUARD #2 (bind) -> (address, error_or_None).
+
+    Without --send this is legacy behaviour (an explicit --http-bind, else --bind), so
+    nothing changes for a display-only run. With --send the HTTP surface carries the
+    signing endpoint, so it is pinned to loopback: the default ('' = all interfaces) is
+    FORCED to 127.0.0.1, and an explicitly requested non-loopback address is REFUSED
+    (the caller exits nonzero) rather than silently downgraded."""
+    if not send:
+        return (http_bind if http_bind else bind), None
+    candidate = http_bind if http_bind else bind
+    if candidate == '':
+        return '127.0.0.1', None
+    if candidate not in LOOPBACK_BINDS:
+        return None, ("--send binds the signing endpoint to loopback only, but '%s' was "
+                      "requested. Pass --http-bind 127.0.0.1 (the telemetry UDP socket keeps "
+                      "using --bind, so it can still listen on the LAN), or run without "
+                      "--send." % candidate)
+    return candidate, None
+
+
+class ControlSender:
+    """Signs and transmits control-IN frames. Holds the key, the epoch, the provisioned
+    box address, and the monotonic sequence state. Thread-safe (the HTTP server is
+    threading, so two browser tabs can POST concurrently)."""
+
+    def __init__(self, key, epoch=CONTROL_TEST_EPOCH, box_mac=BOX_MAC, box_ip=BOX_IP,
+                 port=CONTROL_PORT):
+        self.key = key
+        self.epoch = epoch
+        self.box_mac = box_mac
+        self.box_ip = box_ip
+        self.port = port
+        self._iface = None
+        self._lock = threading.RLock()   # reentrant: send() holds it across next_seq()
+        self._last_seq = 0
+
+    def next_seq(self):
+        """Monotonic, TIMESTAMP-derived (ms since epoch) so it always sits far above the
+        box's persisted replay floor (M3-3) — no floor coordination is needed. Strictly
+        increasing even for several sends inside the same millisecond."""
+        with self._lock:
+            return self._next_seq_locked()
+
+    def _next_seq_locked(self):
+        """The seq allocator proper. Caller MUST hold self._lock (an RLock, so send() can
+        hold it across allocate-and-transmit).
+
+        CAVEAT (honest): the clock is the source. If it steps BACKWARD (NTP correction, a VM
+        snapshot restore) far enough, a fresh process can allocate below the box's PERSISTED
+        replay floor, and the box will silently reject every frame until the clock catches
+        up. That is visible as a turn that never gets a reply, which the console reports."""
+        s = int(time.time() * 1000)
+        if s <= self._last_seq:
+            s = self._last_seq + 1
+        self._last_seq = s
+        return s
+
+    def send(self, query_bytes):
+        """Sign + transmit one frame; returns the seq used. Raises ScapyUnavailable when
+        the raw L2 path is unusable, ValueError for a bad frame."""
+        # Lazy import: scapy (+ Npcap + elevation) is only needed for --send, and must not
+        # become a hard dependency of the display-only receiver.
+        try:
+            from scapy.all import Ether, IP, UDP, Raw, sendp, conf
+        except Exception as e:
+            raise ScapyUnavailable("scapy is unavailable (%s); install scapy (+ Npcap on "
+                                   "Windows) and run elevated" % e)
+        if not self.key:
+            raise ValueError("no HMAC key loaded")
+        if self._iface is None:
+            try:
+                self._iface = conf.route.route(self.box_ip)[0]
+            except Exception as e:
+                raise ScapyUnavailable("no route to %s (%s)" % (self.box_ip, e))
+        # Hold the lock across allocate-seq AND transmit. The box's replay floor is strictly
+        # monotonic (control_replay.c: seq <= floor -> reject), so if two concurrent tabs
+        # allocated N and N+1 and then raced onto the wire in the order N+1, N, the box would
+        # silently drop N — no reply, no error, a turn that hangs "awaiting" forever. Sends
+        # are human-paced, so serializing them costs nothing.
+        with self._lock:
+            seq = self._next_seq_locked()
+            frame = build_control_frame(self.key, seq, self.epoch, query_bytes,
+                                        os.urandom(CONTROL_NONCE_LEN))
+            sport = random.randint(32768, 60999)
+            try:
+                sendp(Ether(dst=self.box_mac) / IP(dst=self.box_ip) /
+                      UDP(sport=sport, dport=self.port) / Raw(frame),
+                      iface=self._iface, verbose=False)
+            except Exception as e:
+                raise ScapyUnavailable("raw L2 send failed (%s); Npcap installed? running "
+                                       "elevated?" % e)
+        return seq
+
+
+def reply_to_record(rep, recv_ts):
+    """JRPL decode -> the SSE 'control_reply' record.
+
+    The 'kind' is the STRING 'control_reply' (telemetry records carry an INTEGER kind),
+    so no consumer can mistake a reply for a telemetry packet."""
+    text = rep['text_bytes'].split(b'\x00', 1)[0].decode('utf-8', 'replace')
+    return {
+        'kind': 'control_reply',
+        'verdict': rep['verdict'],
+        'verdict_name': rep['verdict_name'],
+        'seq': rep['seq'],
+        'text': text,
+        'crc_ok': rep['crc_ok'],
+        'recv_ts': recv_ts,
+    }
+
+
+def _reply_listener(hub, bind, port, box_ip=BOX_IP):
+    """Bind UDP :51002 and fan every decodable JRPL reply out over the existing SSE
+    stream. A bind failure is NON-FATAL (the display half keeps working).
+
+    The reply carries a zlib CRC-32, NOT a MAC (a named limitation of the box->console
+    direction), so a valid CRC proves only that the datagram was not corrupted in transit —
+    anyone can compute one. Datagrams whose source is not the provisioned box address are
+    therefore dropped: the box replies only to the provisioned console, and the console
+    accepts only from the provisioned box. That shrinks the forger set from "any host that
+    can reach this port" to an on-path attacker. It is NOT authentication (HMAC-ing this
+    direction is an M4 item) — the console labels every reply accordingly."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.bind((bind, port))
+    except OSError as e:
+        print("[send] cannot bind reply port %d (%s): replies will not be shown; "
+              "sending still works" % (port, e), flush=True)
+        sock.close()
+        return
+    print("[send] listening for box replies on udp :%d" % port, flush=True)
+    while True:
+        try:
+            data, addr = sock.recvfrom(2048)
+        except OSError:
+            return
+        if box_ip and addr[0] != box_ip:
+            continue  # not from the provisioned box — never render a stranger's "answer"
+        rep, err = decode_control_reply(data)
+        if rep is None:
+            continue  # not a JRPL datagram (or truncated) — nothing honest to show
+        # Publish even when crc_ok is False: the console renders the flag honestly.
+        hub.publish_event(reply_to_record(rep, time.time()))
+
+
 class TelemetryHub:
     """Thread-safe latest-record store + SSE client fan-out."""
 
@@ -382,6 +729,20 @@ class TelemetryHub:
     def publish(self, record):
         with self._lock:
             self.latest = record
+            for q in self._clients:
+                try:
+                    q.put_nowait(record)
+                except queue.Full:
+                    pass  # slow client: drop rather than block the producer
+
+    def publish_event(self, record):
+        """Fan-out ONLY — deliberately does NOT touch self.latest.
+
+        self.latest is replayed to every NEW subscriber as its initial record, so it must
+        stay a TELEMETRY record. A one-shot event (a control-IN reply) that became
+        'latest' would be re-delivered as stale state to every later page load, and would
+        be handed to consumers expecting a telemetry packet. Events fan out live only."""
+        with self._lock:
             for q in self._clients:
                 try:
                     q.put_nowait(record)
@@ -418,23 +779,152 @@ def _replay_producer(hub, path, rate):
 class _SSEHandler(BaseHTTPRequestHandler):
     hub = None
     web_dir = _DEFAULT_WEB_DIR
+    # 6-5/M3-4b: set by _run_sse ONLY when --send was passed. While it is None the handler
+    # never signs anything — a receiver started without --send has no send path at all.
+    sender = None
 
     def log_message(self, *args):  # silence default request logging
         pass
 
     def do_GET(self):
         path = self.path.split('?', 1)[0]
+        # In --send (two-way) mode the /events stream also carries control_reply records =
+        # the box's ANSWER TEXT, and the server is loopback-bound anyway, so a non-loopback
+        # Host can only be a DNS rebind. Display-only mode is untouched (a receiver bound to
+        # a LAN address and browsed from another machine keeps working exactly as before).
+        if self.sender is not None and not host_is_loopback(self.headers.get('Host')):
+            self.send_error(403, 'Host must be a loopback name')
+            return
         if path == '/events':
             self._serve_sse()
         else:
             self._serve_static(path)
+
+    def do_POST(self):
+        """POST /send {"query": "..."} -> sign + transmit one control-IN frame.
+
+        Guarded by THREE independent layers: the server is bound to loopback (guard #2,
+        resolve_http_bind), every request's peer is re-checked here (guard #1), and the
+        request's browser-set provenance headers are checked (guard #3). The peer check
+        comes FIRST — a non-loopback client never reaches signing, never transmits, and
+        never consumes a sequence number."""
+        path = self.path.split('?', 1)[0]
+        if path != '/send':
+            self._send_json(404, {'error': 'not found'})
+            return
+
+        # LOCALHOST GUARD #1 (per-request peer) — before ANY parsing, signing, or sending.
+        peer = self.client_address[0] if self.client_address else ''
+        if peer not in LOOPBACK_PEERS:
+            print("[send] REFUSED non-loopback POST /send from %s" % peer, flush=True)
+            self._send_json(403, {'error': 'the signing endpoint serves loopback clients only'})
+            return
+
+        # LOCALHOST GUARD #3 (request provenance — the confused-deputy guard).
+        #
+        # Guards #1/#2 prove the TCP connection is local. They do NOT prove the operator
+        # asked for it: a page on ANY site the operator visits can make their browser POST
+        # here, and that request arrives with peer 127.0.0.1 and passes both. Without this
+        # block, any website could spend the operator's HMAC key on arbitrary queries and —
+        # via the /events stream — read the box's answers back. So the REQUEST's provenance
+        # is checked too, using headers page JS cannot forge:
+        #   Host             — a rebound DNS name would otherwise be legitimately same-origin
+        #   Sec-Fetch-Site   — a forbidden header name; page JS cannot set or clear it
+        #   Origin           — sent by the browser on every cross-origin POST
+        #   Content-Type     — application/json is NOT CORS-safelisted, so a cross-origin
+        #                      POST must preflight; there is no do_OPTIONS, so it never lands
+        # A non-browser local client (curl, a test) sends no Origin/Sec-Fetch-Site and is
+        # still served, provided it asks correctly.
+        if not host_is_loopback(self.headers.get('Host')):
+            print("[send] REFUSED POST /send with non-loopback Host %r"
+                  % self.headers.get('Host'), flush=True)
+            self._send_json(403, {'error': 'Host must be a loopback name'})
+            return
+        sfs = (self.headers.get('Sec-Fetch-Site') or '').strip().lower()
+        if sfs and sfs not in ('same-origin', 'none'):
+            print("[send] REFUSED cross-site POST /send (Sec-Fetch-Site: %s)" % sfs, flush=True)
+            self._send_json(403, {'error': 'cross-site requests are refused'})
+            return
+        origin = self.headers.get('Origin')
+        if origin is not None and origin.strip().rstrip('/').lower() not in \
+                allowed_origins(self.server.server_address[1]):
+            print("[send] REFUSED cross-origin POST /send from %r" % origin, flush=True)
+            self._send_json(403, {'error': 'cross-origin requests are refused'})
+            return
+        ctype = (self.headers.get('Content-Type') or '').split(';')[0].strip().lower()
+        if ctype != 'application/json':
+            self._send_json(415, {'error': 'Content-Type must be application/json'})
+            return
+
+        try:
+            clen = int(self.headers.get('Content-Length') or 0)
+        except (TypeError, ValueError):
+            clen = -1
+        if clen < 0 or clen > 65536:
+            self._send_json(400, {'error': 'missing, malformed, or oversized Content-Length'})
+            return
+        try:
+            body = json.loads(self.rfile.read(clen).decode('utf-8')) if clen else None
+        except Exception:
+            self._send_json(400, {'error': 'body must be UTF-8 JSON'})
+            return
+        if not isinstance(body, dict):
+            self._send_json(400, {'error': 'body must be a JSON object'})
+            return
+        qb, err = validate_query(body.get('query'))
+        if err:
+            self._send_json(400, {'error': err})
+            return
+
+        sender = self.sender
+        if sender is None:
+            self._send_json(503, {'error': 'the send path is not enabled (start the receiver '
+                                           'with --send)'})
+            return
+        if not sender.key:
+            self._send_json(500, {'error': 'no valid HMAC key loaded (see --key-file); the '
+                                           'send path is disabled'})
+            return
+        try:
+            seq = sender.send(qb)
+        except ScapyUnavailable as e:
+            self._send_json(503, {'error': 'cannot transmit: %s' % e})
+            return
+        except ValueError as e:
+            self._send_json(400, {'error': str(e)})
+            return
+        except Exception:
+            # Never leak a traceback (it can carry paths/config) — the console gets an
+            # honest, bounded message and the operator gets the detail on the terminal.
+            print("[send] unexpected send failure", flush=True)
+            self._send_json(500, {'error': 'send failed (see the receiver terminal)'})
+            return
+        print("[send] sent control-IN frame seq=%d (%d B query)" % (seq, len(qb)), flush=True)
+        self._send_json(200, {'sent': True, 'seq': seq})
+
+    def _send_json(self, code, obj):
+        body = json.dumps(obj).encode('utf-8')
+        try:
+            self.send_response(code)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass  # client went away mid-response
 
     def _serve_sse(self):
         self.send_response(200)
         self.send_header('Content-Type', 'text/event-stream')
         self.send_header('Cache-Control', 'no-cache')
         self.send_header('Connection', 'keep-alive')
-        self.send_header('Access-Control-Allow-Origin', '*')
+        # The permissive CORS header stays for DISPLAY-ONLY runs (pre-existing behaviour: the
+        # stream is read-only telemetry, and box-free consumers rely on it). In --send mode
+        # the SAME stream also carries control_reply records = the box's ANSWER TEXT, so a
+        # cross-origin reader would turn the console into a remote read channel. The real
+        # console is served from this very origin and needs no CORS header at all.
+        if self.sender is None:
+            self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         q, latest = self.hub.subscribe()
         last_keepalive = time.time()
@@ -505,6 +995,13 @@ class _QuietThreadingHTTPServer(ThreadingHTTPServer):
 
 
 def _run_sse(args) -> int:
+    # LOCALHOST GUARD #2 (bind): resolved BEFORE any socket is opened, so a refused
+    # configuration never briefly exposes the signing endpoint.
+    http_bind, bind_err = resolve_http_bind(args.send, args.http_bind, args.bind)
+    if bind_err:
+        print("error: %s" % bind_err, file=sys.stderr, flush=True)
+        return 2
+
     hub = TelemetryHub()
     if args.replay:
         producer = threading.Thread(target=_replay_producer,
@@ -519,9 +1016,25 @@ def _run_sse(args) -> int:
     producer.start()
     _SSEHandler.hub = hub
     _SSEHandler.web_dir = args.web_dir
-    httpd = _QuietThreadingHTTPServer((args.bind, args.http_port), _SSEHandler)
+
+    if args.send:
+        # FAIL-CLOSED: a missing/invalid key leaves sender.key None -> POST /send answers
+        # 500 while the whole DISPLAY half keeps running.
+        key = load_control_key(args.key_file)
+        _SSEHandler.sender = ControlSender(key, epoch=args.epoch, box_mac=args.box_mac,
+                                           box_ip=args.box_ip)
+        # The reply arrives from the box over the LAN, so this socket uses --bind (only the
+        # HTTP/signing surface is loopback-pinned).
+        threading.Thread(target=_reply_listener, args=(hub, args.bind, args.reply_port, args.box_ip),
+                         daemon=True).start()
+        print("[send] POST /send enabled on http://%s:%d/send (loopback only; key=%s; "
+              "box %s / %s :%d)"
+              % (http_bind, args.http_port, 'loaded' if key else 'MISSING -> disabled',
+                 args.box_mac, args.box_ip, CONTROL_PORT), flush=True)
+
+    httpd = _QuietThreadingHTTPServer((http_bind, args.http_port), _SSEHandler)
     print("SSE bridge: http://%s:%d  (/events stream; static from '%s'; source: %s)"
-          % (args.bind or '0.0.0.0', args.http_port, args.web_dir, source), flush=True)
+          % (http_bind or '0.0.0.0', args.http_port, args.web_dir, source), flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -609,7 +1122,25 @@ def main(argv=None) -> int:
                     help="static web root (default: the repo's phase4/console, script-relative)")
     ap.add_argument('--replay', metavar='PCAP', help="replay a captured pcap instead of live UDP (box-free dev)")
     ap.add_argument('--replay-rate', type=float, default=1.0, help="seconds between replayed packets (default: 1.0)")
+    # --- 6-5/M3-4b: the two-way SEND path (requires --sse; needs elevation + scapy/Npcap) ---
+    ap.add_argument('--send', action='store_true',
+                    help="enable POST /send (sign+transmit a control-IN frame) and the reply "
+                         "listener; pins the HTTP/signing surface to loopback")
+    ap.add_argument('--key-file', help="path to the 32-byte raw HMAC-SHA256 key (the box JKEY slot)")
+    ap.add_argument('--epoch', type=lambda s: int(s, 0), default=CONTROL_TEST_EPOCH,
+                    help="sender boot epoch (default: 0x%08X)" % CONTROL_TEST_EPOCH)
+    ap.add_argument('--box-mac', default=BOX_MAC, help="box MAC (provisioned: %s)" % BOX_MAC)
+    ap.add_argument('--box-ip', default=BOX_IP, help="box IP (provisioned: %s)" % BOX_IP)
+    ap.add_argument('--http-bind', default='',
+                    help="HTTP/SSE bind address (default: follow --bind; forced to loopback with --send)")
+    ap.add_argument('--reply-port', type=int, default=CONTROL_REPLY_PORT,
+                    help="UDP port for the box's replies (default: %d)" % CONTROL_REPLY_PORT)
     args = ap.parse_args(argv)
+
+    if args.send and not args.sse:
+        print("error: --send requires --sse (the send path lives in the SSE bridge, which is "
+              "what the browser talks to)", file=sys.stderr, flush=True)
+        return 2
 
     if args.sse:
         return _run_sse(args)

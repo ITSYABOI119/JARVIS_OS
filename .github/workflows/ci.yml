@@ -454,6 +454,15 @@ jobs:
     - name: "Phase 6: 6-5/M1 Control verify orchestrator (C)"
       run: gcc -Wall -Werror -O2 -std=c11 -I phase3/src/net -I phase3/src/crypto phase3/src/net/test_control_verify.c phase3/src/net/control_verify.c phase3/src/net/control_parser.c phase3/src/net/control_replay.c phase3/src/net/control_ratelimit.c phase3/src/crypto/hmac_sha256.c phase3/src/crypto/sha256.c -o /tmp/t_cv && /tmp/t_cv
 
+    - name: "Phase 6: 6-5/M3-4b Signer differential (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -I phase3/src/net -I phase3/src/crypto \
+          phase3/src/net/test_control_signer_differential.c phase3/src/net/control_verify.c \
+          phase3/src/net/control_parser.c phase3/src/net/control_replay.c \
+          phase3/src/net/control_ratelimit.c \
+          phase3/src/crypto/hmac_sha256.c phase3/src/crypto/sha256.c -o /tmp/t_sigdiff
+        /tmp/t_sigdiff
+
     - name: "Phase 6: 6-5/M1 Control-IN Fuzz (C, ASAN)"
       run: |
         gcc -Wall -Werror -O1 -std=c11 -fsanitize=address,undefined -I phase3/src/net -I phase3/src/crypto \

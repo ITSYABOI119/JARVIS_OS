@@ -141,6 +141,59 @@ def main():
             check(qps is not None and qps > 0, "queriesPerSec() > 0 after 2 samples 1s apart (got %r)" % qps)
             page.close()
 
+            # CONTROL-IN REPLY ROUTING (6-5/M3-4b) ---------------------------------------
+            # A control_reply record rides the SAME SSE stream but is NOT a telemetry
+            # packet: it carries the STRING kind 'control_reply' and its seq is the
+            # control-IN request sequence, an unrelated counter. It must NEVER become
+            # state.latest, never touch connState, and never enter the seq-gap accounting.
+            # TEETH: the reply seq (12345) is far ahead of the packet seq (5), so if it
+            # leaked into ingest() the droppedPackets assertions below explode by ~12k.
+            page = fresh_page(browser, errors)
+            page.evaluate("window.__push({crc_ok:true, boot_id:1, seq:5, q_total:10, recv_ts:0})")
+            before = state(page)
+            check(before['connState'] == 'live' and before['droppedPackets'] == 0,
+                  "baseline: live telemetry packet ingested, no drops")
+
+            page.evaluate("window.__push({kind:'control_reply', verdict:0, verdict_name:'answered',"
+                          " seq:12345, text:'a page fault traps to the kernel', crc_ok:true, recv_ts:1})")
+            after = state(page)
+            latest = after['latest'] or {}
+            check(latest.get('seq') == 5 and latest.get('q_total') == 10,
+                  "control_reply did NOT become state.latest (the telemetry packet is still latest)")
+            check(after['connState'] == 'live',
+                  "control_reply left connState untouched (still 'live', got %r)" % after['connState'])
+            check(after['droppedPackets'] == 0,
+                  "control_reply left droppedPackets untouched (0, got %r)" % after['droppedPackets'])
+
+            # the NEXT real packet must still line up against the last PACKET seq (5 -> 6),
+            # proving the reply never clobbered lastSeq.
+            page.evaluate("window.__push({crc_ok:true, boot_id:1, seq:6, q_total:20, recv_ts:2})")
+            check(state(page)['droppedPackets'] == 0,
+                  "seq accounting intact after a reply (packet 5 -> 6 shows no gap)")
+
+            # ...and the reply IS exposed, in its own ring, with the right fields.
+            reps = state(page)['replies']
+            check(isinstance(reps, list) and len(reps) == 1,
+                  "reply landed in the replies ring (len == 1, got %r)" % (len(reps) if isinstance(reps, list) else reps))
+            r0 = reps[0] if reps else {}
+            check(r0.get('verdict') == 0 and r0.get('seq') == 12345
+                  and r0.get('text') == 'a page fault traps to the kernel' and r0.get('crc_ok') is True,
+                  "answered reply exposed with the right verdict/seq/text/crc (got %r)" % (r0,))
+
+            # a REFUSED reply is exposed too (the console renders it as an abuse-class refusal,
+            # never as an answer) — both verdicts must survive the ring.
+            page.evaluate("window.__push({kind:'control_reply', verdict:1, verdict_name:'refused',"
+                          " seq:12346, text:'refuse key-extraction', crc_ok:true, recv_ts:3})")
+            reps = state(page)['replies']
+            check(len(reps) == 2, "refused reply appended (len == 2, got %r)" % len(reps))
+            r1 = reps[1] if len(reps) > 1 else {}
+            check(r1.get('verdict') == 1 and r1.get('verdict_name') == 'refused'
+                  and r1.get('seq') == 12346 and r1.get('text') == 'refuse key-extraction',
+                  "refused reply exposed with its reason label (got %r)" % (r1,))
+            check((state(page)['latest'] or {}).get('seq') == 6,
+                  "after two replies, state.latest is STILL the last telemetry packet")
+            page.close()
+
             browser.close()
 
         check(errors == [], "no console errors / pageerrors (saw %d)" % len(errors))

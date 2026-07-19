@@ -1,6 +1,6 @@
 # Phase 6 Goal 6-5 — Control-IN / Natural-Language Primary (PLAN-FIRST)
 
-**Status: IN PROGRESS — M0 (RX spike) + M1 (host security core) + M2a (I211 RX → control_verify data path in PA) + M2b-1 (the SEC-014 isolation split — parse/ratelimit moved off PA into the new least-privileged `jarvis-input` process, Model 2; PA re-parses + HMAC + replay) DONE 2026-07-15; M2b-2 (input-process liveness + graceful degrade via the monitor spine, drop-`RCTL.BAM` unicast-only, SEC-033 + backpressure/flood, Option-A scheduling) DONE 2026-07-16 — all gated `JARVIS_CONTROL_IN` default-0 (see §9; box gate: OFF 4-object-identity + KVM induced-death PROBE → `[ANOMALY] input-dead` + degrade + the **supervised bare-metal WIRE PROOF, boot_id=24**: acc=3 / DROP_REPLAY / DROP_AUTH, the flood rate-limited (rl→488) with err=0 to q=13,700 / 0 faults, `parse=0` BAM-drop = broadcast hardware-filtered; pre-mortem + diff-review workflows clean). **→ goal-doc item-5 (the SEC-014 less-privileged input process) is FULLY CLOSED.** **M3-1 (host-fuzzable query SHIELD, FP=0/100 + 300K fuzz) DONE 2026-07-16 (`af20ddb`, host+CI); M3-2a (`pa_ctrl_gate` SHIELD-gates + routes QS_ALLOW to inference / audits+drops QS_REFUSE) CODE DONE + KVM-proven 2026-07-17 (gated default-0; OFF 4-object identity + KVM PROBE-mode-3 route/refuse + JACT read-back, teeth-clean) → checklist ITEM-4 (real query SHIELD, SEC-039-for-queries) CLOSED at the logic + box level. M3-2b (unicast reply-to-console + confidentiality) CODE DONE + KVM-proven 2026-07-18 (gated default-0; OFF object-identity `main.c.obj`+`net_udp.c.obj` byte-identical to `7fd1b34`; KVM PROBE-mode-3: 4 `[CTRL-IN-REPLY]` verdicts all unicast to the console MAC, 0 DROP; O-Q11 tag-3 write KVM-DISK-PROVEN via an EARLY read — the boot's 3 `EPI_ACT_CONTROL_IN` records read back before the 8192-slot circular store wraps). M3-2b bare-metal WIRE PROOF PASSED 2026-07-18 (boot_id=25, supervised — the box's FIRST two-way round-trip on the wire: benign `seq=50` → verdict=0 answered CRC-OK coherent + dual-check PASS; hostile `seq=51` → verdict=1 refused LABEL-only + dual-check PASS; durable JACT `action=5` EXECUTED + BLOCKED; reverted to the 6-3 image, md5 re-verified). M3-3 (cross-reboot persisted replay floor, Option A: a separate double-buffered checksummed NVMe floor sector, key stays write-once; WRITE-AHEAD reservation → zero cross-reboot replay window) CODE DONE + KVM-2-boot-proven 2026-07-19 (gated default-0; host 48/48 + OFF object-identity + KVM: boot1 write-ahead persist resv=1256 / boot2 resume floor=1256 + replay seq=1000→DROP_REPLAY + fresh accept / torn-both→FLOOR_CORRUPT fail-safe; adversarial-review workflow caught + fixed a persist-behind flaw) → CLOSES checklist ITEM-2 (replay incl. cross-reboot). M3-4a (telemetry v11 control-IN counters + the honest console display; DEFINED-ABUSE-CLASS refuse count, not "injection blocked"; version-tolerant receiver keeps the live v10 box decoding; gated fill default-0, deploy deferred to the flip) CODE DONE + host-lockstep + KVM-smoked 2026-07-19 (C telemetry 80/80, receiver 160/160 incl. v10-tolerance, honesty 124/124, golden 254 B, e2e value-pin).** Next: M3-4b (the two-way SEND UI — input box + signing helper) → M4 (`/security-review` + emergency-disable + the v11 image deploy) → the hard-gated flip.**
+**Status: IN PROGRESS — M0 (RX spike) + M1 (host security core) + M2a (I211 RX → control_verify data path in PA) + M2b-1 (the SEC-014 isolation split — parse/ratelimit moved off PA into the new least-privileged `jarvis-input` process, Model 2; PA re-parses + HMAC + replay) DONE 2026-07-15; M2b-2 (input-process liveness + graceful degrade via the monitor spine, drop-`RCTL.BAM` unicast-only, SEC-033 + backpressure/flood, Option-A scheduling) DONE 2026-07-16 — all gated `JARVIS_CONTROL_IN` default-0 (see §9; box gate: OFF 4-object-identity + KVM induced-death PROBE → `[ANOMALY] input-dead` + degrade + the **supervised bare-metal WIRE PROOF, boot_id=24**: acc=3 / DROP_REPLAY / DROP_AUTH, the flood rate-limited (rl→488) with err=0 to q=13,700 / 0 faults, `parse=0` BAM-drop = broadcast hardware-filtered; pre-mortem + diff-review workflows clean). **→ goal-doc item-5 (the SEC-014 less-privileged input process) is FULLY CLOSED.** **M3-1 (host-fuzzable query SHIELD, FP=0/100 + 300K fuzz) DONE 2026-07-16 (`af20ddb`, host+CI); M3-2a (`pa_ctrl_gate` SHIELD-gates + routes QS_ALLOW to inference / audits+drops QS_REFUSE) CODE DONE + KVM-proven 2026-07-17 (gated default-0; OFF 4-object identity + KVM PROBE-mode-3 route/refuse + JACT read-back, teeth-clean) → checklist ITEM-4 (real query SHIELD, SEC-039-for-queries) CLOSED at the logic + box level. M3-2b (unicast reply-to-console + confidentiality) CODE DONE + KVM-proven 2026-07-18 (gated default-0; OFF object-identity `main.c.obj`+`net_udp.c.obj` byte-identical to `7fd1b34`; KVM PROBE-mode-3: 4 `[CTRL-IN-REPLY]` verdicts all unicast to the console MAC, 0 DROP; O-Q11 tag-3 write KVM-DISK-PROVEN via an EARLY read — the boot's 3 `EPI_ACT_CONTROL_IN` records read back before the 8192-slot circular store wraps). M3-2b bare-metal WIRE PROOF PASSED 2026-07-18 (boot_id=25, supervised — the box's FIRST two-way round-trip on the wire: benign `seq=50` → verdict=0 answered CRC-OK coherent + dual-check PASS; hostile `seq=51` → verdict=1 refused LABEL-only + dual-check PASS; durable JACT `action=5` EXECUTED + BLOCKED; reverted to the 6-3 image, md5 re-verified). M3-3 (cross-reboot persisted replay floor, Option A: a separate double-buffered checksummed NVMe floor sector, key stays write-once; WRITE-AHEAD reservation → zero cross-reboot replay window) CODE DONE + KVM-2-boot-proven 2026-07-19 (gated default-0; host 48/48 + OFF object-identity + KVM: boot1 write-ahead persist resv=1256 / boot2 resume floor=1256 + replay seq=1000→DROP_REPLAY + fresh accept / torn-both→FLOOR_CORRUPT fail-safe; adversarial-review workflow caught + fixed a persist-behind flaw) → CLOSES checklist ITEM-2 (replay incl. cross-reboot). M3-4a (telemetry v11 control-IN counters + the honest console display; DEFINED-ABUSE-CLASS refuse count, not "injection blocked"; version-tolerant receiver keeps the live v10 box decoding; gated fill default-0, deploy deferred to the flip) CODE DONE + host-lockstep + KVM-smoked 2026-07-19 (C telemetry 80/80, receiver 160/160 incl. v10-tolerance, honesty 124/124, golden 254 B, e2e value-pin). M3-4b (the two-way SEND path — RECEIVER-AS-SIGNER: a dual-guarded loopback-only `POST /send` in `telemetry_receiver.py` + a :51002 JRPL listener fanning `control_reply` out over the existing SSE stream, plus the gated console Control-IN screen) DONE 2026-07-19 — **MAIN-PC-SIDE ONLY: zero box code touched, no box deploy, no box gate, and no OFF-object-identity claim needed (no box binary changed)**; host+CI evidence only — receiver 241/241, honesty 158/158, logic 25/25, e2e 44/44, and a new signer-differential C test 35/35 pinning the committed Python signer against the REAL `control_verify()` the box runs. **The full browser → box → browser round-trip is NOT YET PROVEN** (each leg proven separately; §9.1) and is M4e's validation.** Next: **M4** — M4a NVMe console-addr slot → M4b reply HMAC → M4c `/security-review` of the whole inbound path (incl. the signing endpoint) → M4d emergency-disable proven + third-host negative capture → M4e the v11 image deploy + on-wire v11 (`flag=1`) + the bare-metal replay-floor confirm + the browser round-trip → the hard-gated flip.**
 **This is the phase's LONG POLE and its single hardest security gate:** it turns the read-only
 telemetry console two-way and opens the box to the **FIRST untrusted inbound it has ever accepted**.
 Every prior Phase-6 trigger was internal state; 6-5's first trigger is a hostile network frame.
@@ -713,6 +713,97 @@ until the deliberate, checklist-complete, security-reviewed flip.
   ESP is untouched). Carry-forwards to M4: the v11 IMAGE deploy + on-wire v11 validation (incl. `flag=1`),
   and **M3-4b** (the two-way SEND UI). Remaining 6-5: **M3-4b**, **M4** (`/security-review` +
   emergency-disable), then the hard-gated flip.
+- **M3-4b — the two-way SEND path (browser composer + the receiver-side signer) — DONE 2026-07-19,
+  MAIN-PC-SIDE ONLY.** Architecture **RECEIVER-AS-SIGNER** (D1 below): a browser can hold neither the
+  HMAC key nor a raw L2 socket, so `telemetry_receiver.py` signs. **This milestone TOUCHES ZERO BOX
+  CODE** — no `.c/.h` under `phase3/src/{sel4,drivers,net,crypto}` (the only `phase3/src/net` addition
+  is the new HOST test `test_control_signer_differential.c`), no `jarvis_debug.h`, no
+  `build_jarvis_x86.sh`. Consequently there is **NO box deploy, NO box gate, and NO OFF-object-identity
+  claim** — none is needed or made, because no box binary changed; `JARVIS_CONTROL_IN` stays default-0
+  and the receive/route/reply path is exactly the M2a…M3-2b code already proven.
+  - **Receiver (`--send`, requires `--sse`):** `POST /send {"query":…}` → `build_control_frame`
+    (the `control_msg.h` JCTL layout — BE header, tag = HMAC-SHA256 over `payload[0:36+qlen]`) →
+    scapy raw-L2 `Ether/IP/UDP` to the provisioned box MAC/IP :51001 → `200 {"sent":true,"seq":N}`;
+    plus a UDP **:51002** listener that decodes the box's JRPL reply and fans it out over the
+    **EXISTING** `/events` SSE stream as a `control_reply` record (its `kind` is the **STRING**
+    `"control_reply"` — telemetry records carry an INTEGER `kind`; that is the discriminator).
+    **TRIPLE localhost guard.** #2 the HTTP/signing surface is loopback-PINNED at bind resolution (the
+    `''` default is FORCED to `127.0.0.1`; an explicit non-loopback bind is REFUSED with exit 2, never
+    silently downgraded — only the telemetry UDP socket stays on the LAN); #1 every request's peer is
+    re-checked BEFORE any parse/sign/send (a non-loopback POST never consumes a sequence number); and
+    **#3 the request's PROVENANCE**, because #1/#2 prove only that the TCP connection is local — NOT
+    that the operator asked for it. A 5-lens adversarial review PROVED that gap with a working PoC (see
+    §9.2): a hostile page in the operator's browser satisfies both guards. `/send` now additionally
+    requires `Content-Type: application/json` (NOT CORS-safelisted ⇒ a cross-origin POST must preflight,
+    and there is no `do_OPTIONS`, so it never lands), refuses a foreign `Origin` or a `Sec-Fetch-Site`
+    that is not `same-origin`/`none` (browser-set, unforgeable by page JS), and requires a loopback
+    `Host` (closing the DNS-rebinding bypass of the Origin check). The permissive
+    `Access-Control-Allow-Origin: *` on `/events` is DROPPED in `--send` mode — in that mode the stream
+    also carries the box's ANSWER TEXT — and kept only for display-only runs, preserving pre-existing
+    behaviour where the stream is read-only telemetry. A local non-browser client (curl) sends no
+    `Origin`/`Sec-Fetch-Site` and is still served.
+    The **JRPL reply listener drops datagrams whose source is not the provisioned box IP**: the reply is
+    CRC'd, not a MAC, so anyone able to reach :51002 could otherwise inject a plausible "answer" and, via
+    the 16-bit correlation, land it on a real turn. That narrows the forger set to an on-path attacker;
+    it is NOT authentication (M4b), and the console labels every reply accordingly.
+    `send()` holds its lock across allocate-seq AND transmit, so two concurrent tabs cannot reach the
+    wire out of order and have the box's monotonic floor silently drop the lower seq with no reply.
+    Honest JSON errors only, never a key or a traceback: 400 / 403 / 500 / 503. `--send` needs
+    ELEVATION (raw L2 — the box has no ARP, the dst MAC is provisioned) + Npcap on Windows;
+    `load_control_key` is FAIL-CLOSED; `next_seq` is ms-derived + strictly increasing so it always
+    clears the M3-3 persisted floor without coordination; `publish_event` fans out only and never
+    touches `hub.latest` (a one-shot reply must not be replayed to later page-loads as stale state).
+    **Without `--send` the receiver is the unchanged display-only bridge** (scapy is a lazy import).
+  - **Console:** a NEW `ConsoleControl.jsx` "Control-IN" screen — composer + seq-correlated reply
+    transcript + honesty-ceiling card. **GATED:** `enabled = !!rec && !store.simulated &&
+    hasFlag(rec,'CONTROL_IN')`; the deploy has no flag ⇒ DISABLED with an explicit reason, and the
+    box-free sim deliberately WITHHOLDS the flag so the preview mirrors the real gated-off box.
+    `crc_ok:false` renders as corrupt, never as a trusted answer. `telemetry.js` routes the reply to a
+    separate bounded ring BEFORE `ingest()` — a reply never becomes `state.latest` and never touches
+    connState / seq-gap accounting. One deliberate deviation, commented in-file: correlation masks
+    both sides to 16 bits (the JRPL reply echoes `seq` as u16 while the request seq is u64).
+    **Post-review corrections:** a matched reply is COPIED onto its turn on arrival rather than
+    re-derived from the bounded replies ring each render (an answered turn otherwise reverted to
+    "awaiting" once ~30 later replies evicted it); every reply row carries "CRC-checked, not
+    authenticated · accepted only from the provisioned box address"; a turn unanswered for 15 s says so
+    plainly ("Nothing here says the box received it") — a frame the box rejects on its sequence floor or
+    HMAC produces NO reply at all; and the delivery claim was corrected from "the answer comes back to
+    this console only" to "**addressed** only to this console (unicast to the provisioned address, never
+    broadcast; that is addressing, not a proof no other host saw it)", since third-host exclusivity is
+    NOT PROVEN (§9.1). The honesty gate now BANS the exclusivity phrasings and REQUIRES the addressing
+    framing.
+  - **Evidence (host + CI only, all re-run):** receiver **241/241**, console honesty **158/158**
+    (teeth-proven — an always-enabled stub panel fails 10), logic **25/25** (after two replies
+    `state.latest` is STILL the last telemetry packet), e2e **44/44**; and a NEW differential test
+    **35/35** that feeds the committed Python signer's golden frame bytes to the **REAL
+    `control_verify()` the box runs** (`-Wall -Werror`; CI step "Phase 6: 6-5/M3-4b Signer differential
+    (C)") — the signer is pinned against the box's own verifier, not a re-implementation. The Python
+    suite also asserts the C test's embedded `GOLDEN_JCTL[]` is byte-identical to `build_control_frame`'s
+    output: the constant is a hand-copy, so without that check a signer change regenerated on only one
+    side would leave BOTH suites green while the C side kept blessing a frame the live signer no longer
+    emits — drift that would surface first on hardware, at the flip.
+  - **NOT PROVEN — deferred to M4e:** the full **browser → box → browser** round-trip. Each leg is
+    proven separately (browser→receiver by the Playwright e2e against a stubbed `/send`; the frame
+    format by the differential test; box→console by the M3-2b bare-metal wire proof at boot_id=25,
+    which used a standalone scapy signer, not this endpoint) — they have never been run end to end,
+    because the deployed box has control-IN gated off.
+- **M3-4b review record (§9.2) — the CSRF finding.** A 5-lens adversarial-review workflow (browser
+  attack surface / guards + key handling / protocol correctness / regression + UI honesty / test teeth)
+  ran over the finished M3-4b diff, with a verifier pass triaging every finding against the code. It
+  found ONE HIGH the implementation had missed, reproduced against a live instance:
+  **a cross-origin POST carrying a CORS-safelisted `Content-Type: text/plain` body reached the signer**
+  (`200 {"sent":true}`) because both localhost guards check the TCP peer, which for a browser-borne
+  request is `127.0.0.1`; and `GET /events` answered a hostile `Origin` with `Access-Control-Allow-Origin: *`,
+  so the same page could subscribe and READ the box's answers. Composed, that is a full remote
+  query/response loop against the box driven from any website the operator visits — the exact capability
+  the HMAC/replay/SHIELD arc exists to withhold. The `*` header is pre-existing, but M3-4b **escalates**
+  it: before this milestone `/events` carried only telemetry counters; it now also carries answer text.
+  **Fixed before commit** (guard #3 + the send-mode CORS drop) and the PoC re-run to confirm closure:
+  `403 cross-origin requests are refused`, `ACAO: None`. The same pass produced the reply-source filter,
+  the send lock, the reply-binding fix, the golden-coupling assertion, and the delivery-wording
+  correction — all in this commit. **Process lesson:** two lenses mutated the SHARED working tree
+  concurrently, and one reported the other's in-flight sabotage as a delivered-tree defect; mutation
+  testing must run on a copy. The tree was re-verified clean (no markers, suites green) before commit.
 - **M3 — wire the query through PA + close SEC-039 for queries + response + two-way UI (box, gated):**
   the validated query hits the real query SHIELD (the O-Q4 threat model — the induced-BLOCK proof
   that a genuinely-hostile query is refused), then the cache/inference path (retrieval preamble =
@@ -723,23 +814,74 @@ until the deliberate, checklist-complete, security-reviewed flip.
   wire `ACT_REQUEST_APPROVAL`, fix + host-test the `spine_record` PROPOSED count (latent on the box,
   §2(i)). Multi-turn conversation referencing a PRIOR control-IN session demonstrated on the box (the
   done-when).
-- **M4 — the full `/security-review` pass + the checklist audit:** a clean security review of the
-  ENTIRE inbound path — **the I211 RX descriptor/DMA + buffer handling**, parser, auth, replay,
-  rate-limit, SEC-014 isolation (incl. the no-BAR0/DMA-containment resolution), SEC-039 closure — all
-  six §4 items; confirmation the response-TX + two-way UI stay within the honesty/offline gate; and
-  **a proven emergency-disable** (a persisted runtime off + the retained `=0` rollback image). No
-  item unmet. **M3-2b carry-forwards to fold in here:** (1) **replace `control_console.h` with an
-  NVMe console-addr slot** (fail-closed read, the JKEY precedent) so the console address is
-  install-provisioned, not compile-baked; (2) **authenticate the box→console direction** (M3-2b's
-  reply is CRC'd not HMAC'd — a named limitation; the outbound leg should be HMAC'd to match the
-  inbound); (3) **a third-host negative capture** proving no other LAN host received the unicast reply
-  (M3-2b proved unicast-ADDRESSED + raw-query-never-leaves, but not switch-level delivery isolation).
+- **M4 — the security-review + flip-readiness arc (design pass, post-M3-4b).** M4 is no longer a
+  single review step: M3-4b's receiver-as-signer, M3-2b's compile-baked console address, and the
+  CRC-only reply direction each landed a named carry-forward, and the flip cannot be attempted until
+  all of them close. **Resolved decisions:**
+  - **D1 — RECEIVER-AS-SIGNER, localhost-only (locked at M3-4b).** The browser can hold neither the
+    HMAC key nor a raw L2 socket, so the receiver signs on its behalf. The signing endpoint is
+    loopback-BOUND **and** per-request loopback-CHECKED — two independent guards, because a
+    LAN-exposed signing endpoint would hand the operator's key to the whole subnet and **void every
+    auth milestone in this arc** (M1's HMAC, M3-3's replay floor, M2b's isolation all assume the
+    attacker cannot get frames signed). This is the single most security-load-bearing property of
+    the console half, and the `/security-review` (M4c) must treat it as such.
+  - **D2 — EMERGENCY-DISABLE = the JKEY key-wipe.** Zeroing the NVMe key slot makes the box's
+    fail-closed key read fail ⇒ control-IN accepts nothing, persisted across reboot, no re-flash
+    required. The retained `JARVIS_CONTROL_IN=0` rollback ESP image stays as the nuclear option
+    (slower, total). Both must be PROVEN, not merely available (M4d) — §13's mandatory sign-off.
+  - **D3 — the console reply address moves to NVMe.** `control_console.h`'s compile-const MAC/IP
+    becomes a fail-closed NVMe console-addr slot read (the JKEY/`control_key.h` precedent), so the
+    address is install-provisioned rather than compile-baked. Its own file precisely so this swap is
+    one change (M4a).
+  - **D4 — HMAC the box→console reply direction.** Today the reply is CRC'd only — a NAMED
+    limitation, consistent with the CRC-only telemetry-OUT direction, and honest as long as it is
+    stated. Authenticating the outbound leg to match the inbound is M4b.
+  - **D5 — the flip gate + rollback.** The flip requires ALL SIX §4 checklist items closed, a CLEAN
+    `/security-review`, and a PROVEN emergency-disable — then the K/6-1/6-2/6-3 flip pattern: KVM
+    validate → deploy retaining the pre-flip `=0` ESP as a LABELLED backup → supervised on-wire
+    proof. Unlike the passive honest-0 flips of 6-1/6-2/6-3, this flip's proof SENDS.
+
+  **Sequence:**
+  - **M4a — the NVMe console-addr slot** (D3): replace `control_console.h` with a fail-closed slot
+    read; a missing/corrupt slot disables the reply path rather than falling back to broadcast.
+  - **M4b — reply HMAC** (D4): authenticate box→console, closing the named CRC-only limitation.
+  - **M4c — `/security-review` of the WHOLE inbound path:** the I211 RX descriptor/DMA + buffer
+    handling, parser, auth, replay (incl. the M3-3 write-ahead floor), rate-limit, SEC-014 isolation
+    (incl. the no-BAR0/DMA-containment resolution), SEC-039-for-queries closure — all six §4 items —
+    **plus the M3-4b signing endpoint** (D1: both localhost guards, the fail-closed key load, the
+    error surface leaking neither key nor traceback) and confirmation the response-TX + two-way UI
+    stay inside the honesty gate. No item unmet.
+  - **M4d — emergency-disable PROVEN** (D2: the JKEY wipe demonstrated to fail the box closed across
+    a reboot, plus the retained `=0` image) **and the third-host negative capture** (M3-2b proved the
+    reply is unicast-ADDRESSED and that the raw query never leaves the box, but NOT switch-level
+    delivery isolation — that needs a third LAN host capturing nothing).
+  - **M4e — the v11 image deploy + the full on-wire validation:** deploy the v11 image (M3-4a's
+    deferred carry-forward) and validate on-wire v11 **including `flag=1` on the real box** (the
+    channel-up gate needs a NIC, so KVM can only ever show `flag=0`); **confirm the M3-3 cross-reboot
+    replay floor on BARE METAL** (M3-3 is KVM-2-boot-proven only); and run the **browser → box →
+    browser round-trip** end to end for the first time (M3-4b proved each leg separately, never the
+    whole).
+  - **THE FLIP** — only after every item above.
 - **The FLIP — `JARVIS_CONTROL_IN` default-ON:** deliberate, ONLY after M4, the K/6-1/6-2/6-3 flip
   pattern (KVM/box validate → deploy, retaining the pre-flip `=0` ESP image as a labeled backup →
   supervised on-wire proof). Unlike the passive honest-0 flips of 6-1/6-2/6-3, the flip proof SENDS a
   real signed query round-trip AND proves the SEC-039-refuse of a hostile query on the wire (O-Q8).
   This is the first time the box can receive. The flip is reversible (the `=0` backup + the persisted
   runtime disable).
+
+### 9.1 Carry-forwards — explicitly NOT YET PROVEN
+
+Recorded here so no later summary can quietly promote them. Each is a real gap, not a formality:
+
+| # | Claim | Status | Closes at |
+|---|-------|--------|-----------|
+| 1 | The **browser → box → browser** round-trip works end to end | **NOT PROVEN.** Every leg is proven separately (browser→receiver via the Playwright e2e against a stubbed `/send`; the frame format via the M3-4b differential test against the real `control_verify()`; box→console via the M3-2b bare-metal wire proof, boot_id=25, which used a standalone scapy signer — not this endpoint). They have never been run as one chain. | M4e |
+| 2 | **On-wire v11** telemetry from the real box, with `TLM_F_CONTROL_IN` **set** | **NOT PROVEN.** The box still runs the 6-3/v10 image; KVM can only ever show `flag=0` (the channel-up gate needs an armed I211 RX ring, and KVM has no NIC). `flag=1` is a real-box property. | M4e |
+| 3 | The **cross-reboot replay floor persists on BARE METAL** | **NOT PROVEN.** M3-3 is KVM-2-boot-proven (one persistent image) + host 48/48. Never exercised across a real power-cycle on the box's NVMe. | M4e |
+| 4 | **No other LAN host received** the unicast reply | **NOT PROVEN.** M3-2b proved unicast-ADDRESSED (box-side `dst_ok` + a Main-PC L2/L3 dual-check) and that the raw query never leaves the box — not switch-level delivery isolation, which needs a third host capturing nothing. | M4d |
+| 5 | The **box→console direction is authenticated** | **FALSE TODAY — a NAMED limitation.** The reply is CRC'd, not HMAC'd (consistent with the CRC-only telemetry-OUT direction). Honest only while stated. | M4b |
+| 6 | The console reply address is **install-provisioned** | **FALSE TODAY.** It is compile-baked in `control_console.h`. | M4a |
+| 7 | The **emergency-disable works** | **NOT PROVEN.** The JKEY key-wipe (D2) is designed and the `=0` rollback image is retained; neither has been demonstrated. A mandatory flip-gate item (§13). | M4d |
 
 ## 10. Storage / state
 

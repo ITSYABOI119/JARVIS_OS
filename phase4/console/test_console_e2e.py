@@ -91,6 +91,22 @@ def main():
             page.on('console', lambda m: errors.append('console: ' + m.text) if m.type == 'error' else None)
             page.on('pageerror', lambda e: errors.append('pageerror: ' + str(e)))
 
+            # (6-5/M3-4b) STUB the receiver's /send endpoint. The console's job is to POST the
+            # typed query and honour the JSON contract; the signing/scapy half is the receiver's
+            # (agent A) and is NOT exercised here — so the endpoint is fulfilled locally and the
+            # request body is captured for the assertion below.
+            sent_bodies = []
+
+            def handle_send(route, request):
+                try:
+                    sent_bodies.append(request.post_data)
+                except Exception:
+                    sent_bodies.append(None)
+                route.fulfill(status=200, content_type='application/json',
+                              body='{"sent": true, "seq": 12345}')
+
+            page.route('**/send', handle_send)
+
             page.goto(BASE)
             expect(page.get_by_text('functional-unverified')).to_be_visible(timeout=15000)
             check(True, "page mounted (Babel + React over real HTTP)")
@@ -714,6 +730,89 @@ def main():
             page.evaluate("() => { if (window.__tokPinTimer) clearInterval(window.__tokPinTimer); }")
             check(tok_ok,
                   "(v4) Throughput rendered infer_last_tok_x100/100 as the live tok/s (watcher=%r)" % (tok_dbg,))
+
+            # --- (6-5/M3-4b) Control-IN: the ONE non-read-only screen ---------------------
+            # Three things to prove: the screen mounts; the composer is GATED (disabled +
+            # explained on a frame WITHOUT CONTROL_IN, enabled on a CONTROL_IN-flagged one);
+            # and a real typed query reaches /send.
+            #
+            # Only golden frame 3 carries CONTROL_IN, and the replay LOOPS, so the flag is live
+            # for ~one replay-rate dwell every ~8 frames. Python-side poll-then-act would race
+            # that window, so an in-page watcher does the whole thing on a 50 ms tick (the same
+            # early-watcher idiom as the v4 tok pin above): it latches the gated + enabled
+            # renders, and drives the send across TWO live windows — set the input value on one
+            # (React keeps the typed text in local state while the panel goes disabled again),
+            # click Send on the next. Retries until the deadline.
+            page.get_by_title('Control-IN', exact=True).click()
+            expect(page.get_by_text('Send a query').first).to_be_visible(timeout=10000)
+            check(True, "(6-5/M3-4b) Control-IN screen mounts")
+
+            page.evaluate(
+                "() => {"
+                " const WANT = 'what is a page fault?';"
+                " window.__ctlPin = { gated: false, enabled: false, typed: false, clicked: false, last: null };"
+                " const setter = Object.getOwnPropertyDescriptor("
+                "   window.HTMLInputElement.prototype, 'value').set;"
+                " window.__ctlTimer = setInterval(() => {"
+                "   try {"
+                "     const rec = (window.JarvisTelemetry.getState().latest) || {};"
+                "     const ci = (rec.flags_list || []).indexOf('CONTROL_IN') >= 0;"
+                "     const input = document.querySelector('main input[type=\"text\"]');"
+                "     const btns = Array.from(document.querySelectorAll('main button'));"
+                "     const send = btns.find(b => /send/i.test(b.textContent));"
+                "     if (!input || !send) return;"
+                "     const body = document.body.innerText;"
+                "     window.__ctlPin.last = { ci, disabled: input.disabled, sendDisabled: send.disabled };"
+                "     if (!ci && input.disabled && body.indexOf('gated off on the box') >= 0)"
+                "       window.__ctlPin.gated = true;"
+                "     if (ci && !input.disabled) {"
+                "       window.__ctlPin.enabled = true;"
+                "       if (input.value !== WANT && !window.__ctlPin.clicked) {"
+                "         setter.call(input, WANT);"
+                "         input.dispatchEvent(new Event('input', { bubbles: true }));"
+                "         window.__ctlPin.typed = true;"
+                "       } else if (input.value === WANT && !send.disabled && !window.__ctlPin.clicked) {"
+                "         window.__ctlPin.clicked = true;"
+                "         send.click();"
+                "       }"
+                "     }"
+                "   } catch (e) {}"
+                " }, 50);"
+                "}")
+
+            ctl_dbg = None
+            deadline = time.time() + 30
+            while time.time() < deadline:
+                ctl_dbg = page.evaluate("() => window.__ctlPin")
+                if ctl_dbg and ctl_dbg.get('gated') and ctl_dbg.get('enabled') and sent_bodies:
+                    break
+                time.sleep(0.1)
+            page.evaluate("() => { if (window.__ctlTimer) clearInterval(window.__ctlTimer); }")
+
+            check(bool(ctl_dbg and ctl_dbg.get('gated')),
+                  "(6-5/M3-4b) GATED-OFF state renders: no CONTROL_IN flag -> input disabled + the "
+                  "'gated off on the box' note (watcher=%r)" % (ctl_dbg,))
+            check(bool(ctl_dbg and ctl_dbg.get('enabled')),
+                  "(6-5/M3-4b) ENABLED state renders: a CONTROL_IN-flagged frame -> input enabled "
+                  "(watcher=%r)" % (ctl_dbg,))
+            check(len(sent_bodies) >= 1,
+                  "(6-5/M3-4b) the composer POSTed to /send (%d request(s))" % len(sent_bodies))
+            body0 = sent_bodies[0] if sent_bodies else ''
+            check(bool(body0) and 'what is a page fault?' in body0 and '"query"' in body0,
+                  "(6-5/M3-4b) /send body carries the typed query under 'query' (body=%r)" % (body0,))
+            # the 200 {"sent":true,"seq":12345} path renders a pending transcript turn
+            expect(page.get_by_text('awaiting the box reply', exact=False).first).to_be_visible(timeout=10000)
+            check(True, "(6-5/M3-4b) a 200 send renders a pending transcript turn (awaiting reply)")
+            ctl_words = page.evaluate(
+                "() => { const t = document.body.innerText.toLowerCase();"
+                " return { abuse: t.indexOf('defined abuse class') >= 0,"
+                "          notdet: t.indexOf('not detected') >= 0,"
+                "          banned: (t.indexOf('injection blocked') >= 0)"
+                "                  || (t.indexOf('secure channel') >= 0)"
+                "                  || (t.indexOf('stops attacks') >= 0) }; }")
+            check(ctl_words['abuse'] and ctl_words['notdet'] and not ctl_words['banned'],
+                  "(6-5/M3-4b) Control-IN renders the abuse-class / not-detected ceiling, no "
+                  "overclaim (snap=%r)" % (ctl_words,))
 
             check(errors == [], "no console errors / pageerrors (saw %d)" % len(errors))
             for e in errors[:10]:

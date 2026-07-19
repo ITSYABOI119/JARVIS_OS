@@ -1,7 +1,12 @@
 /* JARVIS OS — Telemetry Console · shared helpers + Shell chrome
  * Reuses the design system verbatim (window.JarvisOSDesignSystem_e0065d).
- * Content is rewired to the honest telemetry record shape. Read-only — no
- * composer, no control-in, no fabricated metrics.
+ * Content is rewired to the honest telemetry record shape. No fabricated metrics.
+ *
+ * The TELEMETRY stream is read-only: every screen here renders inbound box state
+ * and nothing on it can change the box. Control-IN (6-5/M3-4b) is a SEPARATE,
+ * gated send path on its own screen — it is not part of the telemetry stream, and
+ * its composer stays disabled unless the box reports the CONTROL_IN flag. So the
+ * chrome below says "telemetry is read-only", never "the console is read-only".
  */
 
 /* ---- liveness / formatting helpers -------------------------------------- */
@@ -90,6 +95,8 @@ const RAIL_ITEMS = [
   { id: 'models',  icon: 'cpu',              label: 'Models' },
   { id: 'capabilities', icon: 'list-checks', label: 'Capabilities' }, // auto-populated from flags_list
   { id: 'system',  icon: 'server',           label: 'System' },   // real RAM/inference-state/storage telemetry
+  // the ONE non-read-only screen — gated on the box's CONTROL_IN flag (6-5/M3-4b)
+  { id: 'control', icon: 'message-circle',   label: 'Control-IN' },
 ];
 
 function Rail({ view, setView }) {
@@ -116,13 +123,17 @@ function Rail({ view, setView }) {
         })}
       </div>
       <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center' }}>
-        <div title="Read-only telemetry console" style={{ width: 38, height: 38, display: 'flex',
+        {/* Scoped to the TELEMETRY stream — control-IN is a separate, gated send path
+            on its own screen, so this must not claim the whole console is read-only. */}
+        <div title="Telemetry stream is read-only — control-IN is a separate, gated send path"
+          style={{ width: 38, height: 38, display: 'flex',
           alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
           <Icon name="eye" />
         </div>
-        <div style={{ width: 30, height: 30, borderRadius: '999px', background: 'var(--surface-inset)',
+        <div title="Read-only telemetry — control-IN is a separate, gated send path"
+          style={{ width: 30, height: 30, borderRadius: '999px', background: 'var(--surface-inset)',
           border: '1px solid var(--border-strong)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          font: 'var(--weight-semibold) 12px/1 var(--font-mono)', color: 'var(--text-secondary)' }}>RO</div>
+          font: 'var(--weight-semibold) 11px/1 var(--font-mono)', color: 'var(--text-secondary)' }}>TLM</div>
       </div>
     </nav>
   );

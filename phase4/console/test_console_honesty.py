@@ -74,6 +74,11 @@ BANNED = [
     "detects malicious",
     "malicious queries stopped",
     "blocks injection",
+    # 6-5/M3-4b: the control-IN SEND surface. The channel is authenticated inbound and
+    # CRC'd (NOT signed) outbound — "secure channel" overclaims it; and the box refuses a
+    # defined abuse class, it does not stop attacks.
+    "secure channel",
+    "stops attacks",
 ]
 
 # (b) Honest-framing markers that MUST stay present somewhere in the console
@@ -284,6 +289,90 @@ def main():
           "control-IN refusals stat carries the 'defined abuse class' framing")
     check('contained structurally, not detected' in sysb.lower(),
           "control-IN stat carries the 'contained structurally, not detected' honesty ceiling")
+
+    # --- 6-5/M3-4b: the Control-IN SEND surface. This is the ONE non-read-only screen, so the
+    # gate has to be strict: the composer must be GATED on the live CONTROL_IN flag (a stub panel
+    # that always renders an enabled input must FAIL here), must use <input (never the banned
+    # demo-kit <textarea), and must carry the abuse-class / not-detected honesty ceiling. ---
+    check('ConsoleControl.jsx' in files, "Control-IN view exists (ConsoleControl.jsx)")
+    ctl = blobs.get('ConsoleControl.jsx', '')
+    check(len(ctl) > 0, "ConsoleControl.jsx is non-empty")
+    check('ConsoleControl.jsx' in blobs.get('index.html', ''), "Control-IN view wired into index.html")
+    shell_b = blobs.get('ConsoleShell.jsx', '')
+    check("id: 'control'" in shell_b and 'Control-IN' in shell_b,
+          "Control-IN rail item wired into ConsoleShell.jsx")
+    # TEETH #1: the composer is gated on the LIVE flag, not always-on. Requires BOTH the
+    # flag-predicate call AND a derived `disabled` binding — a stub panel has neither.
+    check("hasFlag(rec, 'CONTROL_IN')" in ctl,
+          "composer gating reads the LIVE CONTROL_IN flag (hasFlag(rec, 'CONTROL_IN'))")
+    check('const enabled =' in ctl and 'store.simulated' in ctl,
+          "gating predicate exists and also excludes the SIMULATED preview (no box to send to)")
+    check('disabled={!enabled' in ctl,
+          "the input is disabled from the gating predicate (not unconditionally enabled)")
+    check('canSend' in ctl and 'disabled={!canSend}' in ctl,
+          "the Send button is disabled from the same predicate + the byte cap")
+    # TEETH #2: honest gated-off explanation must be on-screen for the DEPLOYED (flag-absent) box.
+    check('gated off on the box' in ctl.lower(),
+          "disabled state explains control-IN is gated off on the box")
+    check('activates at the flip' in ctl.lower(),
+          "disabled state says the send path activates at the flip (not 'coming soon' fiction)")
+    # TEETH #3: the honesty ceiling, on the send surface itself.
+    check('defined abuse class' in ctl.lower(),
+          "Control-IN carries the 'defined abuse class' framing")
+    check('not detected' in ctl.lower(),
+          "Control-IN carries the 'not detected' honesty ceiling (injection contained structurally)")
+    check('structurally' in ctl.lower(),
+          "Control-IN says injection is contained STRUCTURALLY (the real boundary)")
+    check('crc' in ctl.lower() and 'not authenticated' in ctl.lower(),
+          "Control-IN states the box->console reply is CRC'd, not authenticated")
+    # TEETH #3b: DELIVERY EXCLUSIVITY IS NOT PROVEN. The box-side dst_ok assertion and the wire
+    # proof establish that the reply is unicast-ADDRESSED to the provisioned console; no
+    # third-host negative capture exists (that is an M4 item), so "the answer comes back to this
+    # console only" would assert something the project's own record marks NOT PROVEN.
+    check('addressed only to this console' in ctl.lower(),
+          "reply confidentiality is framed as ADDRESSING ('addressed only to this console')")
+    check('never broadcast' in ctl.lower(),
+          "the addressing claim is qualified with 'never broadcast' (what dst_ok actually proves)")
+    for over in ('comes back to this console only', 'answers going only here',
+                 'only this console receives', 'no other host'):
+        # 'no other host' is allowed ONLY inside an explicit disclaimer of proof.
+        if over == 'no other host':
+            check(('no other host' not in ctl.lower())
+                  or ('not a proof no other host' in ctl.lower()),
+                  "any 'no other host' mention is an explicit NOT-a-proof disclaimer")
+        else:
+            check(over not in ctl.lower(),
+                  "Control-IN does not overclaim delivery exclusivity (%r absent)" % over)
+    # TEETH #3c: the trust marker rides EVERY reply row, not just the CRC-failure row — a good
+    # CRC proves non-corruption, never authorship.
+    check('crc-checked, not authenticated' in ctl.lower(),
+          "every reply row carries the 'CRC-checked, not authenticated' marker")
+    # TEETH #3d: a sent frame is NOT an acknowledged frame. The box drops a frame that fails its
+    # sequence floor or HMAC WITHOUT replying, so a turn can legitimately never complete; the
+    # panel must say so rather than pulse "awaiting" forever and imply delivery.
+    check('nothing here says the box received it' in ctl.lower(),
+          "a long-unanswered turn states plainly that delivery is not implied")
+    # TEETH #4: the banned demo-kit composer must not sneak back in via this new surface.
+    check('<textarea' not in ctl.lower(), "Control-IN uses no <textarea (banned demo-kit composer)")
+    check('<input' in ctl, "Control-IN uses a single-line <input (the 172-byte wire cap)")
+    check('/send' in ctl, "Control-IN posts to the receiver's /send endpoint")
+    ctl_banned = [b for b in BANNED if b.lower() in ctl.lower()]
+    check(not ctl_banned, "ConsoleControl.jsx banned-free%s" % ("" if not ctl_banned else "  <-- %s" % ctl_banned))
+    # The reply stream must be routed separately from telemetry (a reply is NOT a packet).
+    tj = blobs.get('telemetry.js', '')
+    check("'control_reply'" in tj,
+          "telemetry.js routes the control_reply record kind explicitly")
+    check('ingestReply' in tj and 'state.replies' in tj,
+          "telemetry.js keeps replies in their OWN ring (never state.latest / connState)")
+    check("flags.push('CONTROL_IN'" not in tj and 'CONTROL_IN\'' not in tj.split('startSimulator')[-1],
+          "the built-in simulator does NOT claim CONTROL_IN (preview shows the DISABLED composer)")
+    # The shell must no longer claim the whole console is read-only now that a send path exists.
+    check('Read-only telemetry console' not in shell_b,
+          "stale 'Read-only telemetry console' claim removed from the shell (a send path exists)")
+    check('no composer, no control-in' not in shell_b.lower(),
+          "stale 'no composer, no control-in' header comment removed from the shell")
+    check('Telemetry stream is read-only' in shell_b,
+          "shell scopes read-only to the TELEMETRY stream (control-IN noted as separate + gated)")
 
     # --- uptime: box uptime is shown ONLY as the real boot-relative uptime_ms — ≈-marked and
     # TSC-caveated (the box has no RTC), never presented as wall-clock. ---
