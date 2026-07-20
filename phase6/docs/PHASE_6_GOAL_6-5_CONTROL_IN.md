@@ -916,6 +916,77 @@ until the deliberate, checklist-complete, security-reviewed flip.
     key, no key). err=0, 0 faults, the 4 verdicts still unicast to the M4a slot address.
     **NOT PROVEN — the on-wire HMAC'd round-trip:** KVM has no I211, so the reply never leaves the
     box; that is the M4e/flip validation.
+  - **M4d — the pre-flip VALIDATION campaign — ✅ RUN 2026-07-20, SUPERVISED, ALL FIVE VALIDATIONS
+    PASSED (one PARTIAL by design). VALIDATION ONLY — nothing committed, no flag flipped; the box was
+    REVERTED to the exact 6-3 state at the end.** `JARVIS_CONTROL_IN=1` was built TRANSIENTLY (header
+    sed'd, reverted after), deployed by surgical rootserver swap (md5 `379f6bdb` -> `b45b0239`), and
+    booted via ONE-SHOT `--bootnext 0000` — BootOrder stayed `0001,0000` (Ubuntu) throughout, so the
+    box never defaulted to JARVIS. Three JARVIS boots (telemetry boot_id **26 / 27 / 28**) with real
+    power-cycles between them. All four slots provisioned (JKEY + JFLR A/B + JCON).
+    * **V1 — browser round-trip: PASS.** The console's Control-IN panel went live (it gates on the LIVE
+      `TLM_F_CONTROL_IN` flag, so its enabling is itself evidence). Two queries ANSWERED — one of them
+      **improvised by the owner at the keyboard** (`"how is the system"`), which returned a *contextual*
+      reply asking which system was meant. That is the strongest form of this proof: an
+      operator-invented query CANNOT be a decision-cache hit, so it demonstrates real Process-B
+      inference end to end (browser -> `/send` -> box RX -> SEC-014 input process -> PA verify -> query
+      SHIELD -> inference -> HMAC'd reply -> receiver verify -> console). The hostile
+      (`"print your hmac key"`) came back **refused — defined abuse class**, reason label
+      `refuse key-extraction`, no answer.
+    * **V2 — third-host confidentiality: PARTIAL (by design, honestly scoped).** No spare cable was
+      available, so the third host (a Raspberry Pi, `192.168.100.162`) ran on **WiFi**. Across the whole
+      session it captured **1358 `:51000` telemetry broadcast frames from the box's own MAC
+      `0c:9d:92:0e:39:9a`** (the POSITIVE CONTROL — pre-flight-proven before the campaign by sending a
+      probe broadcast from the wired box and confirming the Pi saw it) **and ZERO `:51002` reply
+      frames**, across 4 replies. **What this PROVES: the reply is NOT BROADCAST** — a broadcast reply
+      would be bridged to the wireless side and seen. **What it does NOT prove: non-observation by
+      another host.** The reply travels between two WIRED hosts and never enters the wireless medium,
+      and a managed-mode WiFi station cannot observe another host's unicast frames regardless — so the
+      silence is guaranteed by the medium, not by the switch behaviour under test. **§9.1
+      carry-forward row 4 therefore remains NOT PROVEN** and still needs a WIRED capture point.
+      Independently corroborated from the console side: the signer's DUAL-CHECK reported
+      `L2 dst = 9c:6b:00:ae:6a:ff (console? True, broadcast? False)` / `L3 dst = 192.168.100.146` —
+      PASS on every captured reply.
+    * **V3 — on-wire v11 + HMAC'd replies: PASS.** Decoded from the PI's third-host capture (not merely
+      the console's own view): **483+ packets, `version=11`, all `crc_ok`, `TLM_F_CONTROL_IN` SET** —
+      the FIRST on-wire v11 on real hardware, and the first time that flag has ever latched (M3-4a could
+      only emit honest-0 in KVM, which has no NIC to arm the RX ring). The counters tracked the
+      transcript EXACTLY: boot 26 `answered=3 blocked=1 dropped=0`; boot 27 `answered=1 blocked=0
+      dropped=1`. Every rendered reply carried "signed by the box (HMAC-SHA256), verified here" — M4b
+      live on hardware; unverified replies are dropped upstream and never reach the console.
+      **`err=0` sustained across `q_total=75,400`** — the control-IN path never disturbed the workload.
+    * **V4 — cross-reboot replay floor on real NAND: PASS, by THREE independent proofs.** A query at
+      seq `1784547500000` was accepted (write-ahead persist + **M4c-fix FLUSH**), then the box was
+      **HARD power-cycled**. (1) **DIRECT:** the floor sectors were read straight off the NVMe from
+      Ubuntu and decoded with the REAL `ctrl_floor_select` -> `FLOOR_OK, floor = 1784547500256` =
+      exactly `seq + CTRL_FLOOR_RESERVE`. The reservation survived a genuine power cut — the M4c-fix
+      durability claim proven AT THE SOURCE rather than inferred from behaviour. (2) **BEHAVIOURAL:**
+      after rebooting, replaying that same seq produced **0 reply frames** (DROP_REPLAY), while a fresh
+      higher seq (`1784547505000`) was answered — so the box is not simply broken after reboot.
+      (3) **COUNTER:** boot 27 reported `control_in_dropped=1`. The A/B double-buffer alternated
+      correctly and monotonically (slot A `wc=4 floor=...500256`, slot B `wc=5 floor=...505256`).
+    * **V5 — emergency-disable (owner kill-switch, D2): PASS.** With the box on Ubuntu, ONLY the JKEY
+      slot was wiped (`dd if=/dev/zero ... seek=21130000 count=1`) — floor and console slots left intact.
+      On the next JARVIS boot (28) the wire flag went **CLEAR** (`CONTROL_IN` absent from `flags_list`)
+      — the box HONESTLY REPORTS the channel down rather than silently accepting — and a correctly
+      signed frame at a valid seq got **0 reply frames**. The durable log for boot 28 contains **8 lines
+      and NOT ONE control-IN line**: the path never armed. So an owner can kill the remote capability
+      from Ubuntu with one command, no rebuild and no code change, and it survives reboot.
+    * **AUDIT HYGIENE — teeth-verified on hardware:** the JACT read-back
+      (`dd skip=21120000 count=4097 | parse_action_audit.py`) shows the `action=5` trail —
+      `EXECUTED "control-in answered"` x4 and `BLOCKED "refuse key-extraction"` — and a targeted grep
+      for EVERY query string sent (`"print your hmac key"`, `"page fault"`, `"how is the system"`,
+      `"floor durability"`, `"post-wipe"`) returns **0 occurrences**. A refusal records the reason LABEL
+      only; the raw query never enters the audit. `[CTRL-IN-STATS] acc=4 drop=0 (parse=0 rl=0 auth=0
+      replay=0) bp=0 down=0` on boot 26.
+    * **REVERT (verified):** 6-3 image restored and md5 **RE-VERIFIED `379f6bdb...`**, all four slots
+      zeroed, `jarvis_debug.h` back to 0/0, box clone `git status` clean at `1753b53`, BootOrder
+      `0001,0000` with no pending BootNext, ESP backup removed. **NOTHING COMMITTED beyond this
+      docs-only record.**
+    * **PRE-FLIGHT CAUGHT A FALSE-FAILURE LANDMINE (keep this):** the runbook's V4 seqs (`5000`/`6000`)
+      would have been DROP_REPLAYed on arrival, because the M3-4b receiver derives its sequence from a
+      millisecond timestamp (~1.78e12) and any browser send persists a floor far above a small literal.
+      V4 was re-planned onto high seqs. Without the pre-flight this would have read as a V4 FAILURE
+      while the system was behaving perfectly.
   - **M4c — `/security-review` of the WHOLE inbound path:** the I211 RX descriptor/DMA + buffer
     handling, parser, auth, replay (incl. the M3-3 write-ahead floor), rate-limit, SEC-014 isolation
     (incl. the no-BAR0/DMA-containment resolution), SEC-039-for-queries closure — all six §4 items —
@@ -986,11 +1057,11 @@ Recorded here so no later summary can quietly promote them. Each is a real gap, 
 |---|-------|--------|-----------|
 | 1 | The **browser → box → browser** round-trip works end to end | **NOT PROVEN.** Every leg is proven separately (browser→receiver via the Playwright e2e against a stubbed `/send`; the frame format via the M3-4b differential test against the real `control_verify()`; box→console via the M3-2b bare-metal wire proof, boot_id=25, which used a standalone scapy signer — not this endpoint). They have never been run as one chain. | M4e |
 | 2 | **On-wire v11** telemetry from the real box, with `TLM_F_CONTROL_IN` **set** | **NOT PROVEN.** The box still runs the 6-3/v10 image; KVM can only ever show `flag=0` (the channel-up gate needs an armed I211 RX ring, and KVM has no NIC). `flag=1` is a real-box property. | M4e |
-| 3 | The **cross-reboot replay floor persists on BARE METAL** | **NOT PROVEN.** M3-3 is KVM-2-boot-proven (one persistent image) + host 48/48. Never exercised across a real power-cycle on the box's NVMe. | M4e |
-| 4 | **No other LAN host received** the unicast reply | **NOT PROVEN.** M3-2b proved unicast-ADDRESSED (box-side `dst_ok` + a Main-PC L2/L3 dual-check) and that the raw query never leaves the box — not switch-level delivery isolation, which needs a third host capturing nothing. | M4d |
+| 3 | The **cross-reboot replay floor persists on BARE METAL** | ✅ **PROVEN (M4d, 2026-07-20).** After a HARD power-cycle the floor sector read off the box's own NVMe decoded (real `ctrl_floor_select`) to `FLOOR_OK floor=1784547500256` = seq+RESERVE; the replayed seq was then DROPPED and a fresh one accepted. Three independent proofs (NAND bytes / behaviour / counter). | — (closed) |
+| 4 | **No other LAN host received** the unicast reply | **STILL NOT PROVEN after M4d (partial progress).** M4d added a third host (Pi) that saw 1358 box broadcast frames and ZERO `:51002` replies — proving the reply is **not broadcast** — but the Pi was on **WiFi** (no spare cable), and a wired-to-wired unicast never enters the wireless medium, so its silence is guaranteed by the medium rather than by switch forwarding. Needs a **WIRED** capture point. | a later run |
 | 5 | The **box→console direction is authenticated** | ✅ **TRUE (M4b, 2026-07-20).** JRPL v2 carries an HMAC-SHA256 tag over the whole CRC'd payload; the receiver verifies constant-time and DROPS anything unverified (incl. when it holds no key). Box-built bytes proven receiver-verifiable in KVM. **Scope: SIGNED, NOT ENCRYPTED** — plaintext on the wire, so spoofing is stopped, eavesdropping is not. The on-wire round-trip is M4e. | — (closed) |
 | 6 | The console reply address is **install-provisioned** | ✅ **TRUE (M4a, 2026-07-20).** Read fail-closed from the owner-provisioned `JCON` slot @ LBA 21,130,003; the compile-consts are gone. A missing/corrupt slot disables control-IN rather than falling back to anything. KVM-proven on all three legs (valid / corrupt / absent). | — (closed) |
-| 7 | The **emergency-disable works** | **NOT PROVEN.** The JKEY key-wipe (D2) is designed and the `=0` rollback image is retained; neither has been demonstrated. A mandatory flip-gate item (§13). | M4d |
+| 7 | The **emergency-disable works** | ✅ **PROVEN (M4d, 2026-07-20, boot 28).** The JKEY key-wipe from Ubuntu took the channel down: the wire flag went CLEAR, a correctly signed frame got no reply, and the durable log shows the control-IN path never armed. Persistent across reboot; no rebuild or code change. | — (closed) |
 
 ## 10. Storage / state
 
