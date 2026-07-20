@@ -1896,10 +1896,12 @@ static control_verdict_t pa_verify_candidate(control_result_t *out)
         out->verdict = CV_DROP_AUTH; return out->verdict;
     }
     /* 6-5/M3-3 WRITE-AHEAD replay floor: BEFORE control_replay_check accepts this seq, persist a durable
-     * on-disk reservation >= seq. So an accepted seq is ALWAYS covered by the durable floor -> a crash
-     * right after the accept resumes at a floor >= that seq (zero cross-reboot replay window). FAIL-CLOSED:
-     * if the persist write fails, disable control-IN for the boot and DROP — never accept a seq we cannot
-     * durably back. (Amortized: ~one NVMe write per CTRL_FLOOR_RESERVE accepts.) */
+     * on-disk reservation >= seq — written AND NVMe-FLUSHED to NAND (6-5/M4c-fix), so "durable" means
+     * survives cold power loss, not just a warm crash. So an accepted seq is ALWAYS covered by the durable
+     * floor -> a crash, fault, warm reset OR cold power cut right after the accept resumes at a floor >=
+     * that seq (zero cross-reboot replay window). FAIL-CLOSED: if the persist write OR the flush fails,
+     * disable control-IN for the boot and DROP — never accept a seq we cannot durably back.
+     * (Amortized: ~one NVMe write+flush per CTRL_FLOOR_RESERVE accepts.) */
     if (g_ctrl_floor_ok && !ctrl_floor_persist_ahead(msg.seq)) {
         g_ctrl_floor_ok = 0;
         out->verdict = CV_DROP_REPLAY;   /* replay defense unavailable -> drop (the poll gate then stops the lane) */
@@ -2374,8 +2376,9 @@ static void put_u64_dec(uint64_t v)
 }
 
 /* 6-5/M3-3: WRITE-AHEAD replay-floor persist. Called from pa_verify_candidate BEFORE control_replay_check
- * accepts `seq`, so an accepted seq is ALWAYS covered by a DURABLE on-disk reservation (a crash right after
- * the accept resumes at a floor >= seq -> zero cross-reboot replay window). If `seq` already sits at/below
+ * accepts `seq`, so an accepted seq is ALWAYS covered by a DURABLE on-disk reservation — persisted AND
+ * NVMe-FLUSHED to NAND (6-5/M4c-fix), so a crash, fault, warm reset OR COLD POWER LOSS right after the
+ * accept resumes at a floor >= seq -> zero cross-reboot replay window. If `seq` already sits at/below
  * the durable reservation, nothing is written (eager reservation => ~one write per CTRL_FLOOR_RESERVE
  * accepts). Alternates the A/B sector so a lost single-sector write leaves the OTHER sector holding a
  * reservation >= every previously-accepted seq. Returns 1 when the floor durably covers `seq` (or already
@@ -2393,11 +2396,23 @@ static int ctrl_floor_persist_ahead(uint64_t seq)
         puts_serial("[CTRL-FLOOR] persist WRITE FAILED - control-IN fail-closed (seq not accepted)\n");
         return 0;
     }
+    /* 6-5/M4c-fix: a completed write only means the drive ACCEPTED the sector — on the DRAM-less
+     * NM790 it can still sit in the VOLATILE write cache and be lost to an abrupt COLD power loss.
+     * FLUSH commits it to NAND, so returning 1 means DURABLE, not merely written, and the
+     * zero-cross-reboot-replay-window guarantee holds across cold power loss too. Same fail-closed
+     * contract as the write failure above (the caller clears g_ctrl_floor_ok and drops the frame).
+     * ORDERING: the flush precedes the g_ctrl_floor_resv/g_ctrl_floor_wc advance, so a failed flush
+     * leaves the in-memory reservation accounting untouched — no half-committed state, and a retry
+     * rebuilds the SAME wc/LBA/content (idempotent). */
+    if (!g_nvme_ptr || nvme_flush(g_nvme_ptr) != 0) {
+        puts_serial("[CTRL-FLOOR] FLUSH FAILED - control-IN fail-closed (seq not accepted)\n");
+        return 0;
+    }
     g_ctrl_floor_resv = new_resv;
     g_ctrl_floor_wc   = wc + 1u;
     puts_serial("[CTRL-FLOOR] persist resv="); put_u64_dec(new_resv);
     puts_serial(lba == CTRL_FLOOR_LBA_A ? " lba=A wc=" : " lba=B wc=");
-    put_dec(wc); puts_serial("\n");
+    put_dec(wc); puts_serial(" flushed\n");
     return 1;
 }
 #endif /* JARVIS_CONTROL_IN */

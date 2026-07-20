@@ -465,6 +465,22 @@ static int test_phase_bit_toggle(void)
     return 1;
 }
 
+/* Test 11 (6-5/M4c-fix): the NVM FLUSH opcode constant.
+ *
+ * nvme_flush() itself is gated `#if JARVIS_CONTROL_IN` and needs real NVMe queues, so
+ * it is NOT host-callable — its behavior is KVM-verified. What IS cheaply pinnable here
+ * is the opcode it submits: NVM FLUSH is 0x00 per the NVMe spec, and 0x00 is also the
+ * memset() default, so a typo'd or missing assignment would silently submit a FLUSH.
+ * Pinning the constant keeps that spec value under CI. Also pins that FLUSH is a
+ * DISTINCT opcode from READ/WRITE — the whole point of not reusing the write path. */
+static int test_flush_opcode_constant(void)
+{
+    EXPECT(NVME_IO_FLUSH == 0x00, "NVM FLUSH opcode must be 0x00 (NVMe spec)");
+    EXPECT(NVME_IO_FLUSH != NVME_IO_READ, "FLUSH must differ from READ");
+    EXPECT(NVME_IO_FLUSH != NVME_IO_WRITE, "FLUSH must differ from WRITE");
+    return 1;
+}
+
 /* ========================================================================
  * Main
  * ======================================================================== */
@@ -483,6 +499,7 @@ int main(void)
     RUN_TEST(test_io_queue_creation);
     RUN_TEST(test_read_command_format);
     RUN_TEST(test_phase_bit_toggle);
+    RUN_TEST(test_flush_opcode_constant);
 
     printf("\n=== Results: %d PASS, %d FAIL (of %d) ===\n",
            tests_passed, tests_failed, tests_passed + tests_failed);

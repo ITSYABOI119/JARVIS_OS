@@ -12,6 +12,15 @@
  * always AHEAD of the highest accepted seq (fail-high) -> a reboot resumes with
  * floor >= last-accepted -> ZERO cross-reboot replay window.
  *
+ * DURABILITY BACKING (6-5/M4c-fix — the absolute above is only true WITH this): the
+ * caller persists the reservation AND issues an NVMe FLUSH (mandatory opcode 0x00,
+ * committing the drive's volatile write cache to NAND) BEFORE the accept proceeds,
+ * fail-closing if either step fails. So a floor >= every accepted seq survives not
+ * only crashes / faults / warm resets but COLD POWER LOSS. Without the flush a
+ * completed write could sit in the NM790's volatile cache and be lost to an abrupt
+ * power cut, reopening a bounded (<= CTRL_FLOOR_RESERVE) window of already-answered
+ * seqs — the M4c /security-review finding this backing closes.
+ *
  * STORAGE: a SEPARATE, DOUBLE-BUFFERED, checksummed floor-sector PAIR (A/B) — NOT
  * the JKEY key slot's reserved fields. The key sector (control_key.h) stays
  * WRITE-ONCE-FOREVER (zero torn-write risk on the crown-jewel key); its seq_floor /

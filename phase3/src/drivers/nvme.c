@@ -491,6 +491,49 @@ int nvme_write_sectors(nvme_controller_t *ctrl,
     return nvme_submit_and_wait(ctrl, &ctrl->io, &cmd);
 }
 
+#if JARVIS_CONTROL_IN
+/* ========================================================================
+ * Cache Flush (6-5/M4c-fix, control-IN only)
+ * ======================================================================== */
+
+/**
+ * nvme_flush - Commit the controller's volatile write cache to NAND
+ * @ctrl: Controller state (must be initialized)
+ *
+ * A completed nvme_write_sectors() only means the drive ACCEPTED the data — on a
+ * DRAM-less drive with a volatile write cache (the box's Lexar NM790) it can still
+ * sit in that cache for ~ms and be lost to an abrupt COLD power loss. NVM FLUSH
+ * (opcode 0x00) commits it to non-volatile media.
+ *
+ * FLUSH, deliberately NOT FUA: FLUSH is MANDATORY in the NVMe spec, so it is always
+ * honored; the FUA write bit (cdw12 bit 30) is OPTIONAL and a drive may legally treat
+ * such a write as normal. Implementing this as a SEPARATE command also leaves
+ * nvme_write_sectors() textually and behaviorally unchanged, so the deployed write
+ * path (episodic / JACT / semantic logs) is unaffected.
+ *
+ * GATED to control-IN because only the replay floor needs durability-before-accept;
+ * the logs are best-effort telemetry and flushing them would add latency to the hot
+ * path for no security benefit.
+ *
+ * FLUSH transfers no data and takes no LBA: prp1/prp2 and every cdw stay 0.
+ *
+ * Returns 0 on success, negative on error.
+ */
+int nvme_flush(nvme_controller_t *ctrl)
+{
+    nvme_sq_entry_t cmd;
+
+    if (!ctrl || !ctrl->initialized)
+        return -1;
+
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.opcode = NVME_IO_FLUSH;
+    cmd.nsid   = ctrl->ns_id;
+
+    return nvme_submit_and_wait(ctrl, &ctrl->io, &cmd);
+}
+#endif /* JARVIS_CONTROL_IN */
+
 /* ========================================================================
  * Info Getter
  * ======================================================================== */

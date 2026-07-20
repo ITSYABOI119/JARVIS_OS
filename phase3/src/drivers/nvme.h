@@ -47,6 +47,7 @@
 /* ---- I/O Command Opcodes ---- */
 #define NVME_IO_READ   0x02
 #define NVME_IO_WRITE  0x01
+#define NVME_IO_FLUSH  0x00   /* 6-5/M4c-fix: NVM FLUSH (MANDATORY in the NVMe spec) */
 
 /* ---- Identify CNS values ---- */
 #define NVME_IDENTIFY_CONTROLLER  0x01
@@ -146,5 +147,13 @@ int nvme_write_sectors(nvme_controller_t *ctrl,
 
 int nvme_get_info(nvme_controller_t *ctrl,
                   uint64_t *total_lbas, uint32_t *block_size);
+
+#if JARVIS_CONTROL_IN
+/* 6-5/M4c-fix: commit the drive's VOLATILE write cache to NAND. GATED (declaration
+ * included) so an OFF build's header surface is unchanged; the gate rides the build
+ * script's -DJARVIS_CONTROL_IN=1 (this driver does not include jarvis_debug.h — the
+ * nic_i211.c precedent). ONLY the control-IN replay floor needs this durability. */
+int nvme_flush(nvme_controller_t *ctrl);
+#endif
 
 #endif /* NVME_H */
