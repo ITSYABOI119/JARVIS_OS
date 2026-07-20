@@ -94,7 +94,7 @@
 #include "hmac_sha256.h"         /* Phase 6 6-5/M2a: for the PROBE + the M2b-1 PA-side HMAC (verify-in-PA) */
 #include "control_mailbox.h"     /* Phase 6 6-5/M2b-1: PA<->jarvis-input mailbox layout (Model 2) */
 #include "query_shield.h"        /* Phase 6 6-5/M3-2a: the query SHIELD gate (closes SEC-039-for-queries) */
-#include "control_console.h"     /* Phase 6 6-5/M3-2b: the provisioned reply address (M4 -> NVMe slot) */
+#include "control_console.h"     /* Phase 6 6-5/M4a: the provisioned reply-address NVMe JCON slot (@ 21,130,003) */
 #endif
 #include "jarvis_ui_tokens.h"   /* Step 2c-2b: FBP_ and JUI_ palette + geometry (single source) */
 
@@ -407,6 +407,15 @@ static uint64_t            g_ctrl_floor_resv = 0;   /* current persisted floor R
 static uint32_t            g_ctrl_floor_wc   = 1;   /* next floor-sector write_count (A/B alternates by parity)   */
 static int                 g_ctrl_floor_ok   = 0;   /* 0 => corrupt/unread floor => control-IN OFF (fail-safe)     */
 static int ctrl_floor_persist_ahead(uint64_t seq);   /* 6-5/M3-3 write-ahead; defined below, called by pa_verify_candidate */
+/* 6-5/M4a: the PROVISIONED box->console reply address, read from the NVMe JCON slot (the JKEY/JFLR
+ * precedent) instead of a compile const. The box has NO ARP and no IP stack, so the destination must
+ * be provisioned — never resolved, never taken from a received frame's source (a spoofed source would
+ * redirect the answer). g_ctrl_console_ok is a THIRD FAIL-CLOSED gate beside key + floor: a box with no
+ * valid console address cannot answer, so it must not accept (and ctrl_send_reply withholds outright). */
+static uint8_t             g_ctrl_console_mac[6];
+static uint32_t            g_ctrl_console_ip   = 0;   /* host-order u32 (the JARVIS_BOX_IP convention) */
+static uint16_t            g_ctrl_console_port = 0;
+static int                 g_ctrl_console_ok   = 0;   /* 0 => no/invalid console slot => control-IN OFF */
 /* M2b-1: the token bucket moved INTO the jarvis-input process (Model 2); PA holds no
  * rate limiter. control_ratelimit.c is still compiled (control_verify.c references it). */
 static uint32_t g_ctrl_accepted, g_ctrl_dropped;
@@ -2472,7 +2481,8 @@ static void ctrl_in_jact(uint16_t verdict, uint16_t outcome, const char *trig, u
  * (no silent drops) — verdict 0=answered / 1=refused / 2=degraded / 3=failed. Payload wire (LE):
  *   [magic 'JRPL'][ver=1][verdict][seq:u16][text_len:u16][text: sanitized, <=512][crc32 over all before it].
  * CONFIDENTIALITY (the point of the milestone): the frame is built with net_build_udp_unicast to
- * the PROVISIONED CONTROL_CONSOLE_MAC/IP ONLY — never broadcast, never derived from the request
+ * the address PROVISIONED in the NVMe JCON slot ONLY (6-5/M4a — no longer a compile const; an
+ * unprovisioned box withholds the reply entirely) — never broadcast, never derived from the request
  * frame's source (a spoofed source would redirect the answer). A defensive box-side check re-reads
  * the built frame's L2 dst and DROPS the TX if it is not the console MAC / is broadcast. The reply
  * is CRC'd (integrity), NOT HMAC'd (box->console is unauthenticated — a NAMED limitation, an M4
@@ -2482,6 +2492,17 @@ static void ctrl_in_jact(uint16_t verdict, uint16_t outcome, const char *trig, u
 #define CTRL_REPLY_TEXT_MAX 512u
 static void ctrl_send_reply(uint16_t seq, uint8_t verdict, const char *text, int text_len)
 {
+    /* 6-5/M4a FAIL-CLOSED (defense in depth): with no provisioned console slot there is no address to
+     * answer to, so nothing is built and nothing is sent — a reply must never be constructed against a
+     * zero/unprovisioned destination even if a future caller bypasses the channel-up gate. */
+    if (!g_ctrl_console_ok) {
+        /* Deliberately tagged [CTRL-CONSOLE], NOT [CTRL-IN-REPLY]: this is a console-slot condition,
+         * not a reply. It also keeps "zero [CTRL-IN-REPLY] lines" a clean, unambiguous assertion for
+         * the corrupt/absent-slot box-gate legs. */
+        puts_serial("[CTRL-CONSOLE] reply WITHHELD - no provisioned console address (fail-closed)\n");
+        return;
+    }
+
     int t = text_len; if (t < 0) t = 0; if ((uint32_t)t > CTRL_REPLY_TEXT_MAX) t = (int)CTRL_REPLY_TEXT_MAX;
 
     static uint8_t pl[10u + CTRL_REPLY_TEXT_MAX + 4u];   /* header(10) + text(<=512) + crc(4) */
@@ -2500,11 +2521,11 @@ static void ctrl_send_reply(uint16_t seq, uint8_t verdict, const char *text, int
     pl[body_len + 2] = (uint8_t)((crc >> 16) & 0xFF); pl[body_len + 3] = (uint8_t)((crc >> 24) & 0xFF);
     uint16_t payload_len = (uint16_t)(body_len + 4u);
 
-    static const uint8_t cmac[6] = CONTROL_CONSOLE_MAC;
+    const uint8_t *cmac = g_ctrl_console_mac;   /* 6-5/M4a: from the NVMe JCON slot, not a compile const */
     static uint8_t reply_frame[640];
     int flen = net_build_udp_unicast(reply_frame, sizeof reply_frame, g_net.nic.mac, JARVIS_BOX_IP,
-                                     cmac, CONTROL_CONSOLE_IP, JARVIS_TELEMETRY_PORT,
-                                     CONTROL_REPLY_PORT, pl, payload_len);
+                                     cmac, g_ctrl_console_ip, JARVIS_TELEMETRY_PORT,
+                                     g_ctrl_console_port, pl, payload_len);
 
     /* Defensive confidentiality assertion: the BUILT frame's L2 dst MUST be the console MAC and
      * MUST NOT be broadcast — a reply that cannot be proven unicast never leaves the box. */
@@ -2519,7 +2540,7 @@ static void ctrl_send_reply(uint16_t seq, uint8_t verdict, const char *text, int
     puts_serial(" -> ");
     for (int i = 0; i < 6; i++) { putc_serial(HEXD[(cmac[i] >> 4) & 0xF]); putc_serial(HEXD[cmac[i] & 0xF]);
                                   if (i < 5) putc_serial(':'); }
-    putc_serial(':'); put_dec(CONTROL_REPLY_PORT);
+    putc_serial(':'); put_dec(g_ctrl_console_port);
     puts_serial(dst_ok ? "\n" : " DROP (not unicast — reply withheld)\n");
 
     if (dst_ok && g_net.ready)
@@ -2966,7 +2987,9 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
     pkt.control_in_answered = g_ctrl_in_answered > 0xFFFFu ? 0xFFFFu : (uint16_t)g_ctrl_in_answered;
     pkt.control_in_blocked  = g_ctrl_in_blocked  > 0xFFFFu ? 0xFFFFu : (uint16_t)g_ctrl_in_blocked;
     pkt.control_in_dropped  = g_ctrl_dropped;
-    if (g_ctrl_key_ok && g_ctrl_floor_ok && g_ctrl_rx_ready) pkt.flags |= TLM_F_CONTROL_IN;
+    /* 6-5/M4a: g_ctrl_console_ok joins the channel-up gate — a box with no provisioned console
+     * address cannot answer, so the channel is NOT up and must not advertise/accept. */
+    if (g_ctrl_key_ok && g_ctrl_floor_ok && g_ctrl_console_ok && g_ctrl_rx_ready) pkt.flags |= TLM_F_CONTROL_IN;
 #endif
     /* model display name (matches the on-screen panel) + last response, NUL-bounded (pkt is zeroed) */
     { const char *mn = "Gemma 4 E2B";
@@ -4589,6 +4612,32 @@ static void *main_continued(void *arg UNUSED)
             puts_serial("[CTRL-FLOOR] read FAILED - control-IN DISABLED this boot (fail-safe)\n");
         }
     }
+    /* 6-5/M4a: read the PROVISIONED box->console reply address from the NVMe JCON slot (LBA key+3).
+     * A THIRD INDEPENDENT FAIL-CLOSED GATE — deliberately NOT nested under the key/floor success
+     * branches, so an absent/invalid console slot is always reported rather than hidden behind an
+     * earlier failure. A box that cannot answer must not accept: g_ctrl_console_ok joins the channel-up
+     * gate below, and ctrl_send_reply withholds outright. An ALL-ZERO (unprovisioned) sector parses as
+     * invalid by design — not-provisioned and corrupt have the same effect: control-IN stays OFF. */
+    {
+        static uint8_t cbuf[512];
+        int cok = 0;
+        if (epi_nvme_read(CTRL_CONSOLE_LBA, 1, cbuf) == 0)
+            cok = ctrl_console_parse(cbuf, g_ctrl_console_mac, &g_ctrl_console_ip, &g_ctrl_console_port);
+        if (cok) {
+            static const char HEXD[] = "0123456789abcdef";
+            g_ctrl_console_ok = 1;
+            puts_serial("[CTRL-CONSOLE] addr=");
+            for (int i = 0; i < 6; i++) {
+                putc_serial(HEXD[(g_ctrl_console_mac[i] >> 4) & 0xF]);
+                putc_serial(HEXD[g_ctrl_console_mac[i] & 0xF]);
+                if (i < 5) putc_serial(':');
+            }
+            putc_serial(':'); put_dec(g_ctrl_console_port); puts_serial("\n");
+        } else {
+            g_ctrl_console_ok = 0;   /* covers both the NVMe read failure and an invalid/absent slot */
+            puts_serial("[CTRL-CONSOLE] no/invalid slot - control-IN reply DISABLED (fail-closed)\n");
+        }
+    }
     /* M2b-1: the token bucket now lives INSIDE the jarvis-input process (Model 2). PA
      * does only re-parse + HMAC + replay on the returned candidate, so PA holds no rate
      * limiter of its own. */
@@ -4787,7 +4836,9 @@ static void *main_continued(void *arg UNUSED)
          * 6-5/M2b-2: the outer !g_ctrl_in_down gate stops the whole lane once the input
          * process is declared dead (degrade); a candidate-consume ACKs the liveness counter;
          * a deadline tick + a backpressure drain (else-branch) are the flood/liveness edits. */
-        if (g_ctrl_rx_ready && g_ctrl_key_ok && g_ctrl_floor_ok && g_input_ready && !g_ctrl_in_down) {
+        /* 6-5/M4a: + g_ctrl_console_ok — a box that cannot answer must not accept. */
+        if (g_ctrl_rx_ready && g_ctrl_key_ok && g_ctrl_floor_ok && g_ctrl_console_ok &&
+            g_input_ready && !g_ctrl_in_down) {
             /* (1) consume a candidate (non-blocking): acquire-load the publish seq. */
             uint32_t cs = __atomic_load_n(&g_cand_mbx->seq, __ATOMIC_ACQUIRE);
             if (cs != g_ctrl_cand_last) {
@@ -5546,7 +5597,7 @@ static void *main_continued(void *arg UNUSED)
             puts_serial(" b="); put_dec(g_ctrl_in_blocked);
             puts_serial(" d="); put_dec(g_ctrl_dropped);
             puts_serial(" flag=");
-            put_dec((uint32_t)(g_ctrl_key_ok && g_ctrl_floor_ok && g_ctrl_rx_ready));
+            put_dec((uint32_t)(g_ctrl_key_ok && g_ctrl_floor_ok && g_ctrl_console_ok && g_ctrl_rx_ready));
             puts_serial("\n");
 #endif
 #if JARVIS_MONITORS
