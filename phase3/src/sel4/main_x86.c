@@ -95,6 +95,7 @@
 #include "control_mailbox.h"     /* Phase 6 6-5/M2b-1: PA<->jarvis-input mailbox layout (Model 2) */
 #include "query_shield.h"        /* Phase 6 6-5/M3-2a: the query SHIELD gate (closes SEC-039-for-queries) */
 #include "control_console.h"     /* Phase 6 6-5/M4a: the provisioned reply-address NVMe JCON slot (@ 21,130,003) */
+#include "control_reply.h"       /* Phase 6 6-5/M4b: the AUTHENTICATED (HMAC-SHA256) JRPL reply builder */
 #endif
 #include "jarvis_ui_tokens.h"   /* Step 2c-2b: FBP_ and JUI_ palette + geometry (single source) */
 
@@ -2478,18 +2479,28 @@ static void ctrl_in_jact(uint16_t verdict, uint16_t outcome, const char *trig, u
 }
 
 /* 6-5/M3-2b: the unicast reply-to-console. EVERY pa_ctrl_gate exit path sends exactly ONE reply
- * (no silent drops) — verdict 0=answered / 1=refused / 2=degraded / 3=failed. Payload wire (LE):
- *   [magic 'JRPL'][ver=1][verdict][seq:u16][text_len:u16][text: sanitized, <=512][crc32 over all before it].
- * CONFIDENTIALITY (the point of the milestone): the frame is built with net_build_udp_unicast to
- * the address PROVISIONED in the NVMe JCON slot ONLY (6-5/M4a — no longer a compile const; an
- * unprovisioned box withholds the reply entirely) — never broadcast, never derived from the request
+ * (no silent drops) — verdict 0=answered / 1=refused / 2=degraded / 3=failed.
+ *
+ * 6-5/M4b: THE REPLY IS NOW AUTHENTICATED. The payload is built by the host-pure, differential-
+ * tested ctrl_build_reply() (control_reply.c) — v2 wire, HMAC-SHA256 tagged under the SAME
+ * symmetric JKEY the inbound direction uses:
+ *   ['JRPL'][ver=2][verdict][seq:u16][tlen:u16][text: sanitized, <=512][crc32][tag:32]
+ * The tag spans header+text+CRC (exactly the bytes the receiver parses), so tampered text cannot
+ * be laundered by recomputing the CRC. This closes the M3-2b NAMED limitation: a CRC is not a MAC,
+ * so any LAN host reaching the console's reply port could previously FORGE an "answer from JARVIS"
+ * (including invented "recalled memory") and land it on a real pending turn via the seq. The
+ * receiver verifies constant-time and DROPS a reply that fails auth.
+ * *** HONESTY: AUTHENTICATED, NOT ENCRYPTED — the text is plaintext on the wire. M4b stops
+ * SPOOFING, not eavesdropping. Never call this reply encrypted/private/secret/a secure channel. ***
+ * (Telemetry-OUT stays CRC-only + UNCHANGED by design: non-sensitive and broadcast on purpose.)
+ *
+ * CONFIDENTIALITY (M3-2b/M4a, unchanged): the frame is built with net_build_udp_unicast to the
+ * address PROVISIONED in the NVMe JCON slot ONLY — never broadcast, never derived from the request
  * frame's source (a spoofed source would redirect the answer). A defensive box-side check re-reads
- * the built frame's L2 dst and DROPS the TX if it is not the console MAC / is broadcast. The reply
- * is CRC'd (integrity), NOT HMAC'd (box->console is unauthenticated — a NAMED limitation, an M4
- * /security-review item; consistent with the CRC-only telemetry-OUT direction). The frame is BUILT
+ * the built frame's L2 dst and DROPS the TX if it is not the console MAC / is broadcast. Only
+ * unicast ADDRESSING is proven — never claim third-host delivery exclusivity. The frame is BUILT
  * + LOGGED even with no NIC (the KVM frame-construction assertion); the actual TX is g_net.ready-gated
  * (fire-and-forget, the telemetry precedent). Refuse carries the reason LABEL only — never the query. */
-#define CTRL_REPLY_TEXT_MAX 512u
 static void ctrl_send_reply(uint16_t seq, uint8_t verdict, const char *text, int text_len)
 {
     /* 6-5/M4a FAIL-CLOSED (defense in depth): with no provisioned console slot there is no address to
@@ -2503,26 +2514,52 @@ static void ctrl_send_reply(uint16_t seq, uint8_t verdict, const char *text, int
         return;
     }
 
+    /* 6-5/M4b FAIL-CLOSED: never sign with a key we do not have. The reply path is only reachable
+     * when the channel is up (which already requires g_ctrl_key_ok), but signing under a zeroed
+     * g_ctrl_key would emit a reply ANY attacker could forge — strictly worse than sending nothing.
+     * Belt-and-braces against a future caller that bypasses the channel-up gate. */
+    if (!g_ctrl_key_ok) {
+        puts_serial("[CTRL-CONSOLE] reply WITHHELD - no HMAC key, cannot authenticate (fail-closed)\n");
+        return;
+    }
+
     int t = text_len; if (t < 0) t = 0; if ((uint32_t)t > CTRL_REPLY_TEXT_MAX) t = (int)CTRL_REPLY_TEXT_MAX;
 
-    static uint8_t pl[10u + CTRL_REPLY_TEXT_MAX + 4u];   /* header(10) + text(<=512) + crc(4) */
-    pl[0] = 'J'; pl[1] = 'R'; pl[2] = 'P'; pl[3] = 'L';
-    pl[4] = 1;                 /* version */
-    pl[5] = verdict;
-    pl[6] = (uint8_t)(seq & 0xFF);      pl[7] = (uint8_t)((seq >> 8) & 0xFF);
-    pl[8] = (uint8_t)((uint16_t)t & 0xFF); pl[9] = (uint8_t)(((uint16_t)t >> 8) & 0xFF);
-    for (int i = 0; i < t; i++) {                        /* printable-sanitize (attacker text on the answered path) */
-        uint8_t c = text ? (uint8_t)text[i] : 0;
-        pl[10 + i] = (c >= 0x20 && c < 0x7f) ? (char)c : '.';
+    /* 6-5/M4b: the payload build (header + printable-sanitize + crc + HMAC tag) lives in the
+     * host-pure, golden-pinned, differential-tested ctrl_build_reply() — the box and the host test
+     * emit byte-identical replies, and the sanitize can no longer be forgotten here. */
+    static uint8_t pl[CTRL_REPLY_MAX_LEN];   /* header(10) + text(<=512) + crc(4) + tag(32) = 558 */
+    int rlen = ctrl_build_reply(g_ctrl_key, verdict, seq, (const uint8_t *)text, (uint32_t)t,
+                                pl, (uint32_t)sizeof pl);
+    if (rlen <= 0) {   /* cannot happen with this cap; a half-built reply must never be sent */
+        puts_serial("[CTRL-CONSOLE] reply WITHHELD - build failed (fail-closed)\n");
+        return;
     }
-    uint32_t body_len = 10u + (uint32_t)t;
-    uint32_t crc = jarvis_tlm_crc32(pl, body_len);
-    pl[body_len + 0] = (uint8_t)(crc & 0xFF);        pl[body_len + 1] = (uint8_t)((crc >> 8) & 0xFF);
-    pl[body_len + 2] = (uint8_t)((crc >> 16) & 0xFF); pl[body_len + 3] = (uint8_t)((crc >> 24) & 0xFF);
-    uint16_t payload_len = (uint16_t)(body_len + 4u);
+    uint16_t payload_len = (uint16_t)rlen;
+
+#if JARVIS_CONTROL_IN_PROBE == 3
+    /* 6-5/M4b PROBE-ONLY: dump the signed payload so the box gate can prove the bytes the BOX built
+     * (its own toolchain, its own g_ctrl_key) actually verify in the receiver — rather than inferring
+     * it from the host differential alone. KVM has no I211, so this serial dump is the only way the
+     * reply's bytes leave the box there. Never compiled into a deploy build (PROBE is default 0). */
+    {
+        static const char HEXD2[] = "0123456789abcdef";
+        puts_serial("[CTRL-REPLY-HEX] len="); put_dec(payload_len); puts_serial(" ");
+        for (uint32_t i = 0; i < payload_len; i++) {
+            putc_serial(HEXD2[(pl[i] >> 4) & 0xF]); putc_serial(HEXD2[pl[i] & 0xF]);
+        }
+        putc_serial('\n');
+    }
+#endif
 
     const uint8_t *cmac = g_ctrl_console_mac;   /* 6-5/M4a: from the NVMe JCON slot, not a compile const */
+    /* 6-5/M4b headroom: the v2 payload grew by the 32 B tag, so worst case is
+     *   558 payload (10 hdr + 512 text + 4 crc + 32 tag) + 42 framing (Eth 14 + IPv4 20 + UDP 8)
+     *   = 600 <= 640 — reply_frame does NOT need to grow. Pinned so a future text-max bump
+     * that would silently truncate a frame fails the BUILD instead. */
     static uint8_t reply_frame[640];
+    _Static_assert(CTRL_REPLY_MAX_LEN + 42u <= sizeof reply_frame,
+                   "reply_frame too small for a max-size signed JRPL reply + Eth/IP/UDP framing");
     int flen = net_build_udp_unicast(reply_frame, sizeof reply_frame, g_net.nic.mac, JARVIS_BOX_IP,
                                      cmac, g_ctrl_console_ip, JARVIS_TELEMETRY_PORT,
                                      g_ctrl_console_port, pl, payload_len);

@@ -14,6 +14,7 @@ Run: python3 phase3/scripts/test_telemetry_receiver.py  (exit nonzero on FAIL)
 import argparse
 import hashlib
 import hmac
+import inspect
 import io
 import json
 import os
@@ -113,13 +114,35 @@ def _fake_post(peer, sender, body=None, path='/send', raw=None, headers=None, po
     return out[0] if out else (None, None)
 
 
-def _build_reply(verdict, seq, text, corrupt_crc=False):
-    """Build a JRPL reply datagram exactly as ctrl_send_reply() does (LITTLE-endian)."""
-    body = b'JRPL' + bytes([1, verdict]) + struct.pack('<HH', seq, len(text)) + text
+# 6-5/M4b: the SHARED GOLDEN VECTOR. The box embeds the same 97 bytes in C; the coupling
+# test below asserts the two are byte-identical, pinning builder against verifier.
+REPLY_KEY = bytes(range(1, 33))
+GOLDEN_REPLY_VERDICT = 0
+GOLDEN_REPLY_SEQ = 4242
+GOLDEN_REPLY_TEXT = b'a page fault is a memory access to an unmapped page'
+
+
+def _build_reply(verdict, seq, text, key=REPLY_KEY, ver=2, corrupt_crc=False, tag=True):
+    """Build a JRPL v2 reply exactly as the box's ctrl_send_reply() does (LITTLE-endian).
+
+        magic|ver|verdict|seq|tlen | text | crc32(payload[:10+tlen]) | HMAC(payload[:14+tlen])
+
+    ver=1 / tag=False reproduce the pre-M4b unauthenticated shapes for the negative tests."""
+    body = b'JRPL' + bytes([ver, verdict]) + struct.pack('<HH', seq, len(text)) + text
     crc = zlib.crc32(body) & 0xFFFFFFFF
     if corrupt_crc:
         crc ^= 0xFFFFFFFF
-    return body + struct.pack('<I', crc)
+    body += struct.pack('<I', crc)
+    if not tag:
+        return body
+    return body + hmac.new(bytes(key), body, hashlib.sha256).digest()
+
+
+def _flip(buf, off):
+    """Flip one bit of one byte -- the minimal tamper."""
+    b = bytearray(buf)
+    b[off] ^= 0x01
+    return bytes(b)
 
 
 def main():
@@ -628,29 +651,116 @@ def main():
     check(code == 200 and fs3.calls == [b'uptime'],
           "GUARD #3: a local non-browser client (no Origin/Sec-Fetch-Site) is still served")
 
-    # (f) JRPL reply decode (LITTLE-endian + trailing zlib CRC-32).
-    rep, err = decode_control_reply(_build_reply(0, 50, b'a page fault is ...'))
-    check(err is None and rep is not None, "valid JRPL reply decodes")
+    # (f) JRPL v2 reply decode -- AUTHENTICATED (6-5/M4b).
+    # An unverified reply is DROPPED, never rendered: only (dict, None) is renderable, and a
+    # forged/corrupt/unauthenticatable datagram returns (None, reason). This is a deliberate
+    # change from M3-4b, where a bad CRC still produced a renderable record.
+    rep, err = decode_control_reply(_build_reply(0, 50, b'a page fault is ...'), REPLY_KEY)
+    check(err is None and rep is not None, "valid JRPL v2 reply decodes with the right key")
     check(rep['verdict'] == 0 and rep['verdict_name'] == 'answered', "verdict 0 -> 'answered'")
     check(rep['seq'] == 50 and rep['tlen'] == 19, "reply seq/tlen decode")
-    check(rep['text_bytes'] == b'a page fault is ...' and rep['crc_ok'] is True,
-          "reply text round-trips + crc_ok True")
-    rep1, _ = decode_control_reply(_build_reply(1, 51, b'refuse key-extraction'))
+    check(rep['text_bytes'] == b'a page fault is ...' and rep['crc_ok'] is True
+          and rep['hmac_ok'] is True,
+          "reply text round-trips + crc_ok AND hmac_ok True (acceptance needs BOTH)")
+    check(rep['ver'] == 2, "accepted reply is version 2 (the HMAC'd format)")
+    rep1, _ = decode_control_reply(_build_reply(1, 51, b'refuse key-extraction'), REPLY_KEY)
     check(rep1['verdict_name'] == 'refused' and rep1['text_bytes'] == b'refuse key-extraction',
           "verdict 1 -> 'refused'; the reason-class LABEL is the whole payload (never the query)")
     check(VERDICT_NAMES == {0: 'answered', 1: 'refused', 2: 'degraded', 3: 'failed'},
           "VERDICT_NAMES matches the box's 4 exit paths")
-    rep2, _ = decode_control_reply(_build_reply(2, 52, b'degraded'))
-    rep3, _ = decode_control_reply(_build_reply(3, 53, b'timeout'))
+    rep2, _ = decode_control_reply(_build_reply(2, 52, b'degraded'), REPLY_KEY)
+    rep3, _ = decode_control_reply(_build_reply(3, 53, b'timeout'), REPLY_KEY)
     check(rep2['verdict_name'] == 'degraded' and rep3['verdict_name'] == 'failed',
           "verdicts 2/3 -> 'degraded'/'failed'")
-    repc, errc = decode_control_reply(_build_reply(0, 54, b'hi', corrupt_crc=True))
-    check(errc is None and repc['crc_ok'] is False,
-          "corrupted CRC -> crc_ok False (still decoded, shown honestly)")
-    trunc = _build_reply(0, 55, b'hello world')[:-6]
-    check(decode_control_reply(trunc) == (None, 'truncated text'), "truncated reply -> (None, err)")
-    check(decode_control_reply(b'NOPE' + b'\x00' * 20)[0] is None, "bad magic -> (None, err)")
-    check(decode_control_reply(b'JRPL')[0] is None, "short datagram -> (None, err)")
+
+    # --- the forgery/tamper matrix: EVERY row must DROP (None + a reason), never render ---
+    good = _build_reply(0, 60, b'hello world')          # 46 + 11 = 57 bytes
+    check(decode_control_reply(good, REPLY_KEY)[0] is not None, "control: the untampered v2 accepts")
+    r_tag, e_tag = decode_control_reply(_flip(good, len(good) - 1), REPLY_KEY)
+    check(r_tag is None and e_tag == 'bad hmac', "TAMPERED TAG -> dropped (not a renderable record)")
+    r_txt, e_txt = decode_control_reply(_flip(good, 12), REPLY_KEY)
+    check(r_txt is None and e_txt in ('bad crc', 'bad hmac'),
+          "TAMPERED TEXT -> dropped (the tag covers the text)")
+    # Recompute the CRC over the tampered text so ONLY the tag can catch it: proves the HMAC,
+    # not the CRC, is doing the work.
+    _t = bytearray(good)
+    _t[12] ^= 0x01
+    _t[10 + 11:10 + 11 + 4] = struct.pack('<I', zlib.crc32(bytes(_t[:10 + 11])) & 0xFFFFFFFF)
+    r_tx2, e_tx2 = decode_control_reply(bytes(_t), REPLY_KEY)
+    check(r_tx2 is None and e_tx2 == 'bad hmac',
+          "TAMPERED TEXT with a REPAIRED CRC -> still dropped (only the tag can catch it)")
+    r_crc, e_crc = decode_control_reply(_flip(good, 10 + 11), REPLY_KEY)
+    check(r_crc is None and e_crc in ('bad crc', 'bad hmac'),
+          "TAMPERED CRC bytes -> dropped (the tag covers the CRC too)")
+    r_wk, e_wk = decode_control_reply(good, bytes(range(2, 34)))
+    check(r_wk is None and e_wk == 'bad hmac', "WRONG KEY -> dropped")
+    r_nk, e_nk = decode_control_reply(good, None)
+    check(r_nk is None and 'no key' in (e_nk or ''),
+          "key=None (display-only receiver) -> dropped with a 'no key' reason (fail-closed)")
+    # A v1 CRC-only reply, long enough (tlen >= 32) to clear the minimum-length gate, so the
+    # VERSION check -- not an incidental short-datagram reject -- is what drops it.
+    _v1text = b'v1 crc-only reply, structurally plausible'
+    v1 = _build_reply(0, 61, _v1text, ver=1, tag=False)
+    check(len(v1) >= 46, "the v1 negative is long enough to reach the version check (%d B)" % len(v1))
+    r_v1, e_v1 = decode_control_reply(v1, REPLY_KEY)
+    check(r_v1 is None and 'version' in (e_v1 or ''),
+          "v1 (CRC-only, correct CRC, no tag) -> dropped on VERSION; there is NO v1 fallback")
+    v1t = _build_reply(0, 61, _v1text, ver=1)          # v1 shape WITH a valid tag
+    check(decode_control_reply(v1t, REPLY_KEY)[0] is None,
+          "even a validly-TAGGED v1 is refused (version is checked before the MAC)")
+    r_tr, e_tr = decode_control_reply(good[:-4], REPLY_KEY)
+    check(r_tr is None and e_tr in ('short', 'truncated text'),
+          "truncated (missing tag bytes) -> dropped, no exception")
+    check(decode_control_reply(b'NOPE' + b'\x00' * 60, REPLY_KEY)[0] is None,
+          "bad magic -> (None, err)")
+    check(decode_control_reply(b'JRPL', REPLY_KEY)[0] is None, "short datagram -> (None, err)")
+    check(decode_control_reply(None, REPLY_KEY)[0] is None, "None payload -> (None, err)")
+    # An over-long tlen must be rejected on its own, before any slicing.
+    _big = bytearray(_build_reply(0, 62, b'x' * 8))
+    struct.pack_into('<H', _big, 8, 4000)
+    check(decode_control_reply(bytes(_big), REPLY_KEY)[0] is None,
+          "an over-long tlen is rejected (bounds-checked before slicing)")
+
+    # CONSTANT-TIME: a naked '==' on a MAC leaks the matching-prefix length through timing.
+    # This is a SOURCE-LEVEL assertion (read the receiver's own source) -- which is the honest
+    # limit of what a unit test can check: timing behaviour itself is not measurable here.
+    _dsrc = inspect.getsource(decode_control_reply)
+    check('compare_digest' in _dsrc,
+          "decode_control_reply verifies the tag with hmac.compare_digest (constant-time)")
+    check(not re.search(r'==\s*(bytes\()?payload\[tag_off', _dsrc),
+          "the tag is never compared with a naked '==' (timing-leak guard)")
+
+    # --- CROSS-LANGUAGE COUPLING: the box builder vs this verifier -----------------------
+    # The C side embeds the SAME golden reply bytes and feeds them to the real box builder. If
+    # only one side is regenerated, both suites stay green while the box emits a reply this
+    # console would drop -- drift that would surface only at the flip, on hardware. So compare
+    # the constants mechanically (the GOLDEN_JCTL idiom above, applied to the reply).
+    golden_py = _build_reply(GOLDEN_REPLY_VERDICT, GOLDEN_REPLY_SEQ, GOLDEN_REPLY_TEXT)
+    check(len(golden_py) == 97, "golden reply is 97 bytes (46 + 51 text)")
+    _rsrc = ''
+    for _n in ('test_control_signer_differential.c', 'test_control_reply.c'):
+        _p = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src', 'net', _n)
+        if os.path.isfile(_p):
+            with open(_p, encoding='utf-8') as _fh:
+                _rsrc += _fh.read()
+    # Tolerate both `GOLDEN_JRPL[]` and a sized `GOLDEN_JRPL[97]` declaration.
+    _rm = re.search(r'GOLDEN_JRPL\s*\[\s*\d*\s*\]\s*=\s*\{(.*?)\}\s*;', _rsrc, re.S)
+    if _rm:
+        _rb = bytes(int(b, 16) for b in re.findall(r'0[xX]([0-9a-fA-F]{2})', _rm.group(1)))
+        check(_rb == golden_py,
+              "C GOLDEN_JRPL[] is byte-identical to this verifier's golden reply (%d vs %d bytes)"
+              % (len(_rb), len(golden_py)))
+        gr, ge = decode_control_reply(_rb, REPLY_KEY)
+        check(ge is None and gr is not None and gr['verdict'] == GOLDEN_REPLY_VERDICT
+              and gr['seq'] == GOLDEN_REPLY_SEQ and gr['text_bytes'] == GOLDEN_REPLY_TEXT,
+              "the C golden reply is ACCEPTED by this verifier with the exact verdict/seq/text")
+        check(decode_control_reply(_flip(_rb, len(_rb) - 1), REPLY_KEY)[0] is None,
+              "a 1-byte tamper of the C golden reply is DROPPED")
+    else:
+        # LOUD, never silent: a missing C golden means the coupling is unchecked.
+        check(False, "GOLDEN_JRPL[] not found in phase3/src/net/test_control_*.c "
+                     "(the C<->Python reply coupling is UNCHECKED)")
+
     srec = reply_to_record(rep, 1700000000.5)
     json.dumps(srec)
     check(srec['kind'] == 'control_reply', "SSE record kind is the STRING 'control_reply'")
@@ -659,6 +769,8 @@ def main():
     check(srec['verdict'] == 0 and srec['verdict_name'] == 'answered'
           and srec['seq'] == 50 and srec['crc_ok'] is True and srec['recv_ts'] == 1700000000.5,
           "SSE reply record carries the contract fields")
+    check(srec['hmac_ok'] is True,
+          "SSE reply record carries hmac_ok True (only authenticated replies become records)")
     check(srec['text'] == 'a page fault is ...', "SSE reply record text decodes to str")
 
     # (g) hub.publish_event must NOT poison the telemetry replay state.

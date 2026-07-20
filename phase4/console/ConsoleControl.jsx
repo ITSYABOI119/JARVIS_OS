@@ -16,9 +16,13 @@
  *     General prompt injection is contained structurally — by that no-action
  *     boundary and by the answer being addressed only to this console (unicast to
  *     the provisioned address, never broadcast) — and is not detected.
- *   - The box->console reply carries a CRC, not a signature: it is checked for
- *     corruption, not authenticated. A reply that fails its CRC is shown as
- *     such and never presented as a trusted answer.
+ *   - The box->console reply is AUTHENTICATED: it carries an HMAC-SHA256 tag
+ *     under the same shared key as the inbound direction, verified constant-time
+ *     by the receiver. A reply that fails that check is dropped before it ever
+ *     reaches this panel, so nothing unverified is rendered.
+ *   - SIGNED, NOT ENCRYPTED. The tag proves authorship and integrity; the answer
+ *     text is plaintext on the wire and anyone who captures the frame can read
+ *     it. This stops a forged reply, not eavesdropping.
  *
  * GATING: the composer is FUNCTIONAL only while the live record reports the
  * CONTROL_IN flag (key + replay floor + RX ring all up on the box). The
@@ -153,10 +157,13 @@ function ControlIn({ store }) {
 
   function replyBody(r) {
     const C = { ok: 'var(--text-secondary)', warn: 'var(--status-warn)', err: 'var(--status-err)', muted: 'var(--text-muted)' };
-    if (!r.crc_ok) {
+    // Defence in depth: the receiver already DROPS any reply that fails its HMAC or CRC, so
+    // this branch should be unreachable. If a record ever arrives without both, refuse to
+    // present it as an answer rather than trust the upstream filter.
+    if (!r.crc_ok || !r.hmac_ok) {
       return { color: C.err,
-        line: 'reply failed its CRC — corrupt in transit, so it is not shown as an answer',
-        sub: 'the box->console direction carries a CRC, not a signature' };
+        line: 'reply failed verification — not shown as an answer',
+        sub: 'only replies signed by the box (HMAC-SHA256) are rendered' };
     }
     const v = Number(r.verdict);
     if (v === 0) {
@@ -181,7 +188,8 @@ function ControlIn({ store }) {
 
   function Turn({ e }) {
     const r = e.reply || null;   // bound once on arrival — never re-derived from the ring
-    const v = r && r.crc_ok ? VERDICTS[Number(r.verdict)] : null;
+    const verified = !!(r && r.crc_ok && r.hmac_ok);
+    const v = verified ? VERDICTS[Number(r.verdict)] : null;
     const body = r ? replyBody(r) : null;
     const waited = e.at ? (Date.now() / 1000 - e.at) : 0;
     const quiet = !r && !e.error && e.seq != null && waited > PENDING_QUIET_S;
@@ -194,8 +202,8 @@ function ControlIn({ store }) {
           <span style={{ font: '400 var(--text-2xs)/1 var(--font-mono)', color: 'var(--text-muted)' }}>
             {e.seq != null ? 'seq ' + num(e.seq) : 'not sent'}
           </span>
-          {r && r.crc_ok && v && <Badge tone={v.tone === 'ok' ? 'accent' : 'neutral'}>{v.name}</Badge>}
-          {r && !r.crc_ok && <Badge tone="neutral">CRC FAIL</Badge>}
+          {verified && v && <Badge tone={v.tone === 'ok' ? 'accent' : 'neutral'}>{v.name}</Badge>}
+          {r && !verified && <Badge tone="neutral">UNVERIFIED</Badge>}
         </div>
         {e.error && (
           <div style={{ font: '400 var(--text-xs)/1.5 var(--font-mono)', color: 'var(--status-err)' }}>{e.error}</div>
@@ -218,10 +226,11 @@ function ControlIn({ store }) {
             <div style={{ marginTop: 4, font: '400 var(--text-2xs)/1.4 var(--font-mono)', color: 'var(--text-muted)' }}>
               {body.sub}{r.recv_ts ? ' · ' + fmtAgo(r.recv_ts) : ''}
             </div>
-            {/* Stays on EVERY reply row, not only the CRC-failure row: a good CRC proves the
-                datagram was not corrupted, never that the box authored it. */}
+            {/* Stays on EVERY reply row: it states exactly what was proved (authorship +
+                integrity) and, just as importantly, what was not (confidentiality). */}
             <div style={{ marginTop: 4, font: '400 var(--text-2xs)/1.4 var(--font-mono)', color: 'var(--text-muted)' }}>
-              CRC-checked, not authenticated · accepted only from the provisioned box address
+              signed by the box (HMAC-SHA256), verified here · signed, not encrypted — the text
+              was plaintext on the wire
             </div>
           </div>
         )}
@@ -326,9 +335,11 @@ function ControlIn({ store }) {
           label alone. General prompt injection is contained <strong>structurally</strong> — by that no-action
           boundary and by the answer being <strong>addressed</strong> only to this console (unicast to the
           provisioned address, never broadcast; that is addressing, not a proof no other host saw it)
-          — and is <strong>not detected</strong>. The reply carries a
-          CRC, so it is checked for corruption but not authenticated; a reply that fails its CRC is shown as
-          corrupt and never as an answer.
+          — and is <strong>not detected</strong>. The reply is <strong>authenticated</strong>: it carries an
+          HMAC-SHA256 tag under the same shared key as your question, verified here before anything is
+          shown, so a reply this console cannot verify is dropped rather than displayed. That is
+          <strong> signed, not encrypted</strong> — the answer text travels in plaintext and anyone who
+          captures the frame can read it; what the signature stops is a forged answer, not eavesdropping.
         </p>
       </Card>
     </div>

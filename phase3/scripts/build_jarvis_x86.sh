@@ -254,7 +254,8 @@ if [ "$CONTROL_IN" = "1" ]; then
     done
     for f in control_msg.h control_mailbox.h control_parser.c control_parser.h control_replay.c control_replay.h \
              control_ratelimit.c control_ratelimit.h control_verify.c control_verify.h control_key.h \
-             control_floor.c control_floor.h control_console.c control_console.h; do
+             control_floor.c control_floor.h control_console.c control_console.h \
+             control_reply.c control_reply.h; do
         copy_file "$NET_SRC/$f" "$NET_DST/$f"
     done
 
@@ -700,7 +701,7 @@ if [ -f "$CMAKE_FILE" ]; then
     if [ "$CONTROL_IN" = "1" ]; then
         for cf in src/crypto/sha256.c src/crypto/hmac_sha256.c src/net/control_parser.c \
                   src/net/control_replay.c src/net/control_ratelimit.c src/net/control_verify.c \
-                  src/net/control_floor.c src/net/control_console.c; do
+                  src/net/control_floor.c src/net/control_console.c src/net/control_reply.c; do
             if ! grep -q "$cf" "$CMAKE_FILE"; then
                 sed -i "/src\/ai\/behaviors.c/a\\    $cf" "$CMAKE_FILE" 2>/dev/null
                 if grep -q "$cf" "$CMAKE_FILE"; then
@@ -759,9 +760,10 @@ if [ -f "$CMAKE_FILE" ]; then
             sed -i '/target_compile_definitions(sel4test-driver PRIVATE JARVIS_CONTROL_IN=1)/d' "$CMAKE_FILE"
             # 6-5/M3-2a-fix: value-agnostic (=, not =1) so a stale mode-2/3 -D is torn down too.
             sed -i '/target_compile_definitions(sel4test-driver PRIVATE JARVIS_CONTROL_IN_PROBE=/d' "$CMAKE_FILE"
-            # NOTE (6-5/M4a): the src/net/*.c strip below is GENERIC — it already removes the newly
-            # injected src/net/control_console.c (as it does control_floor.c). Verified, so NO extra
-            # per-file line is added here; an add-without-teardown is the M2a bug class this guards.
+            # NOTE (6-5/M4a, re-verified M4b): the src/net/*.c strip below is GENERIC — it already
+            # removes the newly injected src/net/control_console.c AND src/net/control_reply.c (as it
+            # does control_floor.c). Verified, so NO extra per-file line is added here; an
+            # add-without-teardown is the M2a bug class this guards.
             sed -i '/^[[:space:]]*src\/crypto\//d; /^[[:space:]]*src\/net\/.*\.c/d' "$CMAKE_FILE"
             sed -i '/^[[:space:]]*src\/ai\/query_shield.c/d' "$CMAKE_FILE"   # 6-5/M3-2a: strip the gated query SHIELD
             sed -i 's| "src/crypto" "src/net"||' "$CMAKE_FILE"

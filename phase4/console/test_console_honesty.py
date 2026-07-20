@@ -74,11 +74,24 @@ BANNED = [
     "detects malicious",
     "malicious queries stopped",
     "blocks injection",
-    # 6-5/M3-4b: the control-IN SEND surface. The channel is authenticated inbound and
-    # CRC'd (NOT signed) outbound — "secure channel" overclaims it; and the box refuses a
-    # defined abuse class, it does not stop attacks.
+    # 6-5/M3-4b: the control-IN SEND surface. The box refuses a defined abuse class; it does
+    # not stop attacks. "secure channel" is a vague overclaim either way.
     "secure channel",
     "stops attacks",
+    # 6-5/M4b: the reply is now AUTHENTICATED (HMAC-SHA256) — "signed"/"verified"/
+    # "authenticated" are honest. CONFIDENTIALITY is NOT: the answer text is plaintext on the
+    # wire and anyone who captures the frame can read it. Signing stops a FORGED reply, not
+    # eavesdropping. So every confidentiality claim is banned. (The bare word "encrypted" is
+    # NOT banned outright — the honest disclaimer "signed, not encrypted" must be sayable —
+    # it is scoped below so it may appear ONLY in that negation.)
+    "encrypted channel",
+    "is encrypted",
+    "are encrypted",
+    "traffic is encrypted",
+    "end-to-end",
+    "private channel",
+    "secret channel",
+    "confidential channel",
 ]
 
 # (b) Honest-framing markers that MUST stay present somewhere in the console
@@ -323,8 +336,17 @@ def main():
           "Control-IN carries the 'not detected' honesty ceiling (injection contained structurally)")
     check('structurally' in ctl.lower(),
           "Control-IN says injection is contained STRUCTURALLY (the real boundary)")
-    check('crc' in ctl.lower() and 'not authenticated' in ctl.lower(),
-          "Control-IN states the box->console reply is CRC'd, not authenticated")
+    # 6-5/M4b: the M3-4b "CRC'd, not authenticated" wording is now FALSE — the reply carries
+    # an HMAC-SHA256 tag verified by the receiver. What replaced it must claim authentication
+    # AND disclaim confidentiality (signed != encrypted), and must NOT resurrect the old text.
+    check('hmac' in ctl.lower(),
+          "Control-IN names the reply's actual authentication (HMAC-SHA256)")
+    check('signed, not encrypted' in ctl.lower(),
+          "Control-IN states 'signed, not encrypted' (authorship proved, confidentiality NOT)")
+    check('plaintext' in ctl.lower(),
+          "Control-IN says the answer text is plaintext on the wire (no confidentiality claim)")
+    check('not authenticated' not in ctl.lower(),
+          "the retired M3-4b 'not authenticated' wording is gone (the reply IS authenticated now)")
     # TEETH #3b: DELIVERY EXCLUSIVITY IS NOT PROVEN. The box-side dst_ok assertion and the wire
     # proof establish that the reply is unicast-ADDRESSED to the provisioned console; no
     # third-host negative capture exists (that is an M4 item), so "the answer comes back to this
@@ -343,10 +365,20 @@ def main():
         else:
             check(over not in ctl.lower(),
                   "Control-IN does not overclaim delivery exclusivity (%r absent)" % over)
-    # TEETH #3c: the trust marker rides EVERY reply row, not just the CRC-failure row — a good
-    # CRC proves non-corruption, never authorship.
-    check('crc-checked, not authenticated' in ctl.lower(),
-          "every reply row carries the 'CRC-checked, not authenticated' marker")
+    # TEETH #3c (M4b, replacing the M3-4b 'CRC-checked, not authenticated' marker): the trust
+    # marker rides EVERY reply row and states BOTH halves of the truth — signed by the box,
+    # and NOT encrypted. An unverifiable reply is dropped upstream, so a rendered row is a
+    # verified row; the row says which it is rather than leaving the reader to assume.
+    check('signed by the box' in ctl.lower(),
+          "every reply row carries the 'signed by the box (HMAC-SHA256)' trust marker")
+    check('unverified' in ctl.lower(),
+          "an unverifiable reply is labelled UNVERIFIED, never presented as an answer")
+    # SCOPED: 'encrypted' may appear ONLY inside the honest negation 'not encrypted'. This
+    # keeps the disclaimer sayable while catching any future bare confidentiality claim.
+    for _f, _t in blobs.items():
+        _low = _t.lower()
+        check(_low.count('encrypted') == _low.count('not encrypted'),
+              "%s: every 'encrypted' is part of 'not encrypted' (no confidentiality claim)" % _f)
     # TEETH #3d: a sent frame is NOT an acknowledged frame. The box drops a frame that fails its
     # sequence floor or HMAC WITHOUT replying, so a turn can legitimately never complete; the
     # panel must say so rather than pulse "awaiting" forever and imply delivery.

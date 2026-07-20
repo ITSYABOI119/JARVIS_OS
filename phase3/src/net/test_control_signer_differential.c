@@ -4,18 +4,27 @@
  *
  * ── WHAT THIS PROVES (and why it is stronger than the Python test alone) ─────
  *
- * M3-4b makes telemetry_receiver.py the SIGNER: the browser can hold neither the
- * HMAC key nor a raw L2 socket, so the receiver builds and signs the JCTL frame
- * that goes to the box. The Python side (test_telemetry_receiver.py) proves that
- * frame is SELF-CONSISTENT — right offsets, independently recomputed tag. That is
- * a Python-only claim: it cannot prove the REAL C verifier running on the box
- * accepts those exact bytes.
+ * This harness now pins BOTH DIRECTIONS of the control-IN channel:
  *
- * This test closes that gap. It embeds the LITERAL frame bytes emitted by the
- * committed Python signer and feeds them to the REAL control_verify() — the same
- * translation unit the box runs (main_x86.c -> pa_verify_candidate). An ACCEPT
- * here is end-to-end evidence that browser -> receiver -> box will authenticate,
- * gathered before the JARVIS_CONTROL_IN flip and without touching the box.
+ *   INBOUND  (console -> box, M3-4b): telemetry_receiver.py is the SIGNER — the
+ *     browser can hold neither the HMAC key nor a raw L2 socket, so the receiver
+ *     builds and signs the JCTL frame. The Python side
+ *     (test_telemetry_receiver.py) proves that frame is SELF-CONSISTENT — right
+ *     offsets, independently recomputed tag. That is a Python-only claim: it
+ *     cannot prove the REAL C verifier running on the box accepts those exact
+ *     bytes. T0-T7 close that gap by feeding the LITERAL Python bytes to the real
+ *     control_verify() — the same translation unit the box runs (main_x86.c ->
+ *     pa_verify_candidate).
+ *
+ *   OUTBOUND (box -> console, M4b): the mirror image. The box is the SIGNER
+ *     (ctrl_build_reply in control_reply.c) and the receiver's Python reply
+ *     decoder is the VERIFIER. T8-T10 build the shared golden reply with the real
+ *     C builder and assert it byte-matches the vector the Python decoder is pinned
+ *     against, that the tag verifies, and that a one-byte tamper fails.
+ *
+ * Together: an ACCEPT here is end-to-end evidence that browser -> receiver -> box
+ * authenticates AND that box -> receiver -> browser authenticates, gathered before
+ * the JARVIS_CONTROL_IN flip and without touching the box.
  *
  * NOTHING here is box code: this is a host test over already-committed modules.
  *
@@ -43,6 +52,18 @@
  * T0 below re-derives the tag with the C HMAC so a silent drift in EITHER the
  * bytes or the crypto shows up as a FAIL rather than a false PASS.
  *
+ * The OUTBOUND golden (GOLDEN_JRPL, T8-T10) has the same contract against the
+ * receiver's reply decoder, and is additionally pinned by test_control_reply.c.
+ * Its vector (6-5/M4b):
+ *
+ *     key     = the SAME bytes(range(1, 33)) — one symmetric key, both directions
+ *     verdict = 0 (answered)
+ *     seq     = 4242
+ *     text    = "a page fault is a memory access to an unmapped page"
+ *
+ * HONESTY: the reply is AUTHENTICATED, NOT ENCRYPTED — the text is plaintext on
+ * the wire. M4b stops a forged reply, not eavesdropping.
+ *
  * Build/run:
  *   gcc -Wall -Werror -O2 -std=c11 -I phase3/src/net -I phase3/src/crypto \
  *       phase3/src/net/test_control_signer_differential.c \
@@ -59,6 +80,7 @@
 
 #include "control_verify.h"
 #include "control_msg.h"
+#include "control_reply.h"   /* 6-5/M4b: the outbound (box -> console) signed reply */
 #include "hmac_sha256.h"
 
 /* ---- test bookkeeping (house style: PASS/FAIL per assert + a tally) ---- */
@@ -307,6 +329,89 @@ int main(void)
         check(v == CV_DROP_REPLAY, "T7 valid tag, wrong boot epoch -> CV_DROP_REPLAY");
         check(res.replay_verdict == CR_REJECT_EPOCH, "T7 wrong epoch -> CR_REJECT_EPOCH");
         check(rp.seq_floor == 0, "T7 wrong epoch -> seq_floor UNCHANGED");
+    }
+
+    /* ══ 6-5/M4b: THE OUTBOUND LEG — box signs, the Python receiver verifies ══ */
+
+    printf("\n-- outbound (box -> console) JRPL reply, M4b --\n");
+
+    /*
+     * VERBATIM the 97-byte reply the receiver's Python decoder is pinned against
+     * (independently generated with stdlib zlib.crc32 + hmac/hashlib, so a match
+     * proves cross-LANGUAGE agreement, not C self-consistency).
+     * 97 = 10 (hdr) + 51 (text) + 4 (crc) + 32 (tag).
+     */
+    static const uint8_t GOLDEN_JRPL[97] = {
+        0x4A, 0x52, 0x50, 0x4C, 0x02, 0x00, 0x92, 0x10,
+        0x33, 0x00, 0x61, 0x20, 0x70, 0x61, 0x67, 0x65,
+        0x20, 0x66, 0x61, 0x75, 0x6C, 0x74, 0x20, 0x69,
+        0x73, 0x20, 0x61, 0x20, 0x6D, 0x65, 0x6D, 0x6F,
+        0x72, 0x79, 0x20, 0x61, 0x63, 0x63, 0x65, 0x73,
+        0x73, 0x20, 0x74, 0x6F, 0x20, 0x61, 0x6E, 0x20,
+        0x75, 0x6E, 0x6D, 0x61, 0x70, 0x70, 0x65, 0x64,
+        0x20, 0x70, 0x61, 0x67, 0x65, 0x73, 0x80, 0x19,
+        0x7F, 0x09, 0x09, 0x57, 0x44, 0x5F, 0x3C, 0xEA,
+        0x5A, 0xB6, 0x8F, 0xA2, 0xF8, 0xF9, 0x93, 0x12,
+        0xD4, 0x44, 0x44, 0x67, 0xBE, 0x44, 0x73, 0xDF,
+        0xA4, 0x1B, 0xAF, 0x6C, 0x5C, 0x8B, 0x42, 0xB7,
+        0xEE
+    };
+    static const char JRPL_TEXT[] = "a page fault is a memory access to an unmapped page";
+    const uint16_t JRPL_SEQ  = 4242u;
+    const uint32_t JRPL_TLEN = 51u;
+
+    /* ---- T8: the REAL box builder reproduces the Python-pinned bytes EXACTLY ---- */
+    {
+        uint8_t reply[CTRL_REPLY_MAX_LEN];
+        memset(reply, 0xAA, sizeof reply);
+        int n = ctrl_build_reply(KEY, 0 /*answered*/, JRPL_SEQ,
+                                 (const uint8_t *)JRPL_TEXT, JRPL_TLEN, reply, sizeof reply);
+        check(n == (int)sizeof(GOLDEN_JRPL),
+              "T8 ctrl_build_reply length == 97 (46 overhead + 51 text)");
+        check(n > 0 && memcmp(reply, GOLDEN_JRPL, sizeof GOLDEN_JRPL) == 0,
+              "T8 C builder output == the bytes the Python decoder is pinned against "
+              "(THE outbound differential proof)");
+        check(reply[4] == (uint8_t)CTRL_REPLY_VERSION,
+              "T8 version byte == 2 (v2 = HMAC'd; v1 CRC-only was never deployed)");
+    }
+
+    /* ---- T9: the golden's tag verifies under the constant-time verifier ---- */
+    {
+        size_t tag_off = (size_t)(CTRL_REPLY_HDR_LEN + JRPL_TLEN + CTRL_REPLY_CRC_LEN); /* 65 */
+        check(tag_off == 65u, "T9 tag offset == 14 + tlen == 65");
+        check(hmac_sha256_verify(KEY, sizeof(KEY), GOLDEN_JRPL, tag_off,
+                                 GOLDEN_JRPL + tag_off) == 1,
+              "T9 golden reply tag verifies (the receiver will accept it)");
+        check(sizeof(GOLDEN_JRPL) == tag_off + CTRL_REPLY_TAG_LEN,
+              "T9 total == 14 + tlen + 32 (no trailing bytes)");
+    }
+
+    /* ---- T10 (teeth): a one-byte tamper anywhere fails auth -> the reply is DROPPED ---- */
+    {
+        size_t tag_off = (size_t)(CTRL_REPLY_HDR_LEN + JRPL_TLEN + CTRL_REPLY_CRC_LEN);
+        struct { size_t off; const char *what; } spots[] = {
+            {  5u, "verdict (0 answered -> forged verdict)" },
+            {  6u, "seq (would re-point the reply at another turn)" },
+            { 20u, "answer text (the fabricated-answer attack)" },
+            { 62u, "crc byte (relaunder attempt)" },
+            { 96u, "tag byte" },
+        };
+        for (unsigned i = 0; i < sizeof spots / sizeof spots[0]; i++) {
+            uint8_t bad[97];
+            memcpy(bad, GOLDEN_JRPL, sizeof bad);
+            bad[spots[i].off] ^= 0x01;
+            char msg[160];
+            snprintf(msg, sizeof msg, "T10 tamper in %s -> verify FAILS (reply dropped)",
+                     spots[i].what);
+            check(hmac_sha256_verify(KEY, sizeof(KEY), bad, tag_off, bad + tag_off) == 0, msg);
+        }
+        /* KEY-BOUND: an attacker without the JKEY cannot mint ANY acceptable reply. */
+        uint8_t wrong_key[32];
+        memcpy(wrong_key, KEY, sizeof wrong_key);
+        wrong_key[31] ^= 0x01;
+        check(hmac_sha256_verify(wrong_key, sizeof(wrong_key), GOLDEN_JRPL, tag_off,
+                                 GOLDEN_JRPL + tag_off) == 0,
+              "T10 one-bit-different key -> verify FAILS (a LAN host cannot forge a reply)");
     }
 
     printf("\n%d passed, %d failed\n", g_pass, g_fail);

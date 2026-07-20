@@ -39,8 +39,12 @@ Usage:
 
 HONESTY (send path): a 'refused' verdict from the box is a DEFINED-ABUSE-CLASS refusal. General
 prompt injection is contained STRUCTURALLY (inbound text can never mint an action; answers go only
-to the provisioned console) — it is NOT detected. The box->console reply is CRC'd, not
-authenticated; that direction is unauthenticated by design (same as telemetry-OUT).
+to the provisioned console) — it is NOT detected. Since 6-5/M4b the box->console reply is
+AUTHENTICATED: JRPL v2 carries an HMAC-SHA256 tag over the whole CRC'd payload, verified here in
+constant time, and a reply that fails auth (or that arrives with no key to check it against) is
+DROPPED, never rendered. That is SIGNED, NOT ENCRYPTED — the answer text is plaintext on the wire,
+so M4b stops a FORGED reply, not eavesdropping. Telemetry-OUT is unchanged: still a CRC-only
+broadcast, by design (non-sensitive).
 
 HONESTY: only real fields are shown — no GPU, no "SHIELD blocked" (shield= is
 a check COUNT, not a block count), no "formally verified". Since v4 a REAL
@@ -123,7 +127,24 @@ DEFAULT_PORT = 51000
 # ---------------------------------------------------------------------------
 # 6-5/M3-4b: control-IN wire constants.
 # AUTHORITATIVE SOURCE: phase3/src/net/control_msg.h (outbound JCTL request) and the
-# ctrl_send_reply() builder in phase3/src/sel4/main_x86.c (inbound JRPL reply). Keep in sync.
+# ctrl_send_reply() builder in phase3/src/net/control_reply.c (inbound JRPL reply). Keep in sync.
+#
+# 6-5/M4b — the JRPL reply is v2 and AUTHENTICATED (HMAC-SHA256):
+#     0      4     "JRPL"
+#     4      1     version = 2
+#     5      1     verdict (0 answered / 1 refused / 2 degraded / 3 failed)
+#     6      2     seq   u16 LE (the request seq truncated to u16)
+#     8      2     tlen  u16 LE
+#     10     tlen  text (printable-sanitized, <= CTRL_REPLY_TEXT_MAX)
+#     10+tlen  4   crc32 u32 LE = zlib.crc32(payload[0 : 10+tlen])
+#     14+tlen  32  tag = HMAC-SHA256(key, payload[0 : 14+tlen])
+#   TOTAL = 46 + tlen.
+# The HMAC span DELIBERATELY INCLUDES the CRC bytes, so the tag authenticates the exact bytes
+# the receiver parses. Acceptance requires BOTH crc_ok AND hmac_ok.
+#
+# SIGNED, NOT ENCRYPTED. The tag proves the box authored these bytes and that nobody altered
+# them; the text itself is PLAINTEXT on the wire and anyone who captures the frame can read it.
+# M4b stops SPOOFING (a forged "answer from JARVIS"), not eavesdropping.
 # ---------------------------------------------------------------------------
 CONTROL_MAGIC = 0x4A43544C        # "JCTL", BIG-endian on the wire
 CONTROL_VERSION = 1
@@ -138,6 +159,10 @@ CONTROL_REPLY_PORT = 51002        # box -> console
 CONTROL_TEST_EPOCH = 0x4A320001   # == CONTROL_TEST_EPOCH in main_x86.c
 REPLY_MAGIC = b'JRPL'             # reply header is LITTLE-endian
 REPLY_HDR_LEN = 10                # magic(4) ver(1) verdict(1) seq(2) tlen(2); text follows
+REPLY_VERSION = 2                 # v2 = HMAC'd. v1 (CRC-only) was NEVER DEPLOYED -> no fallback.
+REPLY_CRC_LEN = 4
+REPLY_TAG_LEN = 32                # HMAC-SHA256 tag, trailing
+CTRL_REPLY_TEXT_MAX = 512         # == CTRL_REPLY_TEXT_MAX box-side
 BOX_MAC = '0c:9d:92:0e:39:9a'     # the box I211 MAC (RAL0/RAH0) — provisioned, never resolved
 BOX_IP = '192.168.100.143'
 
@@ -488,37 +513,64 @@ def build_control_frame(key: bytes, seq: int, epoch: int, query: bytes, nonce: b
     return payload + tag
 
 
-def decode_control_reply(payload: bytes):
-    """Decode a JRPL reply datagram -> (dict, None) or (None, 'reason').
+def decode_control_reply(payload: bytes, key):
+    """Decode + AUTHENTICATE a JRPL v2 reply -> (dict, None) or (None, 'reason').
 
-    LITTLE-endian (the reply is built box-side by ctrl_send_reply):
-        0 4 "JRPL" | 4 1 ver | 5 1 verdict | 6 2 seq (u16) | 8 2 tlen (u16)
-        10 tlen text | 10+tlen 4 crc32 = zlib.crc32(payload[:10+tlen])
+    Layout / HMAC span: see the wire block by REPLY_MAGIC above.
 
-    A bad CRC is NOT an error: the dict comes back with crc_ok False so the console can
-    show the reply honestly. Only structurally undecodable input returns (None, reason).
+    FAIL-CLOSED, and a DELIBERATE CHANGE from the M3-4b behaviour where a bad CRC still
+    produced a renderable dict: a reply that cannot be AUTHENTICATED must never reach the
+    console at all. Only (dict, None) is renderable; every other outcome is (None, reason)
+    and the caller drops it.
+
+      - version != 2            -> dropped. v1 was CRC-only and was NEVER DEPLOYED (the box
+                                   has been gated off throughout), so there is no compatibility
+                                   burden. Accepting a v1 reply would reopen exactly the
+                                   spoofing hole M4b closes, so there is NO v1 fallback.
+      - key is None             -> dropped ('no key'). A display-only receiver (no --key-file)
+                                   cannot tell a real reply from a forged one, and an
+                                   unauthenticatable reply is indistinguishable from a forgery.
+      - bad tag / bad CRC       -> dropped. Acceptance needs BOTH.
+
+    The tag is verified CONSTANT-TIME with hmac.compare_digest: a naked '==' on a MAC leaks
+    the matching-prefix length through timing and would be a real bug here.
     """
-    if payload is None or len(payload) < REPLY_HDR_LEN + 4:
+    if payload is None or len(payload) < REPLY_HDR_LEN + REPLY_CRC_LEN + REPLY_TAG_LEN:
         return None, 'short'
     if payload[0:4] != REPLY_MAGIC:
         return None, 'bad magic'
     ver = payload[4]
+    if ver != REPLY_VERSION:
+        return None, 'bad version %d (want %d; v1 is unauthenticated and never accepted)' % (
+            ver, REPLY_VERSION)
     verdict = payload[5]
     seq, tlen = struct.unpack_from('<HH', payload, 6)
+    if tlen > CTRL_REPLY_TEXT_MAX:
+        return None, 'tlen %d > %d' % (tlen, CTRL_REPLY_TEXT_MAX)
     crc_off = REPLY_HDR_LEN + tlen
-    if len(payload) < crc_off + 4:
+    tag_off = crc_off + REPLY_CRC_LEN
+    # Bounds-check BEFORE slicing: tlen is attacker-controlled.
+    if len(payload) < tag_off + REPLY_TAG_LEN:
         return None, 'truncated text'
-    text_bytes = bytes(payload[REPLY_HDR_LEN:crc_off])
+    if key is None:
+        # Fail-closed: no key => no authentication => nothing honest to render.
+        return None, 'no key (reply cannot be authenticated)'
     got_crc = struct.unpack_from('<I', payload, crc_off)[0]
     calc_crc = zlib.crc32(payload[:crc_off]) & 0xFFFFFFFF
+    if got_crc != calc_crc:
+        return None, 'bad crc'
+    want_tag = hmac.new(bytes(key), bytes(payload[:tag_off]), hashlib.sha256).digest()
+    if not hmac.compare_digest(want_tag, bytes(payload[tag_off:tag_off + REPLY_TAG_LEN])):
+        return None, 'bad hmac'
     return {
         'ver': ver,
         'verdict': verdict,
         'verdict_name': VERDICT_NAMES.get(verdict, '?%d' % verdict),
         'seq': seq,
         'tlen': tlen,
-        'text_bytes': text_bytes,
-        'crc_ok': got_crc == calc_crc,
+        'text_bytes': bytes(payload[REPLY_HDR_LEN:crc_off]),
+        'crc_ok': True,
+        'hmac_ok': True,
     }, None
 
 
@@ -668,21 +720,33 @@ def reply_to_record(rep, recv_ts):
         'seq': rep['seq'],
         'text': text,
         'crc_ok': rep['crc_ok'],
+        # 6-5/M4b: only an AUTHENTICATED reply is ever turned into a record (decode drops the
+        # rest), so this is True by construction — carried explicitly so the console can state
+        # what it is showing rather than infer it.
+        'hmac_ok': rep.get('hmac_ok', False),
         'recv_ts': recv_ts,
     }
 
 
-def _reply_listener(hub, bind, port, box_ip=BOX_IP):
-    """Bind UDP :51002 and fan every decodable JRPL reply out over the existing SSE
+# 6-5/M4b: dropped-reply accounting. A drop is the NORMAL outcome for a forged/corrupt/
+# unauthenticatable datagram, so it is counted always and logged at a bounded rate.
+g_reply_drops = {'total': 0}
+REPLY_DROP_LOG_FIRST = 5     # log the first few verbatim (bring-up / misprovisioned key)
+REPLY_DROP_LOG_EVERY = 100   # then one line per N (a flood must not spam the terminal)
+
+
+def _reply_listener(hub, bind, port, box_ip=BOX_IP, key=None):
+    """Bind UDP :51002 and fan every AUTHENTICATED JRPL reply out over the existing SSE
     stream. A bind failure is NON-FATAL (the display half keeps working).
 
-    The reply carries a zlib CRC-32, NOT a MAC (a named limitation of the box->console
-    direction), so a valid CRC proves only that the datagram was not corrupted in transit —
-    anyone can compute one. Datagrams whose source is not the provisioned box address are
-    therefore dropped: the box replies only to the provisioned console, and the console
-    accepts only from the provisioned box. That shrinks the forger set from "any host that
-    can reach this port" to an on-path attacker. It is NOT authentication (HMAC-ing this
-    direction is an M4 item) — the console labels every reply accordingly."""
+    6-5/M4b: the reply now carries an HMAC-SHA256 tag under the SAME symmetric JKEY as the
+    inbound direction, verified constant-time in decode_control_reply. THAT is the
+    authentication: a reply that fails it is dropped here and never rendered, so a LAN host
+    that can reach this port can no longer forge an "answer from JARVIS".
+
+    The source-address check below is now only a cheap PRE-FILTER (it discards obvious
+    strangers before the SHA-256 work); it is NOT the defence and must never be described as
+    one — an on-path attacker can spoof a source address, but cannot produce a valid tag."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
@@ -692,18 +756,26 @@ def _reply_listener(hub, bind, port, box_ip=BOX_IP):
               "sending still works" % (port, e), flush=True)
         sock.close()
         return
-    print("[send] listening for box replies on udp :%d" % port, flush=True)
+    print("[send] listening for box replies on udp :%d (HMAC-verified; key=%s)"
+          % (port, 'loaded' if key else 'MISSING -> every reply dropped'), flush=True)
     while True:
         try:
             data, addr = sock.recvfrom(2048)
         except OSError:
             return
         if box_ip and addr[0] != box_ip:
-            continue  # not from the provisioned box — never render a stranger's "answer"
-        rep, err = decode_control_reply(data)
+            continue  # cheap pre-filter, not the defence (see the docstring)
+        rep, err = decode_control_reply(data, key)
         if rep is None:
-            continue  # not a JRPL datagram (or truncated) — nothing honest to show
-        # Publish even when crc_ok is False: the console renders the flag honestly.
+            # Unverified => never rendered. Counted always; LOGGED at a bounded rate so a
+            # flood cannot spam the terminal (the control-IN stats cadence, mirrored).
+            g_reply_drops['total'] += 1
+            n = g_reply_drops['total']
+            if n <= REPLY_DROP_LOG_FIRST or n % REPLY_DROP_LOG_EVERY == 0:
+                print("[reply] DROP unverified (%s) from %s -- %d dropped so far"
+                      % (err, addr[0], n), flush=True)
+            continue
+        # Only authenticated replies get here.
         hub.publish_event(reply_to_record(rep, time.time()))
 
 
@@ -1025,7 +1097,10 @@ def _run_sse(args) -> int:
                                            box_ip=args.box_ip)
         # The reply arrives from the box over the LAN, so this socket uses --bind (only the
         # HTTP/signing surface is loopback-pinned).
-        threading.Thread(target=_reply_listener, args=(hub, args.bind, args.reply_port, args.box_ip),
+        # The SAME symmetric key authenticates BOTH directions (M4b): no key => replies are
+        # dropped rather than shown unverified.
+        threading.Thread(target=_reply_listener,
+                         args=(hub, args.bind, args.reply_port, args.box_ip, key),
                          daemon=True).start()
         print("[send] POST /send enabled on http://%s:%d/send (loopback only; key=%s; "
               "box %s / %s :%d)"

@@ -807,12 +807,40 @@ def main():
                 "() => { const t = document.body.innerText.toLowerCase();"
                 " return { abuse: t.indexOf('defined abuse class') >= 0,"
                 "          notdet: t.indexOf('not detected') >= 0,"
+                "          hmac: t.indexOf('hmac') >= 0,"
+                "          signedNotEnc: t.indexOf('signed, not encrypted') >= 0,"
+                "          plaintext: t.indexOf('plaintext') >= 0,"
+                "          bareEnc: (t.split('encrypted').length - 1)"
+                "                   !== (t.split('not encrypted').length - 1),"
+                "          staleCrcClaim: t.indexOf('not authenticated') >= 0,"
+                "          answerShown: t.indexOf('a page fault is') >= 0,"
                 "          banned: (t.indexOf('injection blocked') >= 0)"
                 "                  || (t.indexOf('secure channel') >= 0)"
+                "                  || (t.indexOf('end-to-end') >= 0)"
                 "                  || (t.indexOf('stops attacks') >= 0) }; }")
             check(ctl_words['abuse'] and ctl_words['notdet'] and not ctl_words['banned'],
                   "(6-5/M3-4b) Control-IN renders the abuse-class / not-detected ceiling, no "
                   "overclaim (snap=%r)" % (ctl_words,))
+            # (6-5/M4b) the reply is AUTHENTICATED, and the page says so honestly: it names the
+            # HMAC, disclaims confidentiality, and no longer carries the retired "not
+            # authenticated" wording.
+            check(ctl_words['hmac'] and ctl_words['signedNotEnc'] and ctl_words['plaintext'],
+                  "(6-5/M4b) Control-IN renders the HMAC / 'signed, not encrypted' / plaintext "
+                  "framing (snap=%r)" % (ctl_words,))
+            check(not ctl_words['bareEnc'],
+                  "(6-5/M4b) every rendered 'encrypted' is part of 'not encrypted' — no "
+                  "confidentiality claim on screen (snap=%r)" % (ctl_words,))
+            check(not ctl_words['staleCrcClaim'],
+                  "(6-5/M4b) the retired 'not authenticated' reply wording is gone (snap=%r)"
+                  % (ctl_words,))
+            # (6-5/M4b) NO UNVERIFIED REPLY IS EVER RENDERED. The receiver now drops a reply
+            # that fails its HMAC before it reaches the SSE stream, so an unauthenticated
+            # "answer" produces NO control_reply event and NO answer text — the turn simply
+            # stays pending. That pending state (asserted above) IS the observable: the page
+            # shows "awaiting the box reply", never a forged answer body.
+            check(not ctl_words['answerShown'],
+                  "(6-5/M4b) no answer body is rendered for an unverified/absent reply — the "
+                  "turn stays pending (snap=%r)" % (ctl_words,))
 
             check(errors == [], "no console errors / pageerrors (saw %d)" % len(errors))
             for e in errors[:10]:
