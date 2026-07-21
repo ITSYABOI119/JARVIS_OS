@@ -81,22 +81,24 @@ This document is the simple forward roadmap. Each phase has specific goals and a
 
 **Goal:** JARVIS behaves like a butler — anticipates, monitors, and acts when appropriate, not only on direct commands.
 
+**Status:** IN PROGRESS — the keystone **K ("it-acts", self-heal + the SHIELD action gate)** plus goals **#1 always-on monitors**, **#2 event-driven wake**, **#3 proactive actions** and **#5 natural language primary (control-IN)** are **COMPLETE and DEPLOYED default-ON**. **Goal #5 was the LAST hard-security goal of the phase** — it opened the box to its first untrusted network inbound and had to clear a 6-item security checklist before it could ship. **Remaining: #6 (multi-agent routing ≥95%) and #7 (the 7-day supervised exit).** Goal #4 (user model) rides Phase 5's semantic store, which is mechanism-proven and activates with real interaction now that control-IN is live.
+
 ### Goals
 
 1. **Always-on monitors** — Lightweight background watchers (CPU, disk, network, schedule). Minimal CPU when idle.
 2. **Event-driven wake** — Monitors trigger Process A → cache lookup or inference when thresholds crossed. No constant polling of the LLM.
 3. **Proactive actions** — At least 5 automated butler behaviors (e.g. low-disk warning, daily briefing, anomaly alert). Trust Level 0–1 only; higher risk asks or notifies.
 4. **User model** — Semantic memory includes a structured profile: schedule patterns, communication style, priority topics. Updated from consolidation, not manual config files.
-5. **Natural language primary** — Shell/commands exist but conversation is the default interface for all system interaction. **This is where the Remote Telemetry Console's control-IN channel lands** — turning the console from read-only telemetry (shipped in Phase 4 goal #2b) into a two-way interface — gated on the full security checklist: **auth + HMAC, real SHIELD (close SEC-039), rate-limiting, a hardened/fuzzed inbound parser, and ideally a less-privileged input process (SEC-014)**. See `docs/decisions/2026-06-21-adopt-headless-appliance-remote-console.md`.
-6. **Multi-agent routing** — Device, network, filesystem, and user specialists route queries correctly (>95% accuracy on test suite).
-7. **7-day supervised autonomy** — JARVIS runs 7 days with you present: proactive actions logged, zero unapproved high-risk actions, <5% false-positive interrupts.
+5. **Natural language primary** — Shell/commands exist but conversation is the default interface for all system interaction. **This is where the Remote Telemetry Console's control-IN channel lands** — turning the console from read-only telemetry (shipped in Phase 4 goal #2b) into a two-way interface — gated on the full security checklist: **auth + HMAC, real SHIELD (close SEC-039), rate-limiting, a hardened/fuzzed inbound parser, and ideally a less-privileged input process (SEC-014)**. See `docs/decisions/2026-06-21-adopt-headless-appliance-remote-console.md`. — **✅ DONE 2026-07-21 (`a9c1d9a`): `JARVIS_CONTROL_IN` flipped default-ON; the deployed image is two-way.** All 6 checklist items closed — hardened + 300K-iter-fuzzed inbound parser · HMAC-SHA256 auth with constant-time verify + a cross-reboot NVMe-persisted replay floor · a scheduling-backed rate limit · a real QUERY SHIELD closing SEC-039 for control-IN queries · the SEC-014 least-privileged `jarvis-input` process (no NIC caps, no key, no rings) · the virgin I211 RX bring-up. `/security-review` CLEAN, emergency-disable proven. Supervised bare-metal validation (boot_id=30): 15/15 sustained queries at human pace, a 24-frame flood limited at exactly CAP=8 with 16 dropped then 3/3 recovery, the browser round-trip coherent and HMAC-verified, `err=0` at `q=175,600`, audit-clean (49 EXECUTED + 21 BLOCKED, all 25 raw-query probes ZERO). Ubuntu keeps `BootOrder[0]`, so exposure is bounded to deliberate JARVIS boots; rollback = the retained pre-flip image and/or wiping the JKEY slot, both proven. **Honest limits:** the reply is SIGNED, NOT ENCRYPTED; the query SHIELD refuses DEFINED ABUSE CLASSES and is not a general injection detector (injection is contained structurally — inbound text can never mint an action); third-host non-observation of the unicast reply is NOT PROVEN. Detail: `phase6/docs/PHASE_6_GOAL_6-5_CONTROL_IN.md` + `phase6/docs/PHASE_6_GOAL_6-5_FINAL_REPORT.md`.
+6. **Multi-agent routing** — Device, network, filesystem, and user specialists route queries correctly (>95% accuracy on test suite). — **🔜 NEXT (one of the two remaining Phase-6 goals).**
+7. **7-day supervised autonomy** — JARVIS runs 7 days with you present: proactive actions logged, zero unapproved high-risk actions, <5% false-positive interrupts. — **🔜 REMAINING (the phase exit).**
 
 ### Done when
 
-- [ ] At least one proactive action fired correctly without user prompt (logged + correct)
-- [ ] 7-day test completed with SHIELD audit trail showing no Level 2+ actions taken without approval
-- [ ] Multi-agent routing test suite ≥95% pass
-- [ ] You can hold a multi-turn conversation where JARVIS references prior sessions correctly
+- [x] At least one proactive action fired correctly without user prompt (logged + correct) — *met at K/M4 (2026-07-08, boot_id=15: SHIELD-scored, JACT-audited self-heal); goals #1–#3 have since deployed the monitor → wake → ≥5 INFORM-behavior chain.*
+- [ ] 7-day test completed with SHIELD audit trail showing no Level 2+ actions taken without approval — *goal #7, remaining.*
+- [ ] Multi-agent routing test suite ≥95% pass — *goal #6, next.*
+- [ ] You can hold a multi-turn conversation where JARVIS references prior sessions correctly — *NOT MET, and NOT merely undemonstrated. Goal #5 delivered the channel and single-turn Q&A is bare-metal-proven, but a control-IN answer is never retrieval-grounded: `pa_ctrl_gate` deliberately CLEARS the retrieval preamble (`main_x86.c:2670-2672`, to avoid the P6 contamination class), so the recall half is UNWIRED. The episodic WRITE half is proven (`EPI_ACT_CONTROL_IN`), so the lineage is accumulating. Closing this needs its own slice — retrieval-grounded control-IN — carried forward to #6/#7.*
 
 **Estimated effort:** 6–12 months
 
