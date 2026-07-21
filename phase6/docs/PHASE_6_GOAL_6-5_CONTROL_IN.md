@@ -1347,7 +1347,7 @@ Recorded here so no later summary can quietly promote them. Each is a real gap, 
 
 | # | Done-when | Status |
 |---|---|---|
-| 1 | Multi-turn prior-session recall over control-IN | ⚠️ **MET AT THE EXACT-REPEAT LEVEL (M5-recall, gated `JARVIS_CONTROL_IN_RECALL` default-0, pending a supervised mini-flip)** — a repeated control-IN query is now grounded on its OWN prior-session answer via a dedicated tag-3 episodic index + an answer-only preamble. KVM 2-boot proof: boot 1 seeds and commits the tag-3 record, boot 2 reads it back across the reboot → `[CTRL-RECALL] hit=1 recall=1 len=199`, with a never-asked query correctly yielding `hit=0 recall=0 len=0`. **RESIDUAL: SEMANTIC association** — state a fact, then ask a *different* question — remains OUT OF SCOPE and unimplemented (it needs embeddings this system does not have). The honest claim is *cross-session recall of a repeated query's prior answer*, NEVER "JARVIS remembers your conversation" |
+| 1 | Multi-turn prior-session recall over control-IN | ❌ **NOT MET ON HARDWARE — mechanism implemented + KVM-2-boot-proven (`hit=1 recall=1`), but the SUBSTRATE blocks it.** The 8192-slot episodic store is SHARED with the workload (~94-225 q/s), so a control-IN turn is wrap-evicted in ~36 s; the 2026-07-21 mini-flip was ABORTED after an on-disk read found **0 tag-3 records** surviving (7.0 full wraps). Needs a DEDICATED control-IN store first. Semantic association remains separately out of scope (embeddings) |
 | 2 | Every §4 item + clean `/security-review` + proven emergency-disable | ✅ MET |
 | 3 | SEC-039 closed for the query path (induced-BLOCK on a genuinely hostile query) | ✅ MET (`refuse key-extraction`, box-proven, audited by label only) |
 | 4 | Parser + HMAC + replay + rate-limit host-fuzzed in CI; SEC-014 process cap-minimal | ✅ MET |
@@ -1492,3 +1492,66 @@ detective. Do not let this drift into a "the SHIELD catches key-extraction attem
   port; **accepted as a documented limitation at the flip.**
 - No long-run soak of a standing CONTROL_IN=1 deployment has been done; exposure so far is supervised
   boots only.
+
+---
+
+## M5-recall MINI-FLIP — ATTEMPTED AND **ABORTED** 2026-07-21 (substrate finding, not a code defect)
+
+**`JARVIS_CONTROL_IN_RECALL` remains default-0. The flip was NOT committed.** The abort condition in
+the runbook ("ABORT if recall=0 or the record didn't persist") fired on a measured, on-disk-proven
+substrate limitation.
+
+**The mechanism is correct.** Session 1 on bare metal (boot_id=31, RECALL=1 test image `60fc4c3a`,
+one-shot BootNext) worked exactly as designed: the query *"in one sentence what is a page table"*
+returned `verdict=0`, `hmac=True`, and the coherent answer *"A page table is a data structure used by
+an operating system to translate virtual memory addresses into physical memory addresses."* The KVM
+2-boot proof (`hit=1 recall=1 len=199`) stands and is unaffected.
+
+**The substrate cannot hold the record.** The episodic store is **8192 slots SHARED with the synthetic
+workload**, and `epi_batch_add` fires on EVERY workload query. Measured live this boot: **94 q/s
+average, ~225 q/s when not blocked by inference**. A control-IN turn is therefore wrap-evicted in
+roughly **36 seconds of idle running**.
+
+Both failure modes were hit in a single attempt, which is what makes the conclusion firm:
+
+| Moment | State | Outcome if power-cycled then |
+|---|---|---|
+| q_total = 34 | record still in the RAM batch (commits at `EPI_BATCH_MAX` 128 or the q%100 `[STATS]` boundary) | record LOST — never written |
+| q_total = 300 | committed to NVMe | recoverable — but only for ~30 s |
+| q_total = 57,100 | **57,070 records written since = 7.0 COMPLETE WRAPS** | record long gone |
+
+**ON-DISK VERDICT** (`dd skip=21100000 count=8193 | parse_episodic.py`, box back on Ubuntu): of 8192
+records parsed, **0 CONTROLIN (tag-3) records** and **0 records mentioning the seeded query**. The store
+contained nothing but cache-lane workload records. Not one of the boot's 11 control-IN turns survived.
+
+**Why the KVM gate passed and this did not** — a gap in the gate design, recorded so it is not repeated:
+the KVM run zeroed the episodic header first (clean lineage) and its workload was slow, so nothing
+competed for slots. Neither condition holds on the real box. A 2-boot test on an idle emulator cannot
+demonstrate survival under a 225 q/s writer.
+
+**CONSEQUENCE:** cross-session control-IN recall **cannot fire on the deployed box** with the shared
+store — it would return `hit=0` for every realistic case. Flipping the flag default-ON would ship a
+feature that provably never activates. §14's conversational-recall done-when is therefore **NOT met on
+hardware**; the mechanism is implemented and KVM-proven, the substrate is the blocker.
+
+**RECOMMENDED FIX — a DEDICATED control-IN episodic store.** Tag-3 records only, in their own raw-LBA
+region, following the pattern `semantic_store` (@ 21,110,000) and JACT (@ 21,120,000) already use.
+Control-IN traffic is human-paced, so even 4096 slots would hold years of conversation and recall would
+become independent of workload volume. `pa_ctrl_gate` writes there in addition to the shared store;
+`g_ctrl_epi_index` is built from it. Rejected alternatives: enlarging the shared store buys only seconds
+per megabyte at 225 q/s; suppressing workload episodic writes would break cache-growth and
+SHIELD-learning, which consume those records.
+
+**A BROADER OBSERVATION worth carrying into 6-6/6-7:** this is not only about control-IN. The episodic
+store retains roughly **the last ~36 seconds of history** on this box under the synthetic workload.
+Reboot-survival is real (records do persist), but the retained WINDOW is tiny. Any long-horizon episodic
+memory claim should be scoped to that.
+
+**Minor unexplained observation:** the boot's `[CTRL-IN-STATS]` read `acc=11 drop=6 (parse=6 rl=0 auth=0
+replay=0)` — six frames failed parsing. Plausibly RX-ring pressure from rapid-fire frames arriving while
+PA was blocked in a long inference. It fails CLOSED and did not affect any answered query, but it is not
+yet explained and deserves a look.
+
+**Box state after the abort:** ESP restored to `ba93fe4e` (the RECALL=0 two-way standing image, md5
+re-verified), the deeper `379f6bdb` rollback retained, clone clean at `db15b44`, `RECALL=0`, Ubuntu
+`BootOrder[0]`, 0 FATAL/FAULT, `err=0`.
