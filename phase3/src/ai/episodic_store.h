@@ -38,6 +38,25 @@
 #define EPI_STORE_MAGIC        0x4A455049U   /* "JEPI" */
 #define EPI_STORE_VERSION      1U
 
+/* ---- 6-5/M5-recall: the DEDICATED control-IN episodic store ----
+ * A SECOND INSTANCE of this same engine at its own base_lba — no engine change, no new magic.
+ *
+ * WHY it exists: control-IN turns used to share the store above, which the synthetic workload
+ * churns at ~225 q/s. At 8192 slots that wrap-evicts a control-IN turn in ~36 SECONDS — measured
+ * on hardware, where the M5-recall mini-flip aborted with ZERO tag-3 records surviving (7.0
+ * complete wraps). Cross-session recall cannot exist on that substrate. Control-IN is human-paced,
+ * so its own region never churns and recall decouples from workload volume.
+ *
+ * SEPARATION IS BY REGION, NOT BY MAGIC: the magic is a fixed #define shared by every instance
+ * (parameterizing it would change episodic_store.c's object code and break the OFF-identity
+ * discipline). Two instances cannot collide because base_lba is carried per-handle on epi_store_t
+ * and the regions do not overlap — episodic occupies 21,100,000..21,108,192 (8193 sectors) and
+ * this store 21,140,000..21,144,096 (4097 sectors), clear of semantic (21,110,000) and JACT
+ * (21,120,000). The non-collision property is host-pinned by test_episodic_store.c's T9.
+ * RESERVED like its siblings: a future installer/repartition must NOT overlap it. */
+#define CTRL_EPI_BASE_LBA      21140000ULL   /* dedicated control-IN episodic store */
+#define CTRL_EPI_MAX_ENTRIES   4096U         /* header + 4096 slots = 4097 sectors; last @ 21,144,096 */
+
 /* Device-independent I/O callbacks (fat32 style). Return 0 on success, <0 on error.
  * Each call transfers `count` 512-byte sectors at absolute `lba`. */
 typedef int (*epi_read_fn)(uint64_t lba, uint32_t count, void *buf);

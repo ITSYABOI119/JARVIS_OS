@@ -218,13 +218,22 @@ static epi_record_t      g_epi_recall_rec;     /* single-record fetch buffer (on
 #endif
 
 #if JARVIS_CONTROL_IN_RECALL
-/* 6-5/M5-recall: a SEPARATE tag-3 index. g_epi_index above is deduped-to-newest ACROSS tags, so a
- * key present in BOTH a workload record and a control-IN record resolves to whichever is newer —
- * a workload answer could shadow the control-IN one (and g3_candidate_usable would then reject it,
- * silently losing the recall). Built in the SAME boot scan, from EPI_ACT_CONTROL_IN records only.
- * Its own fetch buffer: g_epi_recall_rec is the workload/boot-scan path's — clobbering it from
+/* 6-5/M5-recall: control-IN turns live in their OWN episodic store (CTRL_EPI_BASE_LBA), a second
+ * instance of the same engine. The shared store above is churned by the synthetic workload at
+ * ~225 q/s, which wrap-evicts a control-IN turn in ~36 s (measured on hardware — the mini-flip
+ * aborted with 0 of 8192 tag-3 records surviving). Human-paced traffic in its own region never
+ * wraps, so recall decouples from workload volume.
+ *
+ * Because EVERY record here is a control-IN turn, the index needs no tag filter and cannot be
+ * shadowed by a same-key workload record (the cross-tag hazard that forced a separate index while
+ * the stores were shared). It is built at boot from this store and kept current on every append,
+ * so a turn asked twice in ONE session recalls too.
+ *
+ * Own fetch buffer: g_epi_recall_rec is the workload/boot-scan path's — clobbering it from
  * pa_ctrl_gate would be a cross-lane bug. */
-static epi_index_entry_t g_ctrl_epi_index[EPI_STORE_MAX_ENTRIES];
+static epi_store_t       g_ctrl_episodic;
+static int               g_ctrl_episodic_ready = 0;
+static epi_index_entry_t g_ctrl_epi_index[CTRL_EPI_MAX_ENTRIES];
 static int               g_ctrl_epi_index_n = 0;
 static epi_record_t      g_ctrl_recall_rec;    /* control-IN single-record fetch buffer */
 static uint32_t          g_ctrl_recall_hits;   /* control-IN queries served a non-empty preamble */
@@ -346,6 +355,48 @@ static void epi_batch_add(const char *query, uint16_t action, uint8_t outcome, c
         sctx_record_decision(g_sctx, key, action, outcome, /*committed=*/0);
     }
 }
+
+#if JARVIS_CONTROL_IN_RECALL
+/* 6-5/M5-recall: write ONE control-IN turn to the DEDICATED store, replacing the shared-store
+ * epi_batch_add at the three pa_ctrl_gate exit paths. Two deliberate differences from the batch:
+ *
+ *  (1) PER-TURN DURABLE COMMIT. epi_store_append writes the record AND flushes the header, so the
+ *      turn survives an immediate reboot. That is affordable here precisely because control-IN is
+ *      human-paced — the batch exists to keep the <1 ms cache-hit path off NVMe, and this path is
+ *      already a multi-second inference.
+ *  (2) THE IN-RAM INDEX IS KEPT CURRENT. g_ctrl_epi_index is built at BOOT, so without this a turn
+ *      written THIS session would not be found until the next boot. Appending {key, count-1} makes
+ *      a same-session repeat recall as well — and count-1 is the logical index of the record just
+ *      written (epi_store_read maps oldest->newest, newest == count-1) for both the pre-wrap and
+ *      rolled cases. Once the region does eventually roll, older entries' logical indices shift;
+ *      pa_ctrl_gate's read-key == qkey re-check is what makes a stale entry a clean miss.
+ *
+ * KEY CURRENCY (load-bearing): episodic_fill hashes the SANITIZED `qs` exactly as the shared path
+ * did — cache_hash(cache_normalize_query(qs)) — so the key written here is the key looked up. */
+static void ctrl_epi_write(const char *qs, uint8_t outcome, const char *resp)
+{
+    if (!g_ctrl_episodic_ready) return;
+
+    static epi_record_t rec;   /* static: PA is single-threaded; keeps 512 B off pa_ctrl_gate's frame */
+    episodic_fill(&rec, jarvis_uptime_ms(), qs, EPI_ACT_CONTROL_IN, outcome, 0, resp);
+    if (epi_store_append(&g_ctrl_episodic, &rec) != 0) {
+        puts_serial("[CTRL-EPI] append FAILED (non-fatal — this turn will not recall)\n");
+        return;
+    }
+
+    uint32_t cnt = epi_store_count(&g_ctrl_episodic);
+    if (cnt > 0 && g_ctrl_epi_index_n < (int)CTRL_EPI_MAX_ENTRIES) {
+        g_ctrl_epi_index[g_ctrl_epi_index_n].key = rec.query_key;
+        g_ctrl_epi_index[g_ctrl_epi_index_n].logical_index = cnt - 1u;
+        g_ctrl_epi_index_n++;
+    }
+
+    puts_serial("[CTRL-EPI] stored count="); put_dec(cnt);
+    puts_serial(" total=");                  put_dec(g_ctrl_episodic.hdr.total_entries);
+    puts_serial(" idx=");                    put_dec((uint32_t)g_ctrl_epi_index_n);
+    puts_serial("\n");
+}
+#endif /* JARVIS_CONTROL_IN_RECALL */
 
 static void nvme_timeout_debug(uint32_t cq_raw, uint32_t csts_val, uint8_t sq_op) {
     puts_serial("[NVMe DBG] timeout: cq_status=");
@@ -2664,7 +2715,11 @@ static void pa_ctrl_gate(const control_result_t *cres)
     if (!PB_DISPATCH_OK()) {
         puts_serial("[CTRL-IN-RESP] q=\""); puts_serial(qs);
         puts_serial("\" -> DEGRADED (no dispatch)\n");
+#if JARVIS_CONTROL_IN_RECALL
+        ctrl_epi_write(qs, EPI_OUT_ERROR, NULL);
+#else
         epi_batch_add(qs, EPI_ACT_CONTROL_IN, EPI_OUT_ERROR, NULL);
+#endif
         ctrl_in_jact(AUDIT_EXECUTED, AUDIT_OUT_FAIL, "control-in degraded", 19);
         ctrl_send_reply((uint16_t)cres->seq, 2 /*degraded*/, "degraded", 8);
         return;
@@ -2691,7 +2746,7 @@ static void pa_ctrl_gate(const control_result_t *cres)
      * cache_hash(cache_normalize_query(qs)) (episodic_fill), so hashing the raw frame bytes would
      * mint a key that never matches what was persisted whenever sanitisation/the 120 B bound bit. */
     if (g_sctx_ready) {
-        static g3_candidate_t ctrl_cands[EPI_BATCH_MAX];   /* static: PA is single-threaded (<8 KB stack) */
+        static g3_candidate_t ctrl_cands[1];   /* static: PA is single-threaded (<8 KB stack) */
         static g3_candidate_t ctrl_sel[G3_MAX_FACTS];
         static char           ctrl_pre[SCTX_PREAMBLE_MAX];
         static char           ctrl_norm[MAX_QUERY_LEN];
@@ -2699,50 +2754,32 @@ static void pa_ctrl_gate(const control_result_t *cres)
         if (cache_normalize_query(qs, ctrl_norm, sizeof ctrl_norm))
             ckey = cache_hash(ctrl_norm);
 
-        /* (a) this-boot, uncommitted control-IN turns. Batch INDEX is the recency key (records
-         * carry seq=0 until the commit stamps them), preserved across the filter. */
-        int ccap = g_epi_batch_n;
-        if (ccap > EPI_BATCH_MAX) ccap = EPI_BATCH_MAX;
-        int cn = 0;
-        for (int ci = 0; ci < ccap; ci++) {
-            if (!g3_candidate_usable(g_epi_batch[ci].action, g_epi_batch[ci].outcome,
-                                     g_epi_batch[ci].resp_len, EPI_ACT_CONTROL_IN, EPI_OUT_OK))
-                continue;
-            ctrl_cands[cn].query_key = g_epi_batch[ci].query_key;
-            ctrl_cands[cn].seq       = (uint32_t)ci;
-            ctrl_cands[cn].action    = g_epi_batch[ci].action;
-            ctrl_cands[cn].outcome   = g_epi_batch[ci].outcome;
-            ctrl_cands[cn].query     = g_epi_batch[ci].query;
-            ctrl_cands[cn].query_len = g_epi_batch[ci].query_len;
-            ctrl_cands[cn].resp      = g_epi_batch[ci].resp;
-            ctrl_cands[cn].resp_len  = g_epi_batch[ci].resp_len;
+        /* ONE bounded read of the dedicated store's index match. There is no separate scan of the
+         * this-boot RAM batch any more: control-IN turns are no longer batched — ctrl_epi_write()
+         * commits each turn immediately AND appends it to this index, so a same-session repeat is
+         * already reachable through the same lookup as a prior-session one.
+         * The read-key == ckey re-check STAYS: it is the safety net for a stale logical_index once
+         * the region eventually rolls, turning a shifted entry into a clean miss rather than a
+         * wrong recall. The usable filter stays too — a FAILED turn (timeout/degraded, resp_len 0)
+         * must never be recalled as if it were an answer. */
+        int cn = 0, crecall = 0;
+        int cli = epi_index_lookup(g_ctrl_epi_index, g_ctrl_epi_index_n, ckey);
+        if (cli >= 0 && epi_store_read(&g_ctrl_episodic, (uint32_t)cli, &g_ctrl_recall_rec) == 0
+            && g_ctrl_recall_rec.query_key == ckey
+            && g3_candidate_usable(g_ctrl_recall_rec.action, g_ctrl_recall_rec.outcome,
+                                   g_ctrl_recall_rec.resp_len, EPI_ACT_CONTROL_IN, EPI_OUT_OK)) {
+            ctrl_cands[cn].query_key = g_ctrl_recall_rec.query_key;
+            ctrl_cands[cn].seq       = g_ctrl_recall_rec.seq;
+            ctrl_cands[cn].action    = g_ctrl_recall_rec.action;
+            ctrl_cands[cn].outcome   = g_ctrl_recall_rec.outcome;
+            ctrl_cands[cn].query     = g_ctrl_recall_rec.query;
+            ctrl_cands[cn].query_len = g_ctrl_recall_rec.query_len;
+            ctrl_cands[cn].resp      = g_ctrl_recall_rec.resp;
+            ctrl_cands[cn].resp_len  = g_ctrl_recall_rec.resp_len;
             cn++;
-        }
-
-        /* (b) the PRIOR-SESSION turn: one bounded read of the tag-3 index's match. Re-check the
-         * read record's key == ckey (a stale logical_index after a commit must not recall the wrong
-         * record) AND the usable filter with want_action=EPI_ACT_CONTROL_IN (so a workload or
-         * cache record sharing the key can never be sourced). */
-        int crecall = 0;
-        int c_in_batch = 0;
-        for (int cj = 0; cj < cn; cj++)
-            if (ctrl_cands[cj].query_key == ckey) { c_in_batch = 1; break; }
-        if (!c_in_batch && cn < EPI_BATCH_MAX) {
-            int cli = epi_index_lookup(g_ctrl_epi_index, g_ctrl_epi_index_n, ckey);
-            if (cli >= 0 && epi_store_read(&g_episodic, (uint32_t)cli, &g_ctrl_recall_rec) == 0
-                && g_ctrl_recall_rec.query_key == ckey
-                && g3_candidate_usable(g_ctrl_recall_rec.action, g_ctrl_recall_rec.outcome,
-                                       g_ctrl_recall_rec.resp_len, EPI_ACT_CONTROL_IN, EPI_OUT_OK)) {
-                ctrl_cands[cn].query_key = g_ctrl_recall_rec.query_key;
-                ctrl_cands[cn].seq       = 0;   /* persisted = older than any this-boot turn */
-                ctrl_cands[cn].action    = g_ctrl_recall_rec.action;
-                ctrl_cands[cn].outcome   = g_ctrl_recall_rec.outcome;
-                ctrl_cands[cn].query     = g_ctrl_recall_rec.query;
-                ctrl_cands[cn].query_len = g_ctrl_recall_rec.query_len;
-                ctrl_cands[cn].resp      = g_ctrl_recall_rec.resp;
-                ctrl_cands[cn].resp_len  = g_ctrl_recall_rec.resp_len;
-                cn++; crecall = 1;
-            }
+            /* recall=1 means "sourced from the durable store" — which, now that every turn commits
+             * at write time, covers a prior SESSION and an earlier turn of THIS one alike. */
+            crecall = 1;
         }
 
         int cns  = g3_select_exact_only(ctrl_cands, cn, ckey, ctrl_sel);
@@ -2825,8 +2862,12 @@ static void pa_ctrl_gate(const control_result_t *cres)
             putc_serial((ch >= 0x20 && ch < 0x7f) ? ch : ' ');
         }
         puts_serial("\"\n");
+#if JARVIS_CONTROL_IN_RECALL
+        ctrl_epi_write(qs, roff > 0 ? EPI_OUT_OK : EPI_OUT_ERROR, roff > 0 ? resp : NULL);
+#else
         epi_batch_add(qs, EPI_ACT_CONTROL_IN, roff > 0 ? EPI_OUT_OK : EPI_OUT_ERROR,
                       roff > 0 ? resp : NULL);
+#endif
         ctrl_send_reply((uint16_t)cres->seq, 0 /*answered*/, resp, roff);   /* the sanitized, bounded answer */
     } else {
         /* (§7.5b) timeout or fault-mid-route: honest FAIL. NEVER q_errors++ — a control-IN failure
@@ -2836,7 +2877,11 @@ static void pa_ctrl_gate(const control_result_t *cres)
         if (!faulted) km2b_miss_on_pb_timeout(&g_pb_miss, KM2B_LANE_CTRL);
         puts_serial("[CTRL-IN-RESP] q=\""); puts_serial(qs);
         puts_serial(faulted ? "\" -> FAULT (self-heal)\n" : "\" -> TIMEOUT\n");
+#if JARVIS_CONTROL_IN_RECALL
+        ctrl_epi_write(qs, EPI_OUT_ERROR, NULL);
+#else
         epi_batch_add(qs, EPI_ACT_CONTROL_IN, EPI_OUT_ERROR, NULL);
+#endif
         ctrl_send_reply((uint16_t)cres->seq, 3 /*failed*/, faulted ? "fault" : "timeout", faulted ? 5 : 7);
     }
 
@@ -3593,6 +3638,39 @@ static void *main_continued(void *arg UNUSED)
                                             puts_serial("[SEM] semantic store init FAILED (non-fatal)\n");
                                         }
 #endif
+#if JARVIS_CONTROL_IN_RECALL
+                                        /* 6-5/M5-recall: init the DEDICATED control-IN episodic store
+                                         * (same NVMe bounce callbacks, own raw-LBA sub-region — clear
+                                         * of episodic/semantic/JACT), then build its key index in ONE
+                                         * bounded scan. Every record in this region is a control-IN
+                                         * turn, so the scan needs no tag filter. The scan is here, not
+                                         * riding the shared [RECALL] scan below, so the control-IN
+                                         * lane owns its own store, buffer and index end-to-end. */
+                                        if (epi_store_init(&g_ctrl_episodic, epi_nvme_read, epi_nvme_write,
+                                                           CTRL_EPI_BASE_LBA, CTRL_EPI_MAX_ENTRIES) == 0) {
+                                            g_ctrl_episodic_ready = 1;
+                                            puts_serial("[CTRL-EPI] store ready (boot ");
+                                            put_dec(epi_store_boot_id(&g_ctrl_episodic));
+                                            puts_serial(" count="); put_dec(epi_store_count(&g_ctrl_episodic));
+                                            puts_serial(")\n");
+
+                                            uint32_t _ccnt = epi_store_count(&g_ctrl_episodic);
+                                            if (_ccnt > CTRL_EPI_MAX_ENTRIES) _ccnt = CTRL_EPI_MAX_ENTRIES;
+                                            g_ctrl_epi_index_n = 0;
+                                            for (uint32_t _cli = 0; _cli < _ccnt; _cli++) {
+                                                if (epi_store_read(&g_ctrl_episodic, _cli, &g_ctrl_recall_rec) == 0) {
+                                                    g_ctrl_epi_index[g_ctrl_epi_index_n].key = g_ctrl_recall_rec.query_key;
+                                                    g_ctrl_epi_index[g_ctrl_epi_index_n].logical_index = _cli;
+                                                    g_ctrl_epi_index_n++;
+                                                }
+                                            }
+                                            puts_serial("[CTRL-RECALL] index built n=");
+                                            put_dec((uint32_t)g_ctrl_epi_index_n);
+                                            puts_serial("\n");
+                                        } else {
+                                            puts_serial("[CTRL-EPI] store init FAILED (non-fatal — no recall)\n");
+                                        }
+#endif
 #if JARVIS_ACTIONS
                                         /* Phase 6 K/M1: init the action-audit store (same NVMe bounce
                                          * callbacks, own raw-LBA sub-region — clear of semantic). Records
@@ -3609,7 +3687,8 @@ static void *main_continued(void *arg UNUSED)
                                             puts_serial("[ACTION] audit store init FAILED (non-fatal)\n");
                                         }
 #endif
-#if (JARVIS_G3_RETRIEVAL || JARVIS_CACHE_GROWTH || JARVIS_SHIELD_LEARN || JARVIS_SEMANTIC || JARVIS_CONTROL_IN_RECALL)
+/* (6-5/M5-recall no longer rides this scan — control-IN has its own store + scan above.) */
+#if (JARVIS_G3_RETRIEVAL || JARVIS_CACHE_GROWTH || JARVIS_SHIELD_LEARN || JARVIS_SEMANTIC)
                                         /* G3/M5a: one-time boot scan → in-RAM key→logical_index map of the
                                          * persisted store, so retrieval can recall facts from PRIOR boots
                                          * (survives power-cycle). NOT per-query — built once, here at boot.
@@ -3621,9 +3700,6 @@ static void *main_continued(void *arg UNUSED)
                                             uint32_t _cnt = epi_store_count(&g_episodic);
                                             if (_cnt > EPI_STORE_MAX_ENTRIES) _cnt = EPI_STORE_MAX_ENTRIES;
                                             g_epi_index_n = 0;
-#if JARVIS_CONTROL_IN_RECALL
-                                            g_ctrl_epi_index_n = 0;
-#endif
 #if JARVIS_SEMANTIC
                                             uint32_t sem_win_n = 0;
 #endif
@@ -3632,16 +3708,6 @@ static void *main_continued(void *arg UNUSED)
                                                     g_epi_index[g_epi_index_n].key = g_epi_recall_rec.query_key;
                                                     g_epi_index[g_epi_index_n].logical_index = _li;
                                                     g_epi_index_n++;
-#if JARVIS_CONTROL_IN_RECALL
-                                                    /* 6-5/M5-recall: the parallel tag-3-ONLY index —
-                                                     * so a same-key workload record can never shadow
-                                                     * the control-IN one in the cross-tag map above. */
-                                                    if (g_epi_recall_rec.action == EPI_ACT_CONTROL_IN) {
-                                                        g_ctrl_epi_index[g_ctrl_epi_index_n].key = g_epi_recall_rec.query_key;
-                                                        g_ctrl_epi_index[g_ctrl_epi_index_n].logical_index = _li;
-                                                        g_ctrl_epi_index_n++;
-                                                    }
-#endif
 #if JARVIS_CACHE_GROWTH
                                                     cg_freq_bump(g_key_freq, CG_FREQ_CAP,
                                                                  g_epi_recall_rec.query_key);
@@ -3667,11 +3733,6 @@ static void *main_continued(void *arg UNUSED)
                                             }
                                             puts_serial("[RECALL] index built n="); put_dec((uint32_t)g_epi_index_n);
                                             puts_serial("\n");
-#if JARVIS_CONTROL_IN_RECALL
-                                            puts_serial("[CTRL-RECALL] index built n=");
-                                            put_dec((uint32_t)g_ctrl_epi_index_n);
-                                            puts_serial("\n");
-#endif
 #if JARVIS_SEMANTIC
                                             /* #4/M1: one-shot boot distill — compact the window into durable
                                              * facts (DETERMINISTIC: support >= SEM_MIN_SUPPORT + consistency;
@@ -4996,7 +5057,8 @@ static void *main_continued(void *arg UNUSED)
 
         puts_serial(boot1 ? "[CTRL-RECALL-PROBE] boot1 (fresh floor) - seeding the prior session\n"
                           : "[CTRL-RECALL-PROBE] boot2 (resumed floor) - expecting recall\n");
-        puts_serial("[CTRL-RECALL-PROBE] tag3 index n="); put_dec((uint32_t)g_ctrl_epi_index_n);
+        puts_serial("[CTRL-RECALL-PROBE] ctrl-store index n="); put_dec((uint32_t)g_ctrl_epi_index_n);
+        puts_serial(" stored="); put_dec(epi_store_count(&g_ctrl_episodic));
         puts_serial("\n");
 
         /* the marker query — routed in BOTH boots; boot 1 seeds it, boot 2 must recall it. */
@@ -5034,16 +5096,18 @@ static void *main_continued(void *arg UNUSED)
             }
         }
 
-        /* DURABILITY — the crux of the 2-boot gate. epi_batch_add() only fills the RAM batch; it
-         * reaches NVMe at the [STATS] cadence (every 100 queries). A boot-1 image rebooted before
-         * that commit would persist NOTHING, and boot 2 would honestly report hit=0 — reading as a
-         * MECHANISM failure when the mechanism is fine. Force the commit here and state the result,
-         * so "no record" and "record never written" are never confusable. */
-        puts_serial("[CTRL-RECALL-PROBE] forcing epi_commit (episodic_ready=");
-        put_dec(g_episodic_ready ? 1u : 0u);
-        puts_serial(" pending="); put_dec((uint32_t)g_epi_batch_n); puts_serial(")\n");
-        epi_commit();   /* prints [EPI] committed=N */
-        puts_serial("[CTRL-RECALL-PROBE] commit done - tag3 record durable, safe to reboot\n");
+        /* DURABILITY — the crux of the 2-boot gate, now satisfied BY CONSTRUCTION: ctrl_epi_write()
+         * appends to the dedicated store per turn and epi_store_append flushes the header, so the
+         * record is on NVMe before this line runs (the old shared-batch path needed a forced
+         * epi_commit here, because a boot-1 image rebooted before the [STATS]-cadence commit
+         * persisted NOTHING and boot 2 honestly reported hit=0 — reading as a MECHANISM failure).
+         * State the store's own counters so "no record" and "record never written" stay
+         * distinguishable from the log alone. */
+        puts_serial("[CTRL-RECALL-PROBE] durable by construction (ctrl_episodic_ready=");
+        put_dec(g_ctrl_episodic_ready ? 1u : 0u);
+        puts_serial(" count="); put_dec(epi_store_count(&g_ctrl_episodic));
+        puts_serial(" idx=");   put_dec((uint32_t)g_ctrl_epi_index_n);
+        puts_serial(") - safe to reboot\n");
     } else {
         puts_serial("[CTRL-RECALL-PROBE] SKIPPED (key/input/floor down)\n");
     }

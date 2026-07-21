@@ -390,7 +390,7 @@ breakdown diagnosed the boot_id=29 bug in a single line — and the v11 counters
 | Parser + HMAC + replay + rate-limit host-fuzzed in CI | ✅ 13 CI steps, 600K+ fuzz iterations |
 | SEC-014 input process box-verified cap-minimal | ✅ No BAR0, no key, pinned off the PA core |
 | The flip is reversible | ✅ Both halves proven (§12) |
-| Multi-turn prior-session recall over control-IN | ❌ **NOT MET ON HARDWARE** — mechanism built + KVM-proven, but the shared 8192-slot episodic store wrap-evicts a control-IN turn in ~36 s at the measured 94-225 q/s; the mini-flip was ABORTED (on-disk: 0 tag-3 records survived, 7.0 wraps). Needs a dedicated control-IN store. See the goal doc's mini-flip section |
+| Multi-turn prior-session recall over control-IN | ⚠️ **SUBSTRATE FIXED, HARDWARE RE-RUN PENDING.** The shared store wrap-evicted control-IN turns in ~36 s (mini-flip aborted, 0 survived). M5-recall-store gives control-IN its OWN store @21,140,000; KVM now proves recall AFTER the shared store wrapped **5.06 times** (`hit=1 recall=1`, on-disk: shared 0 tag-3 / dedicated 3). Gated default-0; the bare-metal mini-flip re-run at the real ~225 q/s is the remaining step |
 
 **Net:** the goal's SECURITY done-when bullets are met and the channel is live; **one bullet — the canon conversational-recall demonstration — is NOT met** and is carried forward with a named cause; the *phase* done-when it feeds (multi-turn prior-session
 conversation) has its mechanism in place but no recorded end-to-end demonstration, and is carried to 6-7.

@@ -1555,3 +1555,66 @@ yet explained and deserves a look.
 **Box state after the abort:** ESP restored to `ba93fe4e` (the RECALL=0 two-way standing image, md5
 re-verified), the deeper `379f6bdb` rollback retained, clone clean at `db15b44`, `RECALL=0`, Ubuntu
 `BootOrder[0]`, 0 FATAL/FAULT, `err=0`.
+
+---
+
+## M5-recall-store (2026-07-21): the DEDICATED control-IN episodic store — the mini-flip's blocker FIXED
+
+The aborted mini-flip proved the recall MECHANISM was fine and the SUBSTRATE was wrong: control-IN turns
+lived in the SHARED 8192-slot episodic store, which the workload churns at ~225 q/s, wrap-evicting a
+control-IN turn in ~36 s (on-disk: 0 tag-3 records survived, 7.0 wraps). This slice gives control-IN its
+own store.
+
+**Design — a SECOND INSTANCE of the same engine, no engine change.** `epi_store_init` already takes
+`base_lba` + `max_entries` per handle, and `epi_store_append` writes AND flushes immediately, so
+control-IN gets a **per-turn durable commit with no batch**. New region: **`CTRL_EPI_BASE_LBA`
+21,140,000, `CTRL_EPI_MAX_ENTRIES` 4096** (4097 sectors incl. header, last @ 21,144,096) — clear of
+episodic (21,100,000..21,108,192), semantic (21,110,000), JACT (21,120,000) and the control-key
+sub-region (21,130,000..3).
+
+**Separation is BY REGION, not by magic.** The magic stays the shared `EPI_STORE_MAGIC`; parameterizing
+it would change `episodic_store.c`'s object code and break the OFF-identity discipline (M3-2a verified
+4-object identity including `episodic_store.c.obj`). Two instances cannot collide because `base_lba` is
+carried per-handle and the regions do not overlap. The property is host-pinned by
+`test_episodic_store.c` T9 (8 -> **9 PASS**), which uses deliberately ADJACENT scaled-down regions so an
+off-by-one collides there, and is teeth-proven (setting both bases equal fails).
+
+**Writes:** the 3 control-IN sites (degraded / answered / timeout-fault) call `ctrl_epi_write`, which
+builds the record via `episodic_fill` (so the key stays `cache_hash(cache_normalize_query(qs))` over the
+SANITIZED `qs` — the db15b44 lesson) and appends to the dedicated store, then appends `{key,
+logical_index}` to the in-RAM index so SAME-session repeats recall too. **Reads:** the boot scan indexes
+the dedicated store directly (every record there is control-IN — no tag filter needed), and
+`pa_ctrl_gate`'s lookup reads `g_ctrl_episodic`. **`pa_ctrl_gate` now contains ZERO references to the
+shared `g_episodic`** — verified by grep. The `read-key == qkey` re-check is KEPT as the safety net
+against a stale index once the dedicated region eventually rolls.
+
+### The gate that the previous one lacked — survival under real churn
+
+| Gate | Result |
+|---|---|
+| **Phase A — OFF identity** | `main.c.obj` `.text` **56062** / `.rodata` 1128 / `.data` 96, `nm` md5 `3b31a43b…`, `.text` md5 `ff52e05d…` — all EXACT matches to the baseline; `episodic_store.c.obj` unchanged (`.text` 1583) |
+| **Phase B — KVM 2-boot recall** | boot 1 `[CTRL-EPI] stored count=1 total=1 idx=1`; boot 2 `[CTRL-RECALL] hit=1 recall=1 len=199`; negative control `hit=0 recall=0 len=0`; 0 faults, err=0 |
+| **Phase C — SURVIVAL UNDER SHARED-STORE CHURN** | boot 1 ran on to **q_total 48,900**, driving the shared store to **41,481 records = 5.06 COMPLETE WRAPS**, and boot 2 still recalled |
+
+**On-disk read-back, the two stores side by side:**
+
+| Store | Records | tag-3 (CONTROLIN) | marker present |
+|---|---|---|---|
+| SHARED @21,100,000 | 8192 | **0** | **0** — wrapped away, exactly as at the mini-flip |
+| DEDICATED @21,140,000 | 3 | **3** | **2** — survived |
+
+Boot 1's record and boot 2's carry the **identical key `0x1D9486D6E6ED2E32`**, confirming the sanitized-`qs`
+key derivation is stable across boots — the db15b44 lesson validated end to end on disk.
+
+**This directly closes the gate-design gap that let the mini-flip fail:** the earlier KVM test zeroed the
+store and ran a slow workload, so nothing competed for slots. This one deliberately drives the shared
+store through 5+ wraps first and only then asks for recall.
+
+**§14 status is UNCHANGED — still NOT MET on hardware.** KVM now proves the mechanism survives realistic
+churn, but the bare-metal mini-flip re-run at the real ~225 q/s is the remaining step. `RECALL` stays
+default-0 and the deployed image (`ba93fe4e`) was never touched by this milestone.
+
+**Follow-up noted, not fixed here:** the `#error` in `jarvis_debug.h` requiring `JARVIS_G3_RETRIEVAL` now
+carries a STALE rationale — it says RECALL "rides the boot recall-scan, whose fetch buffer is gated on
+JARVIS_G3_RETRIEVAL", but the lane now owns its own store, buffer and scan. The guard is harmless (G3 is
+default-ON) and conservative, so it was left in place rather than relaxing an untested flag combination.

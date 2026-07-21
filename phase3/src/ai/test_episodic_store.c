@@ -403,12 +403,99 @@ static void test_index_lookup(void)
     PASS("epi_index_lookup: empty/-1, miss/-1, single hit, dup -> newest");
 }
 
+/* ================================================================
+ * T9 (6-5/M5-recall): TWO INSTANCES AT DIFFERENT base_lba DO NOT COLLIDE.
+ *
+ * The control-IN store is a second epi_store_t at CTRL_EPI_BASE_LBA sharing the SAME
+ * EPI_STORE_MAGIC — separation is by REGION, not by magic (parameterizing the magic
+ * would change episodic_store.c's object code and break OFF-identity). This test is
+ * what replaces a distinct magic: it pins that two handles over ONE shared device
+ * keep independent headers, cursors and records.
+ *
+ * Deliberately uses ADJACENT scaled-down regions (B starts one sector past A's last)
+ * rather than the real 40,000-sector gap: adjacency is the TIGHTEST case, so a
+ * one-sector overrun in the base_lba+1+slot arithmetic FAILS here, where far-apart
+ * real bases would happily pass. The real constants are checked separately below, by
+ * arithmetic.
+ * ================================================================ */
+#define T9_BASE_A   EPI_STORE_BASE_LBA
+#define T9_ENTRIES  4U
+#define T9_BASE_B   (T9_BASE_A + 1U + T9_ENTRIES)   /* immediately after A's last record */
+
+static void test_two_instances_no_collision(void)
+{
+    memset(mock_disk, 0, sizeof(mock_disk));   /* ONE shared device backs both instances */
+
+    epi_store_t a, b;
+    ASSERT(epi_store_init(&a, mock_read, mock_write, T9_BASE_A, T9_ENTRIES) == 0, "init A");
+    ASSERT(epi_store_init(&b, mock_read, mock_write, T9_BASE_B, T9_ENTRIES) == 0, "init B");
+
+    /* Both are fresh, so both start at boot 1 / count 0 — B's init must not have been
+     * fooled into "resuming" A's header (they share a magic; only base_lba differs). */
+    ASSERT(epi_store_boot_id(&a) == 1 && epi_store_boot_id(&b) == 1, "both fresh: boot_id 1");
+    ASSERT(epi_store_count(&a) == 0 && epi_store_count(&b) == 0, "both fresh: count 0");
+
+    /* Interleave writes so an aliasing bug cannot hide behind ordering. */
+    ASSERT(episodic_log(&a, 10, "alpha one", EPI_ACT_INFER, EPI_OUT_OK, 0, "A-1") == 0, "A append 1");
+    ASSERT(episodic_log(&b, 20, "bravo one", EPI_ACT_CONTROL_IN, EPI_OUT_OK, 0, "B-1") == 0, "B append 1");
+    ASSERT(episodic_log(&a, 30, "alpha two", EPI_ACT_INFER, EPI_OUT_OK, 0, "A-2") == 0, "A append 2");
+    ASSERT(episodic_log(&b, 40, "bravo two", EPI_ACT_CONTROL_IN, EPI_OUT_OK, 0, "B-2") == 0, "B append 2");
+    ASSERT(episodic_log(&b, 50, "bravo three", EPI_ACT_CONTROL_IN, EPI_OUT_OK, 0, "B-3") == 0, "B append 3");
+
+    /* Headers advanced independently — neither store saw the other's writes. */
+    ASSERT(epi_store_count(&a) == 2, "A count == its own 2 appends");
+    ASSERT(epi_store_count(&b) == 3, "B count == its own 3 appends");
+    ASSERT(a.hdr.cursor == 2 && b.hdr.cursor == 3, "cursors independent");
+
+    /* Records read back are each store's OWN, in its own order, with its own seq lineage. */
+    epi_record_t r;
+    const char *a_exp[2] = { "A-1", "A-2" };
+    for (uint32_t i = 0; i < 2; i++) {
+        ASSERT(epi_store_read(&a, i, &r) == 0, "A read");
+        ASSERT(r.seq == i, "A seq lineage is its own");
+        ASSERT(r.action == EPI_ACT_INFER, "A record is A's tag");
+        ASSERT(r.resp_len == 3 && memcmp(r.resp, a_exp[i], 3) == 0, "A record bytes intact");
+    }
+    const char *b_exp[3] = { "B-1", "B-2", "B-3" };
+    for (uint32_t i = 0; i < 3; i++) {
+        ASSERT(epi_store_read(&b, i, &r) == 0, "B read");
+        ASSERT(r.seq == i, "B seq lineage is its own");
+        ASSERT(r.action == EPI_ACT_CONTROL_IN, "B record is B's tag");
+        ASSERT(r.resp_len == 3 && memcmp(r.resp, b_exp[i], 3) == 0, "B record bytes intact");
+    }
+
+    /* Wrapping A must not spill into B's region (A's last record sector is adjacent to
+     * B's header — an off-by-one in the wrap would corrupt exactly that). */
+    for (int i = 0; i < 6; i++)
+        ASSERT(episodic_log(&a, 60, "alpha churn", EPI_ACT_INFER, EPI_OUT_OK, 0, "A-x") == 0, "A churn");
+    ASSERT(a.hdr.total_entries == 8 && epi_store_count(&a) == T9_ENTRIES, "A rolled");
+    ASSERT(epi_store_count(&b) == 3, "B count untouched by A's wrap");
+    for (uint32_t i = 0; i < 3; i++) {
+        ASSERT(epi_store_read(&b, i, &r) == 0, "B read after A wrap");
+        ASSERT(r.resp_len == 3 && memcmp(r.resp, b_exp[i], 3) == 0, "B record survives A's wrap");
+    }
+
+    /* Re-init B off the shared device: it must resume ITS OWN lineage (boot 2, count 3),
+     * not adopt A's header — the reboot path of the real two-store deployment. */
+    ASSERT(epi_store_init(&b, mock_read, mock_write, T9_BASE_B, T9_ENTRIES) == 0, "re-init B");
+    ASSERT(epi_store_boot_id(&b) == 2, "B resumes its own boot_id");
+    ASSERT(epi_store_count(&b) == 3, "B resumes its own count");
+
+    /* The REAL deployed constants must not overlap: episodic occupies
+     * [EPI_STORE_BASE_LBA, +1+MAX_ENTRIES) and control-IN starts past it. */
+    ASSERT(CTRL_EPI_BASE_LBA >= EPI_STORE_BASE_LBA + 1ULL + EPI_STORE_MAX_ENTRIES,
+           "real regions: control-IN starts after episodic ends");
+    ASSERT(CTRL_EPI_MAX_ENTRIES > 0, "real control-IN region is non-empty");
+
+    PASS("two instances at different base_lba: no collision (shared magic, separate regions)");
+}
+
 int main(int argc, char **argv)
 {
     if (argc >= 3 && strcmp(argv[1], "--dump") == 0)
         return dump_fixture(argv[2]);
 
-    printf("=== Episodic Store Tests (Phase 5 G1/M1 + G3/M5a) ===\n");
+    printf("=== Episodic Store Tests (Phase 5 G1/M1 + G3/M5a + 6-5/M5-recall) ===\n");
 
     test_fresh_init();
     test_append_readback();
@@ -418,6 +505,7 @@ int main(int argc, char **argv)
     test_key_parity();
     test_batched_fill();
     test_index_lookup();
+    test_two_instances_no_collision();
 
     printf("\nResults: %d PASS, %d FAIL\n", tests_passed, tests_failed);
     return tests_failed > 0 ? 1 : 0;
