@@ -5,16 +5,21 @@
  *   gcc -Wall -Werror -O2 -std=c11 -D_POSIX_C_SOURCE=200809L \
  *       -I phase3/src/ai \
  *       phase3/src/ai/test_episodic_store.c phase3/src/ai/episodic_store.c \
- *       phase3/src/ai/decision_cache.c \
+ *       phase3/src/ai/decision_cache.c phase3/src/ai/g3_retrieval.c \
  *       -o /tmp/test_episodic_store
  *
  * Device-independent: mock read/write callbacks below drive a mock buffer (no NVMe,
  * no main_x86.c wiring — that is M1). decision_cache.c is linked for the FNV-1a query
  * key (cache_normalize_query + cache_hash); the store reuses it, never duplicates it.
+ * g3_retrieval.c is linked for T10's usable filter — g3_candidate_usable itself is a
+ * header-side static inline, so the TU is carried for stability, not to resolve a symbol.
  */
 
 #include "episodic_store.h"
 #include "decision_cache.h"
+#include "g3_retrieval.h"      /* T10: the SAME usable filter pa_ctrl_gate applies after a fetch */
+#include "semantic_store.h"    /* T9: real neighbouring region constants (headers, not literals) */
+#include "action_audit.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -487,7 +492,95 @@ static void test_two_instances_no_collision(void)
            "real regions: control-IN starts after episodic ends");
     ASSERT(CTRL_EPI_MAX_ENTRIES > 0, "real control-IN region is non-empty");
 
+    /* ...and clear of every OTHER raw-LBA neighbour, not just episodic. The control-IN store was
+     * the last region added to the map, so it is the one that can collide; pinning all four
+     * boundaries means a future base_lba edit cannot silently park it on top of a sibling.
+     * semantic + JACT come from their real headers. The control-key sub-region is a LITERAL on
+     * purpose: control_key.h lives in phase3/src/net and is gated on JARVIS_CONTROL_IN, so
+     * including it here would need a new -I in CI for one constant. */
+    ASSERT(CTRL_EPI_BASE_LBA >= SEM_STORE_BASE_LBA + 1ULL + SEM_STORE_MAX_FACTS,
+           "real regions: control-IN starts after the semantic store ends");
+    ASSERT(CTRL_EPI_BASE_LBA >= ACT_AUDIT_BASE_LBA + 1ULL + ACT_AUDIT_MAX_ENTRIES,
+           "real regions: control-IN starts after the JACT audit store ends");
+    ASSERT(CTRL_EPI_BASE_LBA >= 21130004ULL,
+           "real regions: control-IN starts after the control-key sub-region "
+           "(key 21,130,000 + floor A/B 21,130,001-2 + console 21,130,003)");
+    ASSERT(CTRL_EPI_BASE_LBA + 1ULL + CTRL_EPI_MAX_ENTRIES == 21144097ULL,
+           "real regions: control-IN store ends at 21,144,096 inclusive");
+
     PASS("two instances at different base_lba: no collision (shared magic, separate regions)");
+}
+
+/* ================================================================
+ * T10 (6-5/M5-recall): A FAILED TURN MUST NOT SHADOW A GOOD ONE.
+ *
+ * ctrl_epi_write() lives in main_x86.c (seL4-only, never host-compiled), so the function
+ * itself cannot be tested in place. What IS host-testable is the invariant it composes out
+ * of: epi_index_lookup is NEWEST-WINS, returns a SINGLE logical index, and has no fallback
+ * to the next-newest same-key entry — while pa_ctrl_gate applies g3_candidate_usable only
+ * AFTER the fetch. Index a FAILED turn and the lookup hands back the failure, the filter
+ * rejects it, and the good prior answer under that key becomes unreachable: hit=0, silently
+ * and permanently for that question. Filtering at INDEX time is what makes that state
+ * unreachable, and these four groups are what pin it.
+ *
+ * Group A is the TEETH: it builds the UNFILTERED index and proves it really does miss —
+ * the failure mode is demonstrated, not just asserted against. Be honest about the limit,
+ * though: this suite never compiles main_x86.c, so it pins the MECHANISM and cannot itself
+ * detect the filter being dropped from either indexing site. The box gate is what covers
+ * that ([CTRL-RECALL] hit=1 on a re-ask after an intervening failed turn).
+ * ================================================================ */
+static void test_index_no_shadow(void)
+{
+    memset(mock_disk, 0, sizeof(mock_disk));
+
+    epi_store_t s;
+    ASSERT(epi_store_init(&s, mock_read, mock_write, EPI_STORE_BASE_LBA, 8U) == 0, "init");
+
+    /* ONE question asked three times — answered, then FAILED, then answered again. All three
+     * share a query_key (episodic_fill hashes the same text): that is the whole hazard. */
+    const char *q = "what is a page fault?";
+    ASSERT(episodic_log(&s, 10, q, EPI_ACT_CONTROL_IN, EPI_OUT_OK,    0, "AAA") == 0, "append OK #1");
+    ASSERT(episodic_log(&s, 20, q, EPI_ACT_CONTROL_IN, EPI_OUT_ERROR, 0, NULL)  == 0, "append FAILED");
+    ASSERT(episodic_log(&s, 30, q, EPI_ACT_CONTROL_IN, EPI_OUT_OK,    0, "CCC") == 0, "append OK #2");
+    ASSERT(epi_store_count(&s) == 3, "three turns stored (a failed turn IS still written)");
+
+    epi_record_t r;
+    ASSERT(epi_store_read(&s, 0, &r) == 0, "read logical 0");
+    const uint64_t key = r.query_key;
+    ASSERT(key != 0, "shared query_key computed by episodic_fill");
+
+    /* (A) TEETH — the UNFILTERED index reproduces the defect exactly as it would occur on the
+     * box: two turns indexed, newest-wins returns the failure, the fetch is then rejected. */
+    epi_index_entry_t idx_bug[2] = { { key, 0u }, { key, 1u } };
+    ASSERT(epi_index_lookup(idx_bug, 2, key) == 1,
+           "unfiltered index: newest-wins returns the FAILED turn");
+    ASSERT(epi_store_read(&s, 1, &r) == 0, "read the failed turn");
+    ASSERT(r.outcome == EPI_OUT_ERROR && r.resp_len == 0, "the failed turn carries no answer text");
+    ASSERT(g3_candidate_usable(r.action, r.outcome, r.resp_len,
+                               EPI_ACT_CONTROL_IN, EPI_OUT_OK) == 0,
+           "usable filter REJECTS it -> nothing to inject -> the recall MISSES (the bug)");
+
+    /* (B) The FILTERED index — what ctrl_epi_write() and the boot scan now build — never holds
+     * the failure, so the same lookup reaches the good answer. */
+    epi_index_entry_t idx_ok[1] = { { key, 0u } };
+    ASSERT(epi_index_lookup(idx_ok, 1, key) == 0, "filtered index: lookup finds the OK turn");
+    ASSERT(epi_store_read(&s, 0, &r) == 0, "read the OK turn");
+    ASSERT(r.resp_len == 3 && memcmp(r.resp, "AAA", 3) == 0, "it is the ANSWER, not the failure");
+    ASSERT(g3_candidate_usable(r.action, r.outcome, r.resp_len,
+                               EPI_ACT_CONTROL_IN, EPI_OUT_OK) == 1,
+           "usable filter ACCEPTS it -> the recall HITS");
+
+    /* (C) Filtering at index time must not cost newest-wins AMONG usable turns: a later good
+     * answer still supersedes an earlier one (re-asking updates what gets recalled). */
+    epi_index_entry_t idx_two[2] = { { key, 0u }, { key, 2u } };
+    ASSERT(epi_index_lookup(idx_two, 2, key) == 2, "two usable turns -> the NEWER logical index");
+    ASSERT(epi_store_read(&s, 2, &r) == 0, "read the newer OK turn");
+    ASSERT(r.resp_len == 3 && memcmp(r.resp, "CCC", 3) == 0, "newest usable answer wins");
+
+    /* (D) A key never written is still a clean miss — filtering must not invent a hit. */
+    ASSERT(epi_index_lookup(idx_two, 2, key ^ 0xA5A5A5A5ULL) == -1, "unwritten key -> -1");
+
+    PASS("index no-shadow: a FAILED turn never masks the good answer under the same key");
 }
 
 int main(int argc, char **argv)
@@ -506,6 +599,7 @@ int main(int argc, char **argv)
     test_batched_fill();
     test_index_lookup();
     test_two_instances_no_collision();
+    test_index_no_shadow();
 
     printf("\nResults: %d PASS, %d FAIL\n", tests_passed, tests_failed);
     return tests_failed > 0 ? 1 : 0;

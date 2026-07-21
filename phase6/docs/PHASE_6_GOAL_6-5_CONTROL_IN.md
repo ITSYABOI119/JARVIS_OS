@@ -1579,6 +1579,42 @@ carried per-handle and the regions do not overlap. The property is host-pinned b
 `test_episodic_store.c` T9 (8 -> **9 PASS**), which uses deliberately ADJACENT scaled-down regions so an
 off-by-one collides there, and is teeth-proven (setting both bases equal fails).
 
+Because separation is by REGION, **no tag filter is needed** to stop a workload record shadowing a
+control-IN one — the workload physically cannot write into that region. (`g3_candidate_usable` is still
+applied, but as the OUTCOME filter, not as tag isolation.)
+
+### The shadow defect — found and fixed after the store landed
+
+`ctrl_epi_write` originally indexed **every** control-IN turn, including failures. That is unsafe given
+how the lookup works: `epi_index_lookup` is **newest-wins**, returns a **single** index, and has **no
+fallback** to the next-newest entry for the same key — while `pa_ctrl_gate` applies `g3_candidate_usable`
+**after** the fetch. Concretely, three turns on one key:
+
+| # | Turn | Outcome | Index effect | Recall for that key afterwards |
+|---|---|---|---|---|
+| 1 | "what is a page fault?" | OK, `resp_len` 199 | indexed | `hit=1` — correct |
+| 2 | same query, PB degraded | ERROR, `resp_len` 0 | **indexed, becomes newest** | `hit=0` — lookup returns turn 2, filter rejects it, **turn 1 is now unreachable** |
+| 3 | same query, healthy again | — | — | still `hit=0` — turn 2 permanently shadows turn 1 |
+
+One transient degraded/timeout/fault turn therefore poisons that query's recall **for good**, and it fails
+*silently* (`hit=0` is indistinguishable from "never asked before"). **Fix: index only RECALLABLE turns
+(`EPI_OUT_OK && resp_len > 0`), at BOTH index-building sites — the write path AND the boot scan.** Fixing
+one alone is useless: the write path keeps the current session honest, the boot scan keeps every later
+session honest. Failed turns are **still written** for forensics — they are just never indexed. Pinned by
+`test_episodic_store.c` T10 (9 -> **10 PASS**).
+
+**Known bounded limits — recorded, NOT handled.** Neither is fixed, and neither is exercised by any gate:
+(a) **post-wrap `logical_index` drift** — indices are captured before the dedicated region rolls, so after
+a wrap a stale entry can point at a re-used slot (the `read-key == qkey` re-check catches it); (b) **index
+saturation** — `g_ctrl_epi_index` is capped at `CTRL_EPI_MAX_ENTRIES` (4096) and stops appending when
+full, so later turns are never indexed. **Both degrade to a silent MISS, never a WRONG recall**, and both
+sit ~4096 human-paced turns away.
+
+**Debt:** `ctrl_epi_write`'s index logic has no direct host coverage, because it lives in `main_x86.c`
+(seL4-only, never host-compiled). The project precedent — `km2b_miss.c`, `km2b_trigger.c`, `wake.c`,
+`control_floor.c` — would extract it to a host-testable module. T10 pins the **invariant**, not the
+function.
+
 **Writes:** the 3 control-IN sites (degraded / answered / timeout-fault) call `ctrl_epi_write`, which
 builds the record via `episodic_fill` (so the key stays `cache_hash(cache_normalize_query(qs))` over the
 SANITIZED `qs` — the db15b44 lesson) and appends to the dedicated store, then appends `{key,
@@ -1614,7 +1650,38 @@ store through 5+ wraps first and only then asks for recall.
 churn, but the bare-metal mini-flip re-run at the real ~225 q/s is the remaining step. `RECALL` stays
 default-0 and the deployed image (`ba93fe4e`) was never touched by this milestone.
 
-**Follow-up noted, not fixed here:** the `#error` in `jarvis_debug.h` requiring `JARVIS_G3_RETRIEVAL` now
-carries a STALE rationale — it says RECALL "rides the boot recall-scan, whose fetch buffer is gated on
-JARVIS_G3_RETRIEVAL", but the lane now owns its own store, buffer and scan. The guard is harmless (G3 is
-default-ON) and conservative, so it was left in place rather than relaxing an untested flag combination.
+**The `JARVIS_G3_RETRIEVAL` guard — CORRECTED 2026-07-21: it is LOAD-BEARING, not vestigial.** An earlier
+revision of this section (and of the commit message and CLAUDE.md) called the `#error` in `jarvis_debug.h`
+merely "stale" and "harmless", which invited a maintainer to delete it. Only the *stated reason* was
+stale: the guard said RECALL "rides the boot recall-scan, whose fetch buffer is gated on
+JARVIS_G3_RETRIEVAL", and that stopped being true when the lane took ownership of its own store, buffer
+and scan. **But the guard is still required, for a different reason nobody had recorded:** `main_x86.c`
+includes `g3_retrieval.h` **only** under `#if JARVIS_G3_RETRIEVAL` (~line 62), while the gated RECALL
+block declares `g3_candidate_t` and calls `g3_candidate_usable`, `g3_select_exact_only` and
+`g3_build_preamble_answer_only`. A `RECALL=1` + `G3_RETRIEVAL=0` build therefore fails with
+undeclared-identifier errors. Deleting the `#error` does not remove a vestige — it replaces one clear
+diagnostic with a pile of confusing compile errors. The `#error` text and its comment now state this real
+dependency and say explicitly that the guard must not be deleted; the honest fix, if that flag combination
+is ever wanted, is to **widen the include gate**, not to drop the guard.
+
+### Mini-flip runbook consequence — the LAST turn before a power cut is the one exposed
+
+This interacts with the M3-3/M4c-fix replay-floor machinery in a way the runbook must account for. The
+control-IN replay floor persists with `CTRL_FLOOR_RESERVE` **256**, and the M3-4b receiver derives its
+sequence from a **millisecond timestamp** (~1.78e12), which jumps far past 256 on every turn — so in
+practice **essentially every control-IN turn triggers a floor persist plus an `nvme_flush`**. NVM FLUSH is
+**namespace-wide**, so that flush also NAND-commits the *previous* turn's episodic record as a side
+effect. The record written by turn N is therefore made durable by the flush that turn N+1 performs.
+
+**Consequence: the marker turn is durable only once ANOTHER turn follows it.** Cutting power immediately
+after the marker turn can lose exactly that record on the DRAM-less NM790, and the re-run would read as a
+recall FAILURE when the mechanism is fine. The mini-flip runbook must therefore do one of:
+
+1. send a **throwaway query after the marker turn** (its flush commits the marker), or
+2. **verify the marker on disk before cutting power**:
+   `sudo dd if=/dev/nvme0n1 bs=512 skip=21140000 count=4097 | python3 phase3/scripts/parse_episodic.py`
+
+This is a *sequencing* requirement on the runbook, not a defect in the store: `epi_store_append` issues
+the write, and the control-IN lane's own flush covers the floor. It is called out here because the failure
+mode is silent and would be misread as the mechanism not working — the same class of trap as the
+pre-flight seq landmine caught before M4d.

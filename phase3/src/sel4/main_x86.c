@@ -384,11 +384,29 @@ static void ctrl_epi_write(const char *qs, uint8_t outcome, const char *resp)
         return;
     }
 
+    /* INDEX ONLY RECALLABLE TURNS. pa_ctrl_gate applies g3_candidate_usable AFTER its fetch, and
+     * epi_index_lookup is NEWEST-WINS returning a SINGLE logical index with NO fallback to the
+     * next-newest same-key entry. So indexing a FAILED turn (timeout/degraded/fault — resp_len 0)
+     * would let it permanently SHADOW the good prior answer under that key: the lookup returns the
+     * failure, the usable filter rejects it, and the recall reads hit=0 for that question forever.
+     * A failed turn can never pass that filter, so it has nothing to contribute to the index.
+     * The predicate is deliberately the exact acceptance shape of the pa_ctrl_gate call
+     * g3_candidate_usable(..., EPI_ACT_CONTROL_IN, EPI_OUT_OK), so index and filter cannot disagree.
+     * The record itself IS still appended above — a failed turn stays in the store for forensics. */
     uint32_t cnt = epi_store_count(&g_ctrl_episodic);
-    if (cnt > 0 && g_ctrl_epi_index_n < (int)CTRL_EPI_MAX_ENTRIES) {
+    int idxable = (cnt > 0) && (rec.outcome == EPI_OUT_OK) && (rec.resp_len > 0);
+    if (idxable && g_ctrl_epi_index_n < (int)CTRL_EPI_MAX_ENTRIES) {
         g_ctrl_epi_index[g_ctrl_epi_index_n].key = rec.query_key;
         g_ctrl_epi_index[g_ctrl_epi_index_n].logical_index = cnt - 1u;
         g_ctrl_epi_index_n++;
+    }
+
+    /* The index is bounded while the store rolls, so a long-lived box can saturate it and then
+     * silently stop recalling NEW turns. Say so ONCE rather than degrading in silence. */
+    static int warned_full = 0;
+    if (idxable && g_ctrl_epi_index_n >= (int)CTRL_EPI_MAX_ENTRIES && !warned_full) {
+        warned_full = 1;
+        puts_serial("[CTRL-EPI] index FULL - new turns will not recall until reboot\n");
     }
 
     puts_serial("[CTRL-EPI] stored count="); put_dec(cnt);
@@ -3657,8 +3675,16 @@ static void *main_continued(void *arg UNUSED)
                                             uint32_t _ccnt = epi_store_count(&g_ctrl_episodic);
                                             if (_ccnt > CTRL_EPI_MAX_ENTRIES) _ccnt = CTRL_EPI_MAX_ENTRIES;
                                             g_ctrl_epi_index_n = 0;
+                                            /* SAME recallability predicate as ctrl_epi_write(): index only
+                                             * turns that can pass pa_ctrl_gate's usable filter. Without it a
+                                             * PERSISTED failed turn shadows its own good prior answer across a
+                                             * REBOOT — newest-wins returns the failure, the filter rejects it,
+                                             * and that key reads hit=0 permanently. Failed records stay in the
+                                             * store (forensics); they just never enter the index. */
                                             for (uint32_t _cli = 0; _cli < _ccnt; _cli++) {
-                                                if (epi_store_read(&g_ctrl_episodic, _cli, &g_ctrl_recall_rec) == 0) {
+                                                if (epi_store_read(&g_ctrl_episodic, _cli, &g_ctrl_recall_rec) == 0
+                                                    && g_ctrl_recall_rec.outcome == EPI_OUT_OK
+                                                    && g_ctrl_recall_rec.resp_len > 0) {
                                                     g_ctrl_epi_index[g_ctrl_epi_index_n].key = g_ctrl_recall_rec.query_key;
                                                     g_ctrl_epi_index[g_ctrl_epi_index_n].logical_index = _cli;
                                                     g_ctrl_epi_index_n++;

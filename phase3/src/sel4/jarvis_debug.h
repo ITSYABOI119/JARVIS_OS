@@ -338,12 +338,25 @@
 /* 6-5/M5-recall: cross-session recall for the control-IN lane. pa_ctrl_gate CLEARS the retrieval
  * preamble today (§7.6 stale-workload-preamble hygiene), so control-IN is stateless — the §14
  * done-when "reference a fact from a PRIOR control-IN session" is unmet. When 1, pa_ctrl_gate
- * instead RETRIEVES over control-IN records only: a DEDICATED tag-3 boot index (g_ctrl_epi_index —
- * separate from g_epi_index, which is deduped-to-newest ACROSS tags and would let a workload record
- * shadow the control-IN one) + g3_candidate_usable(..., EPI_ACT_CONTROL_IN, EPI_OUT_OK), then
- * g3_select_exact_only + g3_build_preamble_answer_only + sctx_pack_preamble. The §7.6 hygiene is
- * PRESERVED, not relaxed: the workload preamble is still never injected — only a prior control-IN
- * ANSWER to THIS EXACT question is.
+ * instead RETRIEVES over control-IN records only.
+ * SEPARATION IS BY REGION, NOT BY TAG (M5-recall-store, 2026-07-21 — supersedes the original
+ * shared-store + tag-filter design): control-IN turns live in their OWN episodic store
+ * (CTRL_EPI_BASE_LBA 21,140,000, CTRL_EPI_MAX_ENTRIES 4096), a second instance of the same engine.
+ * EVERY record in that region is a control-IN turn, so no tag filter is needed to keep a workload
+ * record from shadowing one — the workload physically cannot write there. (g3_candidate_usable is
+ * still applied, but as the OUTCOME filter, not as tag isolation.) Turns are written PER-TURN by
+ * ctrl_epi_write -> epi_store_append (which writes AND flushes), so there is no batch to commit.
+ * THE IN-RAM INDEX HOLDS RECALLABLE TURNS ONLY (EPI_OUT_OK && resp_len > 0), at BOTH index-building
+ * sites — the write path and the boot scan; indexing one but not the other is useless. WHY:
+ * epi_index_lookup is NEWEST-WINS, returns a SINGLE index, and has NO fallback to the next-newest
+ * entry for the same key, while pa_ctrl_gate applies the usable filter AFTER the fetch. So a FAILED
+ * turn (degraded/timeout/fault, resp_len 0) indexed under the same key becomes the newest, the
+ * lookup returns it, the filter rejects it, and recall silently returns hit=0 — PERMANENTLY
+ * shadowing the good prior answer for that key. Failed turns are STILL WRITTEN (forensics), just
+ * never indexed.
+ * Retrieval is then g3_select_exact_only + g3_build_preamble_answer_only + sctx_pack_preamble. The
+ * §7.6 hygiene is PRESERVED, not relaxed: the workload preamble is still never injected — only a
+ * prior control-IN ANSWER to THIS EXACT question is.
  * SCOPE — EXACT-REPEAT RECALL ONLY: the same query, re-asked in a later session, is grounded on its
  * own prior answer (exact FNV-1a key match; NO recency fallback, the G3/M6 P6 lesson). Semantic
  * recall ("state a fact, then ask a different question") is OUT OF SCOPE — it needs embeddings this
@@ -356,21 +369,33 @@
 #if JARVIS_CONTROL_IN_RECALL && !JARVIS_CONTROL_IN
 #error "JARVIS_CONTROL_IN_RECALL retrieves for the control-IN route -> requires JARVIS_CONTROL_IN"
 #endif
-/* The tag-3 index is appended inside the SHARED boot recall-scan, whose per-record fetch buffer
- * (g_epi_recall_rec) is declared under #if JARVIS_G3_RETRIEVAL — a PRE-EXISTING coupling: that
- * scan's own outer gate is already wider than the buffer's, so a CACHE_GROWTH/SHIELD_LEARN/SEMANTIC
- * build with G3 off does not compile at HEAD either. Assert the dependency rather than silently
- * inherit the break (G3_RETRIEVAL is default-ON since G3/M6, so this never binds in practice). */
+/* DO NOT DELETE THIS GUARD — it is LOAD-BEARING, and its ORIGINAL rationale was stale (corrected
+ * 2026-07-21). The old text said RECALL "rides the boot recall-scan, whose fetch buffer is gated on
+ * JARVIS_G3_RETRIEVAL"; that ceased to be true at M5-recall-store, when the lane took ownership of
+ * its own store, fetch buffer and scan. The REAL dependency is a COMPILE-TIME SYMBOL one:
+ * main_x86.c includes "g3_retrieval.h" only under #if JARVIS_G3_RETRIEVAL, and the gated RECALL
+ * block declares g3_candidate_t and calls g3_candidate_usable / g3_select_exact_only /
+ * g3_build_preamble_answer_only. A RECALL=1 + G3_RETRIEVAL=0 build therefore fails with
+ * undeclared-identifier errors. Removing this #error does not "clean up a vestige" — it converts a
+ * clear one-line diagnostic into a pile of confusing compile errors. (G3_RETRIEVAL is default-ON
+ * since G3/M6, so the guard never binds in practice; it exists for the person who turns G3 off.)
+ * The honest fix, if that combination is ever wanted, is to widen the g3_retrieval.h include gate —
+ * not to delete this. */
 #if JARVIS_CONTROL_IN_RECALL && !JARVIS_G3_RETRIEVAL
-#error "JARVIS_CONTROL_IN_RECALL rides the boot recall-scan, whose fetch buffer is gated on JARVIS_G3_RETRIEVAL"
+#error "JARVIS_CONTROL_IN_RECALL calls g3_select_exact_only/g3_build_preamble_answer_only/g3_candidate_usable, but main_x86.c includes g3_retrieval.h only under JARVIS_G3_RETRIEVAL -> enable JARVIS_G3_RETRIEVAL (do NOT delete this guard; widen the include gate instead)"
 #endif
 /* The 2-boot demonstration (KVM has no NIC, so the query is staged through the same signed-JCTL
- * split pipeline the CONTROL_IN_PROBE modes use). BOOT 1 routes a fixed marker query and FORCES an
- * epi_commit so the tag-3 record is DURABLE before the reboot (the batch otherwise commits only at
- * the [STATS] cadence — a probe that reboots first would find nothing and read as a mechanism
- * FAILURE). BOOT 2 (same disk image) re-asks the SAME query -> hit=1 recall=1, plus a NOVEL query
- * as the negative control -> hit=0 recall=0 (no false recall). Its OWN flag (the per-probe
- * precedent). Default 0 -> compiles out. */
+ * split pipeline the CONTROL_IN_PROBE modes use). BOOT 1 routes a fixed marker query; the record is
+ * DURABLE BY CONSTRUCTION — ctrl_epi_write appends per turn via epi_store_append, which writes the
+ * record AND flushes the header immediately, so it is on NVMe before the probe's "safe to reboot"
+ * line prints. (Superseded design note: while control-IN turns were batched into the SHARED store,
+ * this probe had to FORCE an epi_commit, because the batch otherwise flushed only at the [STATS]
+ * cadence and a boot-1 image rebooted first persisted NOTHING — reading as a mechanism FAILURE.
+ * That forced commit is no longer needed for the control-IN record; the probe now prints the
+ * store's own counters instead, so "no record" and "record never written" stay distinguishable
+ * from the log alone.) BOOT 2 (same disk image) re-asks the SAME query -> hit=1 recall=1, plus a
+ * NOVEL query as the negative control -> hit=0 recall=0 (no false recall). Its OWN flag (the
+ * per-probe precedent). Default 0 -> compiles out. */
 #ifndef JARVIS_CONTROL_IN_RECALL_PROBE
 #define JARVIS_CONTROL_IN_RECALL_PROBE 0
 #endif
