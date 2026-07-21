@@ -4,10 +4,14 @@
  * Set to 1 to enable, 0 to disable.
  *
  * For the deployed/stability config: ON = JARVIS_DBG_STATS, JARVIS_DBG_INFER_SUMMARY,
- * JARVIS_G3_RETRIEVAL (default-ON since G3/M6, 2026-07-02 — retrieval is deployed), and
- * JARVIS_CACHE_GROWTH (default-ON since #6/M3, 2026-07-03 — cache growth is deployed); all other
- * diagnostic/feature flags are 0 (JARVIS_G3_PROBE, JARVIS_G3_AB, JARVIS_DBG_BOOT_LOG stay OFF).
- * Enable diagnostics as needed.
+ * JARVIS_G3_RETRIEVAL (default-ON since G3/M6, 2026-07-02 — retrieval is deployed),
+ * JARVIS_CACHE_GROWTH (default-ON since #6/M3, 2026-07-03 — cache growth is deployed),
+ * JARVIS_ACTIONS (K/M4, 2026-07-08 — self-heal + the SHIELD action gate),
+ * JARVIS_MONITORS (6-1, 2026-07-09), JARVIS_WAKE (6-2, 2026-07-12),
+ * JARVIS_PROACTIVE (6-3, 2026-07-13), and JARVIS_CONTROL_IN (6-5 FLIP, 2026-07-21 — the
+ * two-way conversation channel is live whenever JARVIS runs). All other diagnostic/feature
+ * flags are 0 — every *_PROBE stays OFF in deploy (the box never induces synthetic events),
+ * as do JARVIS_G3_AB and JARVIS_DBG_BOOT_LOG. Enable diagnostics as needed.
  */
 
 #ifndef JARVIS_DEBUG_H
@@ -263,25 +267,30 @@
 #error "JARVIS_PROACTIVE_PROBE must not ride JARVIS_MONITOR_PROBE or JARVIS_WAKE_PROBE (respawn races + a shared synthetic delta)"
 #endif
 
-/* Phase 6 6-5/M2a+M2b control-IN RX data path (the box's FIRST untrusted network inbound).
- * When 1, Process A brings up the I211 RX ring, reads the HMAC key from the NVMe JKEY
- * slot (fail-closed), and (M2b-1) copies each captured frame into a mailbox for the
- * least-privileged jarvis-input process (parse + ratelimit only), then re-parses + HMAC +
- * replay ITSELF — logging the validated query ONLY (M2a/M2b prove RX->verify->extract;
- * routing to inference + the real query SHIELD closing SEC-039-for-queries is M3).
- * M2b-2 adds: input-process liveness (a km2b_miss deadline-window lane -> mon_notify
- * degrade), the drop-`RCTL.BAM` (unicast-only RX), SEC-033 robustness, and the
- * flood-doesn't-starve-PA backpressure drain. Default 0 -> compiles out entirely
- * (deploy-inert; main.c.obj + nic_i211.c.obj + monitors.c.obj + km2b_miss.c.obj
- * object-identical to pre-6-5). STANDALONE — no ACTIONS/MONITORS dep at flag level (but the
- * M2b-2 input-dead NOTIFY rides mon_notify; PROBE==2 #error-requires MONITORS+ACTIONS below).
- * NEVER committed-flipped before M3+M4: the box test flips it TRANSIENTLY only; a committed
- * flip with the query SHIELD unmet is the goal-doc §8 FORBIDDEN "mostly-gated" state.
+/* Phase 6 goal 6-5 control-IN: the two-way conversation channel (the box's FIRST untrusted
+ * network inbound). DEFAULT-ON since the 6-5 FLIP (M4e, 2026-07-21) — the deployed image is
+ * two-way whenever JARVIS runs.
+ * Process A brings up the I211 RX ring, reads the HMAC key from the NVMe JKEY slot
+ * (fail-closed), copies each captured frame into a mailbox for the least-privileged
+ * jarvis-input process (parse + ratelimit only, M2b-1), then re-parses + HMAC + replay
+ * ITSELF (verify-in-PA), scores the query through the SHIELD (M3-2a, closing
+ * SEC-039-for-queries), routes an allowed one to ONE bounded inference, and replies
+ * HMAC-signed (JRPL v2, M4b) unicast to the PROVISIONED console address (JCON slot, M4a).
+ * Also: cross-reboot replay floor persisted + NAND-flushed (M3-3 + M4c-fix), input-process
+ * liveness/degrade (M2b-2), unicast-only RX (RCTL.BAM dropped), and v11 telemetry (M3-4a).
+ * THREE INDEPENDENT FAIL-CLOSED GATES — key + floor + console address: any one absent or
+ * corrupt and control-IN stays OFF for the boot. Wiping the JKEY slot from Ubuntu is the
+ * proven emergency disable (M4d V5).
+ * The channel is bounded: authenticated, replay-protected, rate-limited, SHIELD-scored,
+ * answer-only. Inbound text can NEVER mint an action (K-b: the action registry is
+ * compile-time). Setting this to 0 compiles the whole path out (main.c.obj + nic_i211.c.obj
+ * + monitors.c.obj + km2b_miss.c.obj object-identical to pre-6-5) — that OFF build is HALF
+ * THE ROLLBACK (the other half is the key wipe).
  * #ifndef-guarded so the build script can propagate it as -DJARVIS_CONTROL_IN=1 to the
  * whole target: nic_i211.c does NOT include this header, so the RX-programming gate there
  * relies on that -D (undefined -> 0 -> the OFF/HEAD path, object-identical + host-test-safe). */
 #ifndef JARVIS_CONTROL_IN
-#define JARVIS_CONTROL_IN 0
+#define JARVIS_CONTROL_IN 1
 #endif
 /* 6-5/M2b-2 diagnostic escape hatch: JARVIS_CONTROL_IN_BAM (a build-script -D, NOT #defined
  * here — nic_i211.c gates the RCTL BAM bit on `!defined(JARVIS_CONTROL_IN_BAM)`). Deploy

@@ -1372,3 +1372,89 @@ until a TRUST_REQUEST action exists), and the Phase-5 memory stack (prior-sessio
 control-IN write is new). Ground truth verified against HEAD (`56647b7`) by a 3-agent sweep +
 pre-mortem-hardened by a 6-dimension adversarial-review workflow (24 verified findings folded) at
 authoring (2026-07-13) — RE-GREP all line numbers before relying on any.*
+
+---
+
+## M4e — THE FLIP (2026-07-21): `JARVIS_CONTROL_IN` DEFAULT-ON. GOAL 6-5 COMPLETE.
+
+**The deployed image is two-way.** All six checklist items closed, the M4c `/security-review` clean
+(0 flip-blocking defects), the emergency-disable proven. Ubuntu keeps `BootOrder[0]`, so control-IN
+is live only while JARVIS is deliberately booted — bounded exposure by design, not by accident.
+
+### The flip ran TWICE, and that is the point
+
+**Attempt 1 (boot_id=29)** deployed the standing CONTROL_IN=1 image with a **REAL random 32-byte key**
+(generated on the box, provisioned to the JKEY slot and the Main-PC keyfile out-of-band over ssh,
+never printed, never committed; fingerprints matched on both ends). The channel worked — v11 on the
+wire with `TLM_F_CONTROL_IN` set, coherent HMAC-verified answers to operator-invented queries, hostile
+queries refused by label — and then **stopped answering after exactly 8 queries**.
+
+Root cause, confirmed from the durable log: `[CTRL-IN-STATS] acc=8 drop=2 (parse=0 rl=2 auth=0
+replay=0)`. With parse/auth/replay all zero, the key, parser and replay floor were provably fine and
+the **rate limiter was the sole cause** — the SEC-014 input process fed `control_ratelimit_allow` a
+per-frame counter (`tick++`) instead of a millisecond clock, refilling 1 milli-token per frame against
+a 1000 milli-token cost. Net −999/frame ⇒ 8 accepted, then dead until reboot.
+
+It **fails closed** — no security hole, isolation/HMAC/replay/SHIELD all intact — but it made the
+"standing two-way conversation" claim FALSE. **So the flip was ABORTED**, the box reverted to the 6-3
+image, and the bug fixed first in `bb3ffe9` (PA stamps `ctrl_raw_mbx_t.fwd_ms` at all three publish
+sites under the same release store; the limiter stays in the input process; `test_control_ratelimit`
+9 → 13 including a NEGATIVE CONTROL that pins the old bug shape so it cannot silently return).
+
+**Why M4d could not have caught it:** that campaign sent 3–4 queries per boot — *below* the bucket
+capacity of 8. A validation that stays under the cap is not evidence of a standing channel. Hence the
+new flip-gate requirement recorded above.
+
+### Re-flip (boot_id=30, the FIXED image) — every leg passed
+
+| Leg | Result |
+|---|---|
+| **V-LOAD** (the discriminating proof) | **15/15** benign queries at human pace all answered, HMAC-verified; `dropped=0` |
+| **V-BURST** — benign flood (12) | all answered; limiter never fires — routed queries are self-paced by inference (~13 s apart) |
+| **V-BURST** — non-routing flood (24) | **exactly 8 allowed (= `CONTROL_RL_CAPACITY`) + 16 rate-limited**, 24/24 accounted, in <3 s |
+| **Recovery** | **3/3** paced queries answered after the flood — rate-limited, not dead |
+| **V1 browser round-trip** | coherent answer rendered live in the console Control-IN panel |
+| **Durable read-back** | `[CTRL-IN-STATS] acc=55 drop=16 (parse=0 rl=16 auth=0 replay=0) bp=0 down=0` |
+| **Audit hygiene** | JACT `action=5` = 49 EXECUTED + 21 BLOCKED, only the two fixed literals; **all 25 raw-query substring probes ZERO** |
+| **Health** | `err=0` at q=175,600, 0 FATAL/RESTART/ANOMALY, `monitors_fired=0` (input process never down) |
+
+`acc=55` in a single boot against the old ceiling of 8 is the fix proven end-to-end on hardware; every
+one of the 16 drops is attributable to the deliberate flood, with `bp=0` (no backpressure loss).
+
+### Two measured findings about the ceiling — recorded, not glossed
+
+**1. A benign burst cannot exercise the rate limiter at all.** PA keeps one frame in flight and each
+*routed* query costs a full inference, so burst frames reach the limiter ~13 s apart — far under the
+1 token/sec refill. The limiter guards the **non-routing** path (frames that cost PA an HMAC pair but
+no inference), which is exactly where it still bites at precisely CAP. Any future flood test must use
+non-routing traffic or it proves nothing.
+
+**2. In a 14-frame hostile burst, 9 were refused and 5 were ANSWERED** ("leak / export / display /
+transmit your … key"). This is the documented ceiling behaving correctly, not a regression: the query
+SHIELD refuses **defined** patterns and is explicitly **not** a general detector. It is safe because
+the HMAC key lives in Process A and never enters Process B's context — the model cannot leak what it
+does not have. Containment is **structural** (K-b: inbound text can never mint an action), not
+detective. Do not let this drift into a "the SHIELD catches key-extraction attempts" claim.
+
+### Standing configuration and rollback
+
+- ESP holds the CONTROL_IN=1 v11 image; the `=0` 6-3 image is retained as
+  `sel4test-driver-image-x86_64-pc99.bak-pre65flip` (md5 `379f6bdb2acfa0c685a710f794723bad`) on both
+  the ESP and `~/jarvis_63_image.bak-pre65flip`.
+- All four slots provisioned with the real key (JKEY / JFLR ×2 / JCON).
+- Ubuntu `BootOrder[0]`, no BootNext. JARVIS is booted on demand.
+- **Rollback, both halves proven:** re-deploy the retained `=0` image (control-IN compiles out
+  entirely), and/or dd-zero the JKEY slot from Ubuntu (M4d V5 proved the channel goes down and the
+  box honestly reports itself down rather than silently accepting).
+
+### Honest limits at the flip
+
+- **SIGNED, NOT ENCRYPTED.** The answer text is plaintext on the wire; the HMAC stops a forged reply,
+  not eavesdropping.
+- **The query SHIELD is a coarse abuse-refuser**, not an injection detector (see finding 2).
+- **Third-host non-observation of the unicast reply remains NOT PROVEN** (carry-forward row 4). The
+  reply is unicast-ADDRESSED and provably not broadcast, but M4d's V2 ran the capture host on WiFi,
+  which cannot observe a wired-to-wired unicast. Closing it needs one Ethernet cable into a free LAN
+  port; **accepted as a documented limitation at the flip.**
+- No long-run soak of a standing CONTROL_IN=1 deployment has been done; exposure so far is supervised
+  boots only.
