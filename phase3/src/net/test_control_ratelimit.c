@@ -113,6 +113,65 @@ static void t_partial(void)
           "reaching 1000ms grants exactly one token");
 }
 
+/* T6: sustained human-paced traffic (one query per ~2 s) far past CAP -> all allowed.
+ * This is the standing-conversation case the M2b-1 frame-counter clock broke. */
+static void t_sustained_human_pace(void)
+{
+    control_ratelimit_t rl;
+    unsigned i;
+    int allowed = 0;
+    control_ratelimit_init(&rl, 0u);
+    for (i = 0; i < 15u; i++) {
+        if (control_ratelimit_allow(&rl, i * 2000u)) {
+            allowed++;
+        }
+    }
+    CHECK(allowed == 15, "sustained 1 per 2s: all 15 allowed (> CAP)");
+}
+
+/* T7: NEGATIVE CONTROL — pins the historical M2b-1 bug shape. Feeding a per-frame
+ * counter (tick++) instead of a ms clock refills 1 milli-token per frame against a
+ * 1000 milli-token cost, so the bucket dies after exactly CAP frames and the channel
+ * is dead until reboot (bare metal: [CTRL-IN-STATS] acc=8 ... rl=2). If this ever
+ * reads anything but CAP, the caller's clock has regressed to a frame counter. */
+static void t_frame_counter_clock_is_the_bug(void)
+{
+    control_ratelimit_t rl;
+    unsigned i;
+    int allowed = 0;
+    int denied_after_cap = 1;
+    control_ratelimit_init(&rl, 0u);
+    for (i = 0; i < 15u; i++) {
+        if (control_ratelimit_allow(&rl, i)) {   /* the old tick++ clock */
+            allowed++;
+            if (i >= CONTROL_RL_CAPACITY) {
+                denied_after_cap = 0;
+            }
+        }
+    }
+    CHECK(allowed == (int)CONTROL_RL_CAPACITY,
+          "frame-counter clock starves at exactly CAP (the M2b-1 bug)");
+    CHECK(denied_after_cap, "frame-counter clock never recovers past CAP");
+}
+
+/* T8: a burst inside one second still IS limited -> the fix restores refill without
+ * removing rate limiting. */
+static void t_burst_sub_second_still_limited(void)
+{
+    control_ratelimit_t rl;
+    unsigned i;
+    int allowed = 0;
+    control_ratelimit_init(&rl, 10000u);
+    /* 20 frames spread over 950 ms: refill grants < 1 whole token across the burst. */
+    for (i = 0; i < 20u; i++) {
+        if (control_ratelimit_allow(&rl, 10000u + i * 50u)) {
+            allowed++;
+        }
+    }
+    CHECK(allowed == (int)CONTROL_RL_CAPACITY,
+          "sub-second burst still capped at CAP (limiting intact)");
+}
+
 int main(void)
 {
     t_steady();
@@ -120,6 +179,9 @@ int main(void)
     t_drain_refill_clamp();
     t_wrap();
     t_partial();
+    t_sustained_human_pace();
+    t_frame_counter_clock_is_the_bug();
+    t_burst_sub_second_still_limited();
 
     if (g_fail == 0) {
         printf("ALL TESTS PASSED\n");

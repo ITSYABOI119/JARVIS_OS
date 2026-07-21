@@ -1932,7 +1932,8 @@ static control_verdict_t ctrl_roundtrip_sync(const uint8_t *frame, size_t len,
     }
     uint16_t cl = (uint16_t)(len > CTRL_MBX_MAX_FRAME ? CTRL_MBX_MAX_FRAME : len);
     memcpy(g_raw_mbx->bytes, frame, cl);
-    g_raw_mbx->len = cl;
+    g_raw_mbx->len    = cl;
+    g_raw_mbx->fwd_ms = jarvis_uptime_ms();   /* the input process's rate-limiter clock */
     __atomic_store_n(&g_raw_mbx->seq, ++g_ctrl_raw_seq, __ATOMIC_RELEASE);
     seL4_Signal(g_input_wake);
     g_ctrl_inflight = 1;
@@ -4803,7 +4804,8 @@ static void *main_continued(void *arg UNUSED)
         if (pfl > 0) {
             uint16_t sc = (uint16_t)((size_t)pfl > CTRL_MBX_MAX_FRAME ? CTRL_MBX_MAX_FRAME : (size_t)pfl);
             memcpy(g_raw_mbx->bytes, pf, sc);
-            g_raw_mbx->len = sc;
+            g_raw_mbx->len    = sc;
+            g_raw_mbx->fwd_ms = jarvis_uptime_ms();   /* the input process's rate-limiter clock */
             __atomic_store_n(&g_raw_mbx->seq, ++g_ctrl_raw_seq, __ATOMIC_RELEASE);
             seL4_Signal(g_input_wake);   /* harmless — the suspended input never wakes */
         }
@@ -4957,7 +4959,8 @@ static void *main_continued(void *arg UNUSED)
             if (!g_ctrl_inflight) {
                 int rn = i211_nic_recv(&g_net.nic, g_raw_mbx->bytes, CTRL_MBX_MAX_FRAME);
                 if (rn > 0) {
-                    g_raw_mbx->len = (uint16_t)rn;
+                    g_raw_mbx->len    = (uint16_t)rn;
+                    g_raw_mbx->fwd_ms = jarvis_uptime_ms();   /* the input process's rate-limiter clock */
                     __atomic_store_n(&g_raw_mbx->seq, ++g_ctrl_raw_seq, __ATOMIC_RELEASE);
                     seL4_Signal(g_input_wake);
                     g_ctrl_inflight   = 1;

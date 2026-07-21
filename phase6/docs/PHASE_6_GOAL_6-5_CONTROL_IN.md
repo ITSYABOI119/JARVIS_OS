@@ -1035,12 +1035,42 @@ until the deliberate, checklist-complete, security-reviewed flip.
     a reboot, plus the retained `=0` image) **and the third-host negative capture** (M3-2b proved the
     reply is unicast-ADDRESSED and that the raw query never leaves the box, but NOT switch-level
     delivery isolation — that needs a third LAN host capturing nothing).
+  - **M4d-fix — the rate-limiter clock (a PRE-FLIP FINDING, caught by the M4e flip validation,
+    2026-07-21).** The M2b-1 input process fed `control_ratelimit_allow` a **per-frame counter**
+    (`tick++`) with a `/* M2b-2 replaces this with a real ms clock */` note — and that follow-up never
+    landed. The bucket is 8 tokens × 1000 milli; each allowed frame costs 1000; refill is
+    `elapsed × REFILL_PER_SEC`, and with a frame counter `elapsed == 1`, so a frame refills **1
+    milli-token against a 1000 milli-token cost**. Net −999/frame ⇒ **exactly 8 queries accepted per
+    boot, then the channel is dead** (recovery ≈ 1 query per 1000 frames).
+    **CONFIRMED ON BARE METAL** — the durable log read `[CTRL-IN-STATS] acc=8 drop=2 (parse=0 rl=2
+    auth=0 replay=0)`: the 9th and 10th well-formed signed queries were rate-limit-dropped.
+    **Not a security defect** — it fails CLOSED, and isolation / HMAC / replay / SHIELD are all
+    untouched. It is a **claim** defect: it makes "standing two-way conversation" false, so it blocks
+    the flip.
+    **Fix:** the input process holds no timer caps and has no clock, so **PA stamps
+    `ctrl_raw_mbx_t.fwd_ms` (`jarvis_uptime_ms`) into the raw mailbox alongside the payload** —
+    published by the SAME release store, so the timestamp can never be read torn from its frame — at
+    all three publish sites (the two probe/staging paths + the live RX poll), and the input process
+    feeds THAT to the bucket. `control_ratelimit.c` itself was CORRECT and is **unchanged** — the bug
+    was purely the caller's clock, and the rate limiter **stays in the input process** (moving it to
+    PA would undo the M2b-1 SEC-014 split).
+    **Regression (the teeth):** `test_control_ratelimit.c` 9 → **13**, adding a sustained human-pace
+    case (15 queries at ~2 s apart, all allowed — past CAP), a **NEGATIVE CONTROL that pins the
+    historical bug shape** (the same 15 calls on a `tick++` clock allow exactly CAP and never
+    recover), and a sub-second burst that IS still capped (the fix restores refill without removing
+    limiting). All box-side changes stay inside `#if JARVIS_CONTROL_IN`.
   - **M4e — the v11 image deploy + the full on-wire validation:** deploy the v11 image (M3-4a's
     deferred carry-forward) and validate on-wire v11 **including `flag=1` on the real box** (the
     channel-up gate needs a NIC, so KVM can only ever show `flag=0`); **confirm the M3-3 cross-reboot
     replay floor on BARE METAL** (M3-3 is KVM-2-boot-proven only); and run the **browser → box →
     browser round-trip** end to end for the first time (M3-4b proved each leg separately, never the
     whole).
+    **NEW REQUIREMENT — a >8-query SUSTAINED-LOAD leg (added 2026-07-21 by the M4d-fix finding).**
+    M4d's validation sent only 3–4 queries per boot, which is BELOW the token-bucket capacity, so it
+    could not have observed the starvation. The flip gate now requires **more than
+    `CONTROL_RL_CAPACITY` (8) queries in one boot at a realistic human pace (~seconds apart), all
+    answered**, plus the `[CTRL-IN-STATS]` line read back off the durable log showing `rl=0`. A
+    validation that stays under the cap is not evidence of a standing channel.
   - **THE FLIP** — only after every item above.
 - **The FLIP — `JARVIS_CONTROL_IN` default-ON:** deliberate, ONLY after M4, the K/6-1/6-2/6-3 flip
   pattern (KVM/box validate → deploy, retaining the pre-flip `=0` ESP image as a labeled backup →

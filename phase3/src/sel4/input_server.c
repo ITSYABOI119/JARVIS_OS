@@ -10,10 +10,10 @@
  * PA copies each raw captured frame into the PA->input RAW mailbox and signals
  * `wake`; this process strips the Ethernet/IPv4/UDP envelope (control_parse_frame),
  * validates the JCTL message shape (control_parse_msg), rate-limits
- * (control_ratelimit), and returns the isolated JCTL bytes + a status hint in the
- * input->PA CAND mailbox, then signals `ack`. PA RE-PARSES the candidate and does
- * the HMAC + replay ITSELF (verify-in-PA) — it trusts nothing that crosses the
- * candidate mailbox.
+ * (control_ratelimit, on the PA-stamped `fwd_ms` clock — this process holds no timer
+ * caps), and returns the isolated JCTL bytes + a status hint in the input->PA CAND
+ * mailbox, then signals `ack`. PA RE-PARSES the candidate and does the HMAC + replay
+ * ITSELF (verify-in-PA) — it trusts nothing that crosses the candidate mailbox.
  *
  * Containment: a code-exec compromise here can only (a) write garbage that PA
  * HMAC-drops, or (b) stop forwarding (self-DoS). It cannot forge an authenticated
@@ -51,12 +51,12 @@ int main(int argc, char **argv)
     ctrl_cand_mbx_t *cand = (ctrl_cand_mbx_t *)CTRL_MBX_CAND_VADDR_IN;
 
     control_ratelimit_t rl;
+    /* Starts FULL at 0; the first frame's fwd_ms is a large elapsed the existing
+     * saturating add harmlessly clamps back to capacity. */
     control_ratelimit_init(&rl, 0);
 
     uint32_t last = 0;   /* last consumed raw seq                                  */
     uint32_t out  = 0;   /* candidate seq we publish                               */
-    uint32_t tick = 0;   /* M2b-1: monotonic tick feeding the token bucket (M2b-2  */
-                         /*        replaces this with a real ms clock)             */
 
     for (;;) {
         seL4_Wait(wake, NULL);   /* blocks (deschedules) until PA stages a frame — cooperative */
@@ -71,6 +71,7 @@ int main(int argc, char **argv)
             uint16_t len = raw->len;
             if (len > CTRL_MBX_MAX_FRAME)
                 len = CTRL_MBX_MAX_FRAME;
+            uint32_t fwd = raw->fwd_ms;   /* PA-stamped ms; this process has no clock */
 
             /* Snapshot into a private buffer: the copy-free parser aliases its input,
              * and PA (with backpressure) should not mutate the frame from under it. */
@@ -86,8 +87,9 @@ int main(int argc, char **argv)
             if (control_parse_frame(local, len, &pl, &pll) == CTRL_OK &&
                 control_parse_msg(pl, pll, &msg) == CTRL_OK) {
                 /* Rate-limit the WELL-FORMED path — those are the frames that would
-                 * cost PA an HMAC pair. tick++ advances only when we get this far. */
-                if (control_ratelimit_allow(&rl, tick++)) {
+                 * cost PA an HMAC pair. The clock is PA-stamped wall time, so the
+                 * bucket refills with elapsed ms and human-paced queries never trip it. */
+                if (control_ratelimit_allow(&rl, fwd)) {
                     n = (uint16_t)(pll > CONTROL_MSG_MAX ? CONTROL_MSG_MAX : pll);
                     memcpy(cand->jctl, pl, n);   /* forward the isolated JCTL bytes; PA re-parses */
                     status = CTRL_CAND_OK;

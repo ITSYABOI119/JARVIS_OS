@@ -22,6 +22,12 @@
  * (backpressure via g_ctrl_inflight), so the writer never overwrites a payload the
  * reader is still reading.
  *
+ * The input process holds no timer caps and has no independent clock, so PA stamps
+ * `fwd_ms` (jarvis_uptime_ms) into the raw mailbox alongside the payload and the
+ * input process feeds THAT to control_ratelimit — the token bucket is millisecond-
+ * driven, never a frame counter (a per-frame tick refills 1 milli-token per frame
+ * against a 1000 milli-token cost: 8 frames, then the channel is dead).
+ *
  * Host-pure header (no seL4 dep): the km2b_miss.h / control_msg.h precedent.
  */
 #ifndef JARVIS_CONTROL_MAILBOX_H
@@ -54,6 +60,8 @@ typedef struct {
     volatile uint32_t seq;   /* PA bumps AFTER bytes (release); input loads first (acquire) */
     uint16_t len;            /* captured frame length (<= CTRL_MBX_MAX_FRAME)               */
     uint16_t _pad;
+    uint32_t fwd_ms;         /* PA's jarvis_uptime_ms() at forward time; the input process's
+                                rate-limiter clock (it has no independent clock)            */
     uint8_t  bytes[CTRL_MBX_MAX_FRAME];
 } ctrl_raw_mbx_t;
 
