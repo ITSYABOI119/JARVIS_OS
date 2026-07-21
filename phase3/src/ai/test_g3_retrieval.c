@@ -159,6 +159,31 @@ static void test_usable(void)
 }
 
 /* ================================================================
+ * T11 — 6-5/M5-recall TAG ISOLATION. Control-IN recall passes want_action=EPI_ACT_CONTROL_IN (3)
+ *       so it sources ONLY prior control-IN turns; the workload path passes EPI_ACT_INFER (2).
+ *       The two lanes must be mutually exclusive IN BOTH DIRECTIONS: a workload answer must never
+ *       ground a control-IN reply, and a control-IN answer (attacker-influenced text, tag-isolated
+ *       from cache-growth/retrieval/distill by O-Q12) must never leak into the workload preamble.
+ *       Codes mirror episodic_store.h: EPI_ACT_CACHE 1 / EPI_ACT_INFER 2 / EPI_ACT_CONTROL_IN 3.
+ * ================================================================ */
+static void test_tag_isolation(void)
+{
+    /* want CONTROL_IN: only tag-3 is sourced */
+    CHECK(g3_candidate_usable(3, 0, 50, 3, 0) == 1, "T11 CONTROL_IN record, want CONTROL_IN -> usable");
+    CHECK(g3_candidate_usable(2, 0, 50, 3, 0) == 0, "T11 INFER record, want CONTROL_IN -> excluded");
+    CHECK(g3_candidate_usable(1, 0, 50, 3, 0) == 0, "T11 CACHE record, want CONTROL_IN -> excluded");
+
+    /* want INFER: tag-3 must NOT leak into the workload lane */
+    CHECK(g3_candidate_usable(3, 0, 50, 2, 0) == 0, "T11 CONTROL_IN record, want INFER -> excluded");
+
+    /* the outcome/emptiness filters still bite on the control-IN lane (a refused/timed-out or
+     * empty-answer turn is not a memory) */
+    CHECK(g3_candidate_usable(3, 1, 50, 3, 0) == 0, "T11 CONTROL_IN but ERROR outcome -> excluded");
+    CHECK(g3_candidate_usable(3, 2, 50, 3, 0) == 0, "T11 CONTROL_IN but BLOCKED outcome -> excluded");
+    CHECK(g3_candidate_usable(3, 0,  0, 3, 0) == 0, "T11 CONTROL_IN + OK but empty resp -> excluded");
+}
+
+/* ================================================================
  * T8 — G3/M6 exact-key-ONLY select: exact hit newest wins; NO recency fallback
  *      (fixes the A/B P6 leak where a newer, WRONG-key fact was injected).
  * ================================================================ */
@@ -272,6 +297,7 @@ int main(void)
     test_nul_safety();
     test_budget();
     test_usable();
+    test_tag_isolation();
     test_exact_only();
     test_answer_only();
     test_clean_truncation();

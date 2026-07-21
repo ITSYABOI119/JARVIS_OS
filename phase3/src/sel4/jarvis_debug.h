@@ -335,6 +335,56 @@
 #error "JARVIS_CONTROL_IN_PROBE mode 2 asserts [ANOMALY]/JACT via mon_notify -> requires JARVIS_MONITORS && JARVIS_ACTIONS"
 #endif
 
+/* 6-5/M5-recall: cross-session recall for the control-IN lane. pa_ctrl_gate CLEARS the retrieval
+ * preamble today (§7.6 stale-workload-preamble hygiene), so control-IN is stateless — the §14
+ * done-when "reference a fact from a PRIOR control-IN session" is unmet. When 1, pa_ctrl_gate
+ * instead RETRIEVES over control-IN records only: a DEDICATED tag-3 boot index (g_ctrl_epi_index —
+ * separate from g_epi_index, which is deduped-to-newest ACROSS tags and would let a workload record
+ * shadow the control-IN one) + g3_candidate_usable(..., EPI_ACT_CONTROL_IN, EPI_OUT_OK), then
+ * g3_select_exact_only + g3_build_preamble_answer_only + sctx_pack_preamble. The §7.6 hygiene is
+ * PRESERVED, not relaxed: the workload preamble is still never injected — only a prior control-IN
+ * ANSWER to THIS EXACT question is.
+ * SCOPE — EXACT-REPEAT RECALL ONLY: the same query, re-asked in a later session, is grounded on its
+ * own prior answer (exact FNV-1a key match; NO recency fallback, the G3/M6 P6 lesson). Semantic
+ * recall ("state a fact, then ask a different question") is OUT OF SCOPE — it needs embeddings this
+ * system does not have. The honest claim is "cross-session recall of a repeated query's prior
+ * answer", NEVER "remembers your conversation".
+ * Default 0 -> compiles out (main.c.obj object-identical). */
+#ifndef JARVIS_CONTROL_IN_RECALL
+#define JARVIS_CONTROL_IN_RECALL 0
+#endif
+#if JARVIS_CONTROL_IN_RECALL && !JARVIS_CONTROL_IN
+#error "JARVIS_CONTROL_IN_RECALL retrieves for the control-IN route -> requires JARVIS_CONTROL_IN"
+#endif
+/* The tag-3 index is appended inside the SHARED boot recall-scan, whose per-record fetch buffer
+ * (g_epi_recall_rec) is declared under #if JARVIS_G3_RETRIEVAL — a PRE-EXISTING coupling: that
+ * scan's own outer gate is already wider than the buffer's, so a CACHE_GROWTH/SHIELD_LEARN/SEMANTIC
+ * build with G3 off does not compile at HEAD either. Assert the dependency rather than silently
+ * inherit the break (G3_RETRIEVAL is default-ON since G3/M6, so this never binds in practice). */
+#if JARVIS_CONTROL_IN_RECALL && !JARVIS_G3_RETRIEVAL
+#error "JARVIS_CONTROL_IN_RECALL rides the boot recall-scan, whose fetch buffer is gated on JARVIS_G3_RETRIEVAL"
+#endif
+/* The 2-boot demonstration (KVM has no NIC, so the query is staged through the same signed-JCTL
+ * split pipeline the CONTROL_IN_PROBE modes use). BOOT 1 routes a fixed marker query and FORCES an
+ * epi_commit so the tag-3 record is DURABLE before the reboot (the batch otherwise commits only at
+ * the [STATS] cadence — a probe that reboots first would find nothing and read as a mechanism
+ * FAILURE). BOOT 2 (same disk image) re-asks the SAME query -> hit=1 recall=1, plus a NOVEL query
+ * as the negative control -> hit=0 recall=0 (no false recall). Its OWN flag (the per-probe
+ * precedent). Default 0 -> compiles out. */
+#ifndef JARVIS_CONTROL_IN_RECALL_PROBE
+#define JARVIS_CONTROL_IN_RECALL_PROBE 0
+#endif
+#if JARVIS_CONTROL_IN_RECALL_PROBE && !JARVIS_CONTROL_IN_RECALL
+#error "JARVIS_CONTROL_IN_RECALL_PROBE requires JARVIS_CONTROL_IN_RECALL"
+#endif
+/* Same cross-guard rationale as CONTROL_IN_PROBE: this probe stages synthetic frames + routes real
+ * inferences at BOOT, the window the other *_PROBE flags fire synthetic anomalies + real respawns.
+ * CONTROL_IN_PROBE is included — its modes reset the replay floor (and mode 3 latches the TERMINAL
+ * g_pb_dead), either of which would break this probe's floor-derived boot discrimination + routing. */
+#if JARVIS_CONTROL_IN_RECALL_PROBE && (JARVIS_CONTROL_IN_PROBE || JARVIS_MONITOR_PROBE || JARVIS_WAKE_PROBE || JARVIS_PROACTIVE_PROBE || JARVIS_ACTION_PROBE)
+#error "JARVIS_CONTROL_IN_RECALL_PROBE must not co-run with the other *_PROBE flags (boot-time floor resets / synthetic-anomaly / respawn collisions)"
+#endif
+
 /* Phase 6 K/M2a-2 reuse-in-place respawn spike (box-only KVM measurement; SYSTEM_DESIGN
  * §4.1/§4.2). When 1, Process B gains a muslc-init-safe `pb_restart_entry` (re-enters PAST
  * musl's one-time init on a dedicated ABI-aligned restart stack, REUSING the warm model

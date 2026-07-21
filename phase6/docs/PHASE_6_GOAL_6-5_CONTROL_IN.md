@@ -1347,7 +1347,7 @@ Recorded here so no later summary can quietly promote them. Each is a real gap, 
 
 | # | Done-when | Status |
 |---|---|---|
-| 1 | Multi-turn prior-session recall over control-IN | ❌ **NOT MET** — retrieval-grounded control-IN is deliberately deferred (`main_x86.c:2670-2672` clears the preamble); the enabling `EPI_ACT_CONTROL_IN` episodic WRITE is proven, the RECALL path is not wired |
+| 1 | Multi-turn prior-session recall over control-IN | ⚠️ **MET AT THE EXACT-REPEAT LEVEL (M5-recall, gated `JARVIS_CONTROL_IN_RECALL` default-0, pending a supervised mini-flip)** — a repeated control-IN query is now grounded on its OWN prior-session answer via a dedicated tag-3 episodic index + an answer-only preamble. KVM 2-boot proof: boot 1 seeds and commits the tag-3 record, boot 2 reads it back across the reboot → `[CTRL-RECALL] hit=1 recall=1 len=199`, with a never-asked query correctly yielding `hit=0 recall=0 len=0`. **RESIDUAL: SEMANTIC association** — state a fact, then ask a *different* question — remains OUT OF SCOPE and unimplemented (it needs embeddings this system does not have). The honest claim is *cross-session recall of a repeated query's prior answer*, NEVER "JARVIS remembers your conversation" |
 | 2 | Every §4 item + clean `/security-review` + proven emergency-disable | ✅ MET |
 | 3 | SEC-039 closed for the query path (induced-BLOCK on a genuinely hostile query) | ✅ MET (`refuse key-extraction`, box-proven, audited by label only) |
 | 4 | Parser + HMAC + replay + rate-limit host-fuzzed in CI; SEC-014 process cap-minimal | ✅ MET |
@@ -1356,10 +1356,18 @@ Recorded here so no later summary can quietly promote them. Each is a real gap, 
 
 **Two carry-forwards recorded at the flip:**
 
-1. **Retrieval-grounded control-IN** (closes done-when #1): wire a control-IN-scoped retrieval preamble
-   built from the `EPI_ACT_CONTROL_IN` lineage, so a later turn can reference an earlier one. Must not
-   reintroduce the P6 contamination class — the workload preamble stays cleared; this needs its own
-   source, not a re-enable of the existing staging.
+1. ✅ **Retrieval-grounded control-IN — DONE at the exact-repeat level (M5-recall, gated default-0).**
+   `pa_ctrl_gate` now builds its preamble from a DEDICATED tag-3 index (`g_ctrl_epi_index`, built in the
+   boot recall-scan) plus this boot's uncommitted control-IN turns, filtered
+   `g3_candidate_usable(..., EPI_ACT_CONTROL_IN, EPI_OUT_OK)` and selected EXACT-KEY-ONLY
+   (`g3_select_exact_only`) into an answer-only preamble. The P6 hygiene is preserved BY CONSTRUCTION —
+   every candidate is tag-3, so a workload record can never reach a control-IN inference, and a miss
+   packs an empty preamble, degrading to exactly the old clear. **KEY CURRENCY (subtle, load-bearing):**
+   the key is `cache_hash(cache_normalize_query(qs))` over the SANITIZED, 120 B-bounded `qs` that
+   `epi_batch_add` stores under — hashing the raw frame bytes would mint a key that never matches
+   whenever sanitisation or the bound bites, and recall would silently never fire.
+   **STILL OPEN — semantic association:** stating a fact and then asking a DIFFERENT question needs
+   embeddings the system does not have. Out of scope; do not claim conversational memory.
 2. **`main_x86.c:2164` is now stale:** it passes `control_in_available = false` to `trust_policy()`
    with the comment `/* no control-IN yet */`. Harmless TODAY — no v1 action carries `TRUST_REQUEST`,
    so the branch is unreachable and the lane is latent by design — but it is wrong the moment the

@@ -390,7 +390,7 @@ breakdown diagnosed the boot_id=29 bug in a single line — and the v11 counters
 | Parser + HMAC + replay + rate-limit host-fuzzed in CI | ✅ 13 CI steps, 600K+ fuzz iterations |
 | SEC-014 input process box-verified cap-minimal | ✅ No BAR0, no key, pinned off the PA core |
 | The flip is reversible | ✅ Both halves proven (§12) |
-| Multi-turn prior-session recall over control-IN | ❌ **NOT MET** — the retrieval preamble is deliberately cleared for control-IN (`main_x86.c:2670-2672`); the episodic WRITE is proven, the RECALL path is unwired. Needs its own slice (§11, §14) |
+| Multi-turn prior-session recall over control-IN | ⚠️ **MET AT THE EXACT-REPEAT LEVEL** (M5-recall, gated default-0, pending a supervised mini-flip): a repeated control-IN query is grounded on its own prior-session answer — KVM 2-boot `hit=1 recall=1 len=199`, novel query `hit=0`. **Residual: SEMANTIC association is out of scope** (needs embeddings) |
 
 **Net:** the goal's SECURITY done-when bullets are met and the channel is live; **one bullet — the canon conversational-recall demonstration — is NOT met** and is carried forward with a named cause; the *phase* done-when it feeds (multi-turn prior-session
 conversation) has its mechanism in place but no recorded end-to-end demonstration, and is carried to 6-7.
