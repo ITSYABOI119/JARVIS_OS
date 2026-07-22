@@ -169,6 +169,7 @@ AI_FILES=(
     "behaviors.c"         "behaviors.h"
     "query_shield.c"      "query_shield.h"
     "hostile_queries.h"   "benign_queries.h"
+    "route.c"             "route.h"
 )
 
 for f in "${AI_FILES[@]}"; do
@@ -669,6 +670,24 @@ if [ -f "$CMAKE_FILE" ]; then
         fi
     else
         echo -e "  ${CYAN}OK${NC}  src/ai/behaviors.c already in source list"
+    fi
+
+    # Phase 6 6-6/B/M1: add src/ai/route.c to the Process A source list if missing.
+    # UNCONDITIONAL by design (the episodic_store.c / behaviors.c precedent, NOT the gated
+    # control-IN crypto/net one): route.c is host-pure with no external dependency, so linking it
+    # is benign and inert until JARVIS_ROUTING calls it. Keeping the injection ungated means the
+    # ROUTING=0 build links the same objects as the ROUTING=1 build, which is exactly what makes
+    # the main.c.obj OFF-object-identity comparison meaningful rather than a link-set difference.
+    if ! grep -q "src/ai/route.c" "$CMAKE_FILE"; then
+        sed -i '/src\/ai\/behaviors.c/a\    src/ai/route.c' "$CMAKE_FILE" 2>/dev/null
+        if grep -q "src/ai/route.c" "$CMAKE_FILE"; then
+            echo -e "  ${GREEN}ADDED${NC}  src/ai/route.c to source list (6-6/B/M1)"
+            PATCHED=1
+        else
+            echo -e "  ${RED}FAILED${NC}  Could not add route.c — edit CMakeLists.txt manually"
+        fi
+    else
+        echo -e "  ${CYAN}OK${NC}  src/ai/route.c already in source list"
     fi
 
     # Add JARVIS_SEL4 compile definition (needed for pci.c IOPort backend)

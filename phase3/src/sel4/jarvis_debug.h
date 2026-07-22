@@ -8,10 +8,12 @@
  * JARVIS_CACHE_GROWTH (default-ON since #6/M3, 2026-07-03 — cache growth is deployed),
  * JARVIS_ACTIONS (K/M4, 2026-07-08 — self-heal + the SHIELD action gate),
  * JARVIS_MONITORS (6-1, 2026-07-09), JARVIS_WAKE (6-2, 2026-07-12),
- * JARVIS_PROACTIVE (6-3, 2026-07-13), and JARVIS_CONTROL_IN (6-5 FLIP, 2026-07-21 — the
- * two-way conversation channel is live whenever JARVIS runs). All other diagnostic/feature
- * flags are 0 — every *_PROBE stays OFF in deploy (the box never induces synthetic events),
- * as do JARVIS_G3_AB and JARVIS_DBG_BOOT_LOG. Enable diagnostics as needed.
+ * JARVIS_PROACTIVE (6-3, 2026-07-13), JARVIS_CONTROL_IN (6-5 FLIP, 2026-07-21 — the
+ * two-way conversation channel is live whenever JARVIS runs), and JARVIS_CONTROL_IN_RECALL
+ * (6-5/M5-recall FLIP, 2026-07-22 — cross-session exact-repeat recall). All other
+ * diagnostic/feature flags are 0 — including JARVIS_ROUTING (6-6/B/M1, gated pending its box
+ * proof + flip) — and every *_PROBE stays OFF in deploy (the box never induces synthetic
+ * events), as do JARVIS_G3_AB and JARVIS_DBG_BOOT_LOG. Enable diagnostics as needed.
  */
 
 #ifndef JARVIS_DEBUG_H
@@ -408,6 +410,61 @@
  * g_pb_dead), either of which would break this probe's floor-derived boot discrimination + routing. */
 #if JARVIS_CONTROL_IN_RECALL_PROBE && (JARVIS_CONTROL_IN_PROBE || JARVIS_MONITOR_PROBE || JARVIS_WAKE_PROBE || JARVIS_PROACTIVE_PROBE || JARVIS_ACTION_PROBE)
 #error "JARVIS_CONTROL_IN_RECALL_PROBE must not co-run with the other *_PROBE flags (boot-time floor resets / synthetic-anomaly / respawn collisions)"
+#endif
+
+/* ── Phase 6 goal 6-6 / B/M1: the control-IN QUERY ROUTER ──────────────────────────────────────
+ * When 1, pa_ctrl_gate classifies each QS_ALLOW (post-HMAC / post-replay / post-SHIELD) control-IN
+ * query with route_classify() and picks ONE handler:
+ *   ROUTE_SYSFACTS -> sysfacts_answer() renders the answer from a host-whitelisted struct of real
+ *                     PA state (uptime / boot_id / model / nodes / a coarse health bit).
+ *   ROUTE_DECLINE  -> the canned honest route_decline_text() for a status-shaped query the box has
+ *                     NO source for (cpu% / disk / wall-clock / temperature) — NEVER routed to the
+ *                     model to be fabricated.
+ *   ROUTE_INFER    -> the existing PB dispatch, byte-for-byte today's behavior (the SAFE default).
+ *
+ * THE LOAD-BEARING INVARIANT (goal doc §6c): SYSTEM-FACTS and DECLINE leave through the SAME
+ * signed + audited + counted + episodic-written exit as INFERENCE, differing ONLY in where the
+ * answer text came from. There is NO parallel reply path — a bespoke net_build_udp_unicast for a
+ * locally-served answer would reopen the M4b spoofing hole and blind the JACT audit.
+ *
+ * SYSFACTS/DECLINE deliberately bypass the §5-F PB_DISPATCH_OK() gate: they are rendered from PA
+ * state and need no Process B, so "how long have you been up?" is still answerable while PB is
+ * degraded. They also skip the duty window (no inference runs) and never call
+ * km2b_miss_on_pb_ack() — a locally-served answer is NOT evidence of PB contact, and feeding the
+ * hang detector a fake ACK would mask a real wedge.
+ *
+ * HONEST CEILING (route.h): a COARSE KEYWORD classifier over a DEFINED handler set, NOT semantic.
+ * The >=95% is measured on a KEYWORD-BLIND held-out suite (routing_suite.h), NOT production
+ * traffic. An embedding mechanism is a separate later arc (goal doc §8).
+ *
+ * Requires CONTROL_IN (it is the control-IN route) and ACTIONS (the shared exit writes the JACT
+ * audit record). Default 0 -> the whole block compiles out; main.c.obj stays object-identical
+ * (route.c is still LINKED but never called — it is host-pure and inert). */
+#ifndef JARVIS_ROUTING
+#define JARVIS_ROUTING 0
+#endif
+#if JARVIS_ROUTING && !(JARVIS_CONTROL_IN && JARVIS_ACTIONS)
+#error "JARVIS_ROUTING wires into pa_ctrl_gate and shares its signed+AUDITED exit -> requires JARVIS_CONTROL_IN && JARVIS_ACTIONS"
+#endif
+
+/* 6-6/B/M1 routing probe (box/KVM only; KVM has no NIC, so queries are staged through the same
+ * signed-JCTL split pipeline the CONTROL_IN_PROBE / RECALL_PROBE modes use). Routes THREE synthetic
+ * control-IN queries — one per class — and asserts each [ROUTE] line plus the shared exit:
+ *   SYSFACTS "how long have you been up?"  -> answered from PA state (no PB dispatch)
+ *   DECLINE  "what is your cpu usage?"     -> the canned decline (no PB dispatch)
+ *   INFER    "what is a page fault?"       -> Gemma, today's behavior
+ * PROBE==2 additionally latches g_pb_dead FIRST and re-runs the SYSFACTS + an INFER leg, proving
+ * SYSFACTS still answers while INFER correctly degrades. Its OWN flag (the per-probe precedent);
+ * #error-guarded off the other *_PROBE flags, which fire synthetic anomalies / real respawns / floor
+ * resets in the same boot window. Default 0 -> compiles out (deploy induces no synthetic queries). */
+#ifndef JARVIS_ROUTING_PROBE
+#define JARVIS_ROUTING_PROBE 0
+#endif
+#if JARVIS_ROUTING_PROBE && !JARVIS_ROUTING
+#error "JARVIS_ROUTING_PROBE requires JARVIS_ROUTING"
+#endif
+#if JARVIS_ROUTING_PROBE && (JARVIS_CONTROL_IN_PROBE || JARVIS_CONTROL_IN_RECALL_PROBE || JARVIS_MONITOR_PROBE || JARVIS_WAKE_PROBE || JARVIS_PROACTIVE_PROBE || JARVIS_ACTION_PROBE)
+#error "JARVIS_ROUTING_PROBE must not co-run with the other *_PROBE flags (replay-floor resets / synthetic-anomaly / respawn / terminal g_pb_dead collisions)"
 #endif
 
 /* Phase 6 K/M2a-2 reuse-in-place respawn spike (box-only KVM measurement; SYSTEM_DESIGN

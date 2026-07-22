@@ -97,6 +97,9 @@
 #include "control_console.h"     /* Phase 6 6-5/M4a: the provisioned reply-address NVMe JCON slot (@ 21,130,003) */
 #include "control_reply.h"       /* Phase 6 6-5/M4b: the AUTHENTICATED (HMAC-SHA256) JRPL reply builder */
 #endif
+#if JARVIS_ROUTING
+#include "route.h"               /* Phase 6 6-6/B/M1: the control-IN query router + the sysfacts whitelist */
+#endif
 #include "jarvis_ui_tokens.h"   /* Step 2c-2b: FBP_ and JUI_ palette + geometry (single source) */
 
 #if JARVIS_AVX2_PROBE
@@ -547,7 +550,20 @@ static uint32_t    g_ctrl_in_answered;        /* control-IN queries routed to in
 static uint32_t    g_ctrl_in_blocked;         /* control-IN queries the query SHIELD REFUSED (v11)   */
 static uint16_t    g_ctrl_route_seq;          /* the control-IN route's own MSG_QUERY seq space       */
 
-#if (JARVIS_CONTROL_IN_PROBE || JARVIS_CONTROL_IN_RECALL_PROBE)   /* M5-recall reuses this staging */
+#if JARVIS_ROUTING
+/* 6-6/B/M1: per-class routing counts — these count ROUTING DECISIONS, not answered turns, and are
+ * incremented at classification time. They therefore do NOT sum to g_ctrl_in_answered: an INFER
+ * decision whose dispatch later DEGRADES (g_pb_dead) or TIMES OUT still counts in g_route_infer but
+ * never reaches the answered exit. SYSFACTS/DECLINE, being locally rendered, always do. B/M2 must
+ * surface them with that decision semantic (and must not present them as a breakdown of a total) —
+ * as v12 fields riding the EXISTING TLM_F_CONTROL_IN flag, since the u16 flags word is exhausted.
+ * A REFUSE is NOT counted here: query_shield is the exclusive UPSTREAM gate, never a router class. */
+static uint32_t    g_route_sysfacts;          /* answered from whitelisted PA state (no PB dispatch) */
+static uint32_t    g_route_decline;           /* canned honest decline (no source -> never fabricated) */
+static uint32_t    g_route_infer;             /* dispatched to Gemma — today's control-IN behavior    */
+#endif
+
+#if (JARVIS_CONTROL_IN_PROBE || JARVIS_CONTROL_IN_RECALL_PROBE || JARVIS_ROUTING_PROBE)   /* M5-recall + 6-6/B/M1 reuse this staging */
 static void ctrl_put_be16(uint8_t *p, uint16_t v){ p[0]=(uint8_t)(v>>8); p[1]=(uint8_t)v; }
 static void ctrl_put_be32(uint8_t *p, uint32_t v){ p[0]=(uint8_t)(v>>24); p[1]=(uint8_t)(v>>16); p[2]=(uint8_t)(v>>8); p[3]=(uint8_t)v; }
 static void ctrl_put_be64(uint8_t *p, uint64_t v){ for(int i=0;i<8;i++) p[i]=(uint8_t)(v>>(56-8*i)); }
@@ -2721,6 +2737,87 @@ static void pa_ctrl_gate(const control_result_t *cres)
     }
     qs[qm] = 0;
 
+#if JARVIS_ROUTING
+    /* ── 6-6/B/M1: classify the validated query, then pick ONE handler ──────────────────────────
+     * route_classify sees ONLY QS_ALLOW queries — query_shield is the exclusive UPSTREAM gate and
+     * REFUSE is never a router class. SYSFACTS/DECLINE are rendered HERE from PA state and skip the
+     * entire PB dispatch below (including the §5-F PB_DISPATCH_OK() gate, so "how long have you
+     * been up?" stays answerable while PB is degraded), then fall through to the SAME answered exit
+     * as INFERENCE. That shared exit is the load-bearing invariant (goal doc §6c): ONE signed
+     * reply, ONE JACT record, ONE counter, ONE episodic write, for all three classes — a bespoke
+     * reply path for a locally-served answer would reopen the M4b spoofing hole and blind the audit.
+     *
+     * `resp`/`roff`/`got`/`faulted` are HOISTED here so a locally-rendered answer reaches that exit
+     * through exactly the same primitives; at ROUTING=0 they stay in their original position below,
+     * leaving this function textually — and therefore object- — identical.
+     *
+     * RECALL INTERACTION (deliberate, documented): routing runs BEFORE the recall block, so a
+     * SYSFACTS query is always short-circuited on FRESH state and a stored time-varying fact can
+     * never be replayed as a stale preamble while ROUTING=1. The answered exit still writes the
+     * turn (audit + corpus parity with every other control-IN turn), which does make it indexable —
+     * so a ROUTING=0 build reading a ROUTING=1 build's records could inject a stale "up N seconds"
+     * note. Narrow, mixed-build-only, and not a safety issue (the preamble is labelled prior-answer
+     * notes, and the model still answers); revisit at the B flip if the mixed case ever matters. */
+    char resp[1024]; int roff = 0;
+    int got = 0, faulted = 0;
+    int served_locally = 0;
+    route_result_t rr;
+    route_class_t  rc = route_classify((const char *)cres->query, cres->query_len, &rr);
+
+    if (rc == ROUTE_SYSFACTS) {
+        /* Fill the whitelisted struct from the SAME PA sources jarvis_telemetry_emit() reads, so a
+         * control-IN answer can never disagree with the telemetry broadcast (one source of truth).
+         * Nothing outside sysfacts_t is reachable from here BY CONSTRUCTION — route.h pins the field
+         * set with a host structural assertion, so widening it is a conscious edit, never a drift.
+         * The PRNG load-generator counters and all internal/security state are excluded (§4). */
+        sysfacts_t f;
+        f.uptime_ms = jarvis_uptime_ms();              /* == pkt.uptime_ms */
+        f.boot_id   = nvme_log_boot_id();              /* == pkt.boot_id   */
+        f.num_nodes = (uint8_t)g_num_nodes;            /* == pkt.num_nodes */
+        f.healthy   = (g_tlm_q_errors == 0) ? 1 : 0;   /* the COARSE bit behind TLM_F_HAS_ERROR — never the raw count */
+        {   /* keep in lockstep with the model_name literal in jarvis_telemetry_emit() */
+            const char *mn = "Gemma 4 E2B";
+            size_t mi = 0;
+            for (; mi + 1 < sizeof f.model_name && mn[mi]; mi++) f.model_name[mi] = mn[mi];
+            f.model_name[mi] = '\0';
+        }
+
+        roff = sysfacts_answer(rr.field, &f, resp, sizeof resp);
+        if (roff <= 0) {
+            /* Defensive: the classifier named a field the renderer cannot map. Degrade to the honest
+             * decline rather than emit an empty "answer" — and never fall through to the model to
+             * have it invent one (the §4 anti-fabrication rule). */
+            const char *d = route_decline_text();
+            roff = 0;
+            while (d[roff] && roff < (int)sizeof(resp) - 1) { resp[roff] = d[roff]; roff++; }
+            resp[roff] = '\0';
+            rc = ROUTE_DECLINE;
+            g_route_decline++;
+            puts_serial("[ROUTE] class=decline src=pa (unmapped sysfact field)\n");
+        } else {
+            g_route_sysfacts++;
+            puts_serial("[ROUTE] class=sysfacts field="); put_dec((uint32_t)rr.field);
+            puts_serial(" src=pa\n");
+        }
+        served_locally = 1;
+        got = 1;    /* -> the shared answered exit (verdict 0, EXECUTED, counted, episodic-written) */
+    } else if (rc == ROUTE_DECLINE) {
+        const char *d = route_decline_text();
+        while (d[roff] && roff < (int)sizeof(resp) - 1) { resp[roff] = d[roff]; roff++; }
+        resp[roff] = '\0';
+        g_route_decline++;
+        puts_serial("[ROUTE] class=decline src=pa\n");
+        served_locally = 1;
+        got = 1;
+    } else {
+        g_route_infer++;
+        puts_serial("[ROUTE] class=infer src=pb\n");
+    }
+
+    /* The PB dispatch below runs ONLY for ROUTE_INFER. Deliberately NOT re-indented: keeping the
+     * enclosed lines byte-identical is what makes the ROUTING=0 object-identity proof trivial. */
+    if (!served_locally) {
+#endif
     /* §5-F degraded gate (the wake-lane leg at :5783 this function omitted — a D1-class
      * regression, the SAME miss as K/M2c D1). Once the crash-loop bound latches g_pb_dead, do
      * NOT dispatch into a dead PB: pa_fault_check() returns 0 immediately under g_pb_dead, so a
@@ -2821,8 +2918,10 @@ static void pa_ctrl_gate(const control_result_t *cres)
     shmem_ipc_send(shared_request_ring, MSG_QUERY, cseq, cres->query, cres->query_len);
     seL4_Signal(g_pa_req_notif);
 
+#if !JARVIS_ROUTING
     char resp[1024]; int roff = 0;
     int got = 0, faulted = 0;
+#endif
     uint32_t polls = 0, poll_max = 5000000;   /* the wake lane's POLL_TIMEOUT */
 #if JARVIS_CONTROL_IN_PROBE == 3
     /* M3-2b: force the SECOND routed query into its timeout leg (the verdict=3 reply proof) — shrink
@@ -2850,6 +2949,9 @@ static void pa_ctrl_gate(const control_result_t *cres)
         polls++;
         seL4_Yield();
     }
+#if JARVIS_ROUTING
+    }   /* end if (!served_locally) — SYSFACTS/DECLINE skipped the whole PB dispatch above */
+#endif
 
     uint16_t outcome;
     if (got) {
@@ -2858,6 +2960,14 @@ static void pa_ctrl_gate(const control_result_t *cres)
          * so accept ANY MSG_RESPONSE here — the strict pk_seq==cseq match on the FIRST chunk above
          * is what correlates this reply; the F9 pre-send drain + synchronous top-of-loop routing
          * mean no other lane's response can interleave (the wake-lane drain discipline, 5-2/M1). */
+#if JARVIS_ROUTING
+    /* A LOCALLY-rendered answer must NOT run this drain. `resp` already holds the complete text, and
+     * this loop APPENDS any MSG_RESPONSE still sitting in the ring — a stale chunk (e.g. one PB
+     * delivered after an earlier lane timed out) would be concatenated onto a system-facts answer,
+     * corrupting it with model output. The drain belongs to the PB reply alone; staleness on the
+     * next real dispatch is already handled by the F9 pre-send drain. */
+    if (!served_locally) {
+#endif
         uint8_t d_t; uint16_t d_s, d_l; uint8_t d_p[SHMEM_MAX_PAYLOAD];
         while (shmem_ipc_recv(shared_response_ring, &d_t, &d_s, d_p, &d_l) == 0) {
             if (d_t == MSG_INFER_STATS) { infer_stats_latch(d_p, d_l); continue; }
@@ -2868,9 +2978,19 @@ static void pa_ctrl_gate(const control_result_t *cres)
             if (copy > 0) { memcpy(resp + roff, d_p, (size_t)copy); roff += copy; }
         }
         resp[roff] = '\0';
+#if JARVIS_ROUTING
+    }
+#endif
         outcome = roff > 0 ? AUDIT_OUT_OK : AUDIT_OUT_FAIL;
+#if JARVIS_ROUTING
+        /* A LOCALLY-served answer is NOT evidence of PB contact. Resetting the miss-counter here
+         * would hand the K/M2c hang detector a fake ACK — a wedged PB could then be masked forever
+         * by a stream of SYSFACTS queries. Only a genuine MSG_RESPONSE dequeue clears it. */
+        if (!served_locally) { km2b_miss_on_pb_ack(&g_pb_miss); g_pb_last_ack_ms = jarvis_uptime_ms(); }
+#else
         km2b_miss_on_pb_ack(&g_pb_miss);
         g_pb_last_ack_ms = jarvis_uptime_ms();
+#endif
         g_ctrl_in_answered++;
         /* [CTRL-IN-RESP]: sanitized query head + sanitized answer head (both bounded). M3-2b sends
          * the answer to the console; M3-2a LOGS it. */
@@ -2904,7 +3024,14 @@ static void pa_ctrl_gate(const control_result_t *cres)
     }
 
     /* close the control-IN duty window (a fault path may have cleared it via pa_restart_pb). */
+#if JARVIS_ROUTING
+    /* A locally-served answer ran no inference and therefore never OPENED a window. Closing one
+     * here would fold — and clear — an open WORKLOAD window, misattributing that inference's cycles
+     * to the control-IN turn and under-reporting infer_duty_pct. */
+    if (!served_locally && g_infer_active) { g_infer_cycles += jarvis_rdtsc() - g_infer_t0; g_infer_active = 0; }
+#else
     if (g_infer_active) { g_infer_cycles += jarvis_rdtsc() - g_infer_t0; g_infer_active = 0; }
+#endif
 
     ctrl_in_jact(AUDIT_EXECUTED, outcome, "control-in answered", 19);
 }
@@ -5138,6 +5265,76 @@ static void *main_continued(void *arg UNUSED)
         puts_serial("[CTRL-RECALL-PROBE] SKIPPED (key/input/floor down)\n");
     }
 #endif /* JARVIS_CONTROL_IN_RECALL_PROBE */
+
+#if JARVIS_ROUTING_PROBE
+    /* 6-6/B/M1 — the 3-class routing demonstration. KVM has no NIC, so each query is staged through
+     * the same signed-JCTL split pipeline (PA -> jarvis-input -> PA verify) the CONTROL_IN_PROBE and
+     * RECALL_PROBE modes use, i.e. these are REAL validated control-IN queries, not direct calls.
+     * Every seq is derived from the LIVE replay floor: a fixed seq would DROP_REPLAY against the
+     * M3-3 persisted floor on a second boot and read as a routing failure (the mode-4 lesson).
+     *   leg 1 SYSFACTS -> [ROUTE] class=sysfacts + an answer rendered from PA state, NO PB dispatch
+     *   leg 2 DECLINE  -> [ROUTE] class=decline  + the canned text,                  NO PB dispatch
+     *   leg 3 INFER    -> [ROUTE] class=infer    + a coherent Gemma answer (today's behavior)
+     * PROBE==2 then latches the TERMINAL g_pb_dead and re-runs a SYSFACTS + an INFER leg: SYSFACTS
+     * must STILL answer (it needs no PB) while INFER must DEGRADE. That leg is strictly LAST —
+     * g_pb_dead never clears, so anything sequenced after it would be starved (the 6-3/M1 B5
+     * terminal-latch lesson). */
+    if (g_ctrl_key_ok && g_input_ready && g_ctrl_floor_ok) {
+        static uint8_t pj6[CONTROL_MSG_MAX], pf6[512];
+        control_result_t pr6;
+        /* Verified against the real route.c on the host: SYSFACTS/SF_UPTIME, DECLINE, INFER. */
+        static const char *rq_sys  = "how long have you been up?";
+        static const char *rq_dec  = "what is your cpu usage?";
+        static const char *rq_inf  = "what is a page fault?";
+
+        puts_serial("[ROUTE-PROBE] start (sysfacts / decline / infer)\n");
+
+        /* one staged, signed, replay-clearing control-IN query -> pa_ctrl_gate */
+        #define ROUTE_PROBE_SEND(TAG, NONCE, TEXT)                                                 \
+            do {                                                                                   \
+                uint64_t s6  = g_ctrl_replay.seq_floor + 1u;                                       \
+                uint16_t jl6 = build_probe_jctl(pj6, g_ctrl_key, s6, (NONCE), (TEXT));             \
+                int      fl6 = net_build_udp_broadcast(pf6, sizeof pf6, g_net.nic.mac,             \
+                                                       JARVIS_BOX_IP, 40000,                       \
+                                                       (uint16_t)CONTROL_PORT, pj6, jl6);          \
+                control_verdict_t v6 = (fl6 > 0) ? ctrl_roundtrip_sync(pf6, (size_t)fl6, &pr6)     \
+                                                 : CV_DROP_PARSE;                                  \
+                if (v6 == CV_ACCEPT) {                                                             \
+                    puts_serial("[ROUTE-PROBE] " TAG " q=\""); puts_serial(TEXT);                  \
+                    puts_serial("\"\n");                                                           \
+                    pa_ctrl_gate(&pr6);                                                            \
+                } else {                                                                           \
+                    puts_serial("[ROUTE-PROBE] FAIL " TAG " frame not accepted\n");                \
+                }                                                                                  \
+            } while (0)
+
+        ROUTE_PROBE_SEND("sysfacts", 0x70, rq_sys);
+        ROUTE_PROBE_SEND("decline",  0x71, rq_dec);
+        ROUTE_PROBE_SEND("infer",    0x72, rq_inf);
+
+        puts_serial("[ROUTE-PROBE] counts sysfacts="); put_dec(g_route_sysfacts);
+        puts_serial(" decline=");                      put_dec(g_route_decline);
+        puts_serial(" infer=");                        put_dec(g_route_infer);
+        puts_serial(" answered=");                     put_dec(g_ctrl_in_answered);
+        puts_serial("\n");
+
+#if JARVIS_ROUTING_PROBE == 2
+        /* TERMINAL leg — strictly last (g_pb_dead never clears). */
+        puts_serial("[ROUTE-PROBE] latching g_pb_dead (degraded leg)\n");
+        g_pb_dead = 1;
+        ROUTE_PROBE_SEND("sysfacts-degraded", 0x73, rq_sys);   /* MUST still answer (verdict 0)  */
+        ROUTE_PROBE_SEND("infer-degraded",    0x74, rq_inf);   /* MUST DEGRADE (verdict 2)       */
+        puts_serial("[ROUTE-PROBE] degraded counts sysfacts="); put_dec(g_route_sysfacts);
+        puts_serial(" infer=");                                 put_dec(g_route_infer);
+        puts_serial(" answered=");                              put_dec(g_ctrl_in_answered);
+        puts_serial("\n");
+#endif
+        #undef ROUTE_PROBE_SEND
+        puts_serial("[ROUTE-PROBE] done\n");
+    } else {
+        puts_serial("[ROUTE-PROBE] SKIPPED (key/input/floor down)\n");
+    }
+#endif /* JARVIS_ROUTING_PROBE */
 #endif /* JARVIS_CONTROL_IN */
 
     while (1) {
