@@ -1741,3 +1741,20 @@ recall — which is exactly why GATE 3 could be read straight off the durable lo
 **This closes 6-5's last done-when.** The security done-whens closed at the M4e flip (2026-07-21); the
 conversational-recall done-when — at the exact-repeat level, semantic association explicitly excluded — is
 closed here.
+
+
+**Observed quality artifact (recorded, not a defect):** re-asking ONE UNANSWERABLE marker across
+several sessions drifts into meta-commentary — each non-answer is stored and re-injected, building a
+self-referential chain, and by ~4 rounds Gemma emitted a `<|channel>`-thought restatement. This is a
+COHERENCE artifact with NO safety impact (K-b holds, no data leak, no wrong action); normal repeat
+questions recall cleanly (the "what is a page table" and "what does the seL4 capability system provide"
+controls both grounded clean, one line). The recall path is hygiene-IDENTICAL to the deployed workload
+retrieval — `pa_ctrl_gate` calls `g3_build_preamble_answer_only`, which calls `g3_clean_answer_len`
+internally (`g3_retrieval.c`), the SAME builder the A/B-clean workload path (`main_x86.c:5439`) uses. So
+"apply g3_clean_answer_len on the recall path" is a NO-OP — it is already applied.
+
+**Two follow-ups (deferred, low priority):** (a) `g3_clean_answer_len` strips a dangling markdown header
+but NOT `<|channel>`/`<|…|>` special tokens — a shared-helper improvement that would benefit BOTH the
+workload and control-IN retrieval paths; (b) the honest limitation, worth stating in any recall
+description: *exact-repeat recall of a no-stable-answer question asked repeatedly drifts into
+meta-commentary — a coherence artifact, no safety impact; normal repeats recall cleanly.*
