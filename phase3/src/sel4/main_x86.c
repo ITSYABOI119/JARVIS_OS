@@ -5892,7 +5892,7 @@ static void *main_continued(void *arg UNUSED)
             /* 6-5/M2a: control-IN totals (honest counters; every drop is silent per-frame).
              * DURABLE via nvme_log_write so the acc/drop proof survives BOOT_LOG=0 + wrap. */
             {
-                char cl[160]; char *cp = cl;
+                char cl[192]; char *cp = cl;   /* +recall= at RECALL=1 needs headroom over cl[160] */
                 cp = fbp_str(cp, "[CTRL-IN-STATS] acc="); cp = fbp_u32(cp, g_ctrl_accepted);
                 cp = fbp_str(cp, " drop=");   cp = fbp_u32(cp, g_ctrl_dropped);
                 cp = fbp_str(cp, " (parse="); cp = fbp_u32(cp, g_ctrl_d_parse);
@@ -5902,6 +5902,15 @@ static void *main_continued(void *arg UNUSED)
                 *cp++ = ')';
                 cp = fbp_str(cp, " bp=");   cp = fbp_u32(cp, g_ctrl_bp_drops);   /* M2b-2: backpressure/flood drops */
                 cp = fbp_str(cp, " down="); cp = fbp_u32(cp, (uint32_t)g_ctrl_in_down);  /* 1 = input declared dead */
+#if JARVIS_CONTROL_IN_RECALL
+                /* 6-5/M5-recall: the cumulative count of control-IN queries served a durable-store
+                 * preamble this boot (g_ctrl_recall_hits, :2806). Durable at BOOT_LOG=0 via the same
+                 * nvme_log_write below, so the deployed feature's recall is observable without the
+                 * serial-only [CTRL-RECALL] line (which the BOOT_LOG=0 log never captures). Starts at
+                 * 0 each boot -> a nonzero value means a prior-session (or earlier same-session) turn
+                 * was recalled from the dedicated store. */
+                cp = fbp_str(cp, " recall="); cp = fbp_u32(cp, g_ctrl_recall_hits);
+#endif
                 *cp = '\0';
                 puts_serial(cl); puts_serial("\n");
                 if (g_nvme_ptr)
