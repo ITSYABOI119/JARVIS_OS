@@ -492,6 +492,20 @@ jobs:
           -lm -o /tmp/fuzz_qs
         /tmp/fuzz_qs
 
+    - name: "Phase 6: 6-6/B0 Query router (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
+          phase3/src/ai/test_route.c phase3/src/ai/route.c \
+          -o /tmp/test_route
+        /tmp/test_route
+
+    - name: "Phase 6: 6-6/B0 Query router Fuzz (C, ASAN)"
+      run: |
+        gcc -Wall -Werror -O1 -g -std=c11 -fsanitize=address,undefined -I phase3/src/ai \
+          phase3/src/ai/fuzz_route.c phase3/src/ai/route.c \
+          -o /tmp/fuzz_route
+        /tmp/fuzz_route
+
     - name: "Phase 5: Decision-cache LRU eviction (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
