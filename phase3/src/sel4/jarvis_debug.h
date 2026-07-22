@@ -364,7 +364,7 @@
  * answer", NEVER "remembers your conversation".
  * Default 0 -> compiles out (main.c.obj object-identical). */
 #ifndef JARVIS_CONTROL_IN_RECALL
-#define JARVIS_CONTROL_IN_RECALL 0
+#define JARVIS_CONTROL_IN_RECALL 1
 #endif
 #if JARVIS_CONTROL_IN_RECALL && !JARVIS_CONTROL_IN
 #error "JARVIS_CONTROL_IN_RECALL retrieves for the control-IN route -> requires JARVIS_CONTROL_IN"

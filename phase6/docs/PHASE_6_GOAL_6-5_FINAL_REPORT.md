@@ -332,22 +332,16 @@ Carried into the flip deliberately, with eyes open.
 - **Key rotation = reinstall.** There is no rotation mechanism. Changing the key means re-provisioning the
   JKEY slot on the box and the keyfile on the Main PC.
 - **The canon done-when — a multi-turn conversation where JARVIS correctly references a fact from a prior
-  control-IN session — is NOT MET, and this is a FUNCTIONALITY gap, not a testing gap.** It was not simply
-  left undemonstrated: `pa_ctrl_gate` **deliberately clears the retrieval preamble** before routing a
-  control-IN query, so a control-IN answer is never retrieval-grounded and prior-session recall through the
-  real inbound channel **could not have been demonstrated at the flip**. The code says so in place
-  (`main_x86.c:2670-2672`):
-
-  > clear the preamble staging — a stale WORKLOAD preamble must NEVER inject into a control-IN inference
-  > (the P6 contamination class; **retrieval-grounded control-IN is a later slice once a control-IN episodic
-  > lineage exists**).
-
-  The *write* half is proven — control-IN turns land in the episodic store under their own tag
-  (`EPI_ACT_CONTROL_IN`), isolated from cache-growth / retrieval-sourcing / distillation — so the lineage
-  the later slice needs is accumulating. The *recall* half is unwired. Closing it needs its own source
-  change (a control-IN-scoped preamble built from that lineage) that does not reintroduce the P6
-  contamination class; it is **not** a matter of re-enabling the existing staging. Carried forward — see
-  §14.
+  control-IN session — is MET ON HARDWARE (2026-07-22) at the EXACT-REPEAT level** (see §14 and the flip
+  record). It was NOT met at the first control-IN flip: `pa_ctrl_gate` then deliberately cleared the
+  retrieval preamble, so a control-IN answer was never retrieval-grounded. That was closed in stages —
+  M5-recall wired a control-IN-scoped answer-only preamble (`db15b44`), M5-recall-store moved control-IN
+  turns to a DEDICATED episodic store so the record survives the shared store's ~36 s wrap-eviction
+  (`7bf0947`), the no-shadow fix indexed only recallable turns (`78b2081`), and the recall counter was
+  surfaced durably (`fac349f`). **Honest scope, unchanged:** this is EXACT-REPEAT recall of a repeated
+  query's PRIOR ANSWER (proven un-attributable to model knowledge via an UNKNOWABLE marker), NOT
+  conversational memory and NOT semantic association — stating a fact then asking a DIFFERENT question
+  needs embeddings the system does not have and remains out of scope.
 - **Finding 1 and finding 2 (§8) are limitations as much as findings** — a benign flood proves nothing about
   the limiter, and the SHIELD answers some hostile phrasings.
 
@@ -390,10 +384,9 @@ breakdown diagnosed the boot_id=29 bug in a single line — and the v11 counters
 | Parser + HMAC + replay + rate-limit host-fuzzed in CI | ✅ 13 CI steps, 600K+ fuzz iterations |
 | SEC-014 input process box-verified cap-minimal | ✅ No BAR0, no key, pinned off the PA core |
 | The flip is reversible | ✅ Both halves proven (§12) |
-| Multi-turn prior-session recall over control-IN | ⚠️ **SUBSTRATE FIXED, HARDWARE RE-RUN PENDING.** The shared store wrap-evicted control-IN turns in ~36 s (mini-flip aborted, 0 survived). M5-recall-store gives control-IN its OWN store @21,140,000; KVM now proves recall AFTER the shared store wrapped **5.06 times** (`hit=1 recall=1`, on-disk: shared 0 tag-3 / dedicated 3). Gated default-0; the bare-metal mini-flip re-run at the real ~225 q/s is the remaining step |
+| Multi-turn prior-session recall over control-IN | ✅ **MET ON HARDWARE (2026-07-22), at the EXACT-REPEAT level.** The M5-recall-store dedicated control-IN store @21,140,000 closed the substrate blocker the mini-flip aborted on; the re-run passed all three bare-metal gates. Proven un-attributable to model knowledge via an UNKNOWABLE marker query: on a FRESH session (boot_id=34) the durable log read `[CTRL-IN-STATS] … recall=1` after the shared store had wrapped **~5.1×** (on disk: shared 0 tag-3 / 0 marker, dedicated store held the marker intact), err=0. Semantic association (state a fact, ask a DIFFERENT question) stays OUT OF SCOPE — needs embeddings. `JARVIS_CONTROL_IN_RECALL` now default-ON |
 
-**Net:** the goal's SECURITY done-when bullets are met and the channel is live; **one bullet — the canon conversational-recall demonstration — is NOT met** and is carried forward with a named cause; the *phase* done-when it feeds (multi-turn prior-session
-conversation) has its mechanism in place but no recorded end-to-end demonstration, and is carried to 6-7.
+**Net:** the goal's SECURITY done-when bullets are met, the channel is live, and the conversational-recall bullet is now **MET on hardware at the exact-repeat level** (2026-07-22, `recall=1` on a FRESH boot after ~5.1 shared-store wraps, proven un-attributable to model knowledge by an unknowable marker). SEMANTIC association (state a fact, ask a DIFFERENT question) remains out of scope — it needs embeddings this system does not have — and the broader *phase* done-when's fuller multi-turn conversation continues into 6-7.
 
 ---
 
