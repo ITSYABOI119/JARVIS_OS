@@ -113,6 +113,21 @@ static const routing_case_t ROUTING_DEV[] = {
     { "what's your temperature?",            ROUTE_DECLINE, SF_NONE },      /* temperature */
     { "what time is it?",                    ROUTE_DECLINE, SF_NONE },      /* wall-clock */
 
+    /* --- INFER: the UNTRACKED-NOUN FALSE-POSITIVE family (6; DEV-side, for tuning) ---
+     * A conceptual question that merely CONTAINS an untracked-metric noun (cpu / disk /
+     * ram / load / temperature / time) is NOT a status request and MUST reach the model.
+     * Added 2026-07-23 after the supervised B-flip validation caught the live defect: the
+     * bare-noun DECLINE rule declined "why doesn't adding more CPU cores speed up a
+     * single-threaded program?", violating route.h's stated ambiguity->INFER rule and
+     * REGRESSING capability vs the ROUTING=0 box (which answers these via Gemma).
+     * DECLINE must therefore require a STATUS/POSSESSIVE anchor, not the bare noun. */
+    { "what does cpu cache coherency mean?",                      ROUTE_INFER, SF_NONE },
+    { "explain how disk scheduling works",                        ROUTE_INFER, SF_NONE },
+    { "what is time complexity?",                                 ROUTE_INFER, SF_NONE },
+    { "how do temperature sensors work?",                         ROUTE_INFER, SF_NONE },
+    { "why is ram faster than disk?",                             ROUTE_INFER, SF_NONE },
+    { "what does load balancing mean?",                           ROUTE_INFER, SF_NONE },
+
     /* --- INFER (18; general knowledge / chit-chat / ambiguous counters) --- */
     { "what is a page fault?",                                    ROUTE_INFER, SF_NONE }, /* real 6-5 */
     { "explain paging in one line",                               ROUTE_INFER, SF_NONE }, /* real 6-5 */
@@ -197,6 +212,22 @@ static const routing_case_t ROUTING_HELDOUT[] = {
     { "what's the date today?",                 ROUTE_DECLINE, SF_NONE },     /* date */
     { "what's the current time of day?",        ROUTE_DECLINE, SF_NONE },     /* wall-clock */
     { "what day is it?",                        ROUTE_DECLINE, SF_NONE },     /* date */
+
+    /* --- INFER: the UNTRACKED-NOUN FALSE-POSITIVE family (6; the HELDOUT measurement) ---
+     * The boundary the ORIGINAL suite never exercised: every DECLINE case in both splits was
+     * a genuine STATUS query, so a conceptual question containing an untracked-metric noun
+     * was never tested and the 95.52% passed WITH the defect present. That is the honest
+     * reason the held-out number is a POINT ESTIMATE, not a production-accuracy guarantee.
+     * The first entry is the operator's live-validation query, verbatim.
+     * NOTE "how much time does quicksort take?" is deliberately adversarial: it carries the
+     * "how much" quantity-anchor AND an untracked noun, yet is plainly conceptual — so the
+     * anchor set must be SPECIFIC (what time is it / the date), never a generic "how much". */
+    { "why doesn't adding more CPU cores speed up a single-threaded program?", ROUTE_INFER, SF_NONE },
+    { "how does a CPU pipeline work?",                           ROUTE_INFER, SF_NONE },
+    { "what is disk fragmentation?",                             ROUTE_INFER, SF_NONE },
+    { "how does virtual memory work?",                           ROUTE_INFER, SF_NONE },
+    { "why does high temperature slow a processor down?",        ROUTE_INFER, SF_NONE },
+    { "how much time does quicksort take?",                      ROUTE_INFER, SF_NONE },
 
     /* --- INFER (20; general knowledge / chit-chat / ambiguous counters) --- */
     { "what is a tlb?",                                          ROUTE_INFER, SF_NONE },

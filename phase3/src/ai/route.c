@@ -183,19 +183,43 @@ static const char *const RT_BOOT_WORDS[] = {
     "reboot", "reboots", "rebooted", "rebooting",
     "cycles", "powered", NULL
 };
-/* Usage words required to treat "memory" as a resource-usage DECLINE (so the
- * CONCEPT question "what is virtual memory" / "memory-mapped io" stays INFER). */
+/* ---- DECLINE anchoring (6-6, retuned 2026-07-23) ------------------------------
+ * The ORIGINAL rule matched these nouns BARE, so any conceptual question that
+ * merely CONTAINED one was declined: "why doesn't adding more CPU cores speed up
+ * a single-threaded program?" -> "I don't track that". That violated this
+ * module's own conservative rule (ambiguity -> INFER, never toward a wrong
+ * answer) and REGRESSED capability versus a routing-off box, which answers such
+ * questions via the model. It was caught on real hardware during the supervised
+ * B-flip validation and missed by the suite, whose DECLINE cases were ALL
+ * genuine status queries — the boundary was never exercised.
+ *
+ * The fix generalises the guard "memory" ALREADY had (memory + a usage word) to
+ * every metric noun: a metric noun DECLINEs only with a STATUS ANCHOR — a
+ * usage/quantity word, or a possessive/self reference. Same shape as the query
+ * SHIELD's bare-possessive -> emit-anchor retune. Anchors are deliberately
+ * SPECIFIC per family; in particular the wall-clock family must NOT accept the
+ * generic quantity anchor, or "how much time does quicksort take?" would decline. */
+
+/* Usage/quantity anchors — turn a metric noun into a real status question. */
 static const char *const RT_USE_WORDS[] = {
-    "much", "usage", "used", "using", "use", "consumed", "free", NULL
+    "much", "usage", "used", "using", "use", "consumed", "free",
+    "percent", "average", "left", "remaining", NULL
 };
-/* DECLINE — untracked status metrics (bare "ram" is safe; "memory" is guarded
- * above). "time"/"date"/"day" are wall-clock (no RTC). Whole-word matching keeps
- * "times" (boot count) / "today" (chit-chat) out. */
-static const char *const RT_DECLINE_WORDS[] = {
-    "cpu", "busy", "load", "ram", "disk", "storage",
-    "temperature", "temp", "hot", "warm",
-    "time", "date", "day", "clock", NULL
+/* Possessive/self reference ("your cpu", "are you using"). */
+static const char *const RT_SELF_WORDS[] = { "you", "your", "yours", NULL };
+/* Resource nouns — untracked usage metrics. NEVER matched bare. */
+static const char *const RT_METRIC_WORDS[] = {
+    "cpu", "ram", "memory", "disk", "storage", "load", "busy", NULL
 };
+/* Thermal words — need a self or box-hardware anchor ("processor" is deliberately
+ * NOT a hardware anchor: "why does high temperature slow a processor down?" is a
+ * concept question). */
+static const char *const RT_THERM_WORDS[] = { "temperature", "temp", "hot", "warm", NULL };
+static const char *const RT_HW_WORDS[]    = { "chip", "cpu", NULL };
+/* Wall-clock nouns (no RTC) + their SPECIFIC anchors. Whole-word matching keeps
+ * "times" (boot count) / "today" (chit-chat) out of the noun set. */
+static const char *const RT_CLOCK_WORDS[]   = { "time", "day", "date", "clock", NULL };
+static const char *const RT_CLOCK_ANCHORS[] = { "current", "today", "now", NULL };
 
 static route_class_t rt_finish(route_result_t *out, route_class_t cls,
                                sysfact_field_t field, int pat)
@@ -250,10 +274,29 @@ route_class_t route_classify(const char *q, size_t len, route_result_t *out)
     if (rt_any(&W, RT_BOOT_WORDS))
         return rt_finish(out, ROUTE_SYSFACTS, SF_BOOT_ID, RID_BOOT);
 
-    /* ---- (2) DECLINE (untracked status metric; no valid source) ---- */
-    if (rt_any(&W, RT_DECLINE_WORDS) ||
-        (rt_word(&W, "memory") && rt_any(&W, RT_USE_WORDS)))
-        return rt_finish(out, ROUTE_DECLINE, SF_NONE, RID_DECLINE);
+    /* ---- (2) DECLINE (untracked status metric; no valid source) ----
+     * ANCHORED, never bare (see the table comment): a metric noun alone leaves the
+     * query in INFER, which is the conservative direction this module promises. */
+    {
+        const int self  = rt_any(&W, RT_SELF_WORDS);    /* you / your / yours        */
+        const int quant = rt_any(&W, RT_USE_WORDS);     /* much / usage / free / ... */
+
+        /* resource usage: cpu / ram / memory / disk / storage / load */
+        if (rt_any(&W, RT_METRIC_WORDS) && (quant || self))
+            return rt_finish(out, ROUTE_DECLINE, SF_NONE, RID_DECLINE);
+
+        /* thermal state OF THIS BOX (self- or chip/cpu-anchored) */
+        if (rt_any(&W, RT_THERM_WORDS) && (self || rt_any(&W, RT_HW_WORDS)))
+            return rt_finish(out, ROUTE_DECLINE, SF_NONE, RID_DECLINE);
+
+        /* wall-clock: "what time is it" / "what day is it" / "the current time" /
+         * "the date today". Deliberately NOT anchored by the quantity words, so
+         * "how much time does quicksort take?" stays a concept question. */
+        if (rt_any(&W, RT_CLOCK_WORDS) &&
+            (rt_seq2(&W, "time", "is", 1) || rt_seq2(&W, "day", "is", 1) ||
+             rt_seq2(&W, "date", "is", 1) || rt_any(&W, RT_CLOCK_ANCHORS)))
+            return rt_finish(out, ROUTE_DECLINE, SF_NONE, RID_DECLINE);
+    }
 
     /* ---- (3) INFER — the safe default (out already initialized) ---- */
     return ROUTE_INFER;

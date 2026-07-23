@@ -12,6 +12,14 @@
  *   ROUTE_DECLINE  — a status-shaped query for a metric the box has NO source for
  *                  (cpu% / memory-used / disk-free / temperature / wall-clock) ->
  *                  a canned honest "I don't track that", NEVER a fabricated answer.
+ *                  ANCHORED, never bare: the metric noun must carry a status
+ *                  anchor (a usage/quantity word, or a possessive/self
+ *                  reference; wall-clock takes its own specific anchors). A
+ *                  CONCEPTUAL question that merely contains the noun ("how does
+ *                  a CPU pipeline work?") is NOT a status query and goes to
+ *                  INFER. The bare-noun form shipped at B/M0 declined such
+ *                  questions — a live defect found on hardware at the B-flip
+ *                  validation, and a capability regression versus routing-off.
  *   ROUTE_INFER (=0) — everything else -> dispatch to Gemma; the SAFE DEFAULT.
  *
  * Host-pure: only <stdint.h>/<stddef.h>, no seL4 / device / allocator dep, no
@@ -28,10 +36,11 @@
  *   embedding mechanism is a separate later arc (goal doc §8). The >=95% is
  *   measured on a KEYWORD-BLIND held-out suite, NOT production traffic.
  *
- * CONSERVATIVE rule (goal doc §7, load-bearing): DECLINE fires ONLY on the
- * explicit untracked-metric patterns; SYSFACTS only on high-confidence field
- * matches; ANY ambiguity -> ROUTE_INFER (fail toward the general model, never
- * toward a wrong fact). In particular the synthetic load-generator counters
+ * CONSERVATIVE rule (goal doc §7, load-bearing): DECLINE fires ONLY on ANCHORED
+ * untracked-metric patterns; SYSFACTS only on high-confidence field matches; ANY
+ * ambiguity -> ROUTE_INFER (fail toward the general model, never toward a wrong
+ * fact). NOTE this rule is what the bare-noun DECLINE violated: declining a
+ * concept question is failing toward a wrong ANSWER, not toward the model. In particular the synthetic load-generator counters
  * ("how many queries/questions have you answered") are NOT a SYSFACTS field ->
  * ROUTE_INFER.
  *
