@@ -429,6 +429,43 @@ def main():
     check('llama.cpp' in mo,
           "Models bench-off speeds attributed to llama.cpp (llama-bench) — not the JARVIS engine")
 
+    # --- 6-6/B/M2: the control-IN routing card. THE load-bearing honesty here is that route_*
+    # are ROUTING DECISIONS counted at classification time — they do NOT sum to
+    # control_in_answered (an INFER decision that later degrades or times out is counted but
+    # never answered; the box measured 5 decisions against 4 answered). A console that implies
+    # sysfacts+decline+infer == answered is a FRESH dishonesty, so the gate hunts for it. ---
+    rt = blobs.get('Routing.jsx', '')
+    check(len(rt) > 0, "Routing.jsx is non-empty")
+    check('Control-IN routing' in rt,
+          "Routing has a SEPARATE control-IN routing card (not merged with the workload aggregate)")
+    # TEETH #1: gated on the live-vs-gated indicator, never rendered live against a ROUTING=0 box.
+    check('route_inited' in rt,
+          "the routing card gates on route_inited (routing has no flag bit — flags word exhausted)")
+    check('routing gated off' in rt.lower(),
+          "gated-off state says routing is gated off on the box (not a live-looking 0)")
+    # TEETH #2: the decisions framing is REQUIRED and the breakdown framing is BANNED.
+    check('routing decision' in rt.lower(),
+          "the card frames the counts as ROUTING DECISIONS")
+    check('not a breakdown of queries answered' in rt.lower(),
+          "the card states the counts are NOT a breakdown of queries answered")
+    for bad in ('breakdown of answered', 'of the answered', 'sum to answered',
+                'share of answered', 'percent of answered', '% of answered'):
+        check(bad not in rt.lower(),
+              "routing card avoids the answered-breakdown framing (%r)" % bad)
+    # A rendered total that adds the three decisions to control_in_answered would be the concrete
+    # form of that lie — the card must not reference control_in_answered at all.
+    check('control_in_answered' not in rt,
+          "the routing card does NOT render/derive a total against control_in_answered")
+    # TEETH #3: the DECLINE label carries the no-source honesty (never a fabricated answer).
+    check('no source' in rt.lower(),
+          "the declined row carries the no-source honesty (the box does not fabricate it)")
+    # TEETH #4: the pre-existing workload caveat must SURVIVE (two different query populations —
+    # the aggregate must not be silently retired or relabelled as per-query routing).
+    check('aggregate counters — not per-query routing' in rt,
+          "the workload aggregate KEEPS its 'not per-query routing' caveat (separate population)")
+    check('not live in the deployed build' in rt,
+          "the specialist roadmap diagram keeps its 'not live in the deployed build' badge")
+
     print("\n== Results: %d PASS, %d FAIL ==" % (_PASS, _FAIL))
     return 1 if _FAIL else 0
 

@@ -88,18 +88,23 @@ import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MAGIC = 0x4A54454C            # "JTEL" (LE on the wire: 4C 45 54 4A)
-# VERSION-TOLERANT (6-5/M3-4a): the wire is APPEND-ONLY, so the common prefix through beh_pad is
-# shared; v10 appends only crc32, v11 also appends control_in_answered/blocked/dropped before crc32.
-# The deploy-deferral keeps a LIVE v10 box on the wire while the code emits v11 — the receiver must
-# decode BOTH by length, and a v10 (246 B) packet must NOT misparse (control_in fields -> None).
+# VERSION-TOLERANT (6-5/M3-4a, extended 6-6/B/M2): the wire is APPEND-ONLY, so the common prefix
+# through beh_pad is shared; v11 appends control_in_answered/blocked/dropped and v12 further appends
+# route_sysfacts/decline/infer/inited/pad, each before crc32. The deploy-deferral keeps a LIVE v11
+# box on the wire while the code emits v12 — the receiver must decode ALL THREE by length, and an
+# older packet must NOT misparse (its newer fields -> None, never a fabricated 0).
 FMT_COMMON = '<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHHHHIHHHBBHBBHHBB'   # through beh_pad, NO crc
-FMT_V10 = FMT_COMMON + 'I'      # v10: + crc32
-FMT_V11 = FMT_COMMON + 'HHII'   # v11: + control_in_answered(H)/blocked(H)/dropped(I) + crc32(I)
+FMT_CTRL_IN = 'HHI'             # control_in_answered(H)/blocked(H)/dropped(I)  (v11+)
+FMT_ROUTE   = 'HHHBB'           # route_sysfacts(H)/decline(H)/infer(H)/inited(B)/pad(B)  (v12+)
+FMT_V10 = FMT_COMMON + 'I'                            # v10: + crc32
+FMT_V11 = FMT_COMMON + FMT_CTRL_IN + 'I'              # v11: + control_in_* + crc32
+FMT_V12 = FMT_COMMON + FMT_CTRL_IN + FMT_ROUTE + 'I'  # v12: + route_* + crc32
 PKT_SIZE_V10 = struct.calcsize(FMT_V10)   # 246
 PKT_SIZE_V11 = struct.calcsize(FMT_V11)   # 254
-# CURRENT-wire aliases (the code emits v11 now) — derived, never a hardcoded size.
-FMT = FMT_V11
-PKT_SIZE = PKT_SIZE_V11
+PKT_SIZE_V12 = struct.calcsize(FMT_V12)   # 262
+# CURRENT-wire aliases (the code emits v12 now) — derived, never a hardcoded size.
+FMT = FMT_V12
+PKT_SIZE = PKT_SIZE_V12
 LOG_MAX_ENTRIES = 2700        # NVME_LOG_MAX_ENTRIES (no-wrap durable telemetry log)
 
 FLAG_NAMES = {
@@ -220,22 +225,35 @@ def decode_packet(data: bytes) -> dict:
     returns the dict with 'crc_ok' == False (so the caller can distinguish noise
     on the port from genuine corruption).
     """
-    # Version-tolerant by LENGTH (the append-only wire): v11 (254 B) has the 3 control_in fields, v10
-    # (246 B, still emitted by the live deployed box until the flip) does not. A v10 packet decodes
-    # cleanly with control_in_* == None; the CRC region differs (@242 v10 / @250 v11).
+    # Version-tolerant by LENGTH (the append-only wire): v12 (262 B) has the control_in fields AND
+    # the route_* fields; v11 (254 B, still emitted by the live deployed box until the B flip) has
+    # only control_in; v10 (246 B) has neither. An older packet decodes cleanly with its newer
+    # fields == None — never a fabricated 0. CRC region: @242 (v10) / @250 (v11) / @258 (v12).
+    # route_* are ROUTING DECISIONS at classification time, NOT a breakdown of control_in_answered:
+    # an INFER decision that later degrades or times out is counted in route_infer but never
+    # reaches the answered exit, so the three do not sum to control_in_answered.
     n = len(data)
-    if n == PKT_SIZE_V11:
+    if n == PKT_SIZE_V12:
+        fields = struct.unpack(FMT_V12, data)
+        control_in_answered, control_in_blocked, control_in_dropped = fields[-9:-6]
+        route_sysfacts, route_decline, route_infer, route_inited, _route_pad = fields[-6:-1]
+        crc32_field = fields[-1]
+        common = fields[:-9]
+    elif n == PKT_SIZE_V11:
         fields = struct.unpack(FMT_V11, data)
         control_in_answered, control_in_blocked, control_in_dropped = fields[-4:-1]
+        route_sysfacts = route_decline = route_infer = route_inited = None
         crc32_field = fields[-1]
         common = fields[:-4]
     elif n == PKT_SIZE_V10:
         fields = struct.unpack(FMT_V10, data)
         control_in_answered = control_in_blocked = control_in_dropped = None
+        route_sysfacts = route_decline = route_infer = route_inited = None
         crc32_field = fields[-1]
         common = fields[:-1]
     else:
-        raise ValueError("bad length %d (expected %d or %d)" % (n, PKT_SIZE_V10, PKT_SIZE_V11))
+        raise ValueError("bad length %d (expected %d, %d or %d)"
+                         % (n, PKT_SIZE_V10, PKT_SIZE_V11, PKT_SIZE_V12))
 
     (magic, version, kind, flags, boot_id, seq,
      uptime_ms, infer_active, infer_duty_pct, log_cursor,
@@ -254,7 +272,7 @@ def decode_packet(data: bytes) -> dict:
     if magic != MAGIC:
         raise ValueError("bad magic 0x%08X (expected 0x%08X)" % (magic, MAGIC))
 
-    crc_calc = zlib.crc32(data[:n - 4]) & 0xFFFFFFFF   # offsetof(crc32): 242 (v10) / 250 (v11)
+    crc_calc = zlib.crc32(data[:n - 4]) & 0xFFFFFFFF   # offsetof(crc32): 242 (v10) / 250 (v11) / 258 (v12)
     flags_list = [name for bit, name in FLAG_NAMES.items() if flags & bit]
 
     return {
@@ -308,6 +326,12 @@ def decode_packet(data: bytes) -> dict:
         'control_in_answered': control_in_answered,
         'control_in_blocked': control_in_blocked,
         'control_in_dropped': control_in_dropped,
+        # v12 (6-6/B/M2): ROUTING DECISIONS on the control-IN path, counted at classification
+        # time. NOT a breakdown of control_in_answered — never render/sum them as one.
+        'route_sysfacts': route_sysfacts,
+        'route_decline': route_decline,
+        'route_infer': route_infer,
+        'route_inited': route_inited,
         'cache_growth_count': cache_growth_count,
         'log_cursor': log_cursor,
         'infer_gen_tokens': infer_gen_tokens,
@@ -410,6 +434,11 @@ def packet_to_record(d: dict, recv_ts: float = 0) -> dict:
         'control_in_answered': d['control_in_answered'],
         'control_in_blocked': d['control_in_blocked'],
         'control_in_dropped': d['control_in_dropped'],
+        # v12: routing DECISIONS (see decode_packet) — not a breakdown of answered.
+        'route_sysfacts': d['route_sysfacts'],
+        'route_decline': d['route_decline'],
+        'route_infer': d['route_infer'],
+        'route_inited': d['route_inited'],
         'cache_growth_count': d['cache_growth_count'],
         'log_cursor': d['log_cursor'],
         'infer_gen_tokens': d['infer_gen_tokens'],

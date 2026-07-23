@@ -3324,6 +3324,20 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
      * address cannot answer, so the channel is NOT up and must not advertise/accept. */
     if (g_ctrl_key_ok && g_ctrl_floor_ok && g_ctrl_console_ok && g_ctrl_rx_ready) pkt.flags |= TLM_F_CONTROL_IN;
 #endif
+#if JARVIS_ROUTING
+    /* v12 (P6 6-6/B/M2): the control-IN ROUTING DECISIONS. NO new flag bit exists to announce
+     * routing — the u16 flags word is EXHAUSTED at TLM_F_CONTROL_IN 0x8000 — so routing rides that
+     * flag (it requires control-IN) and route_inited is the live-vs-gated indicator instead.
+     * HONESTY: these are DECISIONS at classification time, NOT a breakdown of control_in_answered;
+     * an INFER decision whose dispatch later degrades or times out is counted here but never
+     * reaches the answered exit, so the three do not sum to answered and the console must not
+     * render them as if they did. Gated, so the ROUTING=0 deploy emits v12 with all three 0 and
+     * route_inited 0 — honest "routing gated off" (the SAME pattern as v5..v11). */
+    pkt.route_sysfacts = g_route_sysfacts > 0xFFFFu ? 0xFFFFu : (uint16_t)g_route_sysfacts;
+    pkt.route_decline  = g_route_decline  > 0xFFFFu ? 0xFFFFu : (uint16_t)g_route_decline;
+    pkt.route_infer    = g_route_infer    > 0xFFFFu ? 0xFFFFu : (uint16_t)g_route_infer;
+    pkt.route_inited   = 1;
+#endif
     /* model display name (matches the on-screen panel) + last response, NUL-bounded (pkt is zeroed) */
     { const char *mn = "Gemma 4 E2B";
       for (int i = 0; i < (int)sizeof(pkt.model_name) - 1 && mn[i]; i++) pkt.model_name[i] = mn[i]; }
@@ -6129,6 +6143,17 @@ static void *main_continued(void *arg UNUSED)
             puts_serial(" flag=");
             put_dec((uint32_t)(g_ctrl_key_ok && g_ctrl_floor_ok && g_ctrl_console_ok && g_ctrl_rx_ready));
             puts_serial("\n");
+#endif
+#if JARVIS_ROUTING
+            /* 6-6/B/M2 (v12) box proof: the exact routing DECISION counts + the live-vs-gated
+             * indicator jarvis_telemetry_emit fills into the v12 packet. On-wire I211 validation is
+             * DEFERRED to the B flip (no NIC in QEMU) — the [TLM-V8..V11] precedent. These do NOT
+             * sum to the [TLM-V11] a= above: an INFER decision that later degrades/times out is
+             * counted here but never answered. */
+            puts_serial("[TLM-V12] route sys="); put_dec(g_route_sysfacts);
+            puts_serial(" dec=");  put_dec(g_route_decline);
+            puts_serial(" inf=");  put_dec(g_route_infer);
+            puts_serial(" inited=1 (decisions, NOT a breakdown of answered)\n");
 #endif
 #if JARVIS_MONITORS
             /* 6-1/M1: the q_errors-delta watcher -> ACTION_NOTIFY_ANOMALY through the shared

@@ -1,15 +1,15 @@
 /**
  * jarvis_telemetry.h - JARVIS binary telemetry packet (goal #2b N-c)
  *
- * A versioned, CRC'd, fixed-254-byte (v11) binary packet the box emits over UDP
+ * A versioned, CRC'd, fixed-262-byte (v12) binary packet the box emits over UDP
  * (255.255.255.255:51000, via net_udp.c + the I211) so a remote console can
  * render live, honest box state. Pure logic / host-testable (CRC + finalize);
  * the emit site is in main_x86.c.
  *
  * Wire format: little-endian (x86), packed, no padding. The CRC-32 is the
  * standard zlib/IEEE CRC (poly 0xEDB88320, init/xorout 0xFFFFFFFF) over the
- * first 242 bytes [0 .. offsetof(crc32)), so a Python receiver validates with
- * `zlib.crc32(pkt[:242]) == struct.unpack_from('<I', pkt, 242)[0]`.
+ * first 258 bytes [0 .. offsetof(crc32)), so a Python receiver validates with
+ * `zlib.crc32(pkt[:258]) == struct.unpack_from('<I', pkt, 258)[0]`.
  *
  * JARVIS AI-OS - Phase 4 (goal #2b Remote Telemetry Console)
  */
@@ -20,7 +20,7 @@
 #include <stdint.h>
 
 #define JARVIS_TLM_MAGIC   0x4A54454Cu  /* "JTEL" (LE on wire: 4C 45 54 4A) */
-#define JARVIS_TLM_VERSION 11
+#define JARVIS_TLM_VERSION 12
 
 /* flags (bitfield) */
 #define TLM_F_MODEL_LOADED  0x01
@@ -91,7 +91,20 @@
  * auth/replay/parse/ratelimit; the fill is gated JARVIS_CONTROL_IN so the
  * CONTROL_IN=0 deploy emits v11 with all three 0 + the flag CLEAR — honest
  * "channel gated off"; the flag means the CHANNEL is up, not that a query
- * arrived). */
+ * arrived); v12 (P6 6-6/B/M2) appends route_sysfacts/route_decline/route_infer/
+ * route_inited/route_pad -> 262 B, CRC@258, with NO NEW FLAG BIT — the u16 flags
+ * word is EXHAUSTED (TLM_F_CONTROL_IN 0x8000 is the last), so routing rides the
+ * EXISTING TLM_F_CONTROL_IN (routing requires control-IN) and uses route_inited
+ * as its live-vs-gated indicator; consequently routing gets NO Capabilities
+ * auto-row and must be surfaced as field-derived console rows (goal doc §6g).
+ * These are ROUTING DECISIONS counted at classification time — they are NOT a
+ * breakdown of control_in_answered and must never be rendered as one (an INFER
+ * decision that later degrades or times out counts in route_infer but never
+ * reaches the answered exit; box-proven 5 decisions vs 4 answered). The fill is
+ * gated JARVIS_ROUTING so the ROUTING=0 deploy emits v12 with the three counts 0
+ * and route_inited 0 — honest "routing gated off". Note the STRUCT is v12/262 B
+ * for EVERYONE (the v5..v11 pattern): there is no OFF-object-identity claim at a
+ * size bump; the honest check is the zero-fill + route_inited==0. */
 typedef struct __attribute__((packed)) {
     uint32_t magic; uint8_t version; uint8_t kind; uint16_t flags; uint32_t boot_id; uint32_t seq;  /* 16 */
     uint32_t uptime_ms;                                                                              /*  4 */
@@ -125,15 +138,28 @@ typedef struct __attribute__((packed)) {
     uint16_t control_in_answered; /* v11 (P6 6-5/M3-4a) @242 — control-IN queries routed + answered (g_ctrl_in_answered, sat 0xFFFF) */ /* 2 */
     uint16_t control_in_blocked;  /* v11 @244 — queries the QUERY SHIELD REFUSED = a DEFINED-ABUSE-CLASS refuse count, NEVER "injection blocked" (g_ctrl_in_blocked, sat 0xFFFF) */ /* 2 */
     uint32_t control_in_dropped;  /* v11 @246 — inbound frames dropped PRE-SHIELD (auth/replay/parse/ratelimit; g_ctrl_dropped) */ /* 4 */
-    uint32_t crc32;          /* zlib CRC-32 over the first 250 bytes [0 .. offsetof(crc32)) */       /*  4 */
+    /* v12 (P6 6-6/B/M2) — control-IN ROUTING DECISIONS. Counted at classification time in
+     * pa_ctrl_gate, so they are NOT a breakdown of control_in_answered and MUST NEVER be
+     * presented as one: an INFER decision whose dispatch later DEGRADES or TIMES OUT counts in
+     * route_infer but never reaches the answered exit (box-proven at B/M1 — sysfacts=2 decline=1
+     * infer=2 = 5 decisions with answered=4). No new flag bit exists to carry these (the u16
+     * flags word is EXHAUSTED at TLM_F_CONTROL_IN 0x8000), so routing rides that flag plus
+     * route_inited as the live-vs-gated signal. */
+    uint16_t route_sysfacts;      /* v12 @250 — SYSFACTS routing decisions (g_route_sysfacts, sat 0xFFFF) */ /* 2 */
+    uint16_t route_decline;       /* v12 @252 — DECLINE routing decisions, i.e. no-source status queries answered honestly instead of fabricated (g_route_decline, sat 0xFFFF) */ /* 2 */
+    uint16_t route_infer;         /* v12 @254 — INFER routing decisions dispatched to the model (g_route_infer, sat 0xFFFF) */ /* 2 */
+    uint8_t  route_inited;        /* v12 @256 — 1 iff JARVIS_ROUTING is live in this build; the live-vs-gated indicator (routing has NO flag bit of its own) */ /* 1 */
+    uint8_t  route_pad;           /* v12 @257 — alignment pad, always 0 (the mon_pad/wake_pad/beh_pad precedent) */ /* 1 */
+    uint32_t crc32;          /* zlib CRC-32 over the first 258 bytes [0 .. offsetof(crc32)) */       /*  4 */
 } telemetry_packet_t;
 
-_Static_assert(sizeof(telemetry_packet_t) == 254, "telemetry packet must be 254 bytes (v11)");
+_Static_assert(sizeof(telemetry_packet_t) == 262, "telemetry packet must be 262 bytes (v12)");
 
 /* Standard zlib/IEEE CRC-32 (poly 0xEDB88320, init/xorout 0xFFFFFFFF) — equals Python zlib.crc32. */
 uint32_t jarvis_tlm_crc32(const void *data, uint32_t len);
 
-/* Stamp magic/version and compute+store crc32 over the first 250 bytes (v11). */
+/* Stamp magic/version and compute+store crc32 over the first 258 bytes (v12).
+ * offsetof-based, so a future append auto-extends the CRC region with NO .c change. */
 void jarvis_tlm_finalize(telemetry_packet_t *pkt);
 
 #endif /* JARVIS_TELEMETRY_H */

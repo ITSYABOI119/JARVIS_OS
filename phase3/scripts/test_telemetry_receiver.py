@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import telemetry_receiver as tr_mod  # noqa: E402  (module handle: guard-#2 wiring test stubs into it)
 from telemetry_receiver import (  # noqa: E402
     decode_packet, packet_to_record, iter_pcap_telemetry, FMT, MAGIC, PKT_SIZE, FLAG_NAMES,
-    FMT_V10, FMT_V11, PKT_SIZE_V10, PKT_SIZE_V11, BANNED_RECORD_KEYS,
+    FMT_V10, FMT_V11, FMT_V12, PKT_SIZE_V10, PKT_SIZE_V11, PKT_SIZE_V12, BANNED_RECORD_KEYS,
     # --- 6-5/M3-4b: the two-way SEND path ---
     build_control_frame, decode_control_reply, validate_query, resolve_http_bind,
     reply_to_record, ControlSender, TelemetryHub, _SSEHandler,
@@ -149,9 +149,10 @@ def main():
     print("== telemetry receiver wire-compat ==")
 
     # Layout (v11 = the current wire)
-    check(struct.calcsize(FMT) == 254, "struct.calcsize(FMT) == 254 (v11)")
-    check(PKT_SIZE == 254, "PKT_SIZE == 254 (v11)")
-    check(PKT_SIZE_V10 == 246 and PKT_SIZE_V11 == 254, "version-tolerant sizes: v10=246, v11=254")
+    check(struct.calcsize(FMT) == 262, "struct.calcsize(FMT) == 262 (v12)")
+    check(PKT_SIZE == 262, "PKT_SIZE == 262 (v12)")
+    check(PKT_SIZE_V10 == 246 and PKT_SIZE_V11 == 254 and PKT_SIZE_V12 == 262,
+          "version-tolerant sizes: v10=246, v11=254, v12=262")
 
     # Canonical zlib CRC vector — same CRC the C side proved (jarvis_telemetry.c)
     check(zlib.crc32(b"123456789") & 0xFFFFFFFF == 0xCBF43926,
@@ -159,7 +160,7 @@ def main():
 
     # Valid packet round-trips
     pkt = build_packet()
-    check(len(pkt) == 254, "built packet is 254 bytes (v11)")
+    check(len(pkt) == 262, "built packet is 262 bytes (v12)")
     d = decode_packet(pkt)
     check(d['crc_ok'] is True, "valid packet crc_ok True")
     check(d['kind_name'] == 'STATS', "kind_name == STATS")
@@ -230,7 +231,7 @@ def main():
     pkt_retr = build_packet(retrieval_hits=3, retrieval_latency_us=40, flags=0x01 | 0x10 | 0x80)
     dretr = decode_packet(pkt_retr)
     check(dretr['crc_ok'] is True, "retrieval packet crc_ok True (CRC over [:PKT_SIZE-4])")
-    check(dretr["version"] == 11, "v11 packet version == 11")
+    check(dretr["version"] == 12, "v12 packet version == 12")
     check(dretr['retrieval_hits'] == 3 and dretr['retrieval_latency_us'] == 40,
           "retrieval_hits/retrieval_latency_us decode")
     check('RETRIEVAL' in dretr['flags_list'], "TLM_F_RETRIEVAL 0x80 -> 'RETRIEVAL' in flags_list")
@@ -305,7 +306,7 @@ def main():
                            flags=0x01 | 0x10 | 0x1000)
     dmon = decode_packet(pkt_mon)
     check(dmon['crc_ok'] is True, "v8 monitors packet crc_ok True (CRC over [:PKT_SIZE-4])")
-    check(dmon['version'] == 11, "monitors packet version == 11 (v11 wire)")
+    check(dmon['version'] == 12, "monitors packet version == 12 (v12 wire)")
     check(dmon['monitors_fired'] == 5 and dmon['last_monitor_event'] == 3,
           "monitors_fired/last_monitor_event decode")
     check('MONITORS' in dmon['flags_list'], "TLM_F_MONITORS 0x1000 -> 'MONITORS' in flags_list")
@@ -325,7 +326,7 @@ def main():
                             flags=0x01 | 0x10 | 0x2000)
     dwake = decode_packet(pkt_wake)
     check(dwake['crc_ok'] is True, "wake packet crc_ok True (CRC over [:PKT_SIZE-4])")
-    check(dwake['version'] == 11, "v11 packet version == 11")
+    check(dwake['version'] == 12, "v12 packet version == 12")
     check(dwake['wakes_fired'] == 3 and dwake['last_wake_event'] == 1,
           "wakes_fired/last_wake_event decode")
     check('WAKE' in dwake['flags_list'], "TLM_F_WAKE 0x2000 -> 'WAKE' in flags_list")
@@ -344,12 +345,12 @@ def main():
     # INTERRUPTS (cap-suppressed never counts), mask bit id-1 = behavior fired this boot;
     # a B1/B2 consult bumps BOTH wakes_fired and behaviors_fired BY DESIGN — two honest
     # views of one event, never summed; REAL allowed keys, distinct from every ban) ---
-    check(PKT_SIZE >= 246, "v10 behavior fields present (the v11 bump keeps them at the same offsets)")
+    check(PKT_SIZE >= 246, "v10 behavior fields present (the v11/v12 bumps keep them at the same offsets)")
     pkt_beh = build_packet(behaviors_fired=3, behaviors_mask=21, last_behavior=5,
                            flags=0x01 | 0x10 | 0x4000)
     dbeh = decode_packet(pkt_beh)
     check(dbeh['crc_ok'] is True, "v10 behavior packet crc_ok True (CRC over [:242])")
-    check(dbeh['version'] == 11, "v11 packet version == 11")
+    check(dbeh['version'] == 12, "v12 packet version == 12")
     check(dbeh['behaviors_fired'] == 3 and dbeh['behaviors_mask'] == 21
           and dbeh['last_behavior'] == 5,
           "behaviors_fired/behaviors_mask/last_behavior decode (mask 21 = 0b10101 = B1+B3+B5)")
@@ -372,7 +373,7 @@ def main():
     pkt_ci = build_packet(control_in_answered=3, control_in_blocked=1, control_in_dropped=5,
                           flags=0x01 | 0x10 | 0x8000)
     dci = decode_packet(pkt_ci)
-    check(len(pkt_ci) == 254, "v11 control-IN packet is 254 bytes")
+    check(len(pkt_ci) == 262, "v12 control-IN packet is 262 bytes")
     check(dci['crc_ok'] is True, "v11 control-IN packet crc_ok True (CRC over [:250])")
     check(dci['control_in_answered'] == 3 and dci['control_in_blocked'] == 1
           and dci['control_in_dropped'] == 5,
@@ -405,6 +406,52 @@ def main():
     check(set(rec_v10.keys()) == set(REQUIRED_RECORD_KEYS),
           "v10 record still carries the full key contract (control_in keys present, valued None)")
 
+    # --- P6 6-6/B/M2: route_sysfacts/decline/infer/inited (the v12 254->262 size-bump). These are
+    # ROUTING DECISIONS counted at classification time — NOT a breakdown of control_in_answered.
+    # There is NO new flag bit (the u16 flags word is exhausted at TLM_F_CONTROL_IN 0x8000), so
+    # route_inited is the live-vs-gated indicator instead. ---
+    pkt_rt = build_packet(route_sysfacts=2, route_decline=1, route_infer=3, route_inited=1,
+                          control_in_answered=3, flags=0x01 | 0x8000)
+    drt = decode_packet(pkt_rt)
+    check(len(pkt_rt) == 262, "v12 routing packet is 262 bytes")
+    check(drt['crc_ok'] is True, "v12 packet crc_ok True (CRC over [:258])")
+    check(drt['version'] == 12, "v12 packet version byte == 12")
+    check(drt['route_sysfacts'] == 2 and drt['route_decline'] == 1 and drt['route_infer'] == 3,
+          "route_sysfacts/decline/infer decode (2/1/3)")
+    check(drt['route_inited'] == 1, "route_inited decodes (the live-vs-gated indicator)")
+    rec_rt = packet_to_record(drt)
+    check(rec_rt['route_sysfacts'] == 2 and rec_rt['route_decline'] == 1
+          and rec_rt['route_infer'] == 3 and rec_rt['route_inited'] == 1,
+          "record carries the 4 route fields")
+    check(all(k in REQUIRED_RECORD_KEYS for k in
+              ('route_sysfacts', 'route_decline', 'route_infer', 'route_inited')),
+          "route_sysfacts/decline/infer/inited are REQUIRED_RECORD_KEYs")
+    # HONESTY (the load-bearing one): the three decisions deliberately do NOT sum to answered.
+    # 2+1+3 = 6 decisions against control_in_answered = 3 — an INFER decision that later degrades
+    # or times out is counted but never answered (box-proven at B/M1: 5 decisions, 4 answered).
+    check(drt['route_sysfacts'] + drt['route_decline'] + drt['route_infer']
+          != drt['control_in_answered'],
+          "route_* are DECISIONS, not a breakdown of control_in_answered (6 decisions vs 3 answered)")
+
+    # VERSION-TOLERANCE for the B-flip deferral: the LIVE deployed box stays on v11 (254 B) while
+    # the code emits v12 — a v11 packet must decode CLEANLY with the 4 route fields ABSENT (None),
+    # never a fabricated 0 that would render as a live-looking "0 routing decisions".
+    pkt_v11 = build_packet(wire_version=11, control_in_answered=3, flags=0x01 | 0x8000)
+    dv11 = decode_packet(pkt_v11)
+    check(len(pkt_v11) == 254, "synthetic v11 packet is 254 bytes")
+    check(dv11['crc_ok'] is True, "v11 packet crc_ok True (CRC over [:250], NOT [:258] — per-version)")
+    check(dv11['version'] == 11, "v11 packet version byte == 11")
+    check(dv11['control_in_answered'] == 3, "v11 packet: control_in fields still decode")
+    check(dv11['route_sysfacts'] is None and dv11['route_decline'] is None
+          and dv11['route_infer'] is None and dv11['route_inited'] is None,
+          "v11 packet: route fields ABSENT (None) — no misparse of the live deployed box")
+    rec_v11 = packet_to_record(dv11)
+    check(set(rec_v11.keys()) == set(REQUIRED_RECORD_KEYS),
+          "v11 record still carries the full key contract (route keys present, valued None)")
+    # v10 must ALSO still degrade cleanly now that two tails exist.
+    check(dv10['route_sysfacts'] is None and dv10['route_inited'] is None,
+          "v10 packet: route fields ABSENT (None) too")
+
     # --- N-c-3a: iter_pcap_telemetry on a synthetic 1-packet pcap ---
     pcap = _build_pcap_one(pkt, ts_s=1700000001)
     tf = tempfile.NamedTemporaryFile(suffix='.pcap', delete=False)
@@ -430,8 +477,10 @@ def main():
     meta_keys = set(golden['meta']['keys'])
     check(meta_keys == set(REQUIRED_RECORD_KEYS),
           "golden meta.keys == REQUIRED_RECORD_KEYS (fixture matches receiver output)")
-    check(golden['meta']['size'] == 254 and golden['meta']['fmt'] == FMT,
-          "golden meta fmt/size match the wire format")
+    # Derived from the receiver's CURRENT-wire alias, not a literal — a future size bump then
+    # cannot leave this check silently pinned to a stale number (it was hardcoded 254 at v11).
+    check(golden['meta']['size'] == PKT_SIZE and golden['meta']['fmt'] == FMT,
+          "golden meta fmt/size match the wire format (%d)" % PKT_SIZE)
 
     kind_expect = {1: 'STATS', 2: 'INFER', 3: 'STATE'}
     internal = ('magic', 'crc32', 'crc_calc')

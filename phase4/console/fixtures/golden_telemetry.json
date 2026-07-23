@@ -1,8 +1,8 @@
 {
   "meta": {
     "comment": "Golden /events contract for phase4/console. 'keys' MUST equal set(packet_to_record(...).keys()); the key-contract test (test_telemetry_receiver.py) enforces it. Regenerate golden.pcap via phase3/scripts/gen_golden_pcap.py (CI gates drift). 'flags' are names (telemetry_fixture.FLAG_BITS); other fields are build_packet overrides; label/ts_s/ts_frac/corrupt are fixture-only. NOTE: the 'infer' frame is a SYNTHETIC all-features-on pin frame (SHIELD_LEARN/SEMANTIC are gated-off in the shipped deploy; its nonzero action/monitor counts exist to give the e2e value-pins teeth) \u00e2\u20ac\u201d it is NOT a real capture.",
-    "fmt": "<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHHHHIHHHBBHBBHHBBHHII",
-    "size": 254,
+    "fmt": "<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHHHHIHHHBBHBBHHBBHHIHHHBBI",
+    "size": 262,
     "keys": [
       "recv_ts",
       "version",
@@ -52,6 +52,10 @@
       "control_in_answered",
       "control_in_blocked",
       "control_in_dropped",
+      "route_sysfacts",
+      "route_decline",
+      "route_infer",
+      "route_inited",
       "cache_growth_count",
       "log_cursor",
       "infer_gen_tokens",
@@ -193,7 +197,11 @@
       "last_behavior": 5,
       "control_in_answered": 3,
       "control_in_blocked": 1,
-      "control_in_dropped": 5
+      "control_in_dropped": 5,
+      "route_sysfacts": 2,
+      "route_decline": 1,
+      "route_infer": 3,
+      "route_inited": 1
     },
     {
       "label": "state",

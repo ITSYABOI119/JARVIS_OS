@@ -219,6 +219,52 @@ def main():
             expect(page.get_by_text('Cache hit').first).to_be_visible(timeout=10000)
             check(True, "Routing renders the live workload split (q_hits/q_infer/q_heartbeat/q_shield)")
 
+            # (6-6/B/M2) PIN the Control-IN routing card. The golden 'infer' frame carries
+            # route_inited=1 + sysfacts=2 / decline=1 / infer=3. Three things must hold:
+            #  (a) route_inited drives live-vs-gated (the card is LIVE on this frame);
+            #  (b) all three rendered counts == the live route_* fields (TEETH: fails on any
+            #      mis-wire, a '—', or a removed row);
+            #  (c) the DECISIONS framing renders and NO answered-breakdown total appears.
+            # (c) matters most: 2+1+3 = 6 decisions while control_in_answered is 3, so a console
+            # that presented these as a breakdown of answered would be visibly self-contradictory.
+            rt_ok = False
+            rt_dbg = None
+            deadline = time.time() + 12
+            while time.time() < deadline:
+                snap = page.evaluate(
+                    "() => {"
+                    " const rec = (window.JarvisTelemetry.getState().latest) || {};"
+                    " const want = { 'system-facts (answered from box state)': rec.route_sysfacts,"
+                    "                'declined (no source for it)': rec.route_decline,"
+                    "                'inference (to the model)': rec.route_infer };"
+                    " const got = {};"
+                    " Array.from(document.querySelectorAll('div')).forEach(d => {"
+                    "   const t = d.textContent.trim();"
+                    "   if (Object.prototype.hasOwnProperty.call(want, t) && d.previousElementSibling) {"
+                    "     got[t] = d.previousElementSibling.textContent.trim();"
+                    "   }"
+                    " });"
+                    " const body = document.body.innerText.toLowerCase();"
+                    " return { inited: rec.route_inited, want, got,"
+                    "          decisions: body.indexOf('routing decision') >= 0,"
+                    "          notbreakdown: body.indexOf('not a breakdown of queries answered') >= 0,"
+                    "          banned: body.indexOf('breakdown of answered') >= 0"
+                    "                  || body.indexOf('sum to answered') >= 0 };"
+                    "}")
+                rt_dbg = snap
+                if snap['inited'] == 1 and len(snap['got']) == 3:
+                    matched = all(
+                        str(snap['got'][k]).replace(',', '') == str(snap['want'][k])
+                        for k in snap['want'])
+                    if matched and snap['decisions'] and snap['notbreakdown'] and not snap['banned']:
+                        rt_ok = True
+                        break
+                time.sleep(0.1)
+            check(rt_ok,
+                  "(6-6/B/M2) Control-IN routing card: route_inited drives live, all 3 counts render "
+                  "== live route_* fields, DECISIONS framing present, no answered-breakdown (snap=%r)"
+                  % (rt_dbg,))
+
             # --- Models screen renders; bench speeds carry the llama.cpp provenance ---
             page.get_by_title('Models', exact=True).click()
             expect(page.get_by_text('Quality bench-off')).to_be_visible(timeout=10000)
