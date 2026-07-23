@@ -10,10 +10,11 @@
  * JARVIS_MONITORS (6-1, 2026-07-09), JARVIS_WAKE (6-2, 2026-07-12),
  * JARVIS_PROACTIVE (6-3, 2026-07-13), JARVIS_CONTROL_IN (6-5 FLIP, 2026-07-21 — the
  * two-way conversation channel is live whenever JARVIS runs), and JARVIS_CONTROL_IN_RECALL
- * (6-5/M5-recall FLIP, 2026-07-22 — cross-session exact-repeat recall). All other
- * diagnostic/feature flags are 0 — including JARVIS_ROUTING (6-6/B/M1, gated pending its box
- * proof + flip) — and every *_PROBE stays OFF in deploy (the box never induces synthetic
- * events), as do JARVIS_G3_AB and JARVIS_DBG_BOOT_LOG. Enable diagnostics as needed.
+ * (6-5/M5-recall FLIP, 2026-07-22 — cross-session exact-repeat recall), and JARVIS_ROUTING
+ * (6-6 B FLIP, 2026-07-23 — the control-IN query router: SYSTEM-FACTS answered from PA state /
+ * DECLINE canned / INFER to the model). All other diagnostic/feature flags are 0, and every
+ * *_PROBE stays OFF in deploy (the box never induces synthetic events), as do JARVIS_G3_AB and
+ * JARVIS_DBG_BOOT_LOG. Enable diagnostics as needed.
  */
 
 #ifndef JARVIS_DEBUG_H
@@ -438,10 +439,16 @@
  * traffic. An embedding mechanism is a separate later arc (goal doc §8).
  *
  * Requires CONTROL_IN (it is the control-IN route) and ACTIONS (the shared exit writes the JACT
- * audit record). Default 0 -> the whole block compiles out; main.c.obj stays object-identical
- * (route.c is still LINKED but never called — it is host-pure and inert). */
+ * audit record).
+ *
+ * DEFAULT-ON since the B FLIP 2026-07-23 (supervised, bare metal, boot_id=38): the deployed box
+ * routes control-IN queries for real. SYSFACTS proven live-state by a value that ADVANCES with
+ * elapsed time across sends; DECLINE canned-not-fabricated; INFER coherent. The flip ran TWICE —
+ * attempt 1 (boot 37) was ABORTED when the operator's improvised V-INFER question was wrongly
+ * DECLINEd by the then-bare-noun rule (fixed in 5224a85: DECLINE now requires a status anchor).
+ * Setting it back to 0 compiles the whole block out (route.c stays linked but inert). */
 #ifndef JARVIS_ROUTING
-#define JARVIS_ROUTING 0
+#define JARVIS_ROUTING 1
 #endif
 #if JARVIS_ROUTING && !(JARVIS_CONTROL_IN && JARVIS_ACTIONS)
 #error "JARVIS_ROUTING wires into pa_ctrl_gate and shares its signed+AUDITED exit -> requires JARVIS_CONTROL_IN && JARVIS_ACTIONS"

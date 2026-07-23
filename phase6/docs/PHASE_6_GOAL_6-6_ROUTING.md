@@ -1,6 +1,6 @@
-# Phase 6 Goal 6-6 — Query Routing (≥95%) — PLAN-FIRST
+# Phase 6 Goal 6-6 — Query Routing (≥95%) — **COMPLETE (FLIPPED DEFAULT-ON 2026-07-23)**
 
-**Status: PLAN-FIRST, awaiting user sign-off. NO code/flag/wire changes — docs only.** Grounded by a
+**Status: COMPLETE.** `JARVIS_ROUTING` is default-ON; the deployed control-IN router is live. Grounded by a
 5-lens research pass + a 4-lens adversarial pre-mortem (2026-07-22).
 
 > Line-number caveat: every `file:line` below was verified once at authoring against HEAD, but line
@@ -41,19 +41,90 @@ control-IN query to the correct **HANDLER** — SYSTEM-FACTS (answer from real b
 (Gemma) / DECLINE (a status-shaped query with no source) — at **≥95%** on a **keyword-BLIND held-out
 suite**, with the reply flowing through the existing signed + audited control-IN exit.
 
-**Done-when:**
+**Done-when — ALL MET 2026-07-23 (`JARVIS_ROUTING` FLIPPED DEFAULT-ON):**
 
-- [ ] A held-out, **keyword-BLIND** labeled suite scores **≥95% correct-handler accuracy** (host, CI).
-- [ ] SYSTEM-FACTS answers **ONLY** from a whitelisted set of human-meaningful box-state fields; a
+- [x] A held-out, **keyword-BLIND** labeled suite scores **≥95% correct-handler accuracy** (host, CI).
+      **HELDOUT 70/73 = 95.89%**, DEV 64/64 = 100%, **0 INFER misroutes** in either split.
+- [x] SYSTEM-FACTS answers **ONLY** from a whitelisted set of human-meaningful box-state fields; a
       no-source status query is an explicit **DECLINE** ("I don't track that"), **NEVER** a fabricated
-      inference.
-- [ ] The SYSTEM-FACTS reply uses the **SAME** signed + audited exit as INFERENCE (`ctrl_send_reply`
+      inference. Box-proven (boot 38).
+- [x] The SYSTEM-FACTS reply uses the **SAME** signed + audited exit as INFERENCE (`ctrl_send_reply`
       verdict 0 + `ctrl_in_jact` EXECUTED + `g_ctrl_in_answered++`) — no parallel path.
-- [ ] Live on the box (control-IN path), gated `JARVIS_ROUTING` default-0, then flipped default-ON with
-      box proof; telemetry + a control-IN-scoped console pane surface it.
-- [ ] Honest metric: **≥95% measures a hand-built held-out suite, NOT production traffic.** The dedicated
+- [x] Live on the box (control-IN path), gated `JARVIS_ROUTING` default-0, then flipped default-ON with
+      box proof; telemetry (v12) + a control-IN-scoped console pane surface it.
+- [x] Honest metric: **≥95% measures a hand-built held-out suite, NOT production traffic.** The dedicated
       control-IN store @ LBA 21,140,000 now accumulates a real corpus to sample/validate against over
       time.
+
+---
+
+## 2a. FLIP EVIDENCE (supervised, bare metal, 2026-07-23)
+
+The flip ran **TWICE by design**, and the first attempt is the more valuable record.
+
+**Attempt 1 (boot_id=37) — ABORTED.** SYSFACTS and DECLINE passed, but the V-INFER leg — a question
+the **operator improvised at the keyboard**, per the M4d V1 discipline that an invented query cannot
+be a cache hit — came back wrong:
+
+> `"In one sentence, why doesn't adding more CPU cores speed up a single-threaded program?"`
+> → **`"I don't track that."`**
+
+A controlled re-send differing by **exactly one word** ("CPU cores" → "cores") returned a correct
+coherent Gemma answer, isolating the trigger to the bare noun `cpu`. `route_infer` stood at **0** for
+the entire boot: the INFER path had never once been exercised on hardware. Flip **aborted**, box
+reverted to `a28d34a0`, defect fixed first (`5224a85`).
+
+**Attempt 2 (boot_id=38) — PASSED**, on the fixed image `a865b830`:
+
+| Leg | Evidence |
+|---|---|
+| V-SYSFACTS | `up 130 seconds` → `up 196 seconds` — the value **advances with real elapsed time** across sends, which neither a cache nor the model could do ⇒ provably rendered from live PA state |
+| V-DECLINE | `"I don't track that."` for `what is your cpu usage?` and `how much disk space is free` — declined, never fabricated |
+| V-INFER | the operator's **verbatim** question now returns a correct coherent Gemma answer |
+| On-wire v12 | `version=12`, all `crc_ok`, `route_inited=1`, **route_sysfacts=3 / route_decline=2 / route_infer=1** — matching the send transcript exactly |
+| Health | `control_in_answered=6`, `dropped=0`, `err=0`, NN=6, 0 faults |
+| Audit teeth | every `action=5` trigger is one of the two fixed literals; a grep for every raw query string returns **0** — the audit never records attacker text |
+
+Every reply was `verdict=0` with **both `crc_ok` and `hmac_ok`** (signed by the box, verified at the
+receiver).
+
+---
+
+## 2b. HONEST LIMITS — carried, not glossed
+
+These are the conditions under which the ≥95% is true. None of them is a defect; all of them bound
+what may be claimed.
+
+- **(a) ≥95% is a 67→73-item KEYWORD-BLIND HELD-OUT POINT ESTIMATE, not a production-accuracy
+  guarantee.** The live validation proved exactly why: the original suite scored 95.52% *with a real
+  defect present*, because every DECLINE case in both splits was a genuine status query and the
+  DECLINE-vs-INFER boundary was never exercised. A hand-built suite measures what its author thought
+  to test. The real corpus accumulating in the dedicated control-IN store @ LBA 21,140,000 is the
+  future, larger validation set.
+- **(b) The route counts are ROUTING DECISIONS, not a breakdown of answered.** They are counted at
+  classification time, so an INFER decision that later degrades or times out is counted but never
+  answered; the three do not sum to `control_in_answered`. The console is gate-pinned against
+  presenting them as a breakdown.
+- **(c) Mixed-build recall edge.** A ROUTING=0 build reading a ROUTING=1 build's episodic records
+  could inject a stale "up N seconds" note as a preamble. Narrow, mixed-build-only, no safety impact
+  (routing short-circuits before recall whenever ROUTING=1, so a stale system fact can never be
+  served while routing is on).
+- **(d) DECLINE fires on ANCHORED known-untracked metrics only; ambiguity fails toward INFER.** After
+  the `5224a85` retune a metric noun requires a status anchor (usage/quantity word, or a
+  possessive/self reference; wall-clock takes its own specific anchors). A conceptual question that
+  merely contains the noun goes to the model. This is the module's stated conservative rule, now
+  actually enforced rather than merely documented.
+- **(e) This is a KEYWORD router, not a semantic one.** It has no notion of meaning; it matches words.
+  Paraphrases outside the keyword tables fail toward INFER (safe, but unhelpful for SYSFACTS), and
+  the 3 residual held-out misses are typo probes for exactly that reason. **Semantic/embedding routing
+  is Phase C**, a separate future arc (§8) — 6-6 ships the honest keyword router.
+- **(f) Cosmetic, on the reply path:** Gemma answers occasionally carry `<turn|>`/`<eos>` special
+  tokens into the user-visible reply text (observed at both boots). Not safety-relevant, same family
+  as the `<|channel>` artifact recorded in the 6-5 recall work; a shared reply-sanitiser improvement
+  would benefit both paths.
+- **(g) Unrelated open item, re-observed:** boot 37 logged `[CTRL-IN-STATS] … drop=6 (parse=6 …)`.
+  Frozen at 6, no answered query affected; the pre-existing unexplained parse-drop item, worth a look
+  during the 6-7 soak.
 
 ---
 
