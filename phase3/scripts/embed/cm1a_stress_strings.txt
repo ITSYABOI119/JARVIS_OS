@@ -1,0 +1,33 @@
+it's a trap
+don't do that
+we've been here
+I'll be back
+you're right
+they'd know
+can't stop won't stop
+port 51000 is open
+192.168.100.143
+boot 37 uptime 175600
+3.14159 is pi
+the year 2026
+what?! really?
+hello, world.
+key:value pairs
+(parens) and [brackets]
+int main() { return 0; }
+for (i=0; i<10; i++)
+cache_hash(x) returns
+0xDEADBEEF hex
+what is your uptime?
+how many workers do you have right now?
+explain the TCP/IP stack
+what's 12 times 7?
+why doesn't more RAM help?
+UPPERCASE WORDS
+CamelCaseIdentifier
+snake_case_name
+a-b_c/d slashes
+cafe resume naive
+double  space  words
+what is a page fault???
+the quick brown fox jumps

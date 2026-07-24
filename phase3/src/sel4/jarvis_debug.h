@@ -474,6 +474,20 @@
 #error "JARVIS_ROUTING_PROBE must not co-run with the other *_PROBE flags (replay-floor resets / synthetic-anomaly / respawn / terminal g_pb_dead collisions)"
 #endif
 
+/* ── Phase C (semantic embedding) / C/M1a: the Qwen3-Embedding-0.6B host path (default: 0) ──────
+ * When 1, the engine gains the qwen/embed tokenization + (Stage 2) embed-mode forward for the
+ * co-resident Qwen3-Embedding-0.6B model used by the semantic-recall lane (Phase C). STAGE 1
+ * (this milestone) is TOKENIZATION ONLY: the qwen GPT-2/qwen2 pre-split + the add_eos append, on
+ * the qwen/embed path ONLY, gated so the DEPLOYED SentencePiece/Gemma tokenizer is byte-identical
+ * at EMBED=0. The parity GATE (host, model-gated, NOT CI) is the 15-probe token-id match vs
+ * `phase3/scripts/embed/golden_meta.json`. Stage 2 (RoPE-NEOX + the gated embed-forward + vector
+ * parity) is a separate milestone gated on Stage 1 GREEN. Default 0 -> the whole qwen/embed path
+ * compiles out; the deployed engine is unaffected. (Box wiring — a co-resident 2nd GGUF, MSG_EMBED
+ * IPC, OFF object-identity — is C/M1b, and adds the ACTIONS/CONTROL_IN deps + #error guards then.) */
+#ifndef JARVIS_EMBED
+#define JARVIS_EMBED 0
+#endif
+
 /* Phase 6 K/M2a-2 reuse-in-place respawn spike (box-only KVM measurement; SYSTEM_DESIGN
  * §4.1/§4.2). When 1, Process B gains a muslc-init-safe `pb_restart_entry` (re-enters PAST
  * musl's one-time init on a dedicated ABI-aligned restart stack, REUSING the warm model

@@ -49,8 +49,18 @@ f. The GATE is OUR data, not MTEB (narrow/technical domain). Prove-it-or-don't, 
   EmbeddingGemma) + a mean-projection ablation, kept bge as reference. Golden vectors SAVED for the
   winner (`golden_vectors.npz` + `golden_meta.json`, sym:none + frozen mean-projection). See the C/M0.5
   FINDINGS section. **This inverts the "we must fine-tune" premise — see C/M1a.**
-- **C/M1a (HOST parity — the GATE before any box work): FOUNDATION DONE 2026-07-24; the C-engine port is
-  the remaining phase.** Prove the deployed C engine reproduces reference Qwen3-Embedding-0.6B vectors on
+- **C/M1a (HOST parity — the GATE before any box work): FOUNDATION + STAGE 1 (token parity) DONE
+  2026-07-24; Stage 2 (RoPE + embed-forward + vector parity) is the remaining phase.** STAGE 1 result
+  (token parity): **15/15 golden probes byte-EXACT with ZERO tokenizer.c changes** — the merge-rank
+  scaffold (`gguf_vocab.c` merges→rank-scores + the GPT-2 Ġ marker + the harness EOS-151643 append)
+  already reproduces the qwen tokenization, INCLUDING the contraction/punctuation cases the pre-mortem
+  predicted would break. A 33-string robustness stress (realistic control-IN inputs) is **32/33**; the
+  ONLY divergence is CONSECUTIVE/DOUBLE SPACES (a GPT-2 whitespace pre-tokenization nuance), which would
+  need the full pre-split infra (pre-token boundaries) to close — deferred as a scoped C/M2-hardening
+  step (the committed `cm1a_stress_strings.txt` is its verification gate), NOT rushed into Stage 1 where
+  it would risk regressing the 32/33+15/15 that pass. Per "measure first, fix only what diverges," no
+  tokenizer.c change shipped → the deployed SentencePiece/Gemma path is byte-identical at EMBED=0 by
+  construction. See C/M1a FINDINGS (Stage 1). Prove the deployed C engine reproduces reference Qwen3-Embedding-0.6B vectors on
   the host BEFORE touching the box. FOUNDATION (done, `cm1a_golden.py`): the TWO-GOLDEN methodology —
   `gguf_golden.npz` (official Qwen GGUF at Q8_0 via llama.cpp, last-pool+L2; the TIGHT engine-vs-engine
   ~1e-4 target, its token-ids the token-parity reference) + `golden_vectors.npz` (ST F32, sym:none, +
@@ -249,9 +259,38 @@ BPE (merge the lowest-rank pair); the merges list is already loaded in `gguf_voc
 harness + CI. All `#if JARVIS_EMBED`-gated from the start.
 
 **Honest status:** the foundation (goldens + token-parity reference + measured tolerance + config) is the
-gating prerequisite and is DONE + committed. The C-engine port is the substantial remaining phase — a
-verification-heavy effort (exact token-parity, then 1e-4 vector parity) that the milestone deliberately
-gates on rather than rushes. Delivered in dependency order; the port is next.
+gating prerequisite and is DONE + committed.
+
+### C/M1a Stage 1 — TOKEN PARITY (2026-07-24): 15/15 GATE PASS, no tokenizer.c change needed
+
+`embed_tokenize_probe.c` (host, `#if JARVIS_EMBED`) loads the Qwen3-Embedding-0.6B GGUF vocab via the
+deployed `gguf_vocab` + `tokenizer` path, encodes the 15 golden probes, appends EOS 151643, and prints
+the token-ids; `cm1a_token_parity.py` diffs them EXACTLY vs `golden_meta.json`.
+
+- **GATE: 15/15 byte-EXACT** — including the contraction cases the pre-mortem predicted would diverge
+  ("what's" → `[what, 's]`, "why doesn't" → `[why, doesn, 't]`). **NO tokenizer.c change was needed.**
+  The premise ("the merge-rank scaffold exists; the gaps are the pre-split + add_eos") was HALF right:
+  the scaffold (`gguf_vocab.c` merges→`score = -merge_index` + the GPT-2 Ġ space marker) already
+  produces the correct qwen tokenization, and `add_eos` (151643) is the harness's job at Stage 1 (the
+  box embed-forward appends it at Stage 2). The predicted **GPT-2 pre-split gap did NOT materialize on
+  the gate**.
+- **Robustness stress: 32/33** (`cm1a_stress_strings.txt`, committed — realistic control-IN inputs:
+  contractions, numbers, IPs, punctuation, code, camelCase/snake_case, non-ASCII, "what is your
+  uptime?"). The **ONLY divergence is consecutive/double spaces** ("double  space  words" → the C path
+  merges `Ġ+Ġ→ĠĠ` (256) while GPT-2/qwen2 keeps the word's leading space separate → `[220, Ġspace]`).
+  This is a genuine but narrow gap that needs the FULL pre-split infrastructure (pre-token boundaries in
+  the merge loop) — there is no surgical whitespace-only fix (leading indentation `  code`→`ĠĠcode` IS
+  correct and must stay). **Deferred as a scoped C/M2-hardening step**, with the committed stress set as
+  its verification gate; NOT rushed into Stage 1, where a botched pre-split would regress the 32/33+15/15
+  that currently pass. Honors "measure first; fix only what diverges; the 15-probe parity is the GATE."
+- **Deployed tokenizer unaffected at EMBED=0**: zero lines added to `tokenizer.c` (only the new
+  `JARVIS_EMBED` flag default-0 + the standalone harness), so byte-identical by construction; the harness
+  compiles to an inert stub. No CI unit test added — there is NO new deterministic tokenizer logic to
+  test (the parity harness is model-gated → local, the existing model-gated-SKIP precedent), stated
+  honestly rather than adding a vacuous test.
+
+Stage 2 (RoPE-NEOX keyed off the qwen arch + the gated embed-mode forward + vector parity ≤1e-4 vs
+`gguf_golden` and ≤1.27e-3 vs the F32 golden) is a separate milestone gated on this Stage-1 green.
 
 ## 4. Risks / honest limits
 - ~~Off-the-shelf may miss ROUTING (weak zero-shot); recall/cache are the safe wins.~~ **INVERTED by
