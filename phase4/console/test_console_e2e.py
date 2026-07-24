@@ -809,7 +809,8 @@ def main():
                 "     if (!input || !send) return;"
                 "     const body = document.body.innerText;"
                 "     window.__ctlPin.last = { ci, disabled: input.disabled, sendDisabled: send.disabled };"
-                "     if (!ci && input.disabled && body.indexOf('gated off on the box') >= 0)"
+                "     if (!ci && input.disabled && body.indexOf('gated off on the box') >= 0"
+                "         && body.indexOf('does not report') >= 0 && body.indexOf('2026-07-21') >= 0)"
                 "       window.__ctlPin.gated = true;"
                 "     if (ci && !input.disabled) {"
                 "       window.__ctlPin.enabled = true;"
@@ -837,7 +838,9 @@ def main():
 
             check(bool(ctl_dbg and ctl_dbg.get('gated')),
                   "(6-5/M3-4b) GATED-OFF state renders: no CONTROL_IN flag -> input disabled + the "
-                  "'gated off on the box' note (watcher=%r)" % (ctl_dbg,))
+                  "'gated off on the box' note WITH the post-flip framing RENDERED ('does not "
+                  "report' + default-ON since 2026-07-21 — a comment-only marker cannot satisfy "
+                  "this; the source-grep gate alone could be) (watcher=%r)" % (ctl_dbg,))
             check(bool(ctl_dbg and ctl_dbg.get('enabled')),
                   "(6-5/M3-4b) ENABLED state renders: a CONTROL_IN-flagged frame -> input enabled "
                   "(watcher=%r)" % (ctl_dbg,))

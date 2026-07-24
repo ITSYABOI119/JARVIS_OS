@@ -324,11 +324,19 @@ def main():
           "the input is disabled from the gating predicate (not unconditionally enabled)")
     check('canSend' in ctl and 'disabled={!canSend}' in ctl,
           "the Send button is disabled from the same predicate + the byte cap")
-    # TEETH #2: honest gated-off explanation must be on-screen for the DEPLOYED (flag-absent) box.
+    # TEETH #2: honest disabled-state explanation, POST-FLIP. Control-IN is DEFAULT-ON in the
+    # deployed image (the 6-5 flip, 2026-07-21), so a record without the flag means THIS frame
+    # does not report the channel (stale frame / older packet version / an older or
+    # JARVIS_CONTROL_IN=0 build) — never "waiting for the flip". The stale pre-flip copy
+    # ("the send path activates at the flip") must not resurrect.
+    check('does not report' in ctl.lower(),
+          "disabled state frames a flag-less record as THIS frame not reporting the channel")
+    check('default-on' in ctl.lower() and '2026-07-21' in ctl,
+          "disabled state records control-IN as default-ON in the deploy (since 2026-07-21)")
     check('gated off on the box' in ctl.lower(),
-          "disabled state explains control-IN is gated off on the box")
-    check('activates at the flip' in ctl.lower(),
-          "disabled state says the send path activates at the flip (not 'coming soon' fiction)")
+          "disabled state still names the honest JARVIS_CONTROL_IN=0 possibility (gated off on the box)")
+    check('activates at the flip' not in ctl.lower(),
+          "the stale pre-flip 'activates at the flip' copy is gone (the flip happened 2026-07-21)")
     # TEETH #3: the honesty ceiling, on the send surface itself.
     check('defined abuse class' in ctl.lower(),
           "Control-IN carries the 'defined abuse class' framing")
