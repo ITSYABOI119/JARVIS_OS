@@ -1,0 +1,42 @@
+{
+  "_comment": "Phase C / C/M0 semantic-recall gate corpus. HAND-AUTHORED. A pair = (stored turn = a PRIOR control-IN query, later = a NEW query about the SAME topic but LEXICALLY DIFFERENT so 6-5's exact-FNV-1a-over-the-query recall CANNOT match it -- only meaning-based query-to-query matching can). SYMMETRIC use case (both sides are queries), the faithful semantic extension of 6-5's key-over-the-query match. Split into two subsets after the C/M0 methodology finding: 'distinct' = topically DISTINCT stored turns (unambiguous ground truth -> the FAIR gate), 'adversarial' = a near-synonym cluster where several stored turns are siblings (a DISAMBIGUATION stress test, reported SEPARATELY -- exact-top-1 is legitimately hard there). HONEST: small + hand-authored -> a SIGNAL that gates C/M1, NOT a guarantee; the real validation is on-box with the accumulating control-IN store @21,140,000.",
+
+  "distinct_positives": [
+    { "stored": "what is a page fault",                       "later": "what happens when a program reads memory that isn't currently loaded into RAM" },
+    { "stored": "how does the tcp three-way handshake work",  "later": "what are the steps two hosts take to open a tcp connection" },
+    { "stored": "what is a hash table",                       "later": "which data structure gives average constant-time lookup by key" },
+    { "stored": "what does DMA do",                           "later": "how can a peripheral move data into memory without the CPU copying it" },
+    { "stored": "how does DNS work",                          "later": "how is a website name turned into a numeric IP address" },
+    { "stored": "what is garbage collection",                 "later": "how does a language runtime automatically free memory that is no longer referenced" },
+    { "stored": "what does a compiler do",                    "later": "what translates human-written source code into machine instructions" },
+    { "stored": "why do CPUs have caches",                    "later": "why keep a small fast memory between the processor and main RAM" },
+    { "stored": "what is public-key encryption",              "later": "how can two parties communicate secretly without sharing a password beforehand" },
+    { "stored": "what is recursion",                          "later": "what do you call a function that calls itself to solve a smaller subproblem" },
+    { "stored": "how does binary search work",                "later": "how do you find a value in a sorted array in logarithmic time" },
+    { "stored": "what is a mutex",                            "later": "how do you keep two threads from writing the same variable at the same time" },
+    { "stored": "what is a container like Docker",            "later": "how do you package an app with its dependencies so it runs anywhere" },
+    { "stored": "what is a load balancer",                    "later": "how do you spread incoming requests across several backend servers" },
+    { "stored": "what is a rest api",                         "later": "how do web clients talk to a server over http using resources and verbs" },
+    { "stored": "what is a file descriptor",                  "later": "what is the small integer the kernel hands you to refer to an open file" }
+  ],
+
+  "adversarial_positives": [
+    { "stored": "what is a mutex",         "later": "how do you protect a critical section so only one thread runs it" },
+    { "stored": "what is a semaphore",     "later": "how do you allow at most N threads into a section at once" },
+    { "stored": "what is a spinlock",      "later": "how does a thread wait for a lock by busy-looping instead of sleeping" },
+    { "stored": "what is a page fault",    "later": "what interrupt fires when code touches a page that isn't resident" },
+    { "stored": "what is virtual memory",  "later": "how does each process get the illusion of its own address space" },
+    { "stored": "how does an mmu work",    "later": "what hardware unit translates virtual addresses to physical frames" }
+  ],
+
+  "negatives": [
+    { "later": "what's the capital of France" },
+    { "later": "tell me a joke about cats" },
+    { "later": "what's 12 times 7" },
+    { "later": "recommend a movie to watch tonight" },
+    { "later": "how do you bake sourdough bread" },
+    { "later": "what year did world war two end" },
+    { "later": "how do plants perform photosynthesis" },
+    { "later": "what's a good beginner running plan" }
+  ]
+}

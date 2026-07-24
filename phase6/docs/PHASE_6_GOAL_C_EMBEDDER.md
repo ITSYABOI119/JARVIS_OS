@@ -37,14 +37,13 @@ f. The GATE is OUR data, not MTEB (narrow/technical domain). Prove-it-or-don't, 
    discipline.
 
 ## 3. Milestones
-- **C/M0 (OFF-BOX, Python — gates the whole arc):** prototype EmbeddingGemma-300M (strong-reuse
-  candidate) AND bge-small-en-v1.5 (33M cheap baseline it must beat) in Python/llama.cpp; embed our
-  own labeled data (routing_suite.h paraphrase clusters + the control-IN seeds + a small hand-authored
-  "state a fact / ask a different question" recall set); score the two-part benchmark: (1) nearest-
-  centroid HELDOUT accuracy, (2) positive/negative separation margin. SAVE the reference vectors
-  (golden, for C/M1 parity). GATE: proceed only if HELDOUT paraphrase clustering is strong (target
-  >=~90%) AND positives/negatives are cleanly threshold-separable on held-out data. The score picks
-  the model AND decides off-the-shelf-vs-fine-tune. NO box code.
+- **C/M0 (OFF-BOX, Python — gates the whole arc): DONE 2026-07-24 — GATE = DO NOT PROCEED to C/M1 on
+  an off-the-shelf model (see the C/M0 FINDINGS section below).** Prototyped EmbeddingGemma-300M (the
+  strong-reuse candidate) AND bge-small-en-v1.5 (the 33M baseline) — plus, when both fell short, the
+  bigger off-the-shelf probes bge-large-en-v1.5 and e5-large-v2 (§5's "a bigger embedder" contingency)
+  — on OUR labeled data; scored recall (the C/M2 gate) + intent clustering (routing-relevant). The
+  golden-vector save (§4) is DEFERRED — it is C/M1 setup for the CHOSEN model, and the gate reopened
+  the model choice before any box work. Harness + data + raw results: `phase3/scripts/embed/`.
 - **C/M1 (BOX, gated new flag e.g. JARVIS_EMBED default-0; pre-mortem first):** the embed-mode forward
   in PB (pool + L2-norm + skip the LM head; the :1801 tap), the co-resident second GGUF, the MSG_EMBED
   IPC, + THE PARITY HARNESS (C-engine vectors == C/M0 golden to 1e-3). OFF byte-identical. Prove the
@@ -58,9 +57,77 @@ f. The GATE is OUR data, not MTEB (narrow/technical domain). Prove-it-or-don't, 
 - **C/M4+ (LATER, measured-miss-gated):** routing (with the 2070 fine-tune if zero-shot misses) +
   semantic cache. Each its own slice.
 
+## C/M0 FINDINGS (2026-07-24, off-box, RTX 2070; harness `phase3/scripts/embed/cm0_bench.py`)
+
+**GATE DECISION: DO NOT PROCEED to C/M1 on an off-the-shelf model.** No off-the-shelf embedder clears
+the recall bar (~≥90% top-1 WITH clean separation) on our narrow technical domain. This is the
+"prove-it-or-don't" outcome the milestone exists to produce — the gate stopped the arc BEFORE any box
+engine work.
+
+**Results** — recall = the C/M2 GATE (a hand-authored, topically-DISTINCT query→prior-query set,
+symmetric, N=16); adv = a near-synonym disambiguation stress (N=6); intent = nearest-centroid on the
+73-item routing HELDOUT; INFER-FP = the 6-6 conceptual-metric-noun cases clustering with INFER:
+
+| model | dim | recall@1 | recall@3 | adv@1 | clean sep? | intent(routing) | INFER-FP |
+|---|---|---|---|---|---|---|---|
+| bge-small-en-v1.5 | 384 | 56% (9/16) | 69% | 33% | no | 89.0% | 6/6 |
+| **bge-large-en-v1.5** | 1024 | **81% (13/16)** | **88%** | 50% | no (closest, gap 0.08) | 90.4% | 5/6 |
+| e5-large-v2 | 1024 | 50% | 69% | 67% | no | 93.2% | 6/6 |
+| **EmbeddingGemma-300M** (reuse candidate) | 768 | 50% (8/16) | 56% | 33% | no | 83.6% | 4/6 |
+
+**Three decision-relevant findings:**
+1. **Size helps, a lot** — bge-small→bge-large (33M→335M) lifts recall@1 56%→81%. The ceiling is
+   partly model scale, not only domain.
+2. **The strong-reuse candidate LOSES.** EmbeddingGemma-300M — the near-zero-box-engine Gemma-arch path
+   §2a favored — is among the WEAKEST here (50% recall@1, worst top-3, worst intent, worst INFER-FP).
+   A genuine "MTEB doesn't transfer to a narrow domain" result (§2f, now demonstrated, not asserted).
+3. **The plan's lane prediction is INVERTED.** §2c/§4 guessed ROUTING would be the likely off-the-shelf
+   MISS and recall the safe win. The data shows the OPPOSITE: intent clustering is decent off-the-shelf
+   (83–93%), while **RECALL is the hard lane** — and NO model achieves clean separation (see below).
+   Corollary: an off-the-shelf embedder does NOT beat the deployed keyword router for routing either
+   (83–93% centroid vs the 6-6 router's measured 95.89%), so routing is not a free win at C/M4 either.
+
+**The blocker isn't just accuracy — it's SEPARATION (anisotropy).** A sanity check (validated the
+pipeline: obvious paraphrases score 0.90–0.92, correctly above unrelated) also showed every model is
+strongly anisotropic — unrelated everyday sentences sit at cosine ~0.5–0.7 (EmbeddingGemma's
+unrelated-pair floor: min 0.51 / mean 0.62). So no model's weakest true pair clears its strongest
+unrelated pair (all OVERLAP; bge-large is closest at 0.432 vs 0.511). For a RECALL lane that must
+decide "inject a prior answer or not," poor separation = false-recall risk — the exact P6 contamination
+class 6-5 fought to eliminate. A fixed absolute threshold is unreliable here.
+
+**Methodology corrections made before trusting any number** (the numbers moved a lot as these landed —
+recorded so the result is auditable, not cherry-picked):
+- The recall task is SYMMETRIC query-to-query (the faithful extension of 6-5's key-over-the-QUERY
+  match), NOT asymmetric query→document retrieval. Running EmbeddingGemma in the wrong (document-prompt)
+  mode alone dropped it to 16.7% — a misuse, not a result. The harness now SWEEPS the sensible symmetric
+  prompt strategies per model and reports the best (a mild optimistic bias, noted).
+- The first recall corpus packed near-synonyms (page-fault/paging/vm/mmu; mutex/semaphore/spinlock),
+  making exact-top-1 ill-defined. Split into a topically-DISTINCT gate set (fair ground truth) + a
+  separate adversarial near-synonym stress set.
+
+**RECOMMENDED NEXT STEP (reopens the model choice per §5, BEFORE any box work) — a 2070 CONTRASTIVE
+FINE-TUNE of a DECODER-arch (Gemma-arch) embedder.** This is the coherent path because it (a) fixes the
+MEASURED miss (off-the-shelf recall + separation), (b) directly attacks anisotropy — contrastive
+training with in-batch/hard negatives pushes negatives apart, the separation the lane needs, and (c)
+PRESERVES §2a's near-zero-box-engine reuse (a fine-tuned EmbeddingGemma/Gemma-arch embedder still loads
+on the box's existing Gemma path). Note the doc scoped the 2070 fine-tune as a ROUTING contingency; the
+data reassigns it to RECALL. **Off-the-shelf fallback if the fine-tune is deferred:** bge-large-en-v1.5
+(81% top-1 / 88% top-3, best separation) — but at the cost of a NET-NEW BERT engine on the box (§2a's
+rejected-first-choice) AND still no clean separation. Not recommended over the fine-tune.
+
+**Honest caveats on these numbers:** the recall set is tiny and hand-authored (N=16 distinct / 6
+adversarial) → wide error bars (81% = 13/16, ±~1 item is ±6%); the ~90% bar on a hard hand-authored
+paraphrase set is a soft target; the per-model best-of-sweep prompt pick is a mild optimistic bias; and
+this measures OFF-BOX sentence-transformers vectors (the C-engine/GGUF parity is a separate C/M1
+concern, deferred here since the gate did not pass). The real validation was always meant to be on-box
+with the accumulating control-IN store — this is a pre-box SIGNAL that correctly gated the arc.
+
 ## 4. Risks / honest limits
-- Off-the-shelf may miss ROUTING (weak zero-shot); recall/cache are the safe wins. Fine-tune is scoped
-  to the miss, not pre-committed.
+- ~~Off-the-shelf may miss ROUTING (weak zero-shot); recall/cache are the safe wins.~~ **INVERTED by
+  C/M0 (2026-07-24): off-the-shelf misses RECALL (50–81% top-1, no clean separation), while intent/
+  routing clustering is relatively strong (83–93%). The measured miss is in the RECALL lane, so the
+  2070 contrastive fine-tune is reassigned there.** Fine-tune stays scoped to the measured miss, not
+  pre-committed.
 - The pooling/prefix parity trap (§2e) is the top silent-failure risk — the harness is mandatory.
 - A second resident model competes with Gemma for the single box CPU + PB heap; measure the per-query
   embed latency on-box (C/M1) before claiming the recall path stays cheap.
