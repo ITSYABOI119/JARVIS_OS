@@ -48,18 +48,34 @@ f. The GATE is OUR data, not MTEB (narrow/technical domain). Prove-it-or-don't, 
   fine-tune-BASE candidates (Qwen3-Embedding-0.6B decoder / gte-large / mxbai encoders / re-eval'd
   EmbeddingGemma) + a mean-projection ablation, kept bge as reference. Golden vectors SAVED for the
   winner (`golden_vectors.npz` + `golden_meta.json`, sym:none + frozen mean-projection). See the C/M0.5
-  FINDINGS section. **This inverts the "we must fine-tune" premise — see C/M1 / C/M1a.**
-- **C/M1 (BOX, gated new flag e.g. JARVIS_EMBED default-0; pre-mortem first) — NOW THE NEXT STEP (the
-  off-the-shelf base passes, so no fine-tune blocks it):** the embed-mode forward in PB for the Qwen3
-  path (last-token pool + L2-norm + the mean-projection step + skip the LM head), the co-resident second
-  GGUF, the MSG_EMBED IPC, + THE PARITY HARNESS (C-engine vectors == the C/M0.5 golden to 1e-3, INCLUDING
-  the frozen mu mean-projection per `golden_meta.json`). OFF byte-identical. Prove parity before wiring
-  any lane.
-- **C/M1a (2070 CONTRASTIVE FINE-TUNE) — DEMOTED to a MEASURED-MISS CONTINGENCY (was pre-committed).**
-  C/M0.5 shows off-the-shelf Qwen3-Embedding-0.6B already clears the recall bar, so a fine-tune is NOT
-  a prerequisite. Reserve it for AFTER C/M2 IF on-box parity or real control-IN traffic shows a recall
-  gap (e.g. the adversarial near-synonym subset at 66.7% top-1, or real misses). This is the doc's own
-  §2b discipline — "off-the-shelf FIRST; fine-tune only on a MEASURED miss" — now honored by the data.
+  FINDINGS section. **This inverts the "we must fine-tune" premise — see C/M1a.**
+- **C/M1a (HOST parity — the GATE before any box work): FOUNDATION DONE 2026-07-24; the C-engine port is
+  the remaining phase.** Prove the deployed C engine reproduces reference Qwen3-Embedding-0.6B vectors on
+  the host BEFORE touching the box. FOUNDATION (done, `cm1a_golden.py`): the TWO-GOLDEN methodology —
+  `gguf_golden.npz` (official Qwen GGUF at Q8_0 via llama.cpp, last-pool+L2; the TIGHT engine-vs-engine
+  ~1e-4 target, its token-ids the token-parity reference) + `golden_vectors.npz` (ST F32, sym:none, +
+  frozen mu; the loose F32 target) — and the **MEASURED quant floor** (GGUF-vs-ST cosine 0.99915–0.99965
+  → honest F32 tolerance **1.27e-3**, not a guessed 1e-3; the 0.999+ cross-engine cosine also confirms
+  the last-pool + EOS-151643 config). REMAINING (the C-engine port): a merge-RANK BPE path for qwen in
+  `tokenizer.c` (deployed path is score-priority SentencePiece — wrong for qwen; merges already loaded in
+  `gguf_vocab.c`) + RoPE-NEOX for qwen3 + a gated embed-mode forward (last-pool at `llama_quant.c:1801` →
+  skip LM head → L2 → mean-project → L2) + a host harness (`-DJARVIS_EMBED=1 -mavx2 -mfma`) driving the
+  3 parity gates (token-parity GREEN → engine-vs-engine ≤1e-4 → F32 ≤1.27e-3) + the CI step. All engine
+  edits `#if JARVIS_EMBED`-gated from the start. See C/M1a FINDINGS.
+- **C/M1b (BOX — only after C/M1a GREEN, its own pre-mortem):** the second-model plumbing the single-model
+  loader lacks (2nd `model_frame_caps`, a 2nd `MODEL_VADDR_B` region clear of Gemma's ~2962 MB span, 2nd
+  FAT32 find, 2nd `nvme_model_loaded`, 2nd spawn argv) + provisioning (extend `setup_nvme_partition.sh`)
+  + the MSG_EMBED IPC + cap the embed KV/ctx to ~64 tokens + the sequential-dispatch invariant (embed
+  never overlaps a Gemma forward on the shared M3 pool) + measured per-embed latency (n_tokens sequential
+  positions) + OFF object-identity (`main.c.obj`/`inference_server.c.obj`/`llama_quant.c.obj`/
+  `llama_load.c.obj`/`tokenizer.c.obj` byte-identical — the CONTROL_IN_RECALL precedent, NOT
+  always-compiled-uncalled).
+- **Fine-tune (2070 CONTRASTIVE) — a MEASURED-MISS CONTINGENCY, not a pre-committed step.** C/M0.5 showed
+  off-the-shelf Qwen3-Embedding-0.6B already clears the recall bar, so a fine-tune is NOT a prerequisite.
+  Reserve it for AFTER C/M2 IF on-box parity or real control-IN traffic shows a recall gap (e.g. the
+  adversarial near-synonym subset at 66.7% top-1). The doc's own §2b discipline — "off-the-shelf FIRST;
+  fine-tune only on a MEASURED miss" — now honored by the data. (Renamed from the C/M0.5 draft's "C/M1a"
+  to avoid colliding with this host-parity C/M1a.)
 - **C/M2 (BOX, gated):** the RECALL lane — replace g3_select_exact_only with cosine-topk over per-
   record vectors in the dedicated control-IN store @21,140,000 (add a vector column); the semantic
   "state-a-fact/ask-different" recall works; benchmark on the box; the answer-only-preamble hygiene
@@ -192,6 +208,50 @@ fallback); the near-synonym adversarial subset is still only 66.7% top-1 (though
 duplicate disambiguation is the most likely place a later fine-tune would help; per-model best-of-sweep
 prompt pick is a mild optimistic bias; and this is off-box sentence-transformers — the on-box GGUF/
 C-engine parity (INCLUDING the mean-projection) is the C/M1 gate.
+
+## C/M1a FINDINGS (2026-07-24, off-box) — the two-golden parity FOUNDATION (the C-engine port follows)
+
+**The host-parity GATE, set up correctly.** The methodology fix the pre-mortem named — never gate the C
+engine against ONE golden, because that conflates a PORT bug with quant error — is built and validated
+off-box (`cm1a_golden.py`):
+
+- **GGUF golden** (`gguf_golden.npz`): the OFFICIAL `Qwen/Qwen3-Embedding-0.6B-GGUF` at **Q8_0** (the box
+  quant), embedded via llama-cpp-python in last-token mode. The **TIGHT engine-vs-engine target** — the C
+  engine runs the same quant, so a C-vs-GGUF gap is a PORT bug, isolated from quant error (~1e-4). Its
+  per-probe **token-ids** (in `golden_meta.json`, incl. the appended EOS 151643) are the **token-parity
+  reference** — the gate to pass FIRST, before any vector compare.
+- **F32 golden** (`golden_vectors.npz`): the sentence-transformers F32 vectors (sym:none, last-pool + L2,
+  NO mean-projection) + the frozen `mu`. The **loose end-to-end** target.
+- **MEASURED quant floor** (not guessed): GGUF-Q8_0-vs-ST-F32 cosine = **0.99915–0.99965** (mean 0.99950,
+  max per-probe gap 8.5e-4) → the honest **F32 tolerance = 1.27e-3** (Q8_0 is near-lossless, TIGHTER than
+  the pre-mortem's ~3e-3 estimate). The 0.999+ cosine between two INDEPENDENT engines (llama.cpp vs
+  sentence-transformers) also cross-confirms the config: last-token pooling + EOS-151643 append are
+  consistent both sides (a wrong pooling/EOS would collapse the cosine).
+
+**Config nailed from the GGUF metadata** (the C engine must match exactly): pooling = LAST token;
+`add_bos=false`; `add_eos=true`, EOS = 151643 (`<|endoftext|>`) appended + pooled; pre-tokenizer = qwen2
+(GPT-2-style byte-level rank-BPE); prompt = sym:none (no instruction prefix). Example token-parity ref:
+"what is a mutex" → `[12555, 374, 264, 30863, 151643]`.
+
+**The three parity gates** (in `golden_meta.json`, for the C-engine port): (1) token-parity GREEN for all
+15 probes (a single differing id ⇒ tokenizer wrong; fix before any vector compare) → (2) C-engine raw
+(Q8_0, AVX2) vs `gguf_golden` cosine ≥ 1−1e-4 AND report max per-element abs diff (don't trust cosine
+alone under FP-associativity) → (3) C-engine raw vs `golden_vectors` (F32) gap ≤ 1.27e-3 (the measured
+floor).
+
+**Scoping the remaining C-engine port** (verified against the code): the deployed `tokenizer.c` uses a
+SCORE-priority BPE (SentencePiece "merge the highest-score pair") — WRONG for qwen, which needs merge-RANK
+BPE (merge the lowest-rank pair); the merges list is already loaded in `gguf_vocab.c` (@279). GQA /
+`q_norm` / `k_norm` / `head_dim` / the pooling tap (`llama_quant.c:1801`) are already in-tree
+(one-line asserts, per the risk reframe). So the port's real budget is: (a) the qwen merge-RANK BPE path
++ qwen2 pre-tokenization + EOS append (the biggest item, token-parity-gated), (b) RoPE-NEOX for qwen3,
+(c) the gated embed-mode forward (a SEPARATE function; do NOT touch `qmodel_forward`), (d) the host
+harness + CI. All `#if JARVIS_EMBED`-gated from the start.
+
+**Honest status:** the foundation (goldens + token-parity reference + measured tolerance + config) is the
+gating prerequisite and is DONE + committed. The C-engine port is the substantial remaining phase — a
+verification-heavy effort (exact token-parity, then 1e-4 vector parity) that the milestone deliberately
+gates on rather than rushes. Delivered in dependency order; the port is next.
 
 ## 4. Risks / honest limits
 - ~~Off-the-shelf may miss ROUTING (weak zero-shot); recall/cache are the safe wins.~~ **INVERTED by

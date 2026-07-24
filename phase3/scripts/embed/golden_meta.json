@@ -1,10 +1,189 @@
 {
   "model": "Qwen/Qwen3-Embedding-0.6B",
+  "gguf_repo": "Qwen/Qwen3-Embedding-0.6B-GGUF",
+  "gguf_file": "Qwen3-Embedding-0.6B-Q8_0.gguf",
+  "quant": "Q8_0",
   "kind": "qwen3",
-  "strategy": "sym:none",
-  "mean_projection": true,
   "dim": 1024,
-  "n_probe": 15,
+  "prompt": "sym:none (NO instruction prefix)",
+  "pooling": "last-token (post-final-norm state at llama_quant.c:1801, pre-LM-head)",
+  "eos_appended": 151643,
+  "add_bos": false,
+  "add_eos": true,
+  "pre_tokenizer": "qwen2 (GPT-2-style byte-level rank-BPE)",
   "l2_normalized": true,
-  "note": "C/M1 box parity: the C engine must reproduce these vectors to 1e-3 using the SAME pooling + prompt (sym:none) + L2-norm + mean-projection. mu (if mean_projection) is the frozen single mean direction; apply e'=normalize(e-(e.mu)mu) AFTER pooling."
+  "mean_projection": {
+    "applied_at": "C/M2 downstream (NOT in the parity gate)",
+    "formula": "e' = normalize(e - (e.mu) mu), mu in golden_vectors.npz",
+    "note": "the C/M0.5 winner used mean-projection for CLEAN separation; it is a deterministic post-pool transform, excluded from the C/M1a port gate"
+  },
+  "n_probe": 15,
+  "token_ids": {
+    "what is a page fault": [
+      12555,
+      374,
+      264,
+      2150,
+      14527,
+      151643
+    ],
+    "how does dns work": [
+      5158,
+      1558,
+      44077,
+      975,
+      151643
+    ],
+    "what is a mutex": [
+      12555,
+      374,
+      264,
+      30863,
+      151643
+    ],
+    "how do you find a value in a sorted array in logarithmic time": [
+      5158,
+      653,
+      498,
+      1477,
+      264,
+      897,
+      304,
+      264,
+      10615,
+      1334,
+      304,
+      89936,
+      21220,
+      882,
+      151643
+    ],
+    "what lightweight text format stores structured data as key-value pairs": [
+      12555,
+      29144,
+      1467,
+      3561,
+      10533,
+      32930,
+      821,
+      438,
+      1376,
+      19083,
+      13530,
+      151643
+    ],
+    "how do you protect a critical section so only one thread runs it": [
+      5158,
+      653,
+      498,
+      6016,
+      264,
+      9023,
+      3772,
+      773,
+      1172,
+      825,
+      4516,
+      8473,
+      432,
+      151643
+    ],
+    "what's the capital of France": [
+      12555,
+      594,
+      279,
+      6722,
+      315,
+      9625,
+      151643
+    ],
+    "how do you bake sourdough bread": [
+      5158,
+      653,
+      498,
+      22544,
+      20282,
+      67,
+      1384,
+      16002,
+      151643
+    ],
+    "how long have you been up": [
+      5158,
+      1293,
+      614,
+      498,
+      1012,
+      705,
+      151643
+    ],
+    "what model are you running": [
+      12555,
+      1614,
+      525,
+      498,
+      4303,
+      151643
+    ],
+    "why doesn't adding more cpu cores speed up a single-threaded program": [
+      34634,
+      3171,
+      944,
+      7842,
+      803,
+      17319,
+      35704,
+      4628,
+      705,
+      264,
+      3175,
+      60804,
+      291,
+      2025,
+      151643
+    ],
+    "what is a hash table": [
+      12555,
+      374,
+      264,
+      5175,
+      1965,
+      151643
+    ],
+    "explain how tcp handshake works": [
+      94344,
+      1246,
+      28051,
+      57020,
+      4278,
+      151643
+    ],
+    "what is public-key encryption": [
+      12555,
+      374,
+      584,
+      16173,
+      25463,
+      151643
+    ],
+    "what does DMA do": [
+      12555,
+      1558,
+      25450,
+      653,
+      151643
+    ]
+  },
+  "parity_gates": {
+    "1_token_parity": "C-engine token-ids (incl. EOS 151643) == gguf_golden token_ids, EXACT",
+    "2_engine_vs_engine": "C-engine raw (Q8_0, AVX2) vs gguf_golden.vectors_raw: cosine>=1-1e-4 AND report max per-element abs diff (FP-associativity)",
+    "3_f32_sanity": "C-engine raw vs golden_vectors.vectors_raw (F32): gap <= 1.27e-03 (MEASURED quant floor, not guessed)"
+  },
+  "measured_quant_floor": {
+    "cos_min": 0.9991545081138611,
+    "cos_mean": 0.9994992216428121,
+    "gap_max": 0.000845491886138916,
+    "gap_mean": 0.0005007783571879069,
+    "f32_tolerance": 0.001268237829208374
+  }
 }

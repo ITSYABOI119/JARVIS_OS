@@ -47,6 +47,28 @@ Models (GGUF or HF, hundreds of MB) are NEVER committed; neither is any HF token
   needed for the recall lane** — go straight to C/M1 (box engine + parity); the 2070 fine-tune is a
   measured-miss contingency. Full write-up: `phase6/docs/PHASE_6_GOAL_C_EMBEDDER.md` (C/M0.5 FINDINGS).
 
+## C/M1a — HOST parity foundation (2026-07-24)
+The gate before any box work: prove the deployed C engine reproduces reference embeddings for
+Qwen3-Embedding-0.6B. `cm1a_golden.py` builds the **two-golden** foundation (the methodology fix — one
+golden conflates a PORT bug with quant error):
+- `gguf_golden.npz` — the OFFICIAL `Qwen/Qwen3-Embedding-0.6B-GGUF` at **Q8_0** (the box quant), embedded
+  via llama-cpp-python (last-token pool + L2). The **tight engine-vs-engine** target (~1e-4): same quant,
+  so a C-vs-GGUF gap is a PORT bug. Its `token_ids` (in `golden_meta.json`, incl. EOS 151643) are the
+  **token-parity reference**.
+- `golden_vectors.npz` — the sentence-transformers **F32** golden (sym:none, last-pool + L2, NO
+  mean-projection) + the frozen `mu`. The **loose end-to-end** target at a **MEASURED** tolerance.
+- **Measured quant floor** (GGUF Q8_0 vs ST F32): cosine 0.99915–0.99965 → honest F32 tolerance
+  **1.27e-3** (measured, not a guessed 1e-3). The 0.999+ cross-engine cosine also confirms the
+  pooling/EOS config. Config: pooling = last-token; add_bos=false, add_eos=true (EOS=151643 appended +
+  pooled); pre-tokenizer = qwen2 (GPT-2-style byte-level rank-BPE); prompt = sym:none.
+
+**Remaining C/M1a (the C-engine port — the next phase):** a merge-RANK BPE path for qwen in
+`tokenizer.c` (the deployed path is score-priority SentencePiece — wrong for qwen; the merges list is
+already loaded in `gguf_vocab.c`), RoPE-NEOX for qwen3, a gated embed-mode forward (last-token pool at
+`llama_quant.c:1801` → skip LM head → L2 → mean-project → L2), a host harness compiled with
+`-DJARVIS_EMBED=1 -mavx2 -mfma`, and the 3 parity gates in `golden_meta.json` (token-parity GREEN →
+engine-vs-engine ≤1e-4 → F32 ≤1.27e-3). All engine edits `#if JARVIS_EMBED`-gated from the start.
+
 ## Reproduce (C/M0.5 candidates)
 `Alibaba-NLP/gte-large-en-v1.5` needs `trust_remote_code=True` (the harness retries automatically);
 `Qwen/Qwen3-Embedding-0.6B` / `mxbai-embed-large-v1` are ungated; EmbeddingGemma is license-gated.
