@@ -1,0 +1,10 @@
+{
+  "model": "Qwen/Qwen3-Embedding-0.6B",
+  "kind": "qwen3",
+  "strategy": "sym:none",
+  "mean_projection": true,
+  "dim": 1024,
+  "n_probe": 15,
+  "l2_normalized": true,
+  "note": "C/M1 box parity: the C engine must reproduce these vectors to 1e-3 using the SAME pooling + prompt (sym:none) + L2-norm + mean-projection. mu (if mean_projection) is the frozen single mean direction; apply e'=normalize(e-(e.mu)mu) AFTER pooling."
+}

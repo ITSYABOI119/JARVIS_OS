@@ -1,5 +1,5 @@
 {
-  "_comment": "Phase C / C/M0 semantic-recall gate corpus. HAND-AUTHORED. A pair = (stored turn = a PRIOR control-IN query, later = a NEW query about the SAME topic but LEXICALLY DIFFERENT so 6-5's exact-FNV-1a-over-the-query recall CANNOT match it -- only meaning-based query-to-query matching can). SYMMETRIC use case (both sides are queries), the faithful semantic extension of 6-5's key-over-the-query match. Split into two subsets after the C/M0 methodology finding: 'distinct' = topically DISTINCT stored turns (unambiguous ground truth -> the FAIR gate), 'adversarial' = a near-synonym cluster where several stored turns are siblings (a DISAMBIGUATION stress test, reported SEPARATELY -- exact-top-1 is legitimately hard there). HONEST: small + hand-authored -> a SIGNAL that gates C/M1, NOT a guarantee; the real validation is on-box with the accumulating control-IN store @21,140,000.",
+  "_comment": "Phase C / C/M0+C/M0.5 semantic-recall gate corpus. HAND-AUTHORED. A pair = (stored turn = a PRIOR control-IN query, later = a NEW query about the SAME topic but LEXICALLY DIFFERENT so 6-5's exact-FNV-1a-over-the-query recall CANNOT match it -- only meaning-based query-to-query matching can). SYMMETRIC use case (both sides are queries), the faithful semantic extension of 6-5's key-over-the-query match. 'distinct_positives' = topically DISTINCT stored turns (unambiguous ground truth -> the FAIR gate; ENLARGED to ~36 at C/M0.5 to shrink the N=16 error bars). 'adversarial_positives' = a near-synonym cluster where several stored turns are siblings (a DISAMBIGUATION stress test, reported SEPARATELY). HONEST: still hand-authored -> a stronger SIGNAL, not production truth; the accumulating dedicated control-IN store @21,140,000 is the eventual real set.",
 
   "distinct_positives": [
     { "stored": "what is a page fault",                       "later": "what happens when a program reads memory that isn't currently loaded into RAM" },
@@ -17,7 +17,27 @@
     { "stored": "what is a container like Docker",            "later": "how do you package an app with its dependencies so it runs anywhere" },
     { "stored": "what is a load balancer",                    "later": "how do you spread incoming requests across several backend servers" },
     { "stored": "what is a rest api",                         "later": "how do web clients talk to a server over http using resources and verbs" },
-    { "stored": "what is a file descriptor",                  "later": "what is the small integer the kernel hands you to refer to an open file" }
+    { "stored": "what is a file descriptor",                  "later": "what is the small integer the kernel hands you to refer to an open file" },
+    { "stored": "what is a linked list",                      "later": "which data structure chains nodes together where each points to the next" },
+    { "stored": "what is a stack data structure",            "later": "which structure adds and removes items in last-in first-out order" },
+    { "stored": "what is a queue",                            "later": "which structure processes items in first-in first-out order" },
+    { "stored": "what is a database index",                   "later": "what speeds up row lookups so the engine doesn't scan the whole table" },
+    { "stored": "what is a foreign key",                      "later": "how does one table reference the primary key of another table" },
+    { "stored": "what is http",                               "later": "what protocol do web browsers use to request pages from a server" },
+    { "stored": "what is json",                               "later": "what lightweight text format stores structured data as key-value pairs" },
+    { "stored": "what is a regular expression",              "later": "how do you describe a text-search pattern using special symbols" },
+    { "stored": "what is big-o notation",                    "later": "how do you describe how an algorithm's running time grows with input size" },
+    { "stored": "what is a virtual machine",                "later": "how do you run a full guest operating system on top of a host machine" },
+    { "stored": "what is a firewall",                        "later": "what filters network traffic to block unwanted or unsafe connections" },
+    { "stored": "what is a checksum",                        "later": "how do you detect whether data got corrupted during transmission" },
+    { "stored": "what is a bloom filter",                   "later": "which probabilistic structure tests membership allowing rare false positives" },
+    { "stored": "what is a heap data structure",            "later": "which tree keeps the smallest or largest element at the root for a priority queue" },
+    { "stored": "what is a symbolic link",                  "later": "what special file points to another file by its path name" },
+    { "stored": "what is network latency",                  "later": "what is the delay before data begins to transfer across a network" },
+    { "stored": "what is a thread pool",                    "later": "how do you reuse a fixed set of worker threads to run many small tasks" },
+    { "stored": "what is memoization",                      "later": "how do you cache a function's results to avoid recomputing them" },
+    { "stored": "what is an environment variable",         "later": "what named value in the OS configures how a running process behaves" },
+    { "stored": "what is a uuid",                           "later": "what randomly generated 128-bit identifier is unique without a central authority" }
   ],
 
   "adversarial_positives": [
@@ -37,6 +57,12 @@
     { "later": "how do you bake sourdough bread" },
     { "later": "what year did world war two end" },
     { "later": "how do plants perform photosynthesis" },
-    { "later": "what's a good beginner running plan" }
+    { "later": "what's a good beginner running plan" },
+    { "later": "what's the weather like in Tokyo today" },
+    { "later": "how do you change a flat car tire" },
+    { "later": "who painted the Mona Lisa" },
+    { "later": "how many continents are there on Earth" },
+    { "later": "what's a good birthday gift for my mom" },
+    { "later": "how do you say hello in Spanish" }
   ]
 }

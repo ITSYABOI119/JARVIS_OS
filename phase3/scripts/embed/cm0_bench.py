@@ -38,6 +38,23 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent.parent          # phase3/scripts/embed -> repo root
 ROUTING_H = REPO / "phase3" / "src" / "ai" / "routing_suite.h"
 RECALL_JSON = HERE / "cm0_recall_set.json"
+GENERIC_TXT = HERE / "cm0_generic_corpus.txt"
+GOLDEN_NPZ = HERE / "golden_vectors.npz"
+GOLDEN_META = HERE / "golden_meta.json"
+
+# A fixed probe set for the winner's golden vectors (the C/M1 box-parity reference). Kept small +
+# varied: stored turns, later queries, a near-synonym, negatives, and control-IN-style status queries.
+PROBE_TEXTS = [
+    "what is a page fault", "how does dns work", "what is a mutex",
+    "how do you find a value in a sorted array in logarithmic time",
+    "what lightweight text format stores structured data as key-value pairs",
+    "how do you protect a critical section so only one thread runs it",
+    "what's the capital of France", "how do you bake sourdough bread",
+    "how long have you been up", "what model are you running",
+    "why doesn't adding more cpu cores speed up a single-threaded program",
+    "what is a hash table", "explain how tcp handshake works",
+    "what is public-key encryption", "what does DMA do",
+]
 
 # The HELDOUT INFER-FP family (the conceptual-question-with-metric-noun cases the
 # 6-6 keyword router got wrong before the anchor fix). An embedder SHOULD cluster
@@ -100,6 +117,25 @@ def load_recall(path):
 # one for reference, and the headline uses each model's principled symmetric choice.
 
 BGE_Q = "Represent this sentence for searching relevant passages: "
+MXBAI_Q = "Represent this sentence for searching relevant passages: "
+
+# C/M0.5 candidate KINDS (the bases that fine-tune to the BEST recall, not the cheapest):
+#   qwen3 -- Qwen3-Embedding-0.6B: a strong DECODER embedder, contrastively post-trained (far less
+#            anisotropic than raw Gemma), instruction-aware, PARTIAL box reuse (the Qwen3 path exists
+#            from the model bench-off). Run WITH its instruction prompt.
+#   gte / mxbai -- strong STS ENCODERS (gte-large-en-v1.5 / mxbai-embed-large-v1): encoder uniformity
+#            training gives the BEST separation; a NET-NEW BERT engine on the box, acceptable ONLY if
+#            separation clearly wins over reuse.
+#   gemma -- EmbeddingGemma-300M RE-EVAL with its official symmetric/STS prompt on BOTH sides (the
+#            near-zero-new-engine base; the C/M0 50% is re-checked here on the enlarged set).
+#   bge   -- REFERENCE ONLY (the 56% / 81% baselines to beat), never a ship candidate.
+def model_kind(model_id):
+    m = model_id.lower()
+    if "embeddinggemma" in m:    return "gemma"
+    if "qwen3-embedding" in m:   return "qwen3"
+    if "gte" in m:               return "gte"
+    if "mxbai" in m:             return "mxbai"
+    return "bge"
 
 
 def _raw_encoder(model):
@@ -118,29 +154,34 @@ def _raw_encoder(model):
 
 
 def recall_strategies(model, kind):
-    """Return a list of (name, side_a_encoder, side_b_encoder). For symmetric
-    strategies side_a == side_b (same prompt both sides). The last entry is the
-    asymmetric setup, kept only for reference/contrast."""
+    """Return [(name, side_a_encoder, side_b_encoder)]. The recall use case is SYMMETRIC
+    query-to-query, so symmetric strategies have side_a == side_b (same prompt both sides);
+    asym entries are kept only for reference/contrast."""
     enc, prompts = _raw_encoder(model)
+    fp = lambda t: enc(t)                                   # plain (no prompt/prefix)
+    fbge = lambda t: enc(t, prefix=BGE_Q)
+    fmx = lambda t: enc(t, prefix=MXBAI_Q)
+    fq = lambda t: enc(t, prompt_name="query")
+    fsts = lambda t: enc(t, prompt_name="STS")
     if kind == "gemma":
         strat = []
-        if "query" in prompts:
-            f = lambda t: enc(t, prompt_name="query"); strat.append(("sym:query", f, f))
-        if "STS" in prompts:
-            f = lambda t: enc(t, prompt_name="STS"); strat.append(("sym:STS", f, f))
-        fp = lambda t: enc(t); strat.append(("sym:none", fp, fp))
+        if "query" in prompts: strat.append(("sym:query", fq, fq))
+        if "STS" in prompts:   strat.append(("sym:STS", fsts, fsts))
+        strat.append(("sym:none", fp, fp))
         if "query" in prompts and "document" in prompts:
-            strat.append(("asym:query/doc",
-                          lambda t: enc(t, prompt_name="query"),
-                          lambda t: enc(t, prompt_name="document")))
+            strat.append(("asym:query/doc", fq, lambda t: enc(t, prompt_name="document")))
         return strat
-    # bge: symmetric s2s = NO instruction both sides (the model card: the instruction
-    # is only for asymmetric s2p retrieval). Contrast with instruction-both + asym.
-    fp = lambda t: enc(t)
-    fq = lambda t: enc(t, prefix=BGE_Q)
-    return [("sym:none", fp, fp),
-            ("sym:instr", fq, fq),
-            ("asym:instr/plain", fq, fp)]
+    if kind == "qwen3":
+        strat = []
+        if "query" in prompts: strat.append(("sym:query", fq, fq))
+        strat.append(("sym:none", fp, fp))
+        return strat
+    if kind == "gte":
+        return [("sym:none", fp, fp)]                       # mean-pooled STS encoder, no prompt
+    if kind == "mxbai":
+        return [("sym:none", fp, fp), ("sym:instr", fmx, fmx)]
+    # bge (reference)
+    return [("sym:none", fp, fp), ("sym:instr", fbge, fbge), ("asym:instr/plain", fbge, fp)]
 
 
 def cluster_encoder(model, kind):
@@ -148,7 +189,41 @@ def cluster_encoder(model, kind):
     if kind == "gemma":
         name = "Clustering" if "Clustering" in prompts else ("query" if "query" in prompts else None)
         return lambda t: enc(t, prompt_name=name)
-    return lambda t: enc(t)   # bge symmetric, plain
+    if kind == "qwen3" and "query" in prompts:
+        return lambda t: enc(t, prompt_name="query")
+    return lambda t: enc(t)
+
+
+# --------------------------------------------------- mean-projection (C/M0.5 §3) ---
+# Single-mean-DIRECTION removal (NOT full whitening / all-but-top-K, which over-corrects modern
+# contrastive models and is unstable at our corpus size). mu is estimated OFF-BOX on a MODEST
+# generic corpus + our own data, then FROZEN. e' = normalize(e - (e.mu) mu). A stackable few-point
+# bonus for whichever base we fine-tune (esp. a decoder), reported raw-vs-+meanproj per candidate.
+def load_mu_texts():
+    generic = [ln.strip() for ln in GENERIC_TXT.read_text(encoding="utf-8").splitlines()
+               if ln.strip() and not ln.lstrip().startswith("#")]
+    pos, adv, neg = load_recall(RECALL_JSON)
+    ours = ([p["stored"] for p in pos] + [p["later"] for p in pos]
+            + [p["stored"] for p in adv] + [p["later"] for p in adv])
+    d = parse_routing_suite(ROUTING_H)
+    ours += [r["text"] for r in d["DEV"]] + [r["text"] for r in d["HELDOUT"]]
+    return generic + ours
+
+
+def fit_mu(encoder, texts):
+    V = encoder(texts)                      # already L2-normed
+    mu = V.mean(axis=0)
+    return (mu / (np.linalg.norm(mu) + 1e-9)).astype(np.float32)
+
+
+def mean_project(V, mu):
+    W = V - (V @ mu)[:, None] * mu[None, :]
+    W = W / (np.linalg.norm(W, axis=1, keepdims=True) + 1e-9)
+    return W.astype(np.float32)
+
+
+def mp_wrap(base_encoder, mu):
+    return lambda t: mean_project(base_encoder(t), mu)
 
 
 # -------------------------------------------------------------------- metrics ---
@@ -239,32 +314,45 @@ def intent_metrics(embed_cluster, dev, heldout):
 
 
 # ----------------------------------------------------------------------- main ---
-def run_model(model_id, device, data, positives, adversarial, negatives, verbose=False):
+def _load_st(model_id, device):
+    """Load a SentenceTransformer, retrying with trust_remote_code=True for models whose
+    architecture ships custom code (e.g. gte-large-en-v1.5's NewModel)."""
     from sentence_transformers import SentenceTransformer
-    kind = "gemma" if "embeddinggemma" in model_id.lower() else "bge"
+    try:
+        return SentenceTransformer(model_id, device=device)
+    except Exception as e:
+        if "trust_remote_code" in str(e).lower() or "custom code" in str(e).lower():
+            print("  (retrying with trust_remote_code=True for %s)" % model_id)
+            return SentenceTransformer(model_id, device=device, trust_remote_code=True)
+        raise
+
+
+def run_model(model_id, device, data, positives, adversarial, negatives,
+              mu_texts=None, ref=False, verbose=False):
+    kind = model_kind(model_id)
     print("\n" + "=" * 78)
-    print("MODEL: %s   (%s)" % (model_id, kind))
+    print("MODEL: %s   (%s)%s" % (model_id, kind, "   [REFERENCE ONLY]" if ref else ""))
     print("=" * 78)
     try:
-        model = SentenceTransformer(model_id, device=device)
+        model = _load_st(model_id, device)
     except Exception as e:
         msg = str(e)
         gated = any(s in msg.lower() for s in
                     ("gated", "401", "403", "awaiting", "access to model",
                      "restricted", "you are trying to access"))
         print("  !! FAILED to load: %s" % msg.splitlines()[0][:200])
-        if gated or kind == "gemma":
-            print("  !! This model is likely HF-LICENSE-GATED. To enable it:")
-            print("     1) accept the license at https://huggingface.co/%s" % model_id)
-            print("     2) `py -3 -m huggingface_hub.commands.huggingface_cli login`  (paste a read token)")
-            print("     then re-run this harness. The baseline model still ran.")
+        if gated:
+            print("  !! HF-LICENSE-GATED: accept the license at https://huggingface.co/%s" % model_id)
+            print("     then `hf auth login` with a read token and re-run. Other models still ran.")
+        else:
+            print("  !! (not a gating error -- check the model id / trust_remote_code / torch version)")
         return None
     try:
         dim = model.get_sentence_embedding_dimension()
         prompts = list((getattr(model, "prompts", None) or {}).keys())
         print("  loaded: dim=%d  device=%s  prompts=%s" % (dim, device, prompts or "(none)"))
 
-        # --- recall on the DISTINCT set (the GATE): sweep symmetric prompt strategies ---
+        # --- recall on the DISTINCT set (the GATE): sweep symmetric prompt strategies (RAW) ---
         print("  -- recall on the DISTINCT set (the GATE) across prompt strategies (sym = query-to-query) --")
         print("     %-18s %8s %8s %7s %6s" % ("strategy", "top1", "top3", "margin", "sep?"))
         sweep = []
@@ -279,21 +367,85 @@ def run_model(model_id, device, data, positives, adversarial, negatives, verbose
         print("     -> chosen (symmetric): %s" % best_name)
         fa, fb = next((a, b) for n, a, b in recall_strategies(model, kind) if n == best_name)
         if verbose:
-            print("  -- DISTINCT-set misses under %s --" % best_name)
+            print("  -- DISTINCT-set misses under %s (raw) --" % best_name)
             recall_metrics(fa, fb, positives, negatives, verbose=True)
         best["dim"] = dim
         best["strategy"] = best_name
 
-        # --- the ADVERSARIAL near-synonym subset (a disambiguation STRESS test, NOT the gate) ---
+        # --- MEAN-PROJECTION ablation on the chosen strategy (fit mu OFF the recall set, frozen) ---
+        mp = None
+        mu = None
+        if mu_texts is not None:
+            mu = fit_mu(fa, mu_texts)                 # fit on the chosen encoder over the mu-corpus
+            fam = mp_wrap(fa, mu)
+            mp = recall_metrics(fam, fam, positives, negatives, verbose=False)
+            mp["strategy"] = best_name + "+meanproj"
+            print("  -- +mean-projection (single frozen mean dir, N_mu=%d): top1=%.1f%% top3=%.1f%% "
+                  "margin=%+.3f %s" % (len(mu_texts), 100 * mp["top1_acc"], 100 * mp["top3_acc"],
+                  mp["margin_mean"], "CLEAN" if mp["clean_separation"] else "over"))
+
+        # --- ADVERSARIAL near-synonym subset (disambiguation STRESS, NOT the gate; raw strategy) ---
         adv = recall_metrics(fa, fb, adversarial, negatives, verbose=False)
-        print("  -- ADVERSARIAL near-synonym subset (disambiguation stress, same strategy): "
-              "top1=%.1f%% top3=%.1f%% margin=%+.3f" %
+        print("  -- ADVERSARIAL near-synonym subset: top1=%.1f%% top3=%.1f%% margin=%+.3f" %
               (100 * adv["top1_acc"], 100 * adv["top3_acc"], adv["margin_mean"]))
 
         intent = intent_metrics(cluster_encoder(model, kind), data["DEV"], data["HELDOUT"])
-        return {"model": model_id, "kind": kind, "dim": dim,
-                "recall": best, "recall_adversarial": adv,
-                "recall_sweep": {n: r for n, r in sweep}, "intent": intent}
+        return {"model": model_id, "kind": kind, "dim": dim, "ref": ref,
+                "recall": best, "recall_meanproj": mp, "recall_adversarial": adv,
+                "recall_sweep": {n: r for n, r in sweep}, "intent": intent,
+                "_mu": mu, "_best_strategy": best_name}
+    finally:
+        del model
+        try:
+            import torch, gc
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+
+
+# reference baselines (to beat, NOT ship candidates) + the C/M0.5 fine-tune-base candidates.
+REF_MODELS = ["BAAI/bge-small-en-v1.5", "BAAI/bge-large-en-v1.5"]
+CANDIDATE_MODELS = ["Qwen/Qwen3-Embedding-0.6B", "Alibaba-NLP/gte-large-en-v1.5",
+                    "mixedbread-ai/mxbai-embed-large-v1", "google/embeddinggemma-300m"]
+# box-reuse cost per kind (for the pick's tie-break; lower = cheaper on the box):
+BOX_COST = {"gemma": "near-zero new engine (reuses the Gemma path)",
+            "qwen3": "partial reuse (Qwen3 path exists from the bench-off)",
+            "gte": "NET-NEW BERT engine", "mxbai": "NET-NEW BERT engine",
+            "bge": "NET-NEW BERT engine"}
+
+
+def best_config(r):
+    """The stronger of a model's raw vs +meanproj recall (by top1, then margin)."""
+    raw = dict(r["recall"]); raw["_mp"] = False
+    if r.get("recall_meanproj"):
+        mp = dict(r["recall_meanproj"]); mp["_mp"] = True
+        return max([raw, mp], key=lambda c: (c["top1_acc"], c["margin_mean"]))
+    return raw
+
+
+def save_golden(model_id, device, strategy, use_meanproj, mu):
+    """Embed the fixed PROBE_TEXTS with the winner's chosen config and save as the C/M1 box-parity
+    golden reference (text -> float[dim]) + a meta header so C/M1 replicates it EXACTLY."""
+    kind = model_kind(model_id)
+    model = _load_st(model_id, device)
+    try:
+        fa = next(a for n, a, b in recall_strategies(model, kind) if n == strategy)
+        enc = mp_wrap(fa, mu) if use_meanproj else fa
+        V = enc(PROBE_TEXTS)
+        np.savez(GOLDEN_NPZ, texts=np.array(PROBE_TEXTS, dtype=object), vectors=V,
+                 mu=(mu if use_meanproj else np.zeros(V.shape[1], np.float32)))
+        meta = {"model": model_id, "kind": kind, "strategy": strategy,
+                "mean_projection": bool(use_meanproj), "dim": int(V.shape[1]),
+                "n_probe": len(PROBE_TEXTS), "l2_normalized": True,
+                "note": ("C/M1 box parity: the C engine must reproduce these vectors to 1e-3 using "
+                         "the SAME pooling + prompt (%s) + L2-norm%s. mu (if mean_projection) is the "
+                         "frozen single mean direction; apply e'=normalize(e-(e.mu)mu) AFTER pooling."
+                         % (strategy, " + mean-projection" if use_meanproj else ""))}
+        GOLDEN_META.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        print("  saved golden: %s (%d texts x %d dim, meanproj=%s) + %s"
+              % (GOLDEN_NPZ.name, len(PROBE_TEXTS), V.shape[1], use_meanproj, GOLDEN_META.name))
     finally:
         del model
         try:
@@ -308,8 +460,10 @@ def run_model(model_id, device, data, positives, adversarial, negatives, verbose
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cpu", action="store_true", help="force CPU (tiny workload)")
-    ap.add_argument("--models", nargs="*", default=[
-        "BAAI/bge-small-en-v1.5", "google/embeddinggemma-300m"])
+    ap.add_argument("--models", nargs="*", default=None,
+                    help="override the model list (default = the C/M0.5 ref + candidate set)")
+    ap.add_argument("--no-meanproj", action="store_true", help="skip the mean-projection ablation")
+    ap.add_argument("--no-golden", action="store_true", help="do not save golden vectors for the winner")
     ap.add_argument("--out", default=str(HERE / "cm0_results.json"))
     ap.add_argument("--verbose", action="store_true", help="dump recall misses")
     args = ap.parse_args()
@@ -325,45 +479,78 @@ def main():
 
     data = parse_routing_suite(ROUTING_H)
     positives, adversarial, negatives = load_recall(RECALL_JSON)
-    print("intent corpus: DEV=%d HELDOUT=%d (labels=%s)"
-          % (len(data["DEV"]), len(data["HELDOUT"]),
-             sorted(set(r["label"] for r in data["DEV"]))))
-    print("recall corpus: %d DISTINCT pairs (the gate) + %d adversarial near-synonym pairs, %d hard negatives"
+    print("intent corpus: DEV=%d HELDOUT=%d" % (len(data["DEV"]), len(data["HELDOUT"])))
+    print("recall corpus: %d DISTINCT pairs (the gate) + %d adversarial + %d hard negatives"
           % (len(positives), len(adversarial), len(negatives)))
+    mu_texts = None if args.no_meanproj else load_mu_texts()
+    if mu_texts is not None:
+        print("mean-projection mu corpus: %d texts (generic + our data), frozen per model" % len(mu_texts))
+
+    if args.models is not None:
+        run_list = [(m, model_kind(m) == "bge") for m in args.models]
+    else:
+        run_list = [(m, True) for m in REF_MODELS] + [(m, False) for m in CANDIDATE_MODELS]
 
     results = []
-    for mid in args.models:
-        r = run_model(mid, device, data, positives, adversarial, negatives, verbose=args.verbose)
+    for mid, is_ref in run_list:
+        r = run_model(mid, device, data, positives, adversarial, negatives,
+                      mu_texts=mu_texts, ref=is_ref, verbose=args.verbose)
         if r:
             results.append(r)
 
     # ------- comparison table -------
     print("\n" + "#" * 78)
-    print("# C/M0 COMPARISON  (metric 1 = the C/M2 GATE; metric 2 = routing-relevant)")
+    print("# C/M0.5 BASE-SELECTION  (GATE = distinct recall; raw + mean-projection; * = reference only)")
     print("#" * 78)
-    hdr = ("model", "dim", "GATE@1", "GATE@3", "adv@1", "sep?", "intent-HO", "FP->INFER")
-    print("%-26s %4s %7s %7s %6s %5s %8s %10s" % hdr)
+    print("%-24s %5s %6s %6s %8s %6s %8s %8s" %
+          ("model", "dim", "raw@1", "mp@1", "raw@3/mp@3", "adv@1", "intent", "sep(raw/mp)"))
     for r in results:
         rec, it, adv = r["recall"], r["intent"], r["recall_adversarial"]
-        print("%-26s %4d %6.1f%% %6.1f%% %5.1f%% %5s %7.1f%% %8d/%d  [%s]" % (
-            r["model"].split("/")[-1], r["dim"],
-            100 * rec["top1_acc"], 100 * rec["top3_acc"], 100 * adv["top1_acc"],
-            "YES" if rec["clean_separation"] else "no",
-            100 * it["acc"], it["fp_infer"], it["fp_total"], rec.get("strategy", "?")))
-    print("  GATE = the topically-DISTINCT recall set (fair ground truth); adv = the near-synonym")
-    print("  disambiguation stress; sep? = clean separation of true pairs vs unrelated queries.")
-    print("\nseparation detail (recall gate): a model PASSES clean separation when the")
-    print("weakest intended match still beats every unrelated query's best match:")
+        mp = r.get("recall_meanproj")
+        star = "*" if r.get("ref") else " "
+        print("%s%-23s %5d %5.1f%% %5s %6.1f%%/%-5s %5.1f%% %6.1f%% %4s/%-4s [%s]" % (
+            star, r["model"].split("/")[-1][:23], r["dim"],
+            100 * rec["top1_acc"],
+            ("%.1f%%" % (100 * mp["top1_acc"])) if mp else "-",
+            100 * rec["top3_acc"], ("%.1f%%" % (100 * mp["top3_acc"])) if mp else "-",
+            100 * adv["top1_acc"], 100 * it["acc"],
+            "CLN" if rec["clean_separation"] else "over",
+            (("CLN" if mp["clean_separation"] else "over") if mp else "-"),
+            rec.get("strategy", "?")))
+    print("  * = reference baseline (to beat, not a ship candidate). raw@1/mp@1 = distinct recall@1")
+    print("  raw vs +mean-projection. sep = clean true-vs-unrelated separation. adv = near-synonym stress.")
+    print("\nseparation detail (chosen raw strategy):")
     for r in results:
         rec = r["recall"]
-        print("  %-28s intended_min=%.3f  neg_best_max=%.3f  -> %s"
-              % (r["model"].split("/")[-1], rec["intended_min"], rec["neg_best_max"],
-                 "CLEAN" if rec["clean_separation"] else "OVERLAP"))
+        print("  %-24s intended_min=%.3f  neg_best_max=%.3f  -> %s  | box: %s"
+              % (r["model"].split("/")[-1][:24], rec["intended_min"], rec["neg_best_max"],
+                 "CLEAN" if rec["clean_separation"] else "OVERLAP", BOX_COST.get(r["kind"], "?")))
 
-    Path(args.out).write_text(json.dumps(results, indent=2), encoding="utf-8")
+    # ------- pick the winning BASE (best CANDIDATE by top1 then margin; box cost noted) -------
+    cands = [r for r in results if not r.get("ref")]
+    winner = None
+    if cands:
+        winner = max(cands, key=lambda r: (best_config(r)["top1_acc"], best_config(r)["margin_mean"]))
+        bc = best_config(winner)
+        print("\n#### WINNING BASE (highest candidate recall@1 + margin) ####")
+        print("  %s  [%s]  recall@1=%.1f%% top3=%.1f%% margin=%+.3f  sep=%s  box=%s"
+              % (winner["model"], bc["strategy"], 100 * bc["top1_acc"], 100 * bc["top3_acc"],
+                 bc["margin_mean"], "CLEAN" if bc["clean_separation"] else "OVERLAP",
+                 BOX_COST.get(winner["kind"], "?")))
+        print("  (this off-the-shelf score is the C/M1a BASELINE the 2070 fine-tune must BEAT.)")
+        if not args.no_golden:
+            save_golden(winner["model"], device, winner["_best_strategy"],
+                        bc.get("_mp", False), winner.get("_mu"))
+
+    # serialize (drop the numpy mu from the JSON)
+    ser = []
+    for r in results:
+        rr = {k: v for k, v in r.items() if not k.startswith("_")}
+        ser.append(rr)
+    Path(args.out).write_text(json.dumps(ser, indent=2), encoding="utf-8")
     print("\nwrote %s" % args.out)
     if not results:
-        print("\nNO MODEL RAN. If EmbeddingGemma is gated, accept its license + hf login, then re-run.")
+        print("\nNO MODEL RAN. Handle HF gating (license accept + hf login) and re-run.")
         return 2
     return 0
 

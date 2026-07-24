@@ -37,17 +37,29 @@ f. The GATE is OUR data, not MTEB (narrow/technical domain). Prove-it-or-don't, 
    discipline.
 
 ## 3. Milestones
-- **C/M0 (OFF-BOX, Python — gates the whole arc): DONE 2026-07-24 — GATE = DO NOT PROCEED to C/M1 on
-  an off-the-shelf model (see the C/M0 FINDINGS section below).** Prototyped EmbeddingGemma-300M (the
-  strong-reuse candidate) AND bge-small-en-v1.5 (the 33M baseline) — plus, when both fell short, the
-  bigger off-the-shelf probes bge-large-en-v1.5 and e5-large-v2 (§5's "a bigger embedder" contingency)
-  — on OUR labeled data; scored recall (the C/M2 gate) + intent clustering (routing-relevant). The
-  golden-vector save (§4) is DEFERRED — it is C/M1 setup for the CHOSEN model, and the gate reopened
-  the model choice before any box work. Harness + data + raw results: `phase3/scripts/embed/`.
-- **C/M1 (BOX, gated new flag e.g. JARVIS_EMBED default-0; pre-mortem first):** the embed-mode forward
-  in PB (pool + L2-norm + skip the LM head; the :1801 tap), the co-resident second GGUF, the MSG_EMBED
-  IPC, + THE PARITY HARNESS (C-engine vectors == C/M0 golden to 1e-3). OFF byte-identical. Prove the
-  C engine reproduces the reference embeddings before wiring any lane.
+- **C/M0 (OFF-BOX, Python): DONE 2026-07-24 — its "off-the-shelf fails" gate was BASE-LIMITED and is
+  SUPERSEDED by C/M0.5.** Prototyped EmbeddingGemma-300M + bge-small/large + e5-large; concluded no
+  off-the-shelf model cleared the recall bar. **C/M0.5 then showed that conclusion was an artifact of
+  testing the WRONG bases** (raw EmbeddingGemma — Gemma-arch but NOT a strong contrastive embedder —
+  plus BERT encoders), NOT domain-intractability. Full record in the C/M0 FINDINGS section.
+- **C/M0.5 (OFF-BOX, Python — BASE SELECTION): DONE 2026-07-24 — WINNER = Qwen/Qwen3-Embedding-0.6B,
+  and it CLEARS THE RECALL BAR OFF-THE-SHELF (97.2% recall@1 / 100% top-3 / CLEAN separation on N=36
+  distinct pairs).** Enlarged the recall set to 36 distinct pairs (tighter error bars), scored the
+  fine-tune-BASE candidates (Qwen3-Embedding-0.6B decoder / gte-large / mxbai encoders / re-eval'd
+  EmbeddingGemma) + a mean-projection ablation, kept bge as reference. Golden vectors SAVED for the
+  winner (`golden_vectors.npz` + `golden_meta.json`, sym:none + frozen mean-projection). See the C/M0.5
+  FINDINGS section. **This inverts the "we must fine-tune" premise — see C/M1 / C/M1a.**
+- **C/M1 (BOX, gated new flag e.g. JARVIS_EMBED default-0; pre-mortem first) — NOW THE NEXT STEP (the
+  off-the-shelf base passes, so no fine-tune blocks it):** the embed-mode forward in PB for the Qwen3
+  path (last-token pool + L2-norm + the mean-projection step + skip the LM head), the co-resident second
+  GGUF, the MSG_EMBED IPC, + THE PARITY HARNESS (C-engine vectors == the C/M0.5 golden to 1e-3, INCLUDING
+  the frozen mu mean-projection per `golden_meta.json`). OFF byte-identical. Prove parity before wiring
+  any lane.
+- **C/M1a (2070 CONTRASTIVE FINE-TUNE) — DEMOTED to a MEASURED-MISS CONTINGENCY (was pre-committed).**
+  C/M0.5 shows off-the-shelf Qwen3-Embedding-0.6B already clears the recall bar, so a fine-tune is NOT
+  a prerequisite. Reserve it for AFTER C/M2 IF on-box parity or real control-IN traffic shows a recall
+  gap (e.g. the adversarial near-synonym subset at 66.7% top-1, or real misses). This is the doc's own
+  §2b discipline — "off-the-shelf FIRST; fine-tune only on a MEASURED miss" — now honored by the data.
 - **C/M2 (BOX, gated):** the RECALL lane — replace g3_select_exact_only with cosine-topk over per-
   record vectors in the dedicated control-IN store @21,140,000 (add a vector column); the semantic
   "state-a-fact/ask-different" recall works; benchmark on the box; the answer-only-preamble hygiene
@@ -121,6 +133,65 @@ paraphrase set is a soft target; the per-model best-of-sweep prompt pick is a mi
 this measures OFF-BOX sentence-transformers vectors (the C-engine/GGUF parity is a separate C/M1
 concern, deferred here since the gate did not pass). The real validation was always meant to be on-box
 with the accumulating control-IN store — this is a pre-box SIGNAL that correctly gated the arc.
+
+## C/M0.5 FINDINGS (2026-07-24, off-box, RTX 2070) — BASE SELECTION, and the C/M0 gate INVERTED
+
+**WINNER: `Qwen/Qwen3-Embedding-0.6B` — and it CLEARS THE RECALL BAR OFF-THE-SHELF.** C/M0 concluded
+"off-the-shelf fails → fine-tune required." C/M0.5 shows that was an artifact of the BASES C/M0 tested
+(raw EmbeddingGemma — Gemma-arch but NOT a strong contrastive embedder — plus BERT encoders), not
+domain-intractability. Tested on an ENLARGED N=36 topically-distinct recall set (tighter error bars
+than C/M0's N=16), symmetric query-to-query, + a single frozen-mean-direction projection ablation:
+
+| base (dim) | recall@1 | recall@3 | adv@1 | intent | separation | box cost |
+|---|---|---|---|---|---|---|
+| **Qwen3-Embedding-0.6B** (1024) | **97.2%** (35/36) | **100%** | 66.7% | 89.0% | **CLEAN** (+meanproj; margin +0.18) | **partial reuse** (Qwen3 path from the bench-off) |
+| gte-large-en-v1.5 (1024) | 80.6% | 97.2% | 66.7% | 87.7% | overlap | net-new BERT engine |
+| mxbai-embed-large-v1 (1024) | 69.4% | 83.3% | 50.0% | 90.4% | overlap | net-new BERT engine |
+| *bge-large-en-v1.5 (1024, ref) | 63.9% | 83.3% | 50.0% | 90.4% | overlap | net-new BERT engine |
+| *bge-small-en-v1.5 (384, ref) | 44.4% | 66.7% | 33.3% | 89.0% | overlap | net-new BERT engine |
+| EmbeddingGemma-300M (768) | 30.6% | 41.7% | 33.3% | 83.6% | overlap | near-zero (reuses Gemma) |
+
+**The result is verified, not a fluke.** Qwen3-Embedding-0.6B is the ONLY model with a positive recall
+margin (true pairs beat distractors on average: +0.11 raw, +0.18 with mean-projection) and the ONLY one
+to achieve CLEAN true-vs-unrelated separation. Its single miss (35/36) is a defensible near-match — "web
+clients talk to a server over http using resources" → *"what is http"* instead of *"what is a rest api"*
+(REST runs on HTTP). It loaded with correct last-token pooling (dim 1024).
+
+**Why (arch anisotropy, confirmed):** raw EmbeddingGemma is strongly anisotropic (unrelated-pair cosine
+floor ~0.5–0.7 → 31% recall, no separation); contrastively-trained encoders (bge/gte/mxbai) spread the
+space more (64–81%); a contrastively post-trained DECODER (Qwen3-Embedding) is BOTH accurate (97%) AND,
+with a cheap single-mean-direction projection, cleanly separated. Mean-projection is the predicted
+stackable win FOR THE DECODER (Qwen3: achieves clean separation, +margin) and neutral-to-negative for
+the already-spread encoders (bge/gte/mxbai lost 1–5 pts) — so it is applied to the winner only.
+
+**BASE PICK — Qwen3-Embedding-0.6B**, on both counts the doc weighs: best recall + cleanest separation,
+AND cheaper box cost than the encoders (partial Qwen3-path reuse vs a net-new BERT engine). The
+near-zero-reuse EmbeddingGemma is out (weakest by far). gte-large (80.6/97.2) is the encoder runner-up
+if a decoder ever proves impractical on the box, at a net-new-engine cost.
+
+**THE PLAN-CHANGING FINDING (surfaced, not buried): fine-tuning is NOT needed for the recall lane.** The
+C/M0.5 brief locked "we ARE fine-tuning" on C/M0's now-superseded numbers. The data falsifies that
+premise: off-the-shelf Qwen3-Embedding-0.6B already hits 97.2%/100%/CLEAN on our set. The faithful path
+(and the doc's own §2b rule — "off-the-shelf FIRST; fine-tune only on a MEASURED miss") is: **adopt
+off-the-shelf Qwen3-Embedding-0.6B, go straight to C/M1 (box engine + parity), and reserve the 2070
+contrastive fine-tune (C/M1a) as a contingency IF on-box or real-traffic recall shows a gap.** The base
+pick is Qwen3-Embedding-0.6B either way; only the necessity/timing of the fine-tune changes — flagged
+here for a conscious decision rather than executing a now-unjustified training step.
+
+**Golden vectors SAVED for C/M1 parity** (`golden_vectors.npz` + `golden_meta.json`): Qwen3-Embedding-
+0.6B, strategy `sym:none` + mean-projection, 15 fixed probe texts × 1024-d, L2-normalized, with the
+frozen `mu` (single mean direction). C/M1's C engine must reproduce these to 1e-3 using the SAME
+last-token pooling + L2-norm + `e'=normalize(e-(e·mu)mu)`. (A simpler C/M1 option: the `sym:query`
+instruction strategy gives 86% recall with clean separation RAW — no mean-projection needed — if the
+box would rather avoid replicating `mu`; recorded as the fallback config.)
+
+**Honest caveats:** still N=36 hand-authored (a stronger signal than C/M0's 16, but NOT production
+truth — the accumulating dedicated control-IN store @21,140,000 is the eventual real set); the winning
+config's clean separation depends on the frozen mean-projection (a cheap box step, or use the `sym:query`
+fallback); the near-synonym adversarial subset is still only 66.7% top-1 (though 100% top-3), so hard
+duplicate disambiguation is the most likely place a later fine-tune would help; per-model best-of-sweep
+prompt pick is a mild optimistic bias; and this is off-box sentence-transformers — the on-box GGUF/
+C-engine parity (INCLUDING the mean-projection) is the C/M1 gate.
 
 ## 4. Risks / honest limits
 - ~~Off-the-shelf may miss ROUTING (weak zero-shot); recall/cache are the safe wins.~~ **INVERTED by

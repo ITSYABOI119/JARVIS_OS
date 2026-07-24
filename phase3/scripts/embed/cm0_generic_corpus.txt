@@ -1,0 +1,115 @@
+# Generic corpus for the C/M0.5 mean-projection mu estimate. ~110 diverse everyday/news/science/
+# arts sentences spanning many domains, so the estimated mean direction captures the generic
+# "sentence" component rather than any one topic. The harness ALSO folds in our own data (the recall
+# stored+later turns, the routing intent set, and the control-IN seeds) before computing mu, then
+# FREEZES mu. Lines starting with '#' and blank lines are ignored. Honest caveat: this is a MODEST
+# generic corpus, not full Wikipedia -- mean-projection is a stackable few-point bonus, not a fix.
+The morning sun rose slowly over the quiet coastal village.
+She poured a cup of coffee and read the newspaper on the porch.
+The recipe calls for two cups of flour and a pinch of salt.
+The marathon runners set off just after dawn in light rain.
+The museum's new exhibit features paintings from the seventeenth century.
+He planted tomatoes and basil in the garden behind the house.
+The orchestra tuned their instruments before the evening performance.
+A gentle breeze carried the smell of fresh bread down the street.
+The children built a sandcastle near the edge of the water.
+Ticket prices for the concert went up sharply over the weekend.
+The committee will vote on the new budget next Thursday.
+Heavy snow closed several mountain roads across the region.
+The novel follows two sisters growing up in a small town.
+Scientists discovered a new species of frog in the rainforest.
+The bakery on the corner sells out of croissants by nine.
+Her flight was delayed for three hours because of the storm.
+The team celebrated their first championship in a decade.
+Volunteers spent the afternoon cleaning up the local park.
+The old bridge was finally replaced after years of repairs.
+A documentary about deep-sea creatures premiered last night.
+The farmer checked the weather before harvesting the wheat.
+Tourists gathered in the square to watch the street performers.
+The library extended its hours during final exam season.
+He learned to play the guitar entirely from online videos.
+The chef garnished the plate with a sprig of fresh mint.
+Local shops offered discounts to celebrate the town festival.
+The hikers reached the summit just before the clouds rolled in.
+A power outage left thousands of homes dark for the evening.
+The painting sold at auction for far more than expected.
+She trained every morning for months to run her first marathon.
+The bakery's new sourdough loaf has become a neighborhood favorite.
+Rain is expected across the valley through the end of the week.
+The city council approved funding for a new community center.
+Migrating birds pass through the wetlands every autumn.
+The cafe added several vegan options to its breakfast menu.
+He repaired the leaky faucet with a wrench and some tape.
+The film received mixed reviews but drew large crowds.
+Fresh strawberries are in season at the farmers market now.
+The dog chased the ball across the freshly mowed lawn.
+A famous violinist will perform at the hall on Saturday.
+The recipe suggests letting the dough rest for an hour.
+Firefighters contained the brush fire before it reached the homes.
+The students presented their science projects to the judges.
+Warm weather brought crowds to the beach over the holiday.
+The train arrived on time despite the earlier delays.
+She knitted a scarf as a gift for her grandmother.
+The gallery displayed sculptures made entirely from recycled metal.
+Coffee prices have risen due to a poor harvest this year.
+The coach praised the young players for their effort.
+A rainbow appeared over the hills after the afternoon shower.
+The publisher announced a sequel to the bestselling mystery.
+He spent the weekend restoring an old wooden rowboat.
+The choir rehearsed carols in preparation for the holidays.
+Local beekeepers reported a strong honey harvest this summer.
+The astronaut described watching the sunrise from orbit.
+The town's oldest oak tree was declared a protected landmark.
+She sketched the harbor while the fishermen unloaded their catch.
+The new bakery hired three more staff to keep up with demand.
+Thunderstorms rolled through the plains late in the evening.
+The gardener pruned the roses before the first frost.
+A pod of dolphins followed the boat for nearly an hour.
+The theater sold out its opening night within minutes.
+He whittled a small bird from a piece of driftwood.
+Volunteers planted hundreds of saplings along the riverbank.
+The pastry chef won first prize at the regional competition.
+Snowfall blanketed the town in white overnight.
+The reporter interviewed residents about the new park.
+She collected seashells along the shore at low tide.
+The band played late into the night at the summer festival.
+Farmers welcomed the rain after weeks of dry weather.
+The children learned to skate at the outdoor rink.
+A cargo ship ran aground near the harbor entrance.
+The florist arranged tulips and daffodils for the wedding.
+He memorized the poem for the school recital.
+The bakery's cinnamon rolls are best served warm.
+Migrating whales were spotted off the northern coast.
+The painter mixed blue and yellow to match the sky.
+Students lined up early to buy tickets for the play.
+The old clock tower chimes every hour on the hour.
+She grew herbs on the windowsill of her apartment.
+The soccer match ended in a draw after extra time.
+Autumn leaves covered the trail through the forest.
+The vineyard opened its doors for the annual grape harvest.
+A curious fox wandered into the backyard at dusk.
+The chef simmered the sauce for several hours.
+The photographer captured the storm rolling over the sea.
+Neighbors gathered for a potluck dinner on the lawn.
+The ferry crosses the bay four times each day.
+He tuned the piano before the recital began.
+The market stalls overflowed with ripe summer fruit.
+A light drizzle fell as the parade wound through town.
+The scientist recorded the temperature every morning.
+The children flew kites in the strong afternoon wind.
+She framed the photograph and hung it in the hallway.
+The bakery donated leftover bread to the shelter each night.
+Wildflowers bloomed across the meadow after the rains.
+The carpenter sanded the tabletop until it was smooth.
+The town held a fireworks display over the lake.
+He collected stamps from every country he visited.
+The morning fog lifted to reveal the distant mountains.
+The waiter recommended the soup and the fresh fish.
+A street musician played a soft tune on the accordion.
+The librarian shelved the returned books by author.
+Runners stretched near the starting line before the race.
+The garden buzzed with bees on the warm afternoon.
+She baked a cake for her friend's birthday party.
+The river rose after two days of steady rain.
+The tailor measured the fabric before cutting it.
+Children splashed in the fountain to escape the heat.
