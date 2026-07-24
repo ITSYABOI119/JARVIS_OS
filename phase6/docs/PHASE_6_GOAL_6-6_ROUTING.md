@@ -125,6 +125,19 @@ what may be claimed.
 - **(g) Unrelated open item, re-observed:** boot 37 logged `[CTRL-IN-STATS] … drop=6 (parse=6 …)`.
   Frozen at 6, no answered query affected; the pre-existing unexplained parse-drop item, worth a look
   during the 6-7 soak.
+- **(h) JACT durability of the SHORT validation boots — an OBSERVABILITY question for 6-7, NOT a
+  routing/security defect.** The real-device action-audit store @ LBA 21,120,000 stamps each record
+  with the store's OWN `boot_id` (`action_audit.c` `s->hdr.boot_id++` at init — independent of
+  `nvme_log_boot_id()`, so a JACT "boot N" never maps 1:1 to a telemetry boot). Read off-box after the
+  flip, the store is current through the 6-5 flip (its 21 refuse records are unmistakably boot-30's
+  "21 BLOCKED") and every record is teeth-clean (0 raw query strings). BUT its NEWEST record is a
+  `digest up=1h` — writable only by a boot running ≥1 h — while the three flip-validation boots
+  (37/38/39) were minutes each, so their individual answered-query JACT records are not clearly the
+  newest and may not have persisted to the real-device store. This does NOT undercut the flip: routing
+  is proven by the LIVE wire (v12 route counters matching the transcript), the durable
+  `[CTRL-IN-STATS] acc=3 drop=0`, and three verdict=0/crc_ok/hmac_ok replies — the JACT write is a
+  forensics record, not the functional or security path. Settling it needs a supervised boot with the
+  `ctrl_in_jact`/`act_audit_append` write path watched (a 6-7 task; can't be done from Ubuntu).
 
 ---
 
