@@ -1922,3 +1922,42 @@ int qmodel_generate(const qmodel_t *qm, llama_state_t *state,
     }
     return generated;
 }
+
+#if JARVIS_EMBED
+/* ---- Phase C / C/M1a Stage 2: last-token embedding (host parity harness only) ---- */
+/*
+ * qmodel_embed_last — feed tokens[0..n_tokens-1] through the deployed qmodel_forward
+ * (autoregressive, KV cache), then read state->x — the post-output_norm hidden state of the
+ * LAST token (the pooling tap: the `memcpy(state->x, state->xb, ...)` right after the final
+ * tensor_rms_norm, PRE-LM-head; the output projection that follows only READS state->x, so the
+ * pooled value survives the call) — and L2-normalize it into out[dim]. Last-token pooling,
+ * matching Qwen3-Embedding (add_eos=true → the appended EOS 151643 is the last position).
+ *
+ * COST (precise): this function invokes NO LM head and does NO sampling itself, but qmodel_forward
+ * computes logits INTERNALLY — the output projection at ~:1815 is UNCONDITIONAL and runs right
+ * after the tap — so every embed token still pays a full vocab x dim matmul (151669 x 1024 ~ 155M
+ * MACs) whose result is discarded here. Correctness-neutral for host parity (we read state->x,
+ * which the projection only reads), but a real BOX-LATENCY item: C/M1b CARRY-FORWARD = skip the
+ * output projection in embed mode (an embed-mode flag on the forward, or a tapped variant).
+ *
+ * Reuses the deployed Q8_0 kernels + GQA / q_norm / k_norm / head_dim / RoPE unchanged — for the
+ * qwen arch RoPE is now NEOX (llama_load.c override, same JARVIS_EMBED gate). The CALLER resets
+ * state->pos + KV cache per sequence (see embed_vector_probe.c, mirroring qmodel_generate /
+ * bench_engine). This is a host-only parity entry point (gated JARVIS_EMBED — default builds
+ * compile it out, so the deployed engine object is unchanged); the box embed path is C/M1b.
+ */
+void qmodel_embed_last(const qmodel_t *qm, llama_state_t *state,
+                       const int *tokens, int n_tokens, float *out)
+{
+    const int dim = qm->config.dim;
+    for (int i = 0; i < n_tokens; i++)
+        qmodel_forward(qm, state, tokens[i]);
+    /* state->x = post-final-norm hidden of the last (EOS) token. L2-normalize (double accum). */
+    double n2 = 0.0;
+    for (int i = 0; i < dim; i++)
+        n2 += (double)state->x[i] * (double)state->x[i];
+    const float inv = (n2 > 0.0) ? (float)(1.0 / sqrt(n2)) : 0.0f;
+    for (int i = 0; i < dim; i++)
+        out[i] = state->x[i] * inv;
+}
+#endif /* JARVIS_EMBED */

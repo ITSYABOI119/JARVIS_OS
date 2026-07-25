@@ -119,4 +119,18 @@ int qmodel_generate(const qmodel_t *qm, llama_state_t *state,
                     int eos_token, float temperature, int top_k,
                     uint64_t seed);
 
+#if JARVIS_EMBED
+/**
+ * Phase C / C/M1a Stage 2 (host parity, gated JARVIS_EMBED): last-token embedding.
+ * Feeds tokens through qmodel_forward, pools the last token's post-output_norm hidden state,
+ * and L2-normalizes into out[dim] (dim floats). Invokes no LM head and no sampling ITSELF, but
+ * qmodel_forward runs the output projection unconditionally, so each embed token still pays a
+ * discarded vocab x dim matmul (~155M MACs) — a C/M1b box-latency carry-forward, not a parity
+ * issue. Caller resets state->pos + KV cache per sequence. Default builds compile this out — the
+ * deployed engine is unaffected. The box embed path (co-resident model, MSG_EMBED IPC) is C/M1b.
+ */
+void qmodel_embed_last(const qmodel_t *qm, llama_state_t *state,
+                       const int *tokens, int n_tokens, float *out);
+#endif /* JARVIS_EMBED */
+
 #endif /* LLAMA_QUANT_H */

@@ -49,8 +49,15 @@ f. The GATE is OUR data, not MTEB (narrow/technical domain). Prove-it-or-don't, 
   EmbeddingGemma) + a mean-projection ablation, kept bge as reference. Golden vectors SAVED for the
   winner (`golden_vectors.npz` + `golden_meta.json`, sym:none + frozen mean-projection). See the C/M0.5
   FINDINGS section. **This inverts the "we must fine-tune" premise — see C/M1a.**
-- **C/M1a (HOST parity — the GATE before any box work): FOUNDATION + STAGE 1 (token parity) DONE
-  2026-07-24; Stage 2 (RoPE + embed-forward + vector parity) is the remaining phase.** STAGE 1 result
+- **C/M1a (HOST parity — the GATE before any box work): ✅ COMPLETE 2026-07-25 (FOUNDATION + Stage 1
+  token parity + Stage 2 vector parity).** STAGE 2 result: the port is **PROVEN to float32 machine
+  epsilon** — GATE 2′ (same-precision: our engine on a lossless-F32 GGUF vs the ST F32 golden) worst
+  `1−cos = 0.00e+00` on all 15 probes, and GATE 3 passes at 3.69e-4 vs the 1.268e-3 measured floor. The
+  ORIGINAL GATE 2 (`≤1e-4` cross-engine) was found **MIS-SPECIFIED, not merely unmet** — llama.cpp
+  quantizes ACTIVATIONS while JARVIS keeps them F32, so bit-level engine-vs-engine agreement is
+  unreachable BY CONSTRUCTION; it was **repaired into GATE 2′, not deleted** (GATE 3 alone leaves a ~3.4×
+  headroom band where a subtle port bug hides). `llama_load.c` + `llama_quant.c` proven EMBED=0
+  object-identical AND preprocessed-source-identical. See C/M1a FINDINGS (Stage 2). STAGE 1 result
   (token parity): **15/15 golden probes byte-EXACT with ZERO tokenizer.c changes** — the merge-rank
   scaffold (`gguf_vocab.c` merges→rank-scores + the GPT-2 Ġ marker + the harness EOS-151643 append)
   already reproduces the qwen tokenization, INCLUDING the contraction/punctuation cases the pre-mortem
@@ -291,6 +298,94 @@ the token-ids; `cm1a_token_parity.py` diffs them EXACTLY vs `golden_meta.json`.
 
 Stage 2 (RoPE-NEOX keyed off the qwen arch + the gated embed-mode forward + vector parity ≤1e-4 vs
 `gguf_golden` and ≤1.27e-3 vs the F32 golden) is a separate milestone gated on this Stage-1 green.
+
+### C/M1a Stage 2 — VECTOR PARITY (2026-07-25): PORT PROVEN, and the original GATE 2 found MIS-SPECIFIED
+
+**Result: C/M1a HOST PARITY COMPLETE.** The deployed C engine reproduces the reference
+Qwen3-Embedding-0.6B embeddings **to float32 machine epsilon**. The headline finding is not the pass —
+it is that the *gate itself* was wrong, and the repair (not the removal) is what proved the port.
+
+**The mis-specified gate (the durable finding).** GATE 2 was specified as "engine-vs-engine at the same
+weight quant ⇒ cosine ≥ 1−1e-4 ⇒ any gap is a PORT bug." Measured: `1−cos ∈ [1.82e-4, 3.69e-4]` — a
+FAIL. The premise, not the port, was broken: **llama.cpp quantizes its ACTIVATIONS** (to Q8_x, so it can
+use an integer dot product), while JARVIS's `qdot_row` dequantizes the Q8_0 **weight** and dots it
+against **F32 activations** (`const float *x`). At identical weight quant the two engines still perform
+different arithmetic, so agreement at 1e-4 is **unreachable by construction** — no port fix can close
+it, and keeping F32 activations is a deliberate JARVIS precision choice, not a defect to "fix."
+
+**Why the gate was REPAIRED, not deleted.** Passing on GATE 3 alone would have deleted the
+silent-failure guard the plan calls for (§2e): GATE 3's tolerance is 1.268e-3 while the observed gap is
+3.69e-4 — a ~3.4× headroom band in which a *subtle* port bug (wrong `rope_theta`, eps mismatch,
+misapplied `q_norm`/`k_norm`) passes unnoticed. Gross bugs (RoPE mode, pooling position) blow GATE 3
+open; subtle ones do not. So GATE 2 was replaced by a gate that *can* discriminate:
+
+**GATE 2′ — same-precision port gate.** Run OUR engine on an **F32 GGUF converted from the same HF
+checkpoint** and compare to the ST F32 golden. Both sides then hold F32 weights AND F32 activations, so
+the activation-quant confound is gone. Crucially, the checkpoint is **BF16 on disk** (all 310 tensors;
+`config.json:torch_dtype=bfloat16`, and transformers upcasts to F32 at load — `config.torch_dtype`
+only *reports* float32 post-load), and **BF16 → F32 is a lossless widening**, so the converted F32 GGUF
+carries **bit-identical weight VALUES** to what PyTorch computed with. The weight-delta term is exactly
+ZERO; any residual is pure arithmetic (CPU AVX2 order vs CUDA, our RMSNorm/RoPE/softmax FP details).
+Bands were **fixed in advance** (≤1e-5 noise / ≤1e-4 arithmetic-order / >1e-4 = real discrepancy, hunt
+it) so the verdict could not be re-based a second time after seeing numbers.
+
+Measured, all 15 probes, via the committed `cm1a_vector_parity.py` (`--c-f32` enables (a)+(b)):
+
+| # | comparison | worst `1−cos` | verdict |
+|---|---|---|---|
+| (a) | **GATE 2′** C-F32 vs ST-F32 golden | **0.00e+00** (maxabs 2.6e-7…5.1e-7) | **PASS — decisive, ≤1e-5 noise band** |
+| (b) | C-F32 vs C-Q8_0 (our own weight-quant delta) | 3.69e-4 (mean 2.39e-4) | 0.44× llama.cpp's own 8.45e-4 — same order, consistent |
+| (c) | C-Q8_0 vs llama.cpp-Q8_0 **[diagnostic]** | 3.69e-4 (mean 2.51e-4) | legacy ≤1e-4 would have said FAIL — reported, not gated |
+| GATE 3 | C-Q8_0 vs ST-F32 golden | 3.69e-4 | PASS (measured floor 1.268e-3) |
+
+(a) at **exactly 1.000000 cosine** (two probes read `−1.19e-07`, i.e. the float dot of two unit vectors
+rounding just above 1.0) settles it: the port is correct to numerical noise, so the entire (c) gap is
+attributable to quantization arithmetic — the diagnosis is *demonstrated*, not argued. (b) independently
+confirms it from the other side: our Q8_0 loses **less** accuracy than llama.cpp's own Q8_0, which is
+what keeping F32 activations predicts.
+
+**Config verified (the diagnosis-map suspects, all ruled out):** `rope_neox=1` via the gated qwen
+override (the #1 silent-parity breaker — `llama_load.c` sets `rope_neox = is_gemma`, so qwen3 would
+otherwise get interleaved RoPE: wrong vectors, no crash); last-token pooling of the appended EOS 151643
+at the tap (`llama_quant.c:1801`, post-`output_norm`/pre-LM-head); pool→L2 order; `embed_scale=0`,
+`use_gelu=0`, `rope_theta=1e6`, `rope_dim_count=0`, `rms_norm_eps=1e-6`; q_norm/k_norm F32; every output
+vector unit-norm.
+
+**Two real defects found by doing the work (both fixed, neither a parity issue):**
+- **`slurp()` could not read a >2 GB model on Windows** — it used `long len = ftell(f)`, and `long` is
+  **32-bit on Windows**, so the 2.38 GB F32 GGUF overflowed and the harness failed before embedding a
+  single token. Fixed with 64-bit offsets (`_fseeki64`/`_ftelli64`; LP64 already has a 64-bit `long`).
+  Verified behavior-neutral: the Q8_0 output is **md5-identical** before and after the fix.
+- **md5-of-object is an INVALID identity test on this toolchain.** The control experiment (compile the
+  *same* source twice) produced *different* `.o` md5s — clang/COFF embeds a build TimeDateStamp. This is
+  the object-level analogue of the 6-1 "never md5 a packed image" lesson: compare **section contents +
+  symbols**, never the whole artifact.
+
+**EMBED=0 identity — PROVEN on two axes** (Stage 2 is the first Phase-C change to touch deployed-path
+files, so this is a hard gate, not an afterthought). Both TUs compiled at `JARVIS_EMBED=0` from this tree
+and from `da8d5f8`, in one fixed working dir so only file *contents* differ:
+
+| TU | `.text` size | `.text` md5 | `.rdata` | `.data` | `nm` |
+|---|---|---|---|---|---|
+| `llama_load.o` | `0x2175` both | `dc09abdb…` identical | identical | identical | identical (113 syms) |
+| `llama_quant.o` | `0x7aed` both | `3bb15c01…` identical | identical | identical | identical (152 syms) |
+
+Stronger still, the **preprocessed sources** (`clang -E -P`) are **byte-identical** for both TUs — so the
+gating is provably complete for *any* compiler, not merely for the one that ran here.
+
+**C/M1b CARRY-FORWARD (box latency, not parity):** `qmodel_embed_last` invokes no LM head itself, but
+`qmodel_forward` runs the output projection **unconditionally** (`llama_quant.c:~1815`, immediately after
+the tap), so **every embed token pays a full vocab×dim matmul — 151669 × 1024 ≈ 155M MACs — whose result
+is discarded**. Correctness-neutral on the host; on the box it must be skipped in embed mode (an
+embed-mode flag on the forward, or a tapped variant). Also carried: conversion needed the `sentencepiece`
+package installed — not because qwen uses SentencePiece (it does not), but because
+`Qwen2Model.set_vocab` catches only `FileNotFoundError` to fall back to the correct `_set_vocab_gpt2()`
+path, and a missing module raises `ModuleNotFoundError`, which is not caught.
+
+**Model-gated-local, no CI step** (the Stage-1 precedent): the gate needs the 609 MB Q8_0 GGUF *and* the
+2.38 GB converted F32 GGUF. Reproduce command in `CLAUDE.md`'s `JARVIS_EMBED` row. The double-space
+pre-split gap stays deferred to C/M2-hardening — it does not gate vector parity (all 15 golden probes
+tokenize exactly).
 
 ## 4. Risks / honest limits
 - ~~Off-the-shelf may miss ROUTING (weak zero-shot); recall/cache are the safe wins.~~ **INVERTED by

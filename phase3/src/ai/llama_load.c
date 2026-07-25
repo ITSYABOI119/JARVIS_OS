@@ -51,6 +51,17 @@ int llama_load_config(llama_config_t *config, const gguf_ctx_t *ctx)
     config->use_gelu    = is_gemma;
     config->rope_neox   = is_gemma;
 
+#if JARVIS_EMBED
+    /* Phase C / C/M1a: Qwen3-Embedding uses NEOX (rotate-half) RoPE. With is_gemma=0 the line
+     * above leaves rope_neox interleaved (Llama-style), which is WRONG for the qwen arch — the
+     * #1 silent-parity breaker (plausible-but-wrong vectors, no crash). Override for qwen only;
+     * `config` is per-model, so the deployed Gemma path is untouched. embed_scale(0) + use_gelu(0)
+     * are already correct for qwen (no embedding scale; SwiGLU/silu, not GeLU) — only rope_neox
+     * needs the flip. Gated JARVIS_EMBED: default builds compile this out (object-identical). */
+    if (strncmp(arch, "qwen", 4) == 0)
+        config->rope_neox = 1;
+#endif
+
     char key[256];
     uint32_t u32_val;
     float f32_val;
