@@ -281,7 +281,12 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
     /* Build Gemma 4 chat template prompt with direct control token IDs:
      *   <bos> <|turn> user \n {query} <turn|> \n <|turn> model \n <|think|>
      * Tokens: bos=2, <|turn>=105, user=2364, \n=107, <turn|>=106, model=4368, <|think|>=98
-     * Stop on <eos>=1, NOT eos_id=106 (that's <turn|> which model emits first). */
+     * (all ten VERIFIED against the GGUF's tokenizer.ggml.tokens, 2026-07-26.)
+     *
+     * CORRECTED 2026-07-26: this used to read "Stop on <eos>=1, NOT eos_id=106 (that's <turn|>
+     * which model emits first)". That had it backwards — <turn|> IS the model declaring its turn
+     * finished, and ignoring it made every answer pad to the token cap. The generation loop now
+     * stops on tok->eos_id (the LOADED declared value) as well as <eos>. */
     int prompt_ids[256];          /* G3/M2: was [128]; room for preamble+query. KV stays 512. */
     int n_prompt = 0;
     prompt_ids[n_prompt++] = bos_id;        /* <bos> */
@@ -499,6 +504,29 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
     uint64_t gen_t0 = m1_rdtsc();
     while (n_gen < 50 && state->pos < state->max_seq_len) {
         int next = sample_greedy(state->logits, qm->config.vocab_size);
+
+        /* HONOUR THE MODEL'S DECLARED END-OF-TURN.
+         *
+         * The model declares its terminator in the GGUF as tokenizer.ggml.eos_token_id, which
+         * gguf_vocab.c ALREADY reads and tokenizer_init already copies into tok->eos_id — for
+         * Gemma 4 that is 106 (<turn|>). This loop used to break only on <eos>=1 and ignore the
+         * declared value, so the model would end its turn, not be listened to, and keep
+         * generating until the cap. MEASURED on a native probe: an answer completed, then 23
+         * consecutive <turn|> tokens burned before the 50-token cap — 46% of the budget spent
+         * padding a finished answer.
+         *
+         * Use the LOADED value, never a hardcoded 106: hardcoding token ids is exactly what
+         * produced this bug class (the <|think|> placement bug came from the same habit).
+         * eos_id > 0 guards a model that declares none; <eos>=1 is kept as a belt-and-braces
+         * stop for a model whose declared id is absent or wrong.
+         *
+         * BREAK BEFORE STORING. A terminator is not answer text. Storing it is why records and
+         * console replies carried a trailing "<turn|><turn|><eos>", and why that junk reached
+         * the recall corpus. n_gen therefore counts ANSWER tokens only, which also makes the
+         * v4 tok/s figure measure generation rather than padding. */
+        if (next == 1 /* <eos> */ || (tok->eos_id > 0 && next == tok->eos_id))
+            break;
+
         output_ids[n_gen++] = next;
 #if JARVIS_DBG_PB
         {
@@ -516,7 +544,7 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
             pb_log(gb);
         }
 #endif
-        if (next == 1 /* <eos> */) break;
+        /* (the terminator check moved to the TOP of the loop — see the comment there) */
         qmodel_forward(qm, state, next);
     }
 #if JARVIS_DBG_PB
