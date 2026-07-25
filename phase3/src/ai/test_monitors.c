@@ -231,6 +231,47 @@ int main(void)
               "T12c event fields stamped (type/severity/snap_len)");
     }
 
+    /* T13: the STORE-WRAP ID SPACE. W2 arms one absolute latch per durable store and passes the
+     * store id as v1; the control-IN store (id 4, @ LBA 21,140,000) was added at 6-5/M5-recall
+     * ~2 weeks AFTER W2 and was never armed, so the ONE store holding real human conversation
+     * rolled SILENTLY at CTRL_EPI_MAX_ENTRIES. T7 above only ever exercises v1 == 1, so the new
+     * id needs its own pin: every armed id must render distinctly, stay keyword-clean, and pass
+     * the REAL shield_assess — otherwise a new store's NOTIFY could be BLOCKED by its own
+     * snapshot (the audit hole T7 exists to prevent) and nobody would notice. */
+    {
+        const int ids[] = { 1, 2, 3, 4 };   /* episodic / JACT / semantic / control-IN */
+        char seen[4][MON_SNAP_MAX];
+        int all_ok = 1, all_clean = 1, all_allowed = 1, all_distinct = 1;
+        for (int i = 0; i < 4; i++) {
+            monitor_event_t ev;
+            int n = monitor_build_snapshot(&ev, MON_EV_STORE_WRAP, 1, ids[i], 4096);
+            if (n <= 0 || ev.snap_len != (uint16_t)n || ev.snap[ev.snap_len] != '\0') {
+                all_ok = 0; continue;
+            }
+            if (!snapshot_keyword_clean(ev.snap)) {
+                all_clean = 0;
+                printf("        (store id %d snapshot carries a blocklist keyword: \"%s\")\n",
+                       ids[i], ev.snap);
+            }
+            action_ctx_t ctx = { .trigger = ev.snap, .trigger_len = ev.snap_len, .query_key = 0 };
+            shield_action_result_t sr = shield_assess(ACTION_NOTIFY_ANOMALY, &ctx, NULL, 0);
+            if (sr.verdict != SHIELD_VERDICT_EXECUTE) all_allowed = 0;
+            memcpy(seen[i], ev.snap, sizeof(seen[i]));
+            for (int j = 0; j < i; j++)
+                if (strcmp(seen[i], seen[j]) == 0) all_distinct = 0;
+        }
+        CHECK(all_ok,       "T13a store ids 1-4: snapshot builds + NUL-bounded");
+        CHECK(all_clean,    "T13b store ids 1-4: NO canonical blocklist keyword");
+        CHECK(all_allowed,  "T13c store ids 1-4: shield_assess(NOTIFY_ANOMALY) never BLOCKED");
+        CHECK(all_distinct, "T13d store ids 1-4: render distinctly (id is not dropped)");
+        {   /* exact-format pin for the NEW id — a benign liveness notice, never a problem claim */
+            monitor_event_t ev;
+            int n = monitor_build_snapshot(&ev, MON_EV_STORE_WRAP, 1, 4, 4096);
+            CHECK(n > 0 && strcmp(ev.snap, "mon store-wrap id=4 total=4096") == 0,
+                  "T13e exact: \"mon store-wrap id=4 total=4096\" (control-IN store)");
+        }
+    }
+
     printf("=== %d PASS, %d FAIL ===\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

@@ -750,6 +750,15 @@ static int             g_mon_wrap_epi_on = 0, g_mon_wrap_jact_on = 0;
 static monitor_t       g_mon_wrap_sem;
 static int             g_mon_wrap_sem_on = 0;
 #endif
+#if JARVIS_CONTROL_IN_RECALL
+/* 6-1/M2 W2 gap (closed 2026-07-25): the control-IN store (@ LBA 21,140,000, CTRL_EPI_MAX_ENTRIES
+ * 4096) was added at 6-5/M5-recall ~2 weeks AFTER W2 was written, and was never armed — so the ONE
+ * store holding real human conversation (and the future training corpus) rolled SILENTLY. The
+ * [CTRL-EPI] index-full warning is NOT equivalent cover: it counts only RECALLABLE turns, so the
+ * store can wrap long before the index fills. Store id 4 (episodic 1 / JACT 2 / semantic 3). */
+static monitor_t       g_mon_wrap_ctrl;
+static int             g_mon_wrap_ctrl_on = 0;
+#endif
 #if JARVIS_MONITOR_PROBE || JARVIS_PROACTIVE_PROBE
 static const int64_t   g_mon_uptime_marks[3] = { 5000, 15000, 30000 };   /* probe: short marks */
 #else
@@ -6322,6 +6331,26 @@ static void *main_continued(void *arg UNUSED)
                             put_dec(g_semantic.hdr.total_entries); puts_serial("\n");
                         }
 #endif
+#if JARVIS_CONTROL_IN_RECALL
+                        /* W2 store id 4 — the control-IN store. Same shape as the three above:
+                         * ABSOLUTE GE latch on the monotonic total at capacity, armed ONLY if not
+                         * already wrapped, and an already-rolling store logs ONE [MONITOR] info
+                         * line so a historical wrap never re-notifies per boot. Under the probe,
+                         * total+1 so the next control-IN write trips it. */
+#if JARVIS_MONITOR_PROBE
+                        int64_t mon_ctrl_thr = (int64_t)g_ctrl_episodic.hdr.total_entries + 1;
+#else
+                        int64_t mon_ctrl_thr = (int64_t)CTRL_EPI_MAX_ENTRIES;
+#endif
+                        if (g_ctrl_episodic_ready &&
+                            (int64_t)g_ctrl_episodic.hdr.total_entries < mon_ctrl_thr) {
+                            monitor_init(&g_mon_wrap_ctrl, mon_ctrl_thr, MON_CMP_GE, 1);
+                            g_mon_wrap_ctrl_on = 1;
+                        } else if (g_ctrl_episodic_ready) {
+                            puts_serial("[MONITOR] control-in already rolling total=");
+                            put_dec(g_ctrl_episodic.hdr.total_entries); puts_serial("\n");
+                        }
+#endif
                     }
                     /* 6-1/M2 W3: boot-relative uptime milestones (fire-once each). */
                     for (int mi = 0; mi < 3; mi++)
@@ -6489,6 +6518,14 @@ static void *main_continued(void *arg UNUSED)
                 if (g_mon_wrap_sem_on &&
                     monitor_sample(&g_mon_wrap_sem, (int64_t)g_semantic.hdr.total_entries))
                     mon_notify(MON_EV_STORE_WRAP, 3, (int64_t)g_semantic.hdr.total_entries);
+#endif
+#if JARVIS_CONTROL_IN_RECALL
+                /* id 4 — the control-IN store. A store rolling is a BENIGN LIVENESS event, not a
+                 * problem: this is the box saying "the oldest conversation turns are now being
+                 * overwritten", which is the designed circular behaviour, not a fault. */
+                if (g_mon_wrap_ctrl_on &&
+                    monitor_sample(&g_mon_wrap_ctrl, (int64_t)g_ctrl_episodic.hdr.total_entries))
+                    mon_notify(MON_EV_STORE_WRAP, 4, (int64_t)g_ctrl_episodic.hdr.total_entries);
 #endif
                 /* M2 W3 — uptime milestones: boot-relative ELAPSED only (guard the pre-TSC
                  * zero read; marks <= 7 d — uint32 ms wraps ~49.7 d). */
