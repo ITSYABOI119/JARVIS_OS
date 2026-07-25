@@ -387,3 +387,93 @@ other milestone is sizing or plumbing around a prompt that should be correct fir
    still injected). But it was sized against a diagnosis that has since been superseded, and it did
    not survive contact with a store containing thought text. That is worth saying plainly rather
    than leaving the earlier "fix verified" framing standing unqualified.
+
+---
+
+## 11. RESULT (2026-07-26) — commits 1–3 landed, and BOTH orderings' premises died
+
+Three commits, measured between each as instructed. Two premises this document and its brief were
+built on turned out to be wrong, both killed by measurement rather than argument.
+
+### 11.1 Commit 1 (stop-token) — the effective budget is ~50, NOT ~27
+
+The ruling ordered this first on the basis that "your probe found 23 of 50 tokens were `<turn|>`
+padding, so the effective budget is ~27, not 50" and was "about to move by ~2×". **Measured, over 5
+realistic questions with no preamble:**
+
+| question | terminators in stream | padding recovered |
+|---|---|---|
+| CPU cores | **0** | 0 (0%) |
+| miniflip | 4 | 4 (8%) |
+| favourite colour | **0** | 0 (0%) |
+| page fault | **0** | 0 (0%) |
+| artificial intelligence | **0** | 0 (0%) |
+
+**4 of 5 emit no terminator at all.** The 23-token figure came from ONE question **with a preamble
+injected**, which made the model finish early and then pad — it does not generalise. Real recovery
+is **0–8%**, and the effective budget was ~50 all along.
+
+**THE INVERSE FINDING IS THE IMPORTANT ONE: 5 of 5 hit the 50-token cap**, every answer truncated
+mid-sentence ("…determined is **not currently"). Commit 1 is still correct — it stops writing
+`<turn|><turn|><eos>` into the store and the reply, and it matters whenever the model does finish —
+but **it is not a budget fix.**
+
+### 11.2 Commit 2 (placement) — the CORRECT placement is WORSE
+
+Native probe, 3 questions × 3 placements, then confirmed on seL4:
+
+| placement | native (3 questions) | seL4 KVM (13 inferences) |
+|---|---|---|
+| trailing `<\|think\|>` (what shipped) | thought on 1 of 3 | — |
+| **leading system turn (the model's own template)** | **thought on 3 of 3** | **every `[INFER]`, 15 occurrences** |
+| no think token (`JARVIS_THINKING=0`) | clean answers on 3 of 3 | **0 occurrences**, coherent prose |
+
+Both box gates: `err=0`, 0 MODEL-BAD/FATAL, workload counters identical
+(`q=100 hits=71 infer=13 hb=11 shield=5`).
+
+Correct placement makes the model think **more** — unsurprising once seen, because that placement is
+exactly how the model was trained to be told "you are in thinking mode". So the flag ships
+**default OFF**, deviating from the "Default: ON" ruling, because:
+
+**Thinking ON + thought stripped + a 50-token SHARED budget = an EMPTY reply.** At the correct
+placement the model spends all 50 tokens on thought; strip it (the agreed D4 behaviour) and there is
+nothing left to send. ON is not a preference we can honour yet — it is blocked on arithmetic.
+
+### 11.3 Is the budget milestone still needed? YES — it is now the main event
+
+The brief hoped commit 1 + correct placement might make 50 tokens sufficient, which would have made
+D1–D5 mostly moot. The measurement says the opposite:
+
+- commit 1 recovers 0–8%, not 46%;
+- 5 of 5 answers are cut mid-sentence at 50 tokens **with thinking off**, which is the deployed
+  configuration;
+- thinking ON is *gated on* the budget work rather than independent of it.
+
+**So M2 (separate budgets) is promoted from "quality knob" to the critical path**, and D1's
+unmeasured `poll_max` wall-time is now the first thing to measure, not a footnote. Revised ordering:
+
+- **M0/M1 — DONE** (commits 1–3 below).
+- **M2 — separate budgets + the poll_max measurement.** Now the blocking milestone. Note the
+  answer-only case needs no thought budget at all: at `JARVIS_THINKING=0` a single raised
+  `answer_max` is the whole change, and ~192 tokens ≈ 35 s is comfortably inside even the pessimistic
+  60 s read of the poll budget.
+- **M3 — transport (D2)**, unchanged, and it gates M2's usable ceiling at ~1024 B.
+- **M4 — JRPL v3** (`route` + `think_tokens`), unchanged.
+- **M5 — the `JARVIS_THINKING` flip**, which is now explicitly *after* M2, not before.
+
+### 11.4 What landed
+
+| commit | what | gate |
+|---|---|---|
+| `9d70f7f` | stop on the model's DECLARED `eos_token_id` (loaded, not hardcoded), break before storing | KVM `q=100 err=0`, coherent, 0 `turn\|`/`<eos>` vs 1 visible pre-fix |
+| `d8993ed` | `<\|think\|>` moved to the leading system turn; `JARVIS_THINKING` **default 0** | KVM both states, `err=0` each |
+| `c65e1aa` | thought scratch not recallable + line-leading `"N."` is not a sentence end | host 72 → **83 PASS**, gcc `-Wall -Werror` |
+
+### 11.5 Honest limits
+
+- The per-question token counts are from the **native engine**, not the deployed seL4 build. That
+  harness reproduced box output byte-for-byte on both the good and the bad case, which is why it is
+  trusted here — but it is corroboration, not the deployed path.
+- **`poll_max`'s wall-time is still unmeasured.** Every latency number in D1 remains arithmetic on a
+  measured tok/s, not an observed end-to-end answer time. M2 must measure it first.
+- **Nothing is deployed.** The box still runs `9362c756` with the validation defect live.
