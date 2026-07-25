@@ -277,3 +277,101 @@ reach.** That is the whole point and also the whole risk. Specifically:
    turns "what did I run at 2am" into a fact rather than a memory. It must never log key material.
 7. **One menu, or separate read-only and admin menus?** *Recommendation: one menu with R2's visual
    split.* Two tools means two entry points and the admin one gets launched "just to look".
+
+---
+
+## 10. v1 RESULT (2026-07-25) — BUILT, all 7 options, read-only: PASS
+
+Shipped as `phasec/scripts/jarvis_menu.bat` (**the ENTRY POINT** — a `.ps1` cannot be
+double-clicked) + `phasec/scripts/jarvis_menu.ps1` (**the implementation**), following the
+`start_receiver.bat`/`.ps1` precedent rather than inventing a second convention. All seven §6
+options implemented, no additions. The strategist's rulings on OQ1–OQ7 were adopted as written.
+
+### The invariant, and how to verify it
+
+**Nothing in v1 constructs a dd write operand.** This is not a promise, it is a grep over exactly
+two files:
+
+```
+grep -nE 'of=|seek=' phasec/scripts/jarvis_menu.ps1 phasec/scripts/jarvis_menu.bat   # must print NOTHING
+```
+
+Measured: **no matches**, with a positive control confirming the check is not vacuous (`if=` and
+`skip=` *are* present — the reads are real). The verification command is deliberately **not written
+inside the scripts**: the first draft documented it in the `.ps1` header, and the file then matched
+its own pattern, which would have made the invariant permanently un-checkable. The recipe lives here
+and in CLAUDE.md; the scripts state the property only.
+
+### Two design points that were decided during the build
+
+**The `dd | python3` pipe runs ON THE BOX, not on the Main PC.** Raw sector data never crosses a
+PowerShell pipeline, because PowerShell pipelines carry text and would corrupt it — the same class
+of bug that silently mangled ~12% of generated 32-byte keys until `os.O_BINARY` was added. Only text
+crosses ssh. This also means no intermediate file is written anywhere, which is what keeps the
+invariant above true — a local-parse design would have needed a temporary file and a write operand.
+**Residual, stated honestly:** this uses the BOX clone's parser, so a stale box clone parses with a
+stale parser. `-Check` verifies each remote parser exists and prints the resolved path.
+
+**Output volume (the gap the strategist raised, not in the OQs).** Default is **write the full
+output to a file and show the last N lines** (`-Lines`, default 40; `-Lines 0` prints everything).
+Nothing is lost — the header block that a naive `tail` would cut is preserved in the file — and the
+console stays readable. Dumps go to `%USERPROFILE%\.jarvis\menu\`, **outside the repo**, so
+control-IN conversation text cannot be committed by accident. The control-IN option says so on
+screen before it runs.
+
+### What -Check validates (it is the CI substitute — no ci.yml step exists or can exist)
+
+`ssh` on PATH · `start_receiver.ps1` present · **all six store constants derived from the headers**
+(printed with the macro they came from) · box state · each remote parser present · dumpcap presence
+(informational) · transcript directory writable · then **the exact command every option would run**,
+including option 4's probe chain. Measured: **PASS, exit 0**, all four stores resolving to the
+documented values — telemetry-log 4000794624/2701 · episodic 21100000/8193 · control-IN
+21140000/4097 · JACT 21120000/4097.
+
+### PROVEN on real hardware
+
+The box was on Ubuntu, so v1 was run against it rather than only self-tested:
+
+- **A real store read end to end** — option 8 (JACT), through the shipped `Invoke-StoreRead` body:
+  `exit=0`, 143 lines, `Checksum: 0x4A41434C (OK)`, 134 real records decoded, tail limit applied
+  (`showing the last 6 of 143`), full dump written to `%USERPROFILE%\.jarvis\menu\`.
+- **The transcript line**, in the ruled format, recording the RESOLVED command and never the label:
+  `2026-07-25T19:55:19+10:00 | read-jact | ssh -o BatchMode=yes … | exit=0`.
+- **State detection** resolving `UBUNTU -- ssh answered`.
+
+### Three defects the build found — all fixed, all found by RUNNING it
+
+1. **The self-matching grep** (above): documenting the invariant's own pattern inside the file it
+   checks makes the check useless forever.
+2. **An infinite loop on redirected stdin.** With stdin not a console, `Read-Host` returns empty
+   *immediately* instead of blocking, and the menu loop spun — measured **~10,000 iterations and a
+   232,569-line log in three minutes**. Now guarded by `[Console]::IsInputRedirected` (exit 6, in
+   0.6 s, naming `-Check` as the non-interactive entry point), plus a consecutive-empty-read guard
+   for the console-EOF case that `IsInputRedirected` reports as false.
+3. **`-Lines` never worked.** PowerShell variable names are **case-insensitive**, so the local
+   `$lines = @($out)` overwrote the `$Lines` parameter and `$lines.Count -le $Lines` compared the
+   array against itself — always true, so the full dump always printed. This is exactly the failure
+   the output-volume ruling exists to prevent, it shipped looking correct, and **`-Check` could
+   never have caught it** because `-Check` never reads a store. Renamed to `$outLines`; re-measured
+   `showing the last 6 of 143`.
+
+### UNVERIFIED, stated rather than glossed
+
+- **The interactive loop itself is not automatable, by construction.** The stdin guard that fixes
+  defect 2 also makes piped end-to-end drive impossible — which is the correct trade, and it is the
+  concrete reason `-Check` is the substitute (R5). The loop's dispatch was exercised by loading the
+  shipped function bodies via the PowerShell AST and calling them under the same `StrictMode`; the
+  `Read-Host` menu rendering itself was verified by eye, not by a harness.
+- **Options 1–3 were not launched** during verification (they open a receiver window and, in send
+  mode, a UAC prompt). Their resolved commands are pinned by `-Check`; the launcher's own behaviour
+  is covered by its own `-Check`, which v1 deliberately does not duplicate.
+- **The dumpcap fallback probe was not exercised** — the box was on Ubuntu, so the ssh branch
+  answered first. dumpcap presence was confirmed; the capture path itself is untested.
+- **The JARVIS and UNKNOWN state branches were not exercised** for the same reason.
+
+### Honest ceiling — unchanged, and now more relevant
+
+§8 stands verbatim: wrapping a dangerous command in a menu does not make it less dangerous, it makes
+it easier to reach. v1 sidesteps that only because it is read-only. The moment a destructive option
+lands, §8 becomes the operative section, and defect 3 above is the standing argument for why each
+one needs to be exercised against real hardware rather than trusted because `-Check` printed it.
