@@ -500,7 +500,7 @@ static uint32_t g_model_bad_detail = 0; /* alloc: pages obtained | map: mapping-
  * capability, never to boot"). Same fail-closed PATTERN as 103dea6, different flag.
  *
  * ABSENT IS THE NORMAL CASE, NOT AN ERROR (C/M1b-1 T2): at JARVIS_EMBED=0 there is no second file
- * at all, and even at =1 the operator may not have provisioned it. A box with no QWEN3EMB.GUF
+ * at all, and even at =1 the operator may not have provisioned it. A box with no QWENEMB.GUF
  * boots completely normally, serves inference, and says so ONCE — never per window, never
  * degrading Gemma. g_embed_ready stays 0 and nothing else changes. */
 static seL4_CPtr *g_embed_frame_caps = NULL;

@@ -1,57 +1,39 @@
 #!/bin/bash
-# QEMU boot with NVMe emulation for testing NVMe driver + FAT32 model loading
-# Usage: bash phase3/scripts/qemu_test_nvme.sh [/path/to/model.gguf]
+# ============================================================================
+# qemu_test_nvme.sh — DEPRECATED SHIM. Delegates to qemu_test.sh.
+#
+# This script used to build a throwaway FAT32 image sized to the MODEL (~3 GB)
+# and boot it with no -smp. Both were traps:
+#
+#   1. NO -smp  => numNodes==1, so the M3 worker pool never engaged and any
+#      conclusion about threading, respawn/rejoin or worker faults was void.
+#   2. IMAGE TOO SMALL => the raw-LBA stores start at LBA 21,100,000 (10.06 GiB).
+#      A ~3 GB image cannot contain them, so episodic / semantic / JACT /
+#      control-key / control-IN ALL silently failed to init. Any memory or audit
+#      behaviour "tested" on that image was testing nothing.
+#
+# It also defaulted to a Llama-1B path, not the deployed Gemma. Rather than keep
+# a second, wrong, reachable implementation (see qemu_test.sh's header on why two
+# implementations drift), this now forwards to the canonical script, which takes
+# a PERSISTENT, correctly-sized image via --image.
+#
+# Migrate to:  bash phase3/scripts/qemu_test.sh [--image PATH] [--log FILE]
+# ============================================================================
 set -euo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-BUILD="${SEL4_BUILD_DIR:-$HOME/sel4-x86/jbuild}"
-KERNEL="$BUILD/images/kernel-x86_64-pc99"
-ROOTSERVER="$BUILD/images/sel4test-driver-image-x86_64-pc99"
-MODEL="${1:-$HOME/Desktop/JARVIS_OS/phase3/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf}"
-DISK_IMG="/tmp/jarvis_data.img"
+echo "NOTE: qemu_test_nvme.sh is DEPRECATED — delegating to qemu_test.sh." >&2
+echo "      (the old behaviour booted without -smp and built an image too small" >&2
+echo "       to contain the raw-LBA stores; see this file's header)." >&2
 
-if [ ! -f "$KERNEL" ] || [ ! -f "$ROOTSERVER" ]; then
-    echo "ERROR: Build images not found. Run build_jarvis_x86.sh first."
-    exit 1
+# The old first positional argument was a MODEL path. It is no longer meaningful:
+# the canonical script boots a persistent image that already carries the model as
+# GEMMA2B.GUF. Refuse rather than silently ignore it.
+if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then
+    echo "ERROR: this script no longer takes a model path ('$1')." >&2
+    echo "       The model lives on the NVMe image as GEMMA2B.GUF; pass the image:" >&2
+    echo "         bash phase3/scripts/qemu_test.sh --image /path/to/nvme.img" >&2
+    exit 2
 fi
 
-# Create FAT32 disk image with model
-# Size the image to fit the model (round up to nearest GB + 128MB for FAT32 overhead)
-MODEL_SIZE_MB=1024
-if [ -f "$MODEL" ]; then
-    MODEL_SIZE_MB=$(( $(stat -c%s "$MODEL") / 1048576 + 128 ))
-    [ "$MODEL_SIZE_MB" -lt 1024 ] && MODEL_SIZE_MB=1024
-fi
-echo "Creating FAT32 disk image (${MODEL_SIZE_MB}MB)..."
-dd if=/dev/zero of="$DISK_IMG" bs=1M count="$MODEL_SIZE_MB" 2>/dev/null
-mkfs.fat -F 32 -n JARVIS_DATA "$DISK_IMG" >/dev/null
-MOUNT_DIR=$(mktemp -d)
-sudo mount "$DISK_IMG" "$MOUNT_DIR"
-if [ -f "$MODEL" ]; then
-    echo "Copying model ($(du -h "$MODEL" | cut -f1))..."
-    sudo cp "$MODEL" "$MOUNT_DIR/GEMMA2B.GUF"
-else
-    echo "WARNING: Model not found at $MODEL"
-fi
-sudo umount "$MOUNT_DIR"
-rmdir "$MOUNT_DIR"
-
-echo "Booting JARVIS seL4 x86-64 with NVMe emulation..."
-echo "Exit: Ctrl-A then X"
-echo ""
-
-# Use KVM if available (100x faster inference)
-KVM_OPTS=""
-if [ -e /dev/kvm ]; then
-    KVM_OPTS="-enable-kvm -cpu host"
-    echo "KVM acceleration: enabled"
-else
-    echo "KVM acceleration: not available (inference will be slow)"
-fi
-
-qemu-system-x86_64 \
-    ${KVM_OPTS:--cpu Nehalem,-vme,+pdpe1gb,-xsave,-xsaveopt,-xsavec,-fsgsbase,-invpcid,+syscall,+lm,enforce} \
-    -nographic -serial mon:stdio -m 8G \
-    -kernel "$KERNEL" \
-    -initrd "$ROOTSERVER" \
-    -drive file="$DISK_IMG",if=none,id=nvme0,format=raw \
-    -device nvme,serial=JARVIS_DATA,drive=nvme0
+exec bash "$HERE/qemu_test.sh" "$@"
