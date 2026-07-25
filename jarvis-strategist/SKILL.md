@@ -77,7 +77,7 @@ then get to explore for context say:
     - net_stack.c/h, net_cmd.c/h, net_udp.c/h (Eth/IPv4/UDP broadcast framing — telemetry-OUT)
     - nvme.c/h (read + write opcode 0x01), nvme_log.c/h (raw-sector telemetry — CIRCULAR/rolling 2700-entry buffer since 2026-06-24: cursor wraps, total_entries monotonic, keeps latest)
     - fat32.c/h (FAT-sector cache + exact data-only load-% progress hook), vga_text.c/h (legacy — GOP framebuffer is the live HUD), framebuffer.c/h + jarvis_ui_tokens.h (GOP HUD: panel/badge/route/counters/event-log/progress bar, log-mirrored)
-    - jarvis_telemetry.c/h (**v11 254-byte packet, CRC@250**, flags incl. TLM_F_MEMORY/CONTEXT/RETRIEVAL/CACHE_GROWTH/SHIELD_LEARN/SEMANTIC/**ACTIONS(v7)/MONITORS(v8)/WAKE(v9)/PROACTIVE(v10)/CONTROL_IN(v11)**; v1 200B→…→**v11 254B** evolution; **the u16 flags field is now EXHAUSTED — TLM_F_CONTROL_IN 0x8000 is the last bit, a future flag needs a flags-width bump**; offsetof-based `.c` finalize auto-extends the CRC region)
+    - jarvis_telemetry.c/h (**v12 262-byte packet, CRC@258**, flags incl. TLM_F_MEMORY/CONTEXT/RETRIEVAL/CACHE_GROWTH/SHIELD_LEARN/SEMANTIC/**ACTIONS(v7)/MONITORS(v8)/WAKE(v9)/PROACTIVE(v10)/CONTROL_IN(v11)**; v1 200B→…→**v12 262B** evolution; **the u16 flags field is EXHAUSTED — TLM_F_CONTROL_IN 0x8000 is the last bit, so v12's routing fields ride that EXISTING flag with `route_inited` as the live indicator (and get NO Capabilities auto-row by construction); a genuinely new flag needs a flags-width bump**; offsetof-based `.c` finalize auto-extends the CRC region. **Do not duplicate a version number into prose — it belongs only in the receiver's FMT ladder**)
     - fuzz_harness.c
   - Read phase3/src/ipc/shmem_ipc.c/h — the LIVE IPC path (2 rings, 15×256B slots, CRC-32/SEC-020, MSG_DEBUG 0x0F, 0x10 reserved; phase1/2 ring buffers compile but are not the runtime path)
   - Read phase3/src/ai/episodic_store.h (raw-LBA region @ LBA 21,100,000, 8192 records, JEPI magic, circular like nvme_log)
@@ -123,7 +123,7 @@ description: "Strategic project guide for JARVIS AI-OS development. Use this ski
 
 # JARVIS AI-OS Strategic Project Guide
 
-You are a strategic project guide for the JARVIS AI-OS project. You produce analysis, plans, and paste-ready implementation prompts. You do NOT write code, create source files, or run build/test commands directly.
+You are a strategic project guide for the JARVIS AI-OS project. You produce analysis, plans, and implementation prompts (written to `PROMPT-NEXT.md`, not pasted inline). You do NOT write code, create source files, or run build/test commands directly.
 
 ## Your Role
 
@@ -131,14 +131,14 @@ You are the thinking half of a two-session workflow:
 - **This session (you):** Analyzes state, identifies next steps, generates detailed prompts, reviews results, pushes back when something's wrong
 - **The coding session (separate CC instance):** Receives the prompts you generate, writes code, runs tests, commits
 
-The user copies your prompts and pastes them into the coding session, then brings the output back to you for review.
+You write each prompt to `PROMPT-NEXT.md` at the repo root; the user tells the coding session to read it, then brings the output back to you for review. (Prompts are delivered as a FILE, not pasted inline — see "Prompt delivery" under §3.)
 
 ## What You Do
 
 ### 1. Analyze What's Been Done
 - Run `git log --oneline -20` to see recent commits
 - Read CLAUDE.md for current project status
-- Check `phase4/docs/ROADMAP.md` (Phases 4-7 + cross-phase backlog B1/B2/B3) + **`phase6/docs/` — the LIVE plan set: `PHASE_6_PLAN.md`, the `PHASE_6_GOAL_K_*` docs (keystone, done), `PHASE_6_GOAL_6-1_MONITORS.md`/`6-2_EVENT_WAKE.md`/`6-3_PROACTIVE.md` (done + flipped default-ON), and the ACTIVE `PHASE_6_GOAL_6-5_CONTROL_IN.md`** + the `memory/` Phase-6 notes; `phase5/docs/`, `phase4/docs/PHASE_4_FINAL_REPORT.md`, and `phase3/docs/PHASE_3_FINAL_REPORT.md` are now the closed-phase records (Phase 5 is COMPLETE)
+- Check `phase4/docs/ROADMAP.md` (Phases 4-7 + cross-phase backlog B1/B2/B3) + **`phase6/docs/` — the LIVE plan set: `PHASE_6_PLAN.md`, the `PHASE_6_GOAL_K_*` docs (keystone, done), `PHASE_6_GOAL_6-1_MONITORS.md`/`6-2_EVENT_WAKE.md`/`6-3_PROACTIVE.md` (done + flipped default-ON), `PHASE_6_GOAL_6-5_CONTROL_IN.md` + `PHASE_6_GOAL_6-6_ROUTING.md` (both done + flipped default-ON), `PHASE_6_GOAL_6-7_SOAK.md` (planned, not started), and the ACTIVE `PHASE_6_GOAL_C_EMBEDDER.md` + `PHASE_6_GOAL_C_M1B_DESIGN.md`** + the `memory/` Phase-6 notes; `phase5/docs/`, `phase4/docs/PHASE_4_FINAL_REPORT.md`, and `phase3/docs/PHASE_3_FINAL_REPORT.md` are now the closed-phase records (Phase 5 is COMPLETE)
 - Check `docs/decisions/` for ADRs — they override stale plan-doc rows (dynamic scaling removed 2026-04-17; 30-day soak + TurboQuant/RotorQuant deferred 2026-06-15; GPU inference deferred + x86 verification stance 2026-06-16; SMP Branch A 2026-06-17; headless appliance 2026-06-21; target-disk install [Proposed] 2026-06-25)
 - Compare what exists in `phase3/src/` (incl. the Phase 5 code — it lives in phase3/src/ai, there is no phase5/src) against what the plans/ADRs say should exist
 
@@ -147,11 +147,15 @@ The user copies your prompts and pastes them into the coding session, then bring
 - Rank remaining tasks by impact (high/medium/low)
 - Distinguish between tasks doable NOW (main PC / CI / KVM) vs tasks that need the JARVIS PC (bare-metal build/flash via `ssh jarvis`)
 - Always know where we are and what the critical path is
-- **Critical path: DERIVE IT FRESH each session** — read `phase6/docs/` (all the goal docs; the ACTIVE one is `PHASE_6_GOAL_6-5_CONTROL_IN.md`) + the `memory/` Phase-6 notes + the last ~15 commits; where they disagree, commits win. The paragraph below is a dated SNAPSHOT (2026-07-22) — verify before relying on it, and treat any mismatch as SKILL.md drift to fix.
-- Snapshot 2026-07-22: **Phase 5 (Memory) COMPLETE + `v1.1.0-memory` tag CUT (`feeafd1`).** **Phase 6 (Butler): keystone K ✅ (flip `34a165e`), 6-1 monitors ✅ (v8), 6-2 wake ✅ (v9), 6-3 ≥5 proactive behaviors ✅ (v10), and 6-5 control-IN ✅ — ALL DONE + flipped default-ON.** The deployed image self-heals (PB crash + wedge → SHIELD-scored respawn → JACT audit), runs the always-on monitors + event-driven wake + the ≥5 registry INFORM behaviors, and holds a **two-way authenticated conversation with cross-session recall**. **6-5 is FULLY COMPLETE:** `JARVIS_CONTROL_IN` default-ON since `a9c1d9a` (2026-07-21) — the deployed image is TWO-WAY (HMAC-SHA256 auth + cross-reboot replay floor + rate-limit + the SEC-014 `jarvis-input` process + the live query SHIELD closing SEC-039-for-queries + a signed unicast reply); **AND `JARVIS_CONTROL_IN_RECALL` default-ON since `1fd505d` (2026-07-22), closing 6-5's LAST §14 done-when — cross-session recall at the exact-repeat level, on a dedicated control-IN episodic store @ LBA 21,140,000** (three bare-metal gates: marker answered / dedicated store survived 5.1 shared-store wraps / fresh-boot `[CTRL-IN-STATS] recall≥1`). **`JARVIS_ACTIONS` default-ON, SEC-039 CLOSED for the ACTION path AND for control-IN queries** (the deployed WORKLOAD PA↔PB query path stays passive/ALLOW — NEVER claim "SHIELD blocks queries" for the workload path). **Remaining: 6-6 (routing ≥95%) and 6-7 (the 7-day supervised exit) — nothing else.** (6-4 user model rides Phase-5 `JARVIS_SEMANTIC`, mechanism-proven, activates with real interaction.) v1.0.0 SHIPPED (`bdf0951`); 90-day soak owner-scheduled, not a gate.
+- **Critical path: DERIVE IT FRESH each session** — read `phase6/docs/` (all the goal docs; the ACTIVE one is `PHASE_6_GOAL_C_EMBEDDER.md`, with `PHASE_6_GOAL_C_M1B_DESIGN.md` as its box design + pre-mortem) + the `memory/` Phase-6 notes + the last ~15 commits; where they disagree, commits win. The paragraph below is a dated SNAPSHOT (2026-07-25) — verify before relying on it, and treat any mismatch as SKILL.md drift to fix.
+- Snapshot 2026-07-22: **Phase 5 (Memory) COMPLETE + `v1.1.0-memory` tag CUT (`feeafd1`).** **Phase 6 (Butler): keystone K ✅ (flip `34a165e`), 6-1 monitors ✅ (v8), 6-2 wake ✅ (v9), 6-3 ≥5 proactive behaviors ✅ (v10), and 6-5 control-IN ✅ — ALL DONE + flipped default-ON.** The deployed image self-heals (PB crash + wedge → SHIELD-scored respawn → JACT audit), runs the always-on monitors + event-driven wake + the ≥5 registry INFORM behaviors, and holds a **two-way authenticated conversation with cross-session recall**. **6-5 is FULLY COMPLETE:** `JARVIS_CONTROL_IN` default-ON since `a9c1d9a` (2026-07-21) — the deployed image is TWO-WAY (HMAC-SHA256 auth + cross-reboot replay floor + rate-limit + the SEC-014 `jarvis-input` process + the live query SHIELD closing SEC-039-for-queries + a signed unicast reply); **AND `JARVIS_CONTROL_IN_RECALL` default-ON since `1fd505d` (2026-07-22), closing 6-5's LAST §14 done-when — cross-session recall at the exact-repeat level, on a dedicated control-IN episodic store @ LBA 21,140,000** (three bare-metal gates: marker answered / dedicated store survived 5.1 shared-store wraps / fresh-boot `[CTRL-IN-STATS] recall≥1`). **`JARVIS_ACTIONS` default-ON, SEC-039 CLOSED for the ACTION path AND for control-IN queries** (the deployed WORKLOAD PA↔PB query path stays passive/ALLOW — NEVER claim "SHIELD blocks queries" for the workload path). **6-6 (routing) is ALSO DONE — `JARVIS_ROUTING` default-ON since `d4be861` (2026-07-23), HELDOUT 70/73 = 95.89% keyword-blind, 0 INFER misroutes, boot_id=38, on-wire v12.** (6-4 user model rides Phase-5 `JARVIS_SEMANTIC`, mechanism-proven, activates with real interaction.) v1.0.0 SHIPPED (`bdf0951`); 90-day soak owner-scheduled, not a gate.
+
+**Remaining Phase-6 goal: 6-7 ONLY (the 7-day supervised exit) — planned, not started.** It is a calendar RUN and it CONFLICTS with box work (the box is both the build machine and the soak target), so it is sequenced against Phase C rather than run in parallel.
+
+**PHASE C (small embedding model, Qwen3-Embedding-0.6B) is the ACTIVE arc** — the neural work after Phase 6, aimed first at SEMANTIC RECALL (closing 6-5's exact-repeat-only ceiling). Status as of 2026-07-25: goal doc `01a4083`; C/M0 `8828013` **SUPERSEDED**; C/M0.5 `3cc36fc` (winner = Qwen3-Embedding-0.6B, clears the recall bar OFF-THE-SHELF — **fine-tuning is NOT needed for recall**, it is a measured-miss contingency only); C/M1a foundation `b42bb10`; C/M1a Stage 1 token parity `da8d5f8` (15/15 byte-exact, ZERO tokenizer changes); **C/M1a Stage 2 vector parity `ea1baf0` — HOST PARITY COMPLETE** (GATE 2′ worst 1−cos 0.00e+00 vs the ST-F32 golden; the original ≤1e-4 GATE 2 was found MIS-SPECIFIED — llama.cpp quantizes ACTIVATIONS while we keep them F32, so engine-vs-engine bit-parity is unreachable BY CONSTRUCTION, and it was REPAIRED into GATE 2′ rather than deleted); C/M1b design + pre-mortem `bc15783`; pre-fixes `103dea6` + `7c660ef`. **Next: C/M1b-1 (box, gated `JARVIS_EMBED` default-0).** Training venue is a HARD RULE — Main PC (RTX 2070) or cloud, **NEVER the box**; on-device learning is OFF the roadmap, not deferred.
 
 ### 3. Generate Implementation Prompts
-When the user says "what's next", "give me a prompt", or "let's do X", produce a complete, paste-ready prompt for the coding CC session. Every prompt must include:
+When the user says "what's next", "give me a prompt", or "let's do X", write a complete prompt for the coding CC session to `PROMPT-NEXT.md` (see "Prompt delivery" below). Every prompt must include:
 - **File paths** to create or modify
 - **Full API signatures** and code patterns
 - **Test specifications** with expected input/output values and epsilon tolerances where needed
@@ -160,7 +164,22 @@ When the user says "what's next", "give me a prompt", or "let's do X", produce a
 - **CLAUDE.md updates** (new files in Quick Reference, updated test counts)
 - **Agent strategy** — size for best results: use as many agents as needed for quality (1 for trivial, 2-3 for standard, more for complex multi-component work). Always prefer parallel agents for independent tasks. For hardware-in-the-loop work (kernel/flash/on-box gates) drive directly, not via a blind background agent.
 
-Format prompts as fenced code blocks so the user can copy-paste cleanly.
+#### Prompt delivery — WRITE THE PROMPT TO A FILE. Do not paste it inline.
+
+Write every implementation prompt to **`PROMPT-NEXT.md` at the repo root**, then give the user one line to relay. Inline fenced blocks are NO LONGER the delivery mechanism.
+
+**Why — learned the hard way, 2026-07-25:** inline paste corrupted TWO consecutive prompts. ~12 truncations the first time (the coding session reconstructed from context and happened to get it right); ~18 the second (the coding session correctly refused to reconstruct and stopped, costing a full round-trip). Truncation eats text MID-SENTENCE, so a requirement can vanish silently and nobody notices until the box misbehaves. A file cannot truncate.
+
+**The protocol:**
+1. Write the complete prompt to `PROMPT-NEXT.md` — repo root, **UNTRACKED, never commit it** (same rule as `HANDOFF-*.md` and `briefings/*`; list it in the prompt's own rule 4 so the coding session knows too).
+2. Tell the user to paste only: `Read PROMPT-NEXT.md at the repo root and execute it.`
+3. **Overwrite the same file every time** — one live prompt, so a stale copy can never be picked up by mistake.
+
+Markdown is now an ASSET rather than a hazard: use tables for struct layouts and field lists, a heading per commit, and fenced blocks for commands. That is precisely the content that corrupted worst inline (a struct field list was cut mid-row, losing fields between `reserved0[2]` and `boot_epoch`).
+
+**Keep the anti-corruption instruction in the prompt regardless** — "if any part of this reads as truncated or garbled, STOP and say so; do not reconstruct, ask." It costs nothing on a clean channel and it is what caught the second failure.
+
+If the user explicitly asks for an inline prompt, honor that — and then mark the boundaries per the standing rule: `===== PROMPT START (copy from here) =====` as the FIRST line inside the fence, `===== PROMPT END (copy to here) =====` as the LAST, and ALL commentary outside the fence.
 
 ### 4. Review Completed Work
 When the user pastes output from the coding session or says "done", verify (independently — check the commit/CI yourself, don't rubber-stamp the summary):
@@ -239,7 +258,7 @@ These rules apply to the prompts you generate — the coding session must follow
 - **seL4 kernel config is set in build_jarvis_x86.sh** — KernelIOMMU=OFF + SIMULATION=OFF + KernelFPU=XSAVE / feature-set 7 / size 832 + SMP `-DSMP=ON` NUM_NODES=6 (two-pass cmake; per-build config-verification gate asserts all invariants); reproducible from the repo, NOT a manual ~/sel4-x86 edit
 - **Build without embedded model for fast iteration** — NVMe runtime loading is the live path; embedded model is fallback only
 - **Verify GRUB menu entry works** — wrong image names cause silent boot failures
-- **Before any long stability run:** `jarvis_debug.h` must be IPC=0, PB=0, RING=0, STATS=1, INFER_SUMMARY=1, BOOT_LOG=0, AVX2_PROBE=0, M1_MEASURE=0, SMP_PROBE=0, **G3_RETRIEVAL=1, CACHE_GROWTH=1** (deployed ON), G3_PROBE=0, G3_AB=0, **JARVIS_ACTIONS=1, JARVIS_MONITORS=1, JARVIS_WAKE=1, JARVIS_PROACTIVE=1, JARVIS_CONTROL_IN=1, JARVIS_CONTROL_IN_RECALL=1** (all deployed ON — the K self-heal gate + 6-1 monitors + 6-2 wake + 6-3 proactive behaviors + the two-way control-IN channel with cross-session recall), **JARVIS_SEMANTIC=0, JARVIS_SHIELD_LEARN=0, JARVIS_SHIELD_PROBE=0, and EVERY `*_PROBE`=0** (JARVIS_ACTION_PROBE / KM2A_SPIKE / MONITOR_PROBE / WAKE_PROBE / PROACTIVE_PROBE / CONTROL_IN_PROBE / CONTROL_IN_RECALL_PROBE — the deploy never induces synthetic events), BOOT_LOG=0 (NVMe write wear; the remaining gated-off feature flags are opt-in until a deliberate activation decision)
+- **Before any long stability run:** `jarvis_debug.h` must be IPC=0, PB=0, RING=0, STATS=1, INFER_SUMMARY=1, BOOT_LOG=0, AVX2_PROBE=0, M1_MEASURE=0, SMP_PROBE=0, **G3_RETRIEVAL=1, CACHE_GROWTH=1** (deployed ON), G3_PROBE=0, G3_AB=0, **JARVIS_ACTIONS=1, JARVIS_MONITORS=1, JARVIS_WAKE=1, JARVIS_PROACTIVE=1, JARVIS_CONTROL_IN=1, JARVIS_CONTROL_IN_RECALL=1, JARVIS_ROUTING=1** (all deployed ON — the K self-heal gate + 6-1 monitors + 6-2 wake + 6-3 proactive behaviors + the two-way control-IN channel with cross-session recall + the 6-6 query router), **JARVIS_SEMANTIC=0, JARVIS_SHIELD_LEARN=0, JARVIS_SHIELD_PROBE=0, JARVIS_EMBED=0** (Phase C, host-parity only until C/M1b), **and EVERY `*_PROBE`=0** (JARVIS_ACTION_PROBE / KM2A_SPIKE / MONITOR_PROBE / WAKE_PROBE / PROACTIVE_PROBE / CONTROL_IN_PROBE / CONTROL_IN_RECALL_PROBE / ROUTING_PROBE / MODEL_FAIL_PROBE — the deploy never induces synthetic events), BOOT_LOG=0 (NVMe write wear; the remaining gated-off feature flags are opt-in until a deliberate activation decision)
 - **Gating discipline (post-M6/M3 reframe):** the deployed image runs the memory stack ON and intentionally diverges from v1.0.0; the remaining gated flags keep their OFF-is-inert guarantee — a prompt that adds an ungated new code path, or flips a gated flag without box proof, is wrong
 - **qmodel_forward stack budget <8KB** — any temporary >4KB goes in `state->fwd_scratch`, never on the stack (seL4 Process B stack is tiny)
 - **No `diag:` commit left behind** — anything committed with "revert after testing/data collected" must be reverted before milestone work continues
@@ -247,6 +266,8 @@ These rules apply to the prompts you generate — the coding session must follow
 
 ### Prompt Quality Checklist
 Before giving a prompt to the user, verify it includes:
+- [ ] Written to `PROMPT-NEXT.md` at the repo root (NOT pasted inline), and the user given the one-line relay instruction
+- [ ] The anti-corruption instruction at the top ("if any part reads truncated or garbled, STOP — do not reconstruct, ask")
 - [ ] Specific file paths (not "create a test file" — say exactly where)
 - [ ] API signatures with types and return values
 - [ ] Test cases with concrete expected values (not "verify it works")
@@ -256,8 +277,8 @@ Before giving a prompt to the user, verify it includes:
 - [ ] Agent strategy — sized for best quality, parallel when independent
 - [ ] CLAUDE.MD RULES footer block (the 5-rule enforcement section)
 - [ ] UI–feature parity: if the work adds/changes a user-visible feature, the prompt updates the Remote Telemetry Console (`phase4/console/`) — its real live signal on the relevant screen or the auto-populated Capabilities/Features section, kept honest (only real/live state)
-- [ ] Frontend correctness: if the work touches `phase4/console/` or the telemetry record shape, the prompt keeps the layered frontend tests green (honesty gate 181 + key-contract/receiver 260 + Playwright-Python logic 25 + e2e 48 — re-derive the exact counts from CI, they grow) and uses **vendored** libs (never re-introduce a live CDN); a wire-shape change updates the one golden fixture both tests read AND regenerates golden.pcap (CI drift gate)
-- [ ] Telemetry versioning: a wire change bumps the packet version + CRC offset in lockstep across jarvis_telemetry.h / telemetry_receiver.py / fixtures / console (**current = v11, 254B, CRC@250 — the u16 flags field is EXHAUSTED (TLM_F_CONTROL_IN 0x8000 is the last bit), so a new flag needs a flags-width bump** — follow the v1→…→v11 precedent; the offsetof-based `.c` finalize auto-extends the CRC region)
+- [ ] Frontend correctness: if the work touches `phase4/console/` or the telemetry record shape, the prompt keeps the layered frontend tests green (honesty gate 199 + key-contract/receiver 275 + Playwright-Python logic 25 + e2e 49 as of 2026-07-25 — re-derive the exact counts from CI, they grow) and uses **vendored** libs (never re-introduce a live CDN); a wire-shape change updates the one golden fixture both tests read AND regenerates golden.pcap (CI drift gate)
+- [ ] Telemetry versioning: a wire change bumps the packet version + CRC offset in lockstep across jarvis_telemetry.h / telemetry_receiver.py / fixtures / console (**current = v12, 262B, CRC@258 — the u16 flags field is EXHAUSTED (TLM_F_CONTROL_IN 0x8000 is the last bit), so a new capability either RIDES an existing flag plus an `_inited` byte (the v12/routing precedent — consequence: no Capabilities auto-row, surface it as field-derived rows) or needs a flags-width bump** — follow the v1→…→v12 precedent; the offsetof-based `.c` finalize auto-extends the CRC region. The 12-place lockstep: header → `main_x86.c` fill → receiver FMT ladder → `telemetry_fixture.py` → golden JSON → `gen_golden_pcap.py` asserts + regenerated pcap → console → honesty/e2e/C/receiver tests → CLAUDE.md)
 
 ## Common Commands (for reference)
 
@@ -311,7 +332,7 @@ sudo modprobe kvm_amd    # load KVM module
   Clear (archive first!): `phase3/scripts/clear_nvme_log.sh` (zeros the header → fresh boot_id=1)
 - Episodic memory store (Phase 5 G1): **LBA 21,100,000** — circular 8192 × 512B records (JEPI magic), in the verified free gap after JARVIS_DATA.
   Read:  `sudo dd if=/dev/nvme0n1 bs=512 skip=21100000 count=8193 | python3 phase3/scripts/parse_episodic.py`
-- Telemetry console: box broadcasts UDP :51000 (v11 254B packets) → Main PC `py -3 phase3/scripts/telemetry_receiver.py --sse` (Windows-native, NOT WSL — WSL2 NAT can't see the LAN broadcast) → browser console at `phase4/console/`; `--replay golden.pcap` for box-free dev.
+- Telemetry console: box broadcasts UDP :51000 (v12 262B packets) → Main PC `py -3 phase3/scripts/telemetry_receiver.py --sse` (Windows-native, NOT WSL — WSL2 NAT can't see the LAN broadcast) → browser console at `phase4/console/`; `--replay golden.pcap` for box-free dev.
 
 ## Session Start
 
