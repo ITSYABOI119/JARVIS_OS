@@ -66,6 +66,12 @@ int g3_select_exact_only(const g3_candidate_t *cands, int n, uint64_t query_key,
  * (0 when n<=0). */
 int g3_build_preamble_answer_only(const g3_candidate_t *sel, int n, char *out, int cap);
 
+/* Does `s` (length-carried, NOT NUL-terminated) contain the model's thinking-channel marker text
+ * ("<|channel>" / "<channel|>" / "<|think|>")? Such a record is reasoning scratch, not an answer,
+ * and must never be recalled: injecting it puts the literal marker back into the prompt and drives
+ * the model to produce more thought. Pure/host-testable. */
+int g3_text_has_thought_marker(const char *s, int len);
+
 /* ---- G3/M2: prompt-injection token budget (pure, host-testable) ---- */
 
 #define G3_PREAMBLE_TOK_CAP  160   /* hard cap on injected preamble tokens */

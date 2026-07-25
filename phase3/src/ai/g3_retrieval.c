@@ -122,9 +122,48 @@ int g3_select_exact_only(const g3_candidate_t *cands, int n, uint64_t query_key,
  * fragment — a last line that is a bare "#"-run with too little text after it (e.g. "### W",
  * "###"). All trims are gated on truncation, so a complete short answer is kept verbatim.
  * Length-only, no strlen; returns a length in [0, min(resp_len, G3_R_MAX)]. */
+/* Bounded substring scan. `resp` is NOT NUL-terminated — never strstr here. */
+static int g3_contains(const char *hay, int hn, const char *needle, int nn)
+{
+    if (!hay || !needle || nn <= 0 || hn < nn)
+        return 0;
+    for (int i = 0; i + nn <= hn; i++) {
+        int k = 0;
+        while (k < nn && hay[i + k] == needle[k])
+            k++;
+        if (k == nn)
+            return 1;
+    }
+    return 0;
+}
+
+int g3_text_has_thought_marker(const char *s, int len)
+{
+    /* The model's thinking channel decodes to LITERAL TEXT in a stored answer:
+     *   '<|channel>thought' ... '<channel|>'   (tokens 100 / 101)
+     * and '<|think|>' (98) can appear the same way. A stored record containing any of them is
+     * reasoning scratch, not an answer, and recalling it injects the literal string
+     * "<|channel>thought" back into the next prompt — which is about the strongest possible nudge
+     * for the model to produce MORE thought. That is a self-reinforcing loop, and it is exactly
+     * what put two garbage answers in the control-IN store on boot 41.
+     *
+     * Keyed on the real marker text rather than a heuristic, per the strategist ruling. */
+    return g3_contains(s, len, "<|channel>", 10) ||
+           g3_contains(s, len, "<channel|>", 10) ||
+           g3_contains(s, len, "<|think|>",   9);
+}
+
 static int g3_clean_answer_len(const char *resp, int resp_len)
 {
     if (!resp || resp_len <= 0)
+        return 0;
+
+    /* THOUGHT SCRATCH IS NOT RECALLABLE. Checked before any truncation so a marker anywhere in
+     * the record disqualifies it, not just one inside the first G3_R_MAX bytes. Needed IN
+     * ADDITION to stripping the thought at generation time, because the poisoned records are
+     * already in the store: it is circular with 4096 slots and control-IN is human-paced, so
+     * they would take years to age out. */
+    if (g3_text_has_thought_marker(resp, resp_len))
         return 0;
 
     int truncated = resp_len > G3_R_MAX;
@@ -188,6 +227,25 @@ static int g3_clean_answer_len(const char *resp, int resp_len)
         char c = resp[i];
         if (c != '.' && c != '?' && c != '!')
             continue;
+
+        /* AN ORDERED-LIST MARKER IS NOT A SENTENCE END. "1." / "2." at the start of a line is
+         * enumeration, not prose, and treating it as a completed sentence is how a thought dump
+         * ("...leads to the suggested answer:\n\n1.") survived the complete-sentence rule on
+         * boot 41. Only the LINE-LEADING case is rejected, so a genuine sentence ending in a
+         * number ("...shipped in 2026.") still counts. */
+        if (c == '.') {
+            int k = i;
+            while (k > 0 && resp[k - 1] >= '0' && resp[k - 1] <= '9')
+                k--;
+            if (k < i) {                       /* digits immediately precede the '.' */
+                int p = k;
+                while (p > 0 && (resp[p - 1] == ' ' || resp[p - 1] == '\t'))
+                    p--;
+                if (p == 0 || resp[p - 1] == '\n')
+                    continue;                  /* line-leading "N." => list marker, not a sentence */
+            }
+        }
+
         int j = i + 1;
         while (j < n && (resp[j] == '"' || resp[j] == '\'' || resp[j] == ')' ||
                          resp[j] == ']' || resp[j] == '*' || resp[j] == '`'))

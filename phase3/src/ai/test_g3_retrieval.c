@@ -407,10 +407,72 @@ static void test_sentence_boundary(void)
     }
 }
 
+/* T13 — thought scratch is NOT recallable, and enumeration is not a sentence.
+ *
+ * REAL_THOUGHT is the actual stored text of control-IN record [9:00045] read off the box: the
+ * garbage answer the pre-fix box produced, which then got RECALLED on boot 41 (recall=2 instead
+ * of the predicted 1) because "1." parsed as a completed sentence. Both halves are pinned. */
+static const char REAL_THOUGHT[] =
+    "<|channel>thought\nHere's a thinking process that leads to the suggested answer:\n\n"
+    "1.  **Analyze the Request:**\n    *   **Core Topic:** Why adding more CPU cores doesn't "
+    "speed up a *single-threaded* program";
+
+static void test_thought_filter(void)
+{
+    char buf[512];
+
+    /* A: the marker predicate itself, both ways. */
+    CHECK(g3_text_has_thought_marker(REAL_THOUGHT, (int)(sizeof REAL_THOUGHT - 1)) == 1,
+          "T13A real stored thought record detected");
+    {
+        static const char CH_CLOSE[] = "answer text <channel|> more";
+        static const char THINK[]    = "a <|think|> b";
+        static const char CLEAN[]    = "A page fault is an exception raised by the MMU.";
+        CHECK(g3_text_has_thought_marker(CH_CLOSE, (int)(sizeof CH_CLOSE - 1)) == 1,
+              "T13A closing channel marker detected");
+        CHECK(g3_text_has_thought_marker(THINK, (int)(sizeof THINK - 1)) == 1,
+              "T13A think marker detected");
+        CHECK(g3_text_has_thought_marker(CLEAN, (int)(sizeof CLEAN - 1)) == 0,
+              "T13A clean prose is NOT flagged (no false positive)");
+        CHECK(g3_text_has_thought_marker(NULL, 10) == 0, "T13A NULL safe");
+        CHECK(g3_text_has_thought_marker(CLEAN, 0) == 0, "T13A len 0 safe");
+    }
+
+    /* B: the real record must produce NO preamble — this is the boot-41 defect. */
+    {
+        g3_candidate_t sel[1] = { { .resp = REAL_THOUGHT,
+                                    .resp_len = (uint16_t)(sizeof REAL_THOUGHT - 1) } };
+        memset(buf, (int)0xAA, sizeof buf);
+        int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf);
+        CHECK(len == 0, "T13B thought record => NO preamble (was: 164 bytes of scratch)");
+        CHECK(strstr(buf, "<|channel>") == NULL, "T13B marker never reaches the prompt");
+    }
+
+    /* C: enumeration is not a sentence end. Without the list-marker rule the cut lands on "1."
+     * and injects a fragment; with it there is no completed sentence, so nothing is injected. */
+    {
+        static const char ENUM[] =
+            "Here's a thinking process that leads to the suggested answer:\n\n1.  Analyze";
+        g3_candidate_t sel[1] = { { .resp = ENUM, .resp_len = (uint16_t)(sizeof ENUM - 1) } };
+        int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf);
+        CHECK(len == 0, "T13C line-leading \"1.\" is not a sentence end => no preamble");
+    }
+
+    /* D: but a genuine sentence ending in a NUMBER still counts — the rule must not over-reach. */
+    {
+        static const char NUMEND[] = "The image shipped in 2026. It replaced the prior build.";
+        g3_candidate_t sel[1] = { { .resp = NUMEND, .resp_len = (uint16_t)(sizeof NUMEND - 1) } };
+        int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf);
+        CHECK(len > 0, "T13D sentence ending in a digit still recalls");
+        CHECK(strstr(buf, "shipped in 2026.") != NULL, "T13D that sentence is preserved");
+    }
+}
+
 int main(void)
 {
     printf("=== G3 Retrieval Tests (Phase 5 G3/M0 + M2 budget + M3 filter + M6 hygiene) ===\n");
     test_sentence_boundary();
+    test_thought_filter();
     test_scorer();
     test_preamble_exact();
     test_empty();
