@@ -37,6 +37,14 @@ PARTITION_LABEL="JARVIS_DATA"
 REQUIRED_START_SECTOR=32768
 # The rootserver compares the FAT 8.3 short name (main_x86.c JARVIS_MODEL_FILE).
 EXPECTED_SHORTNAME="GEMMA2B GUF"
+# ── Phase C / C/M1b-1: the OPTIONAL co-resident embedding model ──────────────
+# Absent is the NORMAL case: the box boots and serves inference exactly as before with no second
+# file (main_x86.c prints "[EMBED] no ... - embed capability OFF (normal; Gemma unaffected)" once).
+# Provide EMBED_MODEL_PATH to provision it. Its 8.3 short name is hard-asserted exactly like
+# Gemma's below — the same check, not a second style of check.
+EMBED_MODEL_PATH="${EMBED_MODEL_PATH:-}"
+EMBED_DEST_FILENAME="QWENEMB.GUF"
+EMBED_EXPECTED_SHORTNAME="QWENEMB GUF"   # main_x86.c JARVIS_EMBED_MODEL_FILE (11 bytes, 8-padded)
 MOUNT_POINT=""
 
 usage() {
@@ -170,13 +178,29 @@ fat_8dot3() {
     if [ "${#name}" -gt 8 ] || [ "${#ext}" -gt 3 ]; then
         printf '%s' "__LFN__"; return 0
     fi
-    printf '%s %s' "$name" "$ext"
+    # A FAT 8.3 directory record is EXACTLY 11 bytes: the name SPACE-PADDED to 8, then the 3-byte
+    # extension, with NO separator (fat32.c name_match compares 11 bytes). The previous form used a
+    # single literal space, which is only correct when the stem is <= 7 chars — an 8-char stem
+    # produced a 12-char string that could never match an on-disk record. Pad explicitly.
+    printf '%-8s%-3s' "$name" "$ext"
 }
 
 # Fail loudly unless DEST_FILENAME maps to the rootserver's JARVIS_MODEL_FILE.
 DEST_SHORT="$(fat_8dot3 "$DEST_FILENAME")"
 if [ "$DEST_SHORT" != "$EXPECTED_SHORTNAME" ]; then
     echo -e "${RED}Error: dest filename '$DEST_FILENAME' (8.3 '$DEST_SHORT') != rootserver JARVIS_MODEL_FILE '$EXPECTED_SHORTNAME'${NC}"
+    exit 1
+fi
+
+# Same hard-assert for the optional embed model (C/M1b-1). Checked even when EMBED_MODEL_PATH is
+# unset, so a typo in the constant is caught at every run rather than only when provisioning.
+EMBED_DEST_SHORT="$(fat_8dot3 "$EMBED_DEST_FILENAME")"
+if [ "$EMBED_DEST_SHORT" != "$EMBED_EXPECTED_SHORTNAME" ]; then
+    echo -e "${RED}Error: embed dest filename '$EMBED_DEST_FILENAME' (8.3 '$EMBED_DEST_SHORT') != rootserver JARVIS_EMBED_MODEL_FILE '$EMBED_EXPECTED_SHORTNAME'${NC}"
+    exit 1
+fi
+if [ -n "$EMBED_MODEL_PATH" ] && [ ! -f "$EMBED_MODEL_PATH" ]; then
+    echo -e "${RED}Error: EMBED_MODEL_PATH set but not a file: $EMBED_MODEL_PATH${NC}"
     exit 1
 fi
 
@@ -360,6 +384,22 @@ copy_and_verify_model() {
         exit 1
     fi
     echo "  Verified: ${copied} bytes, 8.3 name '${EXPECTED_SHORTNAME}'"
+    # C/M1b-1: the OPTIONAL embed model, copied into the same mount. Skipped silently when
+    # EMBED_MODEL_PATH is unset — absent is the normal case and must not look like a failure.
+    if [ -n "$EMBED_MODEL_PATH" ]; then
+        local esrc edst
+        esrc=$(stat -c%s "$EMBED_MODEL_PATH")
+        echo "  Copying $EMBED_MODEL_PATH → $MOUNT_POINT/$EMBED_DEST_FILENAME ($(( esrc / 1048576 )) MiB) ..."
+        cp "$EMBED_MODEL_PATH" "$MOUNT_POINT/$EMBED_DEST_FILENAME"
+        edst=$(stat -c%s "$MOUNT_POINT/$EMBED_DEST_FILENAME")
+        if [ "$edst" -ne "$esrc" ]; then
+            echo -e "${RED}Error: embed model copy verification failed (${esrc} → ${edst})${NC}"
+            exit 1
+        fi
+        echo "  Verified: ${edst} bytes, 8.3 name '${EMBED_EXPECTED_SHORTNAME}'"
+    else
+        echo "  (no EMBED_MODEL_PATH — embed model not provisioned; the box boots normally without it)"
+    fi
     sync
     umount "$MOUNT_POINT"
     rmdir "$MOUNT_POINT"

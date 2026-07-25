@@ -113,6 +113,13 @@
 /* Single-model deployment — dynamic tiering removed 2026-04-17.
  * Gemma 4 E2B Q4_K_M is the bench-off winner (8.40/10 quality, 8.63 tok/s @16T). */
 #define JARVIS_MODEL_FILE "GEMMA2B GUF"
+/* Phase C / C/M1b-1: the co-resident embedding model's FAT 8.3 short name. fat32.c's name_match
+ * compares EXACTLY 11 BYTES — an 8-char name field, SPACE-PADDED, followed by the 3-char
+ * extension with NO separator. "QWENEMB" is 7 chars so it takes one pad space, exactly like
+ * "GEMMA2B GUF". (A first draft used QWEN3EMB.GUF; an 8-char stem needs NO pad, so the literal
+ * would have been 12 chars and could never match — the file was silently "not found" on the box.)
+ * setup_nvme_partition.sh hard-asserts QWENEMB.GUF maps to this, mirroring the Gemma assert. */
+#define JARVIS_EMBED_MODEL_FILE "QWENEMB GUF"
 
 static int vga_ready = 0;  /* set after VGA frame mapped into vspace */
 
@@ -483,6 +490,28 @@ static uint8_t  g_model_load_pct = 0;   /* N-c-1: 0..100, set by model_load_prog
 static int g_model_bad = 0;             /* 1 = model unusable; refuse dispatch, clear the wire flag */
 static const char *g_model_bad_why = "";/* fixed literal only — never attacker/model text */
 static uint32_t g_model_bad_detail = 0; /* alloc: pages obtained | map: mapping-error count */
+
+#if JARVIS_EMBED
+/* ---- Phase C / C/M1b-1: the SECOND, co-resident model (Qwen3-Embedding-0.6B) ----------------
+ * SEPARATE STATE, DELIBERATELY NOT g_model_bad. g_model_bad means "GEMMA is unusable, refuse ALL
+ * inference"; if a missing or unmappable EMBEDDER set it, the box would stop answering every
+ * query because a capability that is not even wired up yet failed to load — catastrophically
+ * wrong. These flags disable ONLY the embed capability (C/M1b design OQ3: "fatal to the embed
+ * capability, never to boot"). Same fail-closed PATTERN as 103dea6, different flag.
+ *
+ * ABSENT IS THE NORMAL CASE, NOT AN ERROR (C/M1b-1 T2): at JARVIS_EMBED=0 there is no second file
+ * at all, and even at =1 the operator may not have provisioned it. A box with no QWEN3EMB.GUF
+ * boots completely normally, serves inference, and says so ONCE — never per window, never
+ * degrading Gemma. g_embed_ready stays 0 and nothing else changes. */
+static seL4_CPtr *g_embed_frame_caps = NULL;
+static int        g_embed_ready   = 0;  /* 1 = read AND mapped into PB; capability available     */
+static int        g_embed_bad     = 0;  /* 1 = PRESENT but unusable (alloc/read/map failed)      */
+static int        g_embed_absent  = 0;  /* 1 = no file on JARVIS_DATA — the NORMAL, silent case  */
+static const char *g_embed_bad_why = "";/* fixed literal only                                    */
+static uint32_t   g_embed_size    = 0;
+static uint32_t   g_embed_n_pages = 0;
+static seL4_Word  g_embed_vaddr_b = 0;  /* RUNTIME-DERIVED (T3) — never a fixed base             */
+#endif
 
 /* N-c-1: hoisted NIC for the workload-loop telemetry emitter. The [NET] bring-up fills
  * this on the "first-light OK" path (mac_valid && a DD); ready stays 0 on QEMU / NIC-absent
@@ -1354,6 +1383,36 @@ static int init_system(void)
     return 0;
 }
 
+#if JARVIS_EMBED
+/* Report the RAW probe slot, and the DELTA against the previous probe. Deliberately NOT an
+ * absolute "used / % of CNode" figure: a first draft computed used = (1<<22) - probe on the
+ * K/M2a-2 note that allocman hands out DESCENDING cslots, and the box falsified it — the probe
+ * value ROSE across the embed map while the derived "used" FELL, and the same call site reported
+ * different absolutes in two runs. allocman's slot numbering is not a simple monotone used-count,
+ * so only the DELTA between two probes in ONE run is trustworthy. That delta is what we need: the
+ * embedder's real cslot cost. Absolute CNode headroom is NOT measured by this probe. */
+static uint32_t g_cslot_prev = 0;
+static void embed_cslot_mark(const char *when)
+{
+    cspacepath_t probe;
+    if (vka_cspace_alloc_path(&vka, &probe) != 0) {
+        puts_serial("[VMAP] cslot probe FAILED at "); puts_serial(when);
+        puts_serial(" (cspace exhausted)\n");
+        return;
+    }
+    uint32_t cur = (uint32_t)probe.capPtr;
+    puts_serial("[VMAP] cslot "); puts_serial(when);
+    puts_serial(": probe=");  put_dec(cur);
+    if (g_cslot_prev) {
+        uint32_t d = (cur > g_cslot_prev) ? (cur - g_cslot_prev) : (g_cslot_prev - cur);
+        puts_serial(" delta_since_prev="); put_dec(d);
+    }
+    puts_serial(" cnode_slots="); put_dec((uint32_t)(1UL << 22));
+    puts_serial("\n");
+    g_cslot_prev = cur;
+}
+#endif
+
 /* ---- Direct page mapping helper ---- */
 
 static int map_frame_direct(seL4_CPtr frame, seL4_CPtr vspace_root,
@@ -1465,6 +1524,31 @@ static int find_model_untypeds(uintptr_t *model_paddr_out,
  * GRUB loads model.gguf into RAM. seL4 exposes it as untypeds.
  * We map those frames into Process B's vspace at this address. */
 #define MODEL_VADDR_B   0x60000000UL  /* Virtual address in Process B for model */
+#if JARVIS_EMBED
+/* C/M1b-1 T3 — the embed region's base is DERIVED AT RUNTIME from the MEASURED Gemma span, never
+ * fixed. A fixed base silently encodes a max-Gemma assumption that a future model change breaks;
+ * and an overlap here is NOT a hard fault — seL4 refuses the map, the loop does merr++/continue,
+ * and a PARTIALLY mapped model would boot and run on garbage weights (C/M1b design §4.2). So the
+ * base is computed as (Gemma end + a 1 GiB guard gap), rounded UP to a 1 GiB boundary, and the
+ * [VMAP] boot dump prints BOTH computed ends so the non-overlap is provable from the log.
+ * Measured reference (C/M1b design §2.2): Gemma is 758,480 pages = 2.8934 GiB from 0x60000000,
+ * ending at 0x1192D0000 — already past the 4 GiB line, and the only sub-4 GiB window is exactly
+ * 256.0 MiB, far too small for the ~609 MB embedder. */
+#define EMBED_GUARD_BYTES  (1024ULL * 1024ULL * 1024ULL)   /* 1 GiB dead space between regions */
+#define EMBED_ALIGN_BYTES  (1024ULL * 1024ULL * 1024ULL)   /* round the base up to 1 GiB        */
+/* One probe cslot == the current allocman watermark (descending allocation). Defined here so both
+ * the pre- and post-embed-map call sites can use it; see the call sites for the rationale. */
+static void embed_cslot_mark(const char *when);
+
+static seL4_Word embed_base_for(uint32_t first_n_pages)
+{
+    unsigned long long end = (unsigned long long)MODEL_VADDR_B
+                           + (unsigned long long)first_n_pages * 4096ULL;
+    unsigned long long base = end + EMBED_GUARD_BYTES;
+    base = (base + (EMBED_ALIGN_BYTES - 1ULL)) & ~(EMBED_ALIGN_BYTES - 1ULL);
+    return (seL4_Word)base;
+}
+#endif
 
 /* M3 worker pool sizing (>= kernel NUM_NODES cap of 8). */
 #define JARVIS_MAX_WORKERS 8
@@ -1758,6 +1842,73 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
                            LOG_MODEL_LOAD, "MODEL-BAD partial model map");
         }
     }
+
+#if JARVIS_EMBED
+    /* MEASURED cslot headroom — not re-derived from the design doc's ~1.83M/4.19M estimate.
+     * allocman hands out DESCENDING cslots (K/M2a-2 STEP-3), so ONE probe slot IS the current
+     * watermark: used = CNODE_SLOTS - probe. CONFIG_ROOT_CNODE_SIZE_BITS is 22 on this box
+     * (read from the kernel gen_config) = 4,194,304 slots. Called before and after the embed map
+     * so the DELTA is the embedder's real cslot cost. The probe leaks one slot by design — the
+     * allocator is forward-only and frees nothing anyway. */
+    embed_cslot_mark("after-gemma-map");
+
+    /* ---- C/M1b-1: map the SECOND model into PB, and PROVE non-overlap in the log ----
+     * PB is told NOTHING about it (argv unchanged, no IPC) — it is resident and mapped, nothing
+     * more. That is the whole of C/M1b-1; using it is C/M1b-2/3. */
+    if (g_embed_ready == 0 && g_embed_n_pages > 0 && g_embed_frame_caps && g_embed_vaddr_b) {
+        unsigned long long g_end = (unsigned long long)MODEL_VADDR_B
+                                 + (unsigned long long)model_n_pages * 4096ULL;
+        unsigned long long e_end = (unsigned long long)g_embed_vaddr_b
+                                 + (unsigned long long)g_embed_n_pages * 4096ULL;
+        /* T3: the [VMAP] dump — both regions with their COMPUTED ends, so the non-overlap is
+         * provable from the boot log rather than asserted in a comment. */
+        puts_serial("[VMAP] gemma base="); put_hex64((uint64_t)MODEL_VADDR_B);
+        puts_serial(" pages="); put_dec(model_n_pages);
+        puts_serial(" end=");  put_hex64((uint64_t)g_end); puts_serial("\n");
+        puts_serial("[VMAP] embed base="); put_hex64((uint64_t)g_embed_vaddr_b);
+        puts_serial(" pages="); put_dec(g_embed_n_pages);
+        puts_serial(" end=");  put_hex64((uint64_t)e_end); puts_serial("\n");
+        puts_serial("[VMAP] guard="); put_hex64((uint64_t)(g_embed_vaddr_b - g_end));
+        puts_serial(" overlap="); puts_serial(g_embed_vaddr_b >= g_end ? "NO" : "YES");
+        puts_serial("\n");
+        if (g_embed_vaddr_b < g_end) {
+            /* Unreachable by construction (embed_base_for adds a 1 GiB guard to the measured
+             * span), but a computed base deserves a checked assertion, not trust. */
+            g_embed_bad = 1; g_embed_bad_why = "overlap";
+            puts_serial("[EMBED] BASE OVERLAPS THE FIRST MODEL - refusing to map; embed OFF\n");
+        } else {
+            uint32_t eok = 0, eerr = 0;
+            seL4_CPtr pd_b_embed = inference_process.pd.cptr;
+            for (uint32_t p = 0; p < g_embed_n_pages; p++) {
+                cspacepath_t es, ed;
+                vka_cspace_make_path(&vka, g_embed_frame_caps[p], &es);
+                if (vka_cspace_alloc_path(&vka, &ed)) { eerr++; continue; }
+                if (vka_cnode_copy(&ed, &es, seL4_AllRights)) { eerr++; continue; }
+                if (map_frame_direct(ed.capPtr, pd_b_embed,
+                                     g_embed_vaddr_b + (size_t)p * 4096, seL4_AllRights)) {
+                    eerr++; continue;
+                }
+                eok++;
+            }
+            puts_serial("[EMBED] mapped "); put_dec(eok);
+            puts_serial("/"); put_dec(g_embed_n_pages);
+            puts_serial(" pages into PB");
+            if (eerr) { puts_serial(" ("); put_dec(eerr); puts_serial(" errors)"); }
+            puts_serial("\n");
+            if (eerr > 0) {
+                /* Fail closed — the SAME discipline as 103dea6's partial map, but scoped to the
+                 * embed capability ONLY. Gemma keeps serving; g_model_bad is NOT touched. */
+                g_embed_bad = 1; g_embed_bad_why = "partial-map";
+                puts_serial("[EMBED] partial map - embed capability DISABLED (fail closed);"
+                            " Gemma unaffected\n");
+            } else {
+                g_embed_ready = 1;
+                puts_serial("[EMBED] ready (resident + mapped; PB does not use it yet - C/M1b-1)\n");
+            }
+            embed_cslot_mark("after-embed-map");
+        }
+    }
+#endif /* JARVIS_EMBED */
 
     /* Copy notification caps to Process B's cspace */
     seL4_CPtr remote_req_notif = sel4utils_copy_cap_to_process(
@@ -4309,6 +4460,100 @@ static void *main_continued(void *arg UNUSED)
                                         } else {
                                             puts_serial("[JARVIS] Model file (JARVIS_MODEL_FILE) not found on FAT32\n");
                                         }
+#if JARVIS_EMBED
+                                        /* ---- Phase C / C/M1b-1: the SECOND, co-resident model ----
+                                         * PA finds/loads/maps it; PB does NOTHING with it (no argv
+                                         * change, no IPC — that is C/M1b-3). Reuses the SAME fs
+                                         * handle so the FAT-sector cache stays warm (design §4.6:
+                                         * fat32_fs_t documents it as never invalidated on a
+                                         * read-only FS), and re-points fs.progress so the second
+                                         * read does not drive the Gemma load bar. */
+                                        {
+                                            uint32_t ecl = 0, esz = 0;
+                                            fs.progress = NULL;   /* the HUD bar belongs to Gemma */
+                                            if (fat32_find_file(&fs, JARVIS_EMBED_MODEL_FILE,
+                                                                &ecl, &esz) != 0) {
+                                                /* T2: ABSENT IS NORMAL. Say it ONCE, do not warn per
+                                                 * window, do not touch g_model_bad, do not degrade
+                                                 * Gemma. The box boots and serves exactly as before. */
+                                                g_embed_absent = 1;
+                                                puts_serial("[EMBED] no " JARVIS_EMBED_MODEL_FILE
+                                                            " on JARVIS_DATA - embed capability OFF "
+                                                            "(normal; Gemma unaffected)\n");
+                                            } else if (nvme_model_n_pages == 0) {
+                                                /* Without a first-model span there is no measured
+                                                 * base to derive from (T3), so refuse rather than
+                                                 * guess a fixed address. */
+                                                g_embed_bad = 1; g_embed_bad_why = "no-base";
+                                                puts_serial("[EMBED] first model absent - cannot derive"
+                                                            " a non-overlapping base; embed OFF\n");
+                                            } else {
+                                                uint32_t ep = (esz + 4095) / 4096;
+                                                puts_serial("[EMBED] found: size="); put_dec(esz >> 20);
+                                                puts_serial("MB pages="); put_dec(ep); puts_serial("\n");
+                                                if (ep > MODEL_MAX_PAGES) {
+                                                    g_embed_bad = 1; g_embed_bad_why = "too-large";
+                                                    puts_serial("[EMBED] too large - embed OFF\n");
+                                                } else {
+                                                    int cp = (int)((ep * sizeof(seL4_CPtr) + 4095) / 4096);
+                                                    g_embed_frame_caps = (seL4_CPtr *)vspace_new_pages(
+                                                        &vspace, seL4_AllRights, cp, seL4_PageBits);
+                                                    if (!g_embed_frame_caps) {
+                                                        g_embed_bad = 1; g_embed_bad_why = "cap-array";
+                                                        puts_serial("[EMBED] cap array alloc failed - embed OFF\n");
+                                                    } else {
+                                                        memset(g_embed_frame_caps, 0, (size_t)cp * 4096);
+                                                        int efail = 0;
+                                                        uint32_t got = 0;
+                                                        for (uint32_t p = 0; p < ep; p++) {
+                                                            vka_object_t f;
+                                                            if (vka_alloc_frame(&vka, seL4_PageBits, &f)) {
+                                                                efail = 1; break;   /* alloc_fail HONOURED (103dea6) */
+                                                            }
+                                                            g_embed_frame_caps[p] = f.cptr;
+                                                            got = p + 1;
+                                                        }
+                                                        if (efail) {
+                                                            /* Same fail-closed discipline as the first
+                                                             * model: n_pages truncated but esz is NOT,
+                                                             * so DO NOT read — it would run off the
+                                                             * shorter mapping. Embed only; Gemma is
+                                                             * untouched and keeps serving. */
+                                                            g_embed_bad = 1; g_embed_bad_why = "frame-alloc";
+                                                            puts_serial("[EMBED] frame alloc exhausted at ");
+                                                            put_dec(got);
+                                                            puts_serial(" pages - NOT read (fail closed); embed OFF\n");
+                                                        } else {
+                                                            void *elocal = vspace_map_pages(&vspace,
+                                                                g_embed_frame_caps, NULL, seL4_AllRights,
+                                                                ep, seL4_PageBits, 1);
+                                                            if (!elocal) {
+                                                                g_embed_bad = 1; g_embed_bad_why = "pa-map";
+                                                                puts_serial("[EMBED] PA vspace map failed - embed OFF\n");
+                                                            } else if (fat32_read_file(&fs, ecl, esz, elocal) != 0) {
+                                                                g_embed_bad = 1; g_embed_bad_why = "read";
+                                                                puts_serial("[EMBED] read failed - embed OFF\n");
+                                                            } else {
+                                                                uint32_t emag = 0;
+                                                                memcpy(&emag, elocal, 4);
+                                                                if (emag != 0x46554747u) {   /* "GGUF" */
+                                                                    g_embed_bad = 1; g_embed_bad_why = "bad-magic";
+                                                                    puts_serial("[EMBED] not a GGUF - embed OFF\n");
+                                                                } else {
+                                                                    g_embed_size    = esz;
+                                                                    g_embed_n_pages = ep;
+                                                                    g_embed_vaddr_b = embed_base_for(nvme_model_n_pages);
+                                                                    puts_serial("[EMBED] loaded: ");
+                                                                    put_dec(esz >> 20);
+                                                                    puts_serial("MB GGUF ok (PA side)\n");
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+#endif /* JARVIS_EMBED */
                                     } else {
                                         puts_serial("[JARVIS] FAT32 init failed: err=");
                                         put_dec((uint32_t)(-fat_err));

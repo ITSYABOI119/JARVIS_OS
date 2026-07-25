@@ -334,6 +334,69 @@ queued not interleaved (§4.4); err=0 over a sustained run; EMBED=0 identity re-
 
 ---
 
+## 6a. C/M1b-1 RESULT (2026-07-25) — provisioning + co-resident LOAD/MAP: PASS
+
+Scope held to §6 exactly: PA provisions, finds, loads and maps the second model; **PB does nothing
+with it** (no `MSG_EMBED`, no embed forward, no argv change — PB's own log still reports only the
+Gemma base `1536M` = `0x60000000`). Gated `JARVIS_EMBED`, default 0.
+
+**Gate results (KVM `-smp 6`, real Qwen3-Embedding-0.6B Q8_0, 639,150,592 B):**
+
+| gate | result |
+|---|---|
+| load + map | `[EMBED] found: size=609MB pages=156043` → `loaded` → `mapped 156043/156043 pages into PB` → `ready` |
+| `merr == 0` | yes — zero mapping errors |
+| `[VMAP]` non-overlap | `gemma base=0x60000000 pages=758480 end=0x1192d0000`; `embed base=0x180000000 pages=156043 end=0x1a618b000`; `guard=0x66d30000 overlap=NO` |
+| `alloc_fail` honoured | yes — inherited from `103dea6`'s discipline, scoped to the embed flag |
+| absent-file degrade | **first-class gate, PASS**: one line, `[EMBED] no QWENEMB GUF … (normal; Gemma unaffected)`, Gemma loads 758480/758480, `model=loaded`, 0 `MODEL-BAD`, `[INFER]` serving |
+| Gemma unaffected (with-file run) | 2962 MB loaded, 758480/758480 mapped, `model=loaded`, 0 `MODEL-BAD`, `[INFER]` coherent |
+| cslot cost | **156,940 slots for 156,043 pages ≈ 1.006 slots/page** (measured delta) |
+| boot-time delta | **UNMEASURED** — needs bare metal (see below) |
+| EMBED=0 identity | all 5 objects identical on `.text`/`.rodata`/`.data`/`nm` (see §7 result) |
+
+### Three findings that corrected this document or the code
+
+1. **§4.3's cslot estimate was WRONG — measured, not recomputed.** This doc estimated 2 cslots per
+   page (~1.83M for both models). The measured cost is **1.006 slots/page**, about half. The
+   estimate assumed the `vka_alloc_frame` cap and the `vka_cnode_copy` duplicate both persist as
+   distinct root-CNode slots; the box says otherwise.
+2. **Absolute CNode headroom is NOT measurable by a single probe, and is no longer claimed.** A
+   first draft computed `used = (1<<22) − probe` from the K/M2a-2 "allocman hands out DESCENDING
+   cslots" note. The box falsified it: the probe value **rose** across the embed map while the
+   derived "used" **fell**, and the same call site reported different absolutes in two runs. Only
+   the DELTA between two probes within ONE run is trustworthy — which is the number that matters
+   (the embedder's real cost). The instrument now reports the raw probe and the delta, nothing more.
+3. **An 8.3 name gotcha cost a full gate cycle.** `fat32.c`'s `name_match` compares EXACTLY 11
+   bytes: an 8-char name field SPACE-PADDED, then the 3-char extension, **no separator**.
+   `"GEMMA2B"` (7) takes one pad space; an 8-char stem takes none. The first draft used
+   `QWEN3EMB.GUF` → `"QWEN3EMB GUF"` is **12 chars** and silently never matched, so the model read
+   as "not found" on a box that had it. Name is now `QWENEMB.GUF` → `"QWENEMB GUF"`. The same bug
+   was latent in `setup_nvme_partition.sh`'s `fat_8dot3` helper (a single literal space, correct
+   only for stems ≤7 chars); it now pads explicitly and Gemma's existing assert is unchanged.
+
+### T1/T2/T3 — the three traps, and what actually happened
+
+- **T1 (separate state) — REAL and necessary, implemented.** `g_embed_ready`/`g_embed_bad`/
+  `g_embed_absent` are distinct from `g_model_bad`. Nothing in the embed path can refuse Gemma
+  inference. Confirmed in both runs: the absent run and the loaded run each show `model=loaded`,
+  0 `MODEL-BAD`, and live `[INFER]`.
+- **T2 (absent is normal) — REAL, and it is the default state of every box today.** Proven as a
+  first-class gate, not an afterthought.
+- **T3 (overlap impossible by construction) — REAL, and the runtime derivation is what makes it
+  so.** Predicted `0x180000000` from the measured Gemma span before the run and the box produced
+  exactly that, with a 1.7 GiB guard. Note the failure mode this prevents is NOT a hard fault:
+  seL4 refuses the map, the loop does `merr++/continue`, and a partially-mapped model would boot
+  and run on garbage — so the checked assertion plus the logged proof are the point.
+
+### Honest limits carried forward
+
+- **Boot-time delta UNMEASURED.** It requires bare metal; KVM's emulated NVMe reads at ~130 MB/min
+  and any figure from it would be meaningless. The available honest fact is the added I/O volume:
+  **+609 MB on 2962 MB = +20.6%**. Measure it at the first box boot of a C/M1b image.
+- **The embedder is resident and mapped, and does nothing.** No embedding has been computed on the
+  box. C/M1b-1 proves plumbing only; correctness on the box is C/M1b-2 (the embed forward + on-box
+  vector parity against the C/M1a host golden), and usefulness is C/M2.
+
 ## 7. EMBED=0 identity plan (stated up front)
 
 **Objects:** `main.c.obj`, `inference_server.c.obj`, `llama_quant.c.obj`, `llama_load.c.obj`,
@@ -349,6 +412,28 @@ proven identical at C/M1a and must *stay* so.)
    (same source compiled twice) produced *different* md5s due to an embedded TimeDateStamp. On the box's
    Linux/ELF gcc it is expected to be valid, **but the same-source-twice control must be run to prove
    it** before relying on it. (Object-level analogue of the 6-1 "never md5 a packed image" rule.)
+
+### §7 RESULT (C/M1b-1, 2026-07-25)
+
+**The control was run FIRST, as required, and it PASSED:** two builds of identical source on the
+box's own gcc produced byte-identical `.o` for all five objects — so md5-of-`.o` **is** deterministic
+on this toolchain, unlike clang/COFF at C/M1a. Proven, not expected.
+
+Against baseline `fb1404a`, at `JARVIS_EMBED=0`:
+
+| object | `.text` | `.rodata` | `.data` | `nm` | whole `.o` |
+|---|---|---|---|---|---|
+| `main.c.obj` | identical | identical | identical | identical | **DIFFERS — DWARF only** |
+| `inference_server.c.obj` | identical | identical | identical | identical | identical |
+| `llama_quant.c.obj` | identical | — | identical | identical | identical |
+| `llama_load.c.obj` | identical | — | identical | identical | identical |
+| `tokenizer.c.obj` | identical | identical | identical | identical | identical |
+
+The single whole-`.o` difference was **verified section-by-section rather than asserted**: only
+`.debug_info`, `.debug_abbrev`, `.debug_loclists` and `.debug_line` differ, and `.text` is
+byte-identical at `0xe8a8` in both builds. That is the documented DWARF avalanche — the added lines
+shift line-number info in the including TU while emitting identical code. `llama_quant.c` and
+`llama_load.c` remain identical, as C/M1a requires.
 
 ---
 
