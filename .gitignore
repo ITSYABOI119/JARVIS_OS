@@ -100,3 +100,19 @@ phase4/docs/ui_mockups/design-system/
 .claude/settings.local.json
 .claude/settings.json
 .claude/workflows/
+
+# ---------------------------------------------------------------------------
+# CONTROL-IN KEY MATERIAL — NEVER COMMIT. This repo is PUBLIC (MIT).
+# phasec/scripts/gen_control_key.py defaults its two artifacts to ~/.jarvis/ —
+# deliberately OUTSIDE the repo — but these patterns are the defence-in-depth for
+# an operator who passes an in-repo --key-out/--slot-out, or runs the tool from
+# the repo root. A generated key committed here is one `git add -A` away from
+# publishing the box's HMAC secret to the world, and re-keying the box does not
+# un-publish it. Keep this list ahead of the tool, not behind it.
+control_key.bin
+jkey_slot.bin
+*.jkey
+.jarvis/
+# any stray raw key/slot dumps from manual provisioning
+ctrl_key*.bin
+*_key_slot.bin
