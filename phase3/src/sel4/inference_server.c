@@ -253,6 +253,36 @@ static void pb_log_num(const char *prefix, uint32_t val, const char *suffix)
 
 /* ---- Process incoming IPC requests ---- */
 
+/* Bounded retry for a full response ring. Each retry costs one signal + one yield, so this is
+ * microseconds, not a stall: it is a back-pressure window for PA to drain, NOT a wait for a dead
+ * PA. If PA really is gone the existing K/M2c miss-counter and its respawn are the right recovery,
+ * so giving up quickly and loudly is deliberate. */
+#ifndef PB_SEND_RETRY_MAX
+#define PB_SEND_RETRY_MAX 256
+#endif
+
+/* Response-chunk send, wrapped ONLY so the ring-full branch can be induced. That branch had never
+ * executed in a deployed build (text_out[512] capped a response at <=3 chunks into a 15-slot ring),
+ * and commit 2 of this milestone raises exactly those ceilings — so it must be proven to work
+ * BEFORE it becomes reachable, not after.
+ *   JARVIS_RING_PROBE 1 = fail the first PB_RING_PROBE_FAILS sends this boot, then behave normally
+ *                         => exercises the RETRY path; the answer must still arrive INTACT
+ *   JARVIS_RING_PROBE 2 = fail EVERY send => exercises EXHAUSTION: the loud truncation log, and a
+ *                         short-but-contiguous answer rather than a holed one */
+static int pb_send_chunk(shmem_ring_t *ring, uint16_t seq, const char *buf, int len)
+{
+#if JARVIS_RING_PROBE == 2
+    (void)ring; (void)seq; (void)buf; (void)len;
+    return -1;
+#else
+#if JARVIS_RING_PROBE == 1
+    static int probe_fails = 0;
+    if (probe_fails < PB_RING_PROBE_FAILS) { probe_fails++; return -1; }
+#endif
+    return shmem_ipc_send(ring, MSG_RESPONSE, seq, buf, (uint16_t)len);
+#endif
+}
+
 static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
                           uint16_t seq, const char *query, uint16_t query_len,
                           qmodel_t *qm, llama_state_t *state, tokenizer_t *tok,
@@ -610,6 +640,28 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
     puts_serial(" r="); put_dec(response_ring->header.read_idx);
     puts_serial("\n");
 #endif
+    /* A DROPPED CHUNK MUST NEVER PUNCH A SILENT HOLE IN THE ANSWER.
+     *
+     * shmem_ipc_send returns -1 when the ring is FULL (shmem_ipc.c: `wr - rd >= size`). This loop
+     * used to do `(void)rc` and then `offset += chunk` regardless, so a full ring silently DROPPED
+     * that chunk and the answer was reassembled by PA with a hole in the middle — no error, no log,
+     * just missing text. It was latent only because text_out[512] capped a response at <=3 chunks
+     * into a 15-slot ring. Raising the ceilings without fixing this first would make every new
+     * overflow fail QUIETLY, which is the worst way to discover a limit has been overshot.
+     *
+     * CHOSEN FIX: RETRY THE SAME OFFSET WITH BACK-PRESSURE, rather than fail-and-mark. A full ring
+     * here is TRANSIENT — PA is polling this ring and drains it continuously, and PA shares this
+     * core (K/M2c), so signalling + yielding is precisely what lets it run and make room. Retrying
+     * PRESERVES the answer, which is a strictly better outcome than reporting a degraded one; and
+     * marking the reply degraded on the wire would need a new message type or field, i.e. a wire
+     * change, for a case the retry makes nearly unreachable.
+     *
+     * The offset is advanced ONLY after a send that actually succeeded, so the answer can be short
+     * but is always CONTIGUOUS — never holed.
+     *
+     * If the bounded retry is exhausted (PA wedged or dead), STOP and say so LOUDLY. Note the log
+     * MUST use puts_serial, not pb_log: pb_log sends MSG_DEBUG over this very ring, which is the
+     * thing that is full. A short answer plus a loud line beats a silent hole. */
     while (offset < text_len) {
         int chunk = text_len - offset;
         if (chunk > SHMEM_MAX_PAYLOAD) chunk = SHMEM_MAX_PAYLOAD;
@@ -617,14 +669,33 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
         puts_serial("[PB] chunk @"); put_dec((uint32_t)offset);
         puts_serial(" len="); put_dec((uint32_t)chunk); puts_serial("\n");
 #endif
-        int rc = shmem_ipc_send(response_ring, MSG_RESPONSE, msg_seq,
-                       text_out + offset, (uint16_t)chunk);
+        int rc = pb_send_chunk(response_ring, msg_seq, text_out + offset, chunk);
 #if JARVIS_DBG_RING
         puts_serial("[PB] send rc="); put_dec((uint32_t)rc); puts_serial("\n");
-#else
-        (void)rc;
 #endif
-        offset += chunk;
+        if (rc < 0) {
+            /* Retry the SAME offset, yielding so PA can drain. */
+            int tries = 0;
+            while (rc < 0 && tries < PB_SEND_RETRY_MAX) {
+                seL4_Signal(resp_notif);   /* nudge PA in case it is waiting rather than polling */
+                seL4_Yield();              /* PA shares this core — yield is what lets it drain */
+                rc = pb_send_chunk(response_ring, msg_seq, text_out + offset, chunk);
+                tries++;
+            }
+            if (rc < 0) {
+                puts_serial("[PB] RESPONSE TRUNCATED: response ring full after ");
+                put_dec((uint32_t)PB_SEND_RETRY_MAX);
+                puts_serial(" retries, undelivered bytes=");
+                put_dec((uint32_t)(text_len - offset));
+                puts_serial(" (answer is short but CONTIGUOUS — no hole)\n");
+                break;                     /* offset NOT advanced — nothing was sent */
+            }
+#if JARVIS_DBG_RING
+            puts_serial("[PB] send recovered after retries=");
+            put_dec((uint32_t)tries); puts_serial("\n");
+#endif
+        }
+        offset += chunk;                   /* ONLY after a send that succeeded */
         msg_seq++;
     }
 

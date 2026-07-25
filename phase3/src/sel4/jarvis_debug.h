@@ -518,6 +518,26 @@
 #error "JARVIS_MODEL_FAIL_PROBE must be 0, 1 (frame-alloc) or 2 (partial-map)"
 #endif
 
+/* Response-ring overflow probe (box/KVM-only, default 0). The chunk-send failure branch in PB has
+ * NEVER executed in a deployed build — text_out[512] capped a response at <=3 chunks into a
+ * 15-slot ring, so shmem_ipc_send never returned -1 there. The M2 transport work raises exactly
+ * those ceilings, which makes the branch reachable, so it is proven FIRST. The flag VALUE is a
+ * MODE (the WAKE_PROBE / CONTROL_IN_PROBE precedent):
+ *   1 = fail the first PB_RING_PROBE_FAILS chunk sends this boot, then behave normally
+ *       => the RETRY path runs and the answer must still arrive INTACT (no hole, no truncation)
+ *   2 = fail EVERY chunk send => EXHAUSTION: the loud "[PB] RESPONSE TRUNCATED" line, and a
+ *       short-but-CONTIGUOUS answer instead of a silently holed one
+ * Mode 2 deliberately breaks every inference reply for the whole boot; never deploy != 0. */
+#ifndef JARVIS_RING_PROBE
+#define JARVIS_RING_PROBE 0
+#endif
+#ifndef PB_RING_PROBE_FAILS
+#define PB_RING_PROBE_FAILS 3
+#endif
+#if JARVIS_RING_PROBE && (JARVIS_RING_PROBE != 1 && JARVIS_RING_PROBE != 2)
+#error "JARVIS_RING_PROBE must be 0, 1 (transient, retry recovers) or 2 (permanent, exhaustion)"
+#endif
+
 /* Gemma 4 THINKING MODE — the model's own chat_template gates <|think|> on `enable_thinking`,
  * and this is that switch. DEFAULT 0 (OFF), which is a DELIBERATE DEVIATION from the operator's
  * stated "thinking on by default" preference, made on measurement rather than taste:
