@@ -136,6 +136,42 @@ padding is what puts `<turn|><turn|><turn|><eos>` into the episodic store and th
 "we are wasting the budget we have."** The stop-token fix must land before any budget is sized,
 or the new budgets will be sized against wasted tokens.
 
+### 1.4b RESIDUAL DEFECT IN THE SHIPPED RECALL FIX — the store is poisoned, and recall re-injects it
+
+Read off the box after the failed validation (durable NVMe log, **all 2700 entries are boot_id=41**,
+the boot that followed the `9362c756` deploy — the log had wrapped, evicting every earlier boot):
+
+```
+[41:1903713] IPC_STATS  [CTRL-IN-STATS] acc=3 drop=6 (parse=6 rl=0 auth=0 replay=0) bp=0 down=0 recall=2
+```
+
+`acc=3` matches the operator's three questions. **`recall=2` — but only ONE of the three should have
+recalled** (the marker question; the CPU-cores key was predicted to suppress, and the colour question
+is fresh). The extra one was found by running the shipped fixed builder against the real stored
+bytes of slot 45 — *the thought-channel garbage record itself*, which `epi_index_lookup`'s
+newest-wins had made the newest entry for that key:
+
+```
+Notes from a previous answer (use as reference; add new detail, do not repeat):
+<|channel>thought
+Here's a thinking process that leads to the suggested answer:
+
+1.
+```
+
+**164 bytes, non-empty.** Two independent failures:
+
+1. **`"1."` parses as a completed sentence**, so the complete-sentence rule does not suppress it.
+   Enumerated text defeats the rule.
+2. **Thought-channel text is in the store at all**, so recall injects the literal string
+   `<|channel>thought` into the next prompt — the strongest possible nudge toward more thought
+   output. It is a self-reinforcing loop: thought garbage is stored, recalled, and produces more
+   thought garbage.
+
+This is a defect in the fix I shipped, not a pre-existing one, and it is the mechanism behind
+`recall=2`. **It also makes D4's "strip the thought before storing" load-bearing rather than a
+nicety** — with the thought stripped at the source, neither failure above is reachable.
+
 ### 1.5 What this means
 
 The honest summary is that the thinking path is **misimplemented, not misused**:
@@ -222,9 +258,12 @@ the `infer_last_tok_x100` figure; every historical benchmark, telemetry series a
 produced at 50 tokens. Changing it silently re-bases all of them. Keep it at 50 for comparability,
 and give control-IN — the lane a human actually reads — the real budget.
 
-*(Bare-metal confirmation of the 0.1% figure is pending; the box is currently booted into JARVIS so
-the durable log is not readable. The two independent measurements above already contradict the 14%
-premise, so this does not gate the recommendation.)*
+**Bare-metal, boot 41** (durable log): `q=474200 hit=403206 err=0`. The durable `IPC_STATS` format
+does **not** carry an `infer` counter, so this is an ESTIMATE, not a measurement: the 70,994
+non-hits are `infer + hb + shield`, and applying the KVM lane ratios (hb ≈ 10% of q, shield ≈ 4.6%)
+leaves **infer ≈ 1,900 ≈ 0.4% of q**. Same order as the other two figures, still ~35× below the
+brief's 14%. An exact bare-metal number needs `q_infer` off the v12 telemetry during a JARVIS boot;
+it is not worth a boot on its own, and three independent estimates already settle the premise.
 
 ## 5. D4 — is the thought shown?
 
@@ -283,7 +322,15 @@ came from Gemma. But the label must not be rendered as a quality claim.
 
 **M0 — host, no box.** The thought-boundary scanner and the answer/thought split as pure functions
 (the `km2b_trigger.c` / `wake.c` precedent): given a token stream, find token 101, split, strip.
-Host-tested + a CI step. Also the stop-token predicate (§1.4).
+Host-tested + a CI step. Also the stop-token predicate (§1.4), and **the §1.4b recall-time guard: a
+candidate whose text contains a thought marker is not recallable.**
+
+That guard is needed *in addition to* stripping at the source, because **the poisoned records are
+already in the store**. The control-IN store is circular with 4096 slots and control-IN is
+human-paced, so at the observed rate those records would take **years** to age out. Options are: a
+recall-time filter (cheap, pure, host-testable — recommended), or zeroing the control-IN region
+(destructive, throws away the genuine history with it), or waiting them out (not viable). The filter
+also protects against any future record that slips through.
 
 **M1 — the template correction + the stop-token fix, box, gated.** Move `<|think|>` from the tail to
 a leading `<|turn>system\n<|think|>\n<turn|>\n` block behind `JARVIS_THINKING`; stop on `<turn|>`
@@ -331,3 +378,12 @@ other milestone is sizing or plumbing around a prompt that should be correct fir
 5. Should the §1.4 stop-token fix be split out and shipped on its own? It is small, it is a pure
    improvement, and it is independent of the thinking design. My prior: yes, fold it into M1 but
    gate it separately so a regression is attributable.
+6. **The already-poisoned store (§1.4b).** Recall-time filter (my recommendation), or zero the
+   control-IN region and lose the genuine history with it? The filter is pure, host-testable and
+   protects future records too; zeroing is a one-off that also discards the marker-question lineage
+   the recall gates depend on. I do not recommend zeroing.
+7. **Was the recall fix worth shipping given §1.4b?** My view: yes — it is strictly better than
+   injecting mid-clause fragments, and the KVM gate showed it discriminating correctly (6 of 14 hits
+   still injected). But it was sized against a diagnosis that has since been superseded, and it did
+   not survive contact with a store containing thought text. That is worth saying plainly rather
+   than leaving the earlier "fix verified" framing standing unqualified.
