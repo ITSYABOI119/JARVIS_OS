@@ -3,11 +3,16 @@
 telemetry_receiver.py - JARVIS Remote Telemetry Console receiver (goal #2b N-c-2)
 
 Main-PC Python UDP receiver for the box-side telemetry stream. The JARVIS box
-(headless appliance) broadcasts a 254-byte (v11) binary `telemetry_packet_t` over UDP
+(headless appliance) broadcasts a packed binary `telemetry_packet_t` over UDP
 to 255.255.255.255:51000 at ~1 Hz (see phase3/src/drivers/jarvis_telemetry.h and
 the N-c-1 emit site in phase3/src/sel4/main_x86.c). This tool binds the port,
-decodes each datagram, validates the zlib CRC-32 over the first 250 bytes (v11) / 242 (v10),
-and pretty-prints honest live box state.
+decodes each datagram version-tolerantly by LENGTH, validates the zlib CRC-32 over
+the region for that version, and pretty-prints honest live box state.
+
+The wire version and its sizes/CRC offsets are defined in exactly ONE place — the
+FMT_V* ladder and the length dispatch in decode_packet() below. They are deliberately
+NOT restated in this docstring: every duplicated version number is a future stale fact
+(this docstring itself claimed "254-byte (v11)" for two commits after v12 shipped).
 
 Wire format (little-endian, packed, no padding — see FMT below; sizes are DERIVED,
 never hardcoded here):
@@ -225,10 +230,12 @@ def decode_packet(data: bytes) -> dict:
     returns the dict with 'crc_ok' == False (so the caller can distinguish noise
     on the port from genuine corruption).
     """
-    # Version-tolerant by LENGTH (the append-only wire): v12 (262 B) has the control_in fields AND
-    # the route_* fields; v11 (254 B, still emitted by the live deployed box until the B flip) has
-    # only control_in; v10 (246 B) has neither. An older packet decodes cleanly with its newer
-    # fields == None — never a fabricated 0. CRC region: @242 (v10) / @250 (v11) / @258 (v12).
+    # Version-tolerant by LENGTH (the append-only wire): v12 has the control_in fields AND the
+    # route_* fields; v11 has only control_in; v10 has neither. The DEPLOYED box emits v12 (the
+    # 6-6 B flip landed d4be861); v11/v10 support is retained for captured/replayed older pcaps.
+    # An older packet decodes cleanly with its newer fields == None — never a fabricated 0.
+    # Sizes and CRC offsets are NOT restated here — they are DERIVED from the FMT_V* formats and
+    # the PKT_SIZE_V* constants above, which are the single source of truth.
     # route_* are ROUTING DECISIONS at classification time, NOT a breakdown of control_in_answered:
     # an INFER decision that later degrades or times out is counted in route_infer but never
     # reaches the answered exit, so the three do not sum to control_in_answered.
@@ -272,7 +279,9 @@ def decode_packet(data: bytes) -> dict:
     if magic != MAGIC:
         raise ValueError("bad magic 0x%08X (expected 0x%08X)" % (magic, MAGIC))
 
-    crc_calc = zlib.crc32(data[:n - 4]) & 0xFFFFFFFF   # offsetof(crc32): 242 (v10) / 250 (v11) / 258 (v12)
+    # The CRC region is everything before the trailing u32 crc32 field, DERIVED from the actual
+    # datagram length — so it needs no per-version constant and cannot go stale at the next bump.
+    crc_calc = zlib.crc32(data[:n - 4]) & 0xFFFFFFFF
     flags_list = [name for bit, name in FLAG_NAMES.items() if flags & bit]
 
     return {
