@@ -1750,6 +1750,10 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
             g_model_bad_detail = merr;
             puts_serial("[MODEL-BAD] partial model map: "); put_dec(merr);
             puts_serial(" page errors - inference DISABLED (fail closed)\n");
+            /* NOTE: the FB panel still reads "[loaded]" here — it was written on the READ success
+             * path, which runs BEFORE this map. It is corrected at the first [STATS] window (see
+             * the g_model_bad block there); fb_status_line is a static defined later in this file
+             * and is not callable from this point. */
             nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr, g_nvme_bounce_paddr,
                            LOG_MODEL_LOAD, "MODEL-BAD partial model map");
         }
@@ -3239,7 +3243,17 @@ static void jarvis_log_snapshot(uint64_t q_total, uint64_t q_errors) {
     } else {
         p = fbp_str(p, "no-fb");
     }
-    p = fbp_str(p, " model="); p = fbp_str(p, nvme_model_loaded ? "loaded" : "loading");
+    /* C/M1b pre-fix follow-up: report USABILITY, not merely "the file was read". In the
+     * partial-map case nvme_model_loaded is TRUTHFULLY 1 (the read succeeded; the MAP failed),
+     * so the old two-state token rendered "loaded" next to a [MODEL-BAD] line — not a silent
+     * health claim (they render adjacently), but confusing at a glance, and the project's rule
+     * is that the UI shows real live state. Three states, still ONE glanceable token:
+     *   loading  — not read yet
+     *   loaded   — read AND usable (the healthy steady state, string UNCHANGED)
+     *   UNUSABLE — read but g_model_bad: inference is refused, and the panel says so itself.
+     * The load-bearing signals (TLM_F_MODEL_LOADED cleared, dispatch refused) are untouched. */
+    p = fbp_str(p, " model=");
+    p = fbp_str(p, g_model_bad ? "UNUSABLE" : (nvme_model_loaded ? "loaded" : "loading"));
     p = fbp_str(p, " NN=");    p = fbp_u32(p, (uint32_t)g_num_nodes);
     p = fbp_str(p, " q=");     p = fbp_u32(p, (uint32_t)q_total);
     p = fbp_str(p, " err=");   p = fbp_u32(p, (uint32_t)q_errors);
@@ -6236,6 +6250,16 @@ static void *main_continued(void *arg UNUSED)
              * rides nvme_log_write exactly like [CTRL-IN-STATS]. Emitted only while degraded, so a
              * healthy boot writes nothing new and the log is byte-for-byte as before. */
             if (g_model_bad) {
+                /* Correct the on-screen panel ONCE. It was written "[loaded]" on the read-success
+                 * path, before the map that failed; leaving it would have the HUD asserting health
+                 * the box does not have. Done here (not at the failure site) because
+                 * fb_status_line is a static defined later in this file. */
+                static int mb_panel_done = 0;
+                if (!mb_panel_done && fb_ready()) {
+                    mb_panel_done = 1;
+                    fb_status_line(FBP_Y_MODEL,
+                                   "Model   : Gemma 4 E2B  [UNUSABLE - inference disabled]", FBP_ERR);
+                }
                 char mb[96]; char *mp = mb;
                 mp = fbp_str(mp, "[MODEL-BAD] inference disabled why=");
                 mp = fbp_str(mp, g_model_bad_why);
