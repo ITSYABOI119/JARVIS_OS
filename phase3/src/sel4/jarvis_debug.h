@@ -488,6 +488,22 @@
 #define JARVIS_EMBED 0
 #endif
 
+/* C/M1b pre-fix induction probe (box/KVM-only, default 0). The two fail-closed branches on the
+ * model-load path are UNREACHABLE on a healthy box (one model fits comfortably), so shipping them
+ * untested would be shipping an unproven error path. The flag VALUE is a MODE (the WAKE_PROBE /
+ * CONTROL_IN_PROBE precedent), and the two modes are mutually exclusive BY CONSTRUCTION: mode 1
+ * aborts the frame allocation, which leaves nvme_model_loaded == 0, so PB is spawned model-less and
+ * the mapping loop mode 2 targets never runs.
+ *   1 = force `alloc_fail` — abort the frame-allocation loop early (pre-fix 1a)
+ *   2 = force one `merr`   — fail one page map into PB (pre-fix 1b)
+ * Induces a DEGRADED box on purpose: inference is refused for the whole boot. Never deploy != 0. */
+#ifndef JARVIS_MODEL_FAIL_PROBE
+#define JARVIS_MODEL_FAIL_PROBE 0
+#endif
+#if JARVIS_MODEL_FAIL_PROBE && (JARVIS_MODEL_FAIL_PROBE != 1 && JARVIS_MODEL_FAIL_PROBE != 2)
+#error "JARVIS_MODEL_FAIL_PROBE must be 0, 1 (frame-alloc) or 2 (partial-map)"
+#endif
+
 /* Phase 6 K/M2a-2 reuse-in-place respawn spike (box-only KVM measurement; SYSTEM_DESIGN
  * §4.1/§4.2). When 1, Process B gains a muslc-init-safe `pb_restart_entry` (re-enters PAST
  * musl's one-time init on a dedicated ABI-aligned restart stack, REUSING the warm model

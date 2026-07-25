@@ -471,6 +471,19 @@ static uint32_t nvme_model_size = 0;
 static uint32_t nvme_model_n_pages = 0;
 static uint8_t  g_model_load_pct = 0;   /* N-c-1: 0..100, set by model_load_progress(); for telemetry */
 
+/* C/M1b pre-fix: the model is present-but-UNUSABLE. Two detected-then-discarded failures used to
+ * fall through and serve inference from a bad model while telemetry reported model=loaded:
+ *   (a) frame exhaustion truncated n_pages but NOT model_size, so the read wrote past the mapping
+ *       (`alloc_fail` was set and never read — the guard existed but was dead);
+ *   (b) a partial map into PB (`merr > 0`) printed a count and continued.
+ * Both now FAIL CLOSED: set this latch, clear TLM_F_MODEL_LOADED on the wire, refuse inference
+ * dispatch, and log durably. Deliberately NOT fatal to boot — a shipped system with no observed
+ * failures must degrade, not stop (the g_pb_dead / PB_DISPATCH_OK precedent). g_model_bad is set
+ * ONLY on a real detected failure, so a healthy boot is behaviourally unchanged. */
+static int g_model_bad = 0;             /* 1 = model unusable; refuse dispatch, clear the wire flag */
+static const char *g_model_bad_why = "";/* fixed literal only — never attacker/model text */
+static uint32_t g_model_bad_detail = 0; /* alloc: pages obtained | map: mapping-error count */
+
 /* N-c-1: hoisted NIC for the workload-loop telemetry emitter. The [NET] bring-up fills
  * this on the "first-light OK" path (mac_valid && a DD); ready stays 0 on QEMU / NIC-absent
  * so the emitter is a strict no-op. */
@@ -1685,6 +1698,14 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
         uint32_t mok = 0, merr = 0;
         for (uint32_t p = 0; p < model_n_pages; p++) {
             cspacepath_t msrc, mdst;
+#if JARVIS_MODEL_FAIL_PROBE == 2
+            /* Induce pre-fix 1b: skip exactly one page map, reproducing the partial-map state a
+             * real cspace/copy/map error produces (the same merr++/continue the loop already has). */
+            if (p == 500) {
+                puts_serial("[MODEL-FAIL-PROBE] forcing one page-map failure at p=500\n");
+                merr++; continue;
+            }
+#endif
             vka_cspace_make_path(&vka, model_caps[p], &msrc);
             int e = vka_cspace_alloc_path(&vka, &mdst);
             if (e) { merr++; continue; }
@@ -1705,6 +1726,24 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
             puts_serial(" ("); put_dec(merr); puts_serial(" errors)");
         }
         puts_serial("\n");
+        if (merr > 0) {
+            /* C/M1b pre-fix 1b — FAIL CLOSED. Any of the three failure branches above (cspace
+             * alloc, cnode copy, map) leaves PB holding a PARTIALLY mapped model. Previously this
+             * printed a count and continued: PB then ran on garbage weights while telemetry still
+             * reported model=loaded — fluent nonsense asserted with confidence, the project's
+             * honesty posture inverted. PROPAGATION: this is spawn_inference_process(), a different
+             * function from the PA load path, and its return value is treated as fatal by the
+             * caller — so instead of returning an error (which would newly brick a boot that used
+             * to survive) it latches the file-scope g_model_bad, which the workload lane and the
+             * telemetry emitter both read. Not fatal to boot; the box comes up and says so. */
+            g_model_bad = 1;
+            g_model_bad_why = "partial-map";
+            g_model_bad_detail = merr;
+            puts_serial("[MODEL-BAD] partial model map: "); put_dec(merr);
+            puts_serial(" page errors - inference DISABLED (fail closed)\n");
+            nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr, g_nvme_bounce_paddr,
+                           LOG_MODEL_LOAD, "MODEL-BAD partial model map");
+        }
     }
 
     /* Copy notification caps to Process B's cspace */
@@ -1827,8 +1866,17 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
     snprintf(abuf[0], 32, "%lu", (unsigned long)remote_req_notif);
     snprintf(abuf[1], 32, "%lu", (unsigned long)remote_resp_notif);
     snprintf(abuf[2], 32, "%lu", (unsigned long)remote_vaddr);
-    snprintf(abuf[3], 32, "%lu", (unsigned long)(model_n_pages > 0 ? MODEL_VADDR_B : 0));
-    snprintf(abuf[4], 32, "%lu", (unsigned long)model_size);
+    /* C/M1b pre-fix: hand PB a MODEL-LESS argv when the map failed. Without this, a partial map is
+     * not merely dishonest, it HANGS THE BOOT: PB's qmodel_load touches the unmapped page, faults,
+     * and never signals ready, while PA is still blocked on the pre-loop ready handshake and has
+     * therefore not yet entered the workload loop where the fault EP is polled — so the fault is
+     * never handled and both sides wait forever. (KVM-measured: PA stuck at "Waiting for Process B
+     * ready signal..." with 0 [STATS] windows.) Passing model_vaddr=0/size=0 sends PB down its
+     * existing "No model available — idle mode" path: PB readies, PA enters the workload loop, the
+     * box serves cache and reports WHY every window. Degrade, don't hang. g_model_bad is 0 on a
+     * healthy boot, so both values are unchanged there. */
+    snprintf(abuf[3], 32, "%lu", (unsigned long)((model_n_pages > 0 && !g_model_bad) ? MODEL_VADDR_B : 0));
+    snprintf(abuf[4], 32, "%lu", (unsigned long)(g_model_bad ? 0u : model_size));
     snprintf(abuf[5], 32, "%d",  pb_n_threads);
     snprintf(abuf[6], 32, "%lu", (unsigned long)remote_done);
     int argc_n = 7;
@@ -3203,7 +3251,10 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
     memset(&pkt, 0, sizeof pkt);
     pkt.kind  = kind;
     pkt.seq   = g_tlm_seq++;
-    pkt.flags = (uint16_t)((nvme_model_loaded   ? TLM_F_MODEL_LOADED : 0)
+    /* C/M1b pre-fix: the wire must not claim a model that is not usable. g_model_bad is 0 on every
+     * healthy boot, so this is behaviourally identical there; on a detected load/map failure the
+     * flag CLEARS and the console's "model loaded" row honestly goes dark. */
+    pkt.flags = (uint16_t)(((nvme_model_loaded && !g_model_bad) ? TLM_F_MODEL_LOADED : 0)
                          | (g_fb_desc_drawable  ? TLM_F_FB_DRAWABLE  : 0)
                          | (g_fb_desc_mapped    ? TLM_F_FB_MAPPED    : 0)
                          | (q_errors            ? TLM_F_HAS_ERROR    : 0)
@@ -4131,6 +4182,14 @@ static void *main_continued(void *arg UNUSED)
                                                 int alloc_fail = 0;
                                                 for (uint32_t p = 0; p < n_pages; p++) {
                                                     vka_object_t frm;
+#if JARVIS_MODEL_FAIL_PROBE == 1
+                                                    /* Induce pre-fix 1a: stop allocating early so n_pages
+                                                     * truncates exactly as real exhaustion would. */
+                                                    if (p == 1000) {
+                                                        puts_serial("[MODEL-FAIL-PROBE] forcing frame-alloc failure at p=1000\n");
+                                                        n_pages = p; alloc_fail = 1; break;
+                                                    }
+#endif
                                                     int aerr = vka_alloc_frame(&vka, seL4_PageBits, &frm);
                                                     if (aerr) {
                                                         puts_serial("[JARVIS] Frame alloc failed at ");
@@ -4170,6 +4229,22 @@ static void *main_continued(void *arg UNUSED)
                                                     n_pages, seL4_PageBits, 1);
                                                 if (!model_local) {
                                                     puts_serial("[JARVIS] Model vspace map failed\n");
+                                                } else if (alloc_fail) {
+                                                    /* C/M1b pre-fix 1a — FAIL CLOSED. Frame exhaustion truncated
+                                                     * n_pages, but model_size is UNCHANGED, so the fat32_read_file
+                                                     * below would write the full size into the shorter mapping and
+                                                     * run off its end. `alloc_fail` was set here and never read.
+                                                     * Skip the read entirely: nvme_model_loaded stays 0 (PB is
+                                                     * spawned model-less and idles) and the latch refuses dispatch
+                                                     * fast instead of burning a poll timeout per query. */
+                                                    g_model_bad = 1;
+                                                    g_model_bad_why = "frame-alloc";
+                                                    g_model_bad_detail = n_pages;
+                                                    puts_serial("[MODEL-BAD] frame alloc exhausted at ");
+                                                    put_dec(n_pages);
+                                                    puts_serial(" pages - model NOT read (fail closed)\n");
+                                                    nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr, g_nvme_bounce_paddr,
+                                                                   LOG_MODEL_LOAD, "MODEL-BAD frame-alloc exhausted");
                                                 } else {
                                                     puts_serial("[JARVIS] Model mapped at vaddr ");
                                                     put_hex((uint32_t)(uintptr_t)model_local); puts_serial("\n");
@@ -5569,7 +5644,25 @@ static void *main_continued(void *arg UNUSED)
              * dead PB after g_pb_dead trips). A cache MISS is simply not served: no dead-PB send,
              * no ~60-120 s timeout, no q_error, no miss churn. PB_DISPATCH_OK() is a compile-time 1
              * when JARVIS_ACTIONS=0 -> the guard folds out -> byte-identical. */
-            if (!cg_served_now && PB_DISPATCH_OK()) {
+            /* C/M1b pre-fix: REFUSE inference on a model we know is unusable — partial map (serving
+             * from garbage weights) or a truncated frame allocation (PB is model-less, so a send
+             * would only buy a ~60-120 s poll timeout per query). Folded into the SAME lane
+             * condition as §5-F rather than added as a later bail-out, for two reasons: q_infer++
+             * is the very next line, so a later guard would report inferences that never ran (the
+             * KVM probe caught exactly that), and this inherits §5-F's semantics verbatim — a cache
+             * MISS is simply not served: no send, no timeout, no q_error, no miss churn. The honest
+             * degraded signals are the CLEARED TLM_F_MODEL_LOADED and the durable [MODEL-BAD] line,
+             * not a fake error count. g_model_bad is 0 on a healthy boot, so this folds out. */
+            if (!cg_served_now && g_model_bad) {
+                static int model_bad_logged = 0;
+                if (!model_bad_logged) {
+                    model_bad_logged = 1;
+                    puts_serial("[MODEL-BAD] inference REFUSED (");
+                    puts_serial(g_model_bad_why);
+                    puts_serial(") - serving cache only\n");
+                }
+            }
+            if (!cg_served_now && PB_DISPATCH_OK() && !g_model_bad) {
             q_infer++;
 
 #if JARVIS_G3_PROBE
@@ -6129,6 +6222,21 @@ static void *main_continued(void *arg UNUSED)
                                    LOG_IPC_STATS, cl);
             }
 #endif
+            /* C/M1b pre-fix: DURABLE degraded-model line at the [STATS] cadence. A bare puts_serial
+             * is serial-only and the deployed BOOT_LOG=0 config never captures it, so the proof
+             * rides nvme_log_write exactly like [CTRL-IN-STATS]. Emitted only while degraded, so a
+             * healthy boot writes nothing new and the log is byte-for-byte as before. */
+            if (g_model_bad) {
+                char mb[96]; char *mp = mb;
+                mp = fbp_str(mp, "[MODEL-BAD] inference disabled why=");
+                mp = fbp_str(mp, g_model_bad_why);
+                mp = fbp_str(mp, " detail="); mp = fbp_u32(mp, g_model_bad_detail);
+                mp = fbp_str(mp, " q_err=");  mp = fbp_u32(mp, q_errors);
+                *mp = '\0';
+                puts_serial(mb); puts_serial("\n");
+                nvme_log_write(g_nvme_ptr, g_nvme_bounce_vaddr, g_nvme_bounce_paddr,
+                               LOG_MODEL_LOAD, mb);
+            }
             jarvis_log_snapshot(q_total, q_errors);   /* Step 2c-2a: full-state [SNAP] at the [STATS] cadence */
             jarvis_telemetry_emit(TLM_K_STATS, q_total, q_hits, q_infer, q_heartbeat, q_shield, q_errors);  /* N-c-1 */
             g_tlm_last_tsc = jarvis_rdtsc();   /* N-c-1: re-base the 1 Hz gate so the next tick isn't a near-dup */
