@@ -161,7 +161,41 @@ static int g3_clean_answer_len(const char *resp, int resp_len)
             }
         }
     }
-    return n;
+
+    /* INJECT ONLY COMPLETE SENTENCES (the boot-40 cross-session-recall defect).
+     *
+     * A word-boundary cut still ends mid-clause ("...its single execution thread,"), and a
+     * mid-clause preamble MEASURABLY tips Gemma into emitting its thinking channel
+     * ("<|channel>thought Here's a thinking process...") instead of answering: on the real
+     * engine, with the question held fixed, a mid-sentence preamble produced that garbage and
+     * the SAME preamble completed to a sentence produced clean prose. Markdown was ruled out
+     * as the trigger by testing the identical fragment with the ** removed -- still garbage.
+     *
+     * So back up to the last COMPLETED sentence. Deliberately applied unconditionally, not just
+     * when WE truncated: PB caps generation at 50 tokens (inference_server.c), so a stored
+     * answer can already arrive cut mid-sentence at well under G3_R_MAX -- the boot-40 record
+     * was 246 B, nowhere near the 256 B store cap, and this path must catch that too.
+     *
+     * A terminator only counts when followed by whitespace or the end of the window, so "3.5"
+     * and similar intra-token dots cannot fake a sentence end.
+     *
+     * NO completed sentence in the window => return 0, and the caller emits NO preamble at all
+     * (the "no relevant memory => no preamble" path). A fragment is worse than no memory: it
+     * degrades an answer the box would otherwise get right. That is the honest ceiling --
+     * recall grounds SHORT answers, and an essay simply does not recall. */
+    int sentence_end = 0;
+    for (int i = 0; i < n; i++) {
+        char c = resp[i];
+        if (c != '.' && c != '?' && c != '!')
+            continue;
+        int j = i + 1;
+        while (j < n && (resp[j] == '"' || resp[j] == '\'' || resp[j] == ')' ||
+                         resp[j] == ']' || resp[j] == '*' || resp[j] == '`'))
+            j++;                         /* keep the closing quote/paren/bold with the sentence */
+        if (j >= n || resp[j] == ' ' || resp[j] == '\n' || resp[j] == '\r' || resp[j] == '\t')
+            sentence_end = j;
+    }
+    return sentence_end;
 }
 
 int g3_build_preamble_answer_only(const g3_candidate_t *sel, int n, char *out, int cap)
@@ -178,21 +212,35 @@ int g3_build_preamble_answer_only(const g3_candidate_t *sel, int n, char *out, i
     if (limit < 0)
         limit = 0;
 
+    /* ANSWER-ONLY: emit each selected record's RESPONSE (never its query). No "- " / question
+     * text, so the prior QUESTION can't read like an instruction and get echoed verbatim.
+     * g3_clean_answer_len cuts at a word boundary, strips a dangling markdown header (fix P7),
+     * and cuts back to the last COMPLETE SENTENCE (fix for the boot-40 recall defect). */
+    int facts = n < G3_MAX_FACTS ? n : G3_MAX_FACTS;
+
+    /* Clean FIRST, and emit NOTHING if no fact survives. A bare "Notes from a previous
+     * answer:" header with nothing underneath is itself a malformed prompt -- the point of
+     * returning 0 is to fall back to the clean no-preamble path, header included. */
+    int clean[G3_MAX_FACTS];
+    int any = 0;
+    for (int i = 0; i < facts; i++) {
+        clean[i] = sel[i].resp ? g3_clean_answer_len(sel[i].resp, sel[i].resp_len) : 0;
+        if (clean[i] > 0)
+            any = 1;
+    }
+    if (!any)
+        return 0;   /* out[0] was set to '\0' above */
+
     int pos = 0;
     /* G3/M6b: reframe the label so the context reads as material to BUILD ON, not repeat (a soft
      * nudge against the P7 verbatim self-restatement). Kept short (counts against the token cap). */
     static const char HDR[] = "Notes from a previous answer (use as reference; add new detail, do not repeat):\n";
     g3_append(out, &pos, limit, HDR, (int)(sizeof HDR - 1));
 
-    /* ANSWER-ONLY: emit each selected record's RESPONSE (never its query). No "- " / question
-     * text, so the prior QUESTION can't read like an instruction and get echoed verbatim.
-     * g3_clean_answer_len cuts at a word boundary + strips a dangling markdown header (fix P7). */
-    int facts = n < G3_MAX_FACTS ? n : G3_MAX_FACTS;
     for (int i = 0; i < facts; i++) {
-        if (sel[i].resp) {
-            int rn = g3_clean_answer_len(sel[i].resp, sel[i].resp_len);
-            g3_append(out, &pos, limit, sel[i].resp, rn);
-        }
+        if (clean[i] <= 0)
+            continue;   /* a fact that cleaned away contributes nothing, not a blank line */
+        g3_append(out, &pos, limit, sel[i].resp, clean[i]);
         g3_append(out, &pos, limit, "\n", 1);
     }
 

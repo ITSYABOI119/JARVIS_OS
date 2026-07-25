@@ -213,7 +213,10 @@ static void test_exact_only(void)
 static void test_answer_only(void)
 {
     const char *Q = "What is the seL4 microkernel";   /* the prior QUESTION — must NOT appear */
-    const char *R = "seL4 is a formally verified microkernel";
+    /* T12 note: the response is a COMPLETE sentence. It gained its terminating '.' when the
+     * complete-sentence rule landed — an unterminated answer now yields NO preamble by design,
+     * which would make every assertion below vacuous. The anti-echo intent is unchanged. */
+    const char *R = "seL4 is a formally verified microkernel.";
     g3_candidate_t sel[1] = {
         { .query = Q, .query_len = (uint16_t)strlen(Q), .resp = R, .resp_len = (uint16_t)strlen(R) },
     };
@@ -231,7 +234,10 @@ static void test_answer_only(void)
     memset(cbuf, (int)0xAA, sizeof cbuf);
     const int CAP = 32;
     char big[300];
-    memset(big, 'Z', sizeof big);
+    /* Sentence-terminated filler, NOT a flat run of 'Z': under the complete-sentence rule an
+     * unterminated blob cleans to nothing, the builder writes nothing, and this cap-overrun
+     * canary would pass vacuously without ever exercising truncation. */
+    for (int k = 0; k < 300; k++) big[k] = ((k % 10) == 8) ? '.' : (((k % 10) == 9) ? ' ' : 'Z');
     g3_candidate_t sbig[1] = { { .query = Q, .query_len = 5, .resp = big, .resp_len = 300 } };
     int l2 = g3_build_preamble_answer_only(sbig, 1, cbuf, CAP);
     CHECK(l2 <= CAP - 1 && cbuf[l2] == '\0', "T9 cap: len<=cap-1 + NUL-terminated");
@@ -255,7 +261,15 @@ static void test_clean_truncation(void)
      * drop the incomplete header line. */
     char resp[300];
     int p = 0;
-    while (p < 111) { resp[p++] = 'a'; resp[p++] = 'b'; resp[p++] = ' '; }   /* 37x "ab " = 111 bytes */
+    /* T12 note: the filler is now SENTENCE-TERMINATED ("ab ab ab. " x11 = 110 B). It used to be a
+     * flat "ab " run, which under the complete-sentence rule cleans to nothing — the dangling-header
+     * assertions below would then pass vacuously against an empty preamble, testing nothing. The
+     * P7 intent (a "### W" fragment must never be injected) is unchanged and still exercised: the
+     * hard G3_R_MAX cut still lands inside the trailing header line. */
+    while (p < 110) {
+        static const char UNIT[] = "ab ab ab. ";
+        for (int k = 0; k < (int)(sizeof UNIT - 1); k++) resp[p++] = UNIT[k];
+    }
     resp[p++] = '\n';                                                        /* header on its own line */
     static const char TAIL[] = "### What is important";
     for (int k = 0; k < (int)(sizeof TAIL - 1); k++) resp[p++] = TAIL[k];
@@ -273,8 +287,12 @@ static void test_clean_truncation(void)
         int L = (int)strlen(buf);
         while (L > 0 && buf[L - 1] == '\n') L--;   /* trim trailing newline */
         CHECK(L == 0 || buf[L - 1] != '#', "T10 output does not end with a bare '#'");
-        CHECK(L >= 2 && buf[L - 1] == 'b' && buf[L - 2] == 'a',
-              "T10 truncation cut at a complete word boundary (ends '...ab')");
+        /* T12 note: this assertion used to require the cut land on a complete WORD (ends "...ab").
+         * A complete word is no longer sufficient — a word-boundary cut still ends mid-clause, which
+         * is the measured trigger for the thinking-channel garbage. The stronger property replaces
+         * it: the cut lands on a complete SENTENCE. */
+        CHECK(L >= 1 && buf[L - 1] == '.',
+              "T10 truncation cut at a complete SENTENCE boundary (ends '.')");
     }
     CHECK(len <= PREAMBLE_MAX_BYTES - 1, "T10 total within PREAMBLE_MAX_BYTES");
 
@@ -285,11 +303,114 @@ static void test_clean_truncation(void)
     int l2 = g3_build_preamble_answer_only(sel, 1, cbuf, CAP);
     CHECK(l2 <= CAP - 1 && cbuf[l2] == '\0', "T10 cap: len<=cap-1 + NUL");
     CHECK((unsigned char)cbuf[CAP] == 0xAA && (unsigned char)cbuf[79] == 0xAA, "T10 cap: 0xAA canary intact");
+
+    /* The ORIGINAL T10 input — a flat "ab " run with a dangling header and NO sentence anywhere —
+     * kept here so the contract change is pinned rather than merely edited away: it used to yield a
+     * word-boundary-cut preamble, and now correctly yields NO preamble at all. */
+    {
+        char noterm[300];
+        int q = 0;
+        while (q < 111) { noterm[q++] = 'a'; noterm[q++] = 'b'; noterm[q++] = ' '; }
+        noterm[q++] = '\n';
+        for (int k = 0; k < (int)(sizeof TAIL - 1); k++) noterm[q++] = TAIL[k];
+        g3_candidate_t s2[1] = { { .resp = noterm, .resp_len = (uint16_t)q } };
+        char b2[256];
+        memset(b2, (int)0xAA, sizeof b2);
+        int l3 = g3_build_preamble_answer_only(s2, 1, b2, (int)sizeof b2);
+        CHECK(l3 == 0, "T10 sentence-less answer => NO preamble (was: word-boundary fragment)");
+        CHECK(b2[0] == '\0', "T10 sentence-less: NUL-terminated empty output");
+    }
+}
+
+/* T12 — SENTENCE-BOUNDARY injection (the boot-40 cross-session-recall defect).
+ *
+ * Both inputs below are the REAL bytes read off the box's control-IN store, so this test
+ * pins the actual defect rather than a reconstruction of it:
+ *
+ *   REAL_FAILING  = record [8:00042]. Its first G3_R_MAX(120) bytes contain NO sentence
+ *                   terminator, so the old word-boundary cut injected "...its single
+ *                   execution thread," -- a mid-sentence fragment. MEASURED on the real
+ *                   engine: that preamble makes Gemma emit "<|channel>thought ..." instead
+ *                   of an answer, byte-identical to the garbage the box stored at [9:00045].
+ *   REAL_WORKED   = record [1:00000], the marker answer the M5-recall flip gate used. Its
+ *                   120-byte window DOES contain a completed sentence, which is why that
+ *                   gate passed and never exercised this path.
+ *
+ * Contract: inject only COMPLETE sentences. No completed sentence in the window => no
+ * preamble at all (fall back to the clean no-preamble behaviour), never a fragment. */
+static const char REAL_FAILING[] =
+    "The short answer is: **A single-threaded program is fundamentally limited by the speed "
+    "of its single execution thread, regardless of how many CPU cores are available.**\n\n"
+    "Here is a detailed breakdown of why adding more CPU cores doesn't speed up a";
+static const char REAL_WORKED[] =
+    "Unfortunately, I do not have access to a specific, universally defined "
+    "\"JARVIS-MINIFLIP-7X reference value.\" Please provide more context about what this "
+    "reference value pertains to so I can try to assist you.<turn|><turn|><turn|><eos>";
+
+static void test_sentence_boundary(void)
+{
+    char buf[512];
+
+    /* A: the real failing record -- no completed sentence within the window => NO preamble.
+     * This is the case that shipped garbage to a live, default-ON feature. */
+    {
+        g3_candidate_t sel[1] = { { .resp = REAL_FAILING,
+                                    .resp_len = (uint16_t)(sizeof REAL_FAILING - 1) } };
+        memset(buf, (int)0xAA, sizeof buf);
+        int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf);
+        CHECK(len == 0, "T12A real failing record => NO preamble (no complete sentence in window)");
+        CHECK(buf[0] == '\0', "T12A empty preamble is NUL-terminated");
+        CHECK(strstr(buf, "execution thread,") == NULL, "T12A mid-sentence fragment never injected");
+    }
+
+    /* B: the real marker record -- keeps the completed sentence, drops the dangling tail.
+     * The flip gate must still pass: short facts still recall. */
+    {
+        g3_candidate_t sel[1] = { { .resp = REAL_WORKED,
+                                    .resp_len = (uint16_t)(sizeof REAL_WORKED - 1) } };
+        int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf);
+        CHECK(len > 0, "T12B real marker record still recalls");
+        CHECK(strstr(buf, "reference value.\"") != NULL, "T12B completed sentence kept (incl. closing quote)");
+        CHECK(strstr(buf, "Please") == NULL, "T12B dangling partial sentence dropped");
+    }
+
+    /* C: a SHORT complete answer is passed through untouched -- the recall use case
+     * ("state a fact, ask about it later") must keep working. */
+    {
+        static const char FACT[] = "A TLB caches virtual-to-physical address translations.";
+        g3_candidate_t sel[1] = { { .resp = FACT, .resp_len = (uint16_t)(sizeof FACT - 1) } };
+        int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf);
+        CHECK(len > 0, "T12C short complete answer recalls");
+        CHECK(strstr(buf, FACT) != NULL, "T12C short complete answer preserved verbatim");
+    }
+
+    /* D: an answer with NO terminator at all (e.g. a system-facts string) => no preamble. */
+    {
+        static const char NOTERM[] = "up 255 seconds";
+        g3_candidate_t sel[1] = { { .resp = NOTERM, .resp_len = (uint16_t)(sizeof NOTERM - 1) } };
+        int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf);
+        CHECK(len == 0, "T12D answer with no sentence terminator => NO preamble");
+    }
+
+    /* E: the general invariant -- a NON-EMPTY preamble always ends at a sentence terminator
+     * (optionally followed by closing punctuation), never mid-clause. */
+    {
+        g3_candidate_t sel[1] = { { .resp = REAL_WORKED,
+                                    .resp_len = (uint16_t)(sizeof REAL_WORKED - 1) } };
+        int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf);
+        int L = len;
+        while (L > 0 && (buf[L - 1] == '\n' || buf[L - 1] == ' ')) L--;
+        while (L > 0 && (buf[L - 1] == '"' || buf[L - 1] == '\'' || buf[L - 1] == ')' ||
+                         buf[L - 1] == ']' || buf[L - 1] == '*' || buf[L - 1] == '`')) L--;
+        CHECK(L > 0 && (buf[L - 1] == '.' || buf[L - 1] == '?' || buf[L - 1] == '!'),
+              "T12E non-empty preamble ends at a sentence terminator");
+    }
 }
 
 int main(void)
 {
     printf("=== G3 Retrieval Tests (Phase 5 G3/M0 + M2 budget + M3 filter + M6 hygiene) ===\n");
+    test_sentence_boundary();
     test_scorer();
     test_preamble_exact();
     test_empty();
