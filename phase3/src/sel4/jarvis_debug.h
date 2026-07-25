@@ -518,6 +518,35 @@
 #error "JARVIS_MODEL_FAIL_PROBE must be 0, 1 (frame-alloc) or 2 (partial-map)"
 #endif
 
+/* Gemma 4 THINKING MODE — the model's own chat_template gates <|think|> on `enable_thinking`,
+ * and this is that switch. DEFAULT 0 (OFF), which is a DELIBERATE DEVIATION from the operator's
+ * stated "thinking on by default" preference, made on measurement rather than taste:
+ *
+ *   Native-engine probe, Gemma 4 E2B, 3 questions x 3 prompt placements, no preamble:
+ *     placement                                    | result
+ *     ---------------------------------------------|--------------------------------------
+ *     trailing <|think|> (what shipped)             | thought on 1 of 3
+ *     leading system turn (the model's OWN template)| thought on 3 of 3
+ *     no think token at all                         | clean complete answers on 3 of 3
+ *
+ * So the CORRECT placement makes the model think MORE, not less — unsurprising once seen, since
+ * that placement is exactly how the model was trained to be told "you are in thinking mode".
+ *
+ * The blocker for ON is arithmetic, not preference: generation is capped at 50 tokens SHARED
+ * between thought and answer, and at the correct placement the model spends all 50 on thought.
+ * With the thought stripped from the reply (the agreed D4 behaviour) an ON build would therefore
+ * send the operator an EMPTY answer. ON only becomes useful once think/answer have SEPARATE
+ * budgets and the total is raised (ANSWER_QUALITY_DESIGN.md D1/D2) — at which point flipping this
+ * to 1 is the intended end state.
+ *
+ * When 1 the leading system turn is emitted EXACTLY as the template does:
+ *     '<|turn>system\n'  '<|think|>\n'  '<turn|>\n'
+ * When 0 no think token is emitted anywhere, so the prompt matches the template's plain
+ * add_generation_prompt output — the shape the 8.40/10 bench-off measured. */
+#ifndef JARVIS_THINKING
+#define JARVIS_THINKING 0
+#endif
+
 /* Phase 6 K/M2a-2 reuse-in-place respawn spike (box-only KVM measurement; SYSTEM_DESIGN
  * §4.1/§4.2). When 1, Process B gains a muslc-init-safe `pb_restart_entry` (re-enters PAST
  * musl's one-time init on a dedicated ABI-aligned restart stack, REUSING the warm model

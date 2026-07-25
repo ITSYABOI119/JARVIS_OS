@@ -290,6 +290,26 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
     int prompt_ids[256];          /* G3/M2: was [128]; room for preamble+query. KV stays 512. */
     int n_prompt = 0;
     prompt_ids[n_prompt++] = bos_id;        /* <bos> */
+
+#if JARVIS_THINKING
+    /* THINKING MODE, placed where the MODEL'S OWN chat_template puts it: a LEADING system turn,
+     *     '<|turn>system\n'  '<|think|>\n'  '<turn|>\n'
+     * gated in the template on `enable_thinking`. The role word is ordinary TEXT (only <|turn>,
+     * <|think|> and <turn|> are tokens), so it is encoded rather than hardcoded as an id —
+     * hardcoding ids is the habit that produced this bug class.
+     *
+     * The old code appended <|think|> as the LAST prompt token, after '<|turn>model\n' — i.e. in
+     * the slot where the ANSWER begins, a position the template never emits. See jarvis_debug.h
+     * for the measured placement comparison and why this flag defaults OFF. */
+    prompt_ids[n_prompt++] = 105;           /* <|turn> */
+    n_prompt += tokenizer_encode(tok, "system", prompt_ids + n_prompt, 8);
+    prompt_ids[n_prompt++] = 107;           /* \n */
+    prompt_ids[n_prompt++] = 98;            /* <|think|> */
+    prompt_ids[n_prompt++] = 107;           /* \n */
+    prompt_ids[n_prompt++] = 106;           /* <turn|> */
+    prompt_ids[n_prompt++] = 107;           /* \n */
+#endif
+
     prompt_ids[n_prompt++] = 105;           /* <|turn> */
     prompt_ids[n_prompt++] = 2364;          /* user */
     prompt_ids[n_prompt++] = 107;           /* \n */
@@ -431,7 +451,10 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
     prompt_ids[n_prompt++] = 105;           /* <|turn> */
     prompt_ids[n_prompt++] = 4368;          /* model */
     prompt_ids[n_prompt++] = 107;           /* \n */
-    prompt_ids[n_prompt++] = 98;            /* <|think|> */
+    /* NO <|think|> here. The template's generation prompt is a bare '<|turn>model\n'; the think
+     * token belongs in the leading system turn above (gated JARVIS_THINKING), not in the slot
+     * where the answer starts. Putting it here is what made the box emit <|channel>thought
+     * instead of answering. */
 
 #if JARVIS_DBG_PB
     /* DEBUG: print token IDs for comparison against llama.cpp reference */
