@@ -127,14 +127,22 @@ token 101, then switch to the answer budget. There is a real boundary to switch 
 
 That comment has it backwards. `<turn|>` is the model's declared end-of-turn — **emitting it IS the
 model saying it is finished.** Ignoring it means the loop keeps generating past a completed answer
-until it hits token 1 or the cap. This is directly visible in the stored records and in a measured
-probe: an answer that completed at token ~7 then emitted **23 consecutive `<turn|>` tokens** before
-the 50-token cap — **46% of the budget spent on padding after the answer was done**, and that
-padding is what puts `<turn|><turn|><turn|><eos>` into the episodic store and the console reply.
+until it hits token 1 or the cap, and that padding is what puts `<turn|><turn|><turn|><eos>` into the
+episodic store and the console reply.
 
-**Implication for the whole exercise: some of the "we need a bigger budget" problem is actually
-"we are wasting the budget we have."** The stop-token fix must land before any budget is sized,
-or the new budgets will be sized against wasted tokens.
+> **CORRECTED IN PLACE 2026-07-26 — this section originally claimed "23 consecutive `<turn|>` tokens
+> … 46% of the budget spent on padding", generalised from a single observation. THAT FIGURE IS
+> WRONG and §11.1 supersedes it.** It came from ONE question **with a preamble injected**, which made
+> the model finish early and then pad. Measured across 5 realistic questions with no preamble, **4 of
+> 5 emit no terminator at all** (the model never finishes inside 50 tokens, so there is nothing to
+> pad) and the one that does recovers 4 tokens — **real recovery is 0–8%, and the effective budget
+> was ~50 all along.**
+
+**Implication, as corrected.** The stop-token fix is still the right change — it is the correct
+behaviour and it stops writing terminator junk into the store and the reply — but it is **not** a
+budget fix, and the "we are wasting the budget we have" reading above does not hold. The opposite is
+true: 5 of 5 answers are cut mid-sentence at the cap, so the budget is the binding constraint. See
+§11.1 and §11.3.
 
 ### 1.4b RESIDUAL DEFECT IN THE SHIPPED RECALL FIX — the store is poisoned, and recall re-injects it
 
