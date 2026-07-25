@@ -121,6 +121,49 @@ static gguf_vocab_t  g_pbm_vocab;
 static tokenizer_t   g_pbm_tok;
 static llama_state_t g_pbm_state;
 
+#if JARVIS_EMBED
+/* ---- Phase C / C/M1b-2: the SECOND (embedding) model, PB side --------------------------------
+ * ALL file-scope, deliberately — .bss survives pb_restart_entry unconditionally, whereas a main()
+ * local survives only because the restart re-enters on a separate stack and freezes main()'s
+ * frame. C/M1b's §5 flagged that the FIRST model's `gguf_ctx` is still such a local, surviving by
+ * that accident rather than by a stated property, and warned a second ctx would inherit the same
+ * undocumented fragility. T3 RESOLVED BY CONSTRUCTION: g_pbe_ctx is file-scope, so the embed path
+ * does not depend on the accident at all. (The Gemma ctx is left alone — changing it is an
+ * ungated deployed-path edit for no functional gain, and is recorded as a separate carry-forward.)
+ * Separate readiness flag, never g_model_bad / never the Gemma state: an embed failure degrades
+ * ONLY the embed capability (C/M1b-1 T1, carried forward). */
+static qmodel_t      g_pbe_qm;
+static gguf_vocab_t  g_pbe_vocab;
+static tokenizer_t   g_pbe_tok;
+static llama_state_t g_pbe_state;
+static gguf_ctx_t    g_pbe_ctx;
+static int           g_pbe_ready = 0;
+
+/* Embed context cap. 64 tokens, per the C/M1b OQ1 ruling: C/M0.5 measured that SYMMETRIC
+ * query-to-query beats asymmetric, so C/M2 embeds the stored QUERY, and a control-IN query is
+ * hard-capped at 172 BYTES ~= 40-55 tokens. 64 covers that with headroom at ~14.7 MiB of state.
+ * COUPLING TO RECORD: if C/M2 ever embeds ANSWERS (<=512 B ~= 130 tokens) this is a HEAP
+ * RE-BUDGET, not a free switch — at 128 tokens the KV alone is 28 MiB, at the 512 default 112 MiB
+ * (which does not fit beside Gemma in the 128 MiB musl heap at all). */
+#define EMBED_CTX_TOKENS 64
+
+/* T1: exact heap accounting. sys_morecore.c backs musl's brk with a static array — morecore_area
+ * is a global symbol and sbrk(0) returns the current break — so (break - area) is the EXACT bytes
+ * consumed, not an estimate. CONFIG_LIB_SEL4_MUSLC_SYS_MORECORE_BYTES is the ceiling (128 MiB). */
+#include <unistd.h>                 /* sbrk */
+extern char      morecore_area[];   /* sys_morecore.c: the static heap region (global symbol)   */
+extern uintptr_t morecore_top;      /* sys_morecore.c: its end — read this rather than the      */
+                                    /* CONFIG_ macro, so the report cannot disagree with the    */
+                                    /* allocator that is actually running.                      */
+static unsigned long pbe_heap_used(void)
+{
+    return (unsigned long)((uintptr_t)sbrk(0) - (uintptr_t)morecore_area);
+}
+/* pbe_heap_report is defined AFTER puts_serial/put_dec (they are statics declared later in this
+ * file), see below. */
+static void pbe_heap_report(const char *when);
+#endif /* JARVIS_EMBED */
+
 /* ---- Serial output (via seL4 debug syscall, same as rootserver) ---- */
 
 static void puts_serial(const char *s)
@@ -137,6 +180,25 @@ static void put_dec(uint32_t val)
     while (val > 0) { buf[i++] = '0' + (val % 10); val /= 10; }
     while (--i >= 0) seL4_DebugPutChar(buf[i]);
 }
+
+#if JARVIS_EMBED
+/* C/M1b-2 T1 (definition; forward-declared above because puts_serial/put_dec are statics defined
+ * only just now). EXACT heap accounting from the allocator's own symbols. */
+static void pbe_heap_report(const char *when)
+{
+    /* Report the BREAK POSITION only. An earlier version also printed a total/free derived from
+     * morecore_top — and the box falsified it: the "total" CHANGED between two calls in one boot
+     * (80668 KB -> 56276 KB), so morecore_top is mutated at runtime and any free/percent derived
+     * from it is fiction. Two further honesty limits on even the `used` figure, stated here rather
+     * than implied: it is the musl BREAK, so (a) it is a LOWER BOUND on bytes allocated, because
+     * malloc satisfies requests from already-broken-but-free space without moving the break, and
+     * (b) the delta between two marks is likewise a lower bound on what happened between them. It
+     * is exact for what it claims — where the break is — and nothing more. */
+    puts_serial("[EMBED-HEAP] "); puts_serial(when);
+    puts_serial(": brk_used="); put_dec((uint32_t)(pbe_heap_used() >> 10));
+    puts_serial("KB (lower bound; malloc reuses free space without moving brk)\n");
+}
+#endif
 
 /* ---- Debug log helper: serial + IPC to Process A for NVMe logging ---- */
 
@@ -694,6 +756,50 @@ void pb_restart_entry(void)
     km2a_puthex64("[RESTART-PB]   value_cache=", (uint64_t)(uintptr_t)g_km2a_state->value_cache);
     km2a_puthex64("[RESTART-PB]   logits=",      (uint64_t)(uintptr_t)g_km2a_state->logits);
     km2a_puthex64("[RESTART-PB]   layers=",      (uint64_t)(uintptr_t)g_km2a_qm->layers);
+#if JARVIS_EMBED
+    /* C/M1b-2 T2: the four pointers above are ALL GEMMA'S. With a second model resident they stay
+     * byte-identical even if the EMBED state leaks or re-allocs entirely — the zero-RESOURCE gate
+     * does not weaken gradually, it stops covering the thing this milestone introduced. Extend the
+     * baseline with the embed state's own heap pointers plus the live heap high-water, so a leak
+     * on either side is visible. (A respawn does NOT re-run main(), so these must be IDENTICAL
+     * across every cycle; a change means something re-allocated behind the restart.) */
+    if (g_pbe_ready) {
+        km2a_puthex64("[RESTART-PB]   e_key_cache=",   (uint64_t)(uintptr_t)g_pbe_state.key_cache);
+        km2a_puthex64("[RESTART-PB]   e_value_cache=", (uint64_t)(uintptr_t)g_pbe_state.value_cache);
+        km2a_puthex64("[RESTART-PB]   e_logits=",      (uint64_t)(uintptr_t)g_pbe_state.logits);
+        km2a_puthex64("[RESTART-PB]   e_layers=",      (uint64_t)(uintptr_t)g_pbe_qm.layers);
+        puts_serial("[RESTART-PB]   heap_brk_KB="); km2a_putdec((uint32_t)(pbe_heap_used() >> 10));
+        puts_serial("\n");
+#if JARVIS_EMBED_PROBE
+        /* "A post-respawn embed still correct" — the pointers being flat proves nothing was
+         * re-allocated; this proves the model is still USABLE through the reused state. One fixed
+         * probe, and its first three components are printed so the value can be compared against
+         * the boot-time run for THAT probe (they must be bit-identical: same weights, same state,
+         * same code — nothing about a respawn should perturb the arithmetic). */
+        {
+            static const char *EP0 = "what is a page fault";
+            int ids[64];
+            int n = tokenizer_encode(&g_pbe_tok, EP0, ids, 62);
+            if (n > 0) {
+                ids[n++] = 151643;
+                size_t ekv = (size_t)g_pbe_state.kv_n_layers * (size_t)g_pbe_state.max_seq_len *
+                             (size_t)g_pbe_qm.config.n_kv_heads * (size_t)g_pbe_qm.config.head_dim *
+                             sizeof(float);
+                g_pbe_state.pos = 0;
+                memset(g_pbe_state.key_cache,   0, ekv);
+                memset(g_pbe_state.value_cache, 0, ekv);
+                static float rvec[1024];
+                qmodel_embed_last(&g_pbe_qm, &g_pbe_state, ids, n, rvec);
+                uint32_t w0, w1, w2;
+                memcpy(&w0, &rvec[0], 4); memcpy(&w1, &rvec[1], 4); memcpy(&w2, &rvec[2], 4);
+                km2a_puthex64("[RESTART-PB]   e_v0=", (uint64_t)w0);
+                km2a_puthex64("[RESTART-PB]   e_v1=", (uint64_t)w1);
+                km2a_puthex64("[RESTART-PB]   e_v2=", (uint64_t)w2);
+            }
+        }
+#endif
+    }
+#endif
     puts_serial("[RESTART-PB]   stack_hw="); km2a_putdec(km2a_stack_highwater());
     puts_serial(" of "); km2a_putdec(KM2A_RESTART_STACK_SIZE); puts_serial("\n");
     if (g_km2a_restart_stack[0] != 0xAA || g_km2a_restart_stack[63] != 0xAA)
@@ -850,6 +956,79 @@ int main(int argc, char **argv)
         goto idle;
     }
 
+#if JARVIS_EMBED
+    /* ---- C/M1b-2: the embedding model, PB side. PROBE-driven, NO IPC (that is C/M1b-3). ----
+     * T1: measure GEMMA'S heap FIRST. The C/M1b design recorded Gemma's live llama_state_t
+     * consumption as NOT VERIFIED, which made "how much of the 128 MiB is actually free" the first
+     * unknown this milestone had to close — and it must be closed BEFORE allocating, because if
+     * Gemma already consumes more than expected the 64-token cap needs re-deriving from a real
+     * number rather than from arithmetic. */
+    pbe_heap_report("after-gemma-state");
+    {
+        uintptr_t evaddr = 0; size_t esize = 0;
+        /* PA appends the embed base/size AFTER the per-worker wake cptrs; the wake block is
+         * exactly (n_threads-1) long, so their index is deterministic. n_threads is read straight
+         * from argv[5] rather than from g_km2a_pool_n_threads, because the pool is initialised
+         * LATER in main() (~:1092) than this block runs — using the stash here would silently
+         * compute index 7 and read a wake cptr as the embed base. */
+        int e_nthreads = (argc >= 7) ? (int)atol(argv[5]) : 1;
+        int ebase_idx  = 7 + (e_nthreads > 0 ? e_nthreads - 1 : 0);
+        if (argc >= ebase_idx + 2) {
+            evaddr = (uintptr_t)atol(argv[ebase_idx]);
+            esize  = (size_t)atol(argv[ebase_idx + 1]);
+        }
+        if (!evaddr || !esize) {
+            puts_serial("[EMBED-PB] no embed model in argv - embed capability OFF "
+                        "(normal; Gemma unaffected)\n");
+        } else {
+            puts_serial("[EMBED-PB] embed model at vaddr "); put_dec((uint32_t)(evaddr >> 20));
+            puts_serial("M size "); put_dec((uint32_t)(esize >> 20)); puts_serial("MB\n");
+            if (gguf_open_memory(&g_pbe_ctx, (const void *)evaddr, esize) != 0) {
+                puts_serial("[EMBED-PB] GGUF parse failed - embed OFF\n");
+            } else if (qmodel_load(&g_pbe_qm, &g_pbe_ctx, (const void *)evaddr) != 0) {
+                puts_serial("[EMBED-PB] qmodel_load failed - embed OFF\n");
+            } else {
+                /* T4 + the 64-token cap. The cap is applied to config->max_seq_len AFTER load and
+                 * BEFORE llama_alloc_state — grep-proven safe: LLAMA_MAX_SEQ_LEN appears only as a
+                 * default/clamp at llama_load.c:146-148, and every allocation sizes off
+                 * config->max_seq_len (llama_load.c:691). Without this the embed state would want
+                 * ~113 MiB of a 128 MiB heap Gemma is already using — a cycle-1 brick. */
+                int was = g_pbe_qm.config.max_seq_len;
+                if (g_pbe_qm.config.max_seq_len > EMBED_CTX_TOKENS)
+                    g_pbe_qm.config.max_seq_len = EMBED_CTX_TOKENS;
+                puts_serial("[EMBED-PB] ctx cap "); put_dec((uint32_t)was);
+                puts_serial(" -> "); put_dec((uint32_t)g_pbe_qm.config.max_seq_len);
+                puts_serial(" tokens\n");
+                if (gguf_vocab_extract((const void *)evaddr, esize, &g_pbe_vocab) != 0) {
+                    puts_serial("[EMBED-PB] vocab extract failed - embed OFF\n");
+                    qmodel_free(&g_pbe_qm);
+                } else if (gguf_vocab_init_tokenizer(&g_pbe_vocab, &g_pbe_tok) != 0) {
+                    puts_serial("[EMBED-PB] tokenizer init failed - embed OFF\n");
+                    gguf_vocab_free(&g_pbe_vocab); qmodel_free(&g_pbe_qm);
+                } else if (llama_alloc_state(&g_pbe_state, &g_pbe_qm.config) != 0) {
+                    /* T4: llama_alloc_state validates every calloc and FREES ITS OWN partials via
+                     * llama_free_state before returning -1 (llama_load.c:818-827), so a failed
+                     * embed alloc does NOT permanently shrink the heap — the exposure the trap
+                     * asked about is bounded by musl's free, not by the seL4 allocator (which is
+                     * the never-frees one; this is the musl heap and free() works normally here).
+                     * Gemma is untouched either way. */
+                    puts_serial("[EMBED-PB] state alloc FAILED (OOM) - embed OFF; Gemma unaffected\n");
+                    tokenizer_free(&g_pbe_tok); gguf_vocab_free(&g_pbe_vocab);
+                    qmodel_free(&g_pbe_qm);
+                    pbe_heap_report("after-failed-embed-state");
+                } else {
+                    g_pbe_ready = 1;
+                    puts_serial("[EMBED-PB] ready: "); put_dec((uint32_t)g_pbe_qm.config.n_layers);
+                    puts_serial(" layers dim "); put_dec((uint32_t)g_pbe_qm.config.dim);
+                    puts_serial(" kv_layers "); put_dec((uint32_t)g_pbe_state.kv_n_layers);
+                    puts_serial("\n");
+                    pbe_heap_report("after-embed-state");
+                }
+            }
+        }
+    }
+#endif /* JARVIS_EMBED */
+
     puts_serial("[Process B] Ready for inference requests\n");
     int model_loaded = 1;
 
@@ -973,7 +1152,18 @@ int main(int argc, char **argv)
         int n_threads = (int)atol(argv[5]);
         seL4_CPtr done = (seL4_CPtr)atol(argv[6]);
         seL4_CPtr wake[JARVIS_MAX_WORKERS]; int n_wake = 0;   /* shared cap from threadpool.h */
-        for (int i = 7; i < argc && n_wake < (JARVIS_MAX_WORKERS - 1); i++)
+#if JARVIS_EMBED
+        /* C/M1b-2: PA appends the embed base/size after the wake block, so this loop must stop at
+         * the end of the wake block instead of walking to argc — otherwise it would consume the
+         * embed args as wake cptrs. Bounded by n_threads, which is exactly how many PA wrote.
+         * Gated so the EMBED=0 object is unchanged (the two forms are equivalent today, since PA
+         * passes exactly workers_started caps and argc == 7 + workers_started). */
+        int wake_end = 7 + (n_threads > 0 ? n_threads - 1 : 0);
+        if (wake_end > argc) wake_end = argc;
+#else
+        int wake_end = argc;
+#endif
+        for (int i = 7; i < wake_end && n_wake < (JARVIS_MAX_WORKERS - 1); i++)
             wake[n_wake++] = (seL4_CPtr)atol(argv[i]);
         jarvis_sel4_pool_init(n_threads, done, wake, n_wake);
 #if JARVIS_RESPAWN
@@ -1029,6 +1219,61 @@ int main(int argc, char **argv)
     km2a_puthex64("[RESTART-PB]   key_cache=", (uint64_t)(uintptr_t)state.key_cache);
     km2a_puthex64("[RESTART-PB]   layers=",    (uint64_t)(uintptr_t)qm.layers);
 #endif
+#if JARVIS_EMBED_PROBE
+    /* ---- C/M1b-2 parity + latency probe. Runs AFTER the pool init on purpose: the embed forward
+     * goes through the SAME threaded qmatmul path a real embed would (JARVIS_SEL4_SMP =>
+     * JARVIS_PARALLEL), so this measures the real thing, and the ~1e-6 divergence from the
+     * single-threaded host harness is expected and explained rather than discovered mid-gate. ---- */
+    if (g_pbe_ready) {
+        static const char *const EPROBES[] = {
+            "what is a page fault", "how does dns work", "what is a mutex",
+            "how do you find a value in a sorted array in logarithmic time",
+            "what lightweight text format stores structured data as key-value pairs",
+            "how do you protect a critical section so only one thread runs it",
+            "what's the capital of France", "how do you bake sourdough bread",
+            "how long have you been up", "what model are you running",
+            "why doesn't adding more cpu cores speed up a single-threaded program",
+            "what is a hash table", "explain how tcp handshake works",
+            "what is public-key encryption", "what does DMA do",
+        };
+        const int n_ep = (int)(sizeof(EPROBES) / sizeof(EPROBES[0]));
+        const int edim = g_pbe_qm.config.dim;
+        static const char HX[] = "0123456789abcdef";
+        float *evec = (float *)malloc((size_t)edim * sizeof(float));
+        size_t ekv = (size_t)g_pbe_state.kv_n_layers * (size_t)g_pbe_state.max_seq_len *
+                     (size_t)g_pbe_qm.config.n_kv_heads * (size_t)g_pbe_qm.config.head_dim * sizeof(float);
+        puts_serial("[EMBED-PROBE] begin n="); put_dec((uint32_t)n_ep);
+        puts_serial(" dim="); put_dec((uint32_t)edim);
+        puts_serial(" threads="); put_dec((uint32_t)jarvis_threads()); puts_serial("\n");
+        for (int p = 0; evec && p < n_ep; p++) {
+            int ids[128];
+            int n = tokenizer_encode(&g_pbe_tok, EPROBES[p], ids, 127);
+            if (n < 0) { puts_serial("[EMBED-PROBE] encode failed\n"); break; }
+            ids[n++] = 151643;                       /* EOS, appended + last-pooled (C/M1a) */
+            g_pbe_state.pos = 0;                      /* per-sequence reset — the caller's job */
+            memset(g_pbe_state.key_cache,   0, ekv);
+            memset(g_pbe_state.value_cache, 0, ekv);
+            uint64_t t0 = m1_rdtsc();
+            qmodel_embed_last(&g_pbe_qm, &g_pbe_state, ids, n, evec);
+            uint64_t cyc = m1_rdtsc() - t0;
+            puts_serial("[EMBED-PROBE] p="); put_dec((uint32_t)p);
+            puts_serial(" toks="); put_dec((uint32_t)n);
+            puts_serial(" cyc="); put_dec((uint32_t)(cyc / 1000)); puts_serial("k\n");
+            /* raw little-endian float32 as hex, so the host can byte-compare AND measure the
+             * divergence magnitude. One line per probe. */
+            puts_serial("[EV] "); put_dec((uint32_t)p); seL4_DebugPutChar(' ');
+            for (int i = 0; i < edim; i++) {
+                uint32_t w; memcpy(&w, &evec[i], 4);
+                for (int s = 28; s >= 0; s -= 4) seL4_DebugPutChar(HX[(w >> s) & 0xF]);
+            }
+            seL4_DebugPutChar('\n');
+        }
+        free(evec);
+        pbe_heap_report("after-embed-probe");
+        puts_serial("[EMBED-PROBE] end\n");
+    }
+#endif /* JARVIS_EMBED_PROBE */
+
     pb_serve_loop(request_ring, response_ring, req_notif, resp_notif,
                   &qm, &state, &tok, (int)vocab.bos_id, model_loaded);
 

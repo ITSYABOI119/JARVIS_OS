@@ -397,6 +397,58 @@ Gemma base `1536M` = `0x60000000`). Gated `JARVIS_EMBED`, default 0.
   box. C/M1b-1 proves plumbing only; correctness on the box is C/M1b-2 (the embed forward + on-box
   vector parity against the C/M1a host golden), and usefulness is C/M2.
 
+## 6b. C/M1b-2 RESULT (2026-07-25) — PB embed state + forward: PASS
+
+Scope held to §6: `qmodel_load` on the second model, `llama_alloc_state` with the capped context,
+`qmodel_embed_last` from a probe. **No IPC** — that is C/M1b-3.
+
+| gate | result |
+|---|---|
+| embed load + state | ready: 28 layers, dim 1024, kv_layers 28, ctx `512 -> 64` |
+| PB heap (T1) | break after Gemma **26,644 KB** → after embed **29,392 KB** (limits below) |
+| respawn baseline (T2) | **10 cycles**, all 4 embed pointers identical ×10, Gemma flat, break FLAT 29,400 KB, 0 FATAL |
+| post-respawn embed | **bit-identical** to the boot-time probe (`3d20c4e2/bd75f97c/bc214e34`) |
+| vector parity (T5) | **box-vs-HOST worst `1-cos = 8.3e-13`**, max element diff ~1.3e-7, 15/15 unit-norm |
+| latency (T6) | **~190 M cycles/token** as-is, LM head still running |
+| EMBED=0 identity | 5/5 objects identical on `.text`/`.rodata`/`.data`/`nm` vs `aeeb8d1`, control first |
+
+### What the traps produced
+
+- **T1 — measured Gemma FIRST, and the instrument was falsified twice.** The break figures above
+  are real. But the first version also printed a total/free from `morecore_top`, and the box showed
+  that **total changing mid-boot** (80,668 → 56,276 KB) — so `morecore_top` is mutated at runtime
+  and anything derived from it is fiction. Removed. Second limit, stated rather than implied: the
+  break is a **lower bound** on bytes allocated (malloc reuses already-broken free space without
+  moving it), so the 2,748 KB delta is not "the embed state costs 2.7 MiB" — it is "the break moved
+  2.7 MiB". The load-bearing fact is that the allocation SUCCEEDED at the 64-token cap with Gemma
+  resident, which it did.
+- **T2 — the trap was exactly right and is now closed.** The four asserted pointers were all
+  Gemma's; the baseline is extended and flat across 10 cycles, and the post-respawn embed is
+  bit-identical, which proves *usability* and not merely *non-reallocation*.
+- **T3 — resolved by construction.** `g_pbe_ctx` is file-scope, so the embed path never depends on
+  the frozen-frame accident. The Gemma ctx is deliberately untouched (ungated edit, no functional
+  gain) and remains a carry-forward.
+- **T4 — the exposure the trap feared does not exist here.** `llama_alloc_state` frees its own
+  partials before returning −1 (`llama_load.c:818-827`), and this is the **musl** heap where `free`
+  works — the never-frees allocator is the seL4 one. A failed embed alloc cannot permanently shrink
+  the heap, and Gemma is untouched.
+- **T5 — the trap's concern was right, its mechanism does not apply.** It predicted ~1e-6 from
+  parallel reduction order. Measured 8.3e-13. PB's forward IS threaded (`threads=6`), but
+  `jarvis_parallel_for(0, M, qmatmul_qdot_row, …)` partitions by **output row** — each row's dot
+  runs entirely on one worker in serial order — so there is **no cross-thread reduction to reorder**.
+  The residual ~1e-7 per element is clang-host vs gcc-box codegen. Sharpening the gate to
+  box-vs-HOST (rather than box-vs-golden at 1.27e-3) was the right call: at 8.3e-13 the loose floor
+  would have hidden three orders of magnitude of hypothetical error.
+- **T6 — latency measured AS-IS,** with the discarded `151669 × 1024` LM-head matmul still running
+  every token. Skipping it in embed mode remains the carry-forward, and parity must be re-verified
+  unchanged if it is taken.
+
+### Still open
+
+- **Boot-time delta and the HUD FB-panel correction remain UNMEASURED** — both need bare metal
+  (QEMU reports `disp=no-fb`), and no KVM proxy is quoted for either.
+- `MSG_EMBED` IPC is C/M1b-3; nothing consults the embedder yet.
+
 ## 7. EMBED=0 identity plan (stated up front)
 
 **Objects:** `main.c.obj`, `inference_server.c.obj`, `llama_quant.c.obj`, `llama_load.c.obj`,

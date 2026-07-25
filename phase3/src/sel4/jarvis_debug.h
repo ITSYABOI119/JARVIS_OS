@@ -488,6 +488,20 @@
 #define JARVIS_EMBED 0
 #endif
 
+/* Phase C / C/M1b-2 embed parity+latency probe (box/KVM-only, default 0; requires JARVIS_EMBED).
+ * Runs the 15 C/M1a golden probes through the on-box embed forward and dumps each 1024-d vector
+ * as raw hex plus a per-embed cycle count, so the box result can be compared against the HOST
+ * harness's own output from ea1baf0 (NOT against the loose 1.27e-3 golden floor — see the C/M1b
+ * design). Serial-heavy (~120 KB) by design: a checksum would prove bit-identity or nothing, and
+ * the expected divergence is ~1e-6 because PB's forward is THREADED (JARVIS_SEL4_SMP =>
+ * JARVIS_PARALLEL) while the host harness was single-threaded, so the magnitude must be visible. */
+#ifndef JARVIS_EMBED_PROBE
+#define JARVIS_EMBED_PROBE 0
+#endif
+#if JARVIS_EMBED_PROBE && !JARVIS_EMBED
+#error "JARVIS_EMBED_PROBE requires JARVIS_EMBED"
+#endif
+
 /* C/M1b pre-fix induction probe (box/KVM-only, default 0). The two fail-closed branches on the
  * model-load path are UNREACHABLE on a healthy box (one model fits comfortably), so shipping them
  * untested would be shipping an unproven error path. The flag VALUE is a MODE (the WAKE_PROBE /

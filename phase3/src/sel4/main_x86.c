@@ -2026,7 +2026,11 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
 
     /* Build argv: req_notif, resp_notif, shmem_vaddr, model_vaddr, model_size,
      * then M3: pb_n_threads, done cptr, and the per-worker wake cptrs. */
-    char abuf[7 + JARVIS_MAX_WORKERS][32];
+    /* +2 slots for the C/M1b-2 embed base/size, appended AFTER the per-worker wake cptrs (PB
+     * derives their index from argv[5], the worker count, so the variable-length wake block does
+     * not have to move). Sized unconditionally — two unused stack slots at EMBED=0 cost nothing
+     * and keep the array bound off the feature flag. */
+    char abuf[9 + JARVIS_MAX_WORKERS][32];
     snprintf(abuf[0], 32, "%lu", (unsigned long)remote_req_notif);
     snprintf(abuf[1], 32, "%lu", (unsigned long)remote_resp_notif);
     snprintf(abuf[2], 32, "%lu", (unsigned long)remote_vaddr);
@@ -2048,7 +2052,17 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
         snprintf(abuf[6 + i], 32, "%lu", (unsigned long)remote_wake[i]);
         argc_n++;
     }
-    char *argv[7 + JARVIS_MAX_WORKERS];
+#if JARVIS_EMBED
+    /* C/M1b-2: hand PB the embed model's base + size, appended AFTER the wake block. PB recomputes
+     * this index from argv[5] (the worker count), so the variable-length wake block stays where it
+     * is. Passed ONLY when the embedder is genuinely resident and mapped — g_embed_ready is set at
+     * the end of the C/M1b-1 map, so an absent, failed or partially-mapped embedder simply sends
+     * 0/0 and PB reports "no embed model in argv" and carries on. Gemma's argv is untouched. */
+    snprintf(abuf[argc_n],     32, "%lu", (unsigned long)(g_embed_ready ? g_embed_vaddr_b : 0));
+    snprintf(abuf[argc_n + 1], 32, "%lu", (unsigned long)(g_embed_ready ? g_embed_size : 0));
+    argc_n += 2;
+#endif
+    char *argv[9 + JARVIS_MAX_WORKERS];
     for (int i = 0; i < argc_n; i++) argv[i] = abuf[i];
 
     /* Spawn Process B */

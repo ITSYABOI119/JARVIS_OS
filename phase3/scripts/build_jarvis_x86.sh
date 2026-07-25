@@ -861,6 +861,26 @@ if [ -f "$PB_CMAKE" ]; then
     else
         echo -e "  ${CYAN}OK${NC}  JARVIS_SEL4_SMP already defined"
     fi
+    # Phase C / C/M1b-2: llama_quant.c deliberately does NOT include jarvis_debug.h (it also builds
+    # in the native/CI contexts and carries its own #ifndef fallbacks), so it cannot see
+    # JARVIS_EMBED from the header — qmodel_embed_last would silently not be compiled and PB would
+    # fail to LINK. Propagate the header's value as a -D on the PB target, with a symmetric
+    # teardown so an EMBED=0 build cannot inherit stale ON state (the JARVIS_CONTROL_IN precedent).
+    EMBED_ON=$(grep -oE '^#define[[:space:]]+JARVIS_EMBED[[:space:]]+[0-9]' \
+                 "$JARVIS_DIR/phase3/src/sel4/jarvis_debug.h" | grep -oE '[0-9]$' || echo 0)
+    if [ "$EMBED_ON" = "1" ]; then
+        if ! grep -q "JARVIS_EMBED=1" "$PB_CMAKE"; then
+            sed -i '/target_compile_options(jarvis-inference/a\target_compile_definitions(jarvis-inference PRIVATE JARVIS_EMBED=1)' "$PB_CMAKE"
+            echo -e "  ${GREEN}ADDED${NC}  JARVIS_EMBED=1 define on jarvis-inference (C/M1b-2)"
+        else
+            echo -e "  ${CYAN}OK${NC}  JARVIS_EMBED=1 already defined"
+        fi
+    else
+        if grep -q "JARVIS_EMBED=1" "$PB_CMAKE"; then
+            sed -i '/JARVIS_EMBED=1/d' "$PB_CMAKE"
+            echo -e "  ${GREEN}REMOVED${NC}  stale JARVIS_EMBED=1 define (header says 0)"
+        fi
+    fi
 else
     echo -e "  ${YELLOW}SKIP${NC}  jarvis-inference CMakeLists not found ($PB_CMAKE)"
 fi
