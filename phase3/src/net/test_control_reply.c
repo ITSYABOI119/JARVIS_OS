@@ -111,7 +111,9 @@ int main(void)
         CHECK(CTRL_REPLY_HDR_LEN == 10u && CTRL_REPLY_CRC_LEN == 4u && CTRL_REPLY_TAG_LEN == 32u,
               "constants: hdr 10 / crc 4 / tag 32");
         CHECK(CTRL_REPLY_OVERHEAD == 46u, "constants: fixed overhead == 46");
-        CHECK(CTRL_REPLY_MAX_LEN == 558u, "constants: max payload == 10+512+4+32 == 558");
+        CHECK(CTRL_REPLY_MAX_LEN == CTRL_REPLY_HDR_LEN + CTRL_REPLY_TEXT_MAX + CTRL_REPLY_CRC_LEN +
+                                    CTRL_REPLY_TAG_LEN,
+              "constants: max payload == hdr + text_max + crc + tag");
     }
 
     /* ---- T2: the tag is a REAL HMAC over [0, 14+tlen) — recomputed independently ---- */
@@ -249,23 +251,35 @@ int main(void)
         CHECK(n < 0, "T6 out_cap 0 -> negative even for empty text");
     }
 
-    /* ---- T7: clamp — text_len > 512 becomes exactly 512 ---- */
+    /* ---- T7: clamp — text_len > CTRL_REPLY_TEXT_MAX becomes exactly CTRL_REPLY_TEXT_MAX ----
+     * Written against the CONSTANTS, not literals: the cap moved 512 -> 1426 (the MTU-derived
+     * ceiling) and a test that pins the old number in a string would have to be re-edited on every
+     * bump, which is how a stale expectation gets rubber-stamped. `big` must stay comfortably
+     * larger than the cap for the clamp to be exercised at all. */
     {
-        static uint8_t big[2000];
+        static uint8_t big[CTRL_REPLY_TEXT_MAX * 2];
         memset(big, 'x', sizeof big);
         uint8_t out[CTRL_REPLY_MAX_LEN];
         int n = ctrl_build_reply(KEY, 0, 5, big, sizeof big, out, sizeof out);
-        CHECK(n == (int)CTRL_REPLY_MAX_LEN, "T7 over-long text clamps to the max payload (558)");
-        CHECK(n == (int)(CTRL_REPLY_OVERHEAD + CTRL_REPLY_TEXT_MAX), "T7 total == 46 + 512");
-        CHECK(rd_le16(&out[8]) == CTRL_REPLY_TEXT_MAX, "T7 tlen field == 512 (clamped, not errored)");
-        CHECK(out[10] == 'x' && out[10 + 511] == 'x', "T7 clamped text is the first 512 bytes");
+        CHECK(n == (int)CTRL_REPLY_MAX_LEN, "T7 over-long text clamps to the max payload");
+        CHECK(n == (int)(CTRL_REPLY_OVERHEAD + CTRL_REPLY_TEXT_MAX), "T7 total == overhead + text max");
+        CHECK(rd_le16(&out[8]) == CTRL_REPLY_TEXT_MAX, "T7 tlen field == the cap (clamped, not errored)");
+        CHECK(out[CTRL_REPLY_HDR_LEN] == 'x' &&
+              out[CTRL_REPLY_HDR_LEN + CTRL_REPLY_TEXT_MAX - 1] == 'x',
+              "T7 clamped text is the first CTRL_REPLY_TEXT_MAX bytes");
         uint32_t tag_off = CTRL_REPLY_HDR_LEN + CTRL_REPLY_TEXT_MAX + 4u;
         CHECK(hmac_sha256_verify(KEY, 32, out, (size_t)tag_off, out + tag_off) == 1,
               "T7 clamped max-size reply still signs correctly");
 
-        /* exactly 512 is NOT clamped-away */
+        /* exactly at the cap is NOT clamped-away */
         n = ctrl_build_reply(KEY, 0, 5, big, CTRL_REPLY_TEXT_MAX, out, sizeof out);
-        CHECK(n == (int)CTRL_REPLY_MAX_LEN, "T7 text_len exactly 512 -> full payload");
+        CHECK(n == (int)CTRL_REPLY_MAX_LEN, "T7 text_len exactly at the cap -> full payload");
+
+        /* THE MTU IS THE HARD CEILING and it is not negotiable: the reply goes out as ONE raw UDP
+         * unicast and there is no IP fragmentation on that path. Pin it so a future bump cannot
+         * silently produce a frame the NIC will not send. */
+        CHECK(CTRL_REPLY_MAX_LEN <= 1472u,
+              "T7 max reply payload fits a 1500-MTU IP datagram (1500 - 20 IP - 8 UDP = 1472)");
     }
 
     /* ---- T8: PRINTABLE-SANITIZE happens in the builder (the caller can forget) ---- */

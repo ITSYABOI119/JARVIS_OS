@@ -56,8 +56,26 @@
 #define CTRL_REPLY_HDR_LEN   10u
 #define CTRL_REPLY_CRC_LEN   4u
 
+/* MAX ANSWER TEXT, AND IT IS DERIVED FROM THE MTU — NOT A ROUND NUMBER.
+ *
+ * The reply leaves as ONE raw UDP unicast Ethernet frame (net_build_udp_unicast + i211_send_phys).
+ * There is NO IP fragmentation on that path, so the MTU is a hard ceiling, not a tuning knob:
+ *
+ *     UDP payload max = MTU 1500 - IP_HDR_LEN 20 - UDP_HDR_LEN 8 = 1472
+ *                       (net_udp.c already defines exactly this as UDP_MAX_PAYLOAD)
+ *     JRPL overhead   = CTRL_REPLY_OVERHEAD = 10 hdr + 4 crc + 32 tag = 46
+ *     => text max     = 1472 - 46 = 1426
+ *
+ * NOTE the Ethernet header (14 B) is NOT subtracted from the 1500: the MTU is the maximum IP
+ * DATAGRAM, and the frame on the wire is 14 + 1500 = 1514, inside the driver's
+ * I211_MAX_FRAME_SIZE 1536. An earlier estimate of ~1412 subtracted it twice.
+ *
+ * Raised 512 -> 1426 at M2 so a complete EXPLANATORY answer fits; short factual answers already
+ * finished inside the old cap. At the measured ~4.9 bytes/token this is ~290 tokens, and
+ * test_control_reply.c T7 pins CTRL_REPLY_MAX_LEN <= 1472 so a future bump cannot silently
+ * produce a frame the NIC will not send. */
 #ifndef CTRL_REPLY_TEXT_MAX
-#define CTRL_REPLY_TEXT_MAX  512u
+#define CTRL_REPLY_TEXT_MAX  1426u
 #endif
 
 /* worst case = 10 (hdr) + 512 (text) + 4 (crc) + 32 (tag) = 558 */

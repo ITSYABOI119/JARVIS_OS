@@ -2868,7 +2868,7 @@ static void ctrl_send_reply(uint16_t seq, uint8_t verdict, const char *text, int
     /* 6-5/M4b: the payload build (header + printable-sanitize + crc + HMAC tag) lives in the
      * host-pure, golden-pinned, differential-tested ctrl_build_reply() — the box and the host test
      * emit byte-identical replies, and the sanitize can no longer be forgotten here. */
-    static uint8_t pl[CTRL_REPLY_MAX_LEN];   /* header(10) + text(<=512) + crc(4) + tag(32) = 558 */
+    static uint8_t pl[CTRL_REPLY_MAX_LEN];   /* hdr(10) + text(<=CTRL_REPLY_TEXT_MAX) + crc(4) + tag(32); derived, so the M2 512->1426 bump moved it automatically */
     int rlen = ctrl_build_reply(g_ctrl_key, verdict, seq, (const uint8_t *)text, (uint32_t)t,
                                 pl, (uint32_t)sizeof pl);
     if (rlen <= 0) {   /* cannot happen with this cap; a half-built reply must never be sent */
@@ -2893,11 +2893,14 @@ static void ctrl_send_reply(uint16_t seq, uint8_t verdict, const char *text, int
 #endif
 
     const uint8_t *cmac = g_ctrl_console_mac;   /* 6-5/M4a: from the NVMe JCON slot, not a compile const */
-    /* 6-5/M4b headroom: the v2 payload grew by the 32 B tag, so worst case is
-     *   558 payload (10 hdr + 512 text + 4 crc + 32 tag) + 42 framing (Eth 14 + IPv4 20 + UDP 8)
-     *   = 600 <= 640 — reply_frame does NOT need to grow. Pinned so a future text-max bump
-     * that would silently truncate a frame fails the BUILD instead. */
-    static uint8_t reply_frame[640];
+    /* M2: CTRL_REPLY_TEXT_MAX rose 512 -> 1426 (the MTU-derived ceiling — see control_reply.h),
+     * so worst case is now
+     *   1472 payload (10 hdr + 1426 text + 4 crc + 32 tag) + 42 framing (Eth 14 + IPv4 20 + UDP 8)
+     *   = 1514 on the wire, which is exactly a full 1500-MTU Ethernet frame and sits inside the
+     * driver's I211_MAX_FRAME_SIZE 1536. The buffer therefore grows 640 -> 1536. The assert below
+     * is what made this a BUILD failure rather than a silently truncated frame when the text max
+     * moved — it did its job, so it stays. */
+    static uint8_t reply_frame[1536];
     _Static_assert(CTRL_REPLY_MAX_LEN + 42u <= sizeof reply_frame,
                    "reply_frame too small for a max-size signed JRPL reply + Eth/IP/UDP framing");
     int flen = net_build_udp_unicast(reply_frame, sizeof reply_frame, g_net.nic.mac, JARVIS_BOX_IP,
@@ -2984,7 +2987,12 @@ static void pa_ctrl_gate(const control_result_t *cres)
      * so a ROUTING=0 build reading a ROUTING=1 build's records could inject a stale "up N seconds"
      * note. Narrow, mixed-build-only, and not a safety issue (the preamble is labelled prior-answer
      * notes, and the model still answers); revisit at the B flip if the mixed case ever matters. */
-    char resp[1024]; int roff = 0;
+    /* M2: sized FROM the reply cap, not a round number — this is PA's chunk accumulator, and at
+     * 1024 it would have clamped a 1426-byte answer to 1023 before ctrl_send_reply ever saw it.
+     * It is a FIFTH limit in the chain (text_out / this / CTRL_REPLY_TEXT_MAX / reply_frame / the
+     * ring); raising any subset just moves where the answer gets cut. Deriving it means it can
+     * never drift from the reply cap again. */
+    char resp[CTRL_REPLY_TEXT_MAX + 1]; int roff = 0;
     int got = 0, faulted = 0;
     int served_locally = 0;
     route_result_t rr;
@@ -3145,7 +3153,12 @@ static void pa_ctrl_gate(const control_result_t *cres)
     seL4_Signal(g_pa_req_notif);
 
 #if !JARVIS_ROUTING
-    char resp[1024]; int roff = 0;
+    /* M2: sized FROM the reply cap, not a round number — this is PA's chunk accumulator, and at
+     * 1024 it would have clamped a 1426-byte answer to 1023 before ctrl_send_reply ever saw it.
+     * It is a FIFTH limit in the chain (text_out / this / CTRL_REPLY_TEXT_MAX / reply_frame / the
+     * ring); raising any subset just moves where the answer gets cut. Deriving it means it can
+     * never drift from the reply cap again. */
+    char resp[CTRL_REPLY_TEXT_MAX + 1]; int roff = 0;
     int got = 0, faulted = 0;
 #endif
     uint32_t polls = 0, poll_max = 5000000;   /* the wake lane's POLL_TIMEOUT */

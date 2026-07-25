@@ -172,7 +172,12 @@ REPLY_HDR_LEN = 10                # magic(4) ver(1) verdict(1) seq(2) tlen(2); t
 REPLY_VERSION = 2                 # v2 = HMAC'd. v1 (CRC-only) was NEVER DEPLOYED -> no fallback.
 REPLY_CRC_LEN = 4
 REPLY_TAG_LEN = 32                # HMAC-SHA256 tag, trailing
-CTRL_REPLY_TEXT_MAX = 512         # == CTRL_REPLY_TEXT_MAX box-side
+CTRL_REPLY_TEXT_MAX = 1426        # == CTRL_REPLY_TEXT_MAX box-side (control_reply.h).
+                                  # MTU-derived: 1500 - 20 (IP) - 8 (UDP) = 1472 UDP payload,
+                                  # minus 46 JRPL overhead (10 hdr + 4 crc + 32 tag) = 1426.
+                                  # MUST move in lockstep with the box: this value REJECTS a
+                                  # larger tlen outright, so a box-only bump would make every
+                                  # long answer vanish from the console rather than truncate.
 BOX_MAC = '0c:9d:92:0e:39:9a'     # the box I211 MAC (RAL0/RAH0) — provisioned, never resolved
 BOX_IP = '192.168.100.143'
 

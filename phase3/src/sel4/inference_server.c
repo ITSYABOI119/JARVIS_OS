@@ -618,8 +618,17 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
         shmem_ipc_send(response_ring, MSG_INFER_STATS, seq, &st, (uint16_t)sizeof st);
     }
 
-    /* Decode to text */
-    char text_out[512];
+    /* Decode to text.
+     *
+     * M2: 512 -> 1536 so a full-length answer survives assembly. STATIC, deliberately: PB's
+     * documented stack budget is <8 KB and handle_query already carries prompt_ids[256], so
+     * putting another 1.5 KB on the frame is exactly the kind of quiet stack growth that produced
+     * the Phase-3 bare-metal stack-overflow crash. PB handles one query at a time, so a static is
+     * safe (the `static epi_record_t rec` in PA's ctrl_epi_write is the same call).
+     *
+     * Sized above CTRL_REPLY_TEXT_MAX (1426) so the reply builder's clamp — not this buffer — is
+     * what bounds the answer, keeping the MTU the single authority on length. */
+    static char text_out[1536];
     int text_len = tokenizer_decode(tok, output_ids, n_gen, text_out, sizeof(text_out));
     if (text_len < 0) text_len = 0;
 #if JARVIS_DBG_PB
