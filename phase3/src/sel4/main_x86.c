@@ -2485,7 +2485,21 @@ static spine_decision_t spine_decide(uint16_t id, const action_ctx_t *ctx,
     shield_action_result_t sr = shield_assess(id, ctx, learn, learn_cap);
     const action_def_t *ad = action_lookup(id);
     trust_level_t tlv = ad ? ad->trust : TRUST_NOTIFY;
-    act_decision_t dec = trust_policy(sr.verdict, tlv, false);   /* no control-IN yet */
+    /* The `false` is control_in_available. Control-IN has been default-ON since
+     * 2026-07-21, so the old "no control-IN yet" was stale — but the literal is
+     * still CORRECT and inert: this argument is read ONLY by trust_policy's
+     * TRUST_REQUEST branch (shield_action.c), and action_allowlist.c has FOUR
+     * entries, all TRUST_AUTO or TRUST_NOTIFY — no TRUST_REQUEST, no TRUST_REQUIRE
+     * — so that branch is unreachable in the deployed build. (Action id 5,
+     * ACTION_CONTROL_IN_QUERY, is an AUDIT TAG with no allowlist entry, so it
+     * carries no trust level either.)
+     *
+     * WHEN A TRUST_REQUEST ACTION IS ADDED this must be wired to the live
+     * channel-up gate — the same one the TLM_F_CONTROL_IN telemetry flag uses:
+     * g_ctrl_key_ok && g_ctrl_floor_ok && g_ctrl_console_ok && g_ctrl_rx_ready —
+     * and spine_decide's "touches ZERO globals" purity revisited, because reading
+     * those globals would break it. */
+    act_decision_t dec = trust_policy(sr.verdict, tlv, false);
     spine_decision_t d = { dec, sr.verdict, sr.risk_x100, tlv };
     return d;
 }
