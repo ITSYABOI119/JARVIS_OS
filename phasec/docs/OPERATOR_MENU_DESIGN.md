@@ -455,7 +455,7 @@ path. `-KeepBackups` retains the old pair; delete is the default, because the ro
 discharged the moment the new pair verifies on both halves. Stated plainly in the output: `rm`
 unlinks, it does not securely erase, and on an SSD overwriting would not guarantee erasure either.
 
-### 11.5 Two defects the build found — again, by RUNNING it
+### 11.5 Three defects the build found — again, by RUNNING it
 
 Same lesson as §10's three: `-Check` is worth writing because it is worth *running*.
 
@@ -496,3 +496,51 @@ only the CI substitute (a Windows `.ps1` cannot run in this repo's Linux CI) but
 mechanism: re-keying is incident response, not rotation, so this script will sit unused for long
 stretches and must be verifiable on demand — and it verifies by really reading the box, not by
 printing.
+
+### 11.7 The adversarial review (spec §9) — 15 findings, and the two that mattered
+
+The review agent went idle twice without reporting and had to be re-tasked; its report landed after
+the first two commits. It was worth the wait. Fifteen findings, all verified against the file before
+acting on any of them; the two HIGH ones were both real, and both are the same shape — **a safety
+property that was documented rather than implemented.**
+
+**HIGH-1 — an abort after the write strands plaintext copies of the LIVE key, and prints no path.**
+`Fail` exits immediately, so a W1/W2/W3 failure exits with the box holding `~/jkey_slot.new` and the
+scratch dir holding both new artifacts: three plaintext copies of the now-live key, with cleanup
+unreachable. §11.4's "cleanup runs only after the final gate" is correct and is exactly why they
+cannot be deleted there — but the operator was told nothing. The `.NOTES` block even *described* the
+window accurately, which the reviewer rightly called "an accurate description of the defect, not a
+fix: an operator reading the terminal rather than the source still gets nothing." Now every abort
+prints every artifact, marks which hold the live key (resolved at print time, since the new key only
+becomes live at the write), and gives the removal commands.
+
+**HIGH-2 — `-Check` executed 4 of 13 resolved commands, and the 9 it skipped included every one
+carrying a shell metacharacter.** That is precisely the class that produced both bugs in §11.5 — and
+those were found by RUNNING a command, never by reading one. So the class stayed live until the
+destructive run, at a point where both backups have already been overwritten. `-Check` now performs a
+real **dry run**: it aims the backup/size/magic/fingerprint/md5/remove shapes at a **probe file**
+(never the real backup name, so a `-Check` can never clobber a rollback path), proves the probe is
+gone with `test ! -e`, exercises the `scp` shape with a throwaway file, and runs the generator plus
+G2/G3/G4 into a temp directory it deletes. Only `of=`/`seek=` remains unexercised, and that is stated
+in the output rather than left implicit.
+
+Also fixed, each verified first: **S2's "three-way" check had a tautological term** (it reused W1's
+reading, which W1 had already asserted equal, so a third of the check could never fire — it now
+re-reads the device); **`-Rollback` wrote the crown-jewel sector without ever checking the backup was
+a JKEY slot**, so a torn header with intact key bytes would restore a slot the box rejects at boot
+while the script printed "restored and verified" (it now checks magic before and whole-sector md5
+after, the standard `-Rekey` already held itself to); **`-Rollback` skipped P5** and had an unguarded
+`Copy-Item` running *after* the device write; **W3 reported an ssh/sudo read failure as a data-loss
+event** — the most alarming message in the tool, about a healthy box; **`-Check` crashed instead of
+reporting when `ssh` was missing**, failing to diagnose the one environment defect it most needs to.
+
+**One claim of mine was simply false and is now corrected rather than defended:** three places said
+`-Yes` "does NOT skip a single gate". It skips no *verification* gate, but it also disables the
+redirected-stdin refusal — so `-Rekey -Yes` can write the device with no human present. That is now
+stated wherever `-Yes` is described, and using it prints a warning.
+
+The reviewer's independent confirmation of §11.5's defect 3 (pipeline exit codes) is worth recording
+too, as is its verdict on the parts it found sound: no both-halves-lost state exists, no early exit
+deletes a backup, empty-vs-empty is impossible at every post-write gate, no key bytes can reach
+stdout or the transcript, and all seven header regexes were checked line-by-line against the real
+headers.

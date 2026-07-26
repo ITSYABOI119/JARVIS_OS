@@ -135,7 +135,12 @@
   The receiver's HTTP/SSE port, used only by gate P5. Default 8800.
 .PARAMETER Yes
   Skip the typed confirmation. Exists for the operator who is re-running a
-  procedure they have already read; it does NOT skip a single gate.
+  procedure they have already read. It skips NO verification gate -- but be
+  precise about what it does remove: besides the typed word, it also disables the
+  redirected-stdin refusal (exit 4), because that refusal exists only to stop an
+  unanswerable prompt. So `-Rekey -Yes` CAN run a device write with no human
+  present, e.g. from a scheduled task or a pipe. That is the whole risk of the
+  switch, and it is stated here rather than described as harmless.
 
 .NOTES
   Exit codes:
@@ -224,13 +229,53 @@ function Info([string]$Message) { Write-Host ("  info: {0}" -f $Message) }
 function Pass([string]$Message) { Write-Host ("  PASS: {0}" -f $Message) -ForegroundColor Green }
 function Warn([string]$Message) { Write-Host ("  warn: {0}" -f $Message) -ForegroundColor Yellow }
 
+# Artifacts this run has created that a reader needs to know about on an abort.
+# Registered as they come into existence, so an abort can name them even though
+# it cannot clean them up (cleanup must not run before the final gate -- doing so
+# would destroy the rollback path).
+$script:artifacts = @()
+$script:keyIsLive = $false      # set true the moment the dd write succeeds
+function Add-Artifact {
+    # -NewKey marks an artifact holding the NEWLY GENERATED key. Whether that key
+    # is LIVE depends on whether the write has happened yet, which is why it is
+    # resolved at print time rather than at registration.
+    param([string]$Path, [string]$What, [switch]$NewKey)
+    $script:artifacts += [pscustomobject]@{ Path = $Path; What = $What; NewKey = [bool]$NewKey }
+}
+
+function Show-Artifacts {
+    # Printed on EVERY abort once anything exists. An abort between the write and
+    # S2 leaves up to three plaintext copies of the NOW-LIVE key lying around, and
+    # a script that exits silently there leaves the operator with nothing to act
+    # on -- documenting the window in a comment is not the same as telling the
+    # person reading the terminal.
+    if (-not $script:artifacts.Count) { return }
+    Write-Host ''
+    Write-Host '  ARTIFACTS THIS RUN LEFT BEHIND (nothing was cleaned up -- cleanup runs only after the final gate,' -ForegroundColor Yellow
+    Write-Host '  so an aborted run never destroys its own rollback path):' -ForegroundColor Yellow
+    foreach ($a in $script:artifacts) {
+        $tag = if ($a.NewKey -and $script:keyIsLive) { '   *** HOLDS THE LIVE KEY -- DELETE IT ***' }
+               elseif ($a.NewKey) { '   (new key, NOT yet live on the box)' }
+               else { '   (previous key -- your rollback path; keep until you are satisfied)' }
+        Write-Host ("    {0}`n      {1}{2}" -f $a.Path, $a.What, $tag) -ForegroundColor Yellow
+    }
+    if ($script:keyIsLive -and ($script:artifacts | Where-Object { $_.NewKey })) {
+        Write-Host '  Delete the LIVE-KEY copies once you have finished, or rolled back:' -ForegroundColor Yellow
+        Write-Host ('    ssh {0} ''{1}''' -f $BoxHost, (Get-CmdBoxRemove -Name $BoxSlotNew)) -ForegroundColor Yellow
+        Write-Host '    Remove-Item -Recurse -Force <the scratch dir named above>' -ForegroundColor Yellow
+    }
+}
+
 function Fail([int]$Code, [string]$Message) {
     Write-Host ("  FAIL: {0}" -f $Message) -ForegroundColor Red
     if (-not $Check) {
         Write-Transcript -Command ('ABORT: {0}' -f $Message) -ExitCode $Code
+        Show-Artifacts
         exit $Code
     }
-    if ($script:worstExit -eq 0) { $script:worstExit = $Code }
+    # -Check accumulates. Keep the WORST (highest) code, not merely the first --
+    # otherwise a later, more serious gate is masked by an earlier trivial one.
+    if ($Code -gt $script:worstExit) { $script:worstExit = $Code }
 }
 
 function Write-Transcript {
@@ -265,10 +310,12 @@ if ($modeCount -eq 0) {
     Say ''
     Say 'No mode was given. A destructive tool does nothing on a bare invocation.'
     Say ''
+    Write-Transcript -Command 'invoked with no mode (usage printed)' -ExitCode 2
     exit 2
 }
 if ($modeCount -gt 1) {
     Write-Host '  FAIL: -Check, -Rekey and -Rollback are mutually exclusive -- pick one' -ForegroundColor Red
+    Write-Transcript -Command 'more than one mode given' -ExitCode 3
     exit 3
 }
 $script:mode = if ($Check) { 'check' } elseif ($Rekey) { 'rekey' } else { 'rollback' }
@@ -281,6 +328,7 @@ if (-not $Check -and -not $Yes -and [Console]::IsInputRedirected) {
     Write-Host '  FAIL: stdin is redirected, so the typed confirmation cannot be answered.' -ForegroundColor Red
     Write-Host '        Run this in a console (double-click jarvis_admin.bat), or use -Check,' -ForegroundColor Red
     Write-Host '        which validates everything and runs nothing.' -ForegroundColor Red
+    Write-Transcript -Command 'refused: stdin redirected in a confirmed mode' -ExitCode 4
     exit 4
 }
 
@@ -393,9 +441,13 @@ function Get-CmdBoxBackup {
     # lands owned by the ssh user rather than root -- which keeps cleanup a plain
     # rm. (A dd of=~/... operand would also be a tilde-expansion gamble: tilde
     # expansion after `=` in a command argument is not portable, $HOME is.)
-    'sudo -n dd if={0} bs=512 skip={1} count=1 status=none > $HOME/{2}' -f $BoxDevice, $KEY_LBA, $BoxSlotBak }
+    param([string]$Name)
+    'sudo -n dd if={0} bs=512 skip={1} count=1 status=none > $HOME/{2}' -f $BoxDevice, $KEY_LBA, $Name }
 
 function Get-CmdBoxFileSize { param([string]$Name) 'stat -c%s $HOME/{0}' -f $Name }
+
+function Get-CmdBoxFileMagic { param([string]$Name)
+    'set -o pipefail; head -c 4 $HOME/{0} | od -An -tx1' -f $Name }
 
 function Get-CmdBoxFileFp { param([string]$Name)
     'set -o pipefail; tail -c +{0} $HOME/{1} | head -c {2} | sha256sum | cut -c1-8' -f ($KEY_OFFSET + 1), $Name, $KEY_LEN }
@@ -493,13 +545,14 @@ function Test-ReceiverRunning {
 function Invoke-Preflight {
     Say ''
     Say '== preflight =='
+    $toolsOk = $true
 
     foreach ($t in @(
         @{ n='ssh';  m='ssh not found on PATH (Windows: Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0)' },
         @{ n='scp';  m='scp not found on PATH -- it ships with the same OpenSSH client as ssh' },
         @{ n='py';   m="the 'py' launcher was not found -- gen_control_key.py runs as py -3" })) {
         if (Get-Command $t.n -ErrorAction SilentlyContinue) { Pass ("{0} present" -f $t.n) }
-        else { Fail 5 $t.m }
+        else { Fail 5 $t.m; $toolsOk = $false }
     }
     if (Test-Path -LiteralPath $genKey) { Pass ("generator present ({0})" -f $genKey) }
     else { Fail 5 ("gen_control_key.py not found at '{0}'" -f $genKey) }
@@ -507,6 +560,15 @@ function Invoke-Preflight {
     Pass ('LBA {0} / magic 0x{1:X} / version {2} / key {3} B -- all parsed from control_key.h' -f `
           $KEY_LBA, $KEY_MAGIC, $KEY_VERSION, $KEY_LEN)
     foreach ($n in $neighbours) { Info ('neighbour LBA {0} must stay {1}' -f $n.Lba, $n.Name) }
+
+    # In -Check, Fail() accumulates instead of exiting -- so without this return
+    # a missing `ssh` fell straight through to `& ssh` below and died with an
+    # unhandled CommandNotFoundException, printing no report at all. The tool
+    # failed to diagnose the one environment defect it most needs to.
+    if (-not $toolsOk) {
+        Info 'skipping every box check: a required tool is missing (see the FAIL lines above)'
+        return $null
+    }
 
     # -- P1 -----------------------------------------------------------------
     $probe = Invoke-Box -RemoteCommand 'true'
@@ -587,7 +649,13 @@ function Test-Neighbours {
     foreach ($n in $neighbours) {
         $r = Invoke-Box -RemoteCommand (Get-CmdSectorMagic -Lba $n.Lba)
         $got = Get-HexOut $r.Out
-        if ($r.Code -ne 0 -or $got -ne $n.Hex) {
+        if ($r.Code -ne 0) {
+            # Split from the damage branch deliberately: funnelling both into one
+            # message means a transient ssh/sudo failure prints the most alarming
+            # line in the tool about a box that is fine.
+            $allOk = $false
+            Fail 62 ("could not READ neighbour LBA {0} ({1}) -- exit {2}. This is an ssh/sudo READ failure; the sector is NOT proven damaged. Re-run before acting." -f $n.Lba, $n.Name, $r.Code)
+        } elseif ($got -ne $n.Hex) {
             $allOk = $false
             if ($Fatal) {
                 Fail 62 ("NEIGHBOUR DAMAGED: LBA {0} should hold {1} (magic '{2}') and reads '{3}'. THIS IS A DATA-LOSS EVENT, not a re-key failure. A wrong seek= digit lands on the replay floor, the console address, the JACT audit store or the control-IN conversation store. Stop and assess before booting JARVIS." -f $n.Lba, $n.Name, $n.Hex, $got)
@@ -599,6 +667,87 @@ function Test-Neighbours {
         }
     }
     return $allOk
+}
+
+# ---------------------------------------------------------------------------
+# -Check's DRY RUN. Both bugs found in this script were found by RUNNING a
+# remote command, not by reading one -- so a -Check that only PRINTS the nine
+# commands it never executes leaves that entire class live until the destructive
+# run, at a point where both backups have already been overwritten.
+#
+# This exercises every remote string except the two that cannot be run without
+# writing the device (Get-CmdBoxWrite) -- against a PROBE FILE, never the real
+# backup name, so a -Check can never clobber a rollback path.
+# ---------------------------------------------------------------------------
+function Invoke-CheckDryRun {
+    $probeName = 'jarvis_admin_probe.tmp'
+    $ok = $true
+    Say ''
+    Say '== dry run: really executing every remote command shape (probe file, never the real backup) =='
+
+    $r = Invoke-Box -RemoteCommand (Get-CmdBoxBackup -Name $probeName)      # exercises the > redirect
+    if ($r.Code -ne 0) { Fail 5 ("the backup command shape FAILED (exit {0}) -- the '>' redirect or sudo is broken" -f $r.Code); $ok = $false }
+    else { Pass 'backup shape (sudo dd > $HOME/file) works' }
+
+    if ($ok) {
+        $sz = Invoke-Box -RemoteCommand (Get-CmdBoxFileSize -Name $probeName)   # exercises %s
+        if ($sz.Code -ne 0 -or [int]$sz.Out -ne $SLOT_BYTES) { Fail 5 ("size shape returned '{0}', expected {1}" -f $sz.Out, $SLOT_BYTES); $ok = $false }
+        else { Pass ('size shape (stat -c%s) works -- {0} bytes' -f $sz.Out) }
+
+        $mg = Invoke-Box -RemoteCommand (Get-CmdBoxFileMagic -Name $probeName)
+        if ($mg.Code -ne 0 -or (Get-HexOut $mg.Out) -ne $KEY_MAGIC_HEX) { Fail 5 ("file-magic shape returned '{0}'" -f (Get-HexOut $mg.Out)); $ok = $false }
+        else { Pass 'file-magic shape (head -c 4 | od) works' }
+
+        $fp = Invoke-Box -RemoteCommand (Get-CmdBoxFileFp -Name $probeName)
+        if ($fp.Code -ne 0 -or $fp.Out.Length -ne 8) { Fail 5 ("file-fingerprint shape returned '{0}'{1}" -f $fp.Out, (Get-EmptyReadHint $fp.Out)); $ok = $false }
+        else { Pass ('file-fingerprint shape (tail|head|sha256sum|cut) works -- {0}' -f $fp.Out) }
+
+        $m5 = Invoke-Box -RemoteCommand (Get-CmdBoxFileMd5 -Name $probeName)
+        if ($m5.Code -ne 0 -or $m5.Out.Length -ne 32) { Fail 5 ("file-md5 shape returned '{0}'" -f $m5.Out); $ok = $false }
+        else { Pass ('file-md5 shape (md5sum|cut) works -- {0}' -f $m5.Out) }
+
+        $sm = Invoke-Box -RemoteCommand (Get-CmdSectorMd5 -Lba $KEY_LBA)
+        if ($sm.Code -ne 0 -or $sm.Out -ne $m5.Out) { Fail 5 ("sector-md5 shape returned '{0}', expected the probe's {1}" -f $sm.Out, $m5.Out); $ok = $false }
+        else { Pass ('sector-md5 shape works, and AGREES with the file copy ({0})' -f $sm.Out) }
+    }
+
+    # exercises `rm -f ... 2>/dev/null || sudo -n rm -f ...`, then PROVES removal
+    $rm = Invoke-Box -RemoteCommand (Get-CmdBoxRemove -Name $probeName)
+    $gone = Invoke-Box -RemoteCommand ('test ! -e $HOME/{0}' -f $probeName)
+    if ($gone.Code -ne 0) { Fail 5 ("the probe file was NOT removed -- delete ~/{0} by hand" -f $probeName); $ok = $false }
+    else { Pass 'remove shape works, and the probe file is PROVEN gone (test ! -e)' }
+
+    # scp shape: a tiny temp file under the probe name, then removed
+    $sd = Join-Path $env:TEMP ('jarvis-admin-scp-{0}' -f (Get-Random))
+    New-Item -ItemType Directory -Path $sd -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $sd 'jkey_slot.bin') -Value 'probe' -Encoding ASCII
+    Push-Location $sd
+    try { & scp 'jkey_slot.bin' ("{0}:{1}" -f $BoxHost, $probeName) | Out-Null; $srr = $LASTEXITCODE } finally { Pop-Location }
+    Remove-Item -LiteralPath $sd -Recurse -Force -ErrorAction SilentlyContinue
+    if ($srr -ne 0) { Fail 5 ("the scp shape FAILED (exit {0}) -- host:path parsing or auth" -f $srr); $ok = $false }
+    else { Pass 'scp shape (bare filename from the scratch dir) works' }
+    [void](Invoke-Box -RemoteCommand (Get-CmdBoxRemove -Name $probeName))
+
+    # generator + G2/G3/G4, into a temp dir, never the live paths, never --force
+    $gd = Join-Path $env:TEMP ('jarvis-admin-gen-{0}' -f (Get-Random))
+    New-Item -ItemType Directory -Path $gd -Force | Out-Null
+    $gk = Join-Path $gd 'control_key.bin'; $gs = Join-Path $gd 'jkey_slot.bin'
+    & py -3 $genKey --key-out $gk --slot-out $gs | Out-Null
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $gs)) {
+        Fail 30 'the generator FAILED in the dry run -- G1 would abort a real -Rekey'; $ok = $false
+    } else {
+        $gkb = [IO.File]::ReadAllBytes($gk); $gsb = [IO.File]::ReadAllBytes($gs)
+        $gsk = New-Object byte[] ([int]$KEY_LEN); [Array]::Copy($gsb, $KEY_OFFSET, $gsk, 0, [int]$KEY_LEN)
+        if ($gkb.Length -ne [int]$KEY_LEN -or $gsb.Length -ne $SLOT_BYTES) { Fail 31 'dry-run generator produced wrong-sized artifacts'; $ok = $false }
+        elseif ([BitConverter]::ToUInt32($gsb,0) -ne [uint32]$KEY_MAGIC) { Fail 32 'dry-run slot has the wrong magic'; $ok = $false }
+        elseif ((Get-FpFromBytes $gsk) -ne (Get-FpFromBytes $gkb)) { Fail 33 'dry-run slot key != key file (G4 would abort)'; $ok = $false }
+        else { Pass 'generator + G2/G3/G4 verified on a throwaway pair (deleted immediately)' }
+    }
+    Remove-Item -LiteralPath $gd -Recurse -Force -ErrorAction SilentlyContinue
+
+    if ($ok) { Pass 'every remote command shape except the device WRITE has been executed for real' }
+    Info 'NOT exercised, and cannot be without writing the device: the dd write itself (of=/seek=)'
+    return $ok
 }
 
 # ===========================================================================
@@ -617,11 +766,13 @@ if ($Check) {
     } catch { Fail 5 ("cannot create '{0}'" -f $adminHome) }
 
     $scratchShown = Join-Path $env:TEMP 'jarvis-rekey-<timestamp>'
+    if ($pf) { [void](Invoke-CheckDryRun) } else { Info 'skipping the dry run: preflight did not reach a usable box' }
+
     Say ''
-    Say '-- what -Rekey WOULD run, in order (nothing below has been run) --'
+    Say '-- what -Rekey WOULD run, in order (the shapes above were executed; the WRITE was not) --'
     Say ('  G1 generate  : {0}' -f (Get-CmdGen -ScratchDir $scratchShown))
     Say ('  B1 PC backup : copy "{0}" -> "{1}"  (then verify {2} B + fingerprint)' -f $KeyFile, $PcKeyBak, $KEY_LEN)
-    Say ('  B2 box backup: ssh {0} "{1}"' -f $BoxHost, (Get-CmdBoxBackup))
+    Say ('  B2 box backup: ssh {0} "{1}"' -f $BoxHost, (Get-CmdBoxBackup -Name $BoxSlotBak))
     Say ('     verify    : ssh {0} "{1}" / "{2}"' -f $BoxHost, (Get-CmdBoxFileSize -Name $BoxSlotBak), (Get-CmdBoxFileFp -Name $BoxSlotBak))
     Say ('  T1 transfer  : {0}' -f (Get-CmdScp -ScratchDir $scratchShown))
     Say ('  T2 md5 both  : ssh {0} "{1}"   vs the local slot' -f $BoxHost, (Get-CmdBoxFileMd5 -Name $BoxSlotNew))
@@ -683,7 +834,32 @@ if ($Rollback) {
     if ($bfp.Code -ne 0 -or $bfp.Out -ne $fpBak) {
         Fail 80 ("box backup fingerprint '{0}' != PC backup fingerprint '{1}' -- the two halves of the backup do not agree, so restoring them would recreate a broken channel" -f $bfp.Out, $fpBak)
     }
-    Pass ('box backup present, {0} bytes, fingerprint {1} -- both halves agree' -f $SLOT_BYTES, $bfp.Out)
+    # A 512-byte file whose KEY bytes are right can still have a torn HEADER --
+    # e.g. an interrupted B2 redirect. Restoring that writes a slot the box
+    # rejects at boot ("no key (fail-closed) - inert"), producing the documented
+    # no-reply signature while this script says "restored and verified".
+    # -Rekey catches this at P2/G3; rollback checked neither magic nor md5.
+    $bmg = Invoke-Box -RemoteCommand (Get-CmdBoxFileMagic -Name $BoxSlotBak)
+    $bmgHex = Get-HexOut $bmg.Out
+    if ($bmg.Code -ne 0 -or $bmgHex -ne $KEY_MAGIC_HEX) {
+        Fail 80 ("box backup ~/{0} has magic '{1}', expected '{2}' (JKEY) -- its header is damaged even though its key bytes look right. Restoring it would leave the box fail-closed and silent." -f $BoxSlotBak, $bmgHex, $KEY_MAGIC_HEX)
+    }
+    Pass ('box backup magic OK ({0})' -f $KEY_MAGIC_HEX)
+
+    $bmd5 = Invoke-Box -RemoteCommand (Get-CmdBoxFileMd5 -Name $BoxSlotBak)
+    if ($bmd5.Code -ne 0 -or $bmd5.Out.Length -ne 32) {
+        Fail 80 ("could not md5 the box backup (exit {0}, output '{1}')" -f $bmd5.Code, $bmd5.Out)
+    }
+    Pass ('box backup present, {0} bytes, fingerprint {1}, md5 {2} -- both halves agree' -f $SLOT_BYTES, $bfp.Out, $bmd5.Out)
+
+    # P5 applies to a rollback exactly as it does to a re-key: a receiver caches
+    # the key at startup, so one left running keeps signing with the key you are
+    # rolling AWAY from -- and it may also hold $KeyFile open against the copy.
+    if (Test-ReceiverRunning) {
+        Fail 14 ("something is answering on 127.0.0.1:{0} -- a receiver holds the key it loaded at startup and may hold '{1}' open. Stop it, then re-run." -f $Port, $KeyFile)
+    } else {
+        Pass ('no receiver answering on 127.0.0.1:{0}' -f $Port)
+    }
 
     Say ''
     Say ('  This will WRITE ~/{0} back over LBA {1} on {2} and restore "{3}".' -f $BoxSlotBak, $KEY_LBA, $BoxDevice, $KeyFile)
@@ -694,20 +870,39 @@ if ($Rollback) {
             Write-Transcript -Command 'rollback NOT confirmed' -ExitCode 50
             exit 50
         }
-    } else { Info '-Yes: typed confirmation skipped (no gate was skipped)' }
+    } else {
+        Warn '-Yes: typed confirmation SKIPPED, and the redirected-stdin refusal with it. No verification gate is skipped, but this write can now proceed with no human present.'
+    }
 
     $w = Invoke-Box -RemoteCommand (Get-CmdBoxWrite -Name $BoxSlotBak)
     if ($w.Code -ne 0) { Fail 51 ("the rollback dd FAILED: {0}" -f $w.Out) }
     Pass 'box slot restored'
 
-    Copy-Item -LiteralPath $PcKeyBak -Destination $KeyFile -Force
+    # Guarded: this runs AFTER the device is already written, so an unhandled
+    # throw here (locked file, missing parent dir) would exit with box = backup
+    # key and PC = whatever it had, silently.
+    try {
+        $kdir = Split-Path -Parent $KeyFile
+        if ($kdir -and -not (Test-Path -LiteralPath $kdir)) { New-Item -ItemType Directory -Path $kdir -Force | Out-Null }
+        Copy-Item -LiteralPath $PcKeyBak -Destination $KeyFile -Force
+    } catch {
+        Fail 70 ("the device was RESTORED but the PC half was NOT: copying '{0}' -> '{1}' failed ({2}). The box now holds the backup key and this PC does not. Copy it by hand." -f $PcKeyBak, $KeyFile, $_.Exception.Message)
+    }
     $fpLive = Get-FpFromBytes ([IO.File]::ReadAllBytes($KeyFile))
     $fpDev = Invoke-Box -RemoteCommand (Get-CmdSectorFp -Lba $KEY_LBA)
     if ($fpLive -ne $fpBak -or $fpDev.Out -ne $fpBak) {
-        Fail 70 ("post-rollback mismatch: live PC {0}, device {1}, expected {2}" -f $fpLive, $fpDev.Out, $fpBak)
+        Fail 70 ("post-rollback mismatch: live PC {0}, device {1}, expected {2}{3}" -f $fpLive, $fpDev.Out, $fpBak, (Get-EmptyReadHint $fpDev.Out))
     }
-    Pass ('both halves restored and verified -- fingerprint {0}' -f $fpBak)
-    [void](Test-Neighbours)
+    # W2-equivalent: the whole sector must match the backup file, not just its
+    # key bytes -- the same standard -Rekey holds itself to.
+    $rmd5 = Invoke-Box -RemoteCommand (Get-CmdSectorMd5 -Lba $KEY_LBA)
+    if ($rmd5.Code -ne 0 -or $rmd5.Out -ne $bmd5.Out) {
+        Fail 70 ("post-rollback whole-sector md5 '{0}' != the backup's '{1}' -- the key bytes match but the sector does not" -f $rmd5.Out, $bmd5.Out)
+    }
+    # Neighbours BEFORE the success line, so a rollback that damaged one cannot
+    # print "restored and verified" above the damage report.
+    [void](Test-Neighbours -Fatal)
+    Pass ('both halves restored and verified -- fingerprint {0}, sector md5 {1}' -f $fpBak, $rmd5.Out)
 
     Say ''
     Say '  Start the receiver FRESH (it loads the key at startup), then boot JARVIS and'
@@ -726,9 +921,11 @@ $fpBox = $pf.FpBox
 
 Say ''
 Say '== neighbour sectors BEFORE the write (so "damaged" can be attributed) =='
-if (-not (Test-Neighbours)) {
-    Fail 62 'a neighbour sector is already damaged BEFORE any write by this script -- stop and assess; do not re-key on top of it'
-}
+Say '  (a neighbour already damaged HERE is pre-existing -- this script has not written anything yet)'
+# Test-Neighbours calls Fail, which exits in -Rekey, so it aborts on its own.
+# A wrapper `if (-not (Test-Neighbours)) { Fail ... }` looked like a second gate
+# but was unreachable, and its better wording never reached the operator.
+[void](Test-Neighbours)
 
 # -- B1 / B2 : backups, verified by FINGERPRINT not size --------------------
 Say ''
@@ -741,8 +938,9 @@ if ($bakLen -ne [int]$KEY_LEN) { Fail 20 ("PC backup is {0} bytes, expected {1}"
 $fpBak = Get-FpFromBytes ([IO.File]::ReadAllBytes($PcKeyBak))
 if ($fpBak -ne $pf.FpPc) { Fail 20 ("PC backup fingerprint {0} != live {1} -- the backup is not a copy of what is live" -f $fpBak, $pf.FpPc) }
 Pass ('B1 PC backup -> {0} ({1} B, fp {2} -- verified restorable, not merely present)' -f $PcKeyBak, $KEY_LEN, $fpBak)
+Add-Artifact -Path $PcKeyBak -What 'PC backup of the PREVIOUS key (32 B)'
 
-$b = Invoke-Box -RemoteCommand (Get-CmdBoxBackup)
+$b = Invoke-Box -RemoteCommand (Get-CmdBoxBackup -Name $BoxSlotBak)
 if ($b.Code -ne 0) { Fail 21 ("box backup FAILED: {0}" -f $b.Out) }
 $bs = Invoke-Box -RemoteCommand (Get-CmdBoxFileSize -Name $BoxSlotBak)
 if ($bs.Code -ne 0 -or [int]$bs.Out -ne $SLOT_BYTES) {
@@ -753,12 +951,14 @@ if ($bfp.Code -ne 0 -or $bfp.Out -ne $fpBox) {
     Fail 21 ("box backup fingerprint '{0}' != FP_BOX '{1}' -- a {2}-byte file that is not the slot would pass a size check, which is why this is fingerprinted" -f $bfp.Out, $fpBox, $SLOT_BYTES)
 }
 Pass ('B2 box backup -> ~/{0} ({1} B, fp {2})' -f $BoxSlotBak, $SLOT_BYTES, $bfp.Out)
+Add-Artifact -Path ('{0}:~/{1}' -f $BoxHost, $BoxSlotBak) -What 'box backup of the PREVIOUS slot (512 B)'
 
 # -- G1..G5 : generate into scratch -----------------------------------------
 Say ''
 Say '== generate (scratch only -- nothing live is touched yet) =='
 $scratch = Join-Path $env:TEMP ('jarvis-rekey-{0}' -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
 New-Item -ItemType Directory -Path $scratch -Force | Out-Null
+Add-Artifact -Path $scratch -What 'scratch dir: holds the new key file AND the new slot' -NewKey
 $scratchKey  = Join-Path $scratch 'control_key.bin'
 $scratchSlot = Join-Path $scratch 'jkey_slot.bin'
 
@@ -824,6 +1024,7 @@ $remoteMd5 = Invoke-Box -RemoteCommand (Get-CmdBoxFileMd5 -Name $BoxSlotNew)
 if ($remoteMd5.Code -ne 0 -or $remoteMd5.Out -ne $localMd5) {
     Fail 41 ("T2 slot md5 differs across the wire: local {0}, box '{1}'. Not 'did 512 bytes arrive' -- this project has silently corrupted binary through a text channel three times." -f $localMd5, $remoteMd5.Out)
 }
+Add-Artifact -Path ('{0}:~/{1}' -f $BoxHost, $BoxSlotNew) -What 'scratch slot ON THE BOX' -NewKey
 Pass ('T2 whole-slot md5 identical on both sides ({0})' -f $localMd5)
 
 # -- the write --------------------------------------------------------------
@@ -847,10 +1048,13 @@ if (-not $Yes) {
         Write-Transcript -Command 'write NOT confirmed' -ExitCode 50
         exit 50
     }
-} else { Info '-Yes: typed confirmation skipped (no gate was skipped)' }
+} else {
+    Warn '-Yes: typed confirmation SKIPPED, and the redirected-stdin refusal with it. No verification gate is skipped, but this write can now proceed with no human present.'
+}
 
 $w = Invoke-Box -RemoteCommand (Get-CmdBoxWrite -Name $BoxSlotNew)
 if ($w.Code -ne 0) { Fail 51 ("the dd write FAILED: {0}" -f $w.Out) }
+$script:keyIsLive = $true    # from here on, the scratch copies hold the LIVE key
 Pass 'write completed (conv=fsync)'
 
 # -- W1 / W2 / W3 : verify from the DEVICE ----------------------------------
@@ -878,8 +1082,13 @@ Write-Transcript -Command ('copy scratch key -> "{0}"' -f $KeyFile) -ExitCode 0
 if (-not (Test-Path -LiteralPath $KeyFile)) { Fail 70 ("S1 '{0}' is missing after the copy" -f $KeyFile) }
 if ((Get-Item -LiteralPath $KeyFile).Length -ne [int]$KEY_LEN) { Fail 70 'S1 the live key file is not the right size after the copy' }
 $fpLive = Get-FpFromBytes ([IO.File]::ReadAllBytes($KeyFile))
-if ($fpLive -ne $fpNew -or $fpDev.Out -ne $fpNew) {
-    Fail 70 ("S2 three-way mismatch: live PC {0}, device {1}, expected {2}" -f $fpLive, $fpDev.Out, $fpNew)
+# Re-read the device HERE rather than reusing W1's $fpDev: W1 already aborted
+# unless that value equalled $fpNew, so reusing it made one third of this
+# "three-way" check unreachable -- a term that can never fire is not a check.
+$fpDev2 = Invoke-Box -RemoteCommand (Get-CmdSectorFp -Lba $KEY_LBA)
+if ($fpDev2.Code -ne 0) { Fail 70 ("S2 could not re-read the device (exit {0}) -- the swap is NOT verified" -f $fpDev2.Code) }
+if ($fpLive -ne $fpNew -or $fpDev2.Out -ne $fpNew) {
+    Fail 70 ("S2 three-way mismatch: live PC {0}, device {1}, expected {2}{3}" -f $fpLive, $fpDev2.Out, $fpNew, (Get-EmptyReadHint $fpDev2.Out))
 }
 Pass ('S2 live PC key == device key == FP_NEW ({0})' -f $fpNew)
 
@@ -887,7 +1096,10 @@ Pass ('S2 live PC key == device key == FP_NEW ({0})' -f $fpNew)
 Say ''
 Say '== cleanup =='
 $rm = Invoke-Box -RemoteCommand (Get-CmdBoxRemove -Name $BoxSlotNew)
-if ($rm.Code -eq 0) {
+# rm -f exits 0 for a file that never existed, so its exit code is not evidence
+# of removal. Prove absence instead.
+$rmGone = Invoke-Box -RemoteCommand ('test ! -e $HOME/{0}' -f $BoxSlotNew)
+if ($rm.Code -eq 0 -and $rmGone.Code -eq 0) {
     Pass ('removed ~/{0} from the box -- it was a plaintext copy of the LIVE key, and the key is supposed to exist in exactly two places: the JKEY sector and this PC' -f $BoxSlotNew)
 } else {
     Warn ('could not remove ~/{0} from the box -- DELETE IT BY HAND: it holds the live key' -f $BoxSlotNew)
@@ -902,7 +1114,8 @@ if ($KeepBackups) {
     try { Remove-Item -LiteralPath $PcKeyBak -Force; Pass ('removed {0} (old key)' -f $PcKeyBak) }
     catch { Warn ('could not remove {0}' -f $PcKeyBak) }
     $rmb = Invoke-Box -RemoteCommand (Get-CmdBoxRemove -Name $BoxSlotBak)
-    if ($rmb.Code -eq 0) { Pass ('removed ~/{0} from the box (old key)' -f $BoxSlotBak) }
+    $rmbGone = Invoke-Box -RemoteCommand ('test ! -e $HOME/{0}' -f $BoxSlotBak)
+    if ($rmb.Code -eq 0 -and $rmbGone.Code -eq 0) { Pass ('removed ~/{0} from the box (old key) -- proven gone' -f $BoxSlotBak) }
     else { Warn ('could not remove ~/{0} from the box' -f $BoxSlotBak) }
     Info 'the old pair is gone, so -Rollback can no longer restore it. That is the default on purpose: the new pair is verified on both halves, and the box''s own JKEY sector is itself a recovery path for the PC half.'
 }
