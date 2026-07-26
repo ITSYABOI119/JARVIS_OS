@@ -3146,7 +3146,9 @@ static void pa_ctrl_gate(const control_result_t *cres)
         }
 
         int cns  = g3_select_exact_only(ctrl_cands, cn, ckey, ctrl_sel);
-        int cplen = g3_build_preamble_answer_only(ctrl_sel, cns, ctrl_pre, sizeof ctrl_pre);
+        /* CONTROL-IN lane: the whole stored answer (== EPI_RESP_MAX). The workload lane
+         * deliberately keeps G3_R_MAX -- see g3_retrieval.h. */
+        int cplen = g3_build_preamble_answer_only(ctrl_sel, cns, ctrl_pre, sizeof ctrl_pre, G3_R_MAX_CONTROL_IN);
         sctx_pack_preamble(g_sctx, ctrl_pre, (uint32_t)(cplen > 0 ? cplen : 0));   /* 0 == the old clear */
         if (cplen > 0) g_ctrl_recall_hits++;
 
@@ -6051,7 +6053,9 @@ static void *main_continued(void *arg UNUSED)
                 int ns   = g3_select_exact_only(g3cands, g3n, qkey, g3sel);   /* G3/M6: exact-key ONLY, no recency fallback (fixes A/B P6 leak) */
                 int exact = (ns > 0 && g3sel[0].query_key == qkey);   /* exact match lands at slot 0 */
                 char g3pre[SCTX_PREAMBLE_MAX];
-                int plen = g3_build_preamble_answer_only(g3sel, ns, g3pre, sizeof g3pre);   /* G3/M6: fenced answer-only preamble (no embedded prior-question text) */
+                /* WORKLOAD lane: G3_R_MAX (120), UNCHANGED -- preserves the deployed baseline
+                 * and every historical [INFER] comparison. */
+                int plen = g3_build_preamble_answer_only(g3sel, ns, g3pre, sizeof g3pre, G3_R_MAX);   /* G3/M6: fenced answer-only preamble (no embedded prior-question text) */
                 sctx_pack_preamble(g_sctx, g3pre, (uint32_t)plen);     /* M1: PACK only — PB ignores until M2 */
 
                 /* G3/M4: retrieval telemetry — in-RAM latency (µs; *1000 before /TSC_PER_MS to keep

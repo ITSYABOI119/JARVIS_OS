@@ -21,7 +21,25 @@
 /* Tunables (§3 / D-d). */
 #define G3_MAX_FACTS        2     /* preamble holds at most this many facts */
 #define G3_Q_MAX            80    /* per-field query truncation (bytes) */
-#define G3_R_MAX            120   /* per-field response truncation (bytes) */
+#define G3_R_MAX            120   /* WORKLOAD lane response truncation (bytes) -- UNCHANGED */
+/* CONTROL-IN lane response truncation. PER-LANE, following M2's
+ * PB_GEN_MAX_WORKLOAD / PB_GEN_MAX_CONTROL_IN precedent: g3_clean_answer_len is
+ * SHARED and the workload retrieval lane is default-ON, so raising this globally
+ * would change deployed workload generation -- the same blast radius f1fc84b had.
+ *
+ * 256 is PRINCIPLED, not tuned: it equals EPI_RESP_MAX, so it is the whole stored
+ * answer and nothing beyond it exists to recall. (The _Static_assert pinning the
+ * two together lives in test_g3_retrieval.c, which includes episodic_store.h --
+ * this header stays deliberately decoupled from epi_record_t.)
+ *
+ * WHY: measured 2026-07-26 over the real control-IN store (62 usable records), a
+ * 120-byte window yielded a MEDIAN preamble of 19 bytes -- and that string was
+ * route_decline_text()'s canned "I don't track that.", the most recallable
+ * content in the store precisely because it is short enough to fit with its full
+ * stop. The window DECLINED every informative answer, each of whose first
+ * complete sentence lands between 120 and 256 bytes. The rule selected FOR canned
+ * refusals and AGAINST prose. */
+#define G3_R_MAX_CONTROL_IN 256   /* control-IN lane -- the whole stored answer (== EPI_RESP_MAX) */
 #define PREAMBLE_MAX_BYTES  512   /* total preamble cap (< ~600 so a prompt_ids[256] holds it) */
 
 /* A retrieval candidate — decoupled from epi_record_t so this stays pure/host-testable.
@@ -63,8 +81,12 @@ int g3_select_exact_only(const g3_candidate_t *cands, int n, uint64_t query_key,
  *   "Known context (your earlier answer to this question):\n" then per fact resp(<=G3_R_MAX) "\n".
  * Same discipline as g3_build_preamble: copy text by *_len (never strlen), total cap =
  * min(cap, PREAMBLE_MAX_BYTES)-1, always NUL-terminate, NEVER past cap. Returns the length
- * (0 when n<=0). */
-int g3_build_preamble_answer_only(const g3_candidate_t *sel, int n, char *out, int cap);
+ * (0 when n<=0).
+ *
+ * `r_max` is the PER-LANE response window in bytes -- pass G3_R_MAX from the workload lane and
+ * G3_R_MAX_CONTROL_IN from the control-IN lane. It is an explicit NUMBER rather than a lane enum
+ * on purpose: the caller already knows which lane it is, and a number cannot be mapped wrongly. */
+int g3_build_preamble_answer_only(const g3_candidate_t *sel, int n, char *out, int cap, int r_max);
 
 /* Does `s` (length-carried, NOT NUL-terminated) contain the model's thinking-channel marker text
  * ("<|channel>" / "<channel|>" / "<|think|>")? Such a record is reasoning scratch, not an answer,

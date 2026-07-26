@@ -153,9 +153,9 @@ int g3_text_has_thought_marker(const char *s, int len)
            g3_contains(s, len, "<|think|>",   9);
 }
 
-static int g3_clean_answer_len(const char *resp, int resp_len)
+static int g3_clean_answer_len(const char *resp, int resp_len, int r_max)
 {
-    if (!resp || resp_len <= 0)
+    if (!resp || resp_len <= 0 || r_max <= 0)
         return 0;
 
     /* THOUGHT SCRATCH IS NOT RECALLABLE. Checked before any truncation so a marker anywhere in
@@ -166,8 +166,8 @@ static int g3_clean_answer_len(const char *resp, int resp_len)
     if (g3_text_has_thought_marker(resp, resp_len))
         return 0;
 
-    int truncated = resp_len > G3_R_MAX;
-    int n = truncated ? G3_R_MAX : resp_len;
+    int truncated = resp_len > r_max;
+    int n = truncated ? r_max : resp_len;
 
     if (truncated) {
         /* Back up to the last space so the last word is complete. (No space in the window =>
@@ -256,7 +256,7 @@ static int g3_clean_answer_len(const char *resp, int resp_len)
     return sentence_end;
 }
 
-int g3_build_preamble_answer_only(const g3_candidate_t *sel, int n, char *out, int cap)
+int g3_build_preamble_answer_only(const g3_candidate_t *sel, int n, char *out, int cap, int r_max)
 {
     if (!out || cap <= 0)
         return 0;
@@ -282,7 +282,7 @@ int g3_build_preamble_answer_only(const g3_candidate_t *sel, int n, char *out, i
     int clean[G3_MAX_FACTS];
     int any = 0;
     for (int i = 0; i < facts; i++) {
-        clean[i] = sel[i].resp ? g3_clean_answer_len(sel[i].resp, sel[i].resp_len) : 0;
+        clean[i] = sel[i].resp ? g3_clean_answer_len(sel[i].resp, sel[i].resp_len, r_max) : 0;
         if (clean[i] > 0)
             any = 1;
     }

@@ -8,8 +8,17 @@
  *     phase3/src/ai/test_g3_retrieval.c phase3/src/ai/g3_retrieval.c -o /tmp/tg3 && /tmp/tg3
  */
 #include "g3_retrieval.h"
+#include "episodic_store.h"   /* for the EPI_RESP_MAX pin below */
 #include <stdio.h>
 #include <string.h>
+
+/* 256 is not a tuned number: it is the WHOLE stored answer. If EPI_RESP_MAX ever
+ * shrinks, the control-IN window would silently start promising bytes the store
+ * cannot hold, so pin them together at compile time. */
+_Static_assert(G3_R_MAX_CONTROL_IN <= EPI_RESP_MAX,
+               "control-IN recall window must not exceed the stored response cap");
+_Static_assert(G3_R_MAX <= G3_R_MAX_CONTROL_IN,
+               "the workload window must not exceed the control-IN window");
 
 static int pass = 0, fail = 0;
 #define CHECK(cond, msg) do { \
@@ -221,7 +230,7 @@ static void test_answer_only(void)
         { .query = Q, .query_len = (uint16_t)strlen(Q), .resp = R, .resp_len = (uint16_t)strlen(R) },
     };
     char buf[256];
-    int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf);
+    int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf, G3_R_MAX);
     CHECK(len > 0, "T9 answer-only preamble built");
     CHECK(strstr(buf, "Notes from a previous answer") != NULL,
           "T9 build-on label present");
@@ -239,14 +248,14 @@ static void test_answer_only(void)
      * canary would pass vacuously without ever exercising truncation. */
     for (int k = 0; k < 300; k++) big[k] = ((k % 10) == 8) ? '.' : (((k % 10) == 9) ? ' ' : 'Z');
     g3_candidate_t sbig[1] = { { .query = Q, .query_len = 5, .resp = big, .resp_len = 300 } };
-    int l2 = g3_build_preamble_answer_only(sbig, 1, cbuf, CAP);
+    int l2 = g3_build_preamble_answer_only(sbig, 1, cbuf, CAP, G3_R_MAX);
     CHECK(l2 <= CAP - 1 && cbuf[l2] == '\0', "T9 cap: len<=cap-1 + NUL-terminated");
     CHECK((unsigned char)cbuf[CAP] == 0xAA && (unsigned char)cbuf[63] == 0xAA,
           "T9 cap: 0xAA canary past cap intact (no overrun)");
 
     /* empty sel -> 0, out[0]=='\0'. */
     char ebuf[16] = "x";
-    CHECK(g3_build_preamble_answer_only(NULL, 0, ebuf, (int)sizeof ebuf) == 0 && ebuf[0] == '\0',
+    CHECK(g3_build_preamble_answer_only(NULL, 0, ebuf, (int)sizeof ebuf, G3_R_MAX) == 0 && ebuf[0] == '\0',
           "T9 empty sel -> 0 + NUL");
 }
 
@@ -277,7 +286,7 @@ static void test_clean_truncation(void)
 
     g3_candidate_t sel[1] = { { .resp = resp, .resp_len = (uint16_t)resp_len } };
     char buf[256];
-    int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf);
+    int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf, G3_R_MAX);
     CHECK(len > 0, "T10 preamble built");
     CHECK(strstr(buf, "### W") == NULL, "T10 dangling '### W' fragment gone");
     CHECK(strstr(buf, "###") == NULL, "T10 trailing '#'-run stripped");
@@ -300,7 +309,7 @@ static void test_clean_truncation(void)
     char cbuf[80];
     memset(cbuf, (int)0xAA, sizeof cbuf);
     const int CAP = 48;
-    int l2 = g3_build_preamble_answer_only(sel, 1, cbuf, CAP);
+    int l2 = g3_build_preamble_answer_only(sel, 1, cbuf, CAP, G3_R_MAX);
     CHECK(l2 <= CAP - 1 && cbuf[l2] == '\0', "T10 cap: len<=cap-1 + NUL");
     CHECK((unsigned char)cbuf[CAP] == 0xAA && (unsigned char)cbuf[79] == 0xAA, "T10 cap: 0xAA canary intact");
 
@@ -316,7 +325,7 @@ static void test_clean_truncation(void)
         g3_candidate_t s2[1] = { { .resp = noterm, .resp_len = (uint16_t)q } };
         char b2[256];
         memset(b2, (int)0xAA, sizeof b2);
-        int l3 = g3_build_preamble_answer_only(s2, 1, b2, (int)sizeof b2);
+        int l3 = g3_build_preamble_answer_only(s2, 1, b2, (int)sizeof b2, G3_R_MAX);
         CHECK(l3 == 0, "T10 sentence-less answer => NO preamble (was: word-boundary fragment)");
         CHECK(b2[0] == '\0', "T10 sentence-less: NUL-terminated empty output");
     }
@@ -357,7 +366,7 @@ static void test_sentence_boundary(void)
         g3_candidate_t sel[1] = { { .resp = REAL_FAILING,
                                     .resp_len = (uint16_t)(sizeof REAL_FAILING - 1) } };
         memset(buf, (int)0xAA, sizeof buf);
-        int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf);
+        int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf, G3_R_MAX);
         CHECK(len == 0, "T12A real failing record => NO preamble (no complete sentence in window)");
         CHECK(buf[0] == '\0', "T12A empty preamble is NUL-terminated");
         CHECK(strstr(buf, "execution thread,") == NULL, "T12A mid-sentence fragment never injected");
@@ -368,7 +377,7 @@ static void test_sentence_boundary(void)
     {
         g3_candidate_t sel[1] = { { .resp = REAL_WORKED,
                                     .resp_len = (uint16_t)(sizeof REAL_WORKED - 1) } };
-        int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf);
+        int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf, G3_R_MAX);
         CHECK(len > 0, "T12B real marker record still recalls");
         CHECK(strstr(buf, "reference value.\"") != NULL, "T12B completed sentence kept (incl. closing quote)");
         CHECK(strstr(buf, "Please") == NULL, "T12B dangling partial sentence dropped");
@@ -379,7 +388,7 @@ static void test_sentence_boundary(void)
     {
         static const char FACT[] = "A TLB caches virtual-to-physical address translations.";
         g3_candidate_t sel[1] = { { .resp = FACT, .resp_len = (uint16_t)(sizeof FACT - 1) } };
-        int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf);
+        int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf, G3_R_MAX);
         CHECK(len > 0, "T12C short complete answer recalls");
         CHECK(strstr(buf, FACT) != NULL, "T12C short complete answer preserved verbatim");
     }
@@ -388,7 +397,7 @@ static void test_sentence_boundary(void)
     {
         static const char NOTERM[] = "up 255 seconds";
         g3_candidate_t sel[1] = { { .resp = NOTERM, .resp_len = (uint16_t)(sizeof NOTERM - 1) } };
-        int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf);
+        int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf, G3_R_MAX);
         CHECK(len == 0, "T12D answer with no sentence terminator => NO preamble");
     }
 
@@ -397,7 +406,7 @@ static void test_sentence_boundary(void)
     {
         g3_candidate_t sel[1] = { { .resp = REAL_WORKED,
                                     .resp_len = (uint16_t)(sizeof REAL_WORKED - 1) } };
-        int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf);
+        int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf, G3_R_MAX);
         int L = len;
         while (L > 0 && (buf[L - 1] == '\n' || buf[L - 1] == ' ')) L--;
         while (L > 0 && (buf[L - 1] == '"' || buf[L - 1] == '\'' || buf[L - 1] == ')' ||
@@ -443,7 +452,7 @@ static void test_thought_filter(void)
         g3_candidate_t sel[1] = { { .resp = REAL_THOUGHT,
                                     .resp_len = (uint16_t)(sizeof REAL_THOUGHT - 1) } };
         memset(buf, (int)0xAA, sizeof buf);
-        int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf);
+        int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf, G3_R_MAX);
         CHECK(len == 0, "T13B thought record => NO preamble (was: 164 bytes of scratch)");
         CHECK(strstr(buf, "<|channel>") == NULL, "T13B marker never reaches the prompt");
     }
@@ -454,7 +463,7 @@ static void test_thought_filter(void)
         static const char ENUM[] =
             "Here's a thinking process that leads to the suggested answer:\n\n1.  Analyze";
         g3_candidate_t sel[1] = { { .resp = ENUM, .resp_len = (uint16_t)(sizeof ENUM - 1) } };
-        int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf);
+        int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf, G3_R_MAX);
         CHECK(len == 0, "T13C line-leading \"1.\" is not a sentence end => no preamble");
     }
 
@@ -462,10 +471,148 @@ static void test_thought_filter(void)
     {
         static const char NUMEND[] = "The image shipped in 2026. It replaced the prior build.";
         g3_candidate_t sel[1] = { { .resp = NUMEND, .resp_len = (uint16_t)(sizeof NUMEND - 1) } };
-        int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf);
+        int len = g3_build_preamble_answer_only(sel, 1, buf, (int)sizeof buf, G3_R_MAX);
         CHECK(len > 0, "T13D sentence ending in a digit still recalls");
         CHECK(strstr(buf, "shipped in 2026.") != NULL, "T13D that sentence is preserved");
     }
+}
+
+
+/* ---- T14: PER-LANE recall window (workload 120 / control-IN 256) ----------
+ *
+ * WHY THIS GROUP EXISTS. Measured 2026-07-26 over the REAL control-IN store
+ * (@21140000, 62 usable records) using the SHIPPED g3_build_preamble_answer_only
+ * -- not a replication:
+ *
+ *     G3_R_MAX=120 (workload)   13/62 yield   median preamble  19 B
+ *     G3_R_MAX=160              19/62 yield   median preamble  80 B
+ *     G3_R_MAX=200              20/62 yield   median preamble 108 B
+ *     G3_R_MAX_CONTROL_IN=256   22/62 yield   median preamble 129 B
+ *
+ * The 19-byte median is the finding, not the yield: that string is
+ * route_decline_text()'s canned "I don't track that." -- the most recallable
+ * content in the store, purely because it is short enough to fit inside a
+ * 120-byte window WITH its full stop. Every informative answer was declined.
+ *
+ * SCOPE, stated so it is not restated as something stronger: 22/62 counts
+ * RECORDS, not queries. epi_index_lookup is newest-wins and consults exactly ONE
+ * record, so it is an upper bound on the corpus, never a per-query hit rate.
+ *
+ * Every literal below is the REAL stored answer, byte-for-byte, and every
+ * expected value was measured with the shipped C before being written here. */
+static const char AO_HDR_MIRROR[] =
+    "Notes from a previous answer (use as reference; add new detail, do not repeat):\n";
+#define AO_HDRLEN ((int)(sizeof AO_HDR_MIRROR - 1))
+
+/* Returns the CLEANED ANSWER length carried by a preamble (or 0 for "declined").
+ * Also validates the mirrored header against the shipped output, so this helper
+ * cannot silently drift if the real header text ever changes. */
+static int ao_clean(const char *resp, int resp_len, int r_max)
+{
+    g3_candidate_t c;
+    memset(&c, 0, sizeof c);
+    c.resp = resp; c.resp_len = (uint16_t)resp_len;
+    static char buf[1024];
+    int n = g3_build_preamble_answer_only(&c, 1, buf, (int)sizeof buf, r_max);
+    if (n <= 0) return 0;
+    if (n < AO_HDRLEN || memcmp(buf, AO_HDR_MIRROR, (size_t)AO_HDRLEN) != 0)
+        return -1;            /* mirror drifted from the shipped header */
+    return n - AO_HDRLEN - 1; /* minus the trailing newline */
+}
+
+/* --- the real stored answers (exact bytes, pulled from the box store) --- */
+/* [12:00056] "explain paging in one line" -- 160 B, one markdown-bolded sentence.
+ * Its trailing "**" is why the closer set in g3_clean_answer_len must include '*'. */
+static const char T14_PAGING[] =
+    "**Paging is a memory management technique that divides physical memory and logical memory "
+    "into fixed-size blocks to allow efficient allocation and protection.**";
+/* [14:00059] "what is a page fault?" -- 256 B (at the store cap), first sentence ends at 196. */
+static const char T14_PAGEFAULT[] =
+    "A **page fault** is a type of interrupt that occurs in a **virtual memory system** when a "
+    "program tries to access a page of memory that is **not currently loaded into physical RAM "
+    "(main memory)**.\n\nIn simpler terms, it's the operating system's way of handl";
+/* [8:00042] the good CPU-cores answer, unrecallable since boot 8 -- first sentence ends at 168. */
+static const char T14_CPU[] =
+    "The short answer is: **A single-threaded program is fundamentally limited by the speed of "
+    "its single execution thread, regardless of how many CPU cores are available.**\n\nHere is a "
+    "detailed breakdown of why adding more CPU cores doesn't speed up a";
+/* route_decline_text() -- the string the old window recalled best. */
+static const char T14_DECLINE[] = "I don't track that.";
+/* [4:00010] a real thought-scratch record. */
+static const char T14_THOUGHT[] =
+    "<|channel>thought\nThinking Process:\n\n1.  **Analyze the Request:** The user is asking for "
+    "the \"JARVIS-MINIFLIP-7X reference value,\" based on \"notes from a previous answer.\"";
+/* [2:00002]-shape: pre-9d70f7f stop-token junk, and the ONLY sentence end sits
+ * immediately before it, so the '.' is followed by '"' then '<' -- not whitespace. */
+static const char T14_TURNTAIL_BARE[] =
+    "I do not have access to a specific, universally defined \"JARVIS-MINIFLIP-7X reference "
+    "value.\"<turn|><turn|><turn|><turn|><eos>";
+/* [1:00000]: same junk tail, but an EARLIER sentence qualifies, so the tail costs
+ * only the final sentence rather than the whole record. */
+static const char T14_TURNTAIL_SAVED[] =
+    "Unfortunately, I do not have access to a specific, universally defined \"JARVIS-MINIFLIP-7X "
+    "reference value.\" Please provide more context about what this reference value pertains to "
+    "so I can try to assist you.<turn|><turn|><turn|><eos>";
+
+static void test_per_lane_window(void)
+{
+    /* 1. THE WORKLOAD LANE DID NOT MOVE. The real 160-byte paging answer, whose
+     *    only sentence ends exactly at 160, still yields NOTHING at 120. This is
+     *    the assertion that pins the deployed baseline. */
+    CHECK(ao_clean(T14_PAGING, (int)sizeof T14_PAGING - 1, G3_R_MAX) == 0,
+          "T14.1 workload window (120) still DECLINES the 160 B paging answer");
+
+    /* 2. The same input, control-IN window: the whole sentence. */
+    CHECK(ao_clean(T14_PAGING, (int)sizeof T14_PAGING - 1, G3_R_MAX_CONTROL_IN) == 160,
+          "T14.2 control-IN window (256) recalls the paging answer at 160");
+
+    /* 3. The measured corpus cases, at both windows. */
+    CHECK(ao_clean(T14_PAGEFAULT, (int)sizeof T14_PAGEFAULT - 1, G3_R_MAX) == 0,
+          "T14.3a page-fault answer declined at 120");
+    CHECK(ao_clean(T14_PAGEFAULT, (int)sizeof T14_PAGEFAULT - 1, G3_R_MAX_CONTROL_IN) == 196,
+          "T14.3b page-fault answer recalls at 196");
+    CHECK(ao_clean(T14_CPU, (int)sizeof T14_CPU - 1, G3_R_MAX) == 0,
+          "T14.3c CPU-cores answer declined at 120");
+    CHECK(ao_clean(T14_CPU, (int)sizeof T14_CPU - 1, G3_R_MAX_CONTROL_IN) == 168,
+          "T14.3d CPU-cores answer recalls at 168");
+
+    /* 4. THE CONTROL. The canned decline is short, so widening must not change it.
+     *    Identical in both lanes => the change is ADDITIVE, not a rewrite. */
+    CHECK(ao_clean(T14_DECLINE, (int)sizeof T14_DECLINE - 1, G3_R_MAX) == 19,
+          "T14.4a canned decline still yields 19 at the workload window");
+    CHECK(ao_clean(T14_DECLINE, (int)sizeof T14_DECLINE - 1, G3_R_MAX_CONTROL_IN) == 19,
+          "T14.4b canned decline unchanged at the control-IN window");
+
+    /* 5. Widening must not open a path around the thought filter. */
+    CHECK(ao_clean(T14_THOUGHT, (int)sizeof T14_THOUGHT - 1, G3_R_MAX) == 0,
+          "T14.5a thought scratch rejected at 120");
+    CHECK(ao_clean(T14_THOUGHT, (int)sizeof T14_THOUGHT - 1, G3_R_MAX_CONTROL_IN) == 0,
+          "T14.5b thought scratch STILL rejected at 256 (filter runs before truncation)");
+
+    /* 6. The <turn|> interaction, pinned as a DECISION rather than an accident.
+     *    Pre-9d70f7f records carry stop-token junk; a terminator followed by '<'
+     *    is not a sentence end. Such records exist in the store today and age out
+     *    only over YEARS (4096 slots, human-paced channel), so this is live
+     *    behaviour, not history. */
+    CHECK(ao_clean(T14_TURNTAIL_BARE, (int)sizeof T14_TURNTAIL_BARE - 1, G3_R_MAX_CONTROL_IN) == 0,
+          "T14.6a stop-token tail with no earlier sentence yields 0 even at 256");
+    /* ...but an earlier complete sentence rescues the record, costing only the
+     * final one. Measured on the real [1:00000]; pinned so the two cases are not
+     * confused for each other. */
+    CHECK(ao_clean(T14_TURNTAIL_SAVED, (int)sizeof T14_TURNTAIL_SAVED - 1, G3_R_MAX_CONTROL_IN) == 108,
+          "T14.6b stop-token tail with an earlier sentence still recalls that sentence (108)");
+
+    /* 7. The per-lane parameter must actually be USED. If g3_build_preamble_answer_only
+     *    ignored r_max and read the constant directly, every assertion above that
+     *    depends on 256 would fail -- but make it explicit with a value the
+     *    constant cannot produce: an intermediate window yields an intermediate
+     *    result, so the parameter is demonstrably live rather than incidental. */
+    CHECK(ao_clean(T14_CPU, (int)sizeof T14_CPU - 1, 200) == 168,
+          "T14.7a r_max is honoured at an arbitrary window (200 -> 168)");
+    CHECK(ao_clean(T14_PAGEFAULT, (int)sizeof T14_PAGEFAULT - 1, 150) == 0,
+          "T14.7b r_max is honoured at an arbitrary window (150 -> declined)");
+    CHECK(ao_clean(T14_PAGING, (int)sizeof T14_PAGING - 1, 0) == 0,
+          "T14.7c r_max <= 0 is refused, never treated as unlimited");
 }
 
 int main(void)
@@ -484,6 +631,7 @@ int main(void)
     test_exact_only();
     test_answer_only();
     test_clean_truncation();
+    test_per_lane_window();
     printf("\n== Results: %d PASS, %d FAIL ==\n", pass, fail);
     return fail ? 1 : 0;
 }
