@@ -473,6 +473,18 @@ Same lesson as §10's three: `-Check` is worth writing because it is worth *runn
    the input it exists to reject. Proven non-vacuous with a **positive and negative control** against
    real sectors: an unused sector (md5 `bf619eac…` = 512 zero bytes) returns **0**, the live key
    sector returns **32**.
+3. **Every remote read is a PIPELINE, so its exit status was `cut`/`od`/`wc`'s — not `dd`'s.**
+   Measured by pointing the gates at a nonexistent device: `dd` fails, and the gate still returns
+   **exit 0**. Every gate still failed *closed*, because each compares against a concrete expected
+   value — but two **MISDIAGNOSED**, which in an incident-response tool is its own defect: a failed
+   read reported *"the key inside the box slot is ALL ZERO"* (the broken pipe yields an empty stream
+   and `wc -c` honestly counts 0), and W1 reported a mismatch against **`e3b0c442`** — which is
+   `sha256("")[:8]`, i.e. the signature of a read that returned no bytes at all. Fixed by prefixing
+   all six pipeline reads with **`set -o pipefail`** (verified: failed `dd` → exit 1; healthy reads
+   unchanged, still `a38577f1`), splitting the read-failure and all-zero verdicts into separate
+   messages, and naming `e3b0c442` explicitly wherever a fingerprint is reported. The two commands
+   whose exit codes actually matter — the `stat` size check and **the `dd` write itself** — are not
+   pipelines and always returned true status (confirmed: exit 1 on a missing file).
 
 ### 11.6 Honest ceiling — §8, now operative
 

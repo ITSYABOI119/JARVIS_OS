@@ -372,20 +372,20 @@ $KEY_MAGIC_HEX = Get-LeMagicHex $KEY_MAGIC
 # anywhere in an unquoted word, including after `if=`).
 
 function Get-CmdSectorMagic { param([uint64]$Lba)
-    'sudo -n dd if={0} bs=512 skip={1} count=1 status=none | od -An -tx1 -N4' -f $BoxDevice, $Lba }
+    'set -o pipefail; sudo -n dd if={0} bs=512 skip={1} count=1 status=none | od -An -tx1 -N4' -f $BoxDevice, $Lba }
 
 function Get-CmdSectorFp { param([uint64]$Lba)
     # tail -c +N is 1-based, so key offset 8 is "+9". Only the 8-hex-character
     # fingerprint crosses ssh -- never the key.
-    'sudo -n dd if={0} bs=512 skip={1} count=1 status=none | tail -c +{2} | head -c {3} | sha256sum | cut -c1-8' -f `
+    'set -o pipefail; sudo -n dd if={0} bs=512 skip={1} count=1 status=none | tail -c +{2} | head -c {3} | sha256sum | cut -c1-8' -f `
         $BoxDevice, $Lba, ($KEY_OFFSET + 1), $KEY_LEN }
 
 function Get-CmdSectorMd5 { param([uint64]$Lba)
-    'sudo -n dd if={0} bs=512 skip={1} count=1 status=none | md5sum | cut -c1-32' -f $BoxDevice, $Lba }
+    'set -o pipefail; sudo -n dd if={0} bs=512 skip={1} count=1 status=none | md5sum | cut -c1-32' -f $BoxDevice, $Lba }
 
 function Get-CmdSectorZero { param([uint64]$Lba)
     # "is the key all zero" without moving key bytes: count the non-zero ones.
-    'sudo -n dd if={0} bs=512 skip={1} count=1 status=none | tail -c +{2} | head -c {3} | tr -d \\000 | wc -c' -f `
+    'set -o pipefail; sudo -n dd if={0} bs=512 skip={1} count=1 status=none | tail -c +{2} | head -c {3} | tr -d \\000 | wc -c' -f `
         $BoxDevice, $Lba, ($KEY_OFFSET + 1), $KEY_LEN }
 
 function Get-CmdBoxBackup {
@@ -398,9 +398,9 @@ function Get-CmdBoxBackup {
 function Get-CmdBoxFileSize { param([string]$Name) 'stat -c%s $HOME/{0}' -f $Name }
 
 function Get-CmdBoxFileFp { param([string]$Name)
-    'tail -c +{0} $HOME/{1} | head -c {2} | sha256sum | cut -c1-8' -f ($KEY_OFFSET + 1), $Name, $KEY_LEN }
+    'set -o pipefail; tail -c +{0} $HOME/{1} | head -c {2} | sha256sum | cut -c1-8' -f ($KEY_OFFSET + 1), $Name, $KEY_LEN }
 
-function Get-CmdBoxFileMd5 { param([string]$Name) 'md5sum $HOME/{0} | cut -c1-32' -f $Name }
+function Get-CmdBoxFileMd5 { param([string]$Name) 'set -o pipefail; md5sum $HOME/{0} | cut -c1-32' -f $Name }
 
 function Get-CmdBoxWrite { param([string]$Name)
     'sudo -n dd if=$HOME/{0} of={1} bs=512 seek={2} count=1 conv=fsync' -f $Name, $BoxDevice, $KEY_LBA }
@@ -409,6 +409,21 @@ function Get-CmdBoxRemove { param([string]$Name)
     # rm first (the file is normally ours); sudo only if that fails. Never fails
     # the run -- cleanup reports, it does not abort a completed re-key.
     'rm -f $HOME/{0} 2>/dev/null || sudo -n rm -f $HOME/{0}' -f $Name }
+
+# sha256("")[:8]. A fingerprint gate whose `dd` produced NO BYTES hashes the
+# empty stream and returns exactly this, so seeing it means "the read returned
+# nothing", not "the key is wrong". Measured, not assumed: a deliberately failed
+# remote read returns 'e3b0c442'. `set -o pipefail` now makes such a read exit
+# non-zero as well, but the hint stays because it names the cause in one line.
+$FP_OF_EMPTY = 'e3b0c442'
+
+function Get-EmptyReadHint {
+    param([string]$Fp)
+    if ($Fp -eq $FP_OF_EMPTY) {
+        return ' -- NOTE: that is sha256 of an EMPTY read, so the sector read produced no bytes at all (permissions, wrong device, sudo). It is not a wrong key.'
+    }
+    return ''
+}
 
 function Get-HexOut {
     # Remote hex arrives space-separated from od; normalise HERE rather than
@@ -514,13 +529,21 @@ function Invoke-Preflight {
     Pass ('box slot magic OK at LBA {0}' -f $KEY_LBA)
 
     $nz = Invoke-Box -RemoteCommand (Get-CmdSectorZero -Lba $KEY_LBA)
-    if ($nz.Code -ne 0 -or [int]$nz.Out -eq 0) {
+    # Split deliberately: before `set -o pipefail` these two collapsed into one
+    # message, and a FAILED read reported "the key is ALL ZERO" -- a wrong
+    # diagnosis in an incident-response tool, because a broken pipeline yields
+    # an empty stream and `wc -c` then honestly counts 0.
+    if ($nz.Code -ne 0) {
+        Fail 11 ("the remote read of the key sector FAILED (exit {0}) -- this is a read failure, NOT a verdict about the key's contents" -f $nz.Code)
+        return $null
+    }
+    if ([int]$nz.Out -eq 0) {
         Fail 11 'the key inside the box slot is ALL ZERO -- the box treats that as no key (fail-closed) and the channel is already down'
         return $null
     }
     $fpBoxR = Invoke-Box -RemoteCommand (Get-CmdSectorFp -Lba $KEY_LBA)
     if ($fpBoxR.Code -ne 0 -or $fpBoxR.Out.Length -ne 8) {
-        Fail 11 ("could not fingerprint the box key: {0}" -f $fpBoxR.Out); return $null
+        Fail 11 ("could not fingerprint the box key (exit {0}, output '{1}'){2}" -f $fpBoxR.Code, $fpBoxR.Out, (Get-EmptyReadHint $fpBoxR.Out)); return $null
     }
     $fpBox = $fpBoxR.Out
     Pass ('FP_BOX = {0}' -f $fpBox)
@@ -835,7 +858,7 @@ Say ''
 Say '== post-write verification (read back from the device, not from the file) =='
 $fpDev = Invoke-Box -RemoteCommand (Get-CmdSectorFp -Lba $KEY_LBA)
 if ($fpDev.Code -ne 0 -or $fpDev.Out -ne $fpNew) {
-    Fail 60 ("W1 on-device fingerprint '{0}' != FP_NEW '{1}' -- roll back: jarvis_admin.bat -Rollback" -f $fpDev.Out, $fpNew)
+    Fail 60 ("W1 on-device fingerprint '{0}' != FP_NEW '{1}'{2} -- roll back: jarvis_admin.bat -Rollback" -f $fpDev.Out, $fpNew, (Get-EmptyReadHint $fpDev.Out))
 }
 Pass ('W1 on-device key fingerprint == FP_NEW ({0})' -f $fpNew)
 
