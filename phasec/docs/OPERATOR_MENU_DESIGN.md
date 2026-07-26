@@ -375,3 +375,112 @@ The box was on Ubuntu, so v1 was run against it rather than only self-tested:
 it easier to reach. v1 sidesteps that only because it is read-only. The moment a destructive option
 lands, §8 becomes the operative section, and defect 3 above is the standing argument for why each
 one needs to be exercised against real hardware rather than trusted because `-Check` printed it.
+
+---
+
+## 11. v2 (2026-07-26) — the first destructive slice, in a SEPARATE FILE: `jarvis_admin.ps1`
+
+§10 ended by saying that the moment a destructive option lands, §8 becomes the operative section.
+It has landed: the control-IN **re-key**. This section records the one structural decision that
+shaped everything about it, and the corrections the build produced.
+
+### 11.1 Why it is not a menu option — the invariant would have died
+
+v1's safety property is **not a promise, it is a grep** (§10, "The invariant"): neither
+`jarvis_menu.ps1` nor `jarvis_menu.bat` contains a `dd` output operand or a seek operand anywhere,
+so "v1 cannot write to the box" is mechanically checkable and a single match is the proof that it
+broke. **Re-keying requires both of those operands by definition.** Adding it to the menu would have
+traded a checkable invariant for a claim — and it would have done so silently, since the grep would
+simply start matching and nobody would notice that the thing it was protecting had changed meaning.
+
+So the destructive work went into a **separate file whose name says what it does**, and the
+invariant became **two-sided** — which says strictly more than it did before:
+
+```
+grep -nE 'of=|seek=' phasec/scripts/jarvis_menu.ps1 phasec/scripts/jarvis_menu.bat   -> NOTHING
+grep -nE 'if=|skip=' phasec/scripts/jarvis_menu.ps1                                  -> 2 (positive control)
+grep -nE 'of=|seek=' phasec/scripts/jarvis_admin.ps1                                 -> MATCHES (incl. the write)
+grep -nE 'of=|seek=' phasec/scripts/jarvis_admin.bat                                 -> NOTHING (4-line wrapper)
+```
+
+**Device writes live in exactly one file, and that file's name says so.** Neither menu file was
+modified by the v2 commit — that is itself part of the evidence. This is the read-only/destructive
+separation §6 anticipated, arriving in the shape §6 predicted.
+
+### 11.2 What v2 encodes
+
+The full re-key procedure, performed **by hand on 2026-07-26** and validated on real hardware
+(box `boot_id=44`, `answered=1 blocked=0 dropped=0 err=0`). That manual run is the reason to
+automate: it surfaced roughly ten checks the runbook does not have, and they are exactly the checks
+a human skips on the fifth repetition.
+
+Three modes, and **no default** — a destructive tool must do nothing on a bare invocation, so no
+arguments prints usage and exits 2. `-Check` validates and prints; `-Rekey` runs the procedure
+behind a typed `REKEY-WRITE-NOW`; `-Rollback` restores the previous pair from the `.BAK` artifacts.
+
+The gates that were **not** in the runbook, with why each earns its place:
+
+| gate | what it catches |
+|---|---|
+| **P4** | the two halves must already MATCH before starting. If they do not, the channel is *already* broken and re-keying is the WRONG action — it would overwrite the only copy of the box's current key |
+| **B1/B2** | backups verified by **fingerprint**, not size — a 512-byte file of zeros passes a size check. This is what makes the write safe to take |
+| **G4** | the key *inside* the slot must equal the key file. Without it a mismatched pair provisions "successfully" and the channel is dead with **no error anywhere** until a query gets no reply |
+| **T2** | whole-slot md5 equal on both sides, not "512 bytes arrived" — this project has silently corrupted binary through a text channel three times |
+| **W1** | read back from `/dev/nvme0n1`, **not** from the file that was just written |
+| **W3** | neighbours must survive: `LBA+1/+2` = JFLR, `LBA+3` = JCON. One wrong digit in `seek=` lands on the replay floor, the console address, the JACT audit store or the control-IN conversation store — damage that would not show up in the target sector at all |
+
+Every LBA, magic and version is **parsed from the firmware headers** (`control_key.h`,
+`control_floor.h`, `control_console.h`) — including the neighbour *offsets*, which are expressions
+(`CTRL_KEY_BASE_LBA + 1ULL`) and are parsed out of the expression rather than assumed. A constant
+typed into a script can drift from the firmware; a parsed one cannot.
+
+### 11.3 Correction to RUNBOOK-FULL-EXERCISE §5.1
+
+§5.1 says to "confirm the backup is exactly 32 bytes" and applies that to the **slot**. The key file
+is 32 B; the **slot is 512 B**. Checking a slot for 32 bytes would pass on a truncated backup — i.e.
+the check as written could green-light an unrestorable backup, which is the one thing a backup check
+exists to prevent. v2 encodes the correct size per artifact and fingerprints both.
+
+### 11.4 Cleanup is a gate, not a courtesy
+
+The manual run left six stray artifacts. The one that mattered was **neither old key**: it was the
+`scp`'d scratch slot in the **box's** home directory — a plaintext copy of the **currently live** key
+on a dual-booting LAN machine. The security model is that the key exists in exactly two places, the
+JKEY sector and the Main PC key file; a third readable copy widens the live key's exposure for no
+benefit. Old-key artifacts are inert by comparison, because the box no longer accepts that key and a
+frame signed with it is dropped at HMAC.
+
+**Cleanup runs only after the final gate passes**, so an aborted run never destroys its own rollback
+path. `-KeepBackups` retains the old pair; delete is the default, because the rollback purpose is
+discharged the moment the new pair verifies on both halves. Stated plainly in the output: `rm`
+unlinks, it does not securely erase, and on an SSD overwriting would not guarantee erasure either.
+
+### 11.5 Two defects the build found — again, by RUNNING it
+
+Same lesson as §10's three: `-Check` is worth writing because it is worth *running*.
+
+1. **Embedded double quotes do not survive PowerShell 5.1's native-argument escaping.**
+   `tr -d " \n"` and `cut -d" " -f1` reached the box with their quotes eaten and **silently became
+   no-ops** — the first `-Check` printed a slot magic of `59 45 4b 4a` (unstripped) against an
+   expected `59454b4a`. It failed *loudly* here only by luck of comparing an exact string; a check
+   written to compare a substring would have passed vacuously forever. Fixed by removing every
+   embedded double quote from every remote command: strip whitespace **locally**, take fixed-width
+   hash prefixes with `cut -c` instead of a delimiter, and leave `$HOME/<name>` unquoted (the path
+   has no spaces, and `$VAR` expansion — unlike tilde — happens anywhere in an unquoted word,
+   including after `if=`).
+2. **The all-zero-key gate could itself have been vacuous.** It counts non-`\000` bytes, and if the
+   `tr` no-op'd the count would be non-zero for an all-zero key — i.e. the gate would pass on exactly
+   the input it exists to reject. Proven non-vacuous with a **positive and negative control** against
+   real sectors: an unused sector (md5 `bf619eac…` = 512 zero bytes) returns **0**, the live key
+   sector returns **32**.
+
+### 11.6 Honest ceiling — §8, now operative
+
+Wrapping a destructive command in a script does not make it less destructive; **it makes it easier
+to reach.** Nothing about `jarvis_admin.ps1` changes that. What makes it safe is that every gate is a
+**hard abort** rather than a warning, that the write sits behind a typed confirmation, and that
+nothing live is touched until the new pair is fully verified in a scratch directory. `-Check` is not
+only the CI substitute (a Windows `.ps1` cannot run in this repo's Linux CI) but the **anti-rot**
+mechanism: re-keying is incident response, not rotation, so this script will sit unused for long
+stretches and must be verifiable on demand — and it verifies by really reading the box, not by
+printing.
