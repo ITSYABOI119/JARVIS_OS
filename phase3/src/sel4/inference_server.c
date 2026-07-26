@@ -585,6 +585,19 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
     static int output_ids[PB_GEN_MAX_CONTROL_IN > PB_GEN_MAX_WORKLOAD
                           ? PB_GEN_MAX_CONTROL_IN : PB_GEN_MAX_WORKLOAD];
     int n_gen = 0;
+#if JARVIS_CONTROL_IN_PROBE
+    /* #6 THOUGHT-COST MEASUREMENT (probe-only). Index of the channel CLOSER within
+     * output_ids, or -1 if the model never emitted one.
+     *
+     * 101 is verified, not remembered: dumped straight out of the deployed GGUF's
+     * vocab -- 98 "<|think|>", 100 "<|channel>", 101 "<channel|>", 106 "<turn|>"
+     * (which is also the declared eos). Hardcoding a token id from memory is the
+     * habit that produced the <|think|> placement bug, so this one was checked.
+     *
+     * The closer is the split point that makes separate think/answer budgets
+     * implementable at all, which is exactly why it is what gets measured. */
+    int pb_close_at = -1;
+#endif
     /* v4 live tok/s: the generation loop is ALWAYS timed (two RDTSC reads — immaterial vs the
      * ~seconds-long loop). Raw tokens+cycles go to PA via MSG_INFER_STATS; PA converts to tok/s.
      * The gated M1_MEASURE MSG_DEBUG report below is unchanged (offline-conversion text form). */
@@ -614,6 +627,9 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
         if (next == 1 /* <eos> */ || (tok->eos_id > 0 && next == tok->eos_id))
             break;
 
+#if JARVIS_CONTROL_IN_PROBE
+        if (next == 101 /* <channel|> */ && pb_close_at < 0) pb_close_at = n_gen;
+#endif
         output_ids[n_gen++] = next;
 #if JARVIS_DBG_PB
         {
@@ -648,6 +664,29 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
         if (n_gen >= max_tokens)              puts_serial("CAP");
         else if (state->pos >= state->max_seq_len) puts_serial("KV-FULL");
         else                                  puts_serial("MODEL-ENDED-TURN");
+        /* #6: the think/answer split. think counts tokens 0..closer INCLUSIVE (the
+         * closer is thought scaffolding, not answer text); answer is the remainder.
+         * closer=none means the model never closed the channel -- thought ran to the
+         * stop, so answer=0. That is a RESULT, not a failed run. */
+        {
+            /* THREE cases, and conflating them is how instrumentation lies:
+             *   closer seen            -> think = 0..closer inclusive, answer = rest
+             *   no closer, THINKING=1  -> the thought never closed: ALL tokens are thought
+             *   no closer, THINKING=0  -> thinking mode is off: ALL tokens are answer
+             * The first draft of this line reported think=n_gen whenever the closer was
+             * absent, which made a perfectly normal THINKING=0 run read as 100% thought. */
+            int think, answer;
+            if (pb_close_at >= 0) { think = pb_close_at + 1; answer = n_gen - think; }
+#if JARVIS_THINKING
+            else                  { think = n_gen; answer = 0; }
+#else
+            else                  { think = 0;     answer = n_gen; }
+#endif
+            puts_serial(" think="); put_dec((uint32_t)think);
+            puts_serial(" answer="); put_dec((uint32_t)answer);
+            puts_serial(" closer=");
+            puts_serial(pb_close_at >= 0 ? "yes" : "none");
+        }
         seL4_DebugPutChar(10);
     }
 #endif
