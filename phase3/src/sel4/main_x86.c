@@ -2989,9 +2989,9 @@ static void pa_ctrl_gate(const control_result_t *cres)
      * notes, and the model still answers); revisit at the B flip if the mixed case ever matters. */
     /* M2: sized FROM the reply cap, not a round number — this is PA's chunk accumulator, and at
      * 1024 it would have clamped a 1426-byte answer to 1023 before ctrl_send_reply ever saw it.
-     * It is a FIFTH limit in the chain (text_out / this / CTRL_REPLY_TEXT_MAX / reply_frame / the
-     * ring); raising any subset just moves where the answer gets cut. Deriving it means it can
-     * never drift from the reply cap again. */
+     * One of SIX limits in the chain — output_ids (the generated-token STACK array, the one nobody
+     * lists) / text_out / this / CTRL_REPLY_TEXT_MAX / reply_frame / the ring; raising any subset
+     * just moves where the answer gets cut. Deriving it means it cannot drift from the cap again. */
     char resp[CTRL_REPLY_TEXT_MAX + 1]; int roff = 0;
     int got = 0, faulted = 0;
     int served_locally = 0;
@@ -3157,9 +3157,9 @@ static void pa_ctrl_gate(const control_result_t *cres)
 #if !JARVIS_ROUTING
     /* M2: sized FROM the reply cap, not a round number — this is PA's chunk accumulator, and at
      * 1024 it would have clamped a 1426-byte answer to 1023 before ctrl_send_reply ever saw it.
-     * It is a FIFTH limit in the chain (text_out / this / CTRL_REPLY_TEXT_MAX / reply_frame / the
-     * ring); raising any subset just moves where the answer gets cut. Deriving it means it can
-     * never drift from the reply cap again. */
+     * One of SIX limits in the chain — output_ids (the generated-token STACK array, the one nobody
+     * lists) / text_out / this / CTRL_REPLY_TEXT_MAX / reply_frame / the ring; raising any subset
+     * just moves where the answer gets cut. Deriving it means it cannot drift from the cap again. */
     char resp[CTRL_REPLY_TEXT_MAX + 1]; int roff = 0;
     int got = 0, faulted = 0;
 #endif

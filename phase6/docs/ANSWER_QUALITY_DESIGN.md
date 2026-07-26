@@ -226,13 +226,19 @@ not a side effect.
 
 ## 3. D2 — transport
 
-> **CORRECTED AT IMPLEMENTATION 2026-07-26 — there are FIVE ceilings, not three, and the MTU number
+> **CORRECTED AT IMPLEMENTATION 2026-07-26 — there are SIX ceilings, not three, and the MTU number
 > below was wrong.** The missing one is **`char resp[1024]` in `pa_ctrl_gate`** (`main_x86.c`, both
 > the ROUTING and `!ROUTING` paths) — PA's own chunk accumulator, which would have clamped a
 > 1426-byte answer to 1023 *before* `ctrl_send_reply` ever saw it. Raising any subset just moves
-> where the answer is cut. **And the MTU arithmetic is 1426, not ~1412:** the MTU is the maximum IP
-> DATAGRAM, so the Ethernet header is NOT subtracted from the 1500 — `net_udp.c:25` already encodes
-> exactly this as `UDP_MAX_PAYLOAD = 1500 - 20 - 8 = 1472`, and 1472 − 46 JRPL overhead = **1426**.
+> where the answer is cut. **The SIXTH is `int output_ids[64]` in `handle_query`** — a STACK array
+> holding the generated tokens. It is the one nobody lists, and the only one that did not merely
+> risk corruption but actively corrupted (see §12).
+>
+> **And the MTU arithmetic was misattributed as well as wrong.** Precisely: the MTU is 1500 (the
+> maximum IP DATAGRAM — the Ethernet header is NOT subtracted from it). The CONSTANT in the code is
+> **`UDP_MAX_PAYLOAD = 1472`** (`net_udp.c:25` = `1500 - IP_HDR_LEN - UDP_HDR_LEN`). **1426 is
+> neither of those** — it is the max *TEXT*, i.e. `UDP_MAX_PAYLOAD 1472 − 46 JRPL overhead`
+> (10 hdr + 4 crc + 32 tag). The earlier ~1412 subtracted the Ethernet header twice.
 > The frame on the wire is 1514, inside the driver's `I211_MAX_FRAME_SIZE` 1536. All five now move
 > together, four of them DERIVED from `CTRL_REPLY_TEXT_MAX` so they cannot drift again, and
 > `test_control_reply.c` T7 pins `CTRL_REPLY_MAX_LEN <= 1472` so a future bump fails the build
@@ -514,7 +520,7 @@ intact, mode 2 (fail every send) produced
 `[PB] RESPONSE TRUNCATED: … undelivered bytes=263 (answer is short but CONTIGUOUS — no hole)` and
 0 FATAL.
 
-**Commit 2 — five ceilings, not three, and the MTU is 1426.** See §3's inline correction. The one
+**Commit 2 — six ceilings, not three; `UDP_MAX_PAYLOAD` is 1472 and the max TEXT is 1426.** See §3's inline correction. The one
 the brief's table missed was `char resp[1024]` in `pa_ctrl_gate` — PA's own accumulator, which would
 have clamped a 1426 B answer to 1023 before the reply builder saw it. Four of the five are now
 DERIVED from `CTRL_REPLY_TEXT_MAX`. The receiver had to move in lockstep because it **rejects** a
