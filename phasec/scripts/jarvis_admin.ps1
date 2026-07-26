@@ -296,35 +296,42 @@ function Write-Transcript {
 # Mode selection. No default, and exactly one.
 # ---------------------------------------------------------------------------
 $modeCount = @($Check, $Rekey, $Rollback | Where-Object { $_ }).Count
+$MenuMode = $false
 if ($modeCount -eq 0) {
-    Say ''
-    Say 'jarvis_admin.ps1 -- the DESTRUCTIVE half of the operator tooling (control-IN re-key).'
-    Say ''
-    Say '  jarvis_admin.bat -Check       validate everything, print what each step would run,'
-    Say '                                change nothing. Safe at any time. Start here.'
-    Say '  jarvis_admin.bat -Rekey       generate + provision a new key pair (typed confirmation)'
-    Say '  jarvis_admin.bat -Rollback    restore the previous pair from the .BAK artifacts'
-    Say ''
-    Say '  -KeepBackups   keep the old pair after a successful re-key (default: delete)'
-    Say '  -KeyFile PATH  the live 32-byte key (default %USERPROFILE%\.jarvis\control_key.bin)'
-    Say ''
-    Say 'No mode was given. A destructive tool does nothing on a bare invocation.'
-    Say ''
-    Write-Transcript -Command 'invoked with no mode (usage printed)' -ExitCode 2
-    exit 2
+    # A MENU IS COMPATIBLE WITH "never act on a bare invocation", because a menu
+    # ASKS. Nothing here runs until an option is chosen, and every write still
+    # goes through the typed REKEY-WRITE-NOW in the mode that performs it. What
+    # changed is only how the tool is REACHED: every invocation until now needed
+    # a fully-typed absolute path plus flags, and that produced three consecutive
+    # shell failures in a row (a .bat is not on Git Bash's PATH, backslashes are
+    # escapes in bash, and py cannot parse batch).
+    if ([Console]::IsInputRedirected) {
+        # Read-Host returns EMPTY IMMEDIATELY under a redirect rather than
+        # blocking -- jarvis_menu.ps1 shipped an infinite loop from exactly this
+        # (~10,000 iterations in three minutes). Refuse before the loop exists.
+        Write-Host '  FAIL: the menu needs a real console -- stdin is redirected here, so no choice can be read.' -ForegroundColor Red
+        Write-Host '        Double-click jarvis_admin.bat, or pass a mode explicitly:' -ForegroundColor Red
+        Write-Host '          jarvis_admin.bat -Check     (validates everything, runs nothing)' -ForegroundColor Red
+        Write-Transcript -Command 'menu refused: stdin redirected' -ExitCode 4
+        exit 4
+    }
+    $MenuMode = $true
+    $script:mode = 'menu'
 }
 if ($modeCount -gt 1) {
     Write-Host '  FAIL: -Check, -Rekey and -Rollback are mutually exclusive -- pick one' -ForegroundColor Red
     Write-Transcript -Command 'more than one mode given' -ExitCode 3
     exit 3
 }
-$script:mode = if ($Check) { 'check' } elseif ($Rekey) { 'rekey' } else { 'rollback' }
+if (-not $MenuMode) {
+    $script:mode = if ($Check) { 'check' } elseif ($Rekey) { 'rekey' } else { 'rollback' }
+}
 
 # The confirmed modes prompt. With stdin redirected Read-Host returns empty
 # immediately rather than blocking (jarvis_menu.ps1 shipped an infinite loop from
 # exactly this), and an empty answer must never be able to satisfy a
 # confirmation. Refuse up front and name the mode that IS non-interactive.
-if (-not $Check -and -not $Yes -and [Console]::IsInputRedirected) {
+if (-not $MenuMode -and -not $Check -and -not $Yes -and [Console]::IsInputRedirected) {
     Write-Host '  FAIL: stdin is redirected, so the typed confirmation cannot be answered.' -ForegroundColor Red
     Write-Host '        Run this in a console (double-click jarvis_admin.bat), or use -Check,' -ForegroundColor Red
     Write-Host '        which validates everything and runs nothing.' -ForegroundColor Red
@@ -749,6 +756,145 @@ function Invoke-CheckDryRun {
     Info 'NOT exercised, and cannot be without writing the device: the dd write itself (of=/seek=)'
     return $ok
 }
+
+# ---------------------------------------------------------------------------
+# The chooser (bare invocation only). It owns SELECTION, never logic: each
+# option RE-INVOKES this same script with explicit flags, so the chosen mode
+# runs the identical code path the CLI runs and cannot drift from it. That is
+# jarvis_menu.ps1's R1 rule applied to ourselves.
+# ---------------------------------------------------------------------------
+function Get-MenuStatus {
+    # Read-only probe. Deliberately does NOT call Fail: the menu must render in
+    # every state, including the broken ones it exists to warn about.
+    $st = [pscustomobject]@{ BoxUp = $false; FpBox = ''; FpPc = ''; State = 'UNREACHABLE'; Detail = '' }
+    if (Test-Path -LiteralPath $KeyFile) {
+        try {
+            $kb = [IO.File]::ReadAllBytes($KeyFile)
+            if ($kb.Length -eq [int]$KEY_LEN) { $st.FpPc = Get-FpFromBytes $kb }
+            else { $st.FpPc = ('BAD({0}B)' -f $kb.Length) }
+        } catch { $st.FpPc = 'UNREADABLE' }
+    } else { $st.FpPc = 'MISSING' }
+
+    $probe = Invoke-Box -RemoteCommand 'true'
+    if ($probe.Code -ne 0) {
+        $st.Detail = 'ssh did not answer -- the box is most likely booted into JARVIS (seL4 has no sshd), or off'
+        return $st
+    }
+    $st.BoxUp = $true
+    $fp = Invoke-Box -RemoteCommand (Get-CmdSectorFp -Lba $KEY_LBA)
+    $st.FpBox = if ($fp.Code -eq 0 -and $fp.Out.Length -eq 8) { $fp.Out } else { 'UNREADABLE' }
+
+    if ($st.FpBox -eq 'UNREADABLE' -or $st.FpPc -notmatch '^[0-9a-f]{8}$') {
+        $st.State = 'DIFFER'; $st.Detail = 'one half could not be read'
+    } elseif ($st.FpBox -eq $st.FpPc) {
+        $st.State = 'MATCH'
+    } else {
+        $st.State  = 'DIFFER'
+        $st.Detail = 'the channel is ALREADY broken -- re-keying is the wrong action here; use Rollback'
+    }
+    return $st
+}
+
+function Invoke-Menu {
+    $psExe = 'powershell.exe'
+    try { $pp = (Get-Process -Id $PID).Path; if ($pp) { $psExe = $pp } } catch {}
+    # Forwarded verbatim so a child runs against exactly the values this
+    # invocation was given, not the defaults.
+    $common = @('-KeyFile', $KeyFile, '-BoxHost', $BoxHost, '-Port', "$Port")
+
+    $choices = @(
+        [pscustomobject]@{ Key='1'; Label='Check';                Note='full validation + dry run; writes nothing to the device'; CArgs=@('-Check');                NeedsSsh=$false; Terminal=$false }
+        [pscustomobject]@{ Key='2'; Label='Re-key  KEEP backups'; Note='retains the old key (needed to prove revocation)';        CArgs=@('-Rekey','-KeepBackups'); NeedsSsh=$true;  Terminal=$true  }
+        [pscustomobject]@{ Key='3'; Label='Re-key';               Note='deletes backups after success (default behaviour)';       CArgs=@('-Rekey');                NeedsSsh=$true;  Terminal=$true  }
+        [pscustomobject]@{ Key='4'; Label='Rollback';             Note='restore both halves from the .BAK pair';                  CArgs=@('-Rollback');             NeedsSsh=$true;  Terminal=$true  }
+    )
+
+    Say ''
+    Say '  probing the box...'
+    $st = Get-MenuStatus
+    $empties = 0
+
+    while ($true) {
+        $stateColor = switch ($st.State) { 'MATCH' { 'Green' } 'DIFFER' { 'Red' } default { 'Yellow' } }
+        Say ''
+        Say '================= jarvis_admin -- control-IN re-key (DESTRUCTIVE) ================='
+        Write-Host -NoNewline '  box: '
+        if ($st.BoxUp) { Write-Host 'UBUNTU (ssh up)' -ForegroundColor Green -NoNewline }
+        else { Write-Host 'UNREACHABLE' -ForegroundColor Yellow -NoNewline }
+        Write-Host -NoNewline '      halves: '
+        if ($st.BoxUp) {
+            Write-Host ('{0} (box {1} / pc {2})' -f $st.State, $st.FpBox, $st.FpPc) -ForegroundColor $stateColor
+        } else {
+            Write-Host ('UNKNOWN (pc {0})' -f $st.FpPc) -ForegroundColor Yellow
+        }
+        if ($st.Detail) { Write-Host ('  {0}' -f $st.Detail) -ForegroundColor $stateColor }
+        Say ''
+        foreach ($c in $choices) {
+            $line = '   {0}  {1,-22} {2}' -f $c.Key, $c.Label, $c.Note
+            # Shown DISABLED with the reason, never hidden: a hidden option reads
+            # as a missing feature (jarvis_menu.ps1's R3).
+            if ($c.NeedsSsh -and -not $st.BoxUp) { Write-Host ($line + '   [unavailable]') -ForegroundColor DarkGray }
+            else { Write-Host $line }
+        }
+        if (-not $st.BoxUp) {
+            Say ''
+            Write-Host '   ^ unavailable: these need ssh, and the box is not answering.' -ForegroundColor DarkGray
+            Write-Host '     If it is booted into JARVIS that is exactly the state in which a re-key must' -ForegroundColor DarkGray
+            Write-Host '     NOT proceed -- boot it into Ubuntu first. Check still runs and reports.' -ForegroundColor DarkGray
+        }
+        Say ''
+        Say '   r  Refresh status'
+        Say '   q  Quit'
+        Say '=================================================================================='
+
+        $pick = Read-Host 'choose'
+        $pick = "$pick".Trim().ToLower()
+
+        if ($pick -eq '') {
+            # IsInputRedirected is FALSE for a console driven to EOF (Ctrl+Z), so
+            # the guard at the top does not cover it and this does.
+            $empties++
+            if ($empties -ge 3) { Say '  empty input three times running (stdin at EOF?) -- exiting rather than spinning.'; return 0 }
+            continue
+        }
+        $empties = 0
+
+        if ($pick -eq 'q' -or $pick -eq 'quit') { Write-Transcript -Command 'menu:q -> quit (nothing was run)' -ExitCode 0; return 0 }
+        if ($pick -eq 'r') { Say ''; Say '  probing the box...'; $st = Get-MenuStatus; continue }
+
+        $c = $choices | Where-Object { $_.Key -eq $pick } | Select-Object -First 1
+        if (-not $c) { Write-Host ('  not an option: "{0}"' -f $pick) -ForegroundColor Yellow; continue }
+        if ($c.NeedsSsh -and -not $st.BoxUp) {
+            Write-Host '  unavailable while the box is unreachable -- boot it into Ubuntu, then press r.' -ForegroundColor Yellow
+            continue
+        }
+
+        $argList = @('-NoProfile','-ExecutionPolicy','Bypass','-File', $PSCommandPath) + $c.CArgs + $common
+        $resolved = ($c.CArgs -join ' ')
+        # Record the SELECTION and the RESOLVED action: "which option did I
+        # actually pick" is the first question when something goes wrong.
+        Write-Transcript -Command ('menu:{0} -> {1}' -f $c.Key, $resolved) -ExitCode 'started'
+        Say ''
+        Say ('  running: jarvis_admin.ps1 {0}' -f $resolved)
+        Say ''
+        & $psExe @argList
+        $rc = $LASTEXITCODE
+        Write-Transcript -Command ('menu:{0} -> {1}' -f $c.Key, $resolved) -ExitCode $rc
+
+        if ($c.Terminal) {
+            # Re-keys and rollbacks are terminal: returning to a menu after one
+            # invites a second run against state that just changed underneath it.
+            Say ''
+            Say ('  {0} finished with exit code {1}. This menu does not loop after a write.' -f $c.Label, $rc)
+            return $rc
+        }
+        Say ''
+        Say ('  Check finished (exit {0}).' -f $rc)
+        $st = Get-MenuStatus
+    }
+}
+
+if ($MenuMode) { exit (Invoke-Menu) }
 
 # ===========================================================================
 # -Check
