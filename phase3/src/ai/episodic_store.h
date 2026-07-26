@@ -78,10 +78,41 @@ _Static_assert(sizeof(epi_store_header_t) <= 512, "episodic header must fit one 
 /* Action / route codes — the routes that produce a memory */
 #define EPI_ACT_CACHE       1
 #define EPI_ACT_INFER       2
+/* THE RECALL PREDICATE IS "WHO PRODUCED THE ANSWER", and these two values are how it
+ * is expressed. An answer the MODEL generated is a memory; an answer PA RENDERED --
+ * from live box state (SYSFACTS) or a canned string (DECLINE) -- is not.
+ *
+ * Measured 2026-07-26 over the real control-IN store (62 records): 9 were the canned
+ * "I don't track that." and ALL NINE recalled, because 19 bytes with a full stop clears
+ * the complete-sentence rule trivially. Two of those nine are the 6-6 routing FALSE
+ * POSITIVES from the aborted flip, so a variant of that question could have a
+ * known-wrong answer injected as its remembered context. A further 12 were SYSFACTS
+ * ("up 476 seconds") which decline only BY ACCIDENT -- nothing intends them to be
+ * unrecallable, they simply lack a terminator. Phrase one "Uptime is 476 seconds." and
+ * stale box state becomes recallable.
+ *
+ * Tag 4 is a PREREQUISITE for C/M2, not hygiene: once semantic matching drops the
+ * exact-key requirement, a stale system fact can land on an unrelated question. */
 #define EPI_ACT_CONTROL_IN  3   /* 6-5/M3-2a: an inbound control-IN Q&A. Excluded from cache-growth
                                  * promotion + retrieval-sourcing + semantic distill BY THE TAG VALUE
                                  * ALONE (all three filter == EPI_ACT_INFER) — the O-Q12 store-
                                  * contamination surface is closed by construction, no extra filter. */
+#define EPI_ACT_CONTROL_IN_LOCAL 4  /* an inbound control-IN turn PA answered ITSELF — 6-6 SYSFACTS
+                                     * (rendered from live box state) or the canned DECLINE. Written
+                                     * and auditable like any other turn, so the corpus is preserved
+                                     * and C/M2 can consult these later if it ever wants them; simply
+                                     * NEVER RECALLABLE. Costs no record-format change: `action` is
+                                     * already uint16 and the record stays exactly 512 B.
+                                     *
+                                     * It works AT THE BOOT SCAN, which is the hard half — the scan
+                                     * rebuilds the index from stored bytes and cannot know what route
+                                     * a turn took, but the tag is STORED, so it filters correctly
+                                     * with no extra state.
+                                     *
+                                     * A FAILED turn (EPI_OUT_ERROR — degraded/timeout/fault) stays
+                                     * tag 3 whatever its route: it has no answer at all, and tagging
+                                     * it 4 would conflate "answered from its own state" with "failed
+                                     * to answer". Different facts. */
 
 /* Outcome codes */
 #define EPI_OUT_OK       0

@@ -583,6 +583,79 @@ static void test_index_no_shadow(void)
     PASS("index no-shadow: a FAILED turn never masks the good answer under the same key");
 }
 
+
+/* ================================================================
+ * T11 — a LOCALLY-SERVED turn must never SHADOW the model's answer.
+ *
+ * This is the same shadowing hazard T10 covers for FAILED turns, arriving by a new
+ * route, and it is LIVE rather than hypothetical: the 6-6 false-positive question
+ * ("in one sentence, why doesn't adding more CPU cores...") was wrongly DECLINEd
+ * before 5224a85 and is answered by the model after it. Both therefore exist in the
+ * real store under ONE key, and the decline is the NEWER of the two.
+ *
+ * That is worse than the failed-turn case, because a decline LOOKS recallable: 19
+ * bytes, a full stop, no thought marker -- it passes every text-shaped filter. Only
+ * the stored action tag distinguishes it.
+ *
+ * The tag being STORED is what makes the BOOT SCAN work: the scan rebuilds the index
+ * from bytes on disk and cannot know what route a turn took.
+ * ================================================================ */
+static void test_local_no_shadow(void)
+{
+    memset(mock_disk, 0, sizeof(mock_disk));
+
+    epi_store_t s;
+    ASSERT(epi_store_init(&s, mock_read, mock_write, EPI_STORE_BASE_LBA, 8U) == 0, "init");
+
+    /* One question, asked twice: the model answered it, then routing served it locally.
+     * Same text => same query_key => the shadowing hazard. */
+    const char *q = "in one sentence, why doesn't adding more CPU cores speed up a program?";
+    ASSERT(episodic_log(&s, 10, q, EPI_ACT_CONTROL_IN, EPI_OUT_OK, 0,
+                        "A single-threaded program is limited by one thread.") == 0,
+           "append the MODEL answer (tag 3)");
+    ASSERT(episodic_log(&s, 20, q, EPI_ACT_CONTROL_IN_LOCAL, EPI_OUT_OK, 0,
+                        "I don't track that.") == 0,
+           "append the locally-served DECLINE (tag 4), NEWER");
+    ASSERT(epi_store_count(&s) == 2, "both turns stored -- the corpus is preserved, not discarded");
+
+    epi_record_t r;
+    ASSERT(epi_store_read(&s, 0, &r) == 0, "read logical 0");
+    const uint64_t key = r.query_key;
+
+    /* The tag SURVIVES the round-trip. Without this the boot scan could not filter. */
+    ASSERT(epi_store_read(&s, 1, &r) == 0, "read logical 1");
+    ASSERT(r.action == EPI_ACT_CONTROL_IN_LOCAL, "the LOCAL tag round-trips through the store");
+    ASSERT(r.query_key == key, "and it shares the model answer's key -- the hazard is real");
+
+    /* (A) TEETH — an index that ignores `action` (what both index sites did before this
+     * commit) holds the decline, newest-wins returns it, and the fetch filter then
+     * rejects it: the good answer is shadowed and the recall reads hit=0 forever. */
+    epi_index_entry_t idx_bug[2] = { { key, 0u }, { key, 1u } };
+    ASSERT(epi_index_lookup(idx_bug, 2, key) == 1,
+           "action-blind index: newest-wins returns the LOCALLY-SERVED turn");
+    ASSERT(g3_candidate_usable(r.action, r.outcome, r.resp_len,
+                               EPI_ACT_CONTROL_IN, EPI_OUT_OK) == 0,
+           "the fetch filter rejects it -> the recall MISSES (the shadowing defect)");
+    /* ...and it is REJECTED PURELY ON THE TAG: at tag 3 that identical text is usable,
+     * so nothing else in the record could be doing the work. */
+    ASSERT(g3_candidate_usable(EPI_ACT_CONTROL_IN, r.outcome, r.resp_len,
+                               EPI_ACT_CONTROL_IN, EPI_OUT_OK) == 1,
+           "the same bytes at tag 3 ARE usable -> only the tag excludes it");
+
+    /* (B) The FILTERED index -- what ctrl_epi_write() and the boot scan now build, both
+     * by CALLING g3_candidate_usable rather than restating it -- never holds the
+     * decline, so the lookup reaches the model's answer. */
+    epi_index_entry_t idx_ok[1] = { { key, 0u } };
+    ASSERT(epi_index_lookup(idx_ok, 1, key) == 0, "filtered index: lookup finds the MODEL turn");
+    ASSERT(epi_store_read(&s, 0, &r) == 0, "read the model turn");
+    ASSERT(r.action == EPI_ACT_CONTROL_IN, "it is the model-generated turn");
+    ASSERT(g3_candidate_usable(r.action, r.outcome, r.resp_len,
+                               EPI_ACT_CONTROL_IN, EPI_OUT_OK) == 1,
+           "usable filter ACCEPTS it -> the recall HITS the real answer");
+
+    PASS("local no-shadow: a rendered answer is stored and auditable, but never recalled");
+}
+
 int main(int argc, char **argv)
 {
     if (argc >= 3 && strcmp(argv[1], "--dump") == 0)
@@ -600,6 +673,7 @@ int main(int argc, char **argv)
     test_index_lookup();
     test_two_instances_no_collision();
     test_index_no_shadow();
+    test_local_no_shadow();
 
     printf("\nResults: %d PASS, %d FAIL\n", tests_passed, tests_failed);
     return tests_failed > 0 ? 1 : 0;

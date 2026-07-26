@@ -615,6 +615,95 @@ static void test_per_lane_window(void)
           "T14.7c r_max <= 0 is refused, never treated as unlimited");
 }
 
+
+/* ================================================================
+ * T15 — a LOCALLY-SERVED answer is not a memory (EPI_ACT_CONTROL_IN_LOCAL = 4).
+ *
+ * MEASURED over the real control-IN store (62 records, 2026-07-26), swept with the
+ * SHIPPED preamble builder:
+ *
+ *     canned DECLINE ("I don't track that.")   9   ALL NINE RECALLED
+ *     SYSFACTS ("up 476 seconds")             12   declined BY ACCIDENT only
+ *     model-generated                         41   13 recalled
+ *
+ * Two of those nine DECLINE records are the 6-6 routing FALSE POSITIVES from the
+ * aborted flip, so a variant of that question could be handed "I don't track that."
+ * as its remembered context -- a known-wrong answer fed back as memory. And the
+ * SYSFACTS half is safe only by luck: nothing intends "up 476 seconds" to be
+ * unrecallable, it merely lacks a terminator. Phrase it "Uptime is 476 seconds." and
+ * stale box state becomes recallable.
+ *
+ * The predicate: an answer the box RENDERED (live state or a canned string) is not a
+ * memory; only an answer the MODEL generated is.
+ *
+ * THE SAME PREDICATE GUARDS THE INDEX. main_x86.c's two index sites now CALL
+ * g3_candidate_usable rather than restating it, so everything asserted here holds for
+ * indexing too -- including at the BOOT SCAN, which cannot see what route a turn took
+ * and must rely on the stored tag.
+ * ================================================================ */
+static void test_local_not_a_memory(void)
+{
+    /* The canned DECLINE text, verbatim from the store. It is PERFECTLY recallable on
+     * every other axis -- 19 bytes, a full stop, no thought marker -- so if it is
+     * excluded, only the TAG can be doing the work. That is what makes these
+     * assertions impossible to pass with the tagging removed. */
+    static const char DECLINE[] = "I don't track that.";
+    CHECK(ao_clean(DECLINE, (int)sizeof DECLINE - 1, G3_R_MAX_CONTROL_IN) == 19,
+          "T15.0 the canned decline IS textually recallable (19 B) -- so only the tag can exclude it");
+
+    /* 1. THE CORE ASSERTION: tag 4 is never a candidate, however good its text. */
+    CHECK(g3_candidate_usable(EPI_ACT_CONTROL_IN_LOCAL, EPI_OUT_OK, 19,
+                              EPI_ACT_CONTROL_IN, EPI_OUT_OK) == 0,
+          "T15.1 locally-served turn (tag 4) is NOT a recall candidate");
+
+    /* 2. ...and tag 3 still is, with the identical text. A filter, not a break. */
+    CHECK(g3_candidate_usable(EPI_ACT_CONTROL_IN, EPI_OUT_OK, 19,
+                              EPI_ACT_CONTROL_IN, EPI_OUT_OK) == 1,
+          "T15.2 model-generated turn (tag 3) is STILL a recall candidate");
+
+    /* 3. Both directions, mirroring T11: asking for tag 4 accepts only tag 4. */
+    CHECK(g3_candidate_usable(EPI_ACT_CONTROL_IN_LOCAL, EPI_OUT_OK, 19,
+                              EPI_ACT_CONTROL_IN_LOCAL, EPI_OUT_OK) == 1,
+          "T15.3a want LOCAL -> tag 4 accepted");
+    CHECK(g3_candidate_usable(EPI_ACT_CONTROL_IN, EPI_OUT_OK, 19,
+                              EPI_ACT_CONTROL_IN_LOCAL, EPI_OUT_OK) == 0,
+          "T15.3b want LOCAL -> tag 3 rejected");
+    /* tag 4 must not leak into the WORKLOAD lane either */
+    CHECK(g3_candidate_usable(EPI_ACT_CONTROL_IN_LOCAL, EPI_OUT_OK, 19,
+                              EPI_ACT_INFER, EPI_OUT_OK) == 0,
+          "T15.3c want INFER -> tag 4 rejected (no leak into the workload preamble)");
+
+    /* 4. INDEX/FILTER PARITY over the whole truth table. main_x86.c's index sites call
+     *    this exact function, so this pins the "index and filter cannot disagree"
+     *    invariant that was previously guarded only by a comment -- and that a
+     *    hand-written restatement had already broken by omitting `action`. */
+    {
+        const uint16_t acts[]  = { EPI_ACT_CACHE, EPI_ACT_INFER,
+                                   EPI_ACT_CONTROL_IN, EPI_ACT_CONTROL_IN_LOCAL };
+        const uint8_t  outs[]  = { EPI_OUT_OK, EPI_OUT_ERROR };
+        const uint16_t lens[]  = { 0, 19 };
+        int bad = 0, accepted = 0;
+        for (unsigned a = 0; a < sizeof acts / sizeof acts[0]; a++)
+            for (unsigned o = 0; o < sizeof outs / sizeof outs[0]; o++)
+                for (unsigned l = 0; l < sizeof lens / sizeof lens[0]; l++) {
+                    int got = g3_candidate_usable(acts[a], outs[o], lens[l],
+                                                  EPI_ACT_CONTROL_IN, EPI_OUT_OK);
+                    int want = (acts[a] == EPI_ACT_CONTROL_IN)
+                            && (outs[o] == EPI_OUT_OK) && (lens[l] > 0);
+                    if (got != want) bad++;
+                    if (got) accepted++;
+                }
+        CHECK(bad == 0, "T15.4a index/filter predicate matches the recallability truth table");
+        CHECK(accepted == 1, "T15.4b exactly ONE of the 16 combinations is recallable");
+    }
+
+    /* 5. A FAILED locally-served turn stays tag 3 by design, and is excluded anyway by
+     *    outcome -- so the two exclusions are independent and neither masks the other. */
+    CHECK(g3_candidate_usable(EPI_ACT_CONTROL_IN, EPI_OUT_ERROR, 0,
+                              EPI_ACT_CONTROL_IN, EPI_OUT_OK) == 0,
+          "T15.5 a failed turn stays tag 3 and is excluded by OUTCOME, not by the tag");
+}
+
 int main(void)
 {
     printf("=== G3 Retrieval Tests (Phase 5 G3/M0 + M2 budget + M3 filter + M6 hygiene) ===\n");
@@ -632,6 +721,7 @@ int main(void)
     test_answer_only();
     test_clean_truncation();
     test_per_lane_window();
+    test_local_not_a_memory();
     printf("\n== Results: %d PASS, %d FAIL ==\n", pass, fail);
     return fail ? 1 : 0;
 }

@@ -32,7 +32,11 @@ EPI_QUERY_MAX = 200
 EPI_RESP_OFF = 232
 EPI_RESP_MAX = 256
 
-ACTIONS = {1: 'CACHE', 2: 'INFER', 3: 'CONTROLIN'}   # 3 = 6-5 inbound control-IN Q&A (EPI_ACT_CONTROL_IN)
+ACTIONS = {1: 'CACHE', 2: 'INFER', 3: 'CONTROLIN', 4: 'CTRLIN-LOCAL'}
+# 3 = 6-5 inbound control-IN Q&A answered by the MODEL (EPI_ACT_CONTROL_IN) -- recallable.
+# 4 = the same channel, but PA rendered the answer itself: a 6-6 SYSFACTS reply from live box
+#     state, or the canned DECLINE (EPI_ACT_CONTROL_IN_LOCAL). Stored and auditable, NEVER
+#     recalled -- an answer the box rendered is not a memory.
 OUTCOMES = {0: 'OK', 1: 'ERROR', 2: 'BLOCKED'}
 
 
