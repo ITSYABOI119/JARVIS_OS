@@ -497,3 +497,73 @@ unmeasured `poll_max` wall-time is now the first thing to measure, not a footnot
 - **`poll_max`'s wall-time is still unmeasured.** Every latency number in D1 remains arithmetic on a
   measured tok/s, not an observed end-to-end answer time. M2 must measure it first.
 - **Nothing is deployed.** The box still runs `9362c756` with the validation defect live.
+
+---
+
+## 12. M2 RESULT (2026-07-26) — transport + per-lane budget landed
+
+Three commits, ordered transport-first so no new failure could fail quietly.
+
+**Commit 1 — the silent hole.** The chunk loop advanced `offset` even when `shmem_ipc_send` returned
+−1, so a full ring punched a **hole** in the answer with no error and no log. Fixed by retrying the
+same offset with back-pressure (signal + yield; PA polls this ring and shares the core), advancing
+only after a send that succeeded, and failing loudly on exhaustion via `puts_serial` — never
+`pb_log`, which sends over the very ring that is full. Both halves gated with `JARVIS_RING_PROBE`
+because **the branch had never executed**: mode 1 (fail the first 3 sends) recovered with the answer
+intact, mode 2 (fail every send) produced
+`[PB] RESPONSE TRUNCATED: … undelivered bytes=263 (answer is short but CONTIGUOUS — no hole)` and
+0 FATAL.
+
+**Commit 2 — five ceilings, not three, and the MTU is 1426.** See §3's inline correction. The one
+the brief's table missed was `char resp[1024]` in `pa_ctrl_gate` — PA's own accumulator, which would
+have clamped a 1426 B answer to 1023 before the reply builder saw it. Four of the five are now
+DERIVED from `CTRL_REPLY_TEXT_MAX`. The receiver had to move in lockstep because it **rejects** a
+larger `tlen` outright — a box-only bump would have made long answers vanish rather than truncate.
+
+**Commit 3 — per-lane cap, and a SIXTH limit that was actively corrupting.**
+
+`MSG_QUERY_LONG` 0x13 carries the lane, because PB cannot otherwise distinguish control-IN from the
+workload. Workload stays at **50** for comparability with the entire historical performance record;
+control-IN gets **250**, derived from the MTU at the WORST measured byte/token density
+(250 × 5.66 = 1415 ≤ 1426 — a cap chosen from the mean would overflow the frame) and sized so its
+~46 s worst case fits under the PESSIMISTIC end of the unmeasured poll budget.
+
+**`int output_ids[64]` was the sixth limit**, and finding it is the reason the gate is worth the
+time. At cap 250 a 65-token answer ran off a stack array. It did not merely risk corruption — it
+*was* corrupting: the box returned 219 bytes with the stop-reason probe reporting
+`n=50 stop=MODEL-ENDED-TURN`, i.e. the overflow was corrupting adjacent stack state and
+**masquerading as the model ending its turn at exactly the old 50-token cap.** That is a coincidence
+convincing enough that it was nearly written up as a model behaviour, and it would have quietly
+contradicted commit 1's risk analysis in the previous milestone. Sized from the cap and made static,
+the same query on the same image returns `n=250 prompt=15 stop=CAP` and **1138 bytes**.
+
+### Measured
+
+| | before | after |
+|---|---|---|
+| control-IN answer | 219 B | **1138 B** (5.2×) |
+| tokens generated | 50 (corrupt) | **250**, `stop=CAP` |
+| short answer ("explain paging in one line") | — | **27 tokens**, `stop=MODEL-ENDED-TURN` |
+| workload lane | `q=100 hits=71 infer=13` | **identical** |
+| TRUNCATED / FATAL / MODEL-BAD / ANOMALY | — | **0**, `err=0` |
+
+The cap is a ceiling, not a fixed cost: a short answer still returns in seconds.
+
+### Does this make JARVIS_THINKING ON viable?
+
+**Arithmetically yes, and it is no longer blocked — but do not flip it on these numbers alone.** The
+250-token budget is enough for a thought plus an answer only if the thought is short, and §11.2
+measured the correct placement producing thought on 3 of 3 questions. What is still unmeasured is
+**how many tokens a real thought consumes**, and with the thought stripped, every token it takes is
+one the answer does not get. The honest next step is to measure thought length at
+`JARVIS_THINKING=1` with the new budget before deciding whether 250 is a think+answer budget or only
+an answer budget. That is a separate decision, as instructed.
+
+### Honest limits
+
+- The 250 cap is sized against a byte/token density measured over **five** answers. A denser answer
+  than any observed would still be clamped by `CTRL_REPLY_TEXT_MAX` — correctly, and now visibly.
+- `poll_max`'s wall-time is **still unmeasured**. The budget was sized to fit its pessimistic
+  reading rather than to justify a larger one.
+- The `[PB] lane` / `[PB] gen` instrumentation is probe-gated; a deployed build prints nothing, so
+  the stop reason is not observable in production.

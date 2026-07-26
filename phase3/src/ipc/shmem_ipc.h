@@ -37,6 +37,13 @@
 #define MSG_STATE_ACK      0x0E
 #define MSG_DEBUG          0x0F  /* Debug log from Process B -> Process A for NVMe logging */
 /* 0x10 reserved (was MSG_MODEL_SWAP, removed 2026-04-17) */
+/* 0x12 reserved for MSG_EMBED (Phase C / C/M1b design §4.5) — do NOT take it. */
+#define MSG_QUERY_LONG     0x13  /* PA -> PB: a query whose lane may generate a LONG answer.
+                                  * Identical to MSG_QUERY except for the generation token cap.
+                                  * The lane is not otherwise visible to PB — PA sends the same
+                                  * MSG_QUERY for the synthetic workload, the wake lane and the
+                                  * probes, so the CAP has to ride the message. Only pa_ctrl_gate
+                                  * (the lane a human actually reads) sends this. */
 #define MSG_INFER_STATS    0x11  /* PB -> PA: per-inference tokens + TSC cycles (v4 live tok/s).
                                   * Sent BEFORE the MSG_RESPONSE chunks so PA latches it in the
                                   * same drain pass (no terminator race). Always-on, tiny. */

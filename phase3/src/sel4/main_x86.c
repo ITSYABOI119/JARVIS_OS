@@ -3149,7 +3149,9 @@ static void pa_ctrl_gate(const control_result_t *cres)
 #endif
 
     uint16_t cseq = g_ctrl_route_seq++;
-    shmem_ipc_send(shared_request_ring, MSG_QUERY, cseq, cres->query, cres->query_len);
+    /* MSG_QUERY_LONG: the control-IN lane gets the long-answer token cap. Every other sender
+     * (workload, wake, probes) keeps MSG_QUERY and the 50-token workload cap. */
+    shmem_ipc_send(shared_request_ring, MSG_QUERY_LONG, cseq, cres->query, cres->query_len);
     seL4_Signal(g_pa_req_notif);
 
 #if !JARVIS_ROUTING

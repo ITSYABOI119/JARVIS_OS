@@ -261,6 +261,33 @@ static void pb_log_num(const char *prefix, uint32_t val, const char *suffix)
 #define PB_SEND_RETRY_MAX 256
 #endif
 
+/* GENERATION TOKEN CAPS, PER LANE.
+ *
+ * WORKLOAD stays at 50 deliberately: the 5.46 tok/s benchmark, every historical [INFER]
+ * comparison and the soak baselines were all measured there, and re-basing them silently would
+ * invalidate the performance record. The synthetic workload exists to generate load, not answers.
+ *
+ * CONTROL-IN gets the real budget, and 250 is DERIVED, not picked:
+ *   - the MTU is the hard ceiling: CTRL_REPLY_TEXT_MAX = 1426 bytes of text (control_reply.h)
+ *   - measured byte/token density over 5 real answers: 4.14 .. 5.66, mean ~4.9
+ *   - at the WORST observed density, 250 x 5.66 = 1415 <= 1426, so even a maximally dense answer
+ *     fits the frame; a token cap chosen from the MEAN would overflow it
+ *   - latency at the measured 5.46 tok/s: 250 / 5.46 = ~46 s WORST CASE
+ *   - control-IN's poll budget is documented ~60-120 s and is UNMEASURED, so 46 s was chosen to
+ *     fit under the PESSIMISTIC end of that range. Sizing to fit the worst reading of an
+ *     unmeasured bound is deliberate: it makes measuring it unnecessary for this decision
+ *     rather than betting on the optimistic end.
+ *
+ * This is a CEILING, not a fixed cost. Since the loop now stops on the model's declared
+ * end-of-turn, a short factual answer still returns in a few seconds; the cap only binds the long
+ * explanatory answers it exists for. */
+#ifndef PB_GEN_MAX_WORKLOAD
+#define PB_GEN_MAX_WORKLOAD 50
+#endif
+#ifndef PB_GEN_MAX_CONTROL_IN
+#define PB_GEN_MAX_CONTROL_IN 250
+#endif
+
 /* Response-chunk send, wrapped ONLY so the ring-full branch can be induced. That branch had never
  * executed in a deployed build (text_out[512] capped a response at <=3 chunks into a 15-slot ring),
  * and commit 2 of this milestone raises exactly those ceilings — so it must be proven to work
@@ -286,7 +313,7 @@ static int pb_send_chunk(shmem_ring_t *ring, uint16_t seq, const char *buf, int 
 static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
                           uint16_t seq, const char *query, uint16_t query_len,
                           qmodel_t *qm, llama_state_t *state, tokenizer_t *tok,
-                          int bos_id)
+                          int bos_id, int max_tokens)
 {
     /* Phase 5 G2/M3: read the LIVE context pool per inference, from the mapped page, small-stack
      * only (the <8 KB PB-stack rule — never copy the 4 KB pool / rings onto the stack). This is the
@@ -548,14 +575,21 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
     pb_log("[PB] Prefill complete, generating...");
 #endif
 
-    /* Autoregressive generation with per-token logging */
-    int output_ids[64];
+    /* Autoregressive generation with per-token logging.
+     *
+     * SIZED FROM THE LANE CAP, and this was a real defect the moment the cap moved: it was
+     * int[64] while PB_GEN_MAX_CONTROL_IN is 250, so a 65-token control-IN answer would have run
+     * off the end of a STACK array. A SIXTH linked limit nobody lists next to text_out /
+     * CTRL_REPLY_TEXT_MAX / reply_frame / resp[] / the ring. Static for the same reason text_out
+     * is: PB's stack budget is <8 KB and this is now 1 KB. */
+    static int output_ids[PB_GEN_MAX_CONTROL_IN > PB_GEN_MAX_WORKLOAD
+                          ? PB_GEN_MAX_CONTROL_IN : PB_GEN_MAX_WORKLOAD];
     int n_gen = 0;
     /* v4 live tok/s: the generation loop is ALWAYS timed (two RDTSC reads — immaterial vs the
      * ~seconds-long loop). Raw tokens+cycles go to PA via MSG_INFER_STATS; PA converts to tok/s.
      * The gated M1_MEASURE MSG_DEBUG report below is unchanged (offline-conversion text form). */
     uint64_t gen_t0 = m1_rdtsc();
-    while (n_gen < 50 && state->pos < state->max_seq_len) {
+    while (n_gen < max_tokens && state->pos < state->max_seq_len) {
         int next = sample_greedy(state->logits, qm->config.vocab_size);
 
         /* HONOUR THE MODEL'S DECLARED END-OF-TURN.
@@ -600,6 +634,23 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
         /* (the terminator check moved to the TOP of the loop — see the comment there) */
         qmodel_forward(qm, state, next);
     }
+#if JARVIS_CONTROL_IN_PROBE
+    /* Probe-only: WHY generation stopped. Distinguishes "hit the lane cap" from "the model ended
+     * its turn" from "ran out of KV" — three very different things that all look like a short
+     * answer from outside. Deployed builds print nothing. */
+    {
+        puts_serial("[PB] gen n="); put_dec((uint32_t)n_gen);
+        puts_serial(" prompt="); put_dec((uint32_t)n_prompt);
+        puts_serial(" cap="); put_dec((uint32_t)max_tokens);
+        puts_serial(" pos="); put_dec((uint32_t)state->pos);
+        puts_serial(" kv="); put_dec((uint32_t)state->max_seq_len);
+        puts_serial(" stop=");
+        if (n_gen >= max_tokens)              puts_serial("CAP");
+        else if (state->pos >= state->max_seq_len) puts_serial("KV-FULL");
+        else                                  puts_serial("MODEL-ENDED-TURN");
+        seL4_DebugPutChar(10);
+    }
+#endif
 #if JARVIS_DBG_PB
     pb_log_num("[PB] Generation complete: ", (uint32_t)n_gen, " tokens");
 #endif
@@ -805,15 +856,36 @@ static void pb_serve_loop(shmem_ring_t *request_ring, shmem_ring_t *response_rin
         while (shmem_ipc_recv(request_ring, &msg_type, &msg_seq, payload, &msg_len) == 0) {
             switch (msg_type) {
             case MSG_QUERY:
+            case MSG_QUERY_LONG:
                 if (!model_loaded) {
                     /* No model — send empty response */
                     shmem_ipc_send(response_ring, MSG_RESPONSE, msg_seq, "", 0);
                     seL4_Signal(resp_notif);
                     break;
                 }
-                handle_query(response_ring, resp_notif,
-                             msg_seq, (const char *)payload, msg_len,
-                             qm, state, tok, bos_id);
+                /* PER-LANE TOKEN CAP. The generation loop is SHARED, so a global raise would
+                 * change the synthetic workload too — and every historical [INFER] comparison and
+                 * the 5.46 tok/s benchmark were measured at 50, so re-basing them silently would
+                 * invalidate the performance record. The workload keeps 50; the budget goes to the
+                 * lane a human actually reads. */
+                {
+                    int lane_cap = (msg_type == MSG_QUERY_LONG) ? PB_GEN_MAX_CONTROL_IN
+                                                                : PB_GEN_MAX_WORKLOAD;
+#if JARVIS_CONTROL_IN_PROBE
+                    /* Probe-only boundary evidence: which lane PB actually saw, and the cap it
+                     * chose. Deployed builds print nothing. */
+                    puts_serial("[PB] lane type=0x");
+                    { const char *H = "0123456789abcdef";
+                      seL4_DebugPutChar(H[(msg_type >> 4) & 0xF]);
+                      seL4_DebugPutChar(H[msg_type & 0xF]); }
+                    puts_serial(" cap="); put_dec((uint32_t)lane_cap);
+                    seL4_DebugPutChar(10);   /* newline, written as a code point to keep this
+                                              * generated line free of escape sequences */
+#endif
+                    handle_query(response_ring, resp_notif,
+                                 msg_seq, (const char *)payload, msg_len,
+                                 qm, state, tok, bos_id, lane_cap);
+                }
                 break;
 
             case MSG_HEARTBEAT:
