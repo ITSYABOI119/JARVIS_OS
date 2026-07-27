@@ -19,9 +19,19 @@ QUALITY_DIR="$MODELS_DIR/quality_results"
 
 MODE="${1:-all}"
 
-# Find all GGUF files
+# Find all GGUF files. QUALITY_MODELS is an optional ERE filter on the filename
+# — benching 11 models at the deployed 250-token cap takes hours, and a targeted
+# comparison (incumbent + 2-3 candidates) is the usual need.
+#   QUALITY_MODELS='gemma-4-E2B|Meta-Llama-3.1-8B' bash bench_models.sh quality
 MODELS=$(find "$MODELS_DIR" -maxdepth 1 -name "*.gguf" -type f | sort)
-COUNT=$(echo "$MODELS" | wc -l)
+if [ -n "${QUALITY_MODELS:-}" ]; then
+    MODELS=$(echo "$MODELS" | grep -E "$QUALITY_MODELS" || true)
+fi
+COUNT=$(echo "$MODELS" | grep -c . || true)
+if [ "$COUNT" -eq 0 ]; then
+    echo "ERROR: no models matched (MODELS_DIR=$MODELS_DIR QUALITY_MODELS=${QUALITY_MODELS:-<none>})"
+    exit 1
+fi
 
 header() {
     echo "=== JARVIS AI-OS Model Bench-Off — $1 ==="
@@ -132,33 +142,82 @@ run_quality() {
 
     header "Quality (10 prompts, greedy)"
 
+    # ---- THE REAL WORKLOAD (2026-07-27) -------------------------------------
+    # The original 10 were generic. We now know the actual traffic: 30 unique
+    # questions in the control-IN store @21140000. Most are unusable as quality
+    # probes (8 generated filler, 4 test markers, 3 unanswerable-by-design, 4 that
+    # route to SYSFACTS/DECLINE and never reach the model), so this is the GENUINE
+    # subset, plus 4 of the original 10 for continuity with the old scores.
     PROMPTS=(
-        "The seL4 microkernel is"
+        # -- real control-IN traffic (short-form definitional dominates) --
+        "explain paging in one line"
+        "in one line, what is a mutex"
+        "in one line, what is a translation lookaside buffer"
+        "in one line, what is a memory management unit"
+        "in one line, what does the seL4 capability system provide"
+        "what is a page fault?"
+        "why doesn't adding more CPU cores speed up a single-threaded program?"
+        "In one sentence, why doesn't adding more CPU cores speed up a single-threaded program?"
+        # -- continuity with the 2026-04 bench-off --
         "Explain how virtual memory works in three sentences."
         "What is the difference between a process and a thread?"
-        "Write a C function that reverses a string in place."
-        "The capital of Australia is"
-        "What are the key benefits of formally verified software?"
         "Describe the TCP three-way handshake step by step."
-        "What happens when you type a URL into a browser?"
-        "Compare RISC and CISC architectures in two sentences."
-        "Write a bash one-liner to find all .c files larger than 1MB."
+        "Write a C function that reverses a string in place."
     )
 
-    echo "Prompts: ${#PROMPTS[@]}"
-    echo "Max tokens: 100, Temperature: 0 (greedy)"
+    # ---- SAMPLER (B3): the box generates GREEDY; the Gemma 4 card recommends
+    # temp 1.0 / top_p 0.95 / top_k 64. Reported SEPARATELY from the model
+    # comparison because it applies whatever model wins.
+    case "${QUALITY_SAMPLER:-greedy}" in
+        greedy)      SAMPLER_ARGS=(--temp 0) ;;
+        recommended) SAMPLER_ARGS=(--temp 1.0 --top-p 0.95 --top-k 64) ;;
+        *) echo "ERROR: QUALITY_SAMPLER must be 'greedy' or 'recommended'"; return 1 ;;
+    esac
+
+    # ---- GENERATION CAP: the DEPLOYED control-IN cap, not the original -n 100.
+    # PB_GEN_MAX_CONTROL_IN in inference_server.c. A model that writes better long
+    # answers is invisible at 100 tokens.
+    GEN_MAX="${QUALITY_GEN_MAX:-250}"
+
+    echo "Prompts: ${#PROMPTS[@]} (real control-IN workload + 4 continuity)"
+    echo "Max tokens: $GEN_MAX (deployed PB_GEN_MAX_CONTROL_IN)"
+    echo "Sampler: ${QUALITY_SAMPLER:-greedy} (${SAMPLER_ARGS[*]})"
+    echo "Template: --jinja (each model's OWN chat template); thinking: -rea off"
     echo ""
 
     N=0
     echo "$MODELS" | while read model; do
         N=$((N + 1))
         NAME=$(basename "$model" .gguf)
-        OUTFILE="$QUALITY_DIR/$NAME.txt"
+        # sampler in the filename: a greedy and a recommended-sampler run of the
+        # same model are different evidence and must not overwrite each other
+        OUTFILE="$QUALITY_DIR/$NAME.${QUALITY_SAMPLER:-greedy}.txt"
 
         echo "[$N/$COUNT] $NAME"
 
+        # ---- VERIFY THE PROMPT THIS MODEL ACTUALLY GETS -------------------
+        # The 2026-04 bench-off was misread for three months because everyone
+        # trusted the flags instead of looking at the built prompt. Do not
+        # trust -rea/--jinja either: assert. One extra model load per model.
+        VP=$("$LLAMA_CLI" -m "$model" -p "ping" -n 1 -ngl 0 -t 8 -st --jinja \
+                 -rea off --verbose-prompt 2>&1 </dev/null | head -60)
+        TMPL_OK=0; THINK_LEAK=0
+        echo "$VP" | grep -qE '<\|turn>|<\|im_start\|>|\[INST\]|<\|start_header_id\|>|<start_of_turn>' && TMPL_OK=1
+        echo "$VP" | grep -qE '<\|think\|>|\[Start thinking\]|<\|channel>' && THINK_LEAK=1
+        if [ "$TMPL_OK" -eq 1 ]; then
+            echo "  template: APPLIED"
+        else
+            echo "  template: *** NOT DETECTED — scores for this model are NOT comparable ***"
+        fi
+        if [ "$THINK_LEAK" -eq 1 ]; then
+            echo "  thinking: *** LEAKED despite -rea off — investigate before trusting scores ***"
+        else
+            echo "  thinking: off (no think token in the built prompt)"
+        fi
+
         {
             echo "=== $NAME ==="
+            echo "Sampler: ${QUALITY_SAMPLER:-greedy} | GenMax: $GEN_MAX | template_applied=$TMPL_OK think_leak=$THINK_LEAK"
             echo "Date: $(date)"
             echo ""
 
@@ -166,17 +225,53 @@ run_quality() {
                 P="${PROMPTS[$i]}"
                 PN=$((i + 1))
                 echo "--- Prompt $PN: \"$P\" ---"
-                RESPONSE=$("$LLAMA_CLI" \
+                # CORRECTED INVOCATION (2026-07-27). The original was
+                #   -p "$P" -n 100 --temp 0 -ngl 0 -t 8 --no-display-prompt --log-disable
+                # and was believed to be raw completion because it lacked --jinja.
+                # It is NOT: llama-cli auto-enables conversation mode whenever the
+                # GGUF carries a chat template (PR #11214, 2025-01-13), so this
+                # script silently applied each model's template AND, for Gemma 4,
+                # emitted <|think|> -- i.e. it measured THINKING-ON, the config
+                # closed in THINKING_MODE_RESEARCH.md. --log-disable hid the
+                # "enabling conversation mode" line, which is why nobody saw it.
+                #
+                #   -st          one turn then exit (conversation mode is scriptable)
+                #   --jinja      each model's OWN template (explicit, not inherited)
+                #   -rea off     thinking OFF -- deploy-faithful (JARVIS_THINKING=0)
+                #
+                # NOTE -no-cnv is NOT usable: the current binary rejects it
+                # ("--no-conversation is not supported by llama-cli") and proceeds
+                # WITH conversation mode. Do not "fix" this by adding it back.
+                RAW=$("$LLAMA_CLI" \
                     -m "$model" \
                     -p "$P" \
-                    -n 100 \
-                    --temp 0 \
+                    -n "$GEN_MAX" \
+                    "${SAMPLER_ARGS[@]}" \
                     -ngl 0 \
                     -t 8 \
+                    -st \
+                    --jinja \
+                    -rea off \
                     --no-display-prompt \
                     --log-disable \
-                    2>/dev/null) || RESPONSE="[FAILED TO GENERATE]"
+                    2>/dev/null) || RAW="[FAILED TO GENERATE]"
+
+                # Conversation mode prints an interactive banner, a "> prompt"
+                # echo, a spinner and a timing line on STDOUT. Strip them, or the
+                # blind judges score llama-cli's chrome alongside the answer.
+                # The spinner is BACKSPACE-driven (0x08), not plain characters —
+                # verified with od -c. Delete \b and \r FIRST, or the leading-run
+                # strip below silently does nothing.
+                RESPONSE=$(printf '%s\n' "$RAW" | tr -d '\010\r' | awk '
+                    /^> /         { inresp = 1; next }
+                    /^\[ Prompt:/ { inresp = 0 }
+                    inresp        { sub(/^[-|\/\\ \t]+/, ""); if (length($0)) print }
+                ')
+                [ -z "$RESPONSE" ] && RESPONSE="[NO RESPONSE EXTRACTED]"
+                # tok/s comes free from llama-cli's own timing line (B-req: report speed)
+                TPS=$(printf '%s\n' "$RAW" | grep -oE 'Generation: *[0-9.]+ t/s' | tail -1)
                 echo "$RESPONSE"
+                echo "[speed] ${TPS:-n/a}"
                 echo ""
             done
 

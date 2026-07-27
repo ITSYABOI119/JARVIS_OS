@@ -30,6 +30,14 @@ which is consistent with dual-channel DDR4 on a 2700X under a 6-thread load.
 **All of these FIT in RAM.** Speed is the currency, not memory. Projections are arithmetic from the
 measured bandwidth — they are not measured, and a real bench-off would need to confirm them.
 
+> **MEASURED 2026-07-27 — and this projection is WRONG in a way worth keeping.** `MODEL_BENCH_2026-07.md`
+> benched three of these on the box. **File size is the wrong denominator.** Gemma 4 E4B is LARGER on
+> disk than Llama 3.1 8B (5.03 vs 4.58 GB) yet runs **51% faster** (11.0 vs 7.3 tok/s), because Gemma 4's
+> MatFormer/PLE architecture means *active parameters per token* — not file bytes — set the bandwidth
+> cost. Measured ratios vs the incumbent: **E4B 0.54×, Llama 3.1 8B 0.36×**. The 7–8B row above predicted
+> ~0.64×, i.e. it was **optimistic by ~1.8×** for that class. Use measured ratios, not size arithmetic,
+> for any model whose architecture differs from the incumbent's.
+
 ---
 
 ## 2. The one option that breaks the linear trade

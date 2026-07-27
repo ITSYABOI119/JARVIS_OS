@@ -116,3 +116,6 @@ jkey_slot.bin
 # any stray raw key/slot dumps from manual provisioning
 ctrl_key*.bin
 *_key_slot.bin
+
+# bench-off raw model outputs are evidence, but model WEIGHTS never get committed
+models/*.gguf
