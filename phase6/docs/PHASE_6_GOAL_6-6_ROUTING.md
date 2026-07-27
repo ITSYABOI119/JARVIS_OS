@@ -274,7 +274,106 @@ arc.**
 
 ---
 
+## 9. THE SYSFACTS BARE-WORD DEFECT — measured, ATTEMPTED, and NOT FIXED (2026-07-27)
+
+**Status: the defect is LIVE on the deployed image (`61e8142f`, `JARVIS_ROUTING` default-ON). A keyword
+fix was attempted, measured to be NET WORSE THAN THE DEFECT, and reverted. This section is the evidence
+base for the Phase C routing lane (§8 / C/M4), whose "measured miss" gate this closes.**
+
+### 9.1 The defect
+
+`5224a85` anchored the **DECLINE** rules after the first B-flip validation caught a bare-noun false
+positive on hardware. **The SYSFACTS rules never got the same treatment.** They match bare words and are
+checked FIRST, so they capture before DECLINE or INFER see anything. Measured against the shipped code:
+
+| path | probe | routes to | renders |
+|---|---|---|---|
+| HEALTH | `what causes page faults?` | SF_HEALTH | `healthy` |
+| UPTIME (bare noun) | `how many hours does a full rebuild take?` | SF_UPTIME | `up 76 seconds` |
+| UPTIME (`rt_seq2` phrases) | `how long does a context switch take?` | SF_UPTIME | `up 76 seconds` |
+| BOOT_ID | `how many cycles does a cache miss cost?` | SF_BOOT_ID | `boot 44` |
+| MODEL | `how does a transformer model work?` | SF_MODEL | `Gemma 4 E2B` |
+| NODES | `how many nodes are in a red-black tree?` | SF_NODES | `6 workers` |
+
+**FIVE reachable paths, not the two first reported.** Two table comments documented safeties that did
+not exist: HEALTH claimed *"plural 'faults'/'errors' only"* while its list contains **`"error"`
+singular**; BOOT_ID claimed *"safe as bare words"* on reasoning that covers only duration phrasings.
+MODEL claimed *"unambiguous, never collides"* for `model`/`neural`.
+
+**Worse than the DECLINE defect it mirrors:** that one returned *"I don't track that"*, which visibly
+misfires. This returns a confident, plausible, irrelevant answer with nothing to signal the misroute.
+
+### 9.2 The suite could not see it, and still cannot
+
+Measured before touching anything: **DEV=0, HELDOUT=0** conceptual-question negatives against 65
+SYSFACTS positives. The SYSFACTS-vs-INFER boundary was **completely unexercised**, so 95.89% passed
+clean *with the defect present* — the **second** instance of the blind spot that let the DECLINE defect
+through at 95.52%. §2b(a) predicted exactly this and should now be read as load-bearing, not cautionary.
+
+**The deeper structural fact, found by adversarial review:** of 66 SYSFACTS positives, **39 carry a
+self-reference, 26 carry no concept word, and ZERO occupy the (no-self AND concept-word) quadrant** that
+any anchor actually decides. All 7 auxiliary-bearing positives carry `you`, so a self-branch
+short-circuits and the anchor's real logic is never exercised on a positive. **A suite can be 100%/96%
+green while the rule under test is unmeasured.**
+
+### 9.3 The attempted fix, and why it was reverted
+
+Anchor tried: *a family word is SYSFACTS iff self-reference OR no generic-subject marker*
+(`RT_CONCEPT_WORDS` = a/an/does/do/did/i/explain/why/mean/means/to/with/causes/cause).
+It scored **DEV 76/76, HELDOUT 82/85 = 96.47%, 0 INFER misroutes, test_route 127, fuzz 300K clean** —
+and was still **net worse than doing nothing**, because every one of those gates is blind per §9.2.
+
+A two-sided corpus (37 genuine status questions incl. 24 review-reproduced regressions; 32 conceptual
+questions incl. the unguarded paths) measured it directly:
+
+| | false NEGATIVES | false POSITIVES | total wrong |
+|---|---|---|---|
+| baseline (the live defect) | **0 / 37** | 32 / 32 | **32 / 69** |
+| the attempted anchor | 23 / 37 | 22 / 32 | **45 / 69** |
+| best of 30 keyword configs | 12 / 37 | 15 / 32 | **27 / 69** |
+
+The anchor bought 10 false-positive fixes and paid **23 false negatives** — `do we have errors?`,
+`give me a health check`, `is there an error?`, `can i get the uptime?` all handed to a model that
+cannot know. **The classifier turned on whether the operator said "you" or "we".**
+
+### 9.4 WHY NO KEYWORD FIX EXISTS — the finding that matters
+
+Two independent levers were explored and both hit the same wall.
+
+**Lever 1, anchoring:** 30 configurations over 5 self-vocabularies × 6 marker sets. Best total **27/69**,
+still losing a third of genuine status questions. The words doing the work — `a`/`an`, `do`/`does`/`did`
+— are ordinary English function words that appear on **both sides**: `how does a transformer model
+work?` (concept) and `what model does this run?` (status) are indistinguishable to any such rule.
+
+**Lever 2, shrinking the family vocabularies:** reduces false positives to **0** but costs **22 false
+negatives**, because the discriminating terms are the ambiguous ones. **Nine family words appear on both
+sides and are therefore unfixable by vocabulary at all:**
+
+> `boot` · `cycles` · `errors` · `faults` · `gguf` · `model` · `ok` · `problems` · `wrong`
+
+Same word, same surface form, opposite intent — *"do we have **errors**?"* vs *"how are **errors**
+handled in rust?"*. Separating them requires recognising an **unbounded set of technical subject nouns**,
+which is exactly what `route.h` says a keyword classifier is not and what §8's embedder is for.
+
+Also measured, and a trap for any future attempt: the two words the corpus called safe to drop
+(`hours`, `duration`) are load-bearing for real HELDOUT cases (`how many hours since boot?`,
+`duration since power-on?`). A corpus-only judgement would have broken them.
+
+### 9.5 What this means for Phase C
+
+**§8's routing lane is measured-miss-gated, and this is the measured miss.** The gate is met with a
+concrete, reusable target: an embedder must separate the nine both-sides words by intent, and its
+held-out evaluation must include the **(no-self AND concept-word) quadrant** the current suite leaves
+empty — otherwise it will reproduce this exact blind spot with a neural model instead of a keyword one.
+
+**Carried as a live limitation until then:** a conceptual question containing a SYSFACTS family word may
+be answered with box state. Bounded — it affects only control-IN queries, only where such a word appears,
+and the answer is a visibly-irrelevant box fact rather than a fabricated one.
+
+---
+
 *Companion to `phase4/docs/ROADMAP.md` (goal #6) and the 6-5 control-IN docs (this goal hard-depends on
 the deployed two-way channel). PLAN-FIRST — authored 2026-07-22 from a 5-lens research pass + a 4-lens
 adversarial pre-mortem; no code, flag, or wire change until user sign-off. RE-GREP every `file:line`
-before relying on it.*
+before relying on it. §9 appended 2026-07-27 — a MEASUREMENT, not a change: `route.c` and
+`routing_suite.h` are byte-identical to their pre-attempt state.*
