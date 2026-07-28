@@ -278,6 +278,40 @@ is now correct.
 **root-owned**, so later non-sudo runs **silently failed to overwrite them** while still printing
 "Saved to …". Verification was reading stale files. `chown -R jarvis:jarvis` before trusting a re-run.
 
+### 8.6 Artifact provenance — the front-load-only per-model outputs did NOT survive
+
+**This is a provenance note. It restates no score and re-derives none.**
+
+`bench_models.sh` built its output path with `${PREFIX:+.frontload}`, which collapses **every**
+non-empty prefix to a single filename. The two-clause run and the later front-load-only run therefore
+wrote to the same seven paths, and the second **overwrote the first in place**.
+
+| artifact | status |
+|---|---|
+| two-clause per-model `.txt` | **safe** — committed at `1df800a` |
+| front-load-only **responses** | **survive in `models/quality_results_v2/BLIND_SET.md`** (4 systems × 12 questions, full text) |
+| front-load-only **per-model `.txt`** | **gone.** With them: the per-answer `[speed]` tok/s, the `template_applied`/`think_leak` header, and the built-prompt block |
+
+The label→system mapping was **recovered, not re-run**, and is recorded in
+`models/quality_results_v2/BLIND_SET_KEY.md`. It is **two arms proven and two inferred**, and the key
+states which is which:
+
+- **PROVEN byte-exact** — SYS-1 = E2B baseline, SYS-3 = Llama baseline. The front-load-only round
+  re-ran only the front-loaded arms, so the baselines carried over unchanged and each Q1 answer
+  matches exactly one committed output and no other.
+- **INFERRED** — SYS-2 = E2B front-loaded, SYS-4 = Llama front-loaded, from label continuity plus a
+  byte-exact cross-set match in the two-clause blind set.
+
+The premise that makes the recovery valid was **tested rather than assumed**: the two front-loaded
+probe strings match **zero** committed files. Had either matched, "only the front-loaded arms were
+re-run" would have been false and the recovery invalid.
+
+**The collision now FAILS CLOSED.** A run with `QUALITY_PREFIX` set but no `QUALITY_PREFIX_TAG`
+aborts with exit 2 and writes nothing, rather than guessing a filename — guessing is what consumed
+the artifacts. The output name derives from the tag, so two prefixes can no longer collide. An
+unprefixed run is unaffected. Verified by execution in all three directions (blocked without a tag /
+proceeds with one / unprefixed path unchanged).
+
 ---
 
 *Harness: `phase3/scripts/bench_models.sh` (quality phase). Raw outputs:

@@ -186,6 +186,18 @@ run_quality() {
     # measure something the box could never ship.
     PREFIX="${QUALITY_PREFIX:-}"
 
+    # A prefix CHANGES the system being measured, so two different prefixes must never
+    # share an output filename. Until 2026-07-28 the path used ${PREFIX:+.frontload},
+    # which collapsed EVERY non-empty prefix to one name: the front-load-only run
+    # overwrote the two-clause run in place and those per-model artifacts were
+    # unrecoverable. Guessing a name is what consumed them, so this fails CLOSED.
+    if [ -n "$PREFIX" ] && [ -z "${QUALITY_PREFIX_TAG:-}" ]; then
+        echo "ERROR: QUALITY_PREFIX is set but QUALITY_PREFIX_TAG is empty." >&2
+        echo "       A prefixed run must name itself or it overwrites the previous one." >&2
+        echo "       e.g. QUALITY_PREFIX_TAG=frontload-only" >&2
+        exit 2
+    fi
+
     echo "Prompts: ${#PROMPTS[@]} (real control-IN workload + 4 continuity)"
     echo "Max tokens: $GEN_MAX (deployed PB_GEN_MAX_CONTROL_IN)"
     echo "Sampler: ${QUALITY_SAMPLER:-greedy} (${SAMPLER_ARGS[*]})"
@@ -199,7 +211,7 @@ run_quality() {
         NAME=$(basename "$model" .gguf)
         # sampler in the filename: a greedy and a recommended-sampler run of the
         # same model are different evidence and must not overwrite each other
-        OUTFILE="$QUALITY_DIR/$NAME.${QUALITY_SAMPLER:-greedy}${PREFIX:+.frontload}.txt"
+        OUTFILE="$QUALITY_DIR/$NAME.${QUALITY_SAMPLER:-greedy}${QUALITY_PREFIX_TAG:+.$QUALITY_PREFIX_TAG}.txt"
 
         echo "[$N/$COUNT] $NAME"
 
@@ -299,13 +311,18 @@ run_quality() {
                     /^> /         { inresp = 1; first = 1; next }
                     /^\[ Prompt:/ { inresp = 0 }
                     inresp {
+                        # SKIP BLANKS BEFORE consuming "first": llama-cli emits a
+                        # blank line between the "> prompt" echo and the response, so
+                        # a naive first-line strip lands on the BLANK and the real
+                        # content line keeps its spinner. Cost one run to find.
+                        if (length($0) == 0) next
                         if (first) {
                             while (length($0) > 0 && \
                                    (index("|/- \t", substr($0,1,1)) > 0 || substr($0,1,1) == BS))
                                 $0 = substr($0,2)
                             first = 0
                         }
-                        if (length($0)) print
+                        print
                     }
                 ')
                 [ -z "$RESPONSE" ] && RESPONSE="[NO RESPONSE EXTRACTED]"
