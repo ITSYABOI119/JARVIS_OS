@@ -288,6 +288,48 @@ static void pb_log_num(const char *prefix, uint32_t val, const char *suffix)
 #define PB_GEN_MAX_CONTROL_IN 250
 #endif
 
+/* #18 — THE FRONT-LOADING INSTRUCTION, and it sits here because it is a PER-LANE property in
+ * exactly the way the caps above are.
+ *
+ * WHAT IT IS: ~10 tokens injected into the CONTROL-IN prompt only. Measured blind, same rubric
+ * same run: E2B 9.0 vs Llama 3.1 8B 7.8, against an E2B baseline of 4.3. The incumbent beats the
+ * nominal bench winner, which is why no model swap is happening.
+ *
+ * WHY IT WORKS: the re-benched deficit was answer ORDER, not answer quality. This model preambles
+ * before answering, so at a finite token cap the cut lands on the substance. Telling it to lead
+ * with the answer moves the substance inside the budget. That is an interaction between the
+ * model's STYLE and OUR cap — not a model defect — which is why a prompt change beat both a
+ * thinking mode and a model swap.
+ *
+ * EXACTLY ONE CLAUSE. The two-clause variant ("..., then elaborate.") was measured NET-HARMFUL in
+ * 1df800a: "then elaborate" overrode "in one line", driving control length-violations 0.0 -> 7.0
+ * and quality 8.0 -> 4.0. Do not re-add the second clause, do not paraphrase, do not "improve" it.
+ *
+ * CONTROL-IN ONLY. The workload lane must stay byte-identical — see handle_query's lane parameter
+ * and the comment at the MSG_QUERY_LONG dispatch. */
+#ifndef PB_FRONTLOAD_INSTRUCTION
+#define PB_FRONTLOAD_INSTRUCTION "Answer the question directly in your first sentence.\n"
+#endif
+/* Upper bound on the encoded instruction. The REAL count is measured at first use and reused;
+ * this only sizes the cache. Generous vs the ~10 tokens the text encodes to. */
+#define PB_FRONTLOAD_MAX_TOKS 32
+
+/* Trailing template tokens this function always appends after the question:
+ *     <turn|> \n <|turn> model \n     (5) + 1 slack
+ * This was a bare literal 6 in the query-encode bound. It is now named and used by BOTH the query
+ * encode and #18's bound check so the two cannot drift — the same "derive it, don't restate it"
+ * rule that resp[] and text_out already follow.
+ *
+ * It is deliberately NOT G3_SUFFIX_TOKS, despite being the same value: g3_retrieval.h is included
+ * only under #if JARVIS_G3_RETRIEVAL, so using that macro here would fail to compile a
+ * JARVIS_G3_RETRIEVAL=0 build — the same class of gating mistake #18 itself had to avoid. */
+#define PB_TEMPLATE_SUFFIX_TOKS 6
+
+/* #9 G4: the clamped cap the CAPPROBE marker query uses to force a CAP stop. Probe-gated at the
+ * call site; small enough that any real answer overruns it, large enough to produce visible text
+ * so the gate can confirm a truncated answer is still DELIVERED. */
+#define PB_GEN_CAPPROBE_TOKENS 12
+
 /* Response-chunk send, wrapped ONLY so the ring-full branch can be induced. That branch had never
  * executed in a deployed build (text_out[512] capped a response at <=3 chunks into a 15-slot ring),
  * and commit 2 of this milestone raises exactly those ceilings — so it must be proven to work
@@ -310,10 +352,18 @@ static int pb_send_chunk(shmem_ring_t *ring, uint16_t seq, const char *buf, int 
 #endif
 }
 
+/* `is_control_in` is passed EXPLICITLY and is deliberately NOT derived from max_tokens.
+ *
+ * The lane is resolved in the caller (the MSG_QUERY_LONG test at the dispatch switch); inside this
+ * function the only other lane signal would be the cap VALUE, and testing `max_tokens == 250` would
+ * be a coincidence rather than a fact. The day the two caps happened to match, that test would
+ * silently start front-loading the WORKLOAD lane and re-base the 5.46 tok/s benchmark, every
+ * historical [INFER] comparison and every soak baseline — with no error anywhere. Both values now
+ * derive from one place. */
 static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
                           uint16_t seq, const char *query, uint16_t query_len,
                           qmodel_t *qm, llama_state_t *state, tokenizer_t *tok,
-                          int bos_id, int max_tokens)
+                          int bos_id, int max_tokens, int is_control_in)
 {
     /* Phase 5 G2/M3: read the LIVE context pool per inference, from the mapped page, small-stack
      * only (the <8 KB PB-stack rule — never copy the 4 KB pool / rings onto the stack). This is the
@@ -371,6 +421,27 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
     prompt_ids[n_prompt++] = 2364;          /* user */
     prompt_ids[n_prompt++] = 107;           /* \n */
 
+    /* #18: encode the front-loading instruction ONCE, at first control-IN use, and reuse both the
+     * ids and the MEASURED token count for every later query. Two reasons this is not re-encoded
+     * per query: E1's allocation-free-serve discipline (the tokenizer's scratch is pre-allocated,
+     * and the mid-generation restart relies on this path staying malloc-free), and the budget below
+     * needs the count BEFORE the instruction is appended.
+     *
+     * The count is measured, never hardcoded — writing "10" here would be the same class of bug as
+     * the hardcoded token ids that produced the <|think|> placement defect. `instr_n` stays 0 on
+     * the workload lane, so every expression below folds to its pre-#18 value there. */
+    static int instr_ids[PB_FRONTLOAD_MAX_TOKS];
+    static int instr_cached = -1;   /* -1 = not yet encoded; a 0 result is a CACHED result */
+    int instr_n = 0;
+    if (is_control_in) {
+        if (instr_cached < 0) {
+            int e = tokenizer_encode(tok, PB_FRONTLOAD_INSTRUCTION,
+                                     instr_ids, PB_FRONTLOAD_MAX_TOKS);
+            instr_cached = (e > 0) ? e : 0;
+        }
+        instr_n = instr_cached;
+    }
+
 #if JARVIS_G3_RETRIEVAL
     /* G3/M2: inject the PA-packed retrieval preamble inside the user turn, AFTER the \n and
      * BEFORE the question. PB tokenizes the assembled text blob (PA has no tokenizer). Bounded
@@ -381,7 +452,12 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
         uint32_t pre_len = sctx_get_preamble(g_sctx_pb, pre_buf, sizeof(pre_buf));
         int n_pre = 0;
         if (pre_len > 0) {
-            int budget = g3_prompt_budget(n_prompt,
+            /* #18/§2d: RESERVE FOR THE INSTRUCTION. g3_prompt_budget derives its room from
+             * `n_prompt` AS IT IS AT THIS MOMENT, and the instruction is appended AFTER this call
+             * (it must sit adjacent to the question). Passing the bare n_prompt would therefore
+             * grant the preamble room the instruction then consumes, and prompt_ids[256] could
+             * overflow. instr_n is 0 on the workload lane, so this is the pre-#18 expression there. */
+            int budget = g3_prompt_budget(n_prompt + instr_n,
                              (int)(sizeof(prompt_ids) / sizeof(prompt_ids[0])),
                              G3_QUERY_FLOOR_TOKS, G3_SUFFIX_TOKS);
             if (budget > 0) {
@@ -399,6 +475,38 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
         }
     }
 #endif
+
+    /* #18: THE INSTRUCTION GOES HERE — outside the retrieval block, inside the control-IN lane.
+     *
+     * §2b — NOT inside the #if JARVIS_G3_RETRIEVAL / if (g_sctx_pb) / if (pre_len > 0) nest above.
+     * A retrieval MISS is common by design (the complete-sentence rule suppresses fragments), so an
+     * instruction placed in that block would vanish on exactly the queries with no recalled context
+     * to lean on — and would vanish entirely in a JARVIS_G3_RETRIEVAL=0 build. It is unconditional
+     * within the lane.
+     *
+     * §2c — AFTER any preamble and IMMEDIATELY BEFORE the question. An instruction adjacent to the
+     * question is where it bites hardest, and it also puts a clean sentence boundary between
+     * recalled prose and the question, which is the precise hazard f1fc84b was written to remove
+     * (a mid-clause preamble tips this model into <|channel>thought). The KVM gate treats any
+     * thought-channel leakage as a HARD FAIL rather than assuming this ordering is right.
+     *
+     * The bound check is defensive, not decorative: it is the last line between a mis-sized budget
+     * and a stack-array overrun, and output_ids taught this codebase what an unchecked one costs. */
+    if (instr_n > 0) {
+        int room = (int)(sizeof(prompt_ids) / sizeof(prompt_ids[0])) - n_prompt
+                   - PB_TEMPLATE_SUFFIX_TOKS;
+        if (instr_n <= room) {
+            for (int i = 0; i < instr_n; i++) prompt_ids[n_prompt++] = instr_ids[i];
+        } else {
+            /* Never silently half-inject: a partial instruction is a mid-clause fragment, which is
+             * the failure mode this whole change exists to avoid. Drop it whole and say so. */
+            puts_serial("[PB] FRONTLOAD SKIPPED: no room (instr=");
+            put_dec((uint32_t)instr_n);
+            puts_serial(" room="); put_dec((uint32_t)(room > 0 ? room : 0));
+            seL4_DebugPutChar(10);
+            instr_n = 0;
+        }
+    }
 
     /* Null-terminate the query */
     char query_buf[241];
@@ -469,6 +577,29 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
 #endif
 #endif
 
+#if JARVIS_CONTROL_IN_PROBE
+    /* #9 G4 — FORCE THE CAP, so verdict 4 is proven rather than assumed.
+     *
+     * This exists because #18 largely REMOVED the condition #9 reports: with the front-loading
+     * instruction the model answers directly and ends its turn early, so the questions that used to
+     * run to the 250-token cap now stop at ~25-40 tokens. That is the intended outcome — and it
+     * leaves the truncation branch UNEXERCISED, which is precisely how JARVIS_RING_PROBE's silent
+     * chunk-drop survived: a branch nothing runs is a branch nobody has checked.
+     *
+     * Clamping the cap for one marker query makes CAP reachable on demand and proves the whole
+     * chain end to end — PB's stop_reason -> MSG_INFER_STATS -> PA's latch -> verdict 4 -> the
+     * signed reply — WITHOUT weakening the deployed cap or inventing a fake stop reason. The cap is
+     * the only thing changed; the model genuinely runs out of budget mid-answer, which is exactly
+     * the real condition. Control-IN lane only, probe-gated, deploy prints and does nothing. */
+    if (is_control_in && qlen >= 8 && memcmp(query_buf, "CAPPROBE", 8) == 0) {
+        max_tokens = PB_GEN_CAPPROBE_TOKENS;
+        puts_serial("[PB] CAPPROBE: cap clamped to ");
+        put_dec((uint32_t)max_tokens);
+        puts_serial(" to force the CAP stop (G4)");
+        seL4_DebugPutChar(10);
+    }
+#endif
+
 #if JARVIS_DBG_PB
     {
         char hq[280] = "[PB] handle_query: \"";
@@ -500,7 +631,8 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
 
     /* Encode user text */
     n_prompt += tokenizer_encode(tok, query_buf, prompt_ids + n_prompt,
-                                  (int)(sizeof(prompt_ids) / sizeof(prompt_ids[0])) - n_prompt - 6);
+                                  (int)(sizeof(prompt_ids) / sizeof(prompt_ids[0])) - n_prompt
+                                  - PB_TEMPLATE_SUFFIX_TOKS);
 
     /* Close user turn + open model turn + think */
     prompt_ids[n_prompt++] = 106;           /* <turn|> */
@@ -650,6 +782,22 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
         /* (the terminator check moved to the TOP of the loop — see the comment there) */
         qmodel_forward(qm, state, next);
     }
+
+    /* #9: WHY WE STOPPED — computed UNCONDITIONALLY now, because it leaves this process.
+     *
+     * It used to be a probe-only string built inline for the [PB] gen line below. It is now a
+     * value on the wire to PA, which maps CAP/KV-FULL to reply verdict 4 so the operator is told
+     * their answer was cut off instead of being handed a third of one presented as complete.
+     * The probe line reads this same variable, so the log and the wire can never disagree —
+     * two renderings of one fact, not two computations of it.
+     *
+     * Order matters: the cap test comes first because a generation that hits the cap on its last
+     * possible token would also satisfy the KV test, and CAP is the more accurate report of what
+     * bound it. */
+    uint8_t stop_reason = PB_STOP_MODEL_ENDED;
+    if (n_gen >= max_tokens)                        stop_reason = PB_STOP_CAP;
+    else if (state->pos >= state->max_seq_len)      stop_reason = PB_STOP_KV_FULL;
+
 #if JARVIS_CONTROL_IN_PROBE
     /* Probe-only: WHY generation stopped. Distinguishes "hit the lane cap" from "the model ended
      * its turn" from "ran out of KV" — three very different things that all look like a short
@@ -657,13 +805,21 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
     {
         puts_serial("[PB] gen n="); put_dec((uint32_t)n_gen);
         puts_serial(" prompt="); put_dec((uint32_t)n_prompt);
+        /* #18/G2: the instruction's MEASURED token count as actually injected into THIS prompt.
+         * 0 on the workload lane, and 0 on control-IN only if the bound check refused it. Reported
+         * alongside `prompt` so the gate can assert the built prompt rather than trust the flag —
+         * the 4274ca4 lesson, where three months of a wrong conclusion came from trusting a flag
+         * instead of the artifact. */
+        puts_serial(" instr="); put_dec((uint32_t)instr_n);
         puts_serial(" cap="); put_dec((uint32_t)max_tokens);
         puts_serial(" pos="); put_dec((uint32_t)state->pos);
         puts_serial(" kv="); put_dec((uint32_t)state->max_seq_len);
         puts_serial(" stop=");
-        if (n_gen >= max_tokens)              puts_serial("CAP");
-        else if (state->pos >= state->max_seq_len) puts_serial("KV-FULL");
-        else                                  puts_serial("MODEL-ENDED-TURN");
+        /* Rendered from the SAME `stop_reason` PA receives — never recomputed here, so the log
+         * cannot say one thing while the wire says another. */
+        if (stop_reason == PB_STOP_CAP)          puts_serial("CAP");
+        else if (stop_reason == PB_STOP_KV_FULL) puts_serial("KV-FULL");
+        else                                     puts_serial("MODEL-ENDED-TURN");
         /* #6: the think/answer split. think counts tokens 0..closer INCLUSIVE (the
          * closer is thought scaffolding, not answer text); answer is the remainder.
          * closer=none means the model never closed the channel -- thought ran to the
@@ -705,6 +861,7 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
         infer_stats_msg_t st;
         st.tokens = (uint32_t)n_gen;
         st.tsc_cycles = gen_cyc;
+        st.stop_reason = stop_reason;   /* #9: rides the EXISTING channel — no new message type */
         shmem_ipc_send(response_ring, MSG_INFER_STATS, seq, &st, (uint16_t)sizeof st);
     }
 
@@ -908,8 +1065,11 @@ static void pb_serve_loop(shmem_ring_t *request_ring, shmem_ring_t *response_rin
                  * invalidate the performance record. The workload keeps 50; the budget goes to the
                  * lane a human actually reads. */
                 {
-                    int lane_cap = (msg_type == MSG_QUERY_LONG) ? PB_GEN_MAX_CONTROL_IN
-                                                                : PB_GEN_MAX_WORKLOAD;
+                    /* ONE lane test, TWO derived values: the token cap and #18's front-loading
+                     * instruction. handle_query is given the lane explicitly rather than left to
+                     * infer it from the cap — see the comment on that function. */
+                    int is_ctrl   = (msg_type == MSG_QUERY_LONG);
+                    int lane_cap  = is_ctrl ? PB_GEN_MAX_CONTROL_IN : PB_GEN_MAX_WORKLOAD;
 #if JARVIS_CONTROL_IN_PROBE
                     /* Probe-only boundary evidence: which lane PB actually saw, and the cap it
                      * chose. Deployed builds print nothing. */
@@ -923,7 +1083,7 @@ static void pb_serve_loop(shmem_ring_t *request_ring, shmem_ring_t *response_rin
 #endif
                     handle_query(response_ring, resp_notif,
                                  msg_seq, (const char *)payload, msg_len,
-                                 qm, state, tok, bos_id, lane_cap);
+                                 qm, state, tok, bos_id, lane_cap, is_ctrl);
                 }
                 break;
 

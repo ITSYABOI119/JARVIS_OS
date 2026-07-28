@@ -715,12 +715,28 @@ def main():
     rep1, _ = decode_control_reply(_build_reply(1, 51, b'refuse key-extraction'), REPLY_KEY)
     check(rep1['verdict_name'] == 'refused' and rep1['text_bytes'] == b'refuse key-extraction',
           "verdict 1 -> 'refused'; the reason-class LABEL is the whole payload (never the query)")
-    check(VERDICT_NAMES == {0: 'answered', 1: 'refused', 2: 'degraded', 3: 'failed'},
-          "VERDICT_NAMES matches the box's 4 exit paths")
+    check(VERDICT_NAMES == {0: 'answered', 1: 'refused', 2: 'degraded', 3: 'failed',
+                            4: 'answered (truncated)'},
+          "VERDICT_NAMES matches the box's 5 exit paths")
     rep2, _ = decode_control_reply(_build_reply(2, 52, b'degraded'), REPLY_KEY)
     rep3, _ = decode_control_reply(_build_reply(3, 53, b'timeout'), REPLY_KEY)
     check(rep2['verdict_name'] == 'degraded' and rep3['verdict_name'] == 'failed',
           "verdicts 2/3 -> 'degraded'/'failed'")
+    # #9: verdict 4 = answered but CUT OFF. The load-bearing property is not the name — it is that
+    # the TEXT still arrives. A truncated answer is a real answer that stops early, so a receiver
+    # that dropped or blanked it would lose information the operator already paid for.
+    rep4, e4 = decode_control_reply(_build_reply(4, 54, b'a page fault occurs when'), REPLY_KEY)
+    check(e4 is None and rep4 is not None and rep4['verdict'] == 4
+          and rep4['verdict_name'] == 'answered (truncated)'
+          and rep4['text_bytes'] == b'a page fault occurs when',
+          "verdict 4 -> 'answered (truncated)' AND the answer text is still delivered")
+    # An UNKNOWN verdict must also still deliver its text. Nothing validates the verdict as a
+    # range, deliberately: a box that learns a new verdict before this receiver does must not have
+    # its answers silently vanish here — the same failure shape as the M2 tlen ceiling.
+    rep9, e9 = decode_control_reply(_build_reply(9, 55, b'from a future box'), REPLY_KEY)
+    check(e9 is None and rep9 is not None and rep9['verdict_name'] == '?9'
+          and rep9['text_bytes'] == b'from a future box',
+          "an UNRECOGNISED verdict is reported verbatim and still delivers its text")
 
     # --- the forgery/tamper matrix: EVERY row must DROP (None + a reason), never render ---
     good = _build_reply(0, 60, b'hello world')          # 46 + 11 = 57 bytes

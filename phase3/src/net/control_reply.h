@@ -18,12 +18,22 @@
  * SCOPE: the control-IN REPLY only. Telemetry-OUT (the ~1 Hz broadcast) stays CRC-only and
  * UNCHANGED by design — it is non-sensitive and broadcast on purpose.
  *
+ * VERDICT 4 (#9, 2026-07-28) — "answered, but the answer was CUT OFF". Added as a new VALUE on the
+ * existing 1-byte verdict field: no wire change, no version bump, and none of the 12-place lockstep
+ * a v3 field would have triggered. It is a MARKER ON A GENUINE ANSWER, not an error state — the
+ * text is delivered identically to verdict 0, because it is complete as far as it goes. Only PB's
+ * CAP and KV-FULL stops qualify; the model reaching its declared end-of-turn is COMPLETION, and
+ * marking that truncated would raise the flag on nearly every short factual answer. This module is
+ * unchanged by it — `verdict` was always an opaque byte here — but the value is documented at the
+ * format, which is the only place a reader looks for what a verdict byte can be.
+ *
  * ── WIRE FORMAT v2 (little-endian; v1 was CRC-only and was NEVER DEPLOYED) ──────────────
  *
  *   off        size   field
  *   0          4      "JRPL" magic
  *   4          1      version = 2
- *   5          1      verdict   (0 answered / 1 refused / 2 degraded / 3 failed)
+ *   5          1      verdict   (0 answered / 1 refused / 2 degraded / 3 failed /
+ *                                4 answered-but-truncated)
  *   6          2      seq       u16 LE   (the request seq, truncated to u16)
  *   8          2      tlen      u16 LE
  *   10         tlen   text      (printable-sanitized, <= CTRL_REPLY_TEXT_MAX)

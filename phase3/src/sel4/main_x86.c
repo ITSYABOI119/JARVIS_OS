@@ -276,11 +276,26 @@ static uint16_t          g_cache_growth_count = 0;
 static uint16_t          g_infer_last_tokens = 0;
 static uint16_t          g_infer_last_tok_x100 = 0;
 
+/* #9: WHY PB stopped generating, latched from the same MSG_INFER_STATS message. PB_STOP_UNKNOWN
+ * until a stats message carrying the field arrives. pa_ctrl_gate CLEARS this to UNKNOWN before it
+ * dispatches, so a value read at the answered exit is THIS inference's — never a leftover from a
+ * previous workload generation. */
+static uint8_t           g_infer_last_stop = PB_STOP_UNKNOWN;
+
 static void infer_stats_latch(const uint8_t *payload, uint16_t len)
 {
     infer_stats_msg_t st;
-    if (len < (uint16_t)sizeof st) return;
-    memcpy(&st, payload, sizeof st);
+    /* DEFENSIVE, AND THE TWO SIZES ARE CHECKED SEPARATELY ON PURPOSE. PA and PB ship together so
+     * this should never bite — but the naive `len < sizeof st` guard would, the moment the struct
+     * grew, silently reject the whole message and take the live tok/s figure down with it. The v4
+     * prefix (tokens + cycles) is latched from any message long enough to carry it; stop_reason is
+     * latched only if the message is long enough to carry that too. A short message costs the
+     * truncation signal, never the throughput one. */
+    const uint16_t v4_len = (uint16_t)(sizeof st.tokens + sizeof st.tsc_cycles);
+    if (len < v4_len) return;
+    memset(&st, 0, sizeof st);
+    memcpy(&st, payload, len < (uint16_t)sizeof st ? (size_t)len : sizeof st);
+    g_infer_last_stop = (len >= (uint16_t)sizeof st) ? st.stop_reason : PB_STOP_UNKNOWN;
     g_infer_last_tokens = (uint16_t)(st.tokens > 65535u ? 65535u : st.tokens);
     uint64_t gen_ms = st.tsc_cycles / TSC_PER_MS;
     if (gen_ms > 0 && st.tokens > 0) {
@@ -3177,6 +3192,14 @@ static void pa_ctrl_gate(const control_result_t *cres)
 #endif
 
     uint16_t cseq = g_ctrl_route_seq++;
+    /* #9: clear the stop-reason latch BEFORE dispatching, so whatever is read at the answered exit
+     * belongs to THIS inference. The latch is global and every lane's MSG_INFER_STATS writes it, so
+     * without this a control-IN answer could inherit a previous WORKLOAD generation's CAP — and the
+     * workload lane hits its 50-token cap constantly, which would mark nearly every control-IN
+     * answer truncated. Clearing to UNKNOWN also means a stats message that never arrives reports
+     * "not truncated" rather than a fabricated claim. */
+    g_infer_last_stop = PB_STOP_UNKNOWN;
+
     /* MSG_QUERY_LONG: the control-IN lane gets the long-answer token cap. Every other sender
      * (workload, wake, probes) keeps MSG_QUERY and the 50-token workload cap. */
     shmem_ipc_send(shared_request_ring, MSG_QUERY_LONG, cseq, cres->query, cres->query_len);
@@ -3281,7 +3304,33 @@ static void pa_ctrl_gate(const control_result_t *cres)
         epi_batch_add(qs, (served_locally && roff > 0) ? EPI_ACT_CONTROL_IN_LOCAL : EPI_ACT_CONTROL_IN,
                       roff > 0 ? EPI_OUT_OK : EPI_OUT_ERROR, roff > 0 ? resp : NULL);
 #endif
-        ctrl_send_reply((uint16_t)cres->seq, 0 /*answered*/, resp, roff);   /* the sanitized, bounded answer */
+        /* #9: ANSWERED (0) or ANSWERED-BUT-CUT-OFF (4). A new VALUE on the existing 1-byte verdict
+         * field — no wire change, no version bump, no JRPL v3 and none of its 12-place lockstep.
+         *
+         * ONLY CAP and KV-FULL are truncation. MODEL-ENDED-TURN means the model finished, and most
+         * answers finish; marking those truncated would cry wolf until the marker meant nothing.
+         *
+         * A LOCALLY-served answer can never be truncated by PB — it was rendered by PA from live
+         * state (SYSFACTS) or is a canned string (DECLINE), and no generation ran. Reading the
+         * latch for it would report some earlier inference's stop reason.
+         *
+         * The text is sent EITHER WAY and is byte-identical: verdict 4 is a marker ON a genuine
+         * answer, not an error state that withholds it. */
+        uint8_t rverdict = 0;   /* answered */
+#if JARVIS_ROUTING
+        if (!served_locally &&
+            (g_infer_last_stop == PB_STOP_CAP || g_infer_last_stop == PB_STOP_KV_FULL))
+            rverdict = 4;
+#else
+        if (g_infer_last_stop == PB_STOP_CAP || g_infer_last_stop == PB_STOP_KV_FULL)
+            rverdict = 4;
+#endif
+        if (rverdict == 4) {
+            puts_serial("[CTRL-IN-RESP] TRUNCATED (stop=");
+            puts_serial(g_infer_last_stop == PB_STOP_CAP ? "CAP" : "KV-FULL");
+            puts_serial(") -> verdict=4\n");
+        }
+        ctrl_send_reply((uint16_t)cres->seq, rverdict, resp, roff);   /* the sanitized, bounded answer */
     } else {
         /* (§7.5b) timeout or fault-mid-route: honest FAIL. NEVER q_errors++ — a control-IN failure
          * is not a workload error. A pure timeout feeds the PB miss-counter under KM2B_LANE_CTRL
@@ -5516,6 +5565,41 @@ static void *main_continued(void *arg UNUSED)
             pa_ctrl_gate(&pr);            /* poll_max=2000 -> timeout -> [CTRL-IN-REPLY] verdict=3 */
         } else {
             puts_serial("[CTRL-IN-PROBE] FAIL timeout-leg frame not accepted\n");
+        }
+        /* #9 leg — THE FALSE-POSITIVE CHECK, and the gate is worthless without it. Every other
+         * routed leg here either hits the token cap or fails, so a verdict-4 implementation that
+         * simply marked EVERY answer truncated would pass G4 trivially. This leg routes a question
+         * short enough that the model ENDS ITS TURN inside the budget, with the FULL poll budget
+         * (route #3 — pa_ctrl_gate's PROBE==3 hook shrinks only the 2nd), and asserts the reply is
+         * verdict 0, NOT 4. "in one line" is the phrasing measured at n=27 MODEL-ENDED-TURN.
+         * Sequenced AFTER the timeout leg and BEFORE the degraded latch: PB is still alive here. */
+        control_replay_init(&g_ctrl_replay, CONTROL_TEST_EPOCH);
+        pjl = build_probe_jctl(pj, g_ctrl_key, 14u, 0xE8, "what is a mutex in one line");
+        pfl = net_build_udp_broadcast(pf, sizeof pf, g_net.nic.mac, JARVIS_BOX_IP,
+                                      40000, (uint16_t)CONTROL_PORT, pj, pjl);
+        pv = (pfl > 0) ? ctrl_roundtrip_sync(pf, (size_t)pfl, &pr) : CV_DROP_PARSE;
+        if (pv == CV_ACCEPT) {
+            puts_serial("[CTRL-IN-PROBE] short-answer (expect verdict=0, NOT 4) q=\"what is a mutex in one line\"\n");
+            pa_ctrl_gate(&pr);            /* full budget -> MODEL-ENDED-TURN -> verdict=0 */
+        } else {
+            puts_serial("[CTRL-IN-PROBE] FAIL short-answer frame not accepted\n");
+        }
+        /* #9 leg — THE TRUNCATION CASE (verdict 4). PB clamps this marker query's cap to
+         * PB_GEN_CAPPROBE_TOKENS so generation genuinely runs out of budget mid-answer, which is
+         * the real condition and not a faked stop reason. Needed because #18 made the ordinary
+         * questions END THEIR TURN early — the branch would otherwise ship unexercised. Expect:
+         * [PB] gen ... stop=CAP -> [CTRL-IN-RESP] TRUNCATED -> [CTRL-IN-REPLY] verdict=4, WITH the
+         * partial answer still delivered (len > 0). Full poll budget; still before the degraded latch. */
+        control_replay_init(&g_ctrl_replay, CONTROL_TEST_EPOCH);
+        pjl = build_probe_jctl(pj, g_ctrl_key, 15u, 0xEC, "CAPPROBE explain mutexes");
+        pfl = net_build_udp_broadcast(pf, sizeof pf, g_net.nic.mac, JARVIS_BOX_IP,
+                                      40000, (uint16_t)CONTROL_PORT, pj, pjl);
+        pv = (pfl > 0) ? ctrl_roundtrip_sync(pf, (size_t)pfl, &pr) : CV_DROP_PARSE;
+        if (pv == CV_ACCEPT) {
+            puts_serial("[CTRL-IN-PROBE] truncated-answer (expect verdict=4) q=\"CAPPROBE explain mutexes\"\n");
+            pa_ctrl_gate(&pr);            /* clamped cap -> stop=CAP -> verdict=4, text still sent */
+        } else {
+            puts_serial("[CTRL-IN-PROBE] FAIL truncation-leg frame not accepted\n");
         }
         /* FINAL leg — STRICTLY LAST (g_pb_dead is a TERMINAL latch that kills ALL PB dispatch for
          * the rest of the boot; sequencing it before the route/refuse legs would starve them — the

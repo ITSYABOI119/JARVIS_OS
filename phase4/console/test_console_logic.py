@@ -190,8 +190,20 @@ def main():
             check(r1.get('verdict') == 1 and r1.get('verdict_name') == 'refused'
                   and r1.get('seq') == 12346 and r1.get('text') == 'refuse key-extraction',
                   "refused reply exposed with its reason label (got %r)" % (r1,))
+            # #9: a TRUNCATED reply (verdict 4) must survive the ring carrying its TEXT. The ring
+            # is verdict-agnostic by design, so this pins that nothing added a verdict filter —
+            # a truncated answer is a real answer and dropping it here would lose it silently.
+            page.evaluate("window.__push({kind:'control_reply', verdict:4,"
+                          " verdict_name:'answered (truncated)', seq:12347,"
+                          " text:'a page fault occurs when', crc_ok:true, recv_ts:5})")
+            reps = state(page)['replies']
+            check(len(reps) == 3, "truncated reply appended (len == 3, got %r)" % len(reps))
+            r2 = reps[2] if len(reps) > 2 else {}
+            check(r2.get('verdict') == 4 and r2.get('seq') == 12347
+                  and r2.get('text') == 'a page fault occurs when',
+                  "#9: verdict-4 reply survives the ring WITH its answer text (got %r)" % (r2,))
             check((state(page)['latest'] or {}).get('seq') == 6,
-                  "after two replies, state.latest is STILL the last telemetry packet")
+                  "after three replies, state.latest is STILL the last telemetry packet")
             page.close()
 
             browser.close()

@@ -256,6 +256,20 @@ workload.
   supporting decomposition, nothing more.**
 - **A cap raise remains ruled out** on the arithmetic above, independent of this result.
 
+### 8.4b SHIPPED (2026-07-28) — the one-clause instruction, and what §8.4 does and does not cover
+
+**§8.4's "do not ship this instruction" is scoped to the TWO-CLAUSE variant measured in `1df800a`.**
+It is not a verdict on front-loading as such — the same section names an instruction *without*
+`", then elaborate"` as the obvious next experiment. That experiment was then run (the front-load-only
+round, whose responses are in `BLIND_SET.md` and whose provenance §8.6 documents), and the one-clause
+instruction is now **SHIPPED** into `inference_server.c`'s control-IN prompt — see the #18 commit and
+`ANSWER_QUALITY_DESIGN.md` §13 for the implementation and its four findings.
+
+Scores are deliberately not restated here; §8.6's provenance caveats govern them, and the one that
+matters for a shipped change is that **two of the four arms are RECORDED rather than byte-exact**,
+and the round's rubric gained a fifth rule — so **within-run deltas stand and cross-run absolutes do
+not.**
+
 ### 8.5 A harness bug this run exposed — and it touches §1's results too
 
 **The chrome-strip was corrupting content.** It ran on EVERY response line rather than only the one

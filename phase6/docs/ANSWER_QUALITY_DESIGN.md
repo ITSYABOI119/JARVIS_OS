@@ -572,4 +572,147 @@ an answer budget. That is a separate decision, as instructed.
 - `poll_max`'s wall-time is **still unmeasured**. The budget was sized to fit its pessimistic
   reading rather than to justify a larger one.
 - The `[PB] lane` / `[PB] gen` instrumentation is probe-gated; a deployed build prints nothing, so
-  the stop reason is not observable in production.
+  the stop reason is not observable in production. **CLOSED at M3 — see §13.** The stop reason now
+  leaves PB on the existing `MSG_INFER_STATS` channel and reaches the operator as reply verdict 4,
+  so it is observable in production **on the wire**, which is where it matters, rather than in a log
+  a deployed build never writes.
+
+---
+
+## 13. M3 (2026-07-28) — #18 front-loading, and #9 an answer that says when it was cut
+
+Two changes, one commit. Both are **control-IN only**; the workload lane is untouched.
+
+### 13.1 #18 — the front-loading instruction
+
+`"Answer the question directly in your first sentence."` (~10 tokens), injected into the control-IN
+prompt in the slot the retrieval preamble already uses.
+
+**Why a prompt change and not a model swap.** The re-benched deficit (`4274ca4`) was answer
+**ORDER**, not answer quality: this model preambles before answering, so at a finite cap the cut
+lands on the substance. That is an interaction between the model's STYLE and OUR cap — not a model
+defect — which is why the fix belongs in the prompt. Measured blind, same rubric same run:
+**E2B 9.0 vs Llama 3.1 8B 7.8**, E2B baseline 4.3. The incumbent beats the nominal bench winner, so
+**no model swap is happening** and #17 (Bonsai low-bit) is deprioritised rather than cancelled.
+
+**Exactly one clause.** The two-clause variant (`", then elaborate."`) was measured NET-HARMFUL in
+`1df800a` — `"then elaborate"` overrode `"in one line"`, driving control length-violations 0.0 → 7.0
+and quality 8.0 → 4.0.
+
+**Four implementation findings, each of which would have been a defect:**
+
+1. **`handle_query` does not know its lane.** It took `max_tokens` only; the lane is resolved in the
+   caller. Testing `max_tokens == 250` would have been a coincidence, not a fact — the day the two
+   caps matched it would silently have started front-loading the WORKLOAD and re-based the 5.46
+   tok/s record with no error anywhere. The lane is now an **explicit parameter**, and both it and
+   the cap derive from one `msg_type` test.
+2. **The g3-preamble slot is triple-gated** (`#if JARVIS_G3_RETRIEVAL` / `if (g_sctx_pb)` /
+   `pre_len > 0`). An instruction placed *in* that block would vanish on every retrieval miss —
+   which is common by design, since the complete-sentence rule suppresses fragments — and vanish
+   entirely in a `JARVIS_G3_RETRIEVAL=0` build. It is emitted as a **separate unconditional
+   injection at the same position**.
+3. **The token budget could overflow.** `g3_prompt_budget` derives room from `n_prompt` *at the
+   moment it is called*, and the instruction is appended after it, so the preamble could be granted
+   room the instruction then consumed. The budget call now reserves for it.
+4. **`G3_SUFFIX_TOKS` was the wrong constant to reuse** — `g3_retrieval.h` is included only under
+   `#if JARVIS_G3_RETRIEVAL`, so the bound check would not have compiled in a G3=0 build. That is
+   finding (2)'s mistake repeated one level down. A lane-independent `PB_TEMPLATE_SUFFIX_TOKS` now
+   serves both the query-encode bound and #18's check, replacing a bare literal `6`.
+
+### 13.2 #9 — a cut-off answer says so
+
+**Verdict 4 = "answered, but cut off".** A new VALUE on the existing 1-byte verdict field: no wire
+change, no version bump, no JRPL v3 and none of its 12-place lockstep.
+
+- **PB reports why it stopped** over the existing `MSG_INFER_STATS` (0x11), which already arrives
+  *before* the response chunks and is therefore latched in the same drain pass with no terminator
+  race. `stop_reason` is a new byte on an **internal IPC struct, not a wire format** — PA and PB
+  ship together, so there is nothing to version. PA still size-checks defensively, and checks the v4
+  prefix and the new field **separately**: the naive `len < sizeof st` guard would, the moment the
+  struct grew, have rejected the whole message and taken the live tok/s figure down with it.
+- **Only `CAP` and `KV-FULL` are truncation.** `MODEL-ENDED-TURN` is the model finishing, and most
+  answers finish — marking those truncated would cry wolf until the marker meant nothing.
+- **The latch is cleared before dispatch.** It is global and every lane writes it; the workload lane
+  hits its 50-token cap constantly, so without the clear nearly every control-IN answer would have
+  been marked truncated. Clearing to `UNKNOWN` also means a stats message that never arrives reports
+  *not truncated* rather than a fabricated claim.
+- **A locally-served answer is never truncated.** SYSFACTS/DECLINE are rendered by PA and ran no
+  generation, so the verdict-4 test is guarded on `!served_locally`.
+- **The text is delivered identically either way.** Verdict 4 is a marker ON a genuine answer, not
+  an error state — it is complete as far as it goes, and withholding it would discard work already
+  done.
+
+**§2e correction, carried from the prompt and confirmed against source: PA-side transport truncation
+is currently UNREACHABLE.** The cap was derived so the clamp cannot bind — 250 × 5.66 B/token (the
+*worst* measured density) = 1415 ≤ 1426. So the only reachable truncation today is PB's token cap,
+and the PA-side clamp is a **guard for a future cap raise, not the live path**. A corollary caught in
+passing: do **not** infer truncation from `roff == CTRL_REPLY_TEXT_MAX` — an answer that exactly fits
+is not truncated, and that off-by-one would ship a false claim to the operator.
+
+### 13.3 Honest limits
+
+- **A boundary answer is reported CAP even if the model was about to finish.** If generation ends
+  exactly at the cap, the next token *might* have been the end-of-turn — we cannot know without
+  generating it. "We stopped because of the cap" is the honest report, and it is the conservative
+  direction only in the sense that it never hides a real truncation; it can over-report on a
+  1-in-250 coincidence.
+- **A truncated answer entering the recall corpus is already handled**, and not by this change:
+  `g3_clean_answer_len` cuts to the last COMPLETE SENTENCE, so a fragment tail is suppressed at
+  recall time regardless of verdict.
+- **The #18 evidence is llama.cpp on the Main PC**, not our engine, which is ~3.7× slower on the
+  same silicon. Only the ratios transfer.
+- **Thin-answer risk**, flagged unprompted by a judge: open questions now get single sentences that
+  *"under a normal rubric would score as thin"*. 16 of 30 real questions want one line — the other
+  14 do not. Worth watching once this is deployed.
+
+### 13.4 KVM gate (2026-07-28) — and the finding the two changes produced together
+
+**G1 — the workload lane is untouched, proven by byte-comparison against a same-fixture control.**
+A pre-change build was run first on the same image in `--snapshot` mode, then the changed build.
+Both: `q=100 hits=71 infer=13 hb=11 shield=5 err=0` — the long-standing signature — and the 14
+`[INFER]` lines are **byte-identical, md5 `1ed542bbea2e994108b1cadf683b8e8c` on both**. Zero
+`[PB] gen` / `[CTRL-IN-PROBE]` / `FRONTLOAD` / `TRUNCATED` lines in the deploy config, zero
+FATAL/MODEL-BAD/ANOMALY. **Re-established a second time against the FINAL source** after the G4
+probe legs were added — those are `#if JARVIS_CONTROL_IN_PROBE`-gated, but "it is gated so it cannot
+matter" is an assumption, and the same md5 came back.
+
+**G2 — the instruction is in the prompt, asserted from the artifact.** `instr=10` on every
+control-IN generation (`[PB] gen n=38 prompt=83 instr=10 cap=250 …`), the measured count matching
+what the constant encodes, `n_prompt` 24–83 against `prompt_ids[256]`. 0 `FRONTLOAD SKIPPED`.
+
+**G3 — front-loading works and the §2c ordering is safe.** Answers open with the answer
+(*"A page fault is a crucial event in virtual memory management that occurs when…"*,
+*"A mutex (mutual exclusion) is a synchronization primitive used to…"*). **0 occurrences of
+`<|channel>` / `thought`** — and this was not a soft test: one leg carried a **296-byte recall
+preamble** (`[CTRL-RECALL] hit=1 recall=1 len=296`) ahead of the instruction, which is exactly the
+mid-clause-preamble hazard `f1fc84b` documented. The ordering holds.
+
+**G4 — truncation is reported, both directions.** All five verdicts observed in one run:
+`stop=CAP` → `[CTRL-IN-RESP] TRUNCATED (stop=CAP) -> verdict=4` → `[CTRL-IN-REPLY] verdict=4 len=82`
+**with the partial answer still delivered**; and two naturally-ending answers → `verdict=0`, NOT 4.
+
+**THE FINDING, and it is the interesting part: #18 largely REMOVED the condition #9 exists to
+report.** `"what is a page fault?"` was measured at M2 as `n=250 stop=CAP` — it ran to the cap. With
+the front-loading instruction the same question ends at **`n=38 stop=MODEL-ENDED-TURN`**. Answering
+directly instead of preambling does not just move the substance inside the budget, it means the
+budget is no longer reached. Consequences, both real:
+
+- **The verdict-4 branch would have shipped UNEXERCISED.** No ordinary question in the probe reached
+  the cap any more. That is precisely how `JARVIS_RING_PROBE`'s silent chunk-drop survived — a
+  branch nothing runs is a branch nobody has checked — so a probe-gated `CAPPROBE` marker query was
+  added that clamps the cap to `PB_GEN_CAPPROBE_TOKENS` (12). It changes **only the cap**: the model
+  genuinely runs out of budget mid-answer, which is the real condition, not a faked stop reason.
+- **#9 is now mostly a guard rather than a routine signal** — which is the right outcome, and does
+  not make it optional: the cap still binds on genuinely long explanatory answers, and #14
+  (multi-frame) remains the constraint if the cap is ever raised.
+
+**G5 — host suites, counts re-derived from the run:** receiver **277**, console honesty **203**,
+console logic **27**, console e2e **49**; 0 FAIL.
+
+**One pre-existing artifact, reported rather than hidden:** the probe's FIRST leg logs
+`[CTRL-IN-PROBE] FAIL expected accept (input round trip)`. It sends **seq 1** and, unlike every
+later leg, does **not** call `control_replay_init` first — so it runs against the floor persisted in
+the shared KVM fixture, which this run read as `[CTRL-FLOOR] resumed floor=1542 wc=7`. Replay
+protection correctly dropping a seq-1 frame below a floor of 1542 is the feature working. Not caused
+by this change (which touches no parse/auth/replay code), and the same landmine the 6-5/M4d
+pre-flight documented: *a low probe seq reads as a failure while the system behaves perfectly.*

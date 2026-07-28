@@ -392,6 +392,23 @@ def main():
     # panel must say so rather than pulse "awaiting" forever and imply delivery.
     check('nothing here says the box received it' in ctl.lower(),
           "a long-unanswered turn states plainly that delivery is not implied")
+    # --- #9: a CUT-OFF answer must SAY it was cut off ------------------------------------------
+    # This is the honesty the change exists for. Before #9 a truncated answer arrived as verdict 0
+    # and was rendered as a COMPLETE one — the operator got a third of an answer with nothing on
+    # screen to say so. The panel must (a) know verdict 4, (b) still show the text (it is a real
+    # answer, complete as far as it goes — hiding it would discard work the box already did), and
+    # (c) state plainly that it stopped early.
+    check("4: {" in ctl.replace(' ', '') or "4:{" in ctl.replace(' ', ''),
+          "#9: the verdict table knows verdict 4 (answered-but-truncated)")
+    check('cut off' in ctl.lower(),
+          "#9: a truncated reply says it was CUT OFF rather than reading as a complete answer")
+    check('v === 4' in ctl,
+          "#9: replyBody has an explicit verdict-4 branch (not left to the unknown-verdict path)")
+    # The text must be rendered on the 4 branch exactly as it is on 0 — teeth against a future
+    # 'tidy-up' that turns a truncated answer into a bare status line and drops the answer.
+    check(ctl.count('r.text || ') >= 2,
+          "#9: verdict 4 renders the ANSWER TEXT (same as verdict 0), not just a status line")
+
     # TEETH #4: the banned demo-kit composer must not sneak back in via this new surface.
     check('<textarea' not in ctl.lower(), "Control-IN uses no <textarea (banned demo-kit composer)")
     check('<input' in ctl, "Control-IN uses a single-line <input (the 172-byte wire cap)")

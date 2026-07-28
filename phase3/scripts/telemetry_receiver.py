@@ -142,7 +142,8 @@ DEFAULT_PORT = 51000
 # 6-5/M4b — the JRPL reply is v2 and AUTHENTICATED (HMAC-SHA256):
 #     0      4     "JRPL"
 #     4      1     version = 2
-#     5      1     verdict (0 answered / 1 refused / 2 degraded / 3 failed)
+#     5      1     verdict (0 answered / 1 refused / 2 degraded / 3 failed /
+#                           4 answered-but-truncated)
 #     6      2     seq   u16 LE (the request seq truncated to u16)
 #     8      2     tlen  u16 LE
 #     10     tlen  text (printable-sanitized, <= CTRL_REPLY_TEXT_MAX)
@@ -183,7 +184,15 @@ BOX_IP = '192.168.100.143'
 
 # A refused verdict is a DEFINED-ABUSE-CLASS refusal (the box's query SHIELD), never a claim
 # that an attack or an injection was detected.
-VERDICT_NAMES = {0: 'answered', 1: 'refused', 2: 'degraded', 3: 'failed'}
+#
+# 4 (#9) = the box answered, but generation was CUT OFF (PB hit its token cap or ran out of KV).
+# The text is a real answer and is rendered exactly as verdict 0's is; 4 only adds the fact that
+# there was more to come. Nothing here validates the verdict as a RANGE — an unrecognised value
+# falls through to '?%d' below rather than being dropped — which is deliberate: a box emitting a
+# verdict this receiver has not learned yet must still deliver its answer. The M2 lesson (a
+# box-only ceiling bump silently making long answers VANISH) applies to verdicts too.
+VERDICT_NAMES = {0: 'answered', 1: 'refused', 2: 'degraded', 3: 'failed',
+                 4: 'answered (truncated)'}
 
 # LOCALHOST GUARD #1 (per-request peer): the peer addresses the signing endpoint will serve.
 LOOPBACK_PEERS = ('127.0.0.1', '::1', '::ffff:127.0.0.1')

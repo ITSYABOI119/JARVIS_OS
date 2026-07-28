@@ -174,11 +174,14 @@ function ControlIn({ store }) {
   }
 
   // ---- verdicts + reply body ----------------------------------------------
+  // 4 (#9) = the box answered but generation was CUT OFF. Tone 'ok', not 'warn': the box did not
+  // fail and the answer is real — it just stops early, and the sub-line says so.
   const VERDICTS = {
     0: { name: 'answered', tone: 'ok' },
     1: { name: 'refused', tone: 'warn' },
     2: { name: 'degraded', tone: 'warn' },
     3: { name: 'failed', tone: 'err' },
+    4: { name: 'answered · cut off', tone: 'ok' },
   };
 
   function replyBody(r) {
@@ -195,6 +198,14 @@ function ControlIn({ store }) {
     if (v === 0) {
       return { color: C.ok, line: r.text || '(empty answer)',
         sub: 'answered — one bounded inference or a cache hit on the box' };
+    }
+    // #9: a CUT-OFF answer. The text is genuine and complete as far as it goes, so it is rendered
+    // exactly as verdict 0's is — this is a marker, not an error state, and hiding or dimming the
+    // answer would throw away work the box already did. The sub-line is the whole point: before
+    // #9 this same text arrived as verdict 0 and was presented as a COMPLETE answer.
+    if (v === 4) {
+      return { color: C.ok, line: r.text || '(empty answer)',
+        sub: 'answered — cut off at the generation limit; there was more to say' };
     }
     if (v === 1) {
       return { color: C.warn, line: 'refused — defined abuse class',

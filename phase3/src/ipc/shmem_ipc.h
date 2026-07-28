@@ -48,11 +48,31 @@
                                   * Sent BEFORE the MSG_RESPONSE chunks so PA latches it in the
                                   * same drain pass (no terminator race). Always-on, tiny. */
 
+/* WHY GENERATION STOPPED. Three outcomes that all look like "a short answer" from outside, and
+ * only two of them mean the model was cut off mid-thought:
+ *   CAP     — hit the lane's token budget with more to say  => TRUNCATED
+ *   KV_FULL — ran out of KV context with more to say        => TRUNCATED
+ *   ENDED   — the model emitted its declared end-of-turn    => COMPLETE, not truncation
+ * Marking ENDED as truncated would cry wolf on every short factual answer, which is most of them.
+ * UNKNOWN is the fail-safe: a stats message that never arrived, or one from a PB too old to carry
+ * the field, reports UNKNOWN and PA treats it as NOT truncated — a missing signal must never
+ * manufacture a truncation claim. */
+#define PB_STOP_UNKNOWN     0
+#define PB_STOP_MODEL_ENDED 1
+#define PB_STOP_CAP         2
+#define PB_STOP_KV_FULL     3
+
 /* MSG_INFER_STATS payload — a real per-inference measurement (never a benchmark constant).
- * PA divides by its TSC_PER_MS to derive ms -> tok/s; PB reports RAW tokens + cycles. */
+ * PA divides by its TSC_PER_MS to derive ms -> tok/s; PB reports RAW tokens + cycles.
+ *
+ * #9 appended `stop_reason`. THIS IS AN INTERNAL IPC STRUCT, NOT A WIRE FORMAT — PA and PB are
+ * built from the same tree and ship together, so there is no version to bump and no lockstep
+ * beyond this file. PA still size-checks defensively rather than assuming (infer_stats_latch),
+ * because "they always match" is an assumption that costs nothing to stop making. */
 typedef struct __attribute__((packed)) {
     uint32_t tokens;      /* tokens generated this inference (n_gen) */
     uint64_t tsc_cycles;  /* RDTSC delta over the generation loop */
+    uint8_t  stop_reason; /* PB_STOP_* — #9: was the answer cut off, or did it finish? */
 } infer_stats_msg_t;
 
 /* Ring buffer header (64 bytes, at start of shared page) */
