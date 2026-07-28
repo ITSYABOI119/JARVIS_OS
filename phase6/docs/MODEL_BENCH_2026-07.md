@@ -312,6 +312,15 @@ the artifacts. The output name derives from the tag, so two prefixes can no long
 unprefixed run is unaffected. Verified by execution in all three directions (blocked without a tag /
 proceeds with one / unprefixed path unchanged).
 
+**The blind-judging keys for ALL THREE rounds are now committed** in `models/quality_results_v2/`,
+named per round (`blind_key_rebench_4model.json`, `blind_key_frontload_twoclause.json`,
+`blind_key_frontload_only.json`); they had been sitting in an OS temp scratchpad that gets reaped.
+**That includes the re-bench round's key, so §1's ranking has committed provenance rather than
+session-local provenance.** One consequence is documented in `BLIND_SET_KEY.md` §0 and is easy to
+walk into: **`SYS-n` labels are fixed within a blind set but NOT across rounds** — in the re-bench
+round `SYS-2` is E4B and `SYS-4` is E2B-with-recommended-sampler, while two of the four labels
+coincidentally agree with the front-loading rounds, which makes a spot-check misleading.
+
 ---
 
 *Harness: `phase3/scripts/bench_models.sh` (quality phase). Raw outputs:

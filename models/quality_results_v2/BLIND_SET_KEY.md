@@ -7,7 +7,38 @@ It is a **separate file on purpose.** `BLIND_SET.md` is a blind judging artifact
 it can be re-judged by a panel that has not seen which system is which. Do not merge this key into
 its header.
 
-**This key says which system produced which text. It does not re-validate any score** — see §5.
+**This key says which system produced which text. It does not re-validate any score** — see §6.
+
+---
+
+## ⚠️ 0. READ FIRST — labels do NOT survive across rounds
+
+**Within one blind set, labels are fixed per system.** The set's own header says so and it holds.
+
+**Across rounds they are not.** Each round's generator assigned labels independently. The same
+`SYS-n` string means **different systems in different rounds**:
+
+| label | this round (front-loading) | the `4274ca4` re-bench round |
+|---|---|---|
+| SYS-1 | Gemma 4 E2B — baseline | Gemma 4 E2B — greedy *(same by coincidence)* |
+| **SYS-2** | **Gemma 4 E2B — front-loaded** | **Gemma 4 E4B** |
+| SYS-3 | Llama 3.1 8B — baseline | Llama 3.1 8B — greedy *(same by coincidence)* |
+| **SYS-4** | **Llama 3.1 8B — front-loaded** | **Gemma 4 E2B — recommended sampler** |
+
+**The trap is worse than it looks: two of the four labels DO agree, and two do not.** Anyone
+spot-checking SYS-1 or SYS-3, finding them consistent, and concluding the mapping carries over will
+then misattribute **E4B's answers to E2B**. Partial agreement is more misleading than none.
+
+> **Never carry a label mapping from one blind set to another. Read the key for the round in front
+> of you.**
+
+Which key belongs to which round:
+
+| round | key file |
+|---|---|
+| 4-model re-bench (*"the incumbent is third"*) | `blind_key_rebench_4model.json` |
+| front-loading, **two-clause** (`…, then elaborate.`) | `blind_key_frontload_twoclause.json` |
+| front-loading, **front-load-only** — **this file's round** | `blind_key_frontload_only.json` |
 
 ---
 
@@ -16,11 +47,14 @@ its header.
 | label | system | arm | evidence class |
 |---|---|---|---|
 | **SYS-1** | Gemma 4 E2B | baseline (no prefix) | **PROVEN** — byte-exact |
-| **SYS-2** | Gemma 4 E2B | front-load-only | **INFERRED** — label continuity |
+| **SYS-2** | Gemma 4 E2B | front-load-only | **RECORDED** — generator's own key, independently validated |
 | **SYS-3** | Llama 3.1 8B Instruct | baseline (no prefix) | **PROVEN** — byte-exact |
-| **SYS-4** | Llama 3.1 8B Instruct | front-load-only | **INFERRED** — label continuity |
+| **SYS-4** | Llama 3.1 8B Instruct | front-load-only | **RECORDED** — generator's own key, independently validated |
 
-**Two rows are proven and two are inferred. Do not quote this table without that distinction.**
+**RECORDED is not the same class as PROVEN, and this file does not pretend it is.** PROVEN means a
+byte-exact match against a committed artifact. RECORDED means the generator's own key file says so
+and that key is independently validated — see §3. It is stronger than an inference and weaker than
+a byte-exact match.
 
 **Gemma 4 E4B is NOT in this run.** The committed E4B outputs in this directory belong to the earlier
 model bench-off and match no SYS label here. This round was a four-arm E2B-vs-Llama comparison.
@@ -47,33 +81,55 @@ arms were carried over unchanged, so their text is byte-identical to the committ
 **The check that makes this safe rather than circular:** the SYS-2 and SYS-4 probe strings were
 searched across the same seven files and matched **ZERO** of them. Had either matched, the
 "only the front-loaded arms were re-run" premise would have been false and this whole recovery
-invalid. It did not.
+invalid. It did not. **That check still does work and is retained.**
 
 ---
 
-## 3. How the INFERRED rows were inferred
+## 3. How the RECORDED rows are established
 
-There is no surviving per-model artifact from the front-load-only round to match against (§4), so
-SYS-2 and SYS-4 rest on three converging arguments rather than a byte-exact match:
+The front-load-only round left no surviving per-model artifact for SYS-2/SYS-4 (§5), so they cannot
+be proven byte-exact. They rest on the **generator's own key**, `blind_key_frontload_only.json`,
+which is documentary rather than deduced.
 
-1. **Label continuity by construction.** The anonymiser assigns labels deterministically from the
-   sorted system keys, so the label order is identical between the two blind sets built by it.
-2. **`BLIND_SET.md`'s own header** asserts that each label is FIXED to one system for all 12
-   questions, and only the presentation order shuffles. (That property was itself a correction — an
-   earlier version of the anonymiser assigned labels by *position*, which a judge caught.)
-3. **Cross-set confirmation.** In the git-`HEAD` copy of `BLIND_SET.md` — the earlier *two-clause*
-   round — SYS-2's Q1 answer matches `gemma-4-E2B-it-Q4_K_M.greedy.frontload.txt` byte-exact. That
-   fixes SYS-2 = "E2B, front-loaded" in the set that still has its artifacts, and the label ordering
-   is unchanged between the two sets.
+**The label continuity is recorded, not inferred.** The two-clause key and the front-load-only key
+differ in **exactly two lines**, both prose descriptions:
 
-**Corroboration, recorded but not counted as proof:** the run's own generated key file existed in
-session scratch (`BLIND_KEY4.json`, not committed) and agreed with the mapping above on all four
-rows. It is not a durable repo artifact and shares provenance with the thing it corroborates, so it
-does not upgrade SYS-2/SYS-4 to PROVEN.
+```
+<     "B": "Gemma 4 E2B  — FRONT-LOADED           [SUBJECT, after]",
+>     "B": "Gemma 4 E2B  — FRONT-ONLY (1 clause)   [SUBJECT, after]",
+<     "D": "Llama 3.1 8B — FRONT-LOADED           [CONTROL, after]"
+>     "D": "Llama 3.1 8B — FRONT-ONLY (1 clause)   [CONTROL, after]"
+```
+
+`label_to_system` is **identical**, and all **twelve** `per_prompt_order` entries are **identical**.
+The generator reused the same assignment and the same per-question shuffle.
+
+**Why this is more than self-reference:** that same key file's SYS-1 and SYS-3 rows are the two
+proven byte-exact in §2. **A key that is verifiably correct on every row that can be checked
+independently is trustworthy on the rows that cannot.** It is validated where validation is
+possible, which is what separates RECORDED from a bare assertion.
 
 ---
 
-## 4. What does NOT survive
+## 4. Key provenance — recovered from an ephemeral scratchpad
+
+All three keys were recovered from an OS temp scratchpad **that gets reaped**. They are committed
+here for that reason: they are the blind-judging provenance for three published rounds, including the
+re-bench whose ranking is a committed conclusion.
+
+| committed as | original filename | mtime | md5 | keys which round |
+|---|---|---|---|---|
+| `blind_key_rebench_4model.json` | `BLIND_KEY.json` | Jul 27 23:25 | `0247fefaf5d7014441cec8997dd8baf6` | the 4-model re-bench |
+| `blind_key_frontload_twoclause.json` | `BLIND_KEY2.json` | Jul 28 14:57 | `e0c40a106c601e871bf999df2cb15b3e` | two-clause front-loading |
+| `blind_key_frontload_only.json` | `BLIND_KEY4.json` | Jul 28 16:05 | `60de3a2cd9bc62d73f70d4762b435fc7` | front-load-only *(this round)* |
+
+A fourth file, `BLIND_KEY3.json` (Jul 28 15:43), was **byte-identical** to `BLIND_KEY4.json` — same
+md5 — so only one copy was taken. Renaming costs no provenance: the original names, mtimes and md5s
+are recorded above, and each destination was md5-verified against its source after copying.
+
+---
+
+## 5. What does NOT survive
 
 **The front-load-only per-model `.txt` files are gone — they exist nowhere.**
 
@@ -90,7 +146,7 @@ files in this directory.
 
 ---
 
-## 5. Scoring caveat — read this before comparing any numbers
+## 6. Scoring caveat — read this before comparing any numbers
 
 The judging rubric for the front-load-only round gained a **fifth rule** that earlier rounds did not
 have: *"a short complete answer beats a longer one that is cut off."*
@@ -107,7 +163,7 @@ Consequently:
 
 ---
 
-## 6. What each arm was given
+## 7. What each arm was given
 
 | arm | prefix inside the user turn |
 |---|---|

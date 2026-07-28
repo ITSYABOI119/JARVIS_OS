@@ -1,0 +1,88 @@
+{
+  "systems": {
+    "SYS-A": "Gemma 4 E2B (incumbent) \u2014 greedy",
+    "SYS-B": "Gemma 4 E4B \u2014 greedy",
+    "SYS-C": "Llama 3.1 8B Instruct \u2014 greedy",
+    "SYS-D": "Gemma 4 E2B (incumbent) \u2014 recommended sampler (t=1.0 top_p .95 top_k 64)"
+  },
+  "label_to_system": {
+    "[SYS-1]": "SYS-A",
+    "[SYS-2]": "SYS-B",
+    "[SYS-3]": "SYS-C",
+    "[SYS-4]": "SYS-D"
+  },
+  "per_prompt_order": {
+    "Q1": [
+      "[SYS-4]",
+      "[SYS-1]",
+      "[SYS-2]",
+      "[SYS-3]"
+    ],
+    "Q2": [
+      "[SYS-4]",
+      "[SYS-2]",
+      "[SYS-3]",
+      "[SYS-1]"
+    ],
+    "Q3": [
+      "[SYS-1]",
+      "[SYS-2]",
+      "[SYS-4]",
+      "[SYS-3]"
+    ],
+    "Q4": [
+      "[SYS-1]",
+      "[SYS-3]",
+      "[SYS-2]",
+      "[SYS-4]"
+    ],
+    "Q5": [
+      "[SYS-2]",
+      "[SYS-1]",
+      "[SYS-3]",
+      "[SYS-4]"
+    ],
+    "Q6": [
+      "[SYS-4]",
+      "[SYS-2]",
+      "[SYS-3]",
+      "[SYS-1]"
+    ],
+    "Q7": [
+      "[SYS-4]",
+      "[SYS-1]",
+      "[SYS-2]",
+      "[SYS-3]"
+    ],
+    "Q8": [
+      "[SYS-3]",
+      "[SYS-4]",
+      "[SYS-2]",
+      "[SYS-1]"
+    ],
+    "Q9": [
+      "[SYS-1]",
+      "[SYS-4]",
+      "[SYS-2]",
+      "[SYS-3]"
+    ],
+    "Q10": [
+      "[SYS-4]",
+      "[SYS-2]",
+      "[SYS-3]",
+      "[SYS-1]"
+    ],
+    "Q11": [
+      "[SYS-2]",
+      "[SYS-1]",
+      "[SYS-3]",
+      "[SYS-4]"
+    ],
+    "Q12": [
+      "[SYS-1]",
+      "[SYS-4]",
+      "[SYS-3]",
+      "[SYS-2]"
+    ]
+  }
+}

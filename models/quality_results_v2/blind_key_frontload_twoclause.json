@@ -1,0 +1,88 @@
+{
+  "systems": {
+    "A": "Gemma 4 E2B  \u2014 BASELINE (known 6.1)   [SUBJECT, before]",
+    "B": "Gemma 4 E2B  \u2014 FRONT-LOADED           [SUBJECT, after]",
+    "C": "Llama 3.1 8B \u2014 BASELINE (known 7.7)   [CONTROL, before]",
+    "D": "Llama 3.1 8B \u2014 FRONT-LOADED           [CONTROL, after]"
+  },
+  "label_to_system": {
+    "[SYS-1]": "A",
+    "[SYS-2]": "B",
+    "[SYS-3]": "C",
+    "[SYS-4]": "D"
+  },
+  "per_prompt_order": {
+    "Q1": [
+      "[SYS-2]",
+      "[SYS-1]",
+      "[SYS-3]",
+      "[SYS-4]"
+    ],
+    "Q2": [
+      "[SYS-4]",
+      "[SYS-2]",
+      "[SYS-3]",
+      "[SYS-1]"
+    ],
+    "Q3": [
+      "[SYS-3]",
+      "[SYS-1]",
+      "[SYS-2]",
+      "[SYS-4]"
+    ],
+    "Q4": [
+      "[SYS-2]",
+      "[SYS-1]",
+      "[SYS-3]",
+      "[SYS-4]"
+    ],
+    "Q5": [
+      "[SYS-4]",
+      "[SYS-3]",
+      "[SYS-2]",
+      "[SYS-1]"
+    ],
+    "Q6": [
+      "[SYS-1]",
+      "[SYS-4]",
+      "[SYS-2]",
+      "[SYS-3]"
+    ],
+    "Q7": [
+      "[SYS-1]",
+      "[SYS-2]",
+      "[SYS-3]",
+      "[SYS-4]"
+    ],
+    "Q8": [
+      "[SYS-2]",
+      "[SYS-3]",
+      "[SYS-1]",
+      "[SYS-4]"
+    ],
+    "Q9": [
+      "[SYS-3]",
+      "[SYS-4]",
+      "[SYS-1]",
+      "[SYS-2]"
+    ],
+    "Q10": [
+      "[SYS-2]",
+      "[SYS-1]",
+      "[SYS-3]",
+      "[SYS-4]"
+    ],
+    "Q11": [
+      "[SYS-1]",
+      "[SYS-2]",
+      "[SYS-3]",
+      "[SYS-4]"
+    ],
+    "Q12": [
+      "[SYS-4]",
+      "[SYS-2]",
+      "[SYS-3]",
+      "[SYS-1]"
+    ]
+  }
+}
