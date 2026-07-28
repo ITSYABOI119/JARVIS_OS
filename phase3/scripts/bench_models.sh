@@ -179,10 +179,18 @@ run_quality() {
     # answers is invisible at 100 tokens.
     GEN_MAX="${QUALITY_GEN_MAX:-250}"
 
+    # ---- QUALITY_PREFIX: text prepended INSIDE the user turn, before the question.
+    # DEPLOYABLE BY CONSTRUCTION: that is the exact slot inference_server.c already
+    # injects the G3 retrieval preamble into (after the user-turn \n, before the
+    # question) — same mechanism, different text. A harness-only device would
+    # measure something the box could never ship.
+    PREFIX="${QUALITY_PREFIX:-}"
+
     echo "Prompts: ${#PROMPTS[@]} (real control-IN workload + 4 continuity)"
     echo "Max tokens: $GEN_MAX (deployed PB_GEN_MAX_CONTROL_IN)"
     echo "Sampler: ${QUALITY_SAMPLER:-greedy} (${SAMPLER_ARGS[*]})"
     echo "Template: --jinja (each model's OWN chat template); thinking: -rea off"
+    echo "Prefix: ${PREFIX:-<none>}"
     echo ""
 
     N=0
@@ -191,7 +199,7 @@ run_quality() {
         NAME=$(basename "$model" .gguf)
         # sampler in the filename: a greedy and a recommended-sampler run of the
         # same model are different evidence and must not overwrite each other
-        OUTFILE="$QUALITY_DIR/$NAME.${QUALITY_SAMPLER:-greedy}.txt"
+        OUTFILE="$QUALITY_DIR/$NAME.${QUALITY_SAMPLER:-greedy}${PREFIX:+.frontload}.txt"
 
         echo "[$N/$COUNT] $NAME"
 
@@ -199,8 +207,8 @@ run_quality() {
         # The 2026-04 bench-off was misread for three months because everyone
         # trusted the flags instead of looking at the built prompt. Do not
         # trust -rea/--jinja either: assert. One extra model load per model.
-        VP=$("$LLAMA_CLI" -m "$model" -p "ping" -n 1 -ngl 0 -t 8 -st --jinja \
-                 -rea off --verbose-prompt 2>&1 </dev/null | head -60)
+        VP=$("$LLAMA_CLI" -m "$model" -p "${PREFIX:+$PREFIX }ping" -n 1 -ngl 0 -t 8 -st \
+                 --jinja -rea off --verbose-prompt 2>&1 </dev/null | tr -d '\010\r' | head -80)
         TMPL_OK=0; THINK_LEAK=0
         echo "$VP" | grep -qE '<\|turn>|<\|im_start\|>|\[INST\]|<\|start_header_id\|>|<start_of_turn>' && TMPL_OK=1
         echo "$VP" | grep -qE '<\|think\|>|\[Start thinking\]|<\|channel>' && THINK_LEAK=1
@@ -218,6 +226,10 @@ run_quality() {
         {
             echo "=== $NAME ==="
             echo "Sampler: ${QUALITY_SAMPLER:-greedy} | GenMax: $GEN_MAX | template_applied=$TMPL_OK think_leak=$THINK_LEAK"
+            echo "Prefix: ${PREFIX:-<none>}"
+            echo "--- BUILT PROMPT (verbatim from --verbose-prompt; assert, do not trust the flag) ---"
+            printf '%s\n' "$VP" | sed -n '/<|turn>user/,/<|turn>model/p;/<|im_start|>/,/assistant/p' | head -8
+            echo "--- end built prompt ---"
             echo "Date: $(date)"
             echo ""
 
@@ -242,9 +254,12 @@ run_quality() {
                 # NOTE -no-cnv is NOT usable: the current binary rejects it
                 # ("--no-conversation is not supported by llama-cli") and proceeds
                 # WITH conversation mode. Do not "fix" this by adding it back.
+                # THE ONE VARIABLE UNDER TEST: the prefix goes inside the user turn,
+                # ahead of the question — the g3-preamble slot, so it is deployable.
+                PSEND="${PREFIX:+$PREFIX }$P"
                 RAW=$("$LLAMA_CLI" \
                     -m "$model" \
-                    -p "$P" \
+                    -p "$PSEND" \
                     -n "$GEN_MAX" \
                     "${SAMPLER_ARGS[@]}" \
                     -ngl 0 \
@@ -262,10 +277,36 @@ run_quality() {
                 # The spinner is BACKSPACE-driven (0x08), not plain characters —
                 # verified with od -c. Delete \b and \r FIRST, or the leading-run
                 # strip below silently does nothing.
+                # STRIP THE SPINNER FROM THE FIRST RESPONSE LINE ONLY.
+                #
+                # The previous version ran the strip on EVERY line, which silently
+                # ATE CONTENT: "/**" became "**", "// x" became "x", markdown "- item"
+                # lost its bullet, and ALL CODE INDENTATION was removed. A blind judge
+                # spotted the mangled C comments and correctly called it a pipeline
+                # artifact rather than a model failure. Its character class was also
+                # malformed (awk: "regexp escape sequence `\ ' is not a known regexp
+                # operator"), so it never stripped the backslash it was written for.
+                #
+                # The spinner only ever appears at the head of the FIRST line, so that
+                # is the only place the strip belongs.
+                # index() against a plain set, NOT a regex class: getting a literal
+                # backslash into an awk bracket expression failed three different
+                # ways (`[|\/\\-]`, `[\\|\/-]` and a "|/-\\ \t" string all left the
+                # backslash behind, with awk warning about the escape). sprintf("%c",92)
+                # is unambiguous.
                 RESPONSE=$(printf '%s\n' "$RAW" | tr -d '\010\r' | awk '
-                    /^> /         { inresp = 1; next }
+                    BEGIN         { BS = sprintf("%c", 92) }
+                    /^> /         { inresp = 1; first = 1; next }
                     /^\[ Prompt:/ { inresp = 0 }
-                    inresp        { sub(/^[-|\/\\ \t]+/, ""); if (length($0)) print }
+                    inresp {
+                        if (first) {
+                            while (length($0) > 0 && \
+                                   (index("|/- \t", substr($0,1,1)) > 0 || substr($0,1,1) == BS))
+                                $0 = substr($0,2)
+                            first = 0
+                        }
+                        if (length($0)) print
+                    }
                 ')
                 [ -z "$RESPONSE" ] && RESPONSE="[NO RESPONSE EXTRACTED]"
                 # tok/s comes free from llama-cli's own timing line (B-req: report speed)

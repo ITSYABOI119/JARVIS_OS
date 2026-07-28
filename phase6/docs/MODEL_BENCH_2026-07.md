@@ -171,6 +171,115 @@ best choice and the old evidence was measured wrongly"* — not *"model X is bet
 
 ---
 
+## 8. FRONT-LOAD TEST (2026-07-28) — the mechanism is REAL, the fix is NET-HARMFUL
+
+§3 found the discriminator was **answer order**, not quality. If so the incumbent's deficit is
+structural, and structure is a prompt instruction — testable for one sentence, against a cap raise
+that **cannot work**: max observed answer 1313 B against a 1426 B ceiling is **113 B ≈ 23 tokens, 9%**,
+while reaching Gemma's substance needs ~400 tokens ≈ 1960 B, **1.37× over**. A meaningful cap raise
+needs multi-frame (#14).
+
+**ONE VARIABLE.** Cap 250, greedy, same 12 questions, same fixed-label blind protocol.
+Instruction (**13 tokens**, measured with `llama-tokenize` less BOS = 5.2% of the budget):
+
+> `Answer the question directly in your first sentence, then elaborate.`
+
+Placed **inside the user turn, before the question** — the exact slot `g3_build_preamble_answer_only`
+already injects into (`inference_server.c:373-390`), so it is deployable by construction. Asserted
+from the BUILT prompt, not from a flag:
+
+```
+<|turn>user
+Answer the question directly in your first sentence, then elaborate. ping<turn|>
+<|turn>model
+```
+
+### 8.1 The mechanism WORKED — substance delivery, measured objectively
+
+Per-question substance tests (does a "difference between X and Y" reach Y; does the handshake reach
+all three steps; does the C function have a body):
+
+| system | substance before | after | cut mid-sentence | max bytes |
+|---|---|---|---|---|
+| **Gemma 4 E2B — SUBJECT** | **1/5** | **5/5** | 3/12 → 6/12 | 1233 → 1268 |
+| Gemma 4 E4B — family | 4/5 | 4/5 | 4/12 → 2/12 | 1179 → 1381 |
+| **Llama 3.1 8B — CONTROL** | **5/5** | **5/5** | 4/12 → 3/12 | 1313 → **1404** |
+
+The subject gained **every** fatally-cut question. Cuts went UP while substance went UP — answers are
+now cut in the *elaboration* instead of before the substance. **The structural hypothesis is
+confirmed as a mechanism.** The control was already 5/5 and stayed there, confirming the premise that
+it front-loads (it could not rise — a ceiling effect, so this leg alone is weak evidence).
+
+### 8.2 The SCORES say do not ship it
+
+Judged **paired inside one run** (subject before/after + control before/after), because comparing
+across judging runs would confound the effect with judge drift — and it does: the re-measured
+baselines came in at E2B **7.0** (was 6.1) and Llama **8.0** (was 7.7).
+
+| system | quality | length violations /12 | open unanswered /5 |
+|---|---|---|---|
+| Llama — CONTROL, before | **8.0** | 0.0 | 0.0 |
+| E2B — SUBJECT, before | **7.0** | 0.6 | 3.0 |
+| E2B — SUBJECT, **after** | **6.4** | 3.2 | **1.0** |
+| Llama — CONTROL, **after** | **4.0** | **7.0** | 0.0 |
+
+> **SUBJECT −0.6. CONTROL −4.0.**
+
+**PRE-REGISTERED VERDICT APPLIED: "E2B falls → report it. Instructions consume prompt budget and can
+distort."** That is the outcome. Not the structural-confirmed row.
+
+### 8.3 Why — and the two halves of the instruction did opposite things
+
+The instruction conflated two directives, and the data separates them cleanly:
+
+- **"answer directly in your first sentence"** did its job: open-unanswered **3.0 → 1.0** (judges),
+  matching the 1/5 → 5/5 substance measurement.
+- **"then elaborate"** overrode *"in one line"*: length violations **0.6 → 3.2** on the subject and
+  **0.0 → 7.0** on the control — Llama padded **every** length-constrained question, answering
+  *"in one line, what is a mutex"* with a 150-word essay.
+
+**The control had nothing to gain (0/5 unanswered already) and everything to lose, so it lost 4
+points.** That is the cleanest possible demonstration that this instruction is not free.
+
+**7 of the 12 questions carry an explicit length instruction**, and all four systems obeyed them
+perfectly before the instruction. Trading that for truncation-survival is a bad trade on this
+workload.
+
+### 8.4 Recommendation
+
+**The model question STANDS. This did not dissolve it.** But it is not a dead end either:
+
+- **Do not ship this instruction.** It is net-negative for both systems tested.
+- **An instruction WITHOUT "then elaborate" is UNTESTED** and is the obvious next experiment — the
+  decomposition above says the damage came entirely from that clause. §5 forbade tuning mid-run, so
+  it was not tried. **Do not read this as "a better wording would work"; it is a hypothesis with one
+  supporting decomposition, nothing more.**
+- **A cap raise remains ruled out** on the arithmetic above, independent of this result.
+
+### 8.5 A harness bug this run exposed — and it touches §1's results too
+
+**The chrome-strip was corrupting content.** It ran on EVERY response line rather than only the one
+carrying the spinner, so `/**` became `**`, `// x` became `x`, markdown `- item` lost its bullet, and
+**all code indentation was removed**. Its character class was also malformed (awk warned
+``regexp escape sequence `\ ' is not a known regexp operator``), so it never stripped the backslash it
+was written for. A blind judge spotted the mangled C comments across three systems and correctly
+called it a pipeline artifact rather than a model failure.
+
+**Fixed** (strip the first line only; `index()` against a plain set, since getting a literal backslash
+into an awk bracket expression failed three ways) and verified on fresh output.
+
+**Scope, stated rather than glossed:** the corruption applied **symmetrically to all arms** in both
+§1 and §8, the verdicts rest on length-compliance and substance-delivery (neither involves comment
+markers), and the judge excluded Q12 from differential scoring. **The rankings stand; Q12 alone
+cannot be scored from the committed outputs.** Anyone wanting a clean Q12 must re-run — the harness
+is now correct.
+
+**A second trap, worth more than it looks:** an earlier `sudo systemd-run` bench left the result files
+**root-owned**, so later non-sudo runs **silently failed to overwrite them** while still printing
+"Saved to …". Verification was reading stale files. `chown -R jarvis:jarvis` before trusting a re-run.
+
+---
+
 *Harness: `phase3/scripts/bench_models.sh` (quality phase). Raw outputs:
 `models/quality_results_v2/`. Blind set: `models/quality_results_v2/BLIND_SET.md`.
 Companion to `THINKING_MODE_RESEARCH.md` (why the re-bench was needed) and
