@@ -34,6 +34,16 @@ enum {
     KM2B_LANE_WAKE      = 4,   /* 6-2/M1: a wake-consult dispatch timed out (append-only) */
     KM2B_LANE_INPUT     = 5,   /* 6-5/M2b-2: a forwarded control-IN frame got no candidate back (append-only) */
     KM2B_LANE_CTRL      = 6,   /* 6-5/M3-2a: a routed control-IN query got no PB response (a PB hang; append-only) */
+    KM2B_LANE_EMBED     = 7,   /* C/M1b-3: an embed request got no MSG_EMBED_RESULT (append-only).
+                                * ATTRIBUTION ONLY — an embed timeout DELIBERATELY does NOT advance
+                                * the miss counter. PB serves one message at a time, so a request
+                                * issued mid-generation legitimately waits up to ~46 s for a
+                                * 250-token control-IN answer; feeding those to the shared counter
+                                * would let THREE of them restart a perfectly healthy PB — the
+                                * documented "a slow generation is indistinguishable from a wedged
+                                * PB" hazard, reached through a new door. Detection loses nothing:
+                                * the continuously-running inference/heartbeat/shield lanes already
+                                * observe PB, so a genuinely wedged PB is caught by them. */
 };
 
 typedef struct {

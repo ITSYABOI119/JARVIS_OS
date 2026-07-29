@@ -99,6 +99,9 @@
 #endif
 #if JARVIS_ROUTING
 #include "route.h"               /* Phase 6 6-6/B/M1: the control-IN query router + the sysfacts whitelist */
+#if JARVIS_EMBED
+#include "embed_region.h"        /* Phase C / C/M1b-3: the embed transport region + its staleness predicate */
+#endif
 #endif
 #include "jarvis_ui_tokens.h"   /* Step 2c-2b: FBP_ and JUI_ palette + geometry (single source) */
 
@@ -893,6 +896,22 @@ static uint32_t   g_restart_count = 0;          /* v7 telemetry (K/M3): lifetime
 static uint32_t   g_actions_fired = 0;          /* v7: allowlisted actions EXECUTED (SHIELD-gated) */
 static uint32_t   g_actions_blocked = 0;        /* v7: actions BLOCKED by the action gate (NOT query-SHIELD) */
 static km2b_miss_t g_pb_miss = {0};             /* K/M2c: consecutive PB-contact timeouts (all 3 lanes; cache neutral) */
+#if JARVIS_EMBED
+/* C/M1b-3: the embed transport region, mapped at EMBED_*_VADDR_A. `g_embed_seq` is the request
+ * counter whose EQUALITY with the header's seq is what makes a result non-stale — see
+ * embed_region.h. It is uint32 and allowed to wrap; the predicate compares by equality precisely
+ * so the wrap needs no special case. */
+static embed_ctrl_t *g_embed_ctrl        = NULL;
+static float        *g_embed_vec         = NULL;
+static int           g_embed_region_ready = 0;
+/* uint16, NOT uint32, and that is forced by the transport rather than chosen: shmem_ipc_send()'s
+ * seq parameter is uint16_t, so 16 bits is all PB can be told about which request it is answering —
+ * and PB MUST echo the seq it was ASKED for, or a late result could not be told from a fresh one.
+ * The header field stays uint32 (host-tested that way); the widened value compares fine because
+ * embed_result_usable() uses EQUALITY, which needs no wrap handling at either width. 65536
+ * outstanding requests before reuse is far past any realistic staleness window. */
+static uint16_t      g_embed_seq          = 0;
+#endif
 static uint64_t   g_pb_last_ack_ms = 0;         /* K/M2c: uptime at the last genuine typed PB dequeue (age instrument) */
 static uint32_t   g_restart_window = 0;         /* windowed consecutive restarts (crash-loop bound) */
 static uint32_t   g_healthy_since_restart = 0;  /* coherent PB responses since the last restart */
@@ -1547,6 +1566,26 @@ static int find_model_untypeds(uintptr_t *model_paddr_out,
 #define SCTX_VADDR_A   (SHMEM_VADDR_A + 2UL * 4096UL)  /* Process A view */
 #define SCTX_VADDR_B   (SHMEM_VADDR_B + 2UL * 4096UL)  /* Process B view (= shmem_base + 2*PAGE) */
 
+/* C/M1b-3: the embed transport region — frames 4 and 5, immediately after the context pool.
+ *   frame 3 = control header (embed_ctrl_t)   frame 4 = the 4096 B vector
+ * Two pages because a 1024-float vector is EXACTLY one page with zero bytes spare, so the header
+ * cannot share it. See embed_region.h for the staleness contract these addresses carry. */
+#define EMBED_CTRL_VADDR_A  (SHMEM_VADDR_A + 3UL * 4096UL)
+#define EMBED_VEC_VADDR_A   (SHMEM_VADDR_A + 4UL * 4096UL)
+#define EMBED_CTRL_VADDR_B  (SHMEM_VADDR_B + 3UL * 4096UL)
+#define EMBED_VEC_VADDR_B   (SHMEM_VADDR_B + 4UL * 4096UL)
+
+/* THE FRAME COUNT, IN ONE PLACE. It was three separate hardcoded 3s (the array, the alloc loop, the
+ * PA map loop, the PB map loop) — extending the region by hand would have meant finding all of them,
+ * and missing one maps a frame nobody allocated or leaves a page unmapped in exactly one vspace.
+ * Same "derive it, don't restate it" rule resp[]/text_out already follow.
+ * At JARVIS_EMBED=0 this is 3 and every expression below folds to its pre-C/M1b-3 value. */
+#if JARVIS_EMBED
+#define SHMEM_FRAME_COUNT  5
+#else
+#define SHMEM_FRAME_COUNT  3
+#endif
+
 /* Model loading via GRUB multiboot module.
  * GRUB loads model.gguf into RAM. seL4 exposes it as untypeds.
  * We map those frames into Process B's vspace at this address. */
@@ -1747,9 +1786,10 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
     }
     puts_serial("[JARVIS] Inference process configured\n");
 
-    /* Allocate 3 physical frames: 2 IPC rings + 1 shared context pool (Phase 5 G2/M1) */
-    vka_object_t shmem_frames[3];
-    for (int i = 0; i < 3; i++) {
+    /* Allocate the shared frames: 2 IPC rings + 1 shared context pool (Phase 5 G2/M1)
+     * + (C/M1b-3, JARVIS_EMBED only) 2 more for the embed transport region. */
+    vka_object_t shmem_frames[SHMEM_FRAME_COUNT];
+    for (int i = 0; i < SHMEM_FRAME_COUNT; i++) {
         error = vka_alloc_frame(&vka, seL4_PageBits, &shmem_frames[i]);
         if (error) {
             puts_serial("[JARVIS] Failed to alloc shared frame\n");
@@ -1759,7 +1799,7 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
 
     /* Map frames into Process A at fixed address using direct seL4 syscalls */
     seL4_CPtr pd_a = simple_get_pd(&simple);
-    for (int i = 0; i < 3; i++) {   /* frame 2 -> SCTX_VADDR_A (the context pool) */
+    for (int i = 0; i < SHMEM_FRAME_COUNT; i++) {   /* frame 2 -> SCTX_VADDR_A; 3,4 -> the embed region */
         error = map_frame_direct(shmem_frames[i].cptr, pd_a,
             SHMEM_VADDR_A + i * 4096, seL4_AllRights);
         if (error) {
@@ -1776,7 +1816,7 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
     /* Map SAME physical pages into Process B's VSpace.
      * seL4 requires a separate cap per mapping — duplicate the frame caps. */
     seL4_CPtr pd_b = inference_process.pd.cptr;
-    for (int i = 0; i < 3; i++) {   /* frame 2 -> SCTX_VADDR_B (the context pool) */
+    for (int i = 0; i < SHMEM_FRAME_COUNT; i++) {   /* frame 2 -> SCTX_VADDR_B; 3,4 -> the embed region */
         /* Duplicate the frame cap (can't map same cap in two VSpaces) */
         cspacepath_t src, dest;
         vka_cspace_make_path(&vka, shmem_frames[i].cptr, &src);
@@ -1807,6 +1847,22 @@ static int spawn_inference_process(seL4_CPtr *req_notif_out, seL4_CPtr *resp_not
     g_sctx = (shared_context_t *)SCTX_VADDR_A;
     g_sctx_ready = 1;   /* M2: enable live population — set right after the proven init (nvme_log-independent) */
     puts_serial("[JARVIS] Shared context pool initialized (frame 3)\n");
+
+#if JARVIS_EMBED
+    /* C/M1b-3: init the embed control header PA-side, exactly as the context pool above is.
+     * ready=0 is the load-bearing field: until PB publishes, embed_result_usable() refuses the
+     * page. magic is written so a never-written page (all-zero) stays distinguishable from a
+     * legitimate not-ready one. */
+    g_embed_ctrl = (embed_ctrl_t *)EMBED_CTRL_VADDR_A;
+    g_embed_vec  = (float *)EMBED_VEC_VADDR_A;
+    g_embed_ctrl->magic  = EMBED_REGION_MAGIC;
+    g_embed_ctrl->seq    = 0;
+    g_embed_ctrl->status = EMBED_STATUS_ERR;
+    g_embed_ctrl->len    = 0;
+    __atomic_store_n(&g_embed_ctrl->ready, 0u, __ATOMIC_RELEASE);
+    g_embed_region_ready = 1;
+    puts_serial("[JARVIS] Embed region initialized (frames 4-5)\n");
+#endif
 
     void *remote_vaddr = (void *)SHMEM_VADDR_B;
 
@@ -2335,6 +2391,73 @@ static int wait_for_response(shmem_ring_t *ring, uint8_t expected_type)
     }
     return -1;
 }
+
+#if JARVIS_EMBED
+/*
+ * C/M1b-3: ask PB to embed `text`, and copy the vector out on success.
+ *
+ * Returns 0 and fills out[EMBED_DIM] on success; negative otherwise. `out` is untouched on failure —
+ * a caller that ignores the return value can never read a half-copied or stale vector.
+ *
+ * THE CORRELATION IS THE POINT. Each request takes a fresh seq, and embed_result_usable() requires
+ * the header's seq to EQUAL it. Without that, a result left over from the previous request is
+ * indistinguishable from this one's: a perfectly well-formed unit vector of the WRONG TEXT, which
+ * no cosine or norm check can detect. The ring completion (MSG_EMBED_RESULT) says "something
+ * finished"; the seq in the region says "and it was yours".
+ *
+ * TIMEOUT POLICY (§4e), and it is deliberate: a timeout here does NOT advance the K/M2c miss
+ * counter and does NOT touch q_errors. PB serves one message at a time, so a request issued while
+ * PB is mid-generation legitimately waits — up to ~46 s for a 250-token control-IN answer. Feeding
+ * those to the shared counter would let THREE of them restart a perfectly healthy PB. Detection
+ * loses nothing: the continuously-running inference/heartbeat/shield lanes already watch PB.
+ */
+static int pa_embed_request(const char *text, uint16_t text_len, float *out)
+{
+    if (!g_embed_region_ready || !text || !out) return -1;
+    if (text_len == 0 || text_len > SHMEM_MAX_PAYLOAD) return -1;
+
+    uint32_t seq = ++g_embed_seq;   /* fresh; uint32 wrap is fine — the predicate uses equality */
+
+    /* Clear the ready flag BEFORE sending. If PB is slow and we time out, the next request must not
+     * find this one's result sitting ready — the seq check would catch it, but clearing removes the
+     * window entirely rather than relying on a second line of defence. */
+    __atomic_store_n(&g_embed_ctrl->ready, 0u, __ATOMIC_RELEASE);
+
+    /* Drain stale ring traffic before the send (the F9 pre-send hygiene the other lanes use). */
+    {
+        uint8_t t; uint16_t s, l; uint8_t p[SHMEM_MAX_PAYLOAD];
+        while (shmem_ipc_recv(shared_response_ring, &t, &s, p, &l) == 0) { }
+    }
+
+    if (shmem_ipc_send(shared_request_ring, MSG_EMBED, (uint16_t)seq, text, text_len) != 0)
+        return -2;
+    seL4_Signal(g_pa_req_notif);
+
+    if (wait_for_response(shared_response_ring, MSG_EMBED_RESULT) != 0) {
+        /* Honest FAIL, and deliberately inert: no q_errors, no miss counter. KM2B_LANE_EMBED
+         * exists to attribute this line, not to feed the restart trip. */
+        puts_serial("[EMBED] request timed out (lane=");
+        put_dec((uint32_t)KM2B_LANE_EMBED);
+        puts_serial(", not counted as a PB miss by design)\n");
+        return -3;
+    }
+
+    /* ACQUIRE the ready flag FIRST — until it is set, every other header field is indeterminate. */
+    if (__atomic_load_n(&g_embed_ctrl->ready, __ATOMIC_ACQUIRE) == 0u) return -4;
+
+    if (!embed_result_usable(g_embed_ctrl, seq, EMBED_VEC_BYTES)) {
+        puts_serial("[EMBED] result REJECTED (stale/short/error) want_seq=");
+        put_dec(seq); puts_serial(" got_seq="); put_dec(g_embed_ctrl->seq);
+        puts_serial(" len="); put_dec(g_embed_ctrl->len);
+        puts_serial(" status="); put_dec(g_embed_ctrl->status);
+        seL4_DebugPutChar(10);
+        return -5;
+    }
+
+    memcpy(out, g_embed_vec, EMBED_VEC_BYTES);
+    return 0;
+}
+#endif /* JARVIS_EMBED */
 
 #if JARVIS_RESPAWN
 /* STEP-3 diagnostics: full-width hex (put_hex is 32-bit; fault IPs/addrs are 64-bit — the STEP-2
@@ -5018,6 +5141,7 @@ static void *main_continued(void *arg UNUSED)
         }
     }
 
+
 #if JARVIS_CONTROL_IN
     /* 6-5/M2b-1: spawn the SEC-014 jarvis-input parser process now that PB is up.
      * Fail-open for the box (a spawn failure leaves g_input_ready=0 -> the control-IN
@@ -5029,6 +5153,77 @@ static void *main_continued(void *arg UNUSED)
 #if JARVIS_ACTIONS
     g_pa_req_notif = req_notif; g_pa_resp_notif = resp_notif;   /* K/M2b-2: hoist the notif cptrs for the funnel */
 #endif
+
+#if JARVIS_EMBED_PROBE
+    /* C/M1b-3 G2 — THE TRANSPORT PROOF, and it is a BYTE comparison, not a cosine one.
+     *
+     * PB's own C/M1b-2 probe has already printed the raw vector for these exact strings as
+     * `[EV] <n> <hex>` (it runs before pb_serve_loop, so it is complete by now). This asks for the
+     * SAME text over MSG_EMBED and prints the received vector in the SAME format as
+     * `[EV-PA] <n> <hex>`. The gate is that the two hex lines are IDENTICAL.
+     *
+     * Why not cosine: a vector missing its last few floats — the realistic transport failure —
+     * still scores cosine ~1.0 against the right answer. The whole point of the C/M1a parity work
+     * was catching exactly that class, and it would arrive here through a different door.
+     *
+     * The strings MUST match EPROBES[] in inference_server.c verbatim, and must stay short enough
+     * to tokenize inside EMBED_MAX_CTX-1; a longer string would be truncated on one side only. */
+    if (g_embed_region_ready) {
+        static const char *const PA_EPROBES[] = {
+            "what is a page fault", "how does dns work", "what is a mutex",
+        };
+        static float pa_evec[EMBED_DIM];
+        static const char HXP[] = "0123456789abcdef";
+
+        /* WAIT FOR PB TO ACTUALLY BE SERVING FIRST. PB signals ready BEFORE it runs its own
+         * C/M1b-2 [EMBED-PROBE] (15 embeddings), and only enters pb_serve_loop afterwards — so a
+         * request sent straight after the ready handshake lands while PB is busy and times out
+         * having never reached the handler. That is a probe-sequencing artifact that looks exactly
+         * like a broken transport, and it cost one gate run to tell apart.
+         * A heartbeat can only be ACKed from inside pb_serve_loop, so it is the honest readiness
+         * signal. Bounded, and reported if it never lands. */
+        int pb_serving = 0;
+        shmem_ipc_send(shared_request_ring, MSG_HEARTBEAT, 0xE000, NULL, 0);
+        seL4_Signal(g_pa_req_notif);
+        /* Loop the WAIT, never the SEND. Re-sending while PB is busy fills the 15-slot request
+         * ring, and then the MSG_EMBED send itself fails with no slot — which presents as a
+         * transport failure caused entirely by the probe. One queued heartbeat is enough: PB will
+         * ACK it as soon as it reaches pb_serve_loop. */
+        for (int hb = 0; hb < 40 && !pb_serving; hb++) {
+            if (wait_for_response(shared_response_ring, MSG_HEARTBEAT_ACK) == 0) pb_serving = 1;
+        }
+        puts_serial(pb_serving ? "[EV-PA] PB is serving (heartbeat ACKed)\n"
+                               : "[EV-PA] WARNING: PB never ACKed a heartbeat — requests will time out\n");
+
+        puts_serial("[EV-PA] begin\n");
+        for (unsigned p = 0; p < sizeof PA_EPROBES / sizeof PA_EPROBES[0]; p++) {
+            uint16_t tl = 0; while (PA_EPROBES[p][tl]) tl++;
+            int rc = pa_embed_request(PA_EPROBES[p], tl, pa_evec);
+            if (rc != 0) {
+                puts_serial("[EV-PA] "); put_dec(p);
+                puts_serial(" FAILED rc="); put_dec((uint32_t)(-rc));
+                seL4_DebugPutChar(10);
+                continue;
+            }
+            puts_serial("[EV-PA] "); put_dec(p); seL4_DebugPutChar(' ');
+            for (unsigned i = 0; i < EMBED_DIM; i++) {
+                uint32_t w; memcpy(&w, &pa_evec[i], 4);
+                for (int s = 28; s >= 0; s -= 4) seL4_DebugPutChar(HXP[(w >> s) & 0xF]);
+            }
+            seL4_DebugPutChar(10);
+        }
+        /* STALENESS TEETH: re-validate the region against a seq that was never requested. The
+         * header is still ready + OK + right length from the last request, so ONLY the seq
+         * differs — exactly the stale-result shape, and it must be REJECTED. */
+        puts_serial("[EV-PA] stale-check (expect REJECTED): ");
+        puts_serial(embed_result_usable(g_embed_ctrl, g_embed_seq + 1000u, EMBED_VEC_BYTES)
+                    ? "ACCEPTED <-- BUG\n" : "rejected\n");
+        puts_serial("[EV-PA] end\n");
+    } else {
+        puts_serial("[EV-PA] SKIPPED (embed region not ready)\n");
+    }
+#endif
+
 #if JARVIS_ACTIONS && JARVIS_ACTION_PROBE
     /* K/M2b-2 STEP-3 real-crash probe: a GENUINE PB-main VMFault (deliberate null-READ inside PB —
      * never a wild write) exercised end-to-end: PA's fault-EP receiver detects it -> shield_assess

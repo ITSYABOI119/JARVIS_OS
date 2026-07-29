@@ -42,6 +42,14 @@
 #define EMBED_STATUS_OK      0u
 #define EMBED_STATUS_ERR     1u   /* PB could not produce a vector (not ready / forward failed) */
 
+/* Max tokens PB will encode for an embed request, INCLUDING the appended EOS.
+ * C/M1b-2 (OQ1) capped the embed model's context at 64 deliberately: C/M0.5 measured symmetric
+ * query-to-query matching as the winner, and a control-IN query is hard-capped at 172 B ~= 40-55
+ * tokens, so 64 covers it. This is NOT a free knob — if C/M2 ever embeds ANSWERS (<=512 B ~= 130
+ * tokens) that is a heap RE-BUDGET, not a bigger number: 128 tokens is 28 MiB of KV and the 512
+ * default is 112 MiB, which does not fit beside Gemma. */
+#define EMBED_MAX_CTX        64
+
 /*
  * THE PAGE INVARIANT, PINNED SO A DIMENSION CHANGE BREAKS THE BUILD.
  *

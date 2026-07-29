@@ -233,8 +233,20 @@ removed 2026-04-17) */`. That is the dynamic-model-scaling removal ADR. It is a 
 so **MSG_EMBED should take `0x12`**, leaving the tombstone intact.
 
 **The ring cannot carry a 1024-float vector safely.** Geometry: 15 slots × 256 B, `SHMEM_MAX_PAYLOAD`
-240 (`shmem_ipc.h:18-20`). A 4096 B vector = **18 chunks into a 15-slot ring**. And the existing chunk
-loop **ignores the send return code**: `int rc = shmem_ipc_send(...)`, then `(void)rc;` when
+240 (`shmem_ipc.h:18-20`). A 4096 B vector = **18 chunks into a 15-slot ring**. **That alone settles it,
+and it is the part that has not changed.** The two supporting facts below HAVE changed and are
+corrected in place at C/M1b-3, so a later reader does not find the fix and conclude the ring is now
+safe for bulk:
+
+> **CORRECTED 2026-07-30 (C/M1b-3), fact 1:** the silent-drop described next was **FIXED in `3f132ed`**.
+> The chunk loop now retries the same offset with back-pressure and advances ONLY after a send that
+> succeeded, failing loudly via `puts_serial` on exhaustion. The paragraph is kept because it records
+> why bulk data must not ride this ring, not because the drop is still live.
+> **CORRECTED, fact 2:** `text_out` is **1536**, not 512 — a response is ~6 chunks now, not ≤3. So the
+> "6× jump into a regime the code has never been in" is really more like 3×. **Neither correction
+> rescues the ring: 18 chunks into 15 slots is impossible however well a full ring is handled.**
+
+The (now-fixed) original text: the existing chunk loop **ignores the send return code**: `int rc = shmem_ipc_send(...)`, then `(void)rc;` when
 `JARVIS_DBG_RING` is off (the deploy default), with `offset += chunk; msg_seq++;` unconditional
 (`inference_server.c:500-516`), while `shmem_ipc_send` returns −1 on a full ring (`shmem_ipc.c:58,60-70`).
 **A full ring silently drops the chunk and the loop advances** — producing a truncated payload with no

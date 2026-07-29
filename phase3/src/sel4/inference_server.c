@@ -50,6 +50,9 @@ static inline uint64_t m1_rdtsc(void) {
 #include "sampling.h"
 #include "threadpool.h"
 #include "shared_context.h"
+#if JARVIS_EMBED
+#include "embed_region.h"        /* Phase C / C/M1b-3: the embed transport region layout */
+#endif
 #if JARVIS_G3_RETRIEVAL
 #include "g3_retrieval.h"       /* G3/M2: budget helper + macros (flag-gated; OFF pulls in nothing new) */
 #endif
@@ -138,6 +141,11 @@ static tokenizer_t   g_pbe_tok;
 static llama_state_t g_pbe_state;
 static gguf_ctx_t    g_pbe_ctx;
 static int           g_pbe_ready = 0;
+/* C/M1b-3: the embed transport region (frames 4-5 of the shared mapping). File-scope like the
+ * embed model state, so a respawn — which re-enters pb_serve_loop directly and never re-runs
+ * main() — keeps them valid without a stash. */
+static embed_ctrl_t *g_embed_ctrl_pb = NULL;
+static float        *g_embed_vec_pb  = NULL;
 
 /* Embed context cap. 64 tokens, per the C/M1b OQ1 ruling: C/M0.5 measured that SYMMETRIC
  * query-to-query beats asymmetric, so C/M2 embeds the stored QUERY, and a control-IN query is
@@ -1092,6 +1100,73 @@ static void pb_serve_loop(shmem_ring_t *request_ring, shmem_ring_t *response_rin
                 seL4_Signal(resp_notif);
                 break;
 
+#if JARVIS_EMBED
+            case MSG_EMBED: {
+                /* C/M1b-3: embed the payload text and publish the vector to the shared region.
+                 * The vector NEVER touches this ring — 4096 B would be 18 chunks into 15 slots.
+                 * The ring only carries this request and the small completion below. */
+                uint32_t st  = EMBED_STATUS_ERR;
+                uint32_t vlen = 0;
+
+                if (g_embed_ctrl_pb && g_embed_vec_pb && g_pbe_ready && msg_len > 0) {
+                    /* NUL-terminate into a bounded local — the payload is length-carried and is
+                     * NOT a C string (the length-not-strlen rule the stores follow). */
+                    char etext[SHMEM_MAX_PAYLOAD + 1];
+                    uint16_t el = msg_len > SHMEM_MAX_PAYLOAD ? SHMEM_MAX_PAYLOAD : msg_len;
+                    memcpy(etext, payload, el);
+                    etext[el] = '\0';
+
+                    /* Context is capped at 64 tokens (C/M1b-2, OQ1): the embedder is used on
+                     * queries, and a control-IN query is hard-capped at 172 B ~= 40-55 tokens.
+                     * Reserve one slot for the EOS the pooling depends on. */
+                    int ids[EMBED_MAX_CTX];
+                    int n = tokenizer_encode(&g_pbe_tok, etext, ids, EMBED_MAX_CTX - 1);
+                    if (n > 0) {
+                        ids[n++] = 151643;   /* EOS — appended and LAST-pooled, exactly as C/M1a's
+                                              * golden vectors were produced. Not optional: the
+                                              * pooling tap reads the final token's state. */
+                        /* Per-sequence reset is the CALLER's job (qmodel_embed_last does not do
+                         * it), and skipping it would silently blend the previous sequence's KV
+                         * into this vector — a wrong-but-plausible embedding. */
+                        g_pbe_state.pos = 0;
+                        size_t ekv = (size_t)g_pbe_state.kv_n_layers * (size_t)g_pbe_state.max_seq_len *
+                                     (size_t)g_pbe_qm.config.n_kv_heads * (size_t)g_pbe_qm.config.head_dim *
+                                     sizeof(float);
+                        memset(g_pbe_state.key_cache,   0, ekv);
+                        memset(g_pbe_state.value_cache, 0, ekv);
+
+                        /* Write STRAIGHT into the shared vector page — no bounce buffer, so there
+                         * is no second copy to get out of step with the header. */
+                        qmodel_embed_last(&g_pbe_qm, &g_pbe_state, ids, n, g_embed_vec_pb);
+                        vlen = EMBED_VEC_BYTES;
+                        st   = EMBED_STATUS_OK;
+                    }
+                }
+
+                /* PUBLISH. Order is the whole contract: every other field first, `ready` LAST with
+                 * a RELEASE store. PA acquire-loads `ready` first, so if it sees 1 it is guaranteed
+                 * to see the vector and the seq that go with it.
+                 *
+                 * seq is the REQUEST's seq, echoed — never a counter of PB's own. That is what lets
+                 * PA detect a LATE result: if PA gave up and moved on, this publishes the OLD seq
+                 * and embed_result_usable() rejects it. Publishing PB's own counter would make
+                 * every stale result look fresh. */
+                if (g_embed_ctrl_pb) {
+                    g_embed_ctrl_pb->magic  = EMBED_REGION_MAGIC;
+                    g_embed_ctrl_pb->seq    = (uint32_t)msg_seq;
+                    g_embed_ctrl_pb->status = st;
+                    g_embed_ctrl_pb->len    = vlen;
+                    __atomic_store_n(&g_embed_ctrl_pb->ready, 1u, __ATOMIC_RELEASE);
+                }
+
+                /* The completion carries NO vector — just "seq N is done", so PA's existing
+                 * wait_for_response (poll for a TYPE, drain the rest) works unchanged. */
+                shmem_ipc_send(response_ring, MSG_EMBED_RESULT, msg_seq, NULL, 0);
+                seL4_Signal(resp_notif);
+                break;
+            }
+#endif
+
             case MSG_SHIELD_CHECK: {
                 /* For now, just echo back ALLOW — full model-assisted SHIELD is future work */
                 uint8_t result = 0; /* SHIELD_ALLOW */
@@ -1252,6 +1327,12 @@ int main(int argc, char **argv)
     /* Phase 5 G2/M1: the shared context pool is the 3rd frame (after the 2 IPC rings). */
     shared_context_t *sctx = (shared_context_t *)(shmem_vaddr + 2 * SHMEM_PAGE_SIZE);
     g_sctx_pb = sctx;   /* M3: expose to handle_query for the per-inference read */
+#if JARVIS_EMBED
+    /* C/M1b-3: frames 4 and 5 are the embed transport region — derived from the SAME base, exactly
+     * as the context pool above is. PA initialises the header; PB only ever publishes into it. */
+    g_embed_ctrl_pb = (embed_ctrl_t *)(shmem_vaddr + 3 * SHMEM_PAGE_SIZE);
+    g_embed_vec_pb  = (float *)       (shmem_vaddr + 4 * SHMEM_PAGE_SIZE);
+#endif
 
     if (request_ring->header.magic != SHMEM_MAGIC ||
         response_ring->header.magic != SHMEM_MAGIC) {

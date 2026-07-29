@@ -184,7 +184,8 @@ IPC_DST="$DEST/src/ipc"
 
 # Phase 3 IPC
 IPC3_SRC="$JARVIS_DIR/phase3/src/ipc"
-IPC3_FILES=("shmem_ipc.c" "shmem_ipc.h" "ipc_transport.h")
+IPC3_FILES=("shmem_ipc.c" "shmem_ipc.h" "ipc_transport.h"
+            "embed_region.c" "embed_region.h")   # Phase C / C/M1b-3: embed transport region
 
 for f in "${IPC3_FILES[@]}"; do
     copy_file "$IPC3_SRC/$f" "$IPC_DST/$f"
@@ -339,6 +340,10 @@ done
 # Process B also needs IPC headers
 copy_file "$IPC3_SRC/shmem_ipc.h" "$PROC_B_DIR/ai/shmem_ipc.h"
 copy_file "$IPC3_SRC/shmem_ipc.c" "$PROC_B_DIR/ai/shmem_ipc.c"
+# C/M1b-3: PB needs the embed region LAYOUT (the struct + magic + status/size macros) but NOT
+# embed_region.c — PB only ever PUBLISHES into the region; embed_result_usable() is PA's call.
+# Header only, so PB links no new object.
+copy_file "$IPC3_SRC/embed_region.h" "$PROC_B_DIR/ai/embed_region.h"
 echo ""
 
 # ── [5/5] Patch CMakeLists.txt ─────────────────────────────────────
@@ -688,6 +693,23 @@ if [ -f "$CMAKE_FILE" ]; then
         fi
     else
         echo -e "  ${CYAN}OK${NC}  src/ai/route.c already in source list"
+    fi
+
+    # Phase C / C/M1b-3: add src/ipc/embed_region.c to the Process A source list if missing.
+    # UNCONDITIONAL, the route.c precedent: it is host-pure with no external dependency, so
+    # linking it is benign and inert until JARVIS_EMBED calls it — and keeping the injection
+    # ungated means the EMBED=0 build links the SAME objects as EMBED=1, which is what makes the
+    # main.c.obj OFF-object-identity comparison meaningful rather than a link-set difference.
+    if ! grep -q "src/ipc/embed_region.c" "$CMAKE_FILE"; then
+        sed -i '/src\/ai\/route.c/a\    src/ipc/embed_region.c' "$CMAKE_FILE" 2>/dev/null
+        if grep -q "src/ipc/embed_region.c" "$CMAKE_FILE"; then
+            echo -e "  ${GREEN}ADDED${NC}  src/ipc/embed_region.c to source list (C/M1b-3)"
+            PATCHED=1
+        else
+            echo -e "  ${RED}FAILED${NC}  Could not add embed_region.c — edit CMakeLists.txt manually"
+        fi
+    else
+        echo -e "  ${CYAN}OK${NC}  src/ipc/embed_region.c already in source list"
     fi
 
     # Add JARVIS_SEL4 compile definition (needed for pci.c IOPort backend)

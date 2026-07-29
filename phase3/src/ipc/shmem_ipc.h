@@ -37,7 +37,17 @@
 #define MSG_STATE_ACK      0x0E
 #define MSG_DEBUG          0x0F  /* Debug log from Process B -> Process A for NVMe logging */
 /* 0x10 reserved (was MSG_MODEL_SWAP, removed 2026-04-17) */
-/* 0x12 reserved for MSG_EMBED (Phase C / C/M1b design §4.5) — do NOT take it. */
+/* C/M1b-3 CLAIMED the 0x12 reservation this line used to hold. The vector does NOT ride this ring:
+ * 1024 floats = 4096 B = 18 chunks into a 15-slot, 240 B-payload ring, which is impossible however
+ * well the chunk loop handles a full ring. Both messages below are SMALL control traffic; the
+ * vector travels through a dedicated 2-page shared region (embed_region.h). */
+#define MSG_EMBED          0x12  /* PA -> PB: embed this text. Payload = the text, <= 240 B.
+                                  * PB writes the vector to the embed region and replies below. */
+#define MSG_EMBED_RESULT   0x14  /* PB -> PA: the embed request `seq` is complete; look in the
+                                  * region. Carries NO vector — just the completion, so
+                                  * wait_for_response's poll-for-a-TYPE pattern works unchanged.
+                                  * 0x14 and not 0x10: 0x10 is the MSG_MODEL_SWAP tombstone above
+                                  * and stays one. */
 #define MSG_QUERY_LONG     0x13  /* PA -> PB: a query whose lane may generate a LONG answer.
                                   * Identical to MSG_QUERY except for the generation token cap.
                                   * The lane is not otherwise visible to PB — PA sends the same
