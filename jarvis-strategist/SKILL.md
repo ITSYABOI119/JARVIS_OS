@@ -176,8 +176,17 @@ Write every implementation prompt to **a uniquely-named `PROMPT-<TOPIC>.md` at t
 3. **VERIFY THE WRITE LANDED before telling the user it exists.** `ls`/`head` the file. Do not say "written" on the strength of having intended to write it.
 4. **DELETE consumed prompt files YOURSELF** once their work is committed, so a stale prompt cannot be executed. A missing file is an unambiguous error; a stale file is a silent wrong-execution.
    **NEVER instruct the coding session to create, edit, or delete a `PROMPT-*.md` file.** They are the strategist's channel TO the coder — the coder reads them and nothing else. A prompt that says "consumed and deletable: …" is asking the coder to modify the channel it is being addressed on: the strategist can then no longer tell what was actually delivered, and a file the strategist is mid-write on can be clobbered. Ownership is total and one-way — **strategist creates and deletes, coder only reads.** (Happened 2026-07-25: a "consumed and deletable" line in a prompt header had the coder deleting prompt files; the operator caught it.) The same applies to `RUNBOOK-*.md`, which belongs to the OPERATOR, not the coder.
-5. Tell the user to paste only: `Read PROMPT-<TOPIC>.md at the repo root and execute it.`
-6. **A relayed prompt is IMMUTABLE.** The moment you tell the user to send it, stop editing it. A new finding goes in a NEW `PROMPT-<TOPIC>.md`, never into one already in flight.
+5. Tell the user to paste only:
+
+   `Use superpowers:executing-plans to execute PROMPT-<TOPIC>.md at the repo root.`
+
+   **Why invoke the skill rather than say "read and execute it":** a `PROMPT-*.md` **is** a written implementation plan executed in a separate session with review checkpoints, which is that skill's exact stated use. What it adds that a bare "execute it" does not: **critical review of the plan BEFORE starting, with concerns raised to the human rather than worked around** (its Step 1.3-1.4) — the single highest-value behaviour in this loop, and the one that has repeatedly caught the strategist's false premises; a todo per plan item; "don't skip verifications"; and **stop-and-ask on a blocker instead of guessing**, which reinforces the anti-corruption rule below rather than competing with it.
+6. **Every prompt MUST carry a "deviations from `executing-plans`" block**, because three of that skill's steps do not fit this project and a coder following it literally would be wrong. State them as explicit overrides — user instructions outrank skills, so they must be *written down*, not assumed:
+   - **NO git worktree.** Its Step 1.1 wants an isolated workspace via `superpowers:using-git-worktrees`. This project builds from the repo clone and syncs it to the box (`~/Desktop/JARVIS_OS`, absolute paths in `build_jarvis_x86.sh`); a worktree breaks that. *(Unrelated to the standing backlog rider that the **briefing task** get its own worktree — that is a different process racing the shared index.)*
+   - **master is expected.** Its final rule says never start implementation on master without explicit consent. This project commits directly to master by standing convention — **the prompt IS that consent**, and it should say so in those words.
+   - **NO `finishing-a-development-branch`.** Its Step 3 makes that a REQUIRED sub-skill for choosing how to integrate. Here the integration is settled: commit to master, push, verify CI green. There is no branch to finish and no merge decision to present.
+   - **Agent strategy comes from the prompt, not from the skill.** `executing-plans` redirects to `subagent-driven-development` where subagents exist (they do here). Our prompts size agents per task and sometimes require **none** — hardware-in-the-loop gates must be driven directly, because a background agent will report a watched-boot check as passing without having watched it. **The prompt's §Agent strategy wins.**
+7. **A relayed prompt is IMMUTABLE.** The moment you tell the user to send it, stop editing it. A new finding goes in a NEW `PROMPT-<TOPIC>.md`, never into one already in flight.
 
    **Why — 2026-07-26.** Content was appended to a prompt after it had been relayed. The missed content was not the hazard; the **commit message** was, because it had grown a bullet describing work the coding session never did. A coder re-reading the file at commit time would have committed a message asserting work that never happened, and **falsely-documented work is worse than undocumented work**. The file was reverted to its as-sent byte count. Note the ownership rule in rule 4 protects prompt files from the *coder*; this protects them from the *strategist*.
 
@@ -274,7 +283,8 @@ These rules apply to the prompts you generate — the coding session must follow
 
 ### Prompt Quality Checklist
 Before giving a prompt to the user, verify it includes:
-- [ ] Written to a uniquely-named `PROMPT-<TOPIC>.md` at the repo root (NOT pasted inline, NEVER a reused generic name), the write VERIFIED with `ls`/`head`, and the user given the one-line relay instruction
+- [ ] Written to a uniquely-named `PROMPT-<TOPIC>.md` at the repo root (NOT pasted inline, NEVER a reused generic name), the write VERIFIED with `ls`/`head`, and the user given the relay line **in the `superpowers:executing-plans` form** (delivery rule 5)
+- [ ] The **"deviations from `executing-plans`" block** (delivery rule 6): no worktree · master is expected and the prompt IS the consent · no `finishing-a-development-branch` · **agent strategy comes from the prompt, not the skill**
 - [ ] The anti-corruption instruction at the top ("if any part reads truncated or garbled, STOP — do not reconstruct, ask")
 - [ ] Specific file paths (not "create a test file" — say exactly where)
 - [ ] API signatures with types and return values
