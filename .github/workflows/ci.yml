@@ -383,6 +383,12 @@ jobs:
         gcc -Wall -Werror -O2 -std=c11 -I. test_km2b_miss.c km2b_miss.c -o /tmp/t_km2b_miss
         /tmp/t_km2b_miss
 
+    - name: "Phase C: C/M1b-3 embed region staleness (C)"
+      run: |
+        cd phase3/src/ipc
+        gcc -Wall -Werror -O2 -std=c11 -I. test_embed_region.c embed_region.c -o /tmp/t_embed_region
+        /tmp/t_embed_region
+
     - name: "Phase 6: K/M4 fault validity predicate (C)"
       run: |
         cd phase3/src/ai
