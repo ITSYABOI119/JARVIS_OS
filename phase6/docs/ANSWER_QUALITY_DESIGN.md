@@ -716,3 +716,93 @@ the shared KVM fixture, which this run read as `[CTRL-FLOOR] resumed floor=1542 
 protection correctly dropping a seq-1 frame below a floor of 1542 is the feature working. Not caused
 by this change (which touches no parse/auth/replay code), and the same landmine the 6-5/M4d
 pre-flight documented: *a low probe seq reads as a failure while the system behaves perfectly.*
+
+---
+
+## 14. T1c (2026-07-29) — a BOUNDED elaboration clause: measured, and NOT SHIPPED
+
+**Nothing changed in the deployed path. The source is byte-identical to `5584275`.** This section
+exists so a future session does not re-run this on a hunch.
+
+### 14.1 The question
+
+Boot 47's Q6 answered the same question as Q2 and **added a second sentence about what the OS
+actually does** — the best answer of that run. The mechanism was the recall preamble's *"add new
+detail, do not repeat"* label acting as a **bounded** elaboration cue, which implies the model has
+more to give on a first-time question and the shipped instruction is what stops it. So:
+
+| arm | instruction |
+|---|---|
+| **C (control)** | `Answer the question directly in your first sentence.` |
+| **A (candidate)** | `Answer the question directly in your first sentence, then add one sentence of detail.` |
+
+**The risk, stated before running:** this has the same SHAPE as `1df800a`'s net-harmful
+`", then elaborate."` — it also tells the model to keep going, and a question asking for **one line**
+is now told to produce **two sentences**. Last time the instruction beat the question.
+
+### 14.2 Method
+
+Two KVM runs, **identical in every respect except the instruction string**. The control was RE-RUN
+rather than compared against boot 47 or the earlier T1 KVM run — a different question set is an
+invalid pairing. Seven questions, same order, both arms, full poll budget, `--snapshot` so the shared
+fixture was not mutated.
+
+**Counting rule, applied identically to both arms:** a sentence ends at `.` `?` or `!` followed by
+whitespace **or end-of-text** — the same rule the shipped `g3_clean_answer_len` uses. Known weakness,
+stated rather than hidden: an abbreviation or a decimal followed by a space over-counts; the parser
+flags those cases and none fired in either arm.
+
+**A measurement problem had to be solved first, and it is worth recording.** Every observable source
+clips the answer BELOW the length needed to count sentences: `[CTRL-IN-RESP]` prints at most 160
+chars, the control-IN store caps a record at `EPI_RESP_MAX` 256 B, and `[CTRL-IN-REPLY]` reports
+`len=` but no text. A two-sentence answer to an open question exceeds the first and can exceed the
+second — i.e. exactly the answers the verdict turns on would have been unreadable. A probe-gated
+full-text dump was added to PB (after generation, so it cannot influence what it reports) plus a
+`JARVIS_CONTROL_IN_PROBE == 5` question-set mode. **Both were reverted with everything else**; they
+are recoverable from this session if a future instruction experiment wants them.
+
+### 14.3 Results
+
+| Q | kind | Arm C | Arm A | Δ sentences |
+|---|---|---|---|---|
+| 1 `explain paging in one line` | one-line | **1** · 163 B · 28 tok | **2** · 286 B · 50 tok | **+1 VIOLATION** |
+| 2 `in one line, what is a mutex` | one-line | **1** · 146 B · 23 tok | **2** · 256 B · 44 tok | **+1 VIOLATION** |
+| 3 `in one line, what is a TLB` | one-line | **1** · 154 B · 36 tok | **2** · 368 B · 72 tok | **+1 VIOLATION** |
+| 4 `what is a page fault?` | open | 1 · 218 B · 38 tok | 2 · 370 B · 64 tok | +1 (benefit) |
+| 5 `why doesn't adding more CPU cores…` | open | 1 · 180 B · 36 tok | 2 · 308 B · 57 tok | +1 (benefit) |
+| 6 `process vs thread?` | open | 1 · 257 B · 48 tok | 2 · 244 B · 45 tok | +1 (benefit) |
+| 7 `…in three sentences.` | conflict probe | **3** · 432 B · 77 tok | **3** · 458 B · 80 tok | 0 |
+
+`instr=` **10** (C) vs **17** (A) — the token count is re-derived from the encoded string, so the
+longer candidate's budget reserve was correct by construction. Every generation in both arms stopped
+at `MODEL-ENDED-TURN`; no `CAP`, therefore no verdict 4. **Zero `<|channel>`/thought text in both
+arms.** The workload lane was untouched in both — 8 workload generations at `instr=0 cap=50`, i.e.
+the instruction never reaches it.
+
+### 14.4 Verdict: DO NOT SHIP
+
+The verdict was **pre-registered before measuring** and is objective-counts-only; quality was
+deliberately excluded, because the front-loading round's rubric changed mid-experiment and that is
+the hazard being avoided. The triggering row is *"ANY one-line question gains a sentence in the
+candidate arm"* — and **all three did**, unanimously, not marginally.
+
+**The benefit was real, and that is exactly why the verdict was fixed in advance.** Q4–Q6 each gained
+a genuine sentence: Q4's second sentence finally says what the OS *does* about a page fault, which is
+the elaboration boot 47 suggested was available. A verdict decided after seeing that number would
+have been very tempting to argue into a SHIP.
+
+**The cost is the same failure `1df800a` measured, reproduced at smaller dose.** A question that
+explicitly says *"in one line"* got two sentences — the instruction beat the question, 3 for 3. The
+bounded clause bounds the *amount* of elaboration; it does not make the elaboration *conditional* on
+the question wanting it, which is the property that would actually be needed.
+
+**Two side-findings worth keeping.** Q7 produced exactly 3 sentences in **both** arms, so neither
+instruction overrides an explicit sentence count — the conflict probe is clean and "in three
+sentences" is respected. And Q6's Arm-A answer is **shorter in bytes** (244 vs 257) while gaining a
+sentence: the model restructured into two tighter sentences rather than appending, which is evidence
+the clause changes *shape*, not merely length.
+
+**Not retried with different wording, deliberately.** Tuning the string and re-running converts a
+pre-registered experiment into a search, which is what makes a result untrustworthy. If a future
+attempt is made, the thing to fix is the conditionality — an instruction that elaborates only when
+the question does not ask for brevity — and that is a different design, not a reword.
