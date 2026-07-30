@@ -99,9 +99,18 @@
 #endif
 #if JARVIS_ROUTING
 #include "route.h"               /* Phase 6 6-6/B/M1: the control-IN query router + the sysfacts whitelist */
+#endif
+/* Phase C. DELIBERATELY NOT NESTED INSIDE #if JARVIS_ROUTING, which is where the
+ * embed_region.h include used to sit. Nothing in the embed path depends on the
+ * router, so an EMBED=1 / ROUTING=0 build would have failed to include the region
+ * header for no reason — the same nesting class as the recorded D1 defect, where
+ * the inference lane's PB_DISPATCH_OK() guard was nested in #if JARVIS_CACHE_GROWTH
+ * and a CACHE_GROWTH=0 build silently lost it. Harmless today because ROUTING is
+ * default-ON; corrected rather than replicated. */
 #if JARVIS_EMBED
 #include "embed_region.h"        /* Phase C / C/M1b-3: the embed transport region + its staleness predicate */
-#endif
+#include "embed_store.h"         /* Phase C / C/M2a: the durable per-record vector store (JVEC @ 21,150,000) */
+#include "embed_project.h"       /* Phase C / C/M2b: embed(1024) -> meanproj -> truncate(128) -> L2 */
 #endif
 #include "jarvis_ui_tokens.h"   /* Step 2c-2b: FBP_ and JUI_ palette + geometry (single source) */
 
@@ -401,6 +410,24 @@ static void epi_batch_add(const char *query, uint16_t action, uint8_t outcome, c
  *
  * KEY CURRENCY (load-bearing): episodic_fill hashes the SANITIZED `qs` exactly as the shared path
  * did — cache_hash(cache_normalize_query(qs)) — so the key written here is the key looked up. */
+#if JARVIS_EMBED
+/* What the last ctrl_epi_write() committed, so the answered exit can embed it AFTER
+ * the reply has gone. Set only when that record passed the SAME g3_candidate_usable
+ * check the index uses — see the write site below.
+ *
+ * Declared HERE, immediately above its writer, rather than with the other embed
+ * state ~150 lines further down: ctrl_epi_write() is defined early in this file and
+ * C needs the declaration first. The EMBED=1 build said so plainly (five
+ * "undeclared (first use in this function)" errors), which is the kind of thing only
+ * an actual ON build finds — an OFF build compiles the whole block out and looks
+ * perfectly healthy. */
+static int      g_ctrl_last_vecable = 0;
+static uint32_t g_ctrl_last_seq     = 0;
+static uint64_t g_ctrl_last_key     = 0;
+static char     g_ctrl_last_q[EPI_QUERY_MAX + 1];
+static uint16_t g_ctrl_last_qlen    = 0;
+#endif
+
 static void ctrl_epi_write(const char *qs, uint8_t outcome, const char *resp, uint16_t action)
 {
     if (!g_ctrl_episodic_ready) return;
@@ -440,6 +467,34 @@ static void ctrl_epi_write(const char *qs, uint8_t outcome, const char *resp, ui
         g_ctrl_epi_index[g_ctrl_epi_index_n].logical_index = cnt - 1u;
         g_ctrl_epi_index_n++;
     }
+
+#if JARVIS_EMBED
+    /* C/M2b: publish what was committed, for embed-on-write at the answered exit.
+     *
+     * Gated on `idxable` — the SAME g3_candidate_usable result computed above, not a
+     * restatement of it. That matters for cost as well as correctness: ctrl_epi_write
+     * has three call sites and two are error paths, so an unrecallable record would
+     * otherwise burn ~2 s of embedding to store a vector recall will never look at.
+     * Calling the predicate once and reusing its answer is what keeps "indexed" and
+     * "vectored" from ever disagreeing.
+     *
+     * seq == cnt - 1 because epi_store_append stamps the record's seq from the
+     * header's total_entries BEFORE incrementing it — the same arithmetic the index
+     * entry above uses for logical_index. THE QUERY is what gets embedded, not the
+     * answer: C/M0.5 measured symmetric query-to-query as the stronger direction, and
+     * EPI_QUERY_MAX 200 exceeds the 172-byte control-IN cap so queries are stored
+     * whole (unlike answers, which are 256-B heads). */
+    g_ctrl_last_vecable = idxable;
+    if (idxable) {
+        g_ctrl_last_seq = cnt - 1u;
+        g_ctrl_last_key = rec.query_key;
+        uint16_t _qn = rec.query_len;
+        if (_qn > EPI_QUERY_MAX) _qn = EPI_QUERY_MAX;
+        memcpy(g_ctrl_last_q, rec.query, _qn);
+        g_ctrl_last_q[_qn] = '\0';
+        g_ctrl_last_qlen = _qn;
+    }
+#endif
 
     /* The index is bounded while the store rolls, so a long-lived box can saturate it and then
      * silently stop recalling NEW turns. Say so ONCE rather than degrading in silence. */
@@ -541,6 +596,47 @@ static const char *g_embed_bad_why = "";/* fixed literal only                   
 static uint32_t   g_embed_size    = 0;
 static uint32_t   g_embed_n_pages = 0;
 static seL4_Word  g_embed_vaddr_b = 0;  /* RUNTIME-DERIVED (T3) — never a fixed base             */
+
+/* ---- C/M2b: semantic recall state ----------------------------------------------
+ * g_embed_sem_ok is the SINGLE gate every semantic path checks, and it is set only
+ * when mu verifies AND the vector store initialised. Separate from g_embed_ready
+ * (which means "the embedder MODEL is resident") for the same reason g_embed_* is
+ * separate from g_model_bad: a failure here disables semantic recall ONLY. Exact-key
+ * recall, inference and the workload lane are untouched, and the box degrades to
+ * exactly its pre-C/M2b behaviour. */
+static embed_store_t g_embed_store;
+static int           g_embed_store_ready = 0;
+static int           g_embed_sem_ok      = 0;  /* mu verified AND store ready — THE gate */
+
+/* In-RAM {owner_seq -> logical_index} map of the vector store, built ONCE at boot.
+ * The epi_index_lookup precedent, and for its reason: embed_store_find_by_seq is a
+ * documented O(N) scan, so calling it per candidate would be O(N^2) — hours on a
+ * full store, the same order of cost the store exists to avoid. */
+typedef struct { uint32_t owner_seq; uint32_t logical_index; } embed_idx_entry_t;
+static embed_idx_entry_t g_embed_idx[EMBED_STORE_MAX_VECS];
+static int               g_embed_idx_n = 0;
+
+/* Semantic candidate scratch. STATIC, not stack: PA is single-threaded and the
+ * budget here is <8 KB of stack, while these are ~50 KB. The records must outlive
+ * the select call because g3_candidate_t holds POINTERS into them. */
+#define CTRL_SEM_MAX_CANDS 32
+static epi_record_t   g_sem_recs[CTRL_SEM_MAX_CANDS];
+static g3_candidate_t g_sem_cands[CTRL_SEM_MAX_CANDS];
+static float          g_sem_vecs[CTRL_SEM_MAX_CANDS * G3_SEM_DIM_DEFAULT];
+static float          g_embed_raw[EMBED_DIM];              /* PB's raw 1024 reply */
+static float          g_embed_q128[G3_SEM_DIM_DEFAULT];    /* the projected query */
+static embed_rec_t    g_embed_wrec;                        /* write/read scratch  */
+
+/* Cold start. Existing records have no vectors, and a full backfill is ~2 min today
+ * but ~2.3 HOURS at store capacity — which is why "backfill everything at boot" is
+ * not a design. At most this many per boot, oldest-unvectored first: ~8 boots to
+ * catch up on today's corpus, BOUNDED forever, and it degrades gracefully because an
+ * unvectored record simply is not a semantic candidate. */
+#define EMBED_BACKFILL_PER_BOOT 8
+static uint32_t g_embed_backfilled = 0;   /* embedded by the backfill THIS boot */
+static uint32_t g_embed_written    = 0;   /* vectors stored this boot (backfill + on-write) */
+static uint32_t g_embed_sem_hits   = 0;   /* preambles built from a SEMANTIC match */
+
 #endif
 
 /* N-c-1: hoisted NIC for the workload-loop telemetry emitter. The [NET] bring-up fills
@@ -2457,6 +2553,111 @@ static int pa_embed_request(const char *text, uint16_t text_len, float *out)
     memcpy(out, g_embed_vec, EMBED_VEC_BYTES);
     return 0;
 }
+
+/* ---- C/M2b: semantic recall helpers -------------------------------------------- */
+
+/* In-RAM owner_seq -> logical_index. Linear, but over a RAM array rather than the
+ * store: at capacity this is 4096 comparisons (microseconds) against the O(N) NVMe
+ * scan embed_store_find_by_seq would do (which is why that one is documented as a
+ * one-shot, not a per-candidate call). */
+static int embed_idx_find(uint32_t owner_seq)
+{
+    for (int i = 0; i < g_embed_idx_n; i++)
+        if (g_embed_idx[i].owner_seq == owner_seq)
+            return (int)g_embed_idx[i].logical_index;
+    return -1;
+}
+
+/*
+ * Embed `text`, project it, and store the vector against (owner_seq, owner_key).
+ * Returns 0 on success, negative otherwise. Updates the in-RAM index on success so
+ * the vector is a candidate immediately, without waiting for the next boot's scan.
+ *
+ * COSTS ~2 s (C/M1b-2's ~190 M cycles/token). Every caller must therefore already
+ * be somewhere that can afford it — after the reply has been sent, or in the
+ * bounded backfill. Never in front of a user-visible response.
+ */
+static int ctrl_embed_store_one(uint32_t owner_seq, uint64_t owner_key,
+                                const char *text, uint16_t text_len)
+{
+    if (!g_embed_sem_ok || !text || text_len == 0) return -1;
+    if (g_embed_idx_n >= EMBED_STORE_MAX_VECS)     return -2;   /* index full — bounded, not a leak */
+    if (embed_idx_find(owner_seq) >= 0)            return 1;    /* already vectored — idempotent */
+
+    if (pa_embed_request(text, text_len, g_embed_raw) != 0) return -3;
+    if (embed_project(g_embed_raw, EMBED_DIM, g_embed_q128, G3_SEM_DIM_DEFAULT) != EMBED_PROJ_OK)
+        return -4;
+    if (embed_rec_fill(&g_embed_wrec, owner_seq, owner_key, g_embed_q128, G3_SEM_DIM_DEFAULT) != 0)
+        return -5;
+
+    int rc = embed_store_put(&g_embed_store, &g_embed_wrec);
+    if (rc < 0) return -6;
+    if (rc == 0) {
+        /* Inserted. The store appended at its previous count, so that IS the new
+         * record's logical index while the store has not yet wrapped. Recomputing
+         * it from count-1 keeps this correct without a second read. */
+        uint32_t li = embed_store_count(&g_embed_store);
+        if (li > 0) li--;
+        g_embed_idx[g_embed_idx_n].owner_seq     = owner_seq;
+        g_embed_idx[g_embed_idx_n].logical_index = li;
+        g_embed_idx_n++;
+        g_embed_written++;
+    }
+    return 0;
+}
+
+/*
+ * Assemble the semantic candidate set: the NEWEST vectored, recallable control-IN
+ * records, up to CTRL_SEM_MAX_CANDS. Returns the count.
+ *
+ * NEWEST-FIRST AND BOUNDED, and the limitation is deliberate rather than hidden:
+ * at store capacity a semantically-matching but OLD record will not be considered.
+ * The alternative is a per-query scan whose cost grows with the store, which is
+ * exactly what the prompt forbids. Today the corpus is ~62 usable records, so the
+ * bound is not reached; when it is, recall stays recency-biased, which is the right
+ * bias for a conversation channel.
+ *
+ * The g3_candidate_t entries hold POINTERS into g_sem_recs, which is static and
+ * lives until the next call — so the select and the preamble build that follow are
+ * both valid, and nothing here may be stack-allocated.
+ */
+static int ctrl_sem_gather(void)
+{
+    int n = 0;
+    /* g_ctrl_epi_index is built oldest->newest, so walk it BACKWARDS for newest-first. */
+    for (int i = g_ctrl_epi_index_n - 1; i >= 0 && n < CTRL_SEM_MAX_CANDS; i--) {
+        uint32_t li = g_ctrl_epi_index[i].logical_index;
+        if (epi_store_read(&g_ctrl_episodic, li, &g_sem_recs[n]) != 0) continue;
+        /* The index is already usable-filtered, but the read-back is re-checked for
+         * the same reason the exact-key path re-checks it: after the region rolls, a
+         * stale logical_index can point at a re-used slot. A mismatch here must be a
+         * clean skip, never a wrong candidate. */
+        if (g_sem_recs[n].query_key != g_ctrl_epi_index[i].key) continue;
+
+        int eli = embed_idx_find(g_sem_recs[n].seq);
+        if (eli < 0) continue;                    /* not vectored yet — simply not a candidate */
+        if (embed_store_read(&g_embed_store, (uint32_t)eli, &g_embed_wrec) != 0) continue;
+        if (!embed_rec_is_valid(&g_embed_wrec)) continue;
+        /* THE DESYNC CHECK. This is what the metadata half of the record exists for:
+         * a vector is only usable as THIS record's if it says so. Both fields, since
+         * they fail independently (C/M2a). Without it a positional or index slip
+         * hands cosine a perfectly valid vector of the wrong record. */
+        if (!embed_rec_matches(&g_embed_wrec, g_sem_recs[n].seq, g_sem_recs[n].query_key)) continue;
+
+        memcpy(&g_sem_vecs[n * G3_SEM_DIM_DEFAULT], g_embed_wrec.vec,
+               (size_t)G3_SEM_DIM_DEFAULT * sizeof(float));
+        g_sem_cands[n].query_key = g_sem_recs[n].query_key;
+        g_sem_cands[n].seq       = g_sem_recs[n].seq;
+        g_sem_cands[n].action    = g_sem_recs[n].action;
+        g_sem_cands[n].outcome   = g_sem_recs[n].outcome;
+        g_sem_cands[n].query     = g_sem_recs[n].query;
+        g_sem_cands[n].query_len = g_sem_recs[n].query_len;
+        g_sem_cands[n].resp      = g_sem_recs[n].resp;
+        g_sem_cands[n].resp_len  = g_sem_recs[n].resp_len;
+        n++;
+    }
+    return n;
+}
 #endif /* JARVIS_EMBED */
 
 #if JARVIS_RESPAWN
@@ -3299,12 +3500,78 @@ static void pa_ctrl_gate(const control_result_t *cres)
         /* CONTROL-IN lane: the whole stored answer (== EPI_RESP_MAX). The workload lane
          * deliberately keeps G3_R_MAX -- see g3_retrieval.h. */
         int cplen = g3_build_preamble_answer_only(ctrl_sel, cns, ctrl_pre, sizeof ctrl_pre, G3_R_MAX_CONTROL_IN);
+#if JARVIS_EMBED
+        int csem = 0;   /* 1 = this preamble came from a SEMANTIC match, not exact-key */
+        /*
+         * SEMANTIC FALL-THROUGH — EXACT-KEY FIRST, and the trigger is cplen == 0,
+         * NOT "the index missed".
+         *
+         * That distinction is the whole design and it is measured. cplen can be 0 on
+         * an exact-key HIT: g3_clean_answer_len suppresses a recalled answer with no
+         * complete sentence, and the line below already treats cplen (not cn) as the
+         * hit criterion. In the recorded deploy distribution that was 8 of 14 hits,
+         * and over the real 62-record control-IN store only 22 records are recallable
+         * at all — so "hit => skip semantic" would hand the COMMON case nothing while
+         * a different record might have matched semantically with a complete sentence.
+         *
+         * Falling through on "no usable preamble" instead keeps the cost argument
+         * intact: the ~2 s embed is paid ONLY by a turn that was about to get nothing,
+         * never by one exact-key already answered. An exact-key hit that produced a
+         * preamble costs exactly what it costs today, and embeds nothing.
+         */
+        if (cplen == 0 && g_embed_sem_ok && g_embed_idx_n > 0) {
+            uint16_t qlen = 0;
+            while (qlen < MAX_QUERY_LEN - 1 && qs[qlen] != '\0') qlen++;
+            uint64_t t_e0 = jarvis_uptime_ms();
+            int erc = pa_embed_request(qs, qlen, g_embed_raw);
+            int prc = (erc == 0)
+                    ? embed_project(g_embed_raw, EMBED_DIM, g_embed_q128, G3_SEM_DIM_DEFAULT)
+                    : EMBED_PROJ_E_ARGS;
+            uint64_t t_e1 = jarvis_uptime_ms();
+
+            int sn = 0, ss = 0;
+            if (erc == 0 && prc == EMBED_PROJ_OK) {
+                sn = ctrl_sem_gather();
+                /* want_action/ok_outcome carry the tag-4 exclusion, and it is MORE
+                 * load-bearing here than under exact-key: a stale "up 476 seconds"
+                 * can SEMANTICALLY match an unrelated uptime question, where under
+                 * exact-key it could only ever match its own key. */
+                ss = g3_select_semantic(g_sem_cands, sn, g_embed_q128, g_sem_vecs,
+                                        G3_SEM_DIM_DEFAULT, G3_SEM_FLOOR_DEFAULT,
+                                        G3_MAX_FACTS, EPI_ACT_CONTROL_IN, EPI_OUT_OK,
+                                        ctrl_sel);
+                if (ss > 0) {
+                    /* The SAME untouched builder — P6 contamination hygiene and the
+                     * complete-sentence rule apply identically to a semantic match. */
+                    cplen = g3_build_preamble_answer_only(ctrl_sel, ss, ctrl_pre,
+                                                          sizeof ctrl_pre, G3_R_MAX_CONTROL_IN);
+                    csem = (cplen > 0);
+                }
+            }
+            puts_serial("[CTRL-SEM] cands="); put_dec((uint32_t)sn);
+            puts_serial(" sel=");             put_dec((uint32_t)ss);
+            puts_serial(" len=");             put_dec((uint32_t)cplen);
+            puts_serial(" embed_ms=");        put_dec((uint32_t)(t_e1 - t_e0));
+            if (erc != 0)                   { puts_serial(" embed_rc="); put_dec((uint32_t)(-erc)); }
+            else if (prc != EMBED_PROJ_OK)  { puts_serial(" proj_rc=");  put_dec((uint32_t)(-prc)); }
+            puts_serial("\n");
+            if (csem) g_embed_sem_hits++;
+        }
+#endif
         sctx_pack_preamble(g_sctx, ctrl_pre, (uint32_t)(cplen > 0 ? cplen : 0));   /* 0 == the old clear */
         if (cplen > 0) g_ctrl_recall_hits++;
 
         puts_serial("[CTRL-RECALL] hit="); put_dec(cplen > 0 ? 1u : 0u);
         puts_serial(" recall=");           put_dec((uint32_t)crecall);   /* 1 = sourced from a PRIOR session */
         puts_serial(" len=");              put_dec((uint32_t)cplen);
+#if JARVIS_EMBED
+        /* GATED, and the first attempt at this was NOT — which G1 caught. An ungated
+         * src= field grew the EMBED=0 .text by 80 bytes and added string literals, i.e.
+         * it changed the DEPLOYED durable log line for a feature that is supposed to
+         * ship completely inert. The field is genuinely useful for the gates, so it
+         * stays; it just may not exist when the lane does not. */
+        puts_serial(" src=");              puts_serial(csem ? "semantic" : (cplen > 0 ? "exact" : "none"));
+#endif
         puts_serial("\n");
     }
 #else
@@ -3454,6 +3721,34 @@ static void pa_ctrl_gate(const control_result_t *cres)
             puts_serial(") -> verdict=4\n");
         }
         ctrl_send_reply((uint16_t)cres->seq, rverdict, resp, roff);   /* the sanitized, bounded answer */
+#if JARVIS_EMBED
+        /*
+         * EMBED-ON-WRITE — DELIBERATELY AFTER ctrl_send_reply, so the reply is
+         * already on the wire before PA blocks for ~2 s. FREE TO THE USER by
+         * construction, not by being fast.
+         *
+         * PA does block here, and the honest consequence is a small dip in the
+         * workload q_total rate for the duration. That is EXPECTED, not a
+         * regression: control-IN is human-paced, so it happens at most once per
+         * operator question, and the alternative — embedding before the reply —
+         * would put the 2 s in front of every answer.
+         *
+         * Only recallable records get here (g_ctrl_last_vecable carries
+         * ctrl_epi_write's own g3_candidate_usable result), so the two error call
+         * sites and any tag-4 locally-served turn never pay it.
+         */
+        if (g_embed_sem_ok && g_ctrl_last_vecable && g_ctrl_last_qlen > 0) {
+            uint64_t _w0 = jarvis_uptime_ms();
+            int _wrc = ctrl_embed_store_one(g_ctrl_last_seq, g_ctrl_last_key,
+                                            g_ctrl_last_q, g_ctrl_last_qlen);
+            puts_serial("[EMBED-WRITE] seq="); put_dec(g_ctrl_last_seq);
+            puts_serial(" rc=");               put_dec((uint32_t)(_wrc < 0 ? -_wrc : _wrc));
+            puts_serial(" ms=");               put_dec((uint32_t)(jarvis_uptime_ms() - _w0));
+            puts_serial(" stored=");           put_dec(g_embed_written);
+            puts_serial("\n");
+            g_ctrl_last_vecable = 0;   /* consume it — never embed the same turn twice */
+        }
+#endif
     } else {
         /* (§7.5b) timeout or fault-mid-route: honest FAIL. NEVER q_errors++ — a control-IN failure
          * is not a workload error. A pure timeout feeds the PB miss-counter under KM2B_LANE_CTRL
@@ -4301,6 +4596,56 @@ static void *main_continued(void *arg UNUSED)
                                             puts_serial("\n");
                                         } else {
                                             puts_serial("[CTRL-EPI] store init FAILED (non-fatal — no recall)\n");
+                                        }
+#endif
+#if JARVIS_EMBED
+                                        /* C/M2b: the vector store + its in-RAM index.
+                                         *
+                                         * mu IS CHECKED FIRST, AND A MISMATCH REFUSES THE WHOLE LANE.
+                                         * A silently wrong mu is a silently wrong FLOOR: 0.55 is a
+                                         * measurement taken against this exact projection, so a
+                                         * corrupted mu does not degrade recall gracefully — it moves
+                                         * the operating point while every recorded number still claims
+                                         * the old one. Failing closed costs recall; continuing costs
+                                         * correctness with no signal. */
+                                        if (!embed_mu_verify()) {
+                                            puts_serial("[EMBED-SEM] mu XOR MISMATCH — semantic recall DISABLED (fail closed)\n");
+                                        } else if (embed_store_init(&g_embed_store, epi_nvme_read, epi_nvme_write,
+                                                                    EMBED_STORE_BASE_LBA, EMBED_STORE_MAX_VECS) == 0) {
+                                            g_embed_store_ready = 1;
+                                            puts_serial("[EMBED-SEM] vector store ready (boot ");
+                                            put_dec(embed_store_boot_id(&g_embed_store));
+                                            puts_serial(" stored="); put_dec(embed_store_count(&g_embed_store));
+                                            puts_serial(")\n");
+
+                                            /* ONE bounded scan -> the in-RAM owner_seq map. Only
+                                             * STRUCTURALLY VALID records are indexed: embed_rec_is_valid
+                                             * catches a torn 2-sector write, whose metadata half can be
+                                             * perfectly self-consistent while the vector half still
+                                             * belongs to the slot's previous occupant. Indexing one of
+                                             * those would hand a valid-looking vector of the WRONG
+                                             * record to cosine — the exact failure the 2-sector layout
+                                             * was chosen to make detectable, so it must actually be
+                                             * checked here rather than assumed. */
+                                            uint32_t _ecnt = embed_store_count(&g_embed_store);
+                                            if (_ecnt > EMBED_STORE_MAX_VECS) _ecnt = EMBED_STORE_MAX_VECS;
+                                            g_embed_idx_n = 0;
+                                            uint32_t _ebad = 0;
+                                            for (uint32_t _eli = 0; _eli < _ecnt; _eli++) {
+                                                if (embed_store_read(&g_embed_store, _eli, &g_embed_wrec) != 0)
+                                                    continue;
+                                                if (!embed_rec_is_valid(&g_embed_wrec)) { _ebad++; continue; }
+                                                g_embed_idx[g_embed_idx_n].owner_seq     = g_embed_wrec.owner_seq;
+                                                g_embed_idx[g_embed_idx_n].logical_index = _eli;
+                                                g_embed_idx_n++;
+                                            }
+                                            g_embed_sem_ok = 1;
+                                            puts_serial("[EMBED-SEM] index built n=");
+                                            put_dec((uint32_t)g_embed_idx_n);
+                                            puts_serial(" invalid="); put_dec(_ebad);
+                                            puts_serial(" mu=OK\n");
+                                        } else {
+                                            puts_serial("[EMBED-SEM] vector store init FAILED — semantic recall DISABLED (non-fatal)\n");
                                         }
 #endif
 #if JARVIS_ACTIONS
@@ -7305,6 +7650,54 @@ static void *main_continued(void *arg UNUSED)
             }
 #endif
             epi_commit();   /* Phase 5 G1/M1: flush the episodic batch to NVMe at the [STATS] cadence (~100 q) */
+#if JARVIS_EMBED
+            /*
+             * C/M2b COLD-START BACKFILL — bounded, ONE record per [STATS] window.
+             *
+             * Existing control-IN records predate the vector store, so without this
+             * semantic recall would start empty and stay empty for anything already
+             * stored. A full backfill is ~2 min on today's ~62-record corpus but
+             * ~2.3 HOURS at store capacity, which is why "backfill everything at
+             * boot" is not a design and why this is capped per boot rather than
+             * per run.
+             *
+             * ONE PER WINDOW, not a burst: the embed blocks PA for ~2 s, and doing
+             * EMBED_BACKFILL_PER_BOOT of them consecutively would stall the workload
+             * loop for ~16 s. Spread across windows it is invisible, and it runs here
+             * — after the reply path, at the existing housekeeping cadence — so it
+             * cannot delay serving a query.
+             *
+             * OLDEST-UNVECTORED FIRST, so repeated boots make monotonic progress
+             * instead of re-checking the same recent records: ~8 boots to catch up on
+             * today's corpus, bounded forever. An unvectored record is simply not a
+             * semantic candidate in the meantime, which is the graceful degradation.
+             */
+            if (g_embed_sem_ok && g_embed_backfilled < EMBED_BACKFILL_PER_BOOT) {
+                for (int _bi = 0; _bi < g_ctrl_epi_index_n; _bi++) {
+                    static epi_record_t _brec;
+                    uint32_t _bli = g_ctrl_epi_index[_bi].logical_index;
+                    if (epi_store_read(&g_ctrl_episodic, _bli, &_brec) != 0) continue;
+                    if (_brec.query_key != g_ctrl_epi_index[_bi].key) continue;
+                    if (embed_idx_find(_brec.seq) >= 0) continue;   /* already vectored */
+
+                    uint16_t _bq = _brec.query_len;
+                    if (_bq == 0) continue;
+                    if (_bq > EPI_QUERY_MAX) _bq = EPI_QUERY_MAX;
+                    uint64_t _b0 = jarvis_uptime_ms();
+                    int _brc = ctrl_embed_store_one(_brec.seq, _brec.query_key, _brec.query, _bq);
+                    g_embed_backfilled++;   /* counts the ATTEMPT: a failing record must not be
+                                             * retried every window forever within this boot */
+                    puts_serial("[EMBED-BACKFILL] seq="); put_dec(_brec.seq);
+                    puts_serial(" rc=");  put_dec((uint32_t)(_brc < 0 ? -_brc : _brc));
+                    puts_serial(" ms=");  put_dec((uint32_t)(jarvis_uptime_ms() - _b0));
+                    puts_serial(" done="); put_dec(g_embed_backfilled);
+                    puts_serial("/");     put_dec((uint32_t)EMBED_BACKFILL_PER_BOOT);
+                    puts_serial(" idx=");  put_dec((uint32_t)g_embed_idx_n);
+                    puts_serial("\n");
+                    break;   /* exactly ONE per window */
+                }
+            }
+#endif
             if (g_sctx_ready) {   /* Phase 5 G2/M2: live-pool proof at the [STATS] cadence (climbing seq/ev/dec) */
                 puts_serial("[SCTX] live seq="); put_dec(__atomic_load_n(&g_sctx->seq, __ATOMIC_ACQUIRE));
                 puts_serial(" ev=");  put_dec(sctx_event_count(g_sctx));

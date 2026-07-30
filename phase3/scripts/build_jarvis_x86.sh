@@ -170,6 +170,11 @@ AI_FILES=(
     "query_shield.c"      "query_shield.h"
     "hostile_queries.h"   "benign_queries.h"
     "route.c"             "route.h"
+    # Phase C / C/M2a+C/M2b: the vector store, the frozen mu, and the projection.
+    # embed_mu.h is GENERATED (phase3/scripts/embed/gen_embed_mu.py) — copied, never edited here.
+    "embed_store.c"       "embed_store.h"
+    "embed_project.c"     "embed_project.h"
+    "embed_mu.h"
 )
 
 for f in "${AI_FILES[@]}"; do
@@ -694,6 +699,26 @@ if [ -f "$CMAKE_FILE" ]; then
     else
         echo -e "  ${CYAN}OK${NC}  src/ai/route.c already in source list"
     fi
+
+    # Phase C / C/M2a + C/M2b: add src/ai/embed_store.c and src/ai/embed_project.c to the
+    # Process A source list. UNCONDITIONAL, the route.c / embed_region.c precedent — both are
+    # host-pure with no external dependency, so linking them is benign and inert until
+    # JARVIS_EMBED calls them, and an ungated injection means the EMBED=0 build links the SAME
+    # objects as EMBED=1. That is what makes the G1 main.c.obj comparison an identity test
+    # rather than a link-set difference.
+    for _em in embed_store embed_project; do
+        if ! grep -q "src/ai/$_em.c" "$CMAKE_FILE"; then
+            sed -i "/src\/ai\/route.c/a\\    src/ai/$_em.c" "$CMAKE_FILE" 2>/dev/null
+            if grep -q "src/ai/$_em.c" "$CMAKE_FILE"; then
+                echo -e "  ${GREEN}ADDED${NC}  src/ai/$_em.c to source list (Phase C)"
+                PATCHED=1
+            else
+                echo -e "  ${RED}FAILED${NC}  Could not add $_em.c — edit CMakeLists.txt manually"
+            fi
+        else
+            echo -e "  ${CYAN}OK${NC}  src/ai/$_em.c already in source list"
+        fi
+    done
 
     # Phase C / C/M1b-3: add src/ipc/embed_region.c to the Process A source list if missing.
     # UNCONDITIONAL, the route.c precedent: it is host-pure with no external dependency, so
