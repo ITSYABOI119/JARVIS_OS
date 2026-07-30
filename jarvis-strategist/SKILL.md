@@ -161,7 +161,7 @@ When the user says "what's next", "give me a prompt", or "let's do X", write a c
 - **Test specifications** with expected input/output values and epsilon tolerances where needed
 - **CI step YAML** to add to `.github/workflows/ci.yml`
 - **Commit message** ready to use
-- **CLAUDE.md updates** (new files in Quick Reference, updated test counts)
+- **CLAUDE.md updates** — new files in Quick Reference, **and every row carrying a number the work changes** (assert counts, test tallies, image md5, flag defaults, wire version). Name the rows explicitly; do not assume the coder will find them. Read the current values from the source or CI, **never by quoting CLAUDE.md back into the prompt** — see the checklist item for why.
 - **Agent strategy** — size for best results: use as many agents as needed for quality (1 for trivial, 2-3 for standard, more for complex multi-component work). Always prefer parallel agents for independent tasks. For hardware-in-the-loop work (kernel/flash/on-box gates) drive directly, not via a blind background agent.
 
 #### Prompt delivery — WRITE THE PROMPT TO A FILE. Do not paste it inline.
@@ -291,7 +291,9 @@ Before giving a prompt to the user, verify it includes:
 - [ ] Test cases with concrete expected values (not "verify it works")
 - [ ] CI YAML block ready to paste (or an explicit "N/A — no host test" with why)
 - [ ] Commit message
-- [ ] Instructions for what to update in CLAUDE.md
+- [ ] Instructions for what to update in CLAUDE.md — **naming every ROW the work invalidates, not just the row the work is "about"**. If the prompt asks the coder to report a number that CLAUDE.md already records (assert counts, test tallies, LOC, image md5, flag defaults, wire version), it MUST name that row. A prompt that says "report the new count" and doesn't say where to write it *creates* the drift.
+
+  **Never quote a count from CLAUDE.md into a prompt — read it from the test file or the last CI run.** Quoting the doc is how a stale number becomes load-bearing: it gets copied into a prompt, the coder trusts it, and the drift propagates instead of being fixed. (Happened 2026-07-30: `PROMPT-CM2-SELECTOR.md` said "it was 98" — read off `CLAUDE.md:398`, actually 107 — and asked for the new total without naming the row, so `efe5edd` left 398 saying 98 when it had become 132. **Stale CLAUDE.md is the strategist's defect, not the coder's**: they follow the prompt, and the prompt is the only place that says which rows to touch.)
 - [ ] Agent strategy — sized for best quality, parallel when independent
 - [ ] CLAUDE.MD RULES footer block (the 5-rule enforcement section)
 - [ ] UI–feature parity: if the work adds/changes a user-visible feature, the prompt updates the Remote Telemetry Console (`phase4/console/`) — its real live signal on the relevant screen or the auto-populated Capabilities/Features section, kept honest (only real/live state)

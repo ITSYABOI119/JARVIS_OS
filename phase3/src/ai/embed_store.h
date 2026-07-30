@@ -83,6 +83,23 @@
  * record is skipped, which degrades to "this record has no vector", which falls
  * back to g3_select_exact_only. The safe direction.
  *
+ * AND IT DELIBERATELY DOES NOT nvme_flush. That primitive exists and is already
+ * wired for the control-IN replay floor (6-5/M4c-fix), so using it here would be
+ * a two-line change; it is left out on the following reasoning, recorded because
+ * "why is there no flush" is the obvious question to ask of the paragraph above.
+ *
+ * The replay floor flushes because losing it reopens a SECURITY window — an
+ * already-answered sequence number becomes replayable. Losing a vector costs a
+ * RECALL: that record falls back to exact-key matching, which is exactly what the
+ * whole JARVIS_EMBED=0 path does today and is therefore a state the system is
+ * already correct in. Paying a synchronous cache flush on every vector write to
+ * protect a value whose loss degrades into current behaviour is the wrong trade,
+ * and it would be paid on the write path of a bulk backfill.
+ *
+ * The asymmetry is the point: flush what cannot be reconstructed and whose loss
+ * changes the security posture; do not flush what can be recomputed and whose
+ * loss costs quality. A lost vector can be re-embedded.
+ *
  *
  * ==================== CHECKSUM SPANS BOTH HALVES ====================
  *

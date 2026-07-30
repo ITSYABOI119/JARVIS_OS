@@ -359,6 +359,22 @@ jobs:
           -o /tmp/tembs
         /tmp/tembs
 
+    # THE ANCHOR for embed_mu.h: reads golden_vectors.npz's raw bytes (stdlib
+    # zipfile, no numpy) and compares them bit-for-bit against the header's hex
+    # float literals. Also runs the generator's --check drift gate, so a stale
+    # header fails here rather than at a box gate weeks later.
+    - name: "Phase C: mu bit-exactness vs golden_vectors.npz (Python)"
+      run: python3 phase3/scripts/embed/test_embed_mu.py
+
+    # The other half of the same risk, which only C can reach: that the COMPILER
+    # parses those literals back to the intended bits (verified against
+    # EMBED_MU_XOR, which the Python step above ties to the npz).
+    - name: "Phase C: mu compiler round-trip (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
+          phase3/src/ai/test_embed_mu.c -o /tmp/temu -lm
+        /tmp/temu
+
     - name: "Phase 6: Action allowlist (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
