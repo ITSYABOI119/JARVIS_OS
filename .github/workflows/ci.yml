@@ -375,6 +375,16 @@ jobs:
           phase3/src/ai/test_embed_mu.c -o /tmp/temu -lm
         /tmp/temu
 
+    # The projection between them: embed(1024) -> meanproj -> truncate(128) -> L2.
+    # Links the REAL g3_retrieval.c so the output is checked through the same
+    # g3_vec_is_unit that g3_select_semantic gates on, not a reimplementation.
+    - name: "Phase C: C/M2b mean-projection pipeline (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
+          phase3/src/ai/test_embed_project.c phase3/src/ai/embed_project.c \
+          phase3/src/ai/g3_retrieval.c -o /tmp/tep -lm
+        /tmp/tep
+
     - name: "Phase 6: Action allowlist (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
