@@ -352,6 +352,13 @@ jobs:
           -o /tmp/tsd
         /tmp/tsd
 
+    - name: "Phase C: C/M2a Embedding vector store (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
+          phase3/src/ai/test_embed_store.c phase3/src/ai/embed_store.c \
+          -o /tmp/tembs
+        /tmp/tembs
+
     - name: "Phase 6: Action allowlist (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
