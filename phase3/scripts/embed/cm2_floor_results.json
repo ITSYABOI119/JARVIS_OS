@@ -1,0 +1,637 @@
+{
+  "_comment": "Phase C / C/M2 host half. MEASURED dim + similarity-floor numbers for cosine-topk semantic recall, over the SAME cm0_recall_set.json C/M0.5's 97.2% came from. Pipeline: embed 1024 -> [mean-project with the frozen mu] -> truncate -> L2 renormalise. Strategy sym:none. A NEGATIVE margin means no single threshold separates true from unrelated pairs, and no floor is proposed.",
+  "model": "Qwen/Qwen3-Embedding-0.6B",
+  "strategy": "sym:none",
+  "pipeline_order": "embed(1024) -> [meanproj in 1024] -> truncate(dim) -> l2",
+  "corpus": {
+    "distinct_positives": 36,
+    "adversarial_positives": 6,
+    "negatives": 14
+  },
+  "results": [
+    {
+      "dim": 1024,
+      "projection": "raw",
+      "recall@1_distinct": 0.9444444444444444,
+      "recall@3_distinct": 1.0,
+      "recall@1_all_positives": 0.8571428571428571,
+      "recall@3_all_positives": 0.9761904761904762,
+      "n_distinct": 36,
+      "n_positives": 42,
+      "n_unrelated_pairs": 2310,
+      "true_pair_cos": {
+        "min": 0.49806650830755794,
+        "mean": 0.6811280460324495,
+        "max": 0.8011755158997551
+      },
+      "unrelated_pair_cos": {
+        "min": 0.19860429295819607,
+        "mean": 0.4215116084837938,
+        "max": 0.706003347333589
+      },
+      "margin_min_true_minus_max_unrelated": -0.2079368390260311,
+      "separable_by_a_single_threshold": false,
+      "reconciliation": {
+        "margin_vs_ALL_unrelated_pairs": -0.2079368390260311,
+        "margin_vs_hand_authored_negatives_only": -0.02314608954764108,
+        "gap_between_MEANS_true_minus_unrelated": 0.25961643754865565,
+        "note": "the deployed selector compares a query against EVERY stored record, so the ALL-unrelated-pairs max is the statistic a floor must actually hold back"
+      },
+      "floor_sweep": [
+        {
+          "floor": 0.5,
+          "true_pairs_rejected": 1,
+          "true_pairs_rejected_pct": 2.4,
+          "unrelated_admitted": 277,
+          "unrelated_admitted_pct": 11.99
+        },
+        {
+          "floor": 0.55,
+          "true_pairs_rejected": 2,
+          "true_pairs_rejected_pct": 4.8,
+          "unrelated_admitted": 111,
+          "unrelated_admitted_pct": 4.81
+        },
+        {
+          "floor": 0.6,
+          "true_pairs_rejected": 3,
+          "true_pairs_rejected_pct": 7.1,
+          "unrelated_admitted": 41,
+          "unrelated_admitted_pct": 1.77
+        },
+        {
+          "floor": 0.65,
+          "true_pairs_rejected": 15,
+          "true_pairs_rejected_pct": 35.7,
+          "unrelated_admitted": 11,
+          "unrelated_admitted_pct": 0.48
+        },
+        {
+          "floor": 0.7,
+          "true_pairs_rejected": 24,
+          "true_pairs_rejected_pct": 57.1,
+          "unrelated_admitted": 1,
+          "unrelated_admitted_pct": 0.04
+        },
+        {
+          "floor": 0.75,
+          "true_pairs_rejected": 35,
+          "true_pairs_rejected_pct": 83.3,
+          "unrelated_admitted": 0,
+          "unrelated_admitted_pct": 0.0
+        },
+        {
+          "floor": 0.8,
+          "true_pairs_rejected": 41,
+          "true_pairs_rejected_pct": 97.6,
+          "unrelated_admitted": 0,
+          "unrelated_admitted_pct": 0.0
+        },
+        {
+          "floor": 0.85,
+          "true_pairs_rejected": 42,
+          "true_pairs_rejected_pct": 100.0,
+          "unrelated_admitted": 0,
+          "unrelated_admitted_pct": 0.0
+        },
+        {
+          "floor": 0.9,
+          "true_pairs_rejected": 42,
+          "true_pairs_rejected_pct": 100.0,
+          "unrelated_admitted": 0,
+          "unrelated_admitted_pct": 0.0
+        }
+      ],
+      "operational": [
+        {
+          "floor": 0.5,
+          "useful_recall_queries": 35,
+          "missed_recall_queries": 1,
+          "false_recall_on_positives": 6,
+          "false_recall_on_negatives": 1,
+          "total_false_recalls": 7,
+          "false_recall_rate_pct": 12.5
+        },
+        {
+          "floor": 0.55,
+          "useful_recall_queries": 34,
+          "missed_recall_queries": 2,
+          "false_recall_on_positives": 6,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 6,
+          "false_recall_rate_pct": 10.7
+        },
+        {
+          "floor": 0.6,
+          "useful_recall_queries": 34,
+          "missed_recall_queries": 2,
+          "false_recall_on_positives": 6,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 6,
+          "false_recall_rate_pct": 10.7
+        },
+        {
+          "floor": 0.65,
+          "useful_recall_queries": 26,
+          "missed_recall_queries": 10,
+          "false_recall_on_positives": 5,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 5,
+          "false_recall_rate_pct": 8.9
+        },
+        {
+          "floor": 0.7,
+          "useful_recall_queries": 17,
+          "missed_recall_queries": 19,
+          "false_recall_on_positives": 1,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 1,
+          "false_recall_rate_pct": 1.8
+        },
+        {
+          "floor": 0.75,
+          "useful_recall_queries": 7,
+          "missed_recall_queries": 29,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        }
+      ],
+      "proposed_floor": null,
+      "floor_cost": null,
+      "overlap": {
+        "unrelated_above_min_true": 289,
+        "true_below_max_unrelated": 25
+      }
+    },
+    {
+      "dim": 1024,
+      "projection": "meanproj",
+      "recall@1_distinct": 0.9444444444444444,
+      "recall@3_distinct": 1.0,
+      "recall@1_all_positives": 0.8571428571428571,
+      "recall@3_all_positives": 0.9761904761904762,
+      "n_distinct": 36,
+      "n_positives": 42,
+      "n_unrelated_pairs": 2310,
+      "true_pair_cos": {
+        "min": 0.21167179761616162,
+        "mean": 0.4738633617910066,
+        "max": 0.6398260070316719
+      },
+      "unrelated_pair_cos": {
+        "min": -0.16606934370459508,
+        "mean": 0.051628470588455905,
+        "max": 0.49772053233669833
+      },
+      "margin_min_true_minus_max_unrelated": -0.2860487347205367,
+      "separable_by_a_single_threshold": false,
+      "reconciliation": {
+        "margin_vs_ALL_unrelated_pairs": -0.2860487347205367,
+        "margin_vs_hand_authored_negatives_only": 0.030134541246201463,
+        "gap_between_MEANS_true_minus_unrelated": 0.42223489120255064,
+        "note": "the deployed selector compares a query against EVERY stored record, so the ALL-unrelated-pairs max is the statistic a floor must actually hold back"
+      },
+      "floor_sweep": [
+        {
+          "floor": 0.5,
+          "true_pairs_rejected": 26,
+          "true_pairs_rejected_pct": 61.9,
+          "unrelated_admitted": 0,
+          "unrelated_admitted_pct": 0.0
+        },
+        {
+          "floor": 0.55,
+          "true_pairs_rejected": 31,
+          "true_pairs_rejected_pct": 73.8,
+          "unrelated_admitted": 0,
+          "unrelated_admitted_pct": 0.0
+        },
+        {
+          "floor": 0.6,
+          "true_pairs_rejected": 37,
+          "true_pairs_rejected_pct": 88.1,
+          "unrelated_admitted": 0,
+          "unrelated_admitted_pct": 0.0
+        },
+        {
+          "floor": 0.65,
+          "true_pairs_rejected": 42,
+          "true_pairs_rejected_pct": 100.0,
+          "unrelated_admitted": 0,
+          "unrelated_admitted_pct": 0.0
+        },
+        {
+          "floor": 0.7,
+          "true_pairs_rejected": 42,
+          "true_pairs_rejected_pct": 100.0,
+          "unrelated_admitted": 0,
+          "unrelated_admitted_pct": 0.0
+        },
+        {
+          "floor": 0.75,
+          "true_pairs_rejected": 42,
+          "true_pairs_rejected_pct": 100.0,
+          "unrelated_admitted": 0,
+          "unrelated_admitted_pct": 0.0
+        },
+        {
+          "floor": 0.8,
+          "true_pairs_rejected": 42,
+          "true_pairs_rejected_pct": 100.0,
+          "unrelated_admitted": 0,
+          "unrelated_admitted_pct": 0.0
+        },
+        {
+          "floor": 0.85,
+          "true_pairs_rejected": 42,
+          "true_pairs_rejected_pct": 100.0,
+          "unrelated_admitted": 0,
+          "unrelated_admitted_pct": 0.0
+        },
+        {
+          "floor": 0.9,
+          "true_pairs_rejected": 42,
+          "true_pairs_rejected_pct": 100.0,
+          "unrelated_admitted": 0,
+          "unrelated_admitted_pct": 0.0
+        }
+      ],
+      "operational": [
+        {
+          "floor": 0.5,
+          "useful_recall_queries": 16,
+          "missed_recall_queries": 20,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        },
+        {
+          "floor": 0.55,
+          "useful_recall_queries": 11,
+          "missed_recall_queries": 25,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        },
+        {
+          "floor": 0.6,
+          "useful_recall_queries": 5,
+          "missed_recall_queries": 31,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        },
+        {
+          "floor": 0.65,
+          "useful_recall_queries": 0,
+          "missed_recall_queries": 36,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        },
+        {
+          "floor": 0.7,
+          "useful_recall_queries": 0,
+          "missed_recall_queries": 36,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        },
+        {
+          "floor": 0.75,
+          "useful_recall_queries": 0,
+          "missed_recall_queries": 36,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        }
+      ],
+      "proposed_floor": null,
+      "floor_cost": null,
+      "overlap": {
+        "unrelated_above_min_true": 131,
+        "true_below_max_unrelated": 25
+      }
+    },
+    {
+      "dim": 128,
+      "projection": "raw",
+      "recall@1_distinct": 0.9166666666666666,
+      "recall@3_distinct": 1.0,
+      "recall@1_all_positives": 0.8333333333333334,
+      "recall@3_all_positives": 0.9761904761904762,
+      "n_distinct": 36,
+      "n_positives": 42,
+      "n_unrelated_pairs": 2310,
+      "true_pair_cos": {
+        "min": 0.5784061927016253,
+        "mean": 0.7300752661692456,
+        "max": 0.838099641144684
+      },
+      "unrelated_pair_cos": {
+        "min": 0.12900618637159075,
+        "mean": 0.466452424225732,
+        "max": 0.765207256617646
+      },
+      "margin_min_true_minus_max_unrelated": -0.1868010639160207,
+      "separable_by_a_single_threshold": false,
+      "reconciliation": {
+        "margin_vs_ALL_unrelated_pairs": -0.1868010639160207,
+        "margin_vs_hand_authored_negatives_only": -0.040706711789002537,
+        "gap_between_MEANS_true_minus_unrelated": 0.26362284194351354,
+        "note": "the deployed selector compares a query against EVERY stored record, so the ALL-unrelated-pairs max is the statistic a floor must actually hold back"
+      },
+      "floor_sweep": [
+        {
+          "floor": 0.5,
+          "true_pairs_rejected": 0,
+          "true_pairs_rejected_pct": 0.0,
+          "unrelated_admitted": 894,
+          "unrelated_admitted_pct": 38.7
+        },
+        {
+          "floor": 0.55,
+          "true_pairs_rejected": 0,
+          "true_pairs_rejected_pct": 0.0,
+          "unrelated_admitted": 477,
+          "unrelated_admitted_pct": 20.65
+        },
+        {
+          "floor": 0.6,
+          "true_pairs_rejected": 1,
+          "true_pairs_rejected_pct": 2.4,
+          "unrelated_admitted": 201,
+          "unrelated_admitted_pct": 8.7
+        },
+        {
+          "floor": 0.65,
+          "true_pairs_rejected": 3,
+          "true_pairs_rejected_pct": 7.1,
+          "unrelated_admitted": 76,
+          "unrelated_admitted_pct": 3.29
+        },
+        {
+          "floor": 0.7,
+          "true_pairs_rejected": 11,
+          "true_pairs_rejected_pct": 26.2,
+          "unrelated_admitted": 19,
+          "unrelated_admitted_pct": 0.82
+        },
+        {
+          "floor": 0.75,
+          "true_pairs_rejected": 27,
+          "true_pairs_rejected_pct": 64.3,
+          "unrelated_admitted": 2,
+          "unrelated_admitted_pct": 0.09
+        },
+        {
+          "floor": 0.8,
+          "true_pairs_rejected": 37,
+          "true_pairs_rejected_pct": 88.1,
+          "unrelated_admitted": 0,
+          "unrelated_admitted_pct": 0.0
+        },
+        {
+          "floor": 0.85,
+          "true_pairs_rejected": 42,
+          "true_pairs_rejected_pct": 100.0,
+          "unrelated_admitted": 0,
+          "unrelated_admitted_pct": 0.0
+        },
+        {
+          "floor": 0.9,
+          "true_pairs_rejected": 42,
+          "true_pairs_rejected_pct": 100.0,
+          "unrelated_admitted": 0,
+          "unrelated_admitted_pct": 0.0
+        }
+      ],
+      "operational": [
+        {
+          "floor": 0.5,
+          "useful_recall_queries": 35,
+          "missed_recall_queries": 0,
+          "false_recall_on_positives": 7,
+          "false_recall_on_negatives": 9,
+          "total_false_recalls": 16,
+          "false_recall_rate_pct": 28.6
+        },
+        {
+          "floor": 0.55,
+          "useful_recall_queries": 35,
+          "missed_recall_queries": 0,
+          "false_recall_on_positives": 7,
+          "false_recall_on_negatives": 5,
+          "total_false_recalls": 12,
+          "false_recall_rate_pct": 21.4
+        },
+        {
+          "floor": 0.6,
+          "useful_recall_queries": 35,
+          "missed_recall_queries": 0,
+          "false_recall_on_positives": 6,
+          "false_recall_on_negatives": 1,
+          "total_false_recalls": 7,
+          "false_recall_rate_pct": 12.5
+        },
+        {
+          "floor": 0.65,
+          "useful_recall_queries": 33,
+          "missed_recall_queries": 2,
+          "false_recall_on_positives": 6,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 6,
+          "false_recall_rate_pct": 10.7
+        },
+        {
+          "floor": 0.7,
+          "useful_recall_queries": 28,
+          "missed_recall_queries": 7,
+          "false_recall_on_positives": 4,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 4,
+          "false_recall_rate_pct": 7.1
+        },
+        {
+          "floor": 0.75,
+          "useful_recall_queries": 15,
+          "missed_recall_queries": 20,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        }
+      ],
+      "proposed_floor": null,
+      "floor_cost": null,
+      "overlap": {
+        "unrelated_above_min_true": 298,
+        "true_below_max_unrelated": 29
+      }
+    },
+    {
+      "dim": 128,
+      "projection": "meanproj",
+      "recall@1_distinct": 0.9166666666666666,
+      "recall@3_distinct": 1.0,
+      "recall@1_all_positives": 0.8333333333333334,
+      "recall@3_all_positives": 0.9761904761904762,
+      "n_distinct": 36,
+      "n_positives": 42,
+      "n_unrelated_pairs": 2310,
+      "true_pair_cos": {
+        "min": 0.32060438860256707,
+        "mean": 0.539725935478234,
+        "max": 0.7125990846341383
+      },
+      "unrelated_pair_cos": {
+        "min": -0.3540804054456032,
+        "mean": 0.09816161534961491,
+        "max": 0.5651316968569875
+      },
+      "margin_min_true_minus_max_unrelated": -0.24452730825442043,
+      "separable_by_a_single_threshold": false,
+      "reconciliation": {
+        "margin_vs_ALL_unrelated_pairs": -0.24452730825442043,
+        "margin_vs_hand_authored_negatives_only": -0.021214281563490534,
+        "gap_between_MEANS_true_minus_unrelated": 0.44156432012861907,
+        "note": "the deployed selector compares a query against EVERY stored record, so the ALL-unrelated-pairs max is the statistic a floor must actually hold back"
+      },
+      "floor_sweep": [
+        {
+          "floor": 0.5,
+          "true_pairs_rejected": 13,
+          "true_pairs_rejected_pct": 31.0,
+          "unrelated_admitted": 9,
+          "unrelated_admitted_pct": 0.39
+        },
+        {
+          "floor": 0.55,
+          "true_pairs_rejected": 23,
+          "true_pairs_rejected_pct": 54.8,
+          "unrelated_admitted": 2,
+          "unrelated_admitted_pct": 0.09
+        },
+        {
+          "floor": 0.6,
+          "true_pairs_rejected": 31,
+          "true_pairs_rejected_pct": 73.8,
+          "unrelated_admitted": 0,
+          "unrelated_admitted_pct": 0.0
+        },
+        {
+          "floor": 0.65,
+          "true_pairs_rejected": 34,
+          "true_pairs_rejected_pct": 81.0,
+          "unrelated_admitted": 0,
+          "unrelated_admitted_pct": 0.0
+        },
+        {
+          "floor": 0.7,
+          "true_pairs_rejected": 41,
+          "true_pairs_rejected_pct": 97.6,
+          "unrelated_admitted": 0,
+          "unrelated_admitted_pct": 0.0
+        },
+        {
+          "floor": 0.75,
+          "true_pairs_rejected": 42,
+          "true_pairs_rejected_pct": 100.0,
+          "unrelated_admitted": 0,
+          "unrelated_admitted_pct": 0.0
+        },
+        {
+          "floor": 0.8,
+          "true_pairs_rejected": 42,
+          "true_pairs_rejected_pct": 100.0,
+          "unrelated_admitted": 0,
+          "unrelated_admitted_pct": 0.0
+        },
+        {
+          "floor": 0.85,
+          "true_pairs_rejected": 42,
+          "true_pairs_rejected_pct": 100.0,
+          "unrelated_admitted": 0,
+          "unrelated_admitted_pct": 0.0
+        },
+        {
+          "floor": 0.9,
+          "true_pairs_rejected": 42,
+          "true_pairs_rejected_pct": 100.0,
+          "unrelated_admitted": 0,
+          "unrelated_admitted_pct": 0.0
+        }
+      ],
+      "operational": [
+        {
+          "floor": 0.5,
+          "useful_recall_queries": 27,
+          "missed_recall_queries": 8,
+          "false_recall_on_positives": 3,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 3,
+          "false_recall_rate_pct": 5.4
+        },
+        {
+          "floor": 0.55,
+          "useful_recall_queries": 19,
+          "missed_recall_queries": 16,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        },
+        {
+          "floor": 0.6,
+          "useful_recall_queries": 11,
+          "missed_recall_queries": 24,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        },
+        {
+          "floor": 0.65,
+          "useful_recall_queries": 8,
+          "missed_recall_queries": 27,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        },
+        {
+          "floor": 0.7,
+          "useful_recall_queries": 1,
+          "missed_recall_queries": 34,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        },
+        {
+          "floor": 0.75,
+          "useful_recall_queries": 0,
+          "missed_recall_queries": 35,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        }
+      ],
+      "proposed_floor": null,
+      "floor_cost": null,
+      "overlap": {
+        "unrelated_above_min_true": 157,
+        "true_below_max_unrelated": 25
+      }
+    }
+  ]
+}
