@@ -44,7 +44,18 @@ f. The GATE is OUR data, not MTEB (narrow/technical domain). Prove-it-or-don't, 
   plus BERT encoders), NOT domain-intractability. Full record in the C/M0 FINDINGS section.
 - **C/M0.5 (OFF-BOX, Python — BASE SELECTION): DONE 2026-07-24 — WINNER = Qwen/Qwen3-Embedding-0.6B,
   and it CLEARS THE RECALL BAR OFF-THE-SHELF (97.2% recall@1 / 100% top-3 / CLEAN separation on N=36
-  distinct pairs).** Enlarged the recall set to 36 distinct pairs (tighter error bars), scored the
+  distinct pairs).** **⚠️ THE "CLEAN SEPARATION" HALF OF THAT CLAIM IS NARROWER THAN IT READS —
+  corrected at C/M2 (2026-07-30, `cm2_floor_results.json`).** It was measured against **the 14
+  hand-authored negatives only**, where the margin is **+0.0301** — genuinely positive, which is the
+  number recorded here. Measured against **every stored record a live query is actually compared
+  with** (all 2,310 unrelated pairs), the same configuration is **−0.2860**. Both are true; they are
+  different statistics, and the operational one is the all-pairs figure, because a deployed selector
+  scores the query against the whole store. **`RECALL` SURVIVES UNCHANGED** — 91.7% recall@1 at 128
+  dims, 100% recall@3 — so *"off-the-shelf works, no fine-tune needed"* still holds and C/M0.5's
+  model choice stands. What does NOT hold is citing "clean separation" as an operational guarantee:
+  cosine-topk needs a MEASURED floor, and with one (128 dims, mean-projected, floor 0.55) the
+  measured outcome is 19 useful / 0 false recalls on 36 queries — **no failures observed, which is
+  not a zero rate** (95% upper bound on 0/36 is ~8%). Enlarged the recall set to 36 distinct pairs (tighter error bars), scored the
   fine-tune-BASE candidates (Qwen3-Embedding-0.6B decoder / gte-large / mxbai encoders / re-eval'd
   EmbeddingGemma) + a mean-projection ablation, kept bge as reference. Golden vectors SAVED for the
   winner (`golden_vectors.npz` + `golden_meta.json`, sym:none + frozen mean-projection). See the C/M0.5

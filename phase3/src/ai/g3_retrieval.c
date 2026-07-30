@@ -305,3 +305,100 @@ int g3_build_preamble_answer_only(const g3_candidate_t *sel, int n, char *out, i
     out[pos] = '\0';   /* pos <= limit <= cap-1 — never past cap */
     return pos;
 }
+
+/* ---- Phase C / C/M2: semantic (cosine-topk) selection ---------------------------------------
+ * See g3_retrieval.h for the MEASURED dim/floor, the sweep they came from, and — importantly —
+ * the sample-size caveat that travels with them. */
+
+int g3_vec_is_unit(const float *v, int dim)
+{
+    if (!v || dim <= 0)
+        return 0;
+    /* Sum in double: over 1024 float32 terms a float accumulator drifts enough that a genuinely
+     * unit vector can fail a tight tolerance, which would turn this guard into a nuisance that
+     * someone later loosens into uselessness. */
+    double ss = 0.0;
+    for (int i = 0; i < dim; i++)
+        ss += (double)v[i] * (double)v[i];
+    double d = ss - 1.0;
+    if (d < 0.0) d = -d;
+    return d <= (double)G3_SEM_NORM_TOL;
+}
+
+int g3_select_semantic(const g3_candidate_t *cands, int n,
+                       const float *query_vec, const float *cand_vecs,
+                       int dim, float floor, int max,
+                       uint16_t want_action, uint8_t ok_outcome,
+                       g3_candidate_t *out)
+{
+    if (!cands || !out || !query_vec || !cand_vecs || n <= 0 || dim <= 0 || max <= 0)
+        return 0;
+
+    /* THE QUERY VECTOR MUST BE UNIT-LENGTH, and this is checked rather than assumed. Cosine ==
+     * dot ONLY for L2-normalised vectors; hand a non-unit vector in and every "similarity" becomes
+     * a magnitude ranking that still looks like a plausible ordering. That is the silent-failure
+     * shape this whole arc keeps running into, so it fails CLOSED: nothing selected. */
+    if (!g3_vec_is_unit(query_vec, dim))
+        return 0;
+
+    int written = 0;
+    for (int k = 0; k < max; k++) {
+        int best = -1;
+        double best_score = 0.0;
+
+        for (int i = 0; i < n; i++) {
+            /* Already taken by an earlier pass? Skip. max is tiny (G3_MAX_FACTS), so the O(max*n)
+             * scan is cheaper and far easier to reason about than sorting a partial order. */
+            int taken = 0;
+            for (int j = 0; j < written; j++) {
+                if (out[j].query_key == cands[i].query_key && out[j].seq == cands[i].seq) {
+                    taken = 1;
+                    break;
+                }
+            }
+            if (taken)
+                continue;
+
+            /* THE TAG-4 EXCLUSION. A locally-served answer ("up 476 seconds", "I don't track
+             * that.") is not a memory. Under exact-key select it could only ever match its own
+             * key; under cosine a stale system fact can semantically match an unrelated question,
+             * so this filter is doing MORE work here than it was before. */
+            if (!g3_candidate_usable(cands[i].action, cands[i].outcome, cands[i].resp_len,
+                                     want_action, ok_outcome))
+                continue;
+
+            /* Thought-poisoned records are already in the store and age out over years. Excluded
+             * HERE, not just at clean time, so one cannot occupy a slot and crowd out a good
+             * record — it would otherwise be selected and then render to nothing. */
+            if (g3_text_has_thought_marker(cands[i].resp, (int)cands[i].resp_len))
+                continue;
+
+            /* A candidate vector that is not unit-length cannot be compared meaningfully against
+             * a unit query vector. Skip it rather than letting its magnitude inflate the score. */
+            const float *cv = cand_vecs + (long)i * (long)dim;
+            if (!g3_vec_is_unit(cv, dim))
+                continue;
+
+            double score = 0.0;
+            for (int d = 0; d < dim; d++)
+                score += (double)query_vec[d] * (double)cv[d];
+
+            /* >= floor, matching how the floor's cost was MEASURED (cm2_floor_results.json). */
+            if (score < (double)floor)
+                continue;
+
+            /* Strict '>' => the FIRST of equal scores wins => input order breaks ties =>
+             * deterministic for identical inputs. */
+            if (best < 0 || score > best_score) {
+                best = i;
+                best_score = score;
+            }
+        }
+
+        if (best < 0)
+            break;      /* nothing left above the floor — selecting nothing is the correct answer */
+        out[written++] = cands[best];
+    }
+
+    return written;
+}

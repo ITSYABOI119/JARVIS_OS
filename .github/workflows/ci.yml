@@ -320,7 +320,7 @@ jobs:
       run: |
         gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
           phase3/src/ai/test_g3_retrieval.c phase3/src/ai/g3_retrieval.c \
-          -o /tmp/tg3
+          -o /tmp/tg3 -lm
         /tmp/tg3
 
     - name: "Phase 5: Cache-Growth promotion logic (C)"

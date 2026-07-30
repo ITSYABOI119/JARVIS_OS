@@ -124,4 +124,94 @@ static inline int g3_candidate_usable(uint16_t action, uint8_t outcome, uint16_t
     return (action == infer_action) && (outcome == ok_outcome) && (resp_len > 0);
 }
 
+/* ---- Phase C / C/M2: SEMANTIC selection (cosine-topk) ---------------------------------------
+ *
+ * WHAT CHANGES, AND THE RISK IT INTRODUCES. g3_select_exact_only STRUCTURALLY cannot return a
+ * wrong record: the FNV-1a key matches or nothing is selected. Cosine CAN return a wrong one. And
+ * this embedder is strongly ANISOTROPIC — unrelated-pair cosine sits around 0.5-0.7, not near 0 —
+ * so without a floor an unrelated record scores "similar" and the box injects a wrong prior answer
+ * as context. A false recall is WORSE than no recall (f1fc84b; the EPI_RESP_MAX work).
+ *
+ * THE DEPLOYED VALUES ARE MEASURED, NOT CHOSEN — phase3/scripts/embed/cm2_floor_results.json, over
+ * the 36-distinct + 6-adversarial + 14-negative cm0_recall_set:
+ *
+ *     config                     floor  useful  missed  false
+ *     1024 raw                   0.50     35       1     7   (12.5%)
+ *     1024 mean-projected        0.50     16      20     0
+ *      128 raw                   0.50     35       0    16   (28.6%)
+ *      128 mean-projected        0.55     19      16     0    <-- deployed
+ *
+ * 128 wins on BOTH axes: more useful recalls than 1024 AND 512 B/record (exactly one sector, the
+ * pattern every other store uses) against 4096 B. The cheap option being strictly better is
+ * unusual; it is in the data, not an inference.
+ *
+ * MEAN-PROJECTION IS NOT OPTIONAL. Raw runs 12.5-28.6% false at every usable floor. It is what
+ * makes a safe floor exist at all — and it has the WORSE margin while having the BETTER behaviour,
+ * because it compresses every cosine (min true-pair 0.4981 -> 0.2117) while reordering correctly.
+ *
+ * *** THE CAVEAT THAT TRAVELS WITH THE NUMBER. "0 false out of 36" is NO FAILURES OBSERVED, NOT a
+ * zero rate. The 95% upper bound on 0/36 is roughly 8%. The honest claim is "no false recalls
+ * observed on a 36-query hand-authored set with an adversarial tail". Do NOT write, here or
+ * anywhere, that false recall is zero, prevented, or eliminated. ***
+ *
+ * THE FLOOR IS A KNOB. RAISE it to buy safety at the cost of recall (0.55 -> 0.60 took useful from
+ * 19 to 11 with false still 0); LOWER it to buy recall at the cost of safety (0.50 admitted 3 false
+ * at 128/mean-projected). Both directions are in the measured sweep — turn it with the data, not by
+ * feel.
+ *
+ * PIPELINE the vectors MUST have been through:
+ *     embed(1024) -> mean-project in 1024 -> truncate(dim) -> L2 RENORMALISE
+ * Truncation happens AFTER projection, and renormalisation AFTER truncation. A vector truncated
+ * without renormalising is not unit-length, and cosine silently degrades into magnitude ranking —
+ * which is why g3_vec_is_unit() below is ASSERTED rather than assumed. */
+
+#define G3_SEM_DIM_DEFAULT    128     /* MEASURED (see the table above), not a guess */
+#define G3_SEM_FLOOR_DEFAULT  0.55f   /* MEASURED; a knob — see "THE FLOOR IS A KNOB" above */
+
+/* Tolerance on ||v|| == 1. Generous enough for float32 accumulation over 1024 dims, tight enough
+ * that a genuinely un-normalised vector (e.g. a truncated-but-not-renormalised one, whose norm
+ * lands well below 1) is caught rather than silently ranked by magnitude. */
+#define G3_SEM_NORM_TOL       0.01f
+
+/* Is `v` (dim floats) unit-length within G3_SEM_NORM_TOL? Exposed so a caller — and the test —
+ * can DETECT the un-normalised case explicitly, rather than inferring it from "nothing selected". */
+int g3_vec_is_unit(const float *v, int dim);
+
+/*
+ * Select up to `max` candidates by COSINE similarity to `query_vec`, keeping only those scoring
+ * >= `floor`. Returns the count written to out[] (0..max).
+ *
+ * `cand_vecs` is n consecutive dim-float vectors: candidate i's vector is cand_vecs[i*dim ..].
+ *
+ * dim and floor are PARAMETERS, not compile-time constants, so a future re-measure does not require
+ * editing this function — pass G3_SEM_DIM_DEFAULT / G3_SEM_FLOOR_DEFAULT from the call site.
+ *
+ * >= NOT >, and this is pinned deliberately: the floor's measured cost/benefit in
+ * cm2_floor_results.json was computed with `score >= floor`. Using `>` here would make the deployed
+ * behaviour differ from the numbers that justified the floor. Test 9 pins the boundary.
+ *
+ * BELOW THE FLOOR => SELECT NOTHING. Not "the best of a bad set". Zero-selected is a NORMAL,
+ * expected outcome — it is the path 16 of 36 measured queries take, and it is the safe one.
+ *
+ * FILTERS, each of which encodes a past incident:
+ *   - g3_candidate_usable(..., want_action, ok_outcome): this is what excludes
+ *     EPI_ACT_CONTROL_IN_LOCAL (tag 4). It gets MORE load-bearing with cosine, not less: with
+ *     exact-key select a tag-4 record could only ever match its own key, but a stale
+ *     "up 476 seconds" can SEMANTICALLY match an unrelated uptime question.
+ *   - g3_text_has_thought_marker: poisoned records are already in the store and take years to age
+ *     out. Excluded at SELECT time (not merely at clean time) so a poisoned record cannot occupy a
+ *     slot and crowd out a good one.
+ * want_action/ok_outcome are parameters for the same reason g3_candidate_usable's are: this header
+ * stays decoupled from epi_record_t.
+ *
+ * Deterministic: strict '>' on the score comparison makes input order break ties, so identical
+ * inputs always produce identical output. Returns 0 on any NULL, n <= 0, dim <= 0, max <= 0, or a
+ * non-unit query vector.
+ */
+int g3_select_semantic(const g3_candidate_t *cands, int n,
+                       const float *query_vec, const float *cand_vecs,
+                       int dim, float floor, int max,
+                       uint16_t want_action, uint8_t ok_outcome,
+                       g3_candidate_t *out);
+
 #endif /* G3_RETRIEVAL_H */

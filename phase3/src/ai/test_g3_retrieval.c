@@ -11,6 +11,7 @@
 #include "episodic_store.h"   /* for the EPI_RESP_MAX pin below */
 #include <stdio.h>
 #include <string.h>
+#include <math.h>   /* C/M2: sqrt for the unit-vector fixtures */
 
 /* 256 is not a tuned number: it is the WHOLE stored answer. If EPI_RESP_MAX ever
  * shrinks, the control-IN window would silently start promising bytes the store
@@ -704,6 +705,184 @@ static void test_local_not_a_memory(void)
           "T15.5 a failed turn stays tag 3 and is excluded by OUTCOME, not by the tag");
 }
 
+/* ================= Phase C / C/M2: semantic (cosine-topk) selection =================
+ *
+ * The deployed dim/floor are MEASURED (phase3/scripts/embed/cm2_floor_results.json): 128 dims,
+ * mean-projected, floor 0.55 -> 19 useful / 16 missed / 0 false on the 36-distinct +
+ * 6-adversarial + 14-negative recall set.
+ *
+ * "0 false out of 36" is NO FAILURES OBSERVED, not a zero rate -- the 95% upper bound on 0/36
+ * is roughly 8%. These tests pin the MECHANISM, never that rate. */
+
+#define SEMDIM 4   /* a tiny dim keeps the fixtures readable; the real one is a PARAMETER */
+
+/* Build a unit vector from four components. */
+static void mkv(float *v, float a, float b, float c, float d)
+{
+    double n = sqrt((double)a*a + (double)b*b + (double)c*c + (double)d*d);
+    if (n == 0.0) n = 1.0;
+    v[0] = (float)(a/n); v[1] = (float)(b/n); v[2] = (float)(c/n); v[3] = (float)(d/n);
+}
+
+static g3_candidate_t semcand(uint64_t key, uint32_t seq, uint16_t action, const char *resp)
+{
+    g3_candidate_t c;
+    memset(&c, 0, sizeof c);
+    c.query_key = key; c.seq = seq; c.action = action; c.outcome = EPI_OUT_OK;
+    c.query = "q"; c.query_len = 1;
+    c.resp = resp; c.resp_len = (uint16_t)strlen(resp);
+    return c;
+}
+
+static void test_semantic_select(void)
+{
+    printf("\n--- C/M2: g3_select_semantic (cosine-topk at a measured floor) ---\n");
+
+    g3_candidate_t out[G3_MAX_FACTS];
+    float q[SEMDIM];
+    mkv(q, 1, 0, 0, 0);
+
+    /* T1 -- one candidate clearly above the floor is selected. */
+    {
+        g3_candidate_t c[2] = { semcand(1, 10, EPI_ACT_CONTROL_IN, "a real prior answer."),
+                                semcand(2, 11, EPI_ACT_CONTROL_IN, "an unrelated prior answer.") };
+        float v[2*SEMDIM];
+        mkv(v + 0*SEMDIM, 1.0f, 0.05f, 0, 0);   /* ~1.00 cosine to q */
+        mkv(v + 1*SEMDIM, 0, 1.0f, 0, 0);       /* ~0.00 -- far below any floor */
+        int k = g3_select_semantic(c, 2, q, v, SEMDIM, 0.55f, G3_MAX_FACTS, EPI_ACT_CONTROL_IN, EPI_OUT_OK, out);
+        CHECK(k == 1, "T1 one candidate above floor -> exactly 1 selected");
+        CHECK(k == 1 && out[0].query_key == 1, "T1 the SIMILAR one is the one selected");
+    }
+
+    /* T2 -- ALL below the floor -> select NOTHING. Not "the best of a bad set". This is the path
+     * 16 of the 36 measured queries take, and it is the safe one. */
+    {
+        g3_candidate_t c[2] = { semcand(1, 10, EPI_ACT_CONTROL_IN, "unrelated one."),
+                                semcand(2, 11, EPI_ACT_CONTROL_IN, "unrelated two.") };
+        float v[2*SEMDIM];
+        mkv(v + 0*SEMDIM, 0.3f, 1.0f, 0, 0);
+        mkv(v + 1*SEMDIM, 0.2f, 1.0f, 0, 0);
+        int k = g3_select_semantic(c, 2, q, v, SEMDIM, 0.55f, G3_MAX_FACTS, EPI_ACT_CONTROL_IN, EPI_OUT_OK, out);
+        CHECK(k == 0, "T2 ALL below floor -> ZERO selected (never the best of a bad set)");
+    }
+
+    /* T3 -- ties are deterministic: identical scores, first in input order wins, every time. */
+    {
+        g3_candidate_t c[2] = { semcand(1, 10, EPI_ACT_CONTROL_IN, "tie a."),
+                                semcand(2, 11, EPI_ACT_CONTROL_IN, "tie b.") };
+        float v[2*SEMDIM];
+        mkv(v + 0*SEMDIM, 1, 0, 0, 0);
+        mkv(v + 1*SEMDIM, 1, 0, 0, 0);          /* byte-identical => identical score */
+        int a = g3_select_semantic(c, 2, q, v, SEMDIM, 0.55f, 1, EPI_ACT_CONTROL_IN, EPI_OUT_OK, out);
+        uint64_t first = out[0].query_key;
+        int same = 1;
+        for (int r = 0; r < 5; r++) {
+            g3_select_semantic(c, 2, q, v, SEMDIM, 0.55f, 1, EPI_ACT_CONTROL_IN, EPI_OUT_OK, out);
+            if (out[0].query_key != first) same = 0;
+        }
+        CHECK(a == 1 && first == 1, "T3 tie -> the FIRST in input order wins");
+        CHECK(same, "T3 tie -> identical result on every repeat (deterministic)");
+    }
+
+    /* T4 -- n == 0. */
+    {
+        float v[SEMDIM]; mkv(v, 1, 0, 0, 0);
+        g3_candidate_t c1 = semcand(1, 1, EPI_ACT_CONTROL_IN, "x.");
+        CHECK(g3_select_semantic(&c1, 0, q, v, SEMDIM, 0.55f, G3_MAX_FACTS, EPI_ACT_CONTROL_IN, EPI_OUT_OK, out) == 0,
+              "T4 n==0 -> zero selected, no crash");
+    }
+
+    /* T5 -- max < the number above the floor: exactly max, highest-scoring first. */
+    {
+        g3_candidate_t c[3] = { semcand(1, 10, EPI_ACT_CONTROL_IN, "third best."),
+                                semcand(2, 11, EPI_ACT_CONTROL_IN, "BEST."),
+                                semcand(3, 12, EPI_ACT_CONTROL_IN, "second best.") };
+        float v[3*SEMDIM];
+        mkv(v + 0*SEMDIM, 1.0f, 0.9f, 0, 0);    /* lowest cosine of the three */
+        mkv(v + 1*SEMDIM, 1.0f, 0.0f, 0, 0);    /* highest */
+        mkv(v + 2*SEMDIM, 1.0f, 0.4f, 0, 0);    /* middle */
+        int k = g3_select_semantic(c, 3, q, v, SEMDIM, 0.55f, 2, EPI_ACT_CONTROL_IN, EPI_OUT_OK, out);
+        CHECK(k == 2, "T5 max=2 with 3 above floor -> exactly 2");
+        CHECK(k == 2 && out[0].query_key == 2 && out[1].query_key == 3,
+              "T5 selected in descending score order (best first)");
+    }
+
+    /* T6 -- THE TAG-4 HAZARD, teeth-first: a locally-served record scores HIGHEST and must still
+     * be excluded. Under exact-key select it could only ever match its own key; under cosine a
+     * stale "up 476 seconds" can semantically match an unrelated uptime question. */
+    {
+        g3_candidate_t c[2] = { semcand(1, 10, EPI_ACT_CONTROL_IN_LOCAL, "up 476 seconds"),
+                                semcand(2, 11, EPI_ACT_CONTROL_IN, "a real model answer.") };
+        float v[2*SEMDIM];
+        mkv(v + 0*SEMDIM, 1.0f, 0.0f, 0, 0);    /* PERFECT match -- and must lose anyway */
+        mkv(v + 1*SEMDIM, 1.0f, 0.5f, 0, 0);    /* lower score, but it is a real memory */
+        int k = g3_select_semantic(c, 2, q, v, SEMDIM, 0.55f, G3_MAX_FACTS, EPI_ACT_CONTROL_IN, EPI_OUT_OK, out);
+        CHECK(k == 1, "T6 tag-4 scoring HIGHEST -> only the real memory is selected");
+        CHECK(k == 1 && out[0].query_key == 2, "T6 the selected record is the INFER-tagged one");
+    }
+
+    /* T6b -- a thought-poisoned record must not occupy a slot even when it scores best. */
+    {
+        g3_candidate_t c[2] = { semcand(1, 10, EPI_ACT_CONTROL_IN, "<|channel>thought reasoning..."),
+                                semcand(2, 11, EPI_ACT_CONTROL_IN, "a clean prior answer.") };
+        float v[2*SEMDIM];
+        mkv(v + 0*SEMDIM, 1.0f, 0.0f, 0, 0);
+        mkv(v + 1*SEMDIM, 1.0f, 0.5f, 0, 0);
+        int k = g3_select_semantic(c, 2, q, v, SEMDIM, 0.55f, G3_MAX_FACTS, EPI_ACT_CONTROL_IN, EPI_OUT_OK, out);
+        CHECK(k == 1 && out[0].query_key == 2,
+              "T6b thought-marker record excluded at SELECT time (cannot crowd out a good one)");
+    }
+
+    /* T7 -- an UN-NORMALISED vector is DETECTED, not silently ranked by magnitude. A long vector
+     * would otherwise dominate every dot product while still looking like a legitimate ordering. */
+    {
+        float bad[SEMDIM] = { 5.0f, 0, 0, 0 };          /* norm 5, not 1 */
+        CHECK(!g3_vec_is_unit(bad, SEMDIM), "T7 un-normalised vector DETECTED by g3_vec_is_unit");
+        CHECK(g3_vec_is_unit(q, SEMDIM), "T7 a genuine unit vector passes the same check");
+
+        g3_candidate_t c1 = semcand(1, 10, EPI_ACT_CONTROL_IN, "x.");
+        float v[SEMDIM]; mkv(v, 1, 0, 0, 0);
+        CHECK(g3_select_semantic(&c1, 1, bad, v, SEMDIM, 0.55f, G3_MAX_FACTS, EPI_ACT_CONTROL_IN, EPI_OUT_OK, out) == 0,
+              "T7 non-unit QUERY vector -> fails closed, zero selected");
+
+        float badc[SEMDIM] = { 9.0f, 0, 0, 0 };
+        CHECK(g3_select_semantic(&c1, 1, q, badc, SEMDIM, 0.55f, G3_MAX_FACTS, EPI_ACT_CONTROL_IN, EPI_OUT_OK, out) == 0,
+              "T7 non-unit CANDIDATE vector skipped, not magnitude-ranked");
+    }
+
+    /* T8 -- NULL guards on every pointer, plus the degenerate scalars. */
+    {
+        g3_candidate_t c1 = semcand(1, 10, EPI_ACT_CONTROL_IN, "x.");
+        float v[SEMDIM]; mkv(v, 1, 0, 0, 0);
+        CHECK(g3_select_semantic(NULL, 1, q, v, SEMDIM, 0.55f, 1, EPI_ACT_CONTROL_IN, EPI_OUT_OK, out) == 0, "T8 NULL cands");
+        CHECK(g3_select_semantic(&c1, 1, NULL, v, SEMDIM, 0.55f, 1, EPI_ACT_CONTROL_IN, EPI_OUT_OK, out) == 0, "T8 NULL query_vec");
+        CHECK(g3_select_semantic(&c1, 1, q, NULL, SEMDIM, 0.55f, 1, EPI_ACT_CONTROL_IN, EPI_OUT_OK, out) == 0, "T8 NULL cand_vecs");
+        CHECK(g3_select_semantic(&c1, 1, q, v, SEMDIM, 0.55f, 1, EPI_ACT_CONTROL_IN, EPI_OUT_OK, NULL) == 0, "T8 NULL out");
+        CHECK(g3_select_semantic(&c1, 1, q, v, 0, 0.55f, 1, EPI_ACT_CONTROL_IN, EPI_OUT_OK, out) == 0, "T8 dim<=0");
+        CHECK(g3_select_semantic(&c1, 1, q, v, SEMDIM, 0.55f, 0, EPI_ACT_CONTROL_IN, EPI_OUT_OK, out) == 0, "T8 max<=0");
+        CHECK(!g3_vec_is_unit(NULL, SEMDIM), "T8 g3_vec_is_unit(NULL) -> 0, no crash");
+    }
+
+    /* T9 -- THE BOUNDARY, pinned. `>=` is deliberate: the floor's measured cost/benefit in
+     * cm2_floor_results.json was computed with `score >= floor`, so `>` here would make the
+     * deployed behaviour differ from the very numbers that justified the floor. A score EXACTLY
+     * at the floor is ADMITTED. */
+    {
+        g3_candidate_t c1 = semcand(1, 10, EPI_ACT_CONTROL_IN, "exactly at the floor.");
+        float v[SEMDIM];
+        /* cos(q,v) == v[0] for q = (1,0,0,0) and unit v, so v[0] IS the score. */
+        float target = 0.55f;
+        v[0] = target;
+        v[1] = (float)sqrt(1.0 - (double)target * (double)target);
+        v[2] = 0; v[3] = 0;
+        CHECK(g3_vec_is_unit(v, SEMDIM), "T9 fixture vector is unit-length");
+        int k = g3_select_semantic(&c1, 1, q, v, SEMDIM, target, 1, EPI_ACT_CONTROL_IN, EPI_OUT_OK, out);
+        CHECK(k == 1, "T9 score EXACTLY == floor is ADMITTED (>=, matching how the floor was measured)");
+        int k2 = g3_select_semantic(&c1, 1, q, v, SEMDIM, target + 0.01f, 1, EPI_ACT_CONTROL_IN, EPI_OUT_OK, out);
+        CHECK(k2 == 0, "T9 a floor just ABOVE the score rejects it (the boundary is real)");
+    }
+}
+
 int main(void)
 {
     printf("=== G3 Retrieval Tests (Phase 5 G3/M0 + M2 budget + M3 filter + M6 hygiene) ===\n");
@@ -722,6 +901,7 @@ int main(void)
     test_clean_truncation();
     test_per_lane_window();
     test_local_not_a_memory();
+    test_semantic_select();
     printf("\n== Results: %d PASS, %d FAIL ==\n", pass, fail);
     return fail ? 1 : 0;
 }
