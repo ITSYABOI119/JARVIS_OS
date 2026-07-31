@@ -1,0 +1,273 @@
+{
+  "_comment": "C/M2b Leg A host reference. Per-pair cosines for the DEPLOYED config (dim 128, mean-projected, floor 0.55). Pipeline imported from cm2_floor.py so it cannot drift. The box probe is compared against these.",
+  "model": "Qwen/Qwen3-Embedding-0.6B",
+  "dim": 128,
+  "projection": "meanproj",
+  "floor": 0.55,
+  "n_pairs": 36,
+  "fire_at_floor": 19,
+  "cos_min": 0.33064245004324627,
+  "cos_median": 0.5634199427424522,
+  "cos_max": 0.7125990846341379,
+  "pairs": [
+    {
+      "i": 0,
+      "stored": "what is a page fault",
+      "later": "what happens when a program reads memory that isn't currently loaded into RAM",
+      "cos": 0.45393788483817,
+      "clears_floor": false
+    },
+    {
+      "i": 1,
+      "stored": "how does the tcp three-way handshake work",
+      "later": "what are the steps two hosts take to open a tcp connection",
+      "cos": 0.6037300122531606,
+      "clears_floor": true
+    },
+    {
+      "i": 2,
+      "stored": "what is a hash table",
+      "later": "which data structure gives average constant-time lookup by key",
+      "cos": 0.5962608625833024,
+      "clears_floor": true
+    },
+    {
+      "i": 3,
+      "stored": "what does DMA do",
+      "later": "how can a peripheral move data into memory without the CPU copying it",
+      "cos": 0.5698679519419867,
+      "clears_floor": true
+    },
+    {
+      "i": 4,
+      "stored": "how does DNS work",
+      "later": "how is a website name turned into a numeric IP address",
+      "cos": 0.3378280145555161,
+      "clears_floor": false
+    },
+    {
+      "i": 5,
+      "stored": "what is garbage collection",
+      "later": "how does a language runtime automatically free memory that is no longer referenced",
+      "cos": 0.5448781254353814,
+      "clears_floor": false
+    },
+    {
+      "i": 6,
+      "stored": "what does a compiler do",
+      "later": "what translates human-written source code into machine instructions",
+      "cos": 0.5918863407930692,
+      "clears_floor": true
+    },
+    {
+      "i": 7,
+      "stored": "why do CPUs have caches",
+      "later": "why keep a small fast memory between the processor and main RAM",
+      "cos": 0.6439408678856289,
+      "clears_floor": true
+    },
+    {
+      "i": 8,
+      "stored": "what is public-key encryption",
+      "later": "how can two parties communicate secretly without sharing a password beforehand",
+      "cos": 0.5127639303340371,
+      "clears_floor": false
+    },
+    {
+      "i": 9,
+      "stored": "what is recursion",
+      "later": "what do you call a function that calls itself to solve a smaller subproblem",
+      "cos": 0.6413254508465435,
+      "clears_floor": true
+    },
+    {
+      "i": 10,
+      "stored": "how does binary search work",
+      "later": "how do you find a value in a sorted array in logarithmic time",
+      "cos": 0.6679107028312068,
+      "clears_floor": true
+    },
+    {
+      "i": 11,
+      "stored": "what is a mutex",
+      "later": "how do you keep two threads from writing the same variable at the same time",
+      "cos": 0.4244246727278896,
+      "clears_floor": false
+    },
+    {
+      "i": 12,
+      "stored": "what is a container like Docker",
+      "later": "how do you package an app with its dependencies so it runs anywhere",
+      "cos": 0.4395140061425914,
+      "clears_floor": false
+    },
+    {
+      "i": 13,
+      "stored": "what is a load balancer",
+      "later": "how do you spread incoming requests across several backend servers",
+      "cos": 0.4990724024548352,
+      "clears_floor": false
+    },
+    {
+      "i": 14,
+      "stored": "what is a rest api",
+      "later": "how do web clients talk to a server over http using resources and verbs",
+      "cos": 0.4938269804808751,
+      "clears_floor": false
+    },
+    {
+      "i": 15,
+      "stored": "what is a file descriptor",
+      "later": "what is the small integer the kernel hands you to refer to an open file",
+      "cos": 0.7125990846341379,
+      "clears_floor": true
+    },
+    {
+      "i": 16,
+      "stored": "what is a linked list",
+      "later": "which data structure chains nodes together where each points to the next",
+      "cos": 0.6501200847858861,
+      "clears_floor": true
+    },
+    {
+      "i": 17,
+      "stored": "what is a stack data structure",
+      "later": "which structure adds and removes items in last-in first-out order",
+      "cos": 0.5902152739504776,
+      "clears_floor": true
+    },
+    {
+      "i": 18,
+      "stored": "what is a queue",
+      "later": "which structure processes items in first-in first-out order",
+      "cos": 0.46906366462476506,
+      "clears_floor": false
+    },
+    {
+      "i": 19,
+      "stored": "what is a database index",
+      "later": "what speeds up row lookups so the engine doesn't scan the whole table",
+      "cos": 0.33064245004324627,
+      "clears_floor": false
+    },
+    {
+      "i": 20,
+      "stored": "what is a foreign key",
+      "later": "how does one table reference the primary key of another table",
+      "cos": 0.6586367906706829,
+      "clears_floor": true
+    },
+    {
+      "i": 21,
+      "stored": "what is http",
+      "later": "what protocol do web browsers use to request pages from a server",
+      "cos": 0.5145861115411502,
+      "clears_floor": false
+    },
+    {
+      "i": 22,
+      "stored": "what is json",
+      "later": "what lightweight text format stores structured data as key-value pairs",
+      "cos": 0.5304071948037584,
+      "clears_floor": false
+    },
+    {
+      "i": 23,
+      "stored": "what is a regular expression",
+      "later": "how do you describe a text-search pattern using special symbols",
+      "cos": 0.6884317971351581,
+      "clears_floor": true
+    },
+    {
+      "i": 24,
+      "stored": "what is big-o notation",
+      "later": "how do you describe how an algorithm's running time grows with input size",
+      "cos": 0.655273252329166,
+      "clears_floor": true
+    },
+    {
+      "i": 25,
+      "stored": "what is a virtual machine",
+      "later": "how do you run a full guest operating system on top of a host machine",
+      "cos": 0.5161277872281684,
+      "clears_floor": false
+    },
+    {
+      "i": 26,
+      "stored": "what is a firewall",
+      "later": "what filters network traffic to block unwanted or unsafe connections",
+      "cos": 0.5835606609998906,
+      "clears_floor": true
+    },
+    {
+      "i": 27,
+      "stored": "what is a checksum",
+      "later": "how do you detect whether data got corrupted during transmission",
+      "cos": 0.35948202594154677,
+      "clears_floor": false
+    },
+    {
+      "i": 28,
+      "stored": "what is a bloom filter",
+      "later": "which probabilistic structure tests membership allowing rare false positives",
+      "cos": 0.5175738609299532,
+      "clears_floor": false
+    },
+    {
+      "i": 29,
+      "stored": "what is a heap data structure",
+      "later": "which tree keeps the smallest or largest element at the root for a priority queue",
+      "cos": 0.5653310164490424,
+      "clears_floor": true
+    },
+    {
+      "i": 30,
+      "stored": "what is a symbolic link",
+      "later": "what special file points to another file by its path name",
+      "cos": 0.5455305334260557,
+      "clears_floor": false
+    },
+    {
+      "i": 31,
+      "stored": "what is network latency",
+      "later": "what is the delay before data begins to transfer across a network",
+      "cos": 0.6724713859322133,
+      "clears_floor": true
+    },
+    {
+      "i": 32,
+      "stored": "what is a thread pool",
+      "later": "how do you reuse a fixed set of worker threads to run many small tasks",
+      "cos": 0.5634199427424522,
+      "clears_floor": true
+    },
+    {
+      "i": 33,
+      "stored": "what is memoization",
+      "later": "how do you cache a function's results to avoid recomputing them",
+      "cos": 0.6632503592042827,
+      "clears_floor": true
+    },
+    {
+      "i": 34,
+      "stored": "what is an environment variable",
+      "later": "what named value in the OS configures how a running process behaves",
+      "cos": 0.5574377865352022,
+      "clears_floor": true
+    },
+    {
+      "i": 35,
+      "stored": "what is a uuid",
+      "later": "what randomly generated 128-bit identifier is unique without a central authority",
+      "cos": 0.4915376622894895,
+      "clears_floor": false
+    }
+  ],
+  "extra_invented_pair": {
+    "stored": "what is a page fault",
+    "later": "explain what happens when a memory page is not resident",
+    "note": "INVENTED for the first G2 attempt - not in cm0_recall_set.json, excluded from the rate",
+    "cos": 0.5351686157797304,
+    "clears_floor": false
+  }
+}

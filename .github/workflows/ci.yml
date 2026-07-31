@@ -375,6 +375,12 @@ jobs:
           phase3/src/ai/test_embed_mu.c -o /tmp/temu -lm
         /tmp/temu
 
+    # C/M2b Leg A: the box probe's pair table must not drift from the eval set it is
+    # compared against. Stdlib-only, so it runs here; the cosine reference itself
+    # (cm2b_pair_cos.py) needs the 1.2 GB model and stays model-gated-local.
+    - name: "Phase C: C/M2b recall-pair table up-to-date"
+      run: python3 phase3/scripts/embed/gen_recall_pairs.py --check
+
     # The projection between them: embed(1024) -> meanproj -> truncate(128) -> L2.
     # Links the REAL g3_retrieval.c so the output is checked through the same
     # g3_vec_is_unit that g3_select_semantic gates on, not a reimplementation.

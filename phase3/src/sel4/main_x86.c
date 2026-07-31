@@ -111,6 +111,7 @@
 #include "embed_region.h"        /* Phase C / C/M1b-3: the embed transport region + its staleness predicate */
 #include "embed_store.h"         /* Phase C / C/M2a: the durable per-record vector store (JVEC @ 21,150,000) */
 #include "embed_project.h"       /* Phase C / C/M2b: embed(1024) -> meanproj -> truncate(128) -> L2 */
+#include "embed_gate_pairs.h"    /* Phase C / C/M2b Leg A: the MEASURED pairs (generated; probe-only) */
 #endif
 #include "jarvis_ui_tokens.h"   /* Step 2c-2b: FBP_ and JUI_ palette + geometry (single source) */
 
@@ -731,7 +732,13 @@ static uint32_t    g_route_decline;           /* canned honest decline (no sourc
 static uint32_t    g_route_infer;             /* dispatched to Gemma — today's control-IN behavior    */
 #endif
 
-#if (JARVIS_CONTROL_IN_PROBE || JARVIS_CONTROL_IN_RECALL_PROBE || JARVIS_ROUTING_PROBE)   /* M5-recall + 6-6/B/M1 reuse this staging */
+/* C/M2b adds JARVIS_EMBED_PROBE to this list, and it HAD to: the C/M2b gates are told
+ * to drive real validated frames through this staging, but they are also #error-guarded
+ * AGAINST riding JARVIS_CONTROL_IN_PROBE (which would reset the replay floor their seqs
+ * are derived from). With the old gate that combination could not link —
+ * "undefined reference to build_probe_jctl" — so reuse-by-extension is the only
+ * consistent resolution, and it is the same one M5-recall and 6-6/B/M1 took. */
+#if (JARVIS_CONTROL_IN_PROBE || JARVIS_CONTROL_IN_RECALL_PROBE || JARVIS_ROUTING_PROBE || JARVIS_EMBED_PROBE)   /* M5-recall + 6-6/B/M1 + C/M2b reuse this staging */
 static void ctrl_put_be16(uint8_t *p, uint16_t v){ p[0]=(uint8_t)(v>>8); p[1]=(uint8_t)v; }
 static void ctrl_put_be32(uint8_t *p, uint32_t v){ p[0]=(uint8_t)(v>>24); p[1]=(uint8_t)(v>>16); p[2]=(uint8_t)(v>>8); p[3]=(uint8_t)v; }
 static void ctrl_put_be64(uint8_t *p, uint64_t v){ for(int i=0;i<8;i++) p[i]=(uint8_t)(v>>(56-8*i)); }
@@ -2507,6 +2514,18 @@ static int wait_for_response(shmem_ring_t *ring, uint8_t expected_type)
  * those to the shared counter would let THREE of them restart a perfectly healthy PB. Detection
  * loses nothing: the continuously-running inference/heartbeat/shield lanes already watch PB.
  */
+#if JARVIS_EMBED_PROBE == 2
+/* G4 plumbing. pa_restart_pb is defined ~700 lines below this function, so the
+ * REAL respawn path needs a forward declaration to be callable from the hook
+ * inside pa_embed_request. Using the real path is the point: §4's own reasoning is
+ * that a synthetic stub tests the stub, and the question is what production does. */
+static void pa_restart_pb(const char *reason, uint16_t lane, uint32_t missed, uint64_t age_ms,
+                          seL4_Word flabel, seL4_Word fbadge);
+static int      g_embed_probe_arm_respawn = 0;   /* armed for exactly ONE request */
+static uint32_t g_embed_probe_fired       = 0;
+static int      g_embed_probe_interleaved = 0;   /* 1 = the request really was outstanding */
+#endif
+
 static int pa_embed_request(const char *text, uint16_t text_len, float *out)
 {
     if (!g_embed_region_ready || !text || !out) return -1;
@@ -2528,6 +2547,60 @@ static int pa_embed_request(const char *text, uint16_t text_len, float *out)
     if (shmem_ipc_send(shared_request_ring, MSG_EMBED, (uint16_t)seq, text, text_len) != 0)
         return -2;
     seL4_Signal(g_pa_req_notif);
+
+#if JARVIS_EMBED_PROBE == 2
+    /*
+     * G4 — FIRE THE RESPAWN WHILE THIS REQUEST IS GENUINELY OUTSTANDING.
+     *
+     * Placed AFTER the send+signal and BEFORE wait_for_response, then burning
+     * yields first so PB has dequeued and started the ~2 s embed. Firing
+     * immediately after the signal would prove much less: the request would be
+     * queued-but-untouched rather than in-flight.
+     *
+     * The page state is dumped BEFORE the respawn so the report can show the
+     * request really was unanswered at that moment (ready == 0, because
+     * pa_embed_request cleared it above) and what stale seq the page still carries
+     * from the PREVIOUS embed. Without that evidence steps 2-4 are theatre — §4's
+     * own point, and the same vacuity class as the substring grep.
+     */
+    if (g_embed_probe_arm_respawn) {
+        g_embed_probe_arm_respawn = 0;
+        /* Yield a BOUNDED number of times, and STOP EARLY if PB publishes — the loop
+         * exists to let PB dequeue and start, not to let it finish.
+         *
+         * The first attempt burned a flat 20000 yields, which is far longer than the
+         * 270-830 ms an embed actually takes, so PB had already answered: the log read
+         * ready=1 with stale_seq == want_seq. The gate still printed PASS, because PA
+         * genuinely consumed nothing — but it had tested "respawn AFTER the answer",
+         * not "respawn DURING the request", which is the entire point. Breaking on
+         * ready makes that condition observable instead of assumed. */
+        uint32_t k = 0;
+        for (; k < (uint32_t)EMBED_PROBE_RESPAWN_YIELDS; k++) {
+            if (__atomic_load_n(&g_embed_ctrl->ready, __ATOMIC_ACQUIRE) != 0u) break;
+            seL4_Yield();
+        }
+        uint32_t rdy = __atomic_load_n(&g_embed_ctrl->ready, __ATOMIC_ACQUIRE);
+        puts_serial("[EMBED-G4] pre-respawn page: ready="); put_dec(rdy);
+        puts_serial(" stale_seq=");  put_dec(g_embed_ctrl->seq);
+        puts_serial(" len=");        put_dec(g_embed_ctrl->len);
+        puts_serial(" want_seq=");   put_dec(seq);
+        puts_serial(" yields=");     put_dec(k);
+        puts_serial("\n[EMBED-G4] INTERLEAVING: ");
+        /* THE PRECONDITION, stated as a verdict rather than an assumption. ready==0
+         * means PB has not published for THIS seq, so the request is sent-and-
+         * unanswered and the respawn lands mid-flight. Anything else and the leg is
+         * not testing what it claims, and must say so rather than print PASS. */
+        puts_serial(rdy == 0u
+            ? "ACHIEVED - request is sent-and-unanswered, respawn lands mid-flight\n"
+            : "NOT ACHIEVED - PB already published for this seq; the leg below proves less\n");
+        puts_serial("[EMBED-G4] firing the REAL pa_restart_pb mid-embed\n");
+        g_embed_probe_fired++;
+        g_embed_probe_interleaved = (rdy == 0u);
+        pa_restart_pb("embed-probe", KM2B_LANE_EMBED, 0, 0, 0, 0);
+        puts_serial("[EMBED-G4] respawn returned; now polling for want_seq=");
+        put_dec(seq); seL4_DebugPutChar(10);
+    }
+#endif
 
     if (wait_for_response(shared_response_ring, MSG_EMBED_RESULT) != 0) {
         /* Honest FAIL, and deliberately inert: no q_errors, no miss counter. KM2B_LANE_EMBED
@@ -3520,8 +3593,16 @@ static void pa_ctrl_gate(const control_result_t *cres)
          * preamble costs exactly what it costs today, and embeds nothing.
          */
         if (cplen == 0 && g_embed_sem_ok && g_embed_idx_n > 0) {
+            /* Bound by THIS buffer, not by MAX_QUERY_LEN. qs is char[121] while
+             * MAX_QUERY_LEN is 128, so the original `qlen < MAX_QUERY_LEN - 1` guard
+             * permitted indices past the end of qs. It could not actually overrun —
+             * qs is built as qm = min(query_len,120) followed by qs[qm] = 0, so the
+             * NUL always arrives by index 120 — but a guard whose bound exceeds its
+             * buffer is one constant change away from being a real out-of-bounds read,
+             * and it reads as though it already is. Found while answering whether the
+             * write and recall paths preprocess identically; they do. */
             uint16_t qlen = 0;
-            while (qlen < MAX_QUERY_LEN - 1 && qs[qlen] != '\0') qlen++;
+            while (qlen < (uint16_t)(sizeof qs - 1) && qs[qlen] != '\0') qlen++;
             uint64_t t_e0 = jarvis_uptime_ms();
             int erc = pa_embed_request(qs, qlen, g_embed_raw);
             int prc = (erc == 0)
@@ -3548,6 +3629,44 @@ static void pa_ctrl_gate(const control_result_t *cres)
                     csem = (cplen > 0);
                 }
             }
+#if JARVIS_EMBED_PROBE
+            /* PROBE-ONLY: the BEST cosine over the gathered candidates, and which one.
+             *
+             * g3_select_semantic returns only what cleared the floor, so on a REJECTED
+             * query it reports nothing — and "selected 0" alone cannot distinguish a
+             * working floor from a floor set to 0, or from simply having no candidates.
+             * G2's negative leg is meaningless without this number. Reported x1000 as an
+             * integer because there is no float formatter on the serial path.
+             *
+             * Recomputed here rather than exposed from the selector: this is gate
+             * instrumentation, and adding an out-param to a mutation-proven pure
+             * function to serve a probe would be the wrong direction. */
+            {
+                int best_i = -1; double best = -2.0;
+                for (int ci = 0; ci < sn; ci++) {
+                    double d = 0.0;
+                    for (int k = 0; k < G3_SEM_DIM_DEFAULT; k++)
+                        d += (double)g_embed_q128[k] * (double)g_sem_vecs[ci * G3_SEM_DIM_DEFAULT + k];
+                    if (d > best) { best = d; best_i = ci; }
+                }
+                int bx = (int)(best * 1000.0);
+                puts_serial("[CTRL-SEM-PROBE] best_cos_x1000=");
+                if (bx < 0) { seL4_DebugPutChar('-'); bx = -bx; }
+                put_dec((uint32_t)bx);
+                puts_serial(" floor_x1000=550 best_cand=");
+                put_dec((uint32_t)(best_i < 0 ? 0 : best_i));
+                if (best_i >= 0) {
+                    puts_serial(" best_seq="); put_dec(g_sem_cands[best_i].seq);
+                    puts_serial(" best_q=\"");
+                    for (int t = 0; t < g_sem_cands[best_i].query_len && t < 70; t++) {
+                        char ch = g_sem_cands[best_i].query[t];
+                        putc_serial((ch >= 0x20 && ch < 0x7f) ? ch : ' ');
+                    }
+                    seL4_DebugPutChar('"');
+                }
+                puts_serial("\n");
+            }
+#endif
             puts_serial("[CTRL-SEM] cands="); put_dec((uint32_t)sn);
             puts_serial(" sel=");             put_dec((uint32_t)ss);
             puts_serial(" len=");             put_dec((uint32_t)cplen);
@@ -3777,6 +3896,63 @@ static void pa_ctrl_gate(const control_result_t *cres)
 
     ctrl_in_jact(AUDIT_EXECUTED, outcome, "control-in answered", 19);
 }
+
+#if JARVIS_EMBED_PROBE
+/*
+ * C/M2b gate helper: stage ONE fully-validated control-IN turn and route it.
+ *
+ * KVM has no NIC, so the frame goes through the same path a real inbound one does —
+ * build_probe_jctl -> net_build_udp_broadcast -> ctrl_roundtrip_sync (parse +
+ * rate-limit + HMAC + replay) -> pa_ctrl_gate. Returns 1 if the frame was ACCEPTED
+ * and routed, 0 if it never got that far, so a frame rejected at auth can never be
+ * misread as a recall result.
+ *
+ * The seq is derived from the LIVE floor on every call, which is what lets this run
+ * repeatedly in one boot (each accepted frame advances the floor) and across boots
+ * against a persisted one.
+ */
+static int embed_probe_turn(const char *q, const char *label)
+{
+    static uint8_t ej[CONTROL_MSG_MAX], ef[512];
+    control_result_t er;
+    uint64_t s = g_ctrl_replay.seq_floor + 1u;
+
+    /* THE NONCE MUST VARY PER FRAME. build_probe_jctl derives the whole nonce from
+     * this one seed byte, and control_replay keeps a 128-entry nonce ring, so a fixed
+     * seed makes every frame after the first a NONCE REPLAY — CV_DROP_REPLAY (4). The
+     * first run of this probe used a constant 0xD0 and lost 5 of 6 legs to exactly
+     * that; the seq was fine. The existing mode-3 probe varies its seed per frame
+     * (0xA0/0xB0/0xC0/0xE0) and the reason was not written down anywhere. */
+    static uint8_t nseed = 0x40;
+    nseed = (uint8_t)(nseed + 0x11u);
+
+    puts_serial("\n[EMBED-GATE] --- "); puts_serial(label);
+    puts_serial(" --- q=\""); puts_serial(q);
+    puts_serial("\" seq="); put_dec((uint32_t)s);
+    puts_serial(" nonce_seed=0x"); put_hex((uint32_t)nseed);
+    puts_serial(" key=");
+    {   /* the normalized key, so G2 can SHOW the two queries hash differently.
+         * put_hex emits its own "0x", so no prefix here — the first version printed
+         * "0x0x...0x..." and made the two halves hard to read as one key. */
+        static char nb[MAX_QUERY_LEN];
+        uint64_t k = cache_normalize_query(q, nb, sizeof nb) ? cache_hash(nb) : 0;
+        put_hex((uint32_t)(k >> 32)); puts_serial(":"); put_hex((uint32_t)(k & 0xFFFFFFFFu));
+    }
+    puts_serial("\n");
+
+    uint16_t jl = build_probe_jctl(ej, g_ctrl_key, s, nseed, q);
+    int fl = net_build_udp_broadcast(ef, sizeof ef, g_net.nic.mac, JARVIS_BOX_IP,
+                                     40000, (uint16_t)CONTROL_PORT, ej, jl);
+    control_verdict_t v = (fl > 0) ? ctrl_roundtrip_sync(ef, (size_t)fl, &er) : CV_DROP_PARSE;
+    if (v != CV_ACCEPT) {
+        puts_serial("[EMBED-GATE] FAIL frame not accepted (verdict=");
+        put_dec((uint32_t)v); puts_serial(")\n");
+        return 0;
+    }
+    pa_ctrl_gate(&er);
+    return 1;
+}
+#endif /* JARVIS_EMBED_PROBE */
 #endif /* JARVIS_CONTROL_IN */
 
 #if JARVIS_ACTION_PROBE
@@ -6314,6 +6490,286 @@ static void *main_continued(void *arg UNUSED)
         puts_serial("[CTRL-RECALL-PROBE] SKIPPED (key/input/floor down)\n");
     }
 #endif /* JARVIS_CONTROL_IN_RECALL_PROBE */
+
+#if JARVIS_EMBED_PROBE
+    /* ============================ C/M2b GATES ============================
+     * KVM has no NIC, so every query below is staged through the same signed-JCTL
+     * split pipeline the CONTROL_IN_PROBE modes use: build_probe_jctl ->
+     * net_build_udp_broadcast -> ctrl_roundtrip_sync -> pa_ctrl_gate. These are REAL
+     * validated control-IN queries that passed parse + rate-limit + HMAC + replay,
+     * not direct calls into the gate.
+     *
+     * EVERY SEQ IS DERIVED FROM THE LIVE FLOOR (seq_floor + 1), re-read before each
+     * frame. A fixed seq DROP_REPLAYs against the persisted floor and reads as a gate
+     * failure that is not one. This probe deliberately does NOT call
+     * control_replay_init — that is what CONTROL_IN_PROBE does, and it would reset the
+     * very floor these seqs come from (hence the #error cross-guard).            */
+    if (g_ctrl_key_ok && g_input_ready && g_ctrl_floor_ok) {
+        puts_serial("\n[EMBED-GATE] ================ C/M2b GATES ================\n");
+        puts_serial("[EMBED-GATE] mode="); put_dec((uint32_t)JARVIS_EMBED_PROBE);
+        puts_serial(" sem_ok=");           put_dec((uint32_t)g_embed_sem_ok);
+        puts_serial(" vec_idx_n=");        put_dec((uint32_t)g_embed_idx_n);
+        puts_serial(" ctrl_idx_n=");       put_dec((uint32_t)g_ctrl_epi_index_n);
+        puts_serial(" mu=");               puts_serial(embed_mu_verify() ? "OK" : "MISMATCH");
+        puts_serial(" store_stored=");     put_dec(embed_store_count(&g_embed_store));
+        puts_serial("\n");
+
+#if JARVIS_EMBED_PROBE == 1
+        /* ---------------- G2: semantic recall on a NON-repeat ----------------
+         * SELF-CONTAINED BY DESIGN. The leg stores its own fact first, so the result
+         * does not depend on how many boots the shared KVM fixture has seen or on
+         * whether the backfill has caught up — which would make it flaky and
+         * un-reproducible, and the fixture is already known to drift (the recorded
+         * --no-snapshot incident).
+         *
+         * A2 is worded differently from A1 on purpose, and the two normalized keys
+         * are printed above so the report can SHOW that exact-key cannot match. */
+        /* ---------------- LEG B: end-to-end on pairs the MEASUREMENT says should work ----
+         *
+         * Pairs #15 / #31 / #10 — Leg A measured them at 0.709 / 0.671 / 0.667 on this
+         * box, comfortably above the 0.55 floor, so a miss HERE would mean something is
+         * wrong with the lane rather than with the embedding.
+         *
+         * SELECTING THESE AFTER LEG A PUBLISHED THE RATE IS LEGITIMATE, and the split of
+         * duty is the reason: Leg A establishes the honest fire rate over the WHOLE set
+         * (19/36) with nothing selected for; Leg B demonstrates the MECHANISM end-to-end
+         * on inputs the measurement says should fire. Picking a pair and reporting only
+         * that would be the dishonest version, and it is not what is happening.
+         *
+         * Each pair: store the `stored` side as a real control-IN turn (embed-on-write
+         * vectors it), then ask the `later` side — a different question with a different
+         * query_key, so exact-key provably cannot match and only semantic can answer. */
+        puts_serial("\n[EMBED-GATE] LEG B: end-to-end on pairs Leg A measured ABOVE the floor\n");
+
+        /* INDEXED FROM THE GENERATED TABLE, NEVER RETYPED — and the first version of
+         * this leg retyped them, which is why the rule is stated here rather than
+         * assumed. Pair #31's `later` was transcribed as "...transfer over a link"
+         * when the eval set says "...transfer across a network": the host table's
+         * display truncated at "...begins to tran" and the rest was completed from
+         * memory. It measured 0.548 against Leg A's 0.671 and looked exactly like a
+         * box-vs-host pipeline discrepancy, when it was a different question.
+         *
+         * The generated table exists so inputs cannot drift from the measurement.
+         * Using it for Leg A and then hand-typing for Leg B gave up that guarantee
+         * for no reason. */
+        {
+            static const int legb[3] = { 15, 31, 10 };   /* Leg A box: 0.7087 / 0.6713 / 0.6665 */
+            for (int b = 0; b < 3; b++) {
+                int ix = legb[b];
+                puts_serial("\n[EMBED-GATE] LegB pair #"); put_dec((uint32_t)ix);
+                puts_serial(" - store the `stored` side\n");
+                embed_probe_turn(EMBED_GATE_PAIRS[ix].stored, "LegB-store");
+                puts_serial("[EMBED-GATE] LegB pair #"); put_dec((uint32_t)ix);
+                puts_serial(" - ask the DIFFERENTLY-WORDED `later` side\n");
+                embed_probe_turn(EMBED_GATE_PAIRS[ix].later, "LegB-recall");
+            }
+        }
+
+        /* THE NEGATIVE, and it is what makes the positives mean anything. Without it, a
+         * floor of 0 and a working floor look identical. [CTRL-SEM-PROBE] prints the best
+         * cosine even when nothing is selected, which is the only way to tell "rejected by
+         * the floor" from "there were no candidates". Leg A measured this at 0.108. */
+        puts_serial("\n[EMBED-GATE] LEG B negative: unrelated question must select NOTHING\n");
+        embed_probe_turn("how do you bake sourdough bread", "LegB-negative");
+
+        /* ---------------- G3: the exact-key path is unchanged ----------------
+         * BOTH SHAPES, per the wiring finding that the fall-through triggers on
+         * cplen == 0 rather than on an index miss:
+         *   shape A - an exact-key hit that YIELDS a usable preamble -> NO embed.
+         *   shape B - an exact-key hit whose stored answer holds no complete
+         *             sentence -> cplen 0 -> embed + semantic.
+         * Shape B is arranged by repeating the EXPLANATORY question from G2 step 1:
+         * a long answer is stored as a 256-B head that usually ends mid-clause, which
+         * is the measured reason 8 of 14 recorded hits produced len=0. Whether it
+         * actually lands that way is reported, not assumed. */
+        puts_serial("\n[EMBED-GATE] G3 shape A: verbatim repeat of a SHORT question (expect exact hit, NO embed)\n");
+        embed_probe_turn("explain paging in one line", "G3-shapeA-first");
+        embed_probe_turn("explain paging in one line", "G3-shapeA-repeat");
+
+        puts_serial("\n[EMBED-GATE] G3 shape B: verbatim repeat of the EXPLANATORY question\n");
+        puts_serial("[EMBED-GATE]   (exact-key HITS; if its stored head has no complete sentence,\n");
+        puts_serial("[EMBED-GATE]    cplen==0 and the semantic fall-through fires - reported either way)\n");
+        embed_probe_turn("what is a page fault?", "G3-shapeB-repeat");
+
+        puts_serial("\n[EMBED-GATE] G2/G3 legs complete\n");
+#endif /* mode 1 */
+
+#if JARVIS_EMBED_PROBE == 2
+        /* ---------------- G4: respawn while an embed is OUTSTANDING ----------------
+         * The T2 carry-forward coming due. Since 5ab2004, "PA does not consume a stale
+         * vector after a respawn" has rested on design plus a host seq test, because
+         * T2's own gate ran its respawn cycles AFTER the embed probe had finished.
+         *
+         * SETUP FIRST, AND IT IS WHAT STOPS THIS BEING VACUOUS: a respawn against a
+         * never-written page has no stale vector to wrongly consume, so it would pass
+         * while proving nothing. Step 1 therefore lands a REAL result on the page under
+         * a DIFFERENT seq, and its vector is fingerprinted so a stale consume would be
+         * recognisable rather than merely suspected. */
+        static float g4_v1[EMBED_DIM];
+        puts_serial("\n[EMBED-GATE] G4 step 1: one embed must SUCCEED to leave a prior result on the page\n");
+        int g4rc1 = pa_embed_request("what is a page fault?", 21u, g4_v1);
+        uint32_t g4x = 0;
+        for (int i = 0; i < EMBED_DIM; i++) {
+            uint32_t b; memcpy(&b, &g4_v1[i], 4); g4x ^= b;
+        }
+        puts_serial("[EMBED-GATE] G4 setup: rc="); put_dec((uint32_t)(g4rc1 < 0 ? -g4rc1 : g4rc1));
+        puts_serial(" page_ready=");  put_dec(__atomic_load_n(&g_embed_ctrl->ready, __ATOMIC_ACQUIRE));
+        puts_serial(" page_seq=");    put_dec(g_embed_ctrl->seq);
+        puts_serial(" page_len=");    put_dec(g_embed_ctrl->len);
+        puts_serial(" V1_xor=0x");    put_hex(g4x);
+        puts_serial(g4rc1 == 0 ? "  <= VALID prior result present\n"
+                               : "  <= SETUP FAILED: steps 2-4 would be theatre\n");
+
+        if (g4rc1 == 0) {
+            /* Step 2-3: arm the hook, then issue the next embed. The hook inside
+             * pa_embed_request burns yields so PB is mid-computation, dumps the page
+             * state to prove the request is sent-and-unanswered, then fires the REAL
+             * pa_restart_pb. */
+            static float g4_v2[EMBED_DIM];
+            for (int i = 0; i < EMBED_DIM; i++) g4_v2[i] = 0.0f;
+            g_embed_probe_arm_respawn = 1;
+            puts_serial("\n[EMBED-GATE] G4 steps 2-3: embed #2 with the respawn armed mid-flight\n");
+            int g4rc2 = pa_embed_request("explain what happens when a memory page is not resident",
+                                         53u, g4_v2);
+            uint32_t g4x2 = 0;
+            for (int i = 0; i < EMBED_DIM; i++) {
+                uint32_t b; memcpy(&b, &g4_v2[i], 4); g4x2 ^= b;
+            }
+            puts_serial("[EMBED-GATE] G4 RESULT: rc=");
+            put_dec((uint32_t)(g4rc2 < 0 ? -g4rc2 : g4rc2));
+            puts_serial(" respawn_fired=");  put_dec(g_embed_probe_fired);
+            puts_serial(" out_xor=0x");      put_hex(g4x2);
+            puts_serial(" V1_xor=0x");       put_hex(g4x);
+            puts_serial("\n");
+            /* THE VERDICT. Consuming the stale page would hand back V1 verbatim. */
+            puts_serial("[EMBED-GATE] G4 interleaving_achieved=");
+            put_dec((uint32_t)g_embed_probe_interleaved);
+            puts_serial("\n");
+            if (g4rc2 == 0 && g4x2 == g4x)
+                puts_serial("[EMBED-GATE] G4 FAIL: PA returned the PREVIOUS embed's vector (STALE CONSUMED)\n");
+            else if (!g_embed_probe_interleaved)
+                /* The precondition did not hold, so this says less than PASS. Reporting
+                 * PASS here would be the vacuous-gate class: true statement, wrong test. */
+                puts_serial("[EMBED-GATE] G4 INCONCLUSIVE: no stale vector consumed, but the request "
+                            "was NOT outstanding when the respawn fired\n");
+            else if (g4rc2 == 0)
+                puts_serial("[EMBED-GATE] G4 note: rc=0 with a DIFFERENT vector - PB answered the new seq after all\n");
+            else
+                puts_serial("[EMBED-GATE] G4 PASS: request was outstanding, respawn fired, NO vector consumed\n");
+
+            /* Step 4 — the SEQ CHECK specifically, which the respawn alone cannot
+             * reach. pa_embed_request clears `ready` before sending, so a respawned PB
+             * simply never publishes and the poll times out; the seq-equality guard is
+             * never consulted. The state that DOES consult it is a LATE publish: PA has
+             * moved on to seq N while PB's answer for N-1 lands afterwards. That race
+             * cannot be produced deterministically, so it is SYNTHESISED here - the
+             * page is republished with the OLD seq and the REAL predicate is asked.
+             * Synthesising the RACE, not stubbing the predicate. */
+            puts_serial("\n[EMBED-GATE] G4 step 4: synthesised LATE-PUBLISH race (real predicate)\n");
+            g_embed_ctrl->seq    = 4242u;                  /* a seq PA is not waiting for */
+            g_embed_ctrl->len    = EMBED_VEC_BYTES;
+            g_embed_ctrl->status = EMBED_STATUS_OK;
+            __atomic_store_n(&g_embed_ctrl->ready, 1u, __ATOMIC_RELEASE);
+            int usable_wrong = embed_result_usable(g_embed_ctrl, 4243u, EMBED_VEC_BYTES);
+            int usable_right = embed_result_usable(g_embed_ctrl, 4242u, EMBED_VEC_BYTES);
+            puts_serial("[EMBED-GATE] G4 seq-check: want=4243 got=4242 usable=");
+            put_dec((uint32_t)usable_wrong);
+            puts_serial(" (MUST be 0)   want=4242 got=4242 usable=");
+            put_dec((uint32_t)usable_right);
+            puts_serial(" (positive control, MUST be 1)\n");
+            puts_serial(usable_wrong == 0 && usable_right == 1
+                        ? "[EMBED-GATE] G4 seq-check PASS (rejects the stale seq, accepts the matching one)\n"
+                        : "[EMBED-GATE] G4 seq-check FAIL\n");
+            __atomic_store_n(&g_embed_ctrl->ready, 0u, __ATOMIC_RELEASE);
+        }
+        puts_serial("\n[EMBED-GATE] G4 leg complete\n");
+#endif /* mode 2 */
+
+#if JARVIS_EMBED_PROBE == 3
+        /* ---------------- LEG A: does the box REPRODUCE the measurement? ----------------
+         *
+         * Embed BOTH sides of every measured pair and print the cosine. No storing, no
+         * inference, no recall lane — this leg is embed -> project -> truncate -> L2 ->
+         * cosine and nothing else, so a disagreement with the host has exactly one
+         * place to come from.
+         *
+         * WHY THIS EXISTS AT ALL: every parity check in this arc so far stops at the
+         * RAW 1024 vector (C/M1a Stage 2, T2's G2). The projection, truncation,
+         * renormalisation and cosine ON THE BOX have never been compared against the
+         * host run that produced the 0.55 floor. A box-side pipeline bug would move
+         * cosines and no existing gate could see it.
+         *
+         * The strings come from a GENERATED header so they are byte-identical to the
+         * host's inputs — otherwise a mismatch is ambiguous between "the pipeline
+         * differs" and "the inputs differ".
+         *
+         * Cosines print x10000 as integers (no float formatter on the serial path).  */
+        {
+            static float va[G3_SEM_DIM_DEFAULT], vb[G3_SEM_DIM_DEFAULT];
+            static float raw_a[EMBED_DIM];
+            int fired = 0, done = 0, failed = 0;
+
+            puts_serial("\n[EMBED-GATE] LEG A: per-pair cosines over the MEASURED set\n");
+            puts_serial("[EMBED-GATE] host ref: cm2b_pair_cos.json (19/36 clear 0.55)\n");
+            puts_serial("[LEGA] idx cos_x10000 clears\n");
+
+            for (int p = 0; p < EMBED_GATE_NPAIRS; p++) {
+                uint16_t la = 0, lb = 0;
+                while (EMBED_GATE_PAIRS[p].stored[la]) la++;
+                while (EMBED_GATE_PAIRS[p].later[lb])  lb++;
+
+                if (pa_embed_request(EMBED_GATE_PAIRS[p].stored, la, raw_a) != 0 ||
+                    embed_project(raw_a, EMBED_DIM, va, G3_SEM_DIM_DEFAULT) != EMBED_PROJ_OK) {
+                    puts_serial("[LEGA] "); put_dec((uint32_t)p);
+                    puts_serial(" STORED-SIDE FAILED\n"); failed++; continue;
+                }
+                if (pa_embed_request(EMBED_GATE_PAIRS[p].later, lb, raw_a) != 0 ||
+                    embed_project(raw_a, EMBED_DIM, vb, G3_SEM_DIM_DEFAULT) != EMBED_PROJ_OK) {
+                    puts_serial("[LEGA] "); put_dec((uint32_t)p);
+                    puts_serial(" LATER-SIDE FAILED\n"); failed++; continue;
+                }
+
+                double c = 0.0;
+                for (int k = 0; k < G3_SEM_DIM_DEFAULT; k++) c += (double)va[k] * (double)vb[k];
+                int cx = (int)(c * 10000.0);
+                puts_serial("[LEGA] "); put_dec((uint32_t)p); seL4_DebugPutChar(' ');
+                if (cx < 0) { seL4_DebugPutChar('-'); cx = -cx; }
+                put_dec((uint32_t)cx);
+                puts_serial(c >= (double)G3_SEM_FLOOR_DEFAULT ? " YES\n" : " -\n");
+                if (c >= (double)G3_SEM_FLOOR_DEFAULT) fired++;
+                done++;
+            }
+
+            /* The invented pair, LABELLED and excluded from the rate. */
+            {
+                uint16_t la = 0, lb = 0;
+                const char *sa = EMBED_GATE_EXTRA_STORED, *sb = EMBED_GATE_EXTRA_LATER;
+                while (sa[la]) la++;
+                while (sb[lb]) lb++;
+                if (pa_embed_request(sa, la, raw_a) == 0 &&
+                    embed_project(raw_a, EMBED_DIM, va, G3_SEM_DIM_DEFAULT) == EMBED_PROJ_OK &&
+                    pa_embed_request(sb, lb, raw_a) == 0 &&
+                    embed_project(raw_a, EMBED_DIM, vb, G3_SEM_DIM_DEFAULT) == EMBED_PROJ_OK) {
+                    double c = 0.0;
+                    for (int k = 0; k < G3_SEM_DIM_DEFAULT; k++) c += (double)va[k] * (double)vb[k];
+                    int cx = (int)(c * 10000.0);
+                    puts_serial("[LEGA] EXTRA(invented,not counted) cos_x10000=");
+                    if (cx < 0) { seL4_DebugPutChar('-'); cx = -cx; }
+                    put_dec((uint32_t)cx); puts_serial("  host=5352\n");
+                }
+            }
+
+            puts_serial("[LEGA] SUMMARY pairs="); put_dec((uint32_t)done);
+            puts_serial(" failed=");              put_dec((uint32_t)failed);
+            puts_serial(" fired=");               put_dec((uint32_t)fired);
+            puts_serial(" host_fired=19/36\n");
+            puts_serial("\n[EMBED-GATE] LEG A complete\n");
+        }
+#endif /* mode 3 */
+    } else {
+        puts_serial("[EMBED-GATE] SKIPPED (control-IN channel not up: key/input/floor)\n");
+    }
+#endif /* JARVIS_EMBED_PROBE */
 
 #if JARVIS_ROUTING_PROBE
     /* 6-6/B/M1 — the 3-class routing demonstration. KVM has no NIC, so each query is staged through

@@ -495,11 +495,72 @@
  * design). Serial-heavy (~120 KB) by design: a checksum would prove bit-identity or nothing, and
  * the expected divergence is ~1e-6 because PB's forward is THREADED (JARVIS_SEL4_SMP =>
  * JARVIS_PARALLEL) while the host harness was single-threaded, so the magnitude must be visible. */
+/* C/M2b: THE VALUE IS NOW A MODE (the WAKE_PROBE / CONTROL_IN_PROBE precedent).
+ *
+ *   1 = the C/M1b-2 parity+latency dump above, THEN the G2/G3 semantic-recall legs.
+ *       KVM has no NIC, so every query is staged through the same signed-JCTL split
+ *       pipeline the CONTROL_IN_PROBE modes use (build_probe_jctl +
+ *       ctrl_roundtrip_sync) — these are REAL validated control-IN queries that
+ *       passed auth+replay, not direct calls into the gate.
+ *
+ *   3 = LEG A ONLY: embed BOTH sides of every MEASURED recall pair
+ *       (embed_gate_pairs.h, generated from cm0_recall_set.json) and print the
+ *       per-pair cosine, for comparison against the host reference in
+ *       cm2b_pair_cos.json. No storing, no inference, no recall lane — this is
+ *       embed -> project -> truncate -> L2 -> cosine and nothing else, so a
+ *       disagreement with the host has exactly one place to come from.
+ *
+ *       It exists because every parity check in this arc stops at the RAW 1024
+ *       vector (C/M1a Stage 2, T2's G2): the projection, truncation,
+ *       renormalisation and cosine ON THE BOX have never been compared against the
+ *       host run that produced the 0.55 floor, so a box-side pipeline bug would
+ *       move cosines with no gate able to see it.
+ *
+ *   2 = G4 ONLY: the respawn-mid-embed interleaving, in ITS OWN BOOT and LAST.
+ *       Deliberately excludes the mode-1 legs. A respawn path can latch terminal
+ *       state (g_pb_dead), and the 6-3/M1 lesson is that a terminal latch sequenced
+ *       before other legs starves them — so G4 never shares a boot with G2/G3.
+ *
+ * EVERY SEQ IS DERIVED FROM g_ctrl_replay.seq_floor + 1, never fixed: a fixed seq
+ * DROP_REPLAYs against the persisted floor and reads as a gate failure that is not
+ * one (the documented mode-4 lesson). This probe also must NOT call
+ * control_replay_init — see the cross-guards. */
 #ifndef JARVIS_EMBED_PROBE
 #define JARVIS_EMBED_PROBE 0
 #endif
 #if JARVIS_EMBED_PROBE && !JARVIS_EMBED
 #error "JARVIS_EMBED_PROBE requires JARVIS_EMBED"
+#endif
+/* Cross-guards, each for a concrete interference and not by analogy:
+ *  - MONITOR_PROBE fires 2 REAL respawns for its heal-rate leg, which would race an
+ *    outstanding embed and make G4's interleaving unattributable.
+ *  - CONTROL_IN_PROBE calls control_replay_init (resetting the very floor this probe
+ *    derives its seqs from), and its mode 3 latches terminal g_pb_dead.
+ *  - KM2A_SPIKE drives its own N-cycle respawn loop. */
+#if JARVIS_EMBED_PROBE && JARVIS_MONITOR_PROBE
+#error "JARVIS_EMBED_PROBE must not ride JARVIS_MONITOR_PROBE (its heal-rate leg fires 2 real respawns)"
+#endif
+#if JARVIS_EMBED_PROBE && JARVIS_CONTROL_IN_PROBE
+#error "JARVIS_EMBED_PROBE must not ride JARVIS_CONTROL_IN_PROBE (control_replay_init resets the seq floor; mode 3 latches g_pb_dead)"
+#endif
+#if JARVIS_EMBED_PROBE && JARVIS_KM2A_SPIKE
+#error "JARVIS_EMBED_PROBE must not ride JARVIS_KM2A_SPIKE (its own respawn loop)"
+#endif
+#if JARVIS_EMBED_PROBE == 2 && !JARVIS_ACTIONS
+#error "JARVIS_EMBED_PROBE mode 2 (G4) needs JARVIS_ACTIONS for the real pa_restart_pb path"
+#endif
+/* Mode 2: how many seL4_Yield()s to burn after the MSG_EMBED send before firing the
+ * respawn. The point is that PB has DEQUEUED and STARTED the ~2 s embed, so the
+ * request is genuinely sent-and-unanswered rather than not-yet-sent — firing
+ * immediately after the signal would prove much less.
+ *
+ * MEASURED, not guessed: 20000 was the first value and it was far too many — an embed
+ * takes 270-830 ms and PB had already PUBLISHED before the respawn fired (the log read
+ * ready=1 with stale_seq == want_seq), so the leg tested "respawn after the answer"
+ * rather than "respawn during the request". The probe now also breaks out early if PB
+ * publishes, and reports whether the interleaving was achieved instead of assuming it. */
+#ifndef EMBED_PROBE_RESPAWN_YIELDS
+#define EMBED_PROBE_RESPAWN_YIELDS 200
 #endif
 
 /* C/M1b pre-fix induction probe (box/KVM-only, default 0). The two fail-closed branches on the

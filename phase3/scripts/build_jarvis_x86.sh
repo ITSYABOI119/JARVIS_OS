@@ -124,6 +124,9 @@ copy_file "$JARVIS_DIR/phase3/src/sel4/jarvis_debug.h" "$DEST/src/jarvis_debug.h
 copy_file "$JARVIS_DIR/phase3/src/sel4/jarvis_ui_tokens.h" "$DEST/src/jarvis_ui_tokens.h"
 copy_file "$JARVIS_DIR/phase3/src/sel4/avx2_probe.h" "$DEST/src/avx2_probe.h"
 copy_file "$JARVIS_DIR/phase3/src/sel4/smp_probe.h" "$DEST/src/smp_probe.h"
+# Phase C / C/M2b Leg A: the generated measured-pair table. PROBE-ONLY (the header
+# self-guards on JARVIS_EMBED_PROBE), so a deployed build carries none of its strings.
+copy_file "$JARVIS_DIR/phase3/src/sel4/embed_gate_pairs.h" "$DEST/src/embed_gate_pairs.h"
 echo ""
 
 # ── [2/4] AI modules ───────────────────────────────────────────────
