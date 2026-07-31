@@ -103,6 +103,31 @@ function SystemView({ store }) {
   ];
   const BEHAVIOR_LABELS = ['none', 'anomaly-consult', 'self-heal-consult', 'store-roll', 'status-digest', 'degraded-alert'];
   const lastBehavior = rec ? (BEHAVIOR_LABELS[Number(rec.last_behavior) || 0] || 'none') : null;
+  // Semantic recall (Phase C / C/M3a): the EMBEDDING lane on the control-IN path — a paraphrase of
+  // an earlier question matched by cosine similarity against stored answer vectors. This is NOT the
+  // 'Distilled facts' stat above (semantic_fact_count, Phase 5 #4), which is a deterministic
+  // grouping of repeated Q&A with no model involved. Different mechanism, different ceiling.
+  //
+  // THREE states, deliberately distinct, because collapsing them would each be a false claim:
+  //   sem_inited === 1  -> the lane is live; render the counts.
+  //   sem_inited === 0  -> the box reports the lane and it is GATED OFF (JARVIS_EMBED=0, which is
+  //                        what ships today) — a live-looking "0 recalls" would be wrong.
+  //   sem_inited == null-> this frame predates v13 (the deployed box emits v12 until the flip), so
+  //                        the box says nothing about the lane at all.
+  const semRecallInited = rec ? rec.sem_inited : null;
+  const semRecallLive = semRecallInited === 1;
+  const semRecallReported = semRecallInited === 0 || semRecallInited === 1;
+  const semRecallHits = rec ? Number(rec.sem_recall_hits) || 0 : null;
+  const semRecallTried = rec ? Number(rec.sem_recall_tried) || 0 : null;
+  const semRecallFloor = rec ? Number(rec.sem_recall_floor) || 0 : null;
+  // Rendered ONLY as the three real counts. The remainder (tried - hits - floor) is a real
+  // residual — an attempt with no stored vector yet, or a match with no complete sentence to
+  // quote — so nothing here derives one count from the others or presents them as a partition.
+  const semRecallRows = !semRecallLive ? [] : [
+    { k: 'sem_recall_hits',  label: 'recalled a paraphrase',        v: semRecallHits },
+    { k: 'sem_recall_floor', label: 'tried, nothing cleared the floor', v: semRecallFloor },
+    { k: 'sem_recall_tried', label: 'attempts (turns that would get no recall)', v: semRecallTried },
+  ];
 
   const stat = (label, value, sub) => (
     <div>
@@ -182,6 +207,43 @@ function SystemView({ store }) {
             ciReported ? 'inbound frames rejected before the SHIELD by auth / replay / parse / rate-limit' : 'control-IN channel gated off (not reported)')}
         </div>
         {note('Live heap used/free is not tracked on the box, so it is not shown. The resident model size above is the only real lower bound.')}
+      </Card>
+
+      {/* Semantic recall (Phase C / C/M3a) — FIELD-DERIVED, not a Capabilities auto-row: there is
+          no flag bit left to announce it (the u16 flags word is exhausted at TLM_F_CONTROL_IN),
+          so it rides that flag and sem_inited is the live-vs-gated signal — the v12/routing
+          precedent. The measured ceiling is stated ON THE SURFACE, not hidden in a tooltip. */}
+      <Card title="Semantic recall" subtitle="matching a re-worded question against the box's own earlier answers"
+        right={<Badge tone={semRecallLive ? 'accent' : 'neutral'}>{semRecallLive ? 'live' : 'not live'}</Badge>} padding="md">
+        {!semRecallLive ? (
+          <div style={{ font: '400 var(--text-sm)/1.5 var(--font-sans)', color: 'var(--text-muted)' }}>
+            {semRecallInited === 0
+              ? 'semantic recall gated off (not yet live) — the lane is wired and measured, but ships off until the flip. Recall today is exact-repeat only.'
+              : (rec ? 'this box does not report semantic recall — an older packet version than the one that carries it.'
+                     : '—')}
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 'var(--space-3)' }}>
+              {semRecallRows.map((r) => (
+                <div key={r.k} style={{ border: '1px solid var(--border-hairline)', borderRadius: 'var(--radius-lg)', padding: 'var(--space-4)' }}>
+                  <div style={{ font: '500 var(--text-xl)/1 var(--font-mono)', color: 'var(--text-primary)' }}>{num(r.v)}</div>
+                  <div style={{ font: '400 var(--text-xs)/1.4 var(--font-sans)', color: 'var(--text-secondary)', marginTop: 6 }}>{r.label}</div>
+                </div>
+              ))}
+            </div>
+            <p style={{ margin: 0, font: '400 var(--text-xs)/1.5 var(--font-sans)', color: 'var(--text-muted)', maxWidth: 720 }}>
+              Measured on a 36-pair set, <strong>about half of paraphrases recall</strong> — 19 of 36 at the 0.55
+              similarity floor. A miss is <strong>not an error</strong>: it <strong>degrades to exactly the
+              no-preamble answer the box gives today</strong>, so this lane can only add recall, never remove it.
+              An attempt is only made on a turn that was already going to get no recall, so a repeat of the exact
+              same question costs nothing extra. The three counts deliberately <strong>do not add up</strong> —
+              the remainder had no stored vector to compare against yet, or matched a record with no complete
+              sentence to quote.
+            </p>
+          </div>
+        )}
+        {note('This is not the "Distilled facts" stat above: that groups repeated Q&A deterministically with no model involved, while this compares meaning using an embedding of the question. Matching a re-worded question is all it does — it carries no notion of who you are or what you meant.')}
       </Card>
 
       {/* Proactive behaviors (Phase 6 6-3/M3) — the butler map: one row per registry behavior,

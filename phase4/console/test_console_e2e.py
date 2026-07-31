@@ -717,6 +717,60 @@ def main():
                   "(6-5/M3-4a) control-IN renders the honest 'defined abuse class'/'not detected' framing, "
                   "no injection/attack-block claim (snap=%r)" % (ci_words,))
 
+            # (Phase C / C/M3a) PIN the System 'Semantic recall' card. The golden 'infer' frame
+            # carries sem_inited=1 + hits=4 / tried=9 / floor=3. Four things must hold:
+            #  (a) sem_inited drives live-vs-gated (no flag bit exists for this lane);
+            #  (b) all three rendered counts == the live sem_* fields (TEETH: fails on a mis-wire,
+            #      a '—', or a removed row);
+            #  (c) the MEASURED ceiling renders on the surface, not in a tooltip;
+            #  (d) a miss reads as degrading, never as an error.
+            # (b) carries the sharpest teeth here: 4 + 3 = 7 against 9 attempts, so a card that
+            # derived the below-floor count as tried-hits would render 5 and fail this pin — which
+            # is exactly the misattribution (embed/backfill states relabelled as similarity
+            # decisions) the three-counter design exists to prevent.
+            expect(page.get_by_text('Semantic recall').first).to_be_visible(timeout=10000)
+            sem_ok = False
+            sem_dbg = None
+            deadline = time.time() + 12
+            while time.time() < deadline:
+                snap = page.evaluate(
+                    "() => {"
+                    " const rec = (window.JarvisTelemetry.getState().latest) || {};"
+                    " const want = { 'recalled a paraphrase': rec.sem_recall_hits,"
+                    "                'tried, nothing cleared the floor': rec.sem_recall_floor,"
+                    "                'attempts (turns that would get no recall)': rec.sem_recall_tried };"
+                    " const got = {};"
+                    " Array.from(document.querySelectorAll('div')).forEach(d => {"
+                    "   const t = d.textContent.trim();"
+                    "   if (Object.prototype.hasOwnProperty.call(want, t) && d.previousElementSibling) {"
+                    "     got[t] = d.previousElementSibling.textContent.trim();"
+                    "   }"
+                    " });"
+                    " const body = document.body.innerText.toLowerCase();"
+                    " return { inited: rec.sem_inited, want, got,"
+                    "          rate: body.indexOf('about half of paraphrases recall') >= 0,"
+                    "          floor: body.indexOf('0.55') >= 0,"
+                    "          degrades: body.indexOf('not an error') >= 0"
+                    "                    && body.indexOf('degrades to exactly') >= 0,"
+                    "          banned: body.indexOf('understands your') >= 0"
+                    "                  || body.indexOf('remembers your conversation') >= 0"
+                    "                  || body.indexOf('semantic recall works') >= 0 };"
+                    "}")
+                sem_dbg = snap
+                if snap['inited'] == 1 and len(snap['got']) == 3:
+                    matched = all(
+                        str(snap['got'][k]).replace(',', '') == str(snap['want'][k])
+                        for k in snap['want'])
+                    if (matched and snap['rate'] and snap['floor']
+                            and snap['degrades'] and not snap['banned']):
+                        sem_ok = True
+                        break
+                time.sleep(0.1)
+            check(sem_ok,
+                  "(C/M3a) System 'Semantic recall' card: sem_inited drives live, all 3 counts render "
+                  "== live sem_* fields (4/3/9 — deliberately NOT a partition), measured rate + 0.55 "
+                  "floor + degrades-not-error framing on screen, no overclaim (snap=%r)" % (sem_dbg,))
+
             # (#5/M2) PIN the SHIELD 'Actions with learned risk' VALUE — must equal the live
             # shield_learn_keys on a SHIELD_LEARN-flagged frame (flag-gated; '—' otherwise). The
             # golden 'infer' frame carries shield_learn_keys=1 (the D-d probe shape). MONITOR-ONLY:

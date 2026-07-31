@@ -32,7 +32,7 @@ static int pass = 0, fail = 0;
 
 static void test_layout(void)
 {
-    CHECK(sizeof(telemetry_packet_t) == 262, "sizeof(telemetry_packet_t) == 262 (v12)");
+    CHECK(sizeof(telemetry_packet_t) == 270, "sizeof(telemetry_packet_t) == 270 (v13)");
     OFF(magic, 0);
     OFF(flags, 6);
     OFF(boot_id, 8);
@@ -81,7 +81,18 @@ static void test_layout(void)
     OFF(route_infer, 254);
     OFF(route_inited, 256);
     OFF(route_pad, 257);
-    OFF(crc32, 258);
+    /* v13 (Phase C / C/M3a): the SEMANTIC RECALL counts (the embedding lane) + its
+     * live-vs-gated indicator. Distinct from semantic_fact_count @218, which is the
+     * Phase-5 #4 distill store — different mechanism, never conflated. */
+    OFF(sem_recall_hits, 258);
+    OFF(sem_recall_tried, 260);
+    OFF(sem_recall_floor, 262);
+    OFF(sem_inited, 264);
+    OFF(sem_pad, 265);
+    OFF(crc32, 266);
+    /* The three counts deliberately do NOT sum (tried - hits - floor is a real residual),
+     * so nothing here may assert an arithmetic relation between them. Pinning the OFFSETS
+     * is the contract; pinning a sum would encode a falsehood the fill does not honour. */
 }
 
 static void test_crc_known_vector(void)
@@ -140,12 +151,20 @@ static void test_finalize_roundtrip(void)
     pkt.route_decline  = 1;
     pkt.route_infer    = 3;
     pkt.route_inited   = 1;                 /* routing is live in this build (no flag bit exists) */
+    /* v13 (Phase C / C/M3a): SEMANTIC RECALL. Chosen so the residual is VISIBLE — 4 hits + 3
+     * floor-misses out of 9 attempts leaves 2 attempts in neither bucket (no stored vector yet,
+     * or a match with no complete sentence to quote). A fixture where they summed would quietly
+     * assert a relation the fill does not honour. */
+    pkt.sem_recall_hits  = 4;
+    pkt.sem_recall_tried = 9;
+    pkt.sem_recall_floor = 3;
+    pkt.sem_inited       = 1;               /* the semantic lane is live in this build */
 
     jarvis_tlm_finalize(&pkt);
 
     CHECK(pkt.magic == JARVIS_TLM_MAGIC, "finalize sets magic == JTEL");
-    CHECK(pkt.version == JARVIS_TLM_VERSION, "finalize sets version == 12");
-    CHECK(JARVIS_TLM_VERSION == 12, "wire version is 12 (v12)");
+    CHECK(pkt.version == JARVIS_TLM_VERSION, "finalize sets version == 13");
+    CHECK(JARVIS_TLM_VERSION == 13, "wire version is 13 (v13)");
     CHECK(pkt.infer_active == 1 && pkt.infer_duty_pct == 42, "infer_active/infer_duty_pct survive finalize");
     CHECK(pkt.log_cursor == 137 && pkt.nvme_total_mb == 1953892u, "log_cursor/nvme_total_mb survive finalize");
     CHECK(pkt.total_ram_mb == 30000u, "total_ram_mb survives finalize");
@@ -192,9 +211,27 @@ static void test_finalize_roundtrip(void)
               != (uint32_t)pkt.control_in_answered,
           "route_* are DECISIONS, not a breakdown of control_in_answered");    CHECK(TLM_F_CONTROL_IN == 0x8000, "TLM_F_CONTROL_IN == 0x8000 (the LAST u16 flag bit — flags now exhausted)");
 
-    /* The stored crc matches a recompute over the first 258 bytes (offsetof(crc32)). */
+    /* v13 (Phase C / C/M3a): the semantic-recall counts survive finalize, and — the point of the
+     * triple — they do NOT sum. hits + floor < tried by a real residual (an attempt with no stored
+     * vector to compare against, or a match whose text held no complete sentence). Deriving
+     * "floor = tried - hits" in a console or a test would silently relabel those as similarity
+     * decisions. A miss is not an error: it degrades to exactly today's no-preamble path. */
+    CHECK(pkt.sem_recall_hits == 4u && pkt.sem_recall_tried == 9u && pkt.sem_recall_floor == 3u,
+          "sem_recall_hits/tried/floor survive finalize (4/9/3, CRC covers 258-263)");
+    CHECK(pkt.sem_inited == 1u, "sem_inited survives finalize (live-vs-gated indicator, no flag bit)");
+    CHECK((uint32_t)pkt.sem_recall_hits + (uint32_t)pkt.sem_recall_floor
+              != (uint32_t)pkt.sem_recall_tried,
+          "sem hits+floor != tried — the residual is REAL and must never be derived away");
+    CHECK(pkt.sem_recall_hits <= pkt.sem_recall_tried && pkt.sem_recall_floor <= pkt.sem_recall_tried,
+          "sem hits and floor are each bounded by tried (tried is the denominator)");
+    /* The embedding recall lane is NOT the Phase-5 #4 distill store. Both are populated here with
+     * DIFFERENT values so a test that confused the two would fail rather than coincide. */
+    CHECK(pkt.semantic_fact_count == 1u && pkt.sem_recall_hits == 4u,
+          "semantic_fact_count (v6 distill) and sem_recall_hits (v13 embedding) are distinct fields");
+
+    /* The stored crc matches a recompute over the first 266 bytes (offsetof(crc32)). */
     uint32_t recomputed = jarvis_tlm_crc32(&pkt, offsetof(telemetry_packet_t, crc32));
-    CHECK(pkt.crc32 == recomputed, "stored crc32 == recompute over first 258 B");
+    CHECK(pkt.crc32 == recomputed, "stored crc32 == recompute over first 266 B");
     CHECK(pkt.crc32 != 0u, "crc32 is non-zero for a populated packet");
 
     /* The magic bytes are "JTEL" little-endian: 4C 45 54 4A. */
@@ -202,7 +239,7 @@ static void test_finalize_roundtrip(void)
     CHECK(raw[0] == 0x4C && raw[1] == 0x45 && raw[2] == 0x54 && raw[3] == 0x4A,
           "magic on wire (LE) == 4C 45 54 4A (\"JTEL\")");
 
-    /* Flipping any byte in [0,258) must break the CRC check. */
+    /* Flipping any byte in [0,266) must break the CRC check. */
     int detected_all = 1;
     for (uint32_t i = 0; i < offsetof(telemetry_packet_t, crc32); i++) {
         raw[i] ^= 0xFF;
@@ -210,7 +247,7 @@ static void test_finalize_roundtrip(void)
             detected_all = 0;   /* a flip went undetected */
         raw[i] ^= 0xFF;         /* restore */
     }
-    CHECK(detected_all, "every single-byte flip in [0,258) breaks the CRC");
+    CHECK(detected_all, "every single-byte flip in [0,266) breaks the CRC");
 
     /* CONTROL_IN=0 honest-deploy shape: the control-IN fields left 0 + TLM_F_CONTROL_IN NOT set is the
      * deployed CONTROL_IN=0 box's honest v11 shape ("channel gated off"). The struct is STILL v11/254 B
@@ -219,7 +256,7 @@ static void test_finalize_roundtrip(void)
     telemetry_packet_t z = {0};
     z.flags = TLM_F_MODEL_LOADED | TLM_F_SELFTEST_PASS;   /* deploy flags, NO CONTROL_IN */
     jarvis_tlm_finalize(&z);
-    CHECK(sizeof z == 262u, "honest-0: still v12/262 B for everyone (no OFF-identity claim at a size bump)");
+    CHECK(sizeof z == 270u, "honest-0: still v13/270 B for everyone (no OFF-identity claim at a size bump)");
     CHECK(z.control_in_answered == 0u && z.control_in_blocked == 0u && z.control_in_dropped == 0u,
           "honest-0: control_in fields all 0 (the CONTROL_IN=0 deploy fill)");
 
@@ -230,7 +267,15 @@ static void test_finalize_roundtrip(void)
     CHECK(z.route_sysfacts == 0u && z.route_decline == 0u && z.route_infer == 0u,
           "honest-0: ROUTING=0 emits zero routing decisions");
     CHECK(z.route_inited == 0u, "honest-0: route_inited 0 == 'routing gated off' (no flag bit exists)");    CHECK((z.flags & TLM_F_CONTROL_IN) == 0, "honest-0: TLM_F_CONTROL_IN clear (channel gated off)");
-    CHECK(z.version == JARVIS_TLM_VERSION, "honest-0: version stamped == 12");
+
+    /* The EMBED=0 deploy — which is what ships today — emits v13 with the three semantic counts 0
+     * AND sem_inited 0. sem_inited==0 is what stops the console rendering a live-looking zero: a
+     * gated-off lane and a live lane that has recalled nothing are otherwise indistinguishable on
+     * the wire, and only one of them is honest to render as "0 recalls". */
+    CHECK(z.sem_recall_hits == 0u && z.sem_recall_tried == 0u && z.sem_recall_floor == 0u,
+          "honest-0: EMBED=0 emits zero semantic-recall counts");
+    CHECK(z.sem_inited == 0u, "honest-0: sem_inited 0 == 'semantic recall gated off' (no flag bit exists)");
+    CHECK(z.version == JARVIS_TLM_VERSION, "honest-0: version stamped == 13");
 }
 
 int main(void)

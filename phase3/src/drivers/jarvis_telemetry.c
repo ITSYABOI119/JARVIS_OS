@@ -3,7 +3,10 @@
  *
  * Self-contained (no string.h needed): a bitwise zlib/IEEE CRC-32 (must equal
  * Python zlib.crc32 so the N-c-2 receiver validates trivially) and the packet
- * finalizer. Bitwise (no table) is plenty fast for the 228-byte (v7) CRC region at ~1 Hz.
+ * finalizer. Bitwise (no table) is plenty fast for a packet this size at ~1 Hz.
+ * NOTE the CRC region length is deliberately NOT restated here: it is derived
+ * from offsetof(crc32) in jarvis_tlm_finalize, so a wire bump needs no .c change
+ * and a number written here would only rot (it last read "228-byte (v7)").
  *
  * JARVIS AI-OS - Phase 4 (goal #2b N-c)
  */

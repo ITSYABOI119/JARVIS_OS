@@ -93,23 +93,29 @@ import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MAGIC = 0x4A54454C            # "JTEL" (LE on the wire: 4C 45 54 4A)
-# VERSION-TOLERANT (6-5/M3-4a, extended 6-6/B/M2): the wire is APPEND-ONLY, so the common prefix
-# through beh_pad is shared; v11 appends control_in_answered/blocked/dropped and v12 further appends
-# route_sysfacts/decline/infer/inited/pad, each before crc32. The deploy-deferral keeps a LIVE v11
-# box on the wire while the code emits v12 — the receiver must decode ALL THREE by length, and an
-# older packet must NOT misparse (its newer fields -> None, never a fabricated 0).
+# VERSION-TOLERANT (6-5/M3-4a, extended 6-6/B/M2, extended again at Phase C / C/M3a): the wire is
+# APPEND-ONLY, so the common prefix through beh_pad is shared; v11 appends
+# control_in_answered/blocked/dropped, v12 further appends route_sysfacts/decline/infer/inited/pad,
+# and v13 further appends sem_recall_hits/tried/floor/sem_inited/sem_pad — each before crc32.
+# THIS TOLERANCE IS LOAD-BEARING, NOT HYPOTHETICAL: the deployed box emits v12 today and will keep
+# doing so until the JARVIS_EMBED flip, so a live box is a v12 box while this code speaks v13. An
+# older packet must decode cleanly with its newer fields -> None, NEVER a fabricated 0 (a 0 would
+# read as "the lane is live and recalled nothing", which is a different and false claim).
 FMT_COMMON = '<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHHHHIHHHBBHBBHHBB'   # through beh_pad, NO crc
 FMT_CTRL_IN = 'HHI'             # control_in_answered(H)/blocked(H)/dropped(I)  (v11+)
 FMT_ROUTE   = 'HHHBB'           # route_sysfacts(H)/decline(H)/infer(H)/inited(B)/pad(B)  (v12+)
-FMT_V10 = FMT_COMMON + 'I'                            # v10: + crc32
-FMT_V11 = FMT_COMMON + FMT_CTRL_IN + 'I'              # v11: + control_in_* + crc32
-FMT_V12 = FMT_COMMON + FMT_CTRL_IN + FMT_ROUTE + 'I'  # v12: + route_* + crc32
+FMT_SEM     = 'HHHBB'           # sem_recall_hits(H)/tried(H)/floor(H)/sem_inited(B)/pad(B)  (v13+)
+FMT_V10 = FMT_COMMON + 'I'                                        # v10: + crc32
+FMT_V11 = FMT_COMMON + FMT_CTRL_IN + 'I'                          # v11: + control_in_* + crc32
+FMT_V12 = FMT_COMMON + FMT_CTRL_IN + FMT_ROUTE + 'I'              # v12: + route_* + crc32
+FMT_V13 = FMT_COMMON + FMT_CTRL_IN + FMT_ROUTE + FMT_SEM + 'I'    # v13: + sem_* + crc32
 PKT_SIZE_V10 = struct.calcsize(FMT_V10)   # 246
 PKT_SIZE_V11 = struct.calcsize(FMT_V11)   # 254
 PKT_SIZE_V12 = struct.calcsize(FMT_V12)   # 262
-# CURRENT-wire aliases (the code emits v12 now) — derived, never a hardcoded size.
-FMT = FMT_V12
-PKT_SIZE = PKT_SIZE_V12
+PKT_SIZE_V13 = struct.calcsize(FMT_V13)   # 270
+# CURRENT-wire aliases (the code emits v13 now) — derived, never a hardcoded size.
+FMT = FMT_V13
+PKT_SIZE = PKT_SIZE_V13
 LOG_MAX_ENTRIES = 2700        # NVME_LOG_MAX_ENTRIES (no-wrap durable telemetry log)
 
 FLAG_NAMES = {
@@ -244,37 +250,51 @@ def decode_packet(data: bytes) -> dict:
     returns the dict with 'crc_ok' == False (so the caller can distinguish noise
     on the port from genuine corruption).
     """
-    # Version-tolerant by LENGTH (the append-only wire): v12 has the control_in fields AND the
-    # route_* fields; v11 has only control_in; v10 has neither. The DEPLOYED box emits v12 (the
-    # 6-6 B flip landed d4be861); v11/v10 support is retained for captured/replayed older pcaps.
-    # An older packet decodes cleanly with its newer fields == None — never a fabricated 0.
+    # Version-tolerant by LENGTH (the append-only wire): v13 has control_in + route_* + sem_*;
+    # v12 has control_in + route_*; v11 has only control_in; v10 has none of them. The DEPLOYED
+    # box emits v12 and will until the JARVIS_EMBED flip, so v12 is a LIVE shape here, not legacy;
+    # v11/v10 are retained for captured/replayed older pcaps. An older packet decodes cleanly with
+    # its newer fields == None — never a fabricated 0, because for sem_inited in particular a 0
+    # means "lane live, nothing recalled" while None means "this box does not report the lane".
     # Sizes and CRC offsets are NOT restated here — they are DERIVED from the FMT_V* formats and
     # the PKT_SIZE_V* constants above, which are the single source of truth.
     # route_* are ROUTING DECISIONS at classification time, NOT a breakdown of control_in_answered:
     # an INFER decision that later degrades or times out is counted in route_infer but never
     # reaches the answered exit, so the three do not sum to control_in_answered.
+    # sem_* are SEMANTIC RECALL (the Phase-C embedding lane, NOT the v6 semantic_fact_count distill
+    # store). They also do not sum: tried - hits - floor is a real residual.
     n = len(data)
-    if n == PKT_SIZE_V12:
+    if n == PKT_SIZE_V13:
+        fields = struct.unpack(FMT_V13, data)
+        control_in_answered, control_in_blocked, control_in_dropped = fields[-14:-11]
+        route_sysfacts, route_decline, route_infer, route_inited, _route_pad = fields[-11:-6]
+        sem_recall_hits, sem_recall_tried, sem_recall_floor, sem_inited, _sem_pad = fields[-6:-1]
+        crc32_field = fields[-1]
+        common = fields[:-14]
+    elif n == PKT_SIZE_V12:
         fields = struct.unpack(FMT_V12, data)
         control_in_answered, control_in_blocked, control_in_dropped = fields[-9:-6]
         route_sysfacts, route_decline, route_infer, route_inited, _route_pad = fields[-6:-1]
+        sem_recall_hits = sem_recall_tried = sem_recall_floor = sem_inited = None
         crc32_field = fields[-1]
         common = fields[:-9]
     elif n == PKT_SIZE_V11:
         fields = struct.unpack(FMT_V11, data)
         control_in_answered, control_in_blocked, control_in_dropped = fields[-4:-1]
         route_sysfacts = route_decline = route_infer = route_inited = None
+        sem_recall_hits = sem_recall_tried = sem_recall_floor = sem_inited = None
         crc32_field = fields[-1]
         common = fields[:-4]
     elif n == PKT_SIZE_V10:
         fields = struct.unpack(FMT_V10, data)
         control_in_answered = control_in_blocked = control_in_dropped = None
         route_sysfacts = route_decline = route_infer = route_inited = None
+        sem_recall_hits = sem_recall_tried = sem_recall_floor = sem_inited = None
         crc32_field = fields[-1]
         common = fields[:-1]
     else:
-        raise ValueError("bad length %d (expected %d, %d or %d)"
-                         % (n, PKT_SIZE_V10, PKT_SIZE_V11, PKT_SIZE_V12))
+        raise ValueError("bad length %d (expected %d, %d, %d or %d)"
+                         % (n, PKT_SIZE_V10, PKT_SIZE_V11, PKT_SIZE_V12, PKT_SIZE_V13))
 
     (magic, version, kind, flags, boot_id, seq,
      uptime_ms, infer_active, infer_duty_pct, log_cursor,
@@ -355,6 +375,14 @@ def decode_packet(data: bytes) -> dict:
         'route_decline': route_decline,
         'route_infer': route_infer,
         'route_inited': route_inited,
+        # v13 (Phase C / C/M3a): SEMANTIC RECALL — the embedding lane on the control-IN path.
+        # NOT semantic_fact_count (v6), which is the Phase-5 distill store. These do not sum:
+        # tried - hits - floor is a real residual (no stored vector yet, or a match with no
+        # complete sentence to quote), so never derive floor as tried-hits.
+        'sem_recall_hits': sem_recall_hits,
+        'sem_recall_tried': sem_recall_tried,
+        'sem_recall_floor': sem_recall_floor,
+        'sem_inited': sem_inited,
         'cache_growth_count': cache_growth_count,
         'log_cursor': log_cursor,
         'infer_gen_tokens': infer_gen_tokens,
@@ -462,6 +490,12 @@ def packet_to_record(d: dict, recv_ts: float = 0) -> dict:
         'route_decline': d['route_decline'],
         'route_infer': d['route_infer'],
         'route_inited': d['route_inited'],
+        # v13: SEMANTIC RECALL (see decode_packet) — hits/tried/floor do not sum; the residual
+        # is real. sem_inited None == this box does not report the lane; 0 == gated off.
+        'sem_recall_hits': d['sem_recall_hits'],
+        'sem_recall_tried': d['sem_recall_tried'],
+        'sem_recall_floor': d['sem_recall_floor'],
+        'sem_inited': d['sem_inited'],
         'cache_growth_count': d['cache_growth_count'],
         'log_cursor': d['log_cursor'],
         'infer_gen_tokens': d['infer_gen_tokens'],

@@ -92,6 +92,20 @@ BANNED = [
     "private channel",
     "secret channel",
     "confidential channel",
+    # Phase C / C/M3a: SEMANTIC RECALL. The measured rate is ABOUT HALF (19/36 paraphrase pairs at
+    # the 0.55 floor), so a bare capability claim is false by a factor of two. Every phrase below
+    # asserts the capability without the rate, or asserts a capability the lane does not have.
+    # NOTE the bare word "understands" is NOT banned globally — ConsoleSystem.jsx already uses it
+    # in an honest NEGATION for cache growth ('it never "understands" them'), and that sentence
+    # must stay sayable. It is banned SCOPED to the semantic-recall card instead, exactly as
+    # "encrypted" is scoped above so "signed, not encrypted" stays sayable.
+    "semantic recall works",
+    "understands your",
+    "understands the meaning",
+    "remembers your conversation",
+    "conversational memory",
+    "finds related answers",
+    "knows what you meant",
 ]
 
 # (b) Honest-framing markers that MUST stay present somewhere in the console
@@ -110,6 +124,10 @@ REQUIRED = [
     "informs you",              # 6-3/M3: the proactive-behavior framing (informs, not decisions)
     "defined abuse class",      # 6-5/M3-4a: control_in_blocked is an abuse-class refuse count...
     "not detected",             # ...and general injection is contained STRUCTURALLY, not detected
+    # Phase C / C/M3a: the semantic-recall ceiling must be ON the surface, not in a tooltip.
+    "about half of paraphrases recall",   # the MEASURED rate (19/36), never a bare capability claim
+    "not an error",                        # a miss is not a failure state...
+    "degrades to exactly",                 # ...it degrades to today's no-preamble path
 ]
 
 # At least one spelling of the verification-stance marker must be present.
@@ -290,6 +308,57 @@ def main():
           "the manifest carries the KEEP-IN-SYNC-with-behaviors.c marker")
     check('Proactive behaviors (registry informs)' in capb,
           "Capabilities labels the PROACTIVE flag (registry informs)")
+
+    # --- Phase C / C/M3a: the Semantic-recall card. FIELD-DERIVED (no Capabilities auto-row exists
+    # — the u16 flags word is exhausted), so sem_inited is the live-vs-gated signal. The measured
+    # ceiling is about HALF (19/36 at the 0.55 floor), so the card must state the rate on the
+    # surface, must describe a miss as degrading rather than failing, and must never present the
+    # three counts as a partition (tried - hits - floor is a real residual). ---
+    check('sem_recall_hits' in sysb and 'sem_recall_tried' in sysb
+          and 'sem_recall_floor' in sysb and 'sem_inited' in sysb,
+          "System 'Semantic recall' sources the REAL v13 fields")
+    # Scope = the data slice (const semRecallInited ... const stat =) + the card JSX
+    # (title="Semantic recall" ... </Card>), mirroring the Proactive-behaviors scoping above.
+    sem_start = sysb.find('const semRecallInited')
+    sem_data_end = sysb.find('const stat =', sem_start if sem_start >= 0 else 0)
+    sem_jsx = sysb.find('title="Semantic recall"')
+    sem_end = sysb.find('</Card>', sem_jsx if sem_jsx >= 0 else 0)
+    sem_card = ''
+    if 0 <= sem_start < sem_data_end and 0 < sem_jsx < sem_end:
+        sem_card = sysb[sem_start:sem_data_end] + sysb[sem_jsx:sem_end]
+    check(len(sem_card) > 0, "Semantic-recall card block found in ConsoleSystem.jsx")
+    check('about half of paraphrases recall' in sem_card.lower(),
+          "card states the MEASURED rate ('about half of paraphrases recall'), not a bare capability")
+    check('19 of 36' in sem_card, "card cites the measurement (19 of 36) on the surface")
+    check('0.55' in sem_card, "card names the similarity floor the rate was measured at")
+    check('not an error' in sem_card.lower() and 'degrades to exactly' in sem_card.lower(),
+          "card frames a MISS as degrading to today's path, never as a failure")
+    check('do not add up' in sem_card.lower(),
+          "card states the three counts do NOT partition (the residual is real)")
+    check('gated off (not yet live)' in sem_card.lower(),
+          "a sem_inited==0 box renders 'gated off (not yet live)', never a live-looking 0")
+    # TEETH: the counts must be RENDERED, never DERIVED. If the card computed the below-floor count
+    # as tried-hits it would relabel embed/backfill states as similarity decisions.
+    #
+    # The patterns are IDENTIFIER-shaped on purpose. A prose-shaped pattern like 'tried - hits'
+    # matches the comment that explains why the derivation is wrong — i.e. the check fails on
+    # correct, well-documented code and can only be satisfied by deleting the documentation. That
+    # is the self-matching-grep failure this repo has already hit once (the operator-menu
+    # read-only invariant, which matched its own header). Identifiers appear in expressions, not
+    # in English, so these can only fire on real arithmetic.
+    for derived in ('semRecallTried -', 'semRecallTried-', 'sem_recall_tried -',
+                    'semRecallHits +', 'semRecallFloor +'):
+        check(derived not in sem_card,
+              "card never derives one count from the others (%r absent)" % derived)
+    # Scoped agency/overclaim ban. "understands" is legal elsewhere in this file (the cache-growth
+    # negation) but never inside this card, where it would read as a capability claim.
+    for kw in ('understands', 'thinking', 'reasoning', 'the ai decided', 'decided on its own'):
+        check(kw not in sem_card.lower(),
+              "card block does NOT say '%s' (scoped overclaim ban)" % kw)
+    # The two 'semantic' surfaces are DIFFERENT features and the card says so, so a reader cannot
+    # take the embedding lane's numbers for the Phase-5 distill store's.
+    check('distilled facts' in sem_card.lower(),
+          "card distinguishes itself from the 'Distilled facts' stat (the v6 distill store)")
 
     # --- 6-5/M3-4a: control-IN two-way channel. control_in_blocked is a DEFINED-ABUSE-CLASS refuse
     # count; the console frames it honestly (defined abuse class / not detected) and NEVER as

@@ -1,15 +1,15 @@
 /**
  * jarvis_telemetry.h - JARVIS binary telemetry packet (goal #2b N-c)
  *
- * A versioned, CRC'd, fixed-262-byte (v12) binary packet the box emits over UDP
+ * A versioned, CRC'd, fixed-270-byte (v13) binary packet the box emits over UDP
  * (255.255.255.255:51000, via net_udp.c + the I211) so a remote console can
  * render live, honest box state. Pure logic / host-testable (CRC + finalize);
  * the emit site is in main_x86.c.
  *
  * Wire format: little-endian (x86), packed, no padding. The CRC-32 is the
  * standard zlib/IEEE CRC (poly 0xEDB88320, init/xorout 0xFFFFFFFF) over the
- * first 258 bytes [0 .. offsetof(crc32)), so a Python receiver validates with
- * `zlib.crc32(pkt[:258]) == struct.unpack_from('<I', pkt, 258)[0]`.
+ * first 266 bytes [0 .. offsetof(crc32)), so a Python receiver validates with
+ * `zlib.crc32(pkt[:266]) == struct.unpack_from('<I', pkt, 266)[0]`.
  *
  * JARVIS AI-OS - Phase 4 (goal #2b Remote Telemetry Console)
  */
@@ -20,7 +20,7 @@
 #include <stdint.h>
 
 #define JARVIS_TLM_MAGIC   0x4A54454Cu  /* "JTEL" (LE on wire: 4C 45 54 4A) */
-#define JARVIS_TLM_VERSION 12
+#define JARVIS_TLM_VERSION 13
 
 /* flags (bitfield) */
 #define TLM_F_MODEL_LOADED  0x01
@@ -104,7 +104,39 @@
  * gated JARVIS_ROUTING so the ROUTING=0 deploy emits v12 with the three counts 0
  * and route_inited 0 — honest "routing gated off". Note the STRUCT is v12/262 B
  * for EVERYONE (the v5..v11 pattern): there is no OFF-object-identity claim at a
- * size bump; the honest check is the zero-fill + route_inited==0. */
+ * size bump; the honest check is the zero-fill + route_inited==0.
+ *
+ * v13 (Phase C / C/M3a) appends sem_recall_hits/sem_recall_tried/
+ * sem_recall_floor/sem_inited/sem_pad -> 270 B, CRC@266, again with NO NEW FLAG
+ * BIT (the u16 flags word stayed EXHAUSTED at TLM_F_CONTROL_IN 0x8000), so
+ * semantic recall rides the EXISTING TLM_F_CONTROL_IN — it is a control-IN lane —
+ * and uses sem_inited as its live-vs-gated indicator, exactly as routing does.
+ * Consequence, and it is by construction: semantic recall gets NO Capabilities
+ * auto-row and must be surfaced as field-derived console rows.
+ *
+ * NOT THE SAME FEATURE AS semantic_fact_count (v6). That is the Phase-5 #4
+ * DISTILL store — deterministic grouping of repeated Q&A into facts, no model
+ * involved. These are the Phase-C EMBEDDING recall lane: a paraphrase of an
+ * earlier question matched by cosine similarity against stored answer vectors.
+ * Different mechanism, different store, different honesty ceiling; never merge,
+ * sum or cross-label them.
+ *
+ * HONESTY, and the reason there are three counters rather than one: a hit count
+ * alone lets a reader infer a fire rate that is not there. The MEASURED rate is
+ * about half — 19 of 36 paraphrase pairs at the 0.55 floor — so the miss is the
+ * MAJORITY case and hiding it would misrepresent the feature.
+ *   sem_recall_tried  = the lane was entered at all. It is entered ONLY when the
+ *                       turn was about to get no preamble (cplen==0), so it is
+ *                       the honest denominator, not a count of every query.
+ *   sem_recall_hits   = a semantic preamble was actually built and injected.
+ *   sem_recall_floor  = candidates existed and NONE reached the 0.55 floor.
+ * They deliberately do NOT sum: tried - hits - floor is a real residual (no
+ * stored vector to compare against yet, or a match whose text held no complete
+ * sentence to quote). Rendering the residual as zero, or floor as "tried-hits",
+ * would attribute embed/backfill states to a similarity decision. A miss is NOT
+ * an error — it degrades to EXACTLY the no-preamble path the box takes today.
+ * The fill is gated JARVIS_EMBED so the EMBED=0 deploy emits v13 with all three
+ * counts 0 and sem_inited 0 — honest "semantic recall gated off". */
 typedef struct __attribute__((packed)) {
     uint32_t magic; uint8_t version; uint8_t kind; uint16_t flags; uint32_t boot_id; uint32_t seq;  /* 16 */
     uint32_t uptime_ms;                                                                              /*  4 */
@@ -150,15 +182,25 @@ typedef struct __attribute__((packed)) {
     uint16_t route_infer;         /* v12 @254 — INFER routing decisions dispatched to the model (g_route_infer, sat 0xFFFF) */ /* 2 */
     uint8_t  route_inited;        /* v12 @256 — 1 iff JARVIS_ROUTING is live in this build; the live-vs-gated indicator (routing has NO flag bit of its own) */ /* 1 */
     uint8_t  route_pad;           /* v12 @257 — alignment pad, always 0 (the mon_pad/wake_pad/beh_pad precedent) */ /* 1 */
-    uint32_t crc32;          /* zlib CRC-32 over the first 258 bytes [0 .. offsetof(crc32)) */       /*  4 */
+    /* v13 (Phase C / C/M3a) — SEMANTIC RECALL on the control-IN path (the embedding lane), NOT
+     * the v6 semantic_fact_count distill store. These three do NOT sum: the residual
+     * (tried - hits - floor) is real and means "no stored vector to compare against yet, or a
+     * match with no complete sentence to quote". Measured ceiling: about half of paraphrases
+     * recall (19/36 at the 0.55 floor); a miss degrades to exactly today's no-preamble path. */
+    uint16_t sem_recall_hits;     /* v13 @258 — semantic preambles BUILT + injected (g_embed_sem_hits, sat 0xFFFF) */ /* 2 */
+    uint16_t sem_recall_tried;    /* v13 @260 — lane entries: turns that were about to get NO preamble (the honest denominator) */ /* 2 */
+    uint16_t sem_recall_floor;    /* v13 @262 — candidates existed and NONE reached the 0.55 floor (a similarity decision, never an embed failure) */ /* 2 */
+    uint8_t  sem_inited;          /* v13 @264 — 1 iff the semantic lane is LIVE (mu verified AND vector store ready); the live-vs-gated indicator (no flag bit of its own) */ /* 1 */
+    uint8_t  sem_pad;             /* v13 @265 — alignment pad, always 0 (the mon_pad/wake_pad/beh_pad/route_pad precedent) */ /* 1 */
+    uint32_t crc32;          /* zlib CRC-32 over the first 266 bytes [0 .. offsetof(crc32)) */       /*  4 */
 } telemetry_packet_t;
 
-_Static_assert(sizeof(telemetry_packet_t) == 262, "telemetry packet must be 262 bytes (v12)");
+_Static_assert(sizeof(telemetry_packet_t) == 270, "telemetry packet must be 270 bytes (v13)");
 
 /* Standard zlib/IEEE CRC-32 (poly 0xEDB88320, init/xorout 0xFFFFFFFF) — equals Python zlib.crc32. */
 uint32_t jarvis_tlm_crc32(const void *data, uint32_t len);
 
-/* Stamp magic/version and compute+store crc32 over the first 258 bytes (v12).
+/* Stamp magic/version and compute+store crc32 over the first 266 bytes (v13).
  * offsetof-based, so a future append auto-extends the CRC region with NO .c change. */
 void jarvis_tlm_finalize(telemetry_packet_t *pkt);
 

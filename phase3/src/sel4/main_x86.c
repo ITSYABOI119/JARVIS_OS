@@ -638,6 +638,23 @@ static uint32_t g_embed_backfilled = 0;   /* embedded by the backfill THIS boot 
 static uint32_t g_embed_written    = 0;   /* vectors stored this boot (backfill + on-write) */
 static uint32_t g_embed_sem_hits   = 0;   /* preambles built from a SEMANTIC match */
 
+/* C/M3a — the two counters that make the wire honest. A hit count ALONE lets a reader infer a
+ * fire rate that is not there: the measured rate is about half (19/36 pairs at the 0.55 floor),
+ * so the miss is the MAJORITY case.
+ *
+ * g_embed_sem_tried counts LANE ENTRIES, and the lane is entered only when the turn was about to
+ * get no preamble at all (cplen == 0) — so it is the honest denominator for "did semantic recall
+ * help", NOT a count of every control-IN query. Reporting hits against total queries would
+ * understate the rate; reporting them against nothing at all overstates it.
+ *
+ * g_embed_sem_below_floor counts ONLY the similarity decision: candidates existed and none
+ * reached the floor. It deliberately does NOT absorb the other ways an attempt yields nothing
+ * (embed/projection failure, or no stored vector to compare against yet), because labelling a
+ * cold-start backfill state as "below the similarity floor" would misattribute it. That leaves
+ * tried - hits - below_floor as a REAL residual, which is the honest shape. */
+static uint32_t g_embed_sem_tried       = 0;  /* lane entries: turns that were about to get NO preamble */
+static uint32_t g_embed_sem_below_floor = 0;  /* candidates existed, none reached G3_SEM_FLOOR_DEFAULT */
+
 #endif
 
 /* N-c-1: hoisted NIC for the workload-loop telemetry emitter. The [NET] bring-up fills
@@ -3601,6 +3618,12 @@ static void pa_ctrl_gate(const control_result_t *cres)
              * buffer is one constant change away from being a real out-of-bounds read,
              * and it reads as though it already is. Found while answering whether the
              * write and recall paths preprocess identically; they do. */
+            /* C/M3a: count the ATTEMPT here, at lane entry — before the embed, so an
+             * embed/projection failure still counts as an attempt rather than vanishing.
+             * This is the honest denominator: reaching this line means the turn was about
+             * to get NO preamble, which is exactly the population semantic recall is meant
+             * to help. */
+            g_embed_sem_tried++;
             uint16_t qlen = 0;
             while (qlen < (uint16_t)(sizeof qs - 1) && qs[qlen] != '\0') qlen++;
             uint64_t t_e0 = jarvis_uptime_ms();
@@ -3628,6 +3651,11 @@ static void pa_ctrl_gate(const control_result_t *cres)
                                                           sizeof ctrl_pre, G3_R_MAX_CONTROL_IN);
                     csem = (cplen > 0);
                 }
+                /* C/M3a: a BELOW-FLOOR miss, and ONLY that. Guarded on sn > 0 deliberately:
+                 * with no candidates there was nothing to clear, so counting it here would
+                 * report a cold-start/backfill state as a similarity decision. Those land in
+                 * the tried - hits - floor residual instead, where they belong. */
+                if (sn > 0 && ss == 0) g_embed_sem_below_floor++;
             }
 #if JARVIS_EMBED_PROBE
             /* PROBE-ONLY: the BEST cosine over the gathered candidates, and which one.
@@ -4269,14 +4297,59 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
     pkt.route_infer    = g_route_infer    > 0xFFFFu ? 0xFFFFu : (uint16_t)g_route_infer;
     pkt.route_inited   = 1;
 #endif
+#if JARVIS_EMBED
+    /* v13 (Phase C / C/M3a): SEMANTIC RECALL on the control-IN path. Like routing, there is no
+     * flag bit left to announce it (the u16 flags word is EXHAUSTED at TLM_F_CONTROL_IN 0x8000),
+     * so it rides that flag — semantic recall IS a control-IN lane — and sem_inited is the
+     * live-vs-gated indicator.
+     *
+     * HONESTY, and it is the whole reason there are three: hits alone would let a reader infer a
+     * fire rate that is not there. The measured rate is ABOUT HALF (19/36 pairs at the 0.55
+     * floor), so the miss is the MAJORITY case. tried is the denominator (lane entries — turns
+     * that were about to get NO preamble, not all queries); floor is the similarity decision
+     * ALONE. They do NOT sum: tried - hits - floor is a real residual (no stored vector yet, or a
+     * match with no complete sentence to quote), and the console must not derive one from the
+     * others. A miss is NOT an error — it degrades to exactly today's no-preamble path.
+     *
+     * Distinct from semantic_fact_count (v6), which is the Phase-5 #4 DISTILL store: a different
+     * mechanism with a different ceiling. Never merged or cross-labelled.
+     *
+     * Gated, so the EMBED=0 deploy — which is what ships today — emits v13 with all three 0 and
+     * sem_inited 0, the honest "semantic recall gated off" shape (the v5..v12 pattern). */
+    pkt.sem_recall_hits  = g_embed_sem_hits       > 0xFFFFu ? 0xFFFFu : (uint16_t)g_embed_sem_hits;
+    pkt.sem_recall_tried = g_embed_sem_tried      > 0xFFFFu ? 0xFFFFu : (uint16_t)g_embed_sem_tried;
+    pkt.sem_recall_floor = g_embed_sem_below_floor > 0xFFFFu ? 0xFFFFu : (uint16_t)g_embed_sem_below_floor;
+    /* g_embed_sem_ok, not g_embed_ready: the model being resident is not the same as the lane
+     * being usable (mu must verify AND the vector store must be up). Reporting "live" off model
+     * residency would advertise a lane that cannot select anything. */
+    pkt.sem_inited       = g_embed_sem_ok ? 1u : 0u;
+#endif
     /* model display name (matches the on-screen panel) + last response, NUL-bounded (pkt is zeroed) */
     { const char *mn = "Gemma 4 E2B";
       for (int i = 0; i < (int)sizeof(pkt.model_name) - 1 && mn[i]; i++) pkt.model_name[i] = mn[i]; }
     for (int i = 0; i < (int)sizeof(pkt.last_text) - 1 && g_fb_last_resp[i]; i++)
         pkt.last_text[i] = g_fb_last_resp[i];
     jarvis_tlm_finalize(&pkt);
-    /* wrap as a UDP broadcast to :51000 and fire-and-forget (no DD poll) */
-    static uint8_t tlm_frame[304];   /* 14+20+8+254 = 296 <= 304 (v11; headroom, never exact-fit) */
+    /* wrap as a UDP broadcast to :51000 and fire-and-forget (no DD poll)
+     *
+     * SIZE IS DERIVED, NOT A LITERAL, because getting it wrong FAILS SILENTLY:
+     * net_build_udp_broadcast returns -1 when out_cap < frame_len, and the `if (flen > 0)` below
+     * then simply does not send — telemetry stops dead with no error line anywhere.
+     *
+     * The old literal was 304 with a comment reading "14+20+8+254 = 296 <= 304 (v11; headroom,
+     * never exact-fit)". That comment described v11 and had gone stale at the v12 bump: 42 + 262
+     * is EXACTLY 304, so the buffer was already at zero headroom while claiming to have some, and
+     * the v13 append (42 + 270 = 312) would have overflowed it into the silent-stop path.
+     * Deriving from sizeof(telemetry_packet_t) plus a real slack allowance, with the assert
+     * below, makes the next append break the BUILD instead of the wire. */
+    enum { TLM_FRAME_HDRS = 42,      /* = net_udp.c HDRS_LEN (14 Ethernet + 20 IPv4 + 8 UDP); that
+                                      * #define is .c-local and not exported, so it is restated
+                                      * here — the _Static_assert is what keeps it honest. */
+           TLM_FRAME_SLACK = 16 };
+    static uint8_t tlm_frame[TLM_FRAME_HDRS + sizeof(telemetry_packet_t) + TLM_FRAME_SLACK];
+    _Static_assert(sizeof tlm_frame >= TLM_FRAME_HDRS + sizeof(telemetry_packet_t),
+                   "telemetry frame buffer too small: net_build_udp_broadcast would return -1 and "
+                   "the emit would SILENTLY stop sending telemetry");
     int flen = net_build_udp_broadcast(tlm_frame, sizeof tlm_frame, g_net.nic.mac, JARVIS_BOX_IP,
                    JARVIS_TELEMETRY_PORT, JARVIS_TELEMETRY_PORT, &pkt, (uint16_t)sizeof pkt);
     if (flen > 0)
@@ -7690,6 +7763,19 @@ static void *main_continued(void *arg UNUSED)
             puts_serial(" dec=");  put_dec(g_route_decline);
             puts_serial(" inf=");  put_dec(g_route_infer);
             puts_serial(" inited=1 (decisions, NOT a breakdown of answered)\n");
+#endif
+#if JARVIS_EMBED
+            /* C/M3a (v13) box proof: the exact semantic-recall counters + the live-vs-gated
+             * indicator jarvis_telemetry_emit fills into the v13 packet. On-wire I211 validation
+             * is DEFERRED (no NIC in QEMU) — the [TLM-V8..V12] precedent.
+             * These three do NOT sum: tried - hits - floor is a real residual (no stored vector
+             * yet, or a match with no complete sentence). floor= is the similarity decision ALONE.
+             * A miss degrades to exactly today's no-preamble path — it is not an error. */
+            puts_serial("[TLM-V13] sem hits="); put_dec(g_embed_sem_hits);
+            puts_serial(" tried=");  put_dec(g_embed_sem_tried);
+            puts_serial(" floor=");  put_dec(g_embed_sem_below_floor);
+            puts_serial(" inited="); put_dec((uint32_t)(g_embed_sem_ok ? 1 : 0));
+            puts_serial(" (hits+floor != tried by design; residual is real)\n");
 #endif
 #if JARVIS_MONITORS
             /* 6-1/M1: the q_errors-delta watcher -> ACTION_NOTIFY_ANOMALY through the shared

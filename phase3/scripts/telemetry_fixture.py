@@ -2,9 +2,10 @@
 """
 telemetry_fixture.py - shared packer for the telemetry_packet_t (jarvis_telemetry.h).
 
-Single source for building 262-byte (v12) telemetry packets and legacy-pcap captures,
+Single source for building current-wire (v13) telemetry packets and legacy-pcap captures,
 used by both test_telemetry_receiver.py (host wire-compat) and gen_golden_pcap.py
-(the golden fixture). Stdlib only.
+(the golden fixture). Stdlib only. The packet SIZE is deliberately not restated here —
+it is derived from the receiver's FMT_V* ladder, the single source of truth.
 
 REQUIRED_RECORD_KEYS is DERIVED at import time from packet_to_record() (build a
 sample packet -> decode -> record -> its key set), so the key contract can never
@@ -18,12 +19,13 @@ import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from telemetry_receiver import (  # noqa: E402
-    FMT_V10, FMT_V11, FMT_V12, MAGIC, PKT_SIZE_V10, PKT_SIZE_V11, PKT_SIZE_V12,
+    FMT_V10, FMT_V11, FMT_V12, FMT_V13, MAGIC,
+    PKT_SIZE_V10, PKT_SIZE_V11, PKT_SIZE_V12, PKT_SIZE_V13,
     decode_packet, packet_to_record)
 
-# Field order matches FMT_V12 / jarvis_telemetry.h exactly.
+# Field order matches FMT_V13 / jarvis_telemetry.h exactly.
 _DEFAULTS = dict(
-    magic=MAGIC, version=12, kind=1, flags=0x01 | 0x10, boot_id=1, seq=42,
+    magic=MAGIC, version=13, kind=1, flags=0x01 | 0x10, boot_id=1, seq=42,
     uptime_ms=120000, infer_active=0, infer_duty_pct=18, log_cursor=137,
     q_total=289, q_hits=211, q_infer=29, q_heartbeat=40, q_shield=9, q_errors=0,
     num_nodes=6, model_load_pct=100, fb_bpp=32, selftest_score=5,
@@ -41,17 +43,21 @@ _DEFAULTS = dict(
     # v12 (6-6/B/M2) — ROUTING DECISIONS at classification time; NOT a breakdown of
     # control_in_answered (an INFER decision that later degrades/times out never reaches it).
     route_sysfacts=0, route_decline=0, route_infer=0, route_inited=0, route_pad=0,
+    # v13 (Phase C / C/M3a) — SEMANTIC RECALL (the embedding lane), NOT the v6
+    # semantic_fact_count distill store. hits/tried/floor do NOT sum: the residual is real.
+    sem_recall_hits=0, sem_recall_tried=0, sem_recall_floor=0, sem_inited=0, sem_pad=0,
     crc32=0,
 )
 
 
-def build_packet(finalize=True, wire_version=12, **overrides):
+def build_packet(finalize=True, wire_version=13, **overrides):
     """Pack a telemetry packet; when finalize, stamp a valid zlib CRC over [:size-4].
 
-    wire_version=12 (default) -> a 262-byte v12 packet (+ route_sysfacts/decline/infer/inited/pad);
-    wire_version=11 -> a 254-byte v11 packet (the live deployed box's shape until the B flip, for
-    the deploy-deferral version-tolerance test); wire_version=10 -> a 246-byte v10 packet. The
-    version BYTE tracks wire_version unless explicitly overridden.
+    wire_version=13 (default) -> the current wire (+ sem_recall_hits/tried/floor/inited/pad);
+    wire_version=12 -> the shape the LIVE DEPLOYED BOX still emits until the JARVIS_EMBED flip
+    (+ route_*), which is why v12 must keep decoding cleanly; wire_version=11 -> the pre-routing
+    shape; wire_version=10 -> the pre-control-IN shape. Sizes come from the receiver's PKT_SIZE_V*
+    constants, never a literal here. The version BYTE tracks wire_version unless overridden.
     Pass finalize=False (with an explicit crc32=...) to forge a corrupt packet.
     String fields (last_text/model_name) accept bytes or str.
     """
@@ -84,15 +90,26 @@ def build_packet(finalize=True, wire_version=12, **overrides):
                            v['control_in_answered'], v['control_in_blocked'],
                            v['control_in_dropped'], v['crc32'])
         size = PKT_SIZE_V11
-    else:
+    elif wire_version == 12:
         body = struct.pack(FMT_V12, *common,
                            v['control_in_answered'], v['control_in_blocked'],
                            v['control_in_dropped'],
                            v['route_sysfacts'], v['route_decline'], v['route_infer'],
                            v['route_inited'], v['route_pad'], v['crc32'])
         size = PKT_SIZE_V12
+    else:
+        body = struct.pack(FMT_V13, *common,
+                           v['control_in_answered'], v['control_in_blocked'],
+                           v['control_in_dropped'],
+                           v['route_sysfacts'], v['route_decline'], v['route_infer'],
+                           v['route_inited'], v['route_pad'],
+                           v['sem_recall_hits'], v['sem_recall_tried'],
+                           v['sem_recall_floor'], v['sem_inited'], v['sem_pad'],
+                           v['crc32'])
+        size = PKT_SIZE_V13
     if finalize:
-        crc = zlib.crc32(body[:size - 4]) & 0xFFFFFFFF   # v12: 258 / v11: 250 / v10: 242
+        # The CRC region is size-4 for EVERY version — derived, so no per-version literal can rot.
+        crc = zlib.crc32(body[:size - 4]) & 0xFFFFFFFF
         body = body[:size - 4] + struct.pack('<I', crc)
     return body
 
