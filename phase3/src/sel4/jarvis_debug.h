@@ -485,7 +485,7 @@
  * compiles out; the deployed engine is unaffected. (Box wiring — a co-resident 2nd GGUF, MSG_EMBED
  * IPC, OFF object-identity — is C/M1b, and adds the ACTIONS/CONTROL_IN deps + #error guards then.) */
 #ifndef JARVIS_EMBED
-#define JARVIS_EMBED 0
+#define JARVIS_EMBED 1
 #endif
 
 /* Phase C / C/M1b-2 embed parity+latency probe (box/KVM-only, default 0; requires JARVIS_EMBED).
