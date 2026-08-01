@@ -59,7 +59,7 @@ ROUTE_C = REPO / "phase3" / "src" / "ai" / "route.c"
 AI_DIR = REPO / "phase3" / "src" / "ai"
 
 DIM = 128          # the C/M2-measured storage dimension
-PROJ = True        # mean-projection: the RAW configs ran 12.5-28.6% false recalls
+PROJ = "meanproj"  # STRING sentinel — prepare() tests == "meanproj"; a bool SILENTLY skips it
 
 CLS = {"ROUTE_INFER": 0, "ROUTE_SYSFACTS": 1, "ROUTE_DECLINE": 2}
 CLS_NAME = {0: "INFER", 1: "SYSFACTS", 2: "DECLINE"}

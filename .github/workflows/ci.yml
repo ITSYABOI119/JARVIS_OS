@@ -566,6 +566,29 @@ jobs:
           -o /tmp/cm4_route_driver
         printf 'what causes page faults?\nwhat is a page fault?\n' | /tmp/cm4_route_driver
 
+    - name: "Phase C: C/M4 route-veto decision core (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
+          phase3/src/ai/test_route_veto.c phase3/src/ai/route_veto.c \
+          -o /tmp/troutev -lm
+        /tmp/troutev
+
+    # STDLIB ONLY by design (zipfile + struct, no numpy — CI has none), which is why this
+    # can run here at all while the parity gate that uses the same centroids cannot.
+    - name: "Phase C: route centroids bit-exact vs npz (Python)"
+      run: python3 phase3/scripts/embed/test_route_centroids.py
+
+    # COMPILE-ONLY + empty-stdin smoke. The gate that actually exercises this driver
+    # (cm4_veto_parity.py) needs a 600 MB embedder and is model-gated-local — the
+    # cm2_floor.py precedent. This step exists so the driver cannot rot against a
+    # route_veto.h change and be discovered broken only at the next parity run.
+    - name: "Phase C: C/M4 veto parity driver (C, compile-only)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
+          phase3/scripts/embed/cm4_veto_driver.c phase3/src/ai/route_veto.c \
+          -o /tmp/cm4vd -lm
+        printf '' | /tmp/cm4vd
+
     - name: "Phase 5: Decision-cache LRU eviction (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \

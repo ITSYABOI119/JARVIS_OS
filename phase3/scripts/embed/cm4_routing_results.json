@@ -177,11 +177,11 @@
       ]
     },
     "B_pure_semantic": {
-      "false_positives": 6,
+      "false_positives": 7,
       "fp_of": 32,
-      "false_negatives": 5,
+      "false_negatives": 6,
       "fn_of": 37,
-      "total_wrong": 11,
+      "total_wrong": 13,
       "heldout_correct": 66,
       "heldout_of": 73,
       "heldout_pct": 90.41,
@@ -203,12 +203,16 @@
           "routed": "DECLINE"
         },
         {
+          "q": "how many cores does a typical phone have",
+          "routed": "DECLINE"
+        },
+        {
           "q": "what number of worker processes does nginx spawn by default",
           "routed": "SYSFACTS"
         },
         {
           "q": "how many cpus does a raspberry pi have",
-          "routed": "SYSFACTS"
+          "routed": "DECLINE"
         }
       ],
       "fn_questions": [
@@ -222,6 +226,10 @@
         },
         {
           "q": "duration since power-on?",
+          "routed": "DECLINE"
+        },
+        {
+          "q": "what is the uptime",
           "routed": "DECLINE"
         },
         {
@@ -262,7 +270,7 @@
         {
           "q": "give me a fun fact",
           "want": "INFER",
-          "got": "SYSFACTS"
+          "got": "DECLINE"
         },
         {
           "q": "what are your worker ids?",
