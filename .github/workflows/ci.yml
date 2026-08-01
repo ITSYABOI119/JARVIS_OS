@@ -554,6 +554,18 @@ jobs:
           -o /tmp/fuzz_route
         /tmp/fuzz_route
 
+    # C/M4 arm-A driver: COMPILE-ONLY (it asserts nothing — it is a stdin->route_classify
+    # harness for the off-box routing measurement, which needs a 1.2 GB embedder and cannot
+    # run in CI). The step exists so the driver cannot rot against a route.h change and be
+    # discovered broken only when someone next re-runs the measurement. The bench_engine.c
+    # compile-only precedent.
+    - name: "Phase C: C/M4 routing-measure driver (C, compile-only)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
+          phase3/scripts/embed/cm4_route_driver.c phase3/src/ai/route.c \
+          -o /tmp/cm4_route_driver
+        printf 'what causes page faults?\nwhat is a page fault?\n' | /tmp/cm4_route_driver
+
     - name: "Phase 5: Decision-cache LRU eviction (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \

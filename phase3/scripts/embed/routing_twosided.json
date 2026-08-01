@@ -1,0 +1,90 @@
+{
+  "_comment": "C/M4 two-sided routing corpus. The measurement in PHASE_6_GOAL_6-6_ROUTING.md §9 (commit 5e9d746) was DOCS-ONLY: §9 reports the totals (37 genuine status / 32 conceptual = 69) and the construction rule, but enumerates only ~14 of the 69 questions verbatim. Everything marked source='recovered' is quoted from §9; everything marked source='rebuilt' was constructed under the SAME rule and is NEW. A rebuilt corpus is therefore NOT byte-comparable to §9's recorded 32/69 baseline — the baseline is re-measured here on THIS corpus and both numbers are reported. This file exists so the next session looks the corpus up instead of re-deriving it from prose (the artifact-survives-the-session lesson, which has already bitten this project twice).",
+  "_construction_rule": "conceptual = a technical/CS question that merely CONTAINS a SYSFACTS family word and must route ROUTE_INFER; genuine = a real operator status question that must route ROUTE_SYSFACTS. Coverage targets all FIVE reachable SYSFACTS paths (MODEL/NODES/HEALTH/UPTIME/BOOT_ID) and the nine both-sides words (boot, cycles, errors, faults, gguf, model, ok, problems, wrong). The genuine side deliberately over-weights NO-SELF-REFERENCE phrasings, because that is the quadrant the keyword anchor died in (§9.3: it turned on whether the operator said 'you').",
+  "_expect": "conceptual -> ROUTE_INFER (a SYSFACTS/DECLINE capture is a FALSE POSITIVE). genuine -> ROUTE_SYSFACTS (an INFER fallthrough is a FALSE NEGATIVE).",
+  "_recovered_count": 14,
+  "_rebuilt_count": 55,
+
+  "conceptual": [
+    { "q": "what causes page faults?", "path": "HEALTH", "source": "recovered" },
+    { "q": "how are errors handled in rust?", "path": "HEALTH", "source": "recovered" },
+    { "q": "what is the difference between an error and an exception", "path": "HEALTH", "source": "rebuilt" },
+    { "q": "why is it ok to skip a null pointer check here", "path": "HEALTH", "source": "rebuilt" },
+    { "q": "what does it mean when a compiler says something went wrong", "path": "HEALTH", "source": "rebuilt" },
+    { "q": "how do i debug segmentation faults in c", "path": "HEALTH", "source": "rebuilt" },
+    { "q": "what are common problems with linked lists", "path": "HEALTH", "source": "rebuilt" },
+    { "q": "is it fine to cast a float to an int in c", "path": "HEALTH", "source": "rebuilt" },
+    { "q": "what makes a distributed system healthy", "path": "HEALTH", "source": "rebuilt" },
+    { "q": "are memory errors always fatal", "path": "HEALTH", "source": "rebuilt" },
+    { "q": "why do systems go wrong under heavy load", "path": "HEALTH", "source": "rebuilt" },
+    { "q": "what problems does a write ahead log solve", "path": "HEALTH", "source": "rebuilt" },
+
+    { "q": "how many hours does a full rebuild take?", "path": "UPTIME", "source": "recovered" },
+    { "q": "how long does a context switch take?", "path": "UPTIME", "source": "recovered" },
+    { "q": "what is the duration of a typical gc pause", "path": "UPTIME", "source": "rebuilt" },
+    { "q": "how long should a unit test suite run", "path": "UPTIME", "source": "rebuilt" },
+    { "q": "how many hours of battery does a laptop cpu draw", "path": "UPTIME", "source": "rebuilt" },
+
+    { "q": "how many cycles does a cache miss cost?", "path": "BOOT_ID", "source": "recovered" },
+    { "q": "what does the boot sequence of an operating system look like", "path": "BOOT_ID", "source": "rebuilt" },
+    { "q": "why does a machine reboot after a kernel panic", "path": "BOOT_ID", "source": "rebuilt" },
+    { "q": "how many clock cycles is an l2 cache hit", "path": "BOOT_ID", "source": "rebuilt" },
+    { "q": "what does a cold boot do differently from a warm one", "path": "BOOT_ID", "source": "rebuilt" },
+
+    { "q": "how does a transformer model work?", "path": "MODEL", "source": "recovered" },
+    { "q": "what is a neural network", "path": "MODEL", "source": "rebuilt" },
+    { "q": "how is a gguf file structured", "path": "MODEL", "source": "rebuilt" },
+    { "q": "what is the difference between an llm and a language model", "path": "MODEL", "source": "rebuilt" },
+    { "q": "what happens under the hood when you call malloc", "path": "MODEL", "source": "rebuilt" },
+
+    { "q": "how many nodes are in a red-black tree?", "path": "NODES", "source": "recovered" },
+    { "q": "how many threads should a web server use", "path": "NODES", "source": "rebuilt" },
+    { "q": "how many cores does a typical phone have", "path": "NODES", "source": "rebuilt" },
+    { "q": "what number of worker processes does nginx spawn by default", "path": "NODES", "source": "rebuilt" },
+    { "q": "how many cpus does a raspberry pi have", "path": "NODES", "source": "rebuilt" }
+  ],
+
+  "genuine": [
+    { "q": "do we have errors?", "path": "HEALTH", "source": "recovered" },
+    { "q": "give me a health check", "path": "HEALTH", "source": "recovered" },
+    { "q": "is there an error?", "path": "HEALTH", "source": "recovered" },
+    { "q": "any errors?", "path": "HEALTH", "source": "rebuilt" },
+    { "q": "everything ok?", "path": "HEALTH", "source": "rebuilt" },
+    { "q": "is anything wrong?", "path": "HEALTH", "source": "rebuilt" },
+    { "q": "are there problems?", "path": "HEALTH", "source": "rebuilt" },
+    { "q": "all fine?", "path": "HEALTH", "source": "rebuilt" },
+    { "q": "is the system healthy", "path": "HEALTH", "source": "rebuilt" },
+    { "q": "running smoothly?", "path": "HEALTH", "source": "rebuilt" },
+    { "q": "any faults?", "path": "HEALTH", "source": "rebuilt" },
+    { "q": "all alright?", "path": "HEALTH", "source": "rebuilt" },
+    { "q": "are you ok?", "path": "HEALTH", "source": "rebuilt" },
+
+    { "q": "can i get the uptime?", "path": "UPTIME", "source": "recovered" },
+    { "q": "how many hours since boot?", "path": "UPTIME", "source": "recovered" },
+    { "q": "duration since power-on?", "path": "UPTIME", "source": "recovered" },
+    { "q": "what is the uptime", "path": "UPTIME", "source": "rebuilt" },
+    { "q": "how long have you been up?", "path": "UPTIME", "source": "rebuilt" },
+    { "q": "uptime please", "path": "UPTIME", "source": "rebuilt" },
+    { "q": "how long has this been running", "path": "UPTIME", "source": "rebuilt" },
+    { "q": "how many hours up", "path": "UPTIME", "source": "rebuilt" },
+    { "q": "since when has it been on", "path": "UPTIME", "source": "rebuilt" },
+
+    { "q": "how many boots?", "path": "BOOT_ID", "source": "rebuilt" },
+    { "q": "what boot is this", "path": "BOOT_ID", "source": "rebuilt" },
+    { "q": "how many times has it rebooted", "path": "BOOT_ID", "source": "rebuilt" },
+    { "q": "boot count?", "path": "BOOT_ID", "source": "rebuilt" },
+    { "q": "how many power cycles", "path": "BOOT_ID", "source": "rebuilt" },
+    { "q": "which boot are we on", "path": "BOOT_ID", "source": "rebuilt" },
+
+    { "q": "what model does this run?", "path": "MODEL", "source": "recovered" },
+    { "q": "what model is loaded", "path": "MODEL", "source": "rebuilt" },
+    { "q": "which llm are you running", "path": "MODEL", "source": "rebuilt" },
+    { "q": "what gguf is in use", "path": "MODEL", "source": "rebuilt" },
+    { "q": "model name?", "path": "MODEL", "source": "rebuilt" },
+
+    { "q": "how many workers are there", "path": "NODES", "source": "rebuilt" },
+    { "q": "how many cores are you using", "path": "NODES", "source": "rebuilt" },
+    { "q": "what number of threads is configured", "path": "NODES", "source": "rebuilt" },
+    { "q": "how many nodes are running", "path": "NODES", "source": "rebuilt" }
+  ]
+}

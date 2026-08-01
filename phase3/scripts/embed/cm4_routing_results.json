@@ -1,0 +1,391 @@
+{
+  "_comment": "C/M4 routing measurement. MEASURE ONLY \u2014 no route.c change was made and none is implied. Verdict bands are pre-registered in PROMPT-CM4 \u00a75 and applied verbatim; they were fixed before any number was seen.",
+  "model": "Qwen/Qwen3-Embedding-0.6B",
+  "dim": 128,
+  "projection": "mean-project (frozen mu) + L2",
+  "corpus": {
+    "file": "routing_twosided.json",
+    "conceptual": 32,
+    "genuine": 37,
+    "recovered_verbatim_from_doc_s9": 14,
+    "rebuilt_under_same_rule": 55,
+    "note": "PHASE_6_GOAL_6-6_ROUTING.md \u00a79 was DOCS-ONLY and enumerates only ~14 of its 69 questions, so this corpus is PARTLY REBUILT and is NOT byte-comparable to \u00a79's recorded 32/69 baseline. Arm A is re-measured here to give this corpus its own baseline."
+  },
+  "suite": {
+    "dev": 64,
+    "heldout": 73,
+    "keyword_dev_correct": 64,
+    "centroid_source": "DEV split only (HELDOUT never tuned against)"
+  },
+  "arms": {
+    "A_keyword_baseline": {
+      "false_positives": 32,
+      "fp_of": 32,
+      "false_negatives": 0,
+      "fn_of": 37,
+      "total_wrong": 32,
+      "heldout_correct": 70,
+      "heldout_of": 73,
+      "heldout_pct": 95.89,
+      "fp_questions": [
+        {
+          "q": "what causes page faults?",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "how are errors handled in rust?",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "what is the difference between an error and an exception",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "why is it ok to skip a null pointer check here",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "what does it mean when a compiler says something went wrong",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "how do i debug segmentation faults in c",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "what are common problems with linked lists",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "is it fine to cast a float to an int in c",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "what makes a distributed system healthy",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "are memory errors always fatal",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "why do systems go wrong under heavy load",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "what problems does a write ahead log solve",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "how many hours does a full rebuild take?",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "how long does a context switch take?",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "what is the duration of a typical gc pause",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "how long should a unit test suite run",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "how many hours of battery does a laptop cpu draw",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "how many cycles does a cache miss cost?",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "what does the boot sequence of an operating system look like",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "why does a machine reboot after a kernel panic",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "how many clock cycles is an l2 cache hit",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "what does a cold boot do differently from a warm one",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "how does a transformer model work?",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "what is a neural network",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "how is a gguf file structured",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "what is the difference between an llm and a language model",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "what happens under the hood when you call malloc",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "how many nodes are in a red-black tree?",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "how many threads should a web server use",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "how many cores does a typical phone have",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "what number of worker processes does nginx spawn by default",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "how many cpus does a raspberry pi have",
+          "routed": "SYSFACTS"
+        }
+      ],
+      "fn_questions": [],
+      "heldout_misses": [
+        {
+          "q": "whats your uptiem",
+          "want": "SYSFACTS",
+          "got": "INFER"
+        },
+        {
+          "q": "how many wokers do you have",
+          "want": "SYSFACTS",
+          "got": "INFER"
+        },
+        {
+          "q": "how much memry are you using?",
+          "want": "DECLINE",
+          "got": "INFER"
+        }
+      ]
+    },
+    "B_pure_semantic": {
+      "false_positives": 6,
+      "fp_of": 32,
+      "false_negatives": 5,
+      "fn_of": 37,
+      "total_wrong": 11,
+      "heldout_correct": 66,
+      "heldout_of": 73,
+      "heldout_pct": 90.41,
+      "fp_questions": [
+        {
+          "q": "how many hours does a full rebuild take?",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "how long should a unit test suite run",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "how many hours of battery does a laptop cpu draw",
+          "routed": "DECLINE"
+        },
+        {
+          "q": "how many threads should a web server use",
+          "routed": "DECLINE"
+        },
+        {
+          "q": "what number of worker processes does nginx spawn by default",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "how many cpus does a raspberry pi have",
+          "routed": "SYSFACTS"
+        }
+      ],
+      "fn_questions": [
+        {
+          "q": "give me a health check",
+          "routed": "DECLINE"
+        },
+        {
+          "q": "can i get the uptime?",
+          "routed": "DECLINE"
+        },
+        {
+          "q": "duration since power-on?",
+          "routed": "DECLINE"
+        },
+        {
+          "q": "uptime please",
+          "routed": "DECLINE"
+        },
+        {
+          "q": "what gguf is in use",
+          "routed": "INFER"
+        }
+      ],
+      "heldout_misses": [
+        {
+          "q": "duration since power-on?",
+          "want": "SYSFACTS",
+          "got": "DECLINE"
+        },
+        {
+          "q": "what is the capital of Japan?",
+          "want": "INFER",
+          "got": "SYSFACTS"
+        },
+        {
+          "q": "how many questions have you answered today?",
+          "want": "INFER",
+          "got": "SYSFACTS"
+        },
+        {
+          "q": "how many queries did you process this hour?",
+          "want": "INFER",
+          "got": "DECLINE"
+        },
+        {
+          "q": "what's 12 times 7?",
+          "want": "INFER",
+          "got": "DECLINE"
+        },
+        {
+          "q": "give me a fun fact",
+          "want": "INFER",
+          "got": "SYSFACTS"
+        },
+        {
+          "q": "what are your worker ids?",
+          "want": "INFER",
+          "got": "SYSFACTS"
+        }
+      ],
+      "verdict": "CLOSED"
+    },
+    "C_hybrid_veto": {
+      "false_positives": 6,
+      "fp_of": 32,
+      "false_negatives": 1,
+      "fn_of": 37,
+      "total_wrong": 7,
+      "heldout_correct": 70,
+      "heldout_of": 73,
+      "heldout_pct": 95.89,
+      "fp_questions": [
+        {
+          "q": "how many hours does a full rebuild take?",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "how long should a unit test suite run",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "how many hours of battery does a laptop cpu draw",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "how many threads should a web server use",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "what number of worker processes does nginx spawn by default",
+          "routed": "SYSFACTS"
+        },
+        {
+          "q": "how many cpus does a raspberry pi have",
+          "routed": "SYSFACTS"
+        }
+      ],
+      "fn_questions": [
+        {
+          "q": "what gguf is in use",
+          "routed": "INFER"
+        }
+      ],
+      "heldout_misses": [
+        {
+          "q": "whats your uptiem",
+          "want": "SYSFACTS",
+          "got": "INFER"
+        },
+        {
+          "q": "how many wokers do you have",
+          "want": "SYSFACTS",
+          "got": "INFER"
+        },
+        {
+          "q": "how much memry are you using?",
+          "want": "DECLINE",
+          "got": "INFER"
+        }
+      ],
+      "verdict": "WORTH BUILDING"
+    }
+  },
+  "arm_c_veto_only_claim": {
+    "asserted_at_runtime": true,
+    "captures_created_from_infer": 0,
+    "note": "Holds as stated: the veto only rewrites SYSFACTS/DECLINE -> INFER, and INFER is the conservative default, so no capture is ever created. But this is a claim about CAPTURES, not about harm \u2014 vetoing a genuine status question converts a correct capture into a FALSE NEGATIVE, which is precisely what killed the keyword anchor and what the FN band catches.",
+    "arm_c_vetoes_on_conceptual": 26,
+    "arm_c_vetoes_on_genuine": 1
+  },
+  "heldout_blind_spot_audit": {
+    "heldout_sysfacts_positives": 35,
+    "in_no_self_AND_concept_word_quadrant": 4,
+    "quadrant_questions": [
+      "how many hours since boot?",
+      "how many boots have there been?",
+      "how many worker threads are there?",
+      "how many parallel workers are active?"
+    ],
+    "quadrant_survived_arm_c": 4,
+    "arm_c_vetoes_fired_on_heldout": 0,
+    "heldout_vetoed_questions": [],
+    "verdict": "HELDOUT DOES exercise the quadrant an embedder-veto decides",
+    "what_the_heldout_score_actually_proves": "Arm C's HELDOUT is IDENTICAL to baseline because the veto fired on 0 HELDOUT case(s). With zero firings that is evidence of NO HARM, not evidence the veto was validated on held-out data \u2014 the veto was simply never exercised there. Read it as 'costs nothing on HELDOUT', never as 'HELDOUT confirms the veto'."
+  },
+  "selection_bias_audit": {
+    "why": "55 of the 69 questions were written by the session that scored them (\u00a79 was docs-only). If arm C's gain were concentrated in the REBUILT half it would be an artefact of phrasing, not a property of the embedder. The 14 questions quoted verbatim from \u00a79 are the only unbiased anchor available.",
+    "by_source": {
+      "A_keyword_baseline": {
+        "recovered": {
+          "conceptual_n": 7,
+          "false_positives": 7,
+          "genuine_n": 7,
+          "false_negatives": 0
+        },
+        "rebuilt": {
+          "conceptual_n": 25,
+          "false_positives": 25,
+          "genuine_n": 30,
+          "false_negatives": 0
+        }
+      },
+      "C_hybrid_veto": {
+        "recovered": {
+          "conceptual_n": 7,
+          "false_positives": 1,
+          "genuine_n": 7,
+          "false_negatives": 0
+        },
+        "rebuilt": {
+          "conceptual_n": 25,
+          "false_positives": 5,
+          "genuine_n": 30,
+          "false_negatives": 1
+        }
+      }
+    }
+  }
+}
