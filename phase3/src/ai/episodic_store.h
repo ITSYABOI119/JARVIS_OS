@@ -28,6 +28,7 @@
 #define EPISODIC_STORE_H
 
 #include <stdint.h>
+#include <stddef.h>   /* offsetof — the provenance-offset _Static_asserts below */
 #include <stddef.h>
 
 /* Start of the Phase-5 memory region (8-sector-aligned: 21,100,000 / 8 = 2,637,500). */
@@ -134,10 +135,53 @@ typedef struct __attribute__((packed)) {
     uint16_t resp_len;       /* bytes used in resp[] */
     char     query[EPI_QUERY_MAX];   /* truncated source query (raw; not NUL-required) */
     char     resp[EPI_RESP_MAX];     /* response head (first <=256 B) */
-    uint8_t  pad[24];        /* pad to exactly 512 */
+    /* ---- RECALL PROVENANCE (2026-08-01) — carved out of the former pad[24] --------------
+     * WHICH record supplied this turn's preamble, recorded ON THE TURN rather than in a log.
+     *
+     * WHY HERE AND NOT A LOG LINE: boot 48 recorded sem_recall_hits=4 and durable recall=4,
+     * and WHICH FOUR was unrecoverable — [CTRL-RECALL]/[CTRL-SEM] are puts_serial and vanish
+     * at the deployed JARVIS_DBG_BOOT_LOG=0. The answer text cannot settle it either: every
+     * answer named the right concept, which the model would do with or without a hit. This
+     * record is ALREADY written on every control-IN turn (no new writes), it is co-located
+     * with the turn it describes, and this store is 4096 slots at human pace — years —
+     * against the telemetry log's 2700-entry rolling buffer that would age the evidence out.
+     *
+     * BYTE ARITHMETIC: 488 B of fields precede these. 1 + 4 + 2 = 7 B, so pad 24 -> 17 and
+     * the record stays EXACTLY 512 B — the _Static_assert below is UNCHANGED, deliberately:
+     * it is the thing protecting the on-disk layout, so it must not move. Offsets are
+     * recall_kind @488, recall_src_seq @489, recall_cos_x1000 @493, pad @495..511. The
+     * struct is __attribute__((packed)), so recall_src_seq is deliberately unaligned and no
+     * compiler padding is inserted; parse_episodic.py reads the same three offsets.
+     *
+     * BACKWARD COMPATIBILITY, STATED NOT PAPERED OVER: records written before this change
+     * have pad all-zero, which decodes as recall_kind = 0. For those turns that is AMBIGUOUS
+     * — it could mean "no recall" or "written before the field existed" — and boot 46
+     * genuinely had recall=2, so some of those zeros ARE wrong. There is deliberately NO
+     * version byte: boot_id identifies the era, and parse_episodic.py renders an all-zero
+     * provenance block as UNKNOWN rather than asserting "none". Note the one thing that DOES
+     * disambiguate going forward: a semantic MISS now stores a non-zero cosine, so a
+     * non-zero value anywhere in this block proves the record is post-change. */
+    uint8_t  recall_kind;      /* @488 — 0 = none/unknown · 1 = exact-key · 2 = semantic */
+    uint32_t recall_src_seq;   /* @489 — seq of the record that supplied the preamble; 0 when none */
+    uint16_t recall_cos_x1000; /* @493 — BEST cosine seen x1000, hit OR miss (0 on the exact-key path).
+                                * Recorded even on a miss ON PURPOSE: it makes near-misses readable
+                                * straight off the store. Boot 48's paraphrase scored 0.494 against a
+                                * 0.55 floor and it took a bespoke probe to learn that. */
+    uint8_t  pad[17];        /* pad to exactly 512 */
 } epi_record_t;
 
 _Static_assert(sizeof(epi_record_t) == 512, "episodic record must be exactly one sector");
+/* Pin the provenance offsets explicitly. The sizeof assert above proves the record still fits a
+ * sector, but it would ALSO be satisfied by silently reordering these fields — which would
+ * misread every previously-written record. These asserts are what make the layout the contract. */
+_Static_assert(offsetof(epi_record_t, recall_kind)      == 488, "recall_kind must be @488");
+_Static_assert(offsetof(epi_record_t, recall_src_seq)   == 489, "recall_src_seq must be @489");
+_Static_assert(offsetof(epi_record_t, recall_cos_x1000) == 493, "recall_cos_x1000 must be @493");
+
+/* recall_kind values */
+#define EPI_RECALL_NONE     0u   /* no preamble — or a pre-2026-08-01 record (ambiguous; see above) */
+#define EPI_RECALL_EXACT    1u   /* exact-key hit supplied the preamble */
+#define EPI_RECALL_SEMANTIC 2u   /* semantic (cosine) match supplied the preamble */
 
 /* Store handle — holds the callbacks, region geometry, and the cached header. */
 typedef struct {

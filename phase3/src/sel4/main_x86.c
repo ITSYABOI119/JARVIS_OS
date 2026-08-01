@@ -429,12 +429,24 @@ static char     g_ctrl_last_q[EPI_QUERY_MAX + 1];
 static uint16_t g_ctrl_last_qlen    = 0;
 #endif
 
-static void ctrl_epi_write(const char *qs, uint8_t outcome, const char *resp, uint16_t action)
+/* RECALL PROVENANCE (2026-08-01) is passed as PARAMETERS, not via file-scope state, even though
+ * this function already keeps g_ctrl_last_* statics right above it. The difference matters: a
+ * static that a caller forgets to reset carries the PREVIOUS turn's provenance onto a later
+ * record — a silent false attribution, which is precisely the failure this change exists to make
+ * impossible. A parameter cannot be forgotten; the compiler makes every one of the three call
+ * sites state what it knows, and the two error paths say "none" explicitly and visibly. */
+static void ctrl_epi_write(const char *qs, uint8_t outcome, const char *resp, uint16_t action,
+                           uint8_t recall_kind, uint32_t recall_src_seq, uint16_t recall_cos_x1000)
 {
     if (!g_ctrl_episodic_ready) return;
 
     static epi_record_t rec;   /* static: PA is single-threaded; keeps 512 B off pa_ctrl_gate's frame */
     episodic_fill(&rec, jarvis_uptime_ms(), qs, action, outcome, 0, resp);
+    /* AFTER episodic_fill, which memsets the record — otherwise these would be zeroed again.
+     * The store is a byte copy from here on, so no episodic_store.c change is needed. */
+    rec.recall_kind      = recall_kind;
+    rec.recall_src_seq   = recall_src_seq;
+    rec.recall_cos_x1000 = recall_cos_x1000;
     if (epi_store_append(&g_ctrl_episodic, &rec) != 0) {
         puts_serial("[CTRL-EPI] append FAILED (non-fatal — this turn will not recall)\n");
         return;
@@ -3450,6 +3462,21 @@ static void pa_ctrl_gate(const control_result_t *cres)
     char resp[CTRL_REPLY_TEXT_MAX + 1]; int roff = 0;
     int got = 0, faulted = 0;
     int served_locally = 0;
+    /* RECALL PROVENANCE (2026-08-01) — hoisted HERE, beside resp/roff/got/faulted, for exactly the
+     * reason they are: these values are produced deep inside nested blocks and consumed at the
+     * SHARED answered exit, which sits after all of them have closed. Two earlier placements read
+     * as obviously correct — one beside the recall logic, one just inside `if (!served_locally)` —
+     * and the brace walk showed each was scoped shut before the write sites. Indentation is not
+     * scope; this was verified by counting braces, not by looking.
+     *
+     * "None" is also the correct value for every path that never reaches the recall logic at all:
+     * no shared context, a locally-served SYSFACTS/DECLINE turn, or the degraded early exit. A turn
+     * that could not have recalled therefore records exactly that BY CONSTRUCTION — not because
+     * someone remembered to reset a variable, which is the failure mode that makes a stale
+     * attribution worse than no attribution. */
+    uint8_t  crk_kind = EPI_RECALL_NONE;
+    uint32_t crk_src  = 0;
+    uint16_t crk_cos  = 0;
     route_result_t rr;
     route_class_t  rc = route_classify((const char *)cres->query, cres->query_len, &rr);
 
@@ -3520,7 +3547,10 @@ static void pa_ctrl_gate(const control_result_t *cres)
         puts_serial("[CTRL-IN-RESP] q=\""); puts_serial(qs);
         puts_serial("\" -> DEGRADED (no dispatch)\n");
 #if JARVIS_CONTROL_IN_RECALL
-        ctrl_epi_write(qs, EPI_OUT_ERROR, NULL, EPI_ACT_CONTROL_IN);
+        /* Provenance NONE, stated literally rather than passing crk_*: this exit is BEFORE the
+         * recall block, so no recall could have happened. Writing the literals makes that visible
+         * at the call site instead of relying on the initialiser being read correctly. */
+        ctrl_epi_write(qs, EPI_OUT_ERROR, NULL, EPI_ACT_CONTROL_IN, EPI_RECALL_NONE, 0, 0);
 #else
         epi_batch_add(qs, EPI_ACT_CONTROL_IN, EPI_OUT_ERROR, NULL);
 #endif
@@ -3590,6 +3620,21 @@ static void pa_ctrl_gate(const control_result_t *cres)
         /* CONTROL-IN lane: the whole stored answer (== EPI_RESP_MAX). The workload lane
          * deliberately keeps G3_R_MAX -- see g3_retrieval.h. */
         int cplen = g3_build_preamble_answer_only(ctrl_sel, cns, ctrl_pre, sizeof ctrl_pre, G3_R_MAX_CONTROL_IN);
+
+        /* RECALL PROVENANCE (2026-08-01) — captured HERE, where the values are provably valid,
+         * and carried to the episodic write as parameters. Declared OUTSIDE #if JARVIS_EMBED
+         * because exact-key provenance is useful in every build and the record is written on
+         * every control-IN turn either way.
+         *
+         * Captured by VALUE rather than read at the write site: ctrl_sel[] holds POINTERS into
+         * candidate record buffers, and the semantic path REUSES the same array, so reading it
+         * ~200 lines later would be reasoning about lifetimes for no benefit. seq is a uint32. */
+        if (cplen > 0 && cns > 0) {           /* cplen, not cns: a selected record whose text held no
+                                               * complete sentence yields NO preamble, and a turn that
+                                               * got no preamble did not recall. */
+            crk_kind = EPI_RECALL_EXACT;
+            crk_src  = ctrl_sel[0].seq;
+        }
 #if JARVIS_EMBED
         int csem = 0;   /* 1 = this preamble came from a SEMANTIC match, not exact-key */
         /*
@@ -3656,19 +3701,27 @@ static void pa_ctrl_gate(const control_result_t *cres)
                  * report a cold-start/backfill state as a similarity decision. Those land in
                  * the tried - hits - floor residual instead, where they belong. */
                 if (sn > 0 && ss == 0) g_embed_sem_below_floor++;
+                if (ss > 0) {                 /* the semantic pick REPLACED ctrl_sel[0] */
+                    crk_kind = csem ? EPI_RECALL_SEMANTIC : crk_kind;
+                    if (csem) crk_src = ctrl_sel[0].seq;
+                }
             }
-#if JARVIS_EMBED_PROBE
-            /* PROBE-ONLY: the BEST cosine over the gathered candidates, and which one.
+            /* BEST COSINE — HOISTED OUT OF #if JARVIS_EMBED_PROBE (2026-08-01).
              *
-             * g3_select_semantic returns only what cleared the floor, so on a REJECTED
-             * query it reports nothing — and "selected 0" alone cannot distinguish a
-             * working floor from a floor set to 0, or from simply having no candidates.
-             * G2's negative leg is meaningless without this number. Reported x1000 as an
-             * integer because there is no float formatter on the serial path.
+             * HONEST NOTE ON THE PROMPT'S PREMISE: this is the one provenance value that was NOT
+             * "already in hand at the write site". It existed only inside the probe gate, so
+             * making it durable is genuinely NEW computation in the deployed path, not plumbing.
+             * It is kept because it is the field that pays for the change: a below-floor miss
+             * stores how close it came, so a near-miss is readable straight off the store instead
+             * of needing a bespoke probe (boot 48's 0.494-vs-0.55 cost exactly that).
              *
-             * Recomputed here rather than exposed from the selector: this is gate
-             * instrumentation, and adding an out-param to a mutation-proven pure
-             * function to serve a probe would be the wrong direction. */
+             * COST: at most CTRL_SEM_MAX_CANDS (32) x G3_SEM_DIM_DEFAULT (128) = 4096 multiply-adds,
+             * on a path that has just spent ~190 M cycles on the embed itself. Immaterial, and it
+             * runs ONLY on a turn that already fell through to the semantic lane.
+             *
+             * Still recomputed here rather than exposed from g3_select_semantic: adding an
+             * out-param to a mutation-proven pure function to serve instrumentation would be the
+             * wrong direction, and the selector deliberately reports only what cleared the floor. */
             {
                 int best_i = -1; double best = -2.0;
                 for (int ci = 0; ci < sn; ci++) {
@@ -3678,9 +3731,17 @@ static void pa_ctrl_gate(const control_result_t *cres)
                     if (d > best) { best = d; best_i = ci; }
                 }
                 int bx = (int)(best * 1000.0);
+                /* The stored field is UNSIGNED. A negative cosine means "actively unrelated", which
+                 * for provenance is the same information as "no match" — clamp to 0 rather than
+                 * wrapping a negative into a huge uint16 that would read as a near-perfect match. */
+                if (sn > 0) crk_cos = (uint16_t)(bx < 0 ? 0 : (bx > 65535 ? 65535 : bx));
+#if JARVIS_EMBED_PROBE
+                /* The probe keeps the SIGNED rendering — bx is re-derived so the clamp above
+                 * cannot silently change what the gate prints. */
+                int bxp = bx;
                 puts_serial("[CTRL-SEM-PROBE] best_cos_x1000=");
-                if (bx < 0) { seL4_DebugPutChar('-'); bx = -bx; }
-                put_dec((uint32_t)bx);
+                if (bxp < 0) { seL4_DebugPutChar('-'); bxp = -bxp; }
+                put_dec((uint32_t)bxp);
                 puts_serial(" floor_x1000=550 best_cand=");
                 put_dec((uint32_t)(best_i < 0 ? 0 : best_i));
                 if (best_i >= 0) {
@@ -3693,8 +3754,10 @@ static void pa_ctrl_gate(const control_result_t *cres)
                     seL4_DebugPutChar('"');
                 }
                 puts_serial("\n");
-            }
+#else
+                (void)best_i;   /* used only by the probe print; the dot loop itself now always runs */
 #endif
+            }
             puts_serial("[CTRL-SEM] cands="); put_dec((uint32_t)sn);
             puts_serial(" sel=");             put_dec((uint32_t)ss);
             puts_serial(" len=");             put_dec((uint32_t)cplen);
@@ -3836,7 +3899,8 @@ static void pa_ctrl_gate(const control_result_t *cres)
          * answer at all, and re-tagging it would conflate "answered from own state" with
          * "failed to answer". */
         ctrl_epi_write(qs, roff > 0 ? EPI_OUT_OK : EPI_OUT_ERROR, roff > 0 ? resp : NULL,
-                       (served_locally && roff > 0) ? EPI_ACT_CONTROL_IN_LOCAL : EPI_ACT_CONTROL_IN);
+                       (served_locally && roff > 0) ? EPI_ACT_CONTROL_IN_LOCAL : EPI_ACT_CONTROL_IN,
+                       crk_kind, crk_src, crk_cos);
 #else
         epi_batch_add(qs, (served_locally && roff > 0) ? EPI_ACT_CONTROL_IN_LOCAL : EPI_ACT_CONTROL_IN,
                       roff > 0 ? EPI_OUT_OK : EPI_OUT_ERROR, roff > 0 ? resp : NULL);
@@ -3905,7 +3969,12 @@ static void pa_ctrl_gate(const control_result_t *cres)
         puts_serial("[CTRL-IN-RESP] q=\""); puts_serial(qs);
         puts_serial(faulted ? "\" -> FAULT (self-heal)\n" : "\" -> TIMEOUT\n");
 #if JARVIS_CONTROL_IN_RECALL
-        ctrl_epi_write(qs, EPI_OUT_ERROR, NULL, EPI_ACT_CONTROL_IN);
+        /* Provenance IS carried on a failed turn, deliberately. This exit is AFTER the recall
+         * block, so a turn can legitimately have recalled and THEN timed out — and "this turn had
+         * a preamble from record N and still failed" is exactly the forensic the store exists to
+         * answer. The record is unrecallable either way (resp_len 0 fails g3_candidate_usable), so
+         * recording it costs nothing and hiding it would lose a real signal. */
+        ctrl_epi_write(qs, EPI_OUT_ERROR, NULL, EPI_ACT_CONTROL_IN, crk_kind, crk_src, crk_cos);
 #else
         epi_batch_add(qs, EPI_ACT_CONTROL_IN, EPI_OUT_ERROR, NULL);
 #endif

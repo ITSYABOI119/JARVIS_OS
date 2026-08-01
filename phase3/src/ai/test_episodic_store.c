@@ -371,6 +371,22 @@ static int dump_fixture(const char *path)
     episodic_log(&s, 400, "what time is it",   EPI_ACT_INFER, EPI_OUT_OK,    0, "noon");
     episodic_log(&s, 500, "PING",              EPI_ACT_CACHE, EPI_OUT_OK,    2, "pong");
 
+    /* Two records carrying RECALL PROVENANCE (2026-08-01), so the C->Python round-trip covers the
+     * new fields. episodic_log() cannot express them (it has no provenance parameter, by design —
+     * only the control-IN write site has the values), so these go through fill + set + append.
+     * Records 0..4 above deliberately keep the all-zero provenance a LEGACY record has, which is
+     * what lets the Python side assert the 'unknown' rendering on the same fixture. */
+    {
+        epi_record_t rec;
+        episodic_fill(&rec, 600, "semantic recall turn", EPI_ACT_CONTROL_IN, EPI_OUT_OK, 0, "answered");
+        rec.recall_kind = EPI_RECALL_SEMANTIC; rec.recall_src_seq = 4242u; rec.recall_cos_x1000 = 713u;
+        epi_store_append(&s, &rec);
+
+        episodic_fill(&rec, 700, "near miss turn", EPI_ACT_CONTROL_IN, EPI_OUT_OK, 0, "un-augmented");
+        rec.recall_kind = EPI_RECALL_NONE; rec.recall_src_seq = 0u; rec.recall_cos_x1000 = 494u;
+        epi_store_append(&s, &rec);
+    }
+
     uint32_t total = s.hdr.total_entries;
     size_t region = (size_t)(1 + total) * 512;   /* header sector + `total` record sectors */
 
@@ -656,6 +672,92 @@ static void test_local_no_shadow(void)
     PASS("local no-shadow: a rendered answer is stored and auditable, but never recalled");
 }
 
+/* T13 (2026-08-01): recall provenance — the three fields carved out of the former pad[24].
+ *
+ * Three things have to hold, and the third is the one that is easy to get wrong:
+ *   (a) the record is STILL exactly 512 B and the provenance sits at the pinned offsets;
+ *   (b) a round-trip through append/read preserves all three field-exactly;
+ *   (c) a LEGACY record — pad all-zero, as every record written before this change has —
+ *       still parses, and reads back as kind 0 / src 0 / cos 0. That is the ambiguous case
+ *       (see episodic_store.h): it means "no recall" OR "predates the field", and nothing
+ *       here may pretend otherwise. The test pins that it PARSES, not that it means "none".
+ */
+static void test_recall_provenance(void)
+{
+    /* (a) layout — the record must not have grown, and the fields must be where the on-disk
+     * contract says. The _Static_asserts in the header already fail the BUILD on a violation;
+     * these restate it at runtime so a reader of the test sees the contract too. */
+    ASSERT(sizeof(epi_record_t) == 512, "record still exactly 512 B after adding provenance");
+    ASSERT(offsetof(epi_record_t, recall_kind) == 488, "recall_kind @488");
+    ASSERT(offsetof(epi_record_t, recall_src_seq) == 489, "recall_src_seq @489");
+    ASSERT(offsetof(epi_record_t, recall_cos_x1000) == 493, "recall_cos_x1000 @493");
+    ASSERT(sizeof(((epi_record_t *)0)->pad) == 17, "pad shrank 24 -> 17 (7 B consumed)");
+
+    memset(mock_disk, 0, sizeof(mock_disk));
+    epi_store_t s;
+    ASSERT(epi_store_init(&s, mock_read, mock_write, EPI_STORE_BASE_LBA,
+                          EPI_STORE_MAX_ENTRIES) == 0, "init should succeed");
+
+    /* (b) round-trip. Three shapes that matter operationally:
+     *   0: a semantic HIT     — kind 2, a real source seq, a cosine above the floor
+     *   1: a below-floor MISS — kind 0 but a NON-ZERO cosine; this is the shape that makes a
+     *      near-miss readable off the store, and the shape that disambiguates a post-change
+     *      record from a legacy one
+     *   2: an exact-key HIT   — kind 1, a source seq, cosine 0 (no embedding ran) */
+    struct { uint8_t kind; uint32_t src; uint16_t cos; } want[3] = {
+        { EPI_RECALL_SEMANTIC, 4242u, 713u },
+        { EPI_RECALL_NONE,        0u, 494u },   /* boot 48's real near-miss value */
+        { EPI_RECALL_EXACT,      17u,   0u },
+    };
+    for (int i = 0; i < 3; i++) {
+        epi_record_t rec;
+        episodic_fill(&rec, (uint32_t)(2000 + i), "provenance probe",
+                      EPI_ACT_CONTROL_IN, EPI_OUT_OK, 0, "an answer");
+        rec.recall_kind      = want[i].kind;
+        rec.recall_src_seq   = want[i].src;
+        rec.recall_cos_x1000 = want[i].cos;
+        ASSERT(epi_store_append(&s, &rec) == 0, "append with provenance should succeed");
+    }
+    for (int i = 0; i < 3; i++) {
+        epi_record_t r;
+        ASSERT(epi_store_read(&s, (uint32_t)i, &r) == 0, "read back should succeed");
+        ASSERT(r.recall_kind == want[i].kind, "recall_kind survives the round-trip");
+        ASSERT(r.recall_src_seq == want[i].src, "recall_src_seq survives the round-trip");
+        ASSERT(r.recall_cos_x1000 == want[i].cos, "recall_cos_x1000 survives the round-trip");
+    }
+    /* The miss carries a cosine — the property the field exists for. Asserted explicitly
+     * because a "provenance round-trips" test would pass even if the writer only ever set
+     * the cosine on a hit, which would silently lose every near-miss. */
+    {
+        epi_record_t r;
+        ASSERT(epi_store_read(&s, 1, &r) == 0, "read back the miss");
+        ASSERT(r.recall_kind == EPI_RECALL_NONE && r.recall_cos_x1000 == 494u,
+               "a below-floor MISS still records how close it came (kind 0, cos 494)");
+    }
+
+    /* (c) LEGACY record: pad all-zero, exactly as every pre-2026-08-01 record on disk is.
+     * episodic_fill memsets, so filling and NOT touching the provenance reproduces that
+     * byte pattern precisely. It must still append, read back, and decode as all-zero. */
+    {
+        epi_record_t legacy;
+        episodic_fill(&legacy, 3000u, "written before the field existed",
+                      EPI_ACT_CONTROL_IN, EPI_OUT_OK, 0, "an older answer");
+        ASSERT(legacy.recall_kind == 0 && legacy.recall_src_seq == 0
+               && legacy.recall_cos_x1000 == 0,
+               "episodic_fill zeroes provenance — a legacy record's exact byte pattern");
+        ASSERT(epi_store_append(&s, &legacy) == 0, "legacy-shaped record still appends");
+        epi_record_t r;
+        ASSERT(epi_store_read(&s, 3, &r) == 0, "legacy-shaped record still reads back");
+        ASSERT(r.recall_kind == 0 && r.recall_src_seq == 0 && r.recall_cos_x1000 == 0,
+               "legacy record decodes as all-zero provenance (AMBIGUOUS: none or pre-field)");
+        ASSERT(r.query_len == (uint16_t)strlen("written before the field existed"),
+               "and the rest of the legacy record is untouched by the schema change");
+    }
+
+    PASS("recall provenance: 512 B held, offsets pinned, hit/miss/exact round-trip, "
+         "a MISS keeps its cosine, and a legacy all-zero record still parses");
+}
+
 int main(int argc, char **argv)
 {
     if (argc >= 3 && strcmp(argv[1], "--dump") == 0)
@@ -674,6 +776,7 @@ int main(int argc, char **argv)
     test_two_instances_no_collision();
     test_index_no_shadow();
     test_local_no_shadow();
+    test_recall_provenance();
 
     printf("\nResults: %d PASS, %d FAIL\n", tests_passed, tests_failed);
     return tests_failed > 0 ? 1 : 0;

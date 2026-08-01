@@ -27,6 +27,26 @@ FIXTURE = [
     (300, "DELETE everything", 1, "CACHE", 1, "ERROR", 1, None),
     (400, "what time is it",   2, "INFER", 0, "OK",    0, "noon"),
     (500, "PING",              1, "CACHE", 0, "OK",    2, "pong"),
+    (600, "semantic recall turn", 3, "CONTROLIN", 0, "OK", 0, "answered"),
+    (700, "near miss turn",       3, "CONTROLIN", 0, "OK", 0, "un-augmented"),
+]
+
+# Recall provenance (2026-08-01), indexed to FIXTURE above:
+#   (recall_kind, recall_kind_name, recall_src_seq, recall_cos_x1000)
+# Records 0..4 carry the all-zero block a LEGACY record has, so they must render as
+# 'unknown' — NOT 'none'. That distinction is the whole point of §4: the same bytes mean
+# "did not recall" and "written before the field existed", and the parser must not pick one.
+# Record 5 is a semantic hit; record 6 is a below-floor MISS that still carries its cosine,
+# which is both the field's reason for existing and the thing that proves a record is
+# post-change (any non-zero byte in the block disambiguates it from a legacy record).
+FIXTURE_PROV = [
+    (0, "unknown",  0,    0),
+    (0, "unknown",  0,    0),
+    (0, "unknown",  0,    0),
+    (0, "unknown",  0,    0),
+    (0, "unknown",  0,    0),
+    (2, "semantic", 4242, 713),
+    (0, "miss",     0,    494),
 ]
 
 # ---- decision-cache parity: reimplement cache_normalize_query + cache_hash ----
@@ -134,6 +154,28 @@ def main():
             check(r['query_key'] == expect_key,
                   f"rec{i} query_key == fnv1a(normalize(query)) "
                   f"(got 0x{r['query_key']:016X}, want 0x{expect_key:016X})")
+            # Recall provenance (2026-08-01) — the C writer's bytes decoded at the pinned
+            # offsets. This is the half of the round-trip that proves the Python offsets
+            # (488/489/493) agree with the C _Static_asserts.
+            pk, pname, psrc, pcos = FIXTURE_PROV[i]
+            check(r['recall_kind'] == pk, f"rec{i} recall_kind == {pk} (got {r['recall_kind']})")
+            check(r['recall_src_seq'] == psrc,
+                  f"rec{i} recall_src_seq == {psrc} (got {r['recall_src_seq']})")
+            check(r['recall_cos_x1000'] == pcos,
+                  f"rec{i} recall_cos_x1000 == {pcos} (got {r['recall_cos_x1000']})")
+            check(r['recall_kind_name'] == pname,
+                  f"rec{i} recall_kind_name == {pname!r} (got {r['recall_kind_name']!r})")
+
+        # §4 teeth, asserted once rather than per record: a LEGACY all-zero block must render
+        # 'unknown', NEVER 'none'. Reading those bytes as "this turn did not recall" would be a
+        # false claim about every record written before 2026-08-01 — and boot 46 genuinely had
+        # recall=2, so some of those zeros ARE wrong.
+        check(all(recs[i]['recall_kind_name'] == 'unknown' for i in range(5)),
+              "legacy all-zero provenance renders 'unknown' (never asserts 'none')")
+        check(recs[6]['recall_kind_name'] == 'miss' and recs[6]['recall_cos_x1000'] == 494,
+              "a below-floor MISS renders 'miss' WITH its cosine — the near-miss made readable")
+        check(recs[6]['recall_kind'] == 0 and recs[6]['recall_kind_name'] != 'unknown',
+              "kind 0 + non-zero cosine is DISTINGUISHABLE from a legacy record")
 
     # ---- G4: wrapped region decodes oldest->newest (NOT raw slot order) ----
     # 4 record slots, total=6 (ring rolled twice), cursor=2 -> oldest is slot 2. A real store

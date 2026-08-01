@@ -27,6 +27,31 @@ EPI_STORE_MAGIC = 0x4A455049          # "JEPI"
 EPI_RECORD_SIZE = 512
 REC_FMT = '<IIQQHBBHH'                 # boot_id,seq,t_ms,query_key,action,outcome,feedback,query_len,resp_len
 REC_HDR_SIZE = struct.calcsize(REC_FMT)   # 32
+
+# Recall provenance (2026-08-01) — episodic_store.h carved 7 B out of the former pad[24].
+# Offsets mirror the C _Static_asserts: recall_kind @488, recall_src_seq @489, cos @493.
+EPI_PROV_OFF = 488
+REC_PROV_FMT = '<BIH'                     # kind(B) src_seq(I) cos(H) — packed, deliberately unaligned
+RECALL_KINDS = {0: 'none', 1: 'exact', 2: 'semantic'}
+
+
+def recall_kind_name(kind, src_seq, cos_x1000):
+    """Render provenance, distinguishing 'no recall' from 'record predates the field'.
+
+    A record written before 2026-08-01 has pad all-zero, which decodes as kind 0 — the SAME
+    bytes a genuine no-recall turn writes. That is genuinely ambiguous and there is deliberately
+    no version byte to resolve it (boot_id identifies the era). So an all-zero provenance block
+    renders 'unknown' rather than asserting 'none', because boot 46 really did have recall=2 and
+    some of those stored zeros are therefore wrong.
+
+    Going forward the ambiguity mostly evaporates on its own: a semantic MISS now stores a
+    non-zero cosine, so ANY non-zero byte in the block proves the record is post-change.
+    """
+    if kind == 0 and src_seq == 0 and cos_x1000 == 0:
+        return 'unknown'          # no recall, OR written before the field existed
+    if kind == 0:
+        return 'miss'             # lane ran, nothing cleared the floor — cos says how close
+    return RECALL_KINDS.get(kind, 'kind_%d' % kind)
 EPI_QUERY_OFF = 32
 EPI_QUERY_MAX = 200
 EPI_RESP_OFF = 232
@@ -95,6 +120,10 @@ def iter_records(data):
         r = min(resp_len, EPI_RESP_MAX)
         query = data[off + EPI_QUERY_OFF:off + EPI_QUERY_OFF + q].decode('utf-8', errors='replace')
         resp = data[off + EPI_RESP_OFF:off + EPI_RESP_OFF + r].decode('utf-8', errors='replace')
+        # Recall provenance (2026-08-01), carved out of the former pad[24]. Read at fixed offsets
+        # rather than extending REC_FMT, because REC_FMT deliberately covers only the 32-byte
+        # header and query/resp are already read positionally the same way.
+        rk_kind, rk_src, rk_cos = struct.unpack_from(REC_PROV_FMT, data, off + EPI_PROV_OFF)
         out.append({
             'boot_id': boot_id,
             'seq': seq,
@@ -109,6 +138,10 @@ def iter_records(data):
             'resp_len': resp_len,
             'query': query,
             'resp': resp,
+            'recall_kind': rk_kind,
+            'recall_kind_name': recall_kind_name(rk_kind, rk_src, rk_cos),
+            'recall_src_seq': rk_src,
+            'recall_cos_x1000': rk_cos,
         })
     return out
 
@@ -149,9 +182,33 @@ def main():
     print(f"  Sectors:   {len(data) // 512} read")
     print(f"  Records:   {len(recs)} decoded")
     print()
+    n_unknown = 0
     for e in recs:
+        # Provenance, rendered compactly and only when it says something. 'unknown' is the
+        # all-zero block (no recall OR pre-2026-08-01) and is left OFF the line to keep it
+        # readable — it is summarised below instead, so the ambiguity is stated once, loudly,
+        # rather than repeated on every historical record.
+        k = e['recall_kind_name']
+        if k == 'unknown':
+            n_unknown += 1
+            prov = ''
+        elif k == 'miss':
+            prov = f" recall=miss cos={e['recall_cos_x1000'] / 1000:.3f}"
+        elif k == 'semantic':
+            prov = (f" recall=semantic src={e['recall_src_seq']}"
+                    f" cos={e['recall_cos_x1000'] / 1000:.3f}")
+        else:
+            prov = f" recall={k} src={e['recall_src_seq']}"
         print(f"  [{e['boot_id']}:{e['seq']:05d}] {e['action_name']}/{e['outcome_name']} "
-              f"key=0x{e['query_key']:016X} q=\"{e['query']}\" r=\"{e['resp']}\"")
+              f"key=0x{e['query_key']:016X}{prov} q=\"{e['query']}\" r=\"{e['resp']}\"")
+    if n_unknown:
+        print()
+        print(f"  NOTE: {n_unknown} record(s) carry an all-zero provenance block, which is")
+        print("        AMBIGUOUS: either the turn recalled nothing, or it was written before")
+        print("        the provenance fields existed (2026-08-01). There is no version byte to")
+        print("        tell them apart — boot_id identifies the era. Records from the first boot")
+        print("        carrying this field onward are unambiguous, and any non-zero value in the")
+        print("        block (a miss now stores its cosine) proves a record is post-change.")
 
 
 if __name__ == '__main__':
