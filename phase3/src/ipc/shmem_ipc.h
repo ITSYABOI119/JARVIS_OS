@@ -114,6 +114,47 @@ typedef struct {
 _Static_assert(sizeof(shmem_ring_t) <= 4096,
     "shmem_ring_t must fit in a single 4KB page");
 
+/* ---- N2: the PB liveness-tick word ---------------------------------------------------------
+ *
+ * A monotonic uint32 living in the GENUINELY SPARE tail of the RESPONSE-ring page, directly
+ * after shmem_ring_t (64 B header + 15 x 256 B slots = 3904 B, leaving 192 B of the 4 KB frame
+ * that nothing has ever addressed). Chosen over a new frame because 4 bytes do not justify one,
+ * and over the header's padding words because the tail provably belongs to no protocol: the
+ * ring code never addresses past sizeof(shmem_ring_t). The page is already mapped BOTH
+ * directions in PA and PB regardless of JARVIS_EMBED, and on the response ring PB is the
+ * natural producer (PB-writes / PA-reads — the direction the tick needs).
+ *
+ * Contract (the embed_region publish discipline): PB RELEASE-stores a bump once per GENERATED
+ * token; PA ACQUIRE-loads only at window boundaries and compares with INEQUALITY ONLY (the
+ * counter wraps once per 2^32 tokens; ordering inverts at the wrap — pb_progress.h).
+ *
+ * The helpers are static inline and deliberately UNGATED: an uncalled static inline emits no
+ * code, so a JARVIS_PB_TICK=0 build is byte-identical without threading the flag into this
+ * header (which is also host-compiled by the shmem/host tests, where jarvis_debug.h may not
+ * be in the include set). All call sites live behind #if JARVIS_PB_TICK in main_x86.c /
+ * inference_server.c. The offset is DERIVED (sizeof), so both processes agree by construction;
+ * the asserts keep the word inside the page and off the ring. */
+#define PB_TICK_WORD_OFFSET (sizeof(shmem_ring_t))
+_Static_assert(sizeof(shmem_ring_t) + sizeof(uint32_t) <= 4096,
+    "PB liveness-tick word must fit in the response-ring page's spare tail");
+
+static inline volatile uint32_t *pb_tick_word(shmem_ring_t *ring)
+{
+    return (volatile uint32_t *)(void *)((uint8_t *)ring + PB_TICK_WORD_OFFSET);
+}
+/* Producer (PB): one bump per generated token. RELEASE so the token's effects are visible
+ * before the count that announces them. */
+static inline void pb_tick_bump(shmem_ring_t *ring)
+{
+    volatile uint32_t *w = pb_tick_word(ring);
+    __atomic_store_n(w, __atomic_load_n(w, __ATOMIC_RELAXED) + 1u, __ATOMIC_RELEASE);
+}
+/* Consumer (PA): ACQUIRE-load at window boundaries only. */
+static inline uint32_t pb_tick_read(shmem_ring_t *ring)
+{
+    return __atomic_load_n(pb_tick_word(ring), __ATOMIC_ACQUIRE);
+}
+
 /* Error codes */
 #define SHMEM_ERR_CRC      (-2)  /* CRC-32 mismatch on recv (SEC-020) */
 

@@ -665,6 +665,102 @@
 #error "JARVIS_ROUTE_VETO_PROBE must not ride JARVIS_KM2A_SPIKE (its own respawn loop)"
 #endif
 
+/* N2: the PB liveness tick (default 0 — the flip is a separate operator-supervised decision).
+ *
+ * THE PROBLEM. Every PB-touching per-query wait is the same 5,000,000-iteration budget
+ * (wait_for_response POLL_TIMEOUT, the workload inline poll, pa_ctrl_gate's poll_max, the
+ * wake lane's wpoll_max), and its wall-time is described only by an UNMEASURED "~60-120 s"
+ * comment. The M2 cap raise made the worst-case LEGITIMATE control-IN generation ~46 s
+ * (measured), and the #6 thinking-mode run had to transiently raise the budget for a ~100 s
+ * generation — so today a slow-but-alive generation is indistinguishable from a wedged PB,
+ * and three consecutive CTRL-lane misses restart PB mid-answer.
+ *
+ * THE LOCKED DIRECTION (backlog #7): a liveness tick, NOT a bigger timeout — a bigger
+ * timeout would blind the K/M2c wedge detector by exactly the margin it adds. PB
+ * RELEASE-stores a monotonic uint32 once per generated token (one aligned store per
+ * ~190M-cycle token = noise) into the spare tail of the RESPONSE-RING page (already mapped
+ * both directions, PB-writes/PA-reads, EMBED-independent; offset pinned by _Static_assert in
+ * shmem_ipc.h). On CTRL-lane window exhaustion PA ACQUIRE-loads it and asks pb_wait_decide()
+ * (host-pure, pb_progress.c): counter moved -> EXTEND (re-arm the window, windows_used++,
+ * NO miss); no movement -> TIMEOUT, exactly today's path (miss, KM2B_LANE_CTRL, everything).
+ * The comparison is INEQUALITY ONLY — the counter wraps once per 2^32 tokens and ordering
+ * inverts at the wrap (the embed_region seq lesson; host-pinned by test_pb_progress T3).
+ *
+ * SCOPE: the CONTROL-IN lane (KM2B_LANE_CTRL) wait ONLY. Heartbeat/shield/workload lanes and
+ * the K/M2c wedge-detection path are UNTOUCHED — the workload inference lane is the baseline
+ * for the whole historical performance record. A wedge makes no progress, gets no extension,
+ * and still times out in exactly today's budget (probe leg W proves it).
+ *
+ * PB_TICK_WINDOW_CAP bounds the pathological case: at most CAP extensions per wait, then
+ * TIMEOUT even with visible progress. cap==0 degenerates to exactly today's behaviour
+ * (always TIMEOUT — the KVM negative-control leg N). Requires CONTROL_IN (the lane). */
+#ifndef JARVIS_PB_TICK
+#define JARVIS_PB_TICK 0
+#endif
+#if JARVIS_PB_TICK && !JARVIS_CONTROL_IN
+#error "JARVIS_PB_TICK requires JARVIS_CONTROL_IN (the control-IN wait is the only lane it extends)"
+#endif
+/* Extension cap: 8 x the measured window must comfortably cover 250 tokens at the SLOWEST
+ * measured rate (sanity-checked against the leg-M1/M2 numbers in the N2 Commit-2 record).
+ * #ifndef-guarded so the leg-N negative control can build with the cap forced to 0. */
+#ifndef PB_TICK_WINDOW_CAP
+#define PB_TICK_WINDOW_CAP 8u
+#endif
+
+/* N2 probe (box/KVM-only, default 0; its own flag, the per-probe precedent; requires TICK).
+ * The VALUE is a MODE (the WAKE_PROBE/CONTROL_IN_PROBE precedent): 1 = legs M1/M2/E/W in
+ * sequence; 2 = leg N ONLY (build with PB_TICK_WINDOW_CAP forced 0 — the negative control).
+ * Legs (staged control-IN queries via build_probe_jctl + ctrl_roundtrip_sync, seqs from
+ * g_ctrl_replay.seq_floor + 1, nonce seed VARIES per frame):
+ *   M1 rate      — RDTSC across a normal INFER wait: iterations, wall-ms, ms/iteration.
+ *   M2 exhaust   — seL4_TCB_Suspend PB-main, dispatch, RDTSC to timeout = the FIRST measured
+ *                  wall-time of the full 5M-iteration budget; then RESUME + recover + verify
+ *                  the miss counter reset on the genuine ACK. ONE exhaustion only (threshold
+ *                  is 3); 0 [RESTART] asserted.
+ *   E extension  — window shrunk via a probe hook (the wpoll_max precedent) so a full-length
+ *                  generation spans multiple windows: [PBTICK] extend lines, the answer
+ *                  COMPLETES, 0 miss, 0 restart.
+ *   N negative   — same shrunk window, cap forced 0: TIMEOUT fires (today's behaviour under
+ *                  the tick build) — proving the EXTENSION saved leg E, not the probe.
+ *   W wedge      — PB suspended, tick ON, default windows: no progress -> NO extension ->
+ *                  timeout inside the leg-M2-measured budget (wedge detection not blinded).
+ *                  STRICTLY LAST among the suspend legs in sequence terms; each suspend leg
+ *                  RESUMES PB before the workload touches it, or the inference/hb/shield
+ *                  lanes would stack their own misses toward the threshold-3 restart. */
+#ifndef JARVIS_PB_TICK_PROBE
+#define JARVIS_PB_TICK_PROBE 0
+#endif
+#if JARVIS_PB_TICK_PROBE && !JARVIS_PB_TICK
+#error "JARVIS_PB_TICK_PROBE requires JARVIS_PB_TICK"
+#endif
+/* Cross-guards, each for a concrete interference: MONITOR_PROBE fires 2 real respawns (a
+ * respawn during a suspend leg is chaos); CONTROL_IN_PROBE resets the replay floor these
+ * seqs derive from and its mode 3 latches terminal g_pb_dead; EMBED_PROBE stages its own
+ * control-IN turns and mode 2 respawns mid-embed; RECALL_PROBE / ROUTING_PROBE /
+ * ROUTE_VETO_PROBE stage their own control-IN queries into the same lane; KM2A_SPIKE runs an
+ * N-cycle respawn loop while these legs deliberately suspend PB. */
+#if JARVIS_PB_TICK_PROBE && JARVIS_MONITOR_PROBE
+#error "JARVIS_PB_TICK_PROBE must not ride JARVIS_MONITOR_PROBE (2 real respawns)"
+#endif
+#if JARVIS_PB_TICK_PROBE && JARVIS_CONTROL_IN_PROBE
+#error "JARVIS_PB_TICK_PROBE must not ride JARVIS_CONTROL_IN_PROBE (resets the seq floor; mode 3 latches g_pb_dead)"
+#endif
+#if JARVIS_PB_TICK_PROBE && JARVIS_EMBED_PROBE
+#error "JARVIS_PB_TICK_PROBE must not ride JARVIS_EMBED_PROBE (its own staged turns; mode 2 respawns mid-embed)"
+#endif
+#if JARVIS_PB_TICK_PROBE && JARVIS_CONTROL_IN_RECALL_PROBE
+#error "JARVIS_PB_TICK_PROBE must not ride JARVIS_CONTROL_IN_RECALL_PROBE (both stage control-IN queries)"
+#endif
+#if JARVIS_PB_TICK_PROBE && JARVIS_ROUTING_PROBE
+#error "JARVIS_PB_TICK_PROBE must not ride JARVIS_ROUTING_PROBE (both stage control-IN queries)"
+#endif
+#if JARVIS_PB_TICK_PROBE && JARVIS_ROUTE_VETO_PROBE
+#error "JARVIS_PB_TICK_PROBE must not ride JARVIS_ROUTE_VETO_PROBE (both stage control-IN queries)"
+#endif
+#if JARVIS_PB_TICK_PROBE && JARVIS_KM2A_SPIKE
+#error "JARVIS_PB_TICK_PROBE must not ride JARVIS_KM2A_SPIKE (its own respawn loop vs deliberate suspends)"
+#endif
+
 /* C/M1b pre-fix induction probe (box/KVM-only, default 0). The two fail-closed branches on the
  * model-load path are UNREACHABLE on a healthy box (one model fits comfortably), so shipping them
  * untested would be shipping an unproven error path. The flag VALUE is a MODE (the WAKE_PROBE /

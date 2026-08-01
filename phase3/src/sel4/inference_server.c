@@ -771,6 +771,17 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
         if (next == 101 /* <channel|> */ && pb_close_at < 0) pb_close_at = n_gen;
 #endif
         output_ids[n_gen++] = next;
+#if JARVIS_PB_TICK
+        /* N2: the liveness tick — one RELEASE-store per GENERATED token into the response-ring
+         * page's spare tail (shmem_ipc.h). Bumped for EVERY lane's generation on purpose: PB
+         * serves one message at a time, so during PA's control-IN wait the only generation
+         * running is the control-IN one, and PA reads the word ONLY inside that wait — the
+         * workload lane's behaviour cannot change by PB writing a word nobody reads (§1.5).
+         * Placed AFTER the token is accepted, so a bump means a token genuinely landed; the
+         * eos/turn-end break above bumps nothing, which is correct — a finished answer stops
+         * ticking and a wait that outlives it times out on today's schedule. */
+        pb_tick_bump(response_ring);
+#endif
 #if JARVIS_DBG_PB
         {
             char gb[64] = "[PB] Generated token ";

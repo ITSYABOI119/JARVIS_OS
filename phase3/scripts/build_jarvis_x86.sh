@@ -183,6 +183,8 @@ AI_FILES=(
     # regenerating it invalidates the parity evidence and the probe-leg expectations.
     "route_veto.c"        "route_veto.h"
     "route_centroids.h"
+    # Phase 6 N2: the PB liveness-tick wait verdict (host-pure; call sites gated JARVIS_PB_TICK)
+    "pb_progress.c"       "pb_progress.h"
 )
 
 for f in "${AI_FILES[@]}"; do
@@ -714,7 +716,7 @@ if [ -f "$CMAKE_FILE" ]; then
     # JARVIS_EMBED calls them, and an ungated injection means the EMBED=0 build links the SAME
     # objects as EMBED=1. That is what makes the G1 main.c.obj comparison an identity test
     # rather than a link-set difference.
-    for _em in embed_store embed_project route_veto; do
+    for _em in embed_store embed_project route_veto pb_progress; do
         if ! grep -q "src/ai/$_em.c" "$CMAKE_FILE"; then
             sed -i "/src\/ai\/route.c/a\\    src/ai/$_em.c" "$CMAKE_FILE" 2>/dev/null
             if grep -q "src/ai/$_em.c" "$CMAKE_FILE"; then
@@ -905,6 +907,21 @@ if [ -f "$PB_CMAKE" ]; then
         fi
     else
         echo -e "  ${CYAN}OK${NC}  src/ai/threadpool_sel4.c already in sources"
+    fi
+    # Phase 6 N2: pb_progress.c into the PB source list too — BOTH lists, unconditionally (the
+    # route.c precedent). PB never calls pb_wait_decide (its half of the tick is the inline
+    # RELEASE bump from shmem_ipc.h), so the object links inert; injecting it anyway keeps the
+    # TICK=0 and TICK=1 builds linking the SAME object set on both targets, which is what makes
+    # the G1 OFF-object-identity comparison an identity test rather than a link-set difference.
+    if ! grep -q "src/ai/pb_progress.c" "$PB_CMAKE"; then
+        sed -i '/src\/ai\/qdot.c/a\    src/ai/pb_progress.c' "$PB_CMAKE"
+        if grep -q "src/ai/pb_progress.c" "$PB_CMAKE"; then
+            echo -e "  ${GREEN}ADDED${NC}  src/ai/pb_progress.c to jarvis-inference sources (N2)"
+        else
+            echo -e "  ${RED}FAILED${NC}  could not add pb_progress.c — edit PB CMakeLists manually"
+        fi
+    else
+        echo -e "  ${CYAN}OK${NC}  src/ai/pb_progress.c already in sources"
     fi
     if ! grep -q "JARVIS_SEL4_SMP" "$PB_CMAKE"; then
         sed -i '/target_compile_options(jarvis-inference/a\target_compile_definitions(jarvis-inference PRIVATE JARVIS_SEL4_SMP)' "$PB_CMAKE"

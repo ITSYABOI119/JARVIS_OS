@@ -78,6 +78,14 @@
 #include "action_audit.h"       /* Phase 6 K/M1: the raw-LBA action-audit store (flag-gated; JACT @ 21,120,000) */
 #include "km2b_trigger.h"       /* Phase 6 K/M2b-2: keyword-clean restart trigger builder (§5-E; host-tested) */
 #include "km2b_miss.h"          /* Phase 6 K/M2c: shared PB-contact miss-counter (hang/wedge detector; host-tested) */
+#include "pb_progress.h"        /* Phase 6 N2: the PB liveness-tick wait verdict. UNCONDITIONAL — the call
+                                 * sites are #if JARVIS_PB_TICK, but the header (an enum + one prototype)
+                                 * must be visible whenever the tick is on, which is INDEPENDENT of
+                                 * JARVIS_ROUTE_VETO/JARVIS_EMBED. An earlier draft nested this include under
+                                 * #if JARVIS_ROUTE_VETO and a PB_TICK=1/ROUTE_VETO=0 build failed to see
+                                 * PB_WAIT_EXTEND — the exact D1 nesting class the embed_region.h comment
+                                 * above warns about. The km2b_miss.h precedent: an unused declaration emits
+                                 * no code, so this is byte-neutral at PB_TICK=0. */
 #include "km2b_fault.h"         /* Phase 6 K/M4 pre-flip: fault-EP validity predicate (label+badge; host-tested) */
 #include "monitors.h"           /* Phase 6 6-1: pure watcher framework (threshold/debounce/delta/snapshot; host-tested) */
 #if JARVIS_WAKE
@@ -785,7 +793,7 @@ static int         g_ctrl_qvec_valid;
  * are derived from). With the old gate that combination could not link —
  * "undefined reference to build_probe_jctl" — so reuse-by-extension is the only
  * consistent resolution, and it is the same one M5-recall and 6-6/B/M1 took. */
-#if (JARVIS_CONTROL_IN_PROBE || JARVIS_CONTROL_IN_RECALL_PROBE || JARVIS_ROUTING_PROBE || JARVIS_EMBED_PROBE || JARVIS_ROUTE_VETO_PROBE)   /* M5-recall + 6-6/B/M1 + C/M2b + C/M4 reuse this staging */
+#if (JARVIS_CONTROL_IN_PROBE || JARVIS_CONTROL_IN_RECALL_PROBE || JARVIS_ROUTING_PROBE || JARVIS_EMBED_PROBE || JARVIS_ROUTE_VETO_PROBE || JARVIS_PB_TICK_PROBE)   /* M5-recall + 6-6/B/M1 + C/M2b + C/M4 + N2 reuse this staging */
 static void ctrl_put_be16(uint8_t *p, uint16_t v){ p[0]=(uint8_t)(v>>8); p[1]=(uint8_t)v; }
 static void ctrl_put_be32(uint8_t *p, uint32_t v){ p[0]=(uint8_t)(v>>24); p[1]=(uint8_t)(v>>16); p[2]=(uint8_t)(v>>8); p[3]=(uint8_t)v; }
 static void ctrl_put_be64(uint8_t *p, uint64_t v){ for(int i=0;i<8;i++) p[i]=(uint8_t)(v>>(56-8*i)); }
@@ -2581,6 +2589,19 @@ static int      g_embed_probe_interleaved = 0;   /* 1 = the request really was o
 static uint32_t g_veto_probe_embeds;
 #endif
 
+#if JARVIS_PB_TICK_PROBE
+/* N2 probe plumbing (never in a deploy build).
+ * g_pbtick_win_override — legs E/N shrink the WINDOW (the wpoll_max precedent) so a normal
+ *   generation spans several windows; 0 = the real window (legs M1/M2/W).
+ * g_pbtick_last_polls / g_pbtick_last_windows — pa_ctrl_gate exports how much of its final
+ *   window the wait consumed and how many extensions it granted, so leg M1 can report
+ *   iterations + wall-ms + ns/iteration and leg M2 can prove the exhaustion really spent the
+ *   full window. */
+static uint32_t g_pbtick_win_override  = 0;
+static uint32_t g_pbtick_last_polls    = 0;
+static uint32_t g_pbtick_last_windows  = 0;
+#endif
+
 static int pa_embed_request(const char *text, uint16_t text_len, float *out)
 {
     if (!g_embed_region_ready || !text || !out) return -1;
@@ -3976,6 +3997,21 @@ static void pa_ctrl_gate(const control_result_t *cres)
      * the full budget. Deploy-inert (PROBE=0). */
     { static int cin_route_n = 0; if (++cin_route_n == 2) poll_max = 2000; }
 #endif
+#if JARVIS_PB_TICK
+#if JARVIS_PB_TICK_PROBE
+    /* Legs E/N: shrink the WINDOW (not the total patience) so a full-length generation spans
+     * several windows and the extension path actually runs — the wpoll_max/cin_route_n probe
+     * precedent. 0 = no override (legs M1/M2/W run the real window). */
+    if (g_pbtick_win_override) poll_max = g_pbtick_win_override;
+#endif
+    /* N2 window accounting. `poll_max` is now the length of ONE window rather than the whole
+     * wait: on exhaustion, pb_wait_decide (host-pure, wrap-safe inequality) grants an EXTEND
+     * only when the token counter MOVED and fewer than PB_TICK_WINDOW_CAP extensions have been
+     * granted — a wedged PB makes no progress and still times out in exactly today's budget,
+     * so the K/M2c wedge detector is not blinded. ACQUIRE here pairs with PB's RELEASE bump. */
+    uint32_t tick_win_start = pb_tick_read(shared_response_ring);
+    uint32_t tick_windows   = 0;
+#endif
     while (!got && !faulted && polls < poll_max) {
         uint8_t pk_type; uint16_t pk_seq, pk_len; uint8_t pk_pay[SHMEM_MAX_PAYLOAD];
         while (shmem_ipc_recv(shared_response_ring, &pk_type, &pk_seq, pk_pay, &pk_len) == 0) {
@@ -3993,8 +4029,31 @@ static void pa_ctrl_gate(const control_result_t *cres)
         jarvis_telemetry_tick();
         if (pa_fault_check()) { faulted = 1; break; }   /* (§7.5a) self-heal funneled; break, NEVER goto */
         polls++;
+#if JARVIS_PB_TICK
+        /* N2: window boundary. EXTEND only re-arms the window (polls=0) — everything else falls
+         * out of the loop into today's timeout path byte-for-byte (the else branch below: miss,
+         * KM2B_LANE_CTRL, verdict=3 reply, never q_errors). prog= is a uint32 delta, wrap-safe. */
+        if (polls >= poll_max) {
+            uint32_t tick_now = pb_tick_read(shared_response_ring);
+            if (pb_wait_decide(tick_win_start, tick_now, tick_windows,
+                               PB_TICK_WINDOW_CAP) == PB_WAIT_EXTEND) {
+                tick_windows++;
+                puts_serial("[PBTICK] extend w="); put_dec(tick_windows);
+                puts_serial(" prog="); put_dec(tick_now - tick_win_start);
+                puts_serial("\n");
+                tick_win_start = tick_now;
+                polls = 0;
+            }
+        }
+#endif
         seL4_Yield();
     }
+#if JARVIS_PB_TICK && JARVIS_PB_TICK_PROBE
+    /* Probe visibility only: legs M1/M2 read back how much of the window the wait consumed and
+     * how many extensions were granted. Never compiled into a deploy build. */
+    g_pbtick_last_polls   = polls;
+    g_pbtick_last_windows = tick_windows;
+#endif
 #if JARVIS_ROUTING
     }   /* end if (!served_locally) — SYSFACTS/DECLINE skipped the whole PB dispatch above */
 #endif
@@ -7288,6 +7347,158 @@ static void *main_continued(void *arg UNUSED)
         puts_serial("[VETO-PROBE] SKIPPED (key/input/floor not ready)\n");
     }
 #endif /* JARVIS_ROUTE_VETO_PROBE */
+
+#if JARVIS_PB_TICK_PROBE
+    /* N2 probe. The VALUE is a MODE (the WAKE/CONTROL_IN_PROBE precedent):
+     *   mode 1 = legs M1 (rate) -> M2 (exhaustion = the FIRST measured wall-time of the full
+     *            budget, + recovery + miss-reset) -> E (extension under a shrunk window) ->
+     *            W (wedge unchanged: suspended PB gets NO extension and times out on the
+     *            default window, ~= M2) -> W-recover.
+     *   mode 2 = leg N ONLY (the negative control): the E scenario under a build whose
+     *            PB_TICK_WINDOW_CAP is forced 0 — TIMEOUT fires (today's behaviour reproduced
+     *            under the tick build), proving the EXTENSION saved leg E, not the probe.
+     *
+     * Every suspend leg RESUMES PB before anything else touches it. The probe owns the whole
+     * control flow here (the workload loop has not started and PA is single-threaded), so no
+     * other lane can stack misses toward the threshold-3 restart while PB is suspended. */
+    if (g_ctrl_key_ok && g_input_ready && g_ctrl_floor_ok) {
+        static uint8_t tkj[CONTROL_MSG_MAX], tkf[512];
+        control_result_t tkr;
+        uint64_t tk_t0, tk_ms;
+#if JARVIS_PB_TICK_PROBE == 1
+        seL4_CPtr tick_pb_tcb = inference_process.thread.tcb.cptr;   /* suspend legs only */
+        uint64_t m2_budget_ms = 0;
+#endif
+
+        #define PBTICK_SEND(TAG, NONCE, TEXT)                                                  \
+            do {                                                                               \
+                uint64_t sv  = g_ctrl_replay.seq_floor + 1u;                                   \
+                uint16_t jlv = build_probe_jctl(tkj, g_ctrl_key, sv, (NONCE), (TEXT));         \
+                int      flv = net_build_udp_broadcast(tkf, sizeof tkf, g_net.nic.mac,         \
+                                                       JARVIS_BOX_IP, 40000,                   \
+                                                       (uint16_t)CONTROL_PORT, tkj, jlv);      \
+                control_verdict_t vv = (flv > 0) ? ctrl_roundtrip_sync(tkf, (size_t)flv, &tkr) \
+                                                 : CV_DROP_PARSE;                              \
+                puts_serial("[PBTICK-PROBE] leg=" TAG " q=\""); puts_serial(TEXT);             \
+                puts_serial("\"\n");                                                           \
+                if (vv == CV_ACCEPT) {                                                         \
+                    pa_ctrl_gate(&tkr);                                                        \
+                    puts_serial("[PBTICK-PROBE] leg=" TAG " polls=");                          \
+                    put_dec(g_pbtick_last_polls);                                              \
+                    puts_serial(" windows="); put_dec(g_pbtick_last_windows);                  \
+                    puts_serial(" miss=");    put_dec(g_pb_miss.count);                        \
+                    puts_serial("\n");                                                         \
+                } else {                                                                       \
+                    puts_serial("[PBTICK-PROBE] leg=" TAG " FAIL frame not accepted verdict=");\
+                    put_dec((uint32_t)vv); puts_serial("\n");                                  \
+                }                                                                              \
+            } while (0)
+
+        puts_serial("[PBTICK-PROBE] start mode="); put_dec((uint32_t)JARVIS_PB_TICK_PROBE);
+        puts_serial(" cap="); put_dec((uint32_t)PB_TICK_WINDOW_CAP);
+        puts_serial("\n");
+
+#if JARVIS_PB_TICK_PROBE == 1
+        /* Leg M1 — rate. A NORMAL full-length INFER wait on the REAL window: iterations the
+         * wait consumed + wall-ms + ns/iteration. The wall includes the input-process round
+         * trip (sub-second) and the generation itself — the CLEAN per-iteration number comes
+         * from M2, whose exhausted window is pure polling. */
+        tk_t0 = jarvis_uptime_ms();
+        PBTICK_SEND("M1-rate", 0xA1, "what is a page fault?");
+        tk_ms = jarvis_uptime_ms() - tk_t0;
+        puts_serial("[PBTICK-PROBE] leg=M1-rate wall_ms="); put_dec((uint32_t)tk_ms);
+        if (g_pbtick_last_polls > 0) {
+            puts_serial(" ns_per_iter~=");
+            put_dec((uint32_t)(tk_ms * 1000000ull / g_pbtick_last_polls));
+        }
+        puts_serial("\n");
+
+        /* Leg M2 — exhaustion: the FIRST measured wall-time of the full 5,000,000-iteration
+         * budget. PB-main suspended (the pa_restart_pb suspend precedent), so the window is
+         * pure poll loop: no response, no ticks, no progress -> pb_wait_decide says TIMEOUT
+         * with ZERO extensions, in exactly today's time. ONE exhaustion = ONE miss (threshold
+         * is 3) — asserted via the miss= print; [RESTART] must stay 0 for the whole boot. */
+        {
+            uint32_t m2_miss_before = g_pb_miss.count;
+            seL4_TCB_Suspend(tick_pb_tcb);
+            tk_t0 = jarvis_uptime_ms();
+            PBTICK_SEND("M2-exhaust", 0xB2, "what is a mutex in one line");
+            m2_budget_ms = jarvis_uptime_ms() - tk_t0;
+            seL4_TCB_Resume(tick_pb_tcb);
+            puts_serial("[PBTICK-PROBE] leg=M2-exhaust budget_ms="); put_dec((uint32_t)m2_budget_ms);
+            if (g_pbtick_last_polls > 0) {
+                puts_serial(" ns_per_iter=");
+                put_dec((uint32_t)(m2_budget_ms * 1000000ull / g_pbtick_last_polls));
+            }
+            puts_serial(" miss_before="); put_dec(m2_miss_before);
+            puts_serial("\n");
+        }
+        /* Recovery: PB resumed, a real query must answer and the genuine ACK must RESET the
+         * miss counter (miss= in the leg line must read 0). */
+        PBTICK_SEND("M2-recover", 0xC3, "explain paging in one line");
+
+        /* Leg E — extension. THE WINDOW IS SIZED IN ITERATION-SPACE, not as a fraction of the
+         * 5M budget — and that distinction is the boot-1 finding: a LIVE generation yields the
+         * core to PB every iteration, so it accrues poll-iterations ~700x slower than a pure
+         * spin (measured: this exact query completed in ~62,000 iterations of live generation,
+         * while a wedged PB reaches the full 5,000,000 in 5.79 s). A T/4 = 1.25M window is still
+         * ~20x the whole generation, so it never reaches a boundary. 20,000 iterations puts ~3
+         * window boundaries inside the ~62k-iteration generation -> expect [PBTICK] extend
+         * w=1..3, the answer COMPLETES through the normal exit, 0 new miss, 0 restart. And
+         * 8 x 20,000 = 160,000 > the ~154,000-iteration budget of a full 250-token answer, so
+         * the cap still comfortably covers a max-length answer (the §3 sanity-check, now against
+         * MEASURED iteration counts). Route-verified INFER on the host. */
+        g_pbtick_win_override = 20000u;
+        PBTICK_SEND("E-extend", 0xD4,
+                    "explain each step the OS performs to resolve a page fault, one sentence per step");
+        g_pbtick_win_override = 0;
+
+        /* Leg W — wedge detection provably unchanged: PB suspended again, tick ON, DEFAULT
+         * window. No progress -> NO extension (windows= must read 0) -> timeout in the
+         * leg-M2-measured budget (compare wedge_ms to budget_ms; expect within ~10%). */
+        {
+            seL4_TCB_Suspend(tick_pb_tcb);
+            tk_t0 = jarvis_uptime_ms();
+            PBTICK_SEND("W-wedge", 0xE5, "what is a semaphore in one line");
+            tk_ms = jarvis_uptime_ms() - tk_t0;
+            seL4_TCB_Resume(tick_pb_tcb);
+            puts_serial("[PBTICK-PROBE] leg=W-wedge wedge_ms="); put_dec((uint32_t)tk_ms);
+            puts_serial(" m2_budget_ms="); put_dec((uint32_t)m2_budget_ms);
+            puts_serial("\n");
+        }
+        /* Clear W's miss + leave the boot healthy for the trailing workload windows. */
+        PBTICK_SEND("W-recover", 0xF6, "what is a file descriptor in one line");
+#endif /* mode 1 */
+
+#if JARVIS_PB_TICK_PROBE == 2
+        /* Leg N — the negative control. The SAME E-class query and the SAME 20,000-iteration
+         * window as leg E, but this build forces PB_TICK_WINDOW_CAP=0, so pb_wait_decide's
+         * degenerate makes every exhaustion a TIMEOUT: the generation (~62k iterations) hits the
+         * first 20,000-iteration boundary, and with cap 0 there is no extension -> TIMEOUT
+         * (today's behaviour reproduced UNDER the tick build), one miss, verdict=3 reply, 0
+         * restart. Identical scenario to leg E MINUS the extension, so it isolates the extension
+         * as the thing that saved E — not the probe plumbing. */
+        g_pbtick_win_override = 20000u;
+        tk_t0 = jarvis_uptime_ms();
+        PBTICK_SEND("N-cap0", 0xA7,
+                    "explain each step the OS performs to resolve a page fault, one sentence per step");
+        tk_ms = jarvis_uptime_ms() - tk_t0;
+        g_pbtick_win_override = 0;
+        puts_serial("[PBTICK-PROBE] leg=N-cap0 wall_ms="); put_dec((uint32_t)tk_ms);
+        puts_serial(" (cap 0: TIMEOUT at the first 20k-iter boundary; the SAME window leg E extended)\n");
+        /* Recovery: the tick build must still serve after a cap-0 timeout (PB was never
+         * suspended here — it is mid-generation when the window expires, exactly leg E's
+         * scenario minus the extension). */
+        PBTICK_SEND("N-recover", 0xB8, "explain paging in one line");
+#endif /* mode 2 */
+
+        puts_serial("[PBTICK-PROBE] done miss="); put_dec(g_pb_miss.count);
+        puts_serial("\n");
+        #undef PBTICK_SEND
+    } else {
+        puts_serial("[PBTICK-PROBE] SKIPPED (key/input/floor not ready)\n");
+    }
+#endif /* JARVIS_PB_TICK_PROBE */
 #endif /* JARVIS_CONTROL_IN */
 
     while (1) {
