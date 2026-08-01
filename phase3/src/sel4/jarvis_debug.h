@@ -667,13 +667,23 @@
 
 /* N2: the PB liveness tick (default 0 — the flip is a separate operator-supervised decision).
  *
- * THE PROBLEM. Every PB-touching per-query wait is the same 5,000,000-iteration budget
- * (wait_for_response POLL_TIMEOUT, the workload inline poll, pa_ctrl_gate's poll_max, the
- * wake lane's wpoll_max), and its wall-time is described only by an UNMEASURED "~60-120 s"
- * comment. The M2 cap raise made the worst-case LEGITIMATE control-IN generation ~46 s
- * (measured), and the #6 thinking-mode run had to transiently raise the budget for a ~100 s
- * generation — so today a slow-but-alive generation is indistinguishable from a wedged PB,
- * and three consecutive CTRL-lane misses restart PB mid-answer.
+ * THE ORIGINAL PROBLEM STATEMENT (backlog #7): every PB-touching per-query wait is the same
+ * 5,000,000-iteration budget (wait_for_response POLL_TIMEOUT, the workload inline poll,
+ * pa_ctrl_gate's poll_max, the wake lane's wpoll_max), whose wall-time was documented only as
+ * an UNMEASURED "~60-120 s" — and the fear was that a slow-but-alive generation would be
+ * indistinguishable from a wedged PB and get restarted mid-answer (three consecutive CTRL-lane
+ * misses restart PB).
+ *
+ * WHAT N2 THEN MEASURED (KVM -smp 6, 2026-08-02), which CHANGES that premise: a WEDGED PB
+ * exhausts the full 5M iterations in ~5.9 s (PA spinning, ~1.18 us/iter), while a LIVE
+ * generation accrues iterations ~700x slower (~0.85 ms/iter — each seL4_Yield hands core 0 to
+ * PB) and would need ~70 minutes to exhaust the budget. So at the CURRENT budget a live
+ * generation and a wedge are NOT indistinguishable — the wedge reaches 5M, a live generation
+ * never comes close. The tick built here is therefore SAFE INSURANCE, not a live-defect fix
+ * (it never blinds wedge detection — a wedge makes no progress, gets no extension, times out
+ * on today's budget). It becomes LOAD-BEARING only if the core-sharing accident that scales
+ * the budget is broken (a dedicated PA core, or a deliberately shrunk budget) — see the
+ * CLAUDE.md JARVIS_PB_TICK flag row for the flip criteria. The "~60-120 s" estimate is retired.
  *
  * THE LOCKED DIRECTION (backlog #7): a liveness tick, NOT a bigger timeout — a bigger
  * timeout would blind the K/M2c wedge detector by exactly the margin it adds. PB

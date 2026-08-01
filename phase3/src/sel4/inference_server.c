@@ -281,10 +281,16 @@ static void pb_log_num(const char *prefix, uint32_t val, const char *suffix)
  *   - at the WORST observed density, 250 x 5.66 = 1415 <= 1426, so even a maximally dense answer
  *     fits the frame; a token cap chosen from the MEAN would overflow it
  *   - latency at the measured 5.46 tok/s: 250 / 5.46 = ~46 s WORST CASE
- *   - control-IN's poll budget is documented ~60-120 s and is UNMEASURED, so 46 s was chosen to
- *     fit under the PESSIMISTIC end of that range. Sizing to fit the worst reading of an
- *     unmeasured bound is deliberate: it makes measuring it unnecessary for this decision
- *     rather than betting on the optimistic end.
+ *   - control-IN's poll budget was, WHEN 250 WAS CHOSEN, documented only as an UNMEASURED
+ *     "~60-120 s", so 46 s was chosen to fit under the pessimistic end of that estimate — sizing
+ *     to the worst reading of an unmeasured bound, deliberately, to make measuring it unnecessary
+ *     for THIS decision. N2 (2026-08-02) then MEASURED the budget (KVM -smp 6): the 5M-iteration
+ *     poll loop exhausts in ~5.9 s when PB is WEDGED and PA spins, and a LIVE generation accrues
+ *     iterations ~700x slower (it yields core 0 to PB every iteration) so it could not
+ *     realistically exhaust the budget at all. That MOOTS the timeout-fit rationale above — the
+ *     46 s answer sits far inside any live budget — and leaves the MTU ceiling (1426 B) as the
+ *     one binding constraint on the cap, which it always was. (KVM-measured; bare-metal wall-time
+ *     is a recorded carry-forward. See the JARVIS_PB_TICK flag row.)
  *
  * This is a CEILING, not a fixed cost. Since the loop now stops on the model's declared
  * end-of-turn, a short factual answer still returns in a few seconds; the cap only binds the long

@@ -1077,11 +1077,13 @@ static int        g_pb_dead = 0;                /* §5-F: crash-loop bound hit -
 #endif
 
 /* §5-F degraded-mode gate: when the crash-loop bound has tripped (g_pb_dead), PA must STOP
- * dispatching to the dead/wedged PB — otherwise every PB-contact iteration burns a ~60-120 s
- * timeout, inflates q_errors, and churns the K/M2c miss-counter, making the "cache-only, PB
- * dispatch STOPPED" log a lie. This makes it TRUE: a cache HIT still serves; a cache MISS / HB /
- * shield is simply not sent. OFF (JARVIS_ACTIONS=0) has no degraded state -> always 1 -> the
- * compiler folds the guard out -> deployed path byte-identical. */
+ * dispatching to the dead/wedged PB — otherwise every PB-contact iteration burns a full poll-
+ * budget timeout (N2-measured ~5.9 s in KVM against a dead/wedged PB, when PA spins the 5M-
+ * iteration loop; bare-metal wall-time is a carry-forward), inflates q_errors, and churns the
+ * K/M2c miss-counter, making the "cache-only, PB dispatch STOPPED" log a lie. This makes it TRUE:
+ * a cache HIT still serves; a cache MISS / HB / shield is simply not sent. OFF (JARVIS_ACTIONS=0)
+ * has no degraded state -> always 1 -> the compiler folds the guard out -> deployed path
+ * byte-identical. */
 #if JARVIS_ACTIONS
 #define PB_DISPATCH_OK()  (!g_pb_dead)
 #else
@@ -3690,8 +3692,9 @@ static void pa_ctrl_gate(const control_result_t *cres)
     /* §5-F degraded gate (the wake-lane leg at :5783 this function omitted — a D1-class
      * regression, the SAME miss as K/M2c D1). Once the crash-loop bound latches g_pb_dead, do
      * NOT dispatch into a dead PB: pa_fault_check() returns 0 immediately under g_pb_dead, so a
-     * send here would burn the FULL ~60-120 s poll_max per inbound frame and stall the whole
-     * workload loop, making the "PB dispatch STOPPED" log a lie. Suppress ONLY the route — the
+     * send here would burn the FULL poll_max per inbound frame (N2-measured ~5.9 s in KVM against
+     * a dead/wedged PB; bare-metal wall-time is a carry-forward) and stall the whole workload
+     * loop, making the "PB dispatch STOPPED" log a lie. Suppress ONLY the route — the
      * QS_REFUSE branch above already ran + audited (it touches no PB state); honest FAIL, audited
      * EXECUTED/FAIL to mirror the wake lane's degraded semantics. Placed BEFORE the duty fold so
      * no window opens, no F9 drain / preamble-clear runs, no g_ctrl_route_seq is consumed. Folds
@@ -6731,7 +6734,8 @@ static void *main_continued(void *arg UNUSED)
         /* FINAL leg — STRICTLY LAST (g_pb_dead is a TERMINAL latch that kills ALL PB dispatch for
          * the rest of the boot; sequencing it before the route/refuse legs would starve them — the
          * 6-3/M1 "B5 terminal latch LAST" lesson). Induce degraded, then a benign frame proves the
-         * §5-F gate SUPPRESSES the route (no dispatch, no ~60-120 s stall). The workload then runs
+         * §5-F gate SUPPRESSES the route (no dispatch, no full poll-budget stall — N2-measured
+         * ~5.9 s in KVM against a dead/wedged PB). The workload then runs
          * cache-only with q_infer frozen (the degraded steady state). PB stays ALIVE; PA just stops
          * dispatching (the WAKE_PROBE mode-2 latch semantics, :5393). */
         g_pb_dead = 1;
@@ -7717,11 +7721,13 @@ static void *main_continued(void *arg UNUSED)
             /* §5-F: ALWAYS guard the PB dispatch (D1: unconditional, NOT nested in #if
              * JARVIS_CACHE_GROWTH — an ACTIONS=1 CACHE_GROWTH=0 build must ALSO skip dispatch to a
              * dead PB after g_pb_dead trips). A cache MISS is simply not served: no dead-PB send,
-             * no ~60-120 s timeout, no q_error, no miss churn. PB_DISPATCH_OK() is a compile-time 1
+             * no full poll-budget timeout (N2-measured ~5.9 s in KVM against a dead/wedged PB), no
+             * q_error, no miss churn. PB_DISPATCH_OK() is a compile-time 1
              * when JARVIS_ACTIONS=0 -> the guard folds out -> byte-identical. */
             /* C/M1b pre-fix: REFUSE inference on a model we know is unusable — partial map (serving
              * from garbage weights) or a truncated frame allocation (PB is model-less, so a send
-             * would only buy a ~60-120 s poll timeout per query). Folded into the SAME lane
+             * would only buy a full poll-budget timeout per query — N2-measured ~5.9 s in KVM
+             * against a model-less/wedged PB). Folded into the SAME lane
              * condition as §5-F rather than added as a later bail-out, for two reasons: q_infer++
              * is the very next line, so a later guard would report inferences that never ran (the
              * KVM probe caught exactly that), and this inherits §5-F's semantics verbatim — a cache
@@ -7883,9 +7889,13 @@ static void *main_continued(void *arg UNUSED)
 
             /* Wait for Process B response with timeout.
              * PA and PB at equal priority — seL4_Yield gives PB CPU time.
-             * Timeout after 5M polls (~60-120s on bare metal) prevents
-             * permanent hang if PB crashes (fault goes to fault endpoint,
-             * not resp_notif, so seL4_Wait would block forever). */
+             * Timeout after 5M polls — N2-measured (KVM -smp 6, 2026-08-02): the 5M-iteration
+             * loop exhausts in ~5.9 s when PB is WEDGED and PA spins (~1.18 us/iter); a LIVE
+             * generation accrues iterations ~700x slower because each iteration yields core 0 to
+             * PB, so it completes long before the budget. (The prior "~60-120 s on bare metal"
+             * here was an UNMEASURED estimate and is retired; bare-metal wall-time is a recorded
+             * carry-forward.) The timeout prevents a permanent hang if PB crashes (fault goes to
+             * the fault endpoint, not resp_notif, so seL4_Wait would block forever). */
             char full_response[512];
             int resp_offset = 0;
             {
