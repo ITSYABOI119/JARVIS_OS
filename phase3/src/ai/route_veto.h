@@ -156,15 +156,22 @@ int route_veto_should(const float *v128, route_class_t kw_cls);
  * Verify the compiled ROUTE_CENTROIDS against the generator's npz-derived
  * ROUTE_CENTROIDS_XOR.
  *
- * Returns 0 on match, non-zero on mismatch.
+ * Returns 1 when the centroids are INTACT, 0 when they are not.
  *
- * NOTE THE POLARITY. This is 0-is-good, the opposite of embed_project.h's
- * embed_mu_verify() (1-is-good). The two are not interchangeable and a
- * copy-pasted `if (!verify())` from one to the other inverts the gate — which
- * fails OPEN, the direction that matters. The polarity here is deliberate (0 ==
- * OK is this file's locked API) and is pinned by test_route_veto.c.
+ * THE NAME AND THE POLARITY ARE BOTH DELIBERATE, and this is the second draft.
+ * The first was `route_veto_centroids_verify()` returning 0-on-OK — which is the
+ * OPPOSITE of its only sibling, embed_project.h's embed_mu_verify() (1-on-OK).
+ * Two XOR self-verifiers with inverted polarity, destined for adjacent call sites
+ * in the same init block, is a latent fail-OPEN: a copy-pasted `if (!verify())`
+ * between them proceeds to veto with corrupted centroids. That was caught before
+ * the first caller existed, so the fix was free; it is recorded here because the
+ * hazard is invisible once both call sites read naturally.
  *
- * THE CALLER MUST REFUSE TO VETO ON A NON-ZERO RETURN. A corrupted centroid is
+ * `_ok()` rather than `_verify()` because the name now states the polarity: a
+ * reader of `if (!route_veto_centroids_ok())` cannot get it backwards, whereas
+ * `if (!..._verify())` reads correct under either convention.
+ *
+ * THE CALLER MUST REFUSE TO VETO WHEN THIS RETURNS 0. A corrupted centroid is
  * not a degraded router, it is a silently WRONG one: every number above was
  * measured against these exact vectors, so different bits mean a different
  * decision boundary while the docs still claim the old one. Falling back to the
@@ -173,7 +180,8 @@ int route_veto_should(const float *v128, route_class_t kw_cls);
  *
  * WHY THIS IS SEPARATE FROM route_veto_should RATHER THAN CHECKED PER CALL (the
  * embed_project.c pattern is per-call, so the deviation is deliberate): a
- * per-call verify would have to fail by returning 0 — "no veto" — which is
+ * per-call check would have to fail by returning 0 from route_veto_should — "no
+ * veto" — which is
  * INDISTINGUISHABLE from the common, healthy answer. Corruption would present as
  * "the veto quietly stopped helping". Gated once at init, corruption presents as
  * a refused lane the operator can see, which is the C/M2b embed_mu_verify()
@@ -184,6 +192,6 @@ int route_veto_should(const float *v128, route_class_t kw_cls);
  * route_class_t order with _Static_asserts, which is a compile-time check and
  * strictly stronger than a runtime one.
  */
-int route_veto_centroids_verify(void);
+int route_veto_centroids_ok(void);
 
 #endif /* ROUTE_VETO_H */

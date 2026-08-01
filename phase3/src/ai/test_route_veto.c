@@ -109,7 +109,7 @@ static void unit128(float *v)
     scale128(v, 1.0 / norm128(v));
 }
 
-/* The XOR route_veto_centroids_verify() computes, but over a CALLER-SUPPLIED copy
+/* The XOR route_veto_centroids_ok() computes, but over a CALLER-SUPPLIED copy
  * so a mutation can be applied without touching the frozen header. */
 static uint32_t xor_of_rows(const float rows[][DIM], int n)
 {
@@ -159,8 +159,8 @@ static void test_header_integrity(void)
     /* The shipped gate. 0 == OK; the polarity is the opposite of
      * embed_mu_verify() and is pinned here so an inverted copy-paste (which would
      * fail OPEN) cannot pass. */
-    ASSERT(route_veto_centroids_verify() == 0,
-           "route_veto_centroids_verify() reports the compiled centroids intact");
+    ASSERT(route_veto_centroids_ok() == 1,
+           "route_veto_centroids_ok() reports the compiled centroids intact (1 == INTACT)");
 
     /* Every row is a unit vector. The generator L2-normalises in float64 and casts
      * once at storage, so the residual is ~1e-8; 1e-3 would catch a row that was

@@ -563,6 +563,108 @@
 #define EMBED_PROBE_RESPAWN_YIELDS 200
 #endif
 
+/* ---- Phase C / C/M4: the hybrid ROUTING VETO (default 0) ------------------------------
+ *
+ * WHAT IT IS. The keyword router still decides; the embedder may only REROUTE a SYSFACTS
+ * capture to INFER, never the reverse. It cannot create a capture, widen the allowlist,
+ * mint an action or touch the reply path — K-b holds, because the embedder's output only
+ * selects between two EXISTING handlers for a query that is already authenticated and
+ * already SHIELD-scored.
+ *
+ * WHAT IT FIXES, MEASURED (347d96a + the C/M4 parity gate): the live bare-word defect in
+ * PHASE_6_GOAL_6-6_ROUTING.md §9, where a conceptual question containing a family word
+ * ("what causes page faults?") is answered with box state. Two-sided corpus:
+ *   false POSITIVES 32 -> 6   false NEGATIVES 0 -> 1   HELDOUT 95.89% UNCHANGED
+ * THE HONEST CLAIM IS "an 81% measured cut in ONE defect class", NEVER "routing is fixed":
+ * the 6 surviving quantity-question FPs and the 1 FN ARE the ceiling. The trade is visible
+ * nonsense (a status answer to a concept question) for, occasionally, plausible fiction
+ * (a genuine status question handed to a model that cannot know) — 26 correct vetoes
+ * against 1 wrong one on the corpus, so net strongly positive, but not free.
+ *
+ * SYSFACTS-ONLY SCOPE, and it is narrower than what was measured. Arm C as measured vetoed
+ * DECLINE captures too. Vetoing a genuine DECLINE would send a no-source metric question
+ * ("what is your cpu usage?") to Gemma to be FABRICATED — the exact failure
+ * route_decline_text() exists to prevent, and a class the measurement never priced. The
+ * narrowing is only safe because it is measured-INVARIANT: the parity gate ran both rules
+ * over 206 queries, found 21 DECLINE captures, and the measured rule would have vetoed
+ * ZERO of them (0 outcome differences). Not vacuous — the captures were really there.
+ *
+ * EVERY OBSTACLE DEGRADES TO TODAY. Preconditions (all must hold, else the keyword verdict
+ * stands untouched, with a [VETO] skip line): embedder resident and healthy, PB dispatchable,
+ * the embed request succeeds and its result validates, the projection succeeds, and the
+ * centroids verify. A skip costs no q_errors and no miss-counter advance — KM2B_LANE_EMBED
+ * stays attribution-only, exactly as the recall lane uses it. The box-proven
+ * SYSFACTS-while-PB-degraded property is preserved by the PB precondition.
+ *
+ * A PRE-REGISTERED WOBBLE, recorded BEFORE any hardware run so a later flip cannot be
+ * re-based: of 27 firings across the 206-query parity set, exactly ONE sits inside the
+ * measured 0.0094 max box-vs-host cosine delta — "what gguf is in use" at margin 0.0048,
+ * which is precisely the single false negative. The next-lowest firing margin is 0.042,
+ * ~4.5x the wobble. So if that one decision flips on real hardware it is EXPECTED Q8_0-vs-F32
+ * wobble in the HARM-REMOVING direction (the FN disappears), NOT a parity failure; none of
+ * the 26 correct vetoes are near the band. The parity gate proves host-C == host-Python, it
+ * does not prove box == host.
+ *
+ * Counters: g_route_veto_checked (comparisons actually run) and g_route_vetoed (fired).
+ * `checked` is the honest denominator — vetoed=0 alone cannot distinguish "no conceptual
+ * questions arrived" from "the veto silently skipped every time" (the sem_* three-counter
+ * lesson). The v12 route_* counters count the POST-veto final decision, which needs no code
+ * move: the veto rewrites `rc` UPSTREAM of every increment site.
+ *
+ * Requires ROUTING (the classifier it wraps), EMBED (the vector it needs) and CONTROL_IN
+ * (the only lane it runs on). NOT deployed: the flip is a separate operator-supervised
+ * decision, and the defect stays LIVE on the deployed image until then. */
+#ifndef JARVIS_ROUTE_VETO
+#define JARVIS_ROUTE_VETO 0
+#endif
+#if JARVIS_ROUTE_VETO && !JARVIS_ROUTING
+#error "JARVIS_ROUTE_VETO requires JARVIS_ROUTING (it wraps route_classify's result)"
+#endif
+#if JARVIS_ROUTE_VETO && !JARVIS_EMBED
+#error "JARVIS_ROUTE_VETO requires JARVIS_EMBED (it needs the projected query vector)"
+#endif
+#if JARVIS_ROUTE_VETO && !JARVIS_CONTROL_IN
+#error "JARVIS_ROUTE_VETO requires JARVIS_CONTROL_IN (control-IN is the only lane it runs on)"
+#endif
+
+/* Route-veto probe (box/KVM-only, default 0; its own flag, the per-probe precedent).
+ * Stages control-IN queries through build_probe_jctl + ctrl_roundtrip_sync with seqs derived
+ * from g_ctrl_replay.seq_floor + 1 and a VARYING nonce seed (a constant seed DROP_REPLAYs
+ * every frame after the first). Legs: one query whose veto FIRES, one genuine status query
+ * that is HELD, one of the 6 measured surviving FPs that is also HELD (the honest residual,
+ * proven present rather than hidden), an embed-reuse count, and a terminal SKIP leg.
+ * The skip leg latches g_pb_dead and is STRICTLY LAST — a terminal latch starves every leg
+ * sequenced after it (the 6-3/M1 B5 lesson). */
+#ifndef JARVIS_ROUTE_VETO_PROBE
+#define JARVIS_ROUTE_VETO_PROBE 0
+#endif
+#if JARVIS_ROUTE_VETO_PROBE && !JARVIS_ROUTE_VETO
+#error "JARVIS_ROUTE_VETO_PROBE requires JARVIS_ROUTE_VETO"
+#endif
+/* Cross-guards, each for a concrete interference: MONITOR_PROBE fires 2 real respawns;
+ * CONTROL_IN_PROBE calls control_replay_init (resetting the seq floor these legs derive
+ * from) and its mode 3 latches terminal g_pb_dead; EMBED_PROBE drives its own staged
+ * control-IN turns and mode 2 respawns mid-embed; RECALL_PROBE and ROUTING_PROBE both stage
+ * their own control-IN queries into the same lane; KM2A_SPIKE runs an N-cycle respawn loop. */
+#if JARVIS_ROUTE_VETO_PROBE && JARVIS_MONITOR_PROBE
+#error "JARVIS_ROUTE_VETO_PROBE must not ride JARVIS_MONITOR_PROBE (2 real respawns)"
+#endif
+#if JARVIS_ROUTE_VETO_PROBE && JARVIS_CONTROL_IN_PROBE
+#error "JARVIS_ROUTE_VETO_PROBE must not ride JARVIS_CONTROL_IN_PROBE (resets the seq floor; mode 3 latches g_pb_dead)"
+#endif
+#if JARVIS_ROUTE_VETO_PROBE && JARVIS_EMBED_PROBE
+#error "JARVIS_ROUTE_VETO_PROBE must not ride JARVIS_EMBED_PROBE (its own staged turns; mode 2 respawns mid-embed)"
+#endif
+#if JARVIS_ROUTE_VETO_PROBE && JARVIS_CONTROL_IN_RECALL_PROBE
+#error "JARVIS_ROUTE_VETO_PROBE must not ride JARVIS_CONTROL_IN_RECALL_PROBE (both stage control-IN queries)"
+#endif
+#if JARVIS_ROUTE_VETO_PROBE && JARVIS_ROUTING_PROBE
+#error "JARVIS_ROUTE_VETO_PROBE must not ride JARVIS_ROUTING_PROBE (both stage control-IN queries)"
+#endif
+#if JARVIS_ROUTE_VETO_PROBE && JARVIS_KM2A_SPIKE
+#error "JARVIS_ROUTE_VETO_PROBE must not ride JARVIS_KM2A_SPIKE (its own respawn loop)"
+#endif
+
 /* C/M1b pre-fix induction probe (box/KVM-only, default 0). The two fail-closed branches on the
  * model-load path are UNREACHABLE on a healthy box (one model fits comfortably), so shipping them
  * untested would be shipping an unproven error path. The flag VALUE is a MODE (the WAKE_PROBE /

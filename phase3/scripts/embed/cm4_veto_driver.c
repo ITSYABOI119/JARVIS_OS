@@ -90,7 +90,7 @@ int main(void)
      * skipped this could report a whole run of verdicts computed against corrupted
      * constants and call it a parity failure.
      */
-    if (route_veto_centroids_verify() != 0) {
+    if (!route_veto_centroids_ok()) {
         fprintf(stderr, "cm4_veto_driver: ROUTE_CENTROIDS failed XOR verification "
                         "- refusing to emit verdicts\n");
         return 2;

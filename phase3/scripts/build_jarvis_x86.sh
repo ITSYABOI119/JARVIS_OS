@@ -178,6 +178,11 @@ AI_FILES=(
     "embed_store.c"       "embed_store.h"
     "embed_project.c"     "embed_project.h"
     "embed_mu.h"
+    # Phase C / C/M4: the measured routing veto. route_centroids.h is GENERATED
+    # (phase3/scripts/embed/gen_route_centroids.py) and FROZEN — copied, never edited here;
+    # regenerating it invalidates the parity evidence and the probe-leg expectations.
+    "route_veto.c"        "route_veto.h"
+    "route_centroids.h"
 )
 
 for f in "${AI_FILES[@]}"; do
@@ -709,7 +714,7 @@ if [ -f "$CMAKE_FILE" ]; then
     # JARVIS_EMBED calls them, and an ungated injection means the EMBED=0 build links the SAME
     # objects as EMBED=1. That is what makes the G1 main.c.obj comparison an identity test
     # rather than a link-set difference.
-    for _em in embed_store embed_project; do
+    for _em in embed_store embed_project route_veto; do
         if ! grep -q "src/ai/$_em.c" "$CMAKE_FILE"; then
             sed -i "/src\/ai\/route.c/a\\    src/ai/$_em.c" "$CMAKE_FILE" 2>/dev/null
             if grep -q "src/ai/$_em.c" "$CMAKE_FILE"; then

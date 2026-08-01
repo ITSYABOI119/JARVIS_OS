@@ -61,7 +61,24 @@ def mean_project(e, mu):
 
 
 def prepare(emb_full, mu, dim, proj):
-    """Apply the pipeline in the documented order, then truncate + renormalise."""
+    """Apply the pipeline in the documented order, then truncate + renormalise.
+
+    `proj` is a STRING from PROJECTIONS, and unknown values are REJECTED rather than
+    treated as "raw". That guard is not hypothetical hardening: this function's `proj`
+    used to be tested with a bare `if proj == "meanproj"`, so any other value silently
+    selected the raw path. cm4_routing_measure.py passed the boolean `True` — which is
+    not equal to "meanproj" — and the whole C/M4 routing measurement therefore ran
+    UNPROJECTED while its own results file recorded "mean-project (frozen mu) + L2".
+    Nothing failed, nothing warned, and the artifact claimed a configuration that had
+    not been measured. Re-running in both spaces showed the verdict happened to be
+    unchanged, so the damage was to the record rather than the conclusion — but the
+    next caller might not be so lucky, and a silent wrong-space run is exactly the
+    class of defect that survives review because every number still looks plausible.
+    """
+    if proj not in PROJECTIONS:
+        raise ValueError(
+            "prepare(): proj must be one of %r, got %r. A bool or a typo previously "
+            "selected the RAW path silently — see this docstring." % (PROJECTIONS, proj))
     e = emb_full
     if proj == "meanproj":
         e = mean_project(e, mu)

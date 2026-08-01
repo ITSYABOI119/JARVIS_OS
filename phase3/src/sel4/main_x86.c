@@ -111,6 +111,9 @@
 #include "embed_region.h"        /* Phase C / C/M1b-3: the embed transport region + its staleness predicate */
 #include "embed_store.h"         /* Phase C / C/M2a: the durable per-record vector store (JVEC @ 21,150,000) */
 #include "embed_project.h"       /* Phase C / C/M2b: embed(1024) -> meanproj -> truncate(128) -> L2 */
+#if JARVIS_ROUTE_VETO
+#include "route_veto.h"          /* Phase C / C/M4: the measured SYSFACTS-capture veto (gated) */
+#endif
 #include "embed_gate_pairs.h"    /* Phase C / C/M2b Leg A: the MEASURED pairs (generated; probe-only) */
 #endif
 #include "jarvis_ui_tokens.h"   /* Step 2c-2b: FBP_ and JUI_ palette + geometry (single source) */
@@ -759,6 +762,21 @@ static uint16_t    g_ctrl_route_seq;          /* the control-IN route's own MSG_
 static uint32_t    g_route_sysfacts;          /* answered from whitelisted PA state (no PB dispatch) */
 static uint32_t    g_route_decline;           /* canned honest decline (no source -> never fabricated) */
 static uint32_t    g_route_infer;             /* dispatched to Gemma — today's control-IN behavior    */
+#if JARVIS_ROUTE_VETO
+/* C/M4 veto state. TWO counters, and `checked` is not decoration: vetoed==0 on its own cannot
+ * distinguish "no conceptual questions arrived this boot" from "the veto skipped every single
+ * time" — the same denominator lesson the sem_* three-counter design was built on. `armed` is
+ * set once at init only if the centroids verify; it fails CLOSED to the keyword verdict. */
+static uint32_t    g_route_veto_checked;      /* comparisons actually RUN (the honest denominator) */
+static uint32_t    g_route_vetoed;            /* SYSFACTS captures rerouted to INFER               */
+static int         g_route_veto_armed;        /* centroids verified at init; 0 => never veto       */
+/* The per-turn projected query vector. Stashed so the recall lane's cplen==0 fall-through can
+ * consume it instead of re-embedding the SAME qs bytes: a vetoed turn must pay ONE embed, not
+ * two. CLEARED at the top of every turn — a stale stash is a wrong-vector recall, which is the
+ * exact hazard embed_region's seq guard exists for, and it would be silent. */
+static float       g_ctrl_qvec128[G3_SEM_DIM_DEFAULT];
+static int         g_ctrl_qvec_valid;
+#endif
 #endif
 
 /* C/M2b adds JARVIS_EMBED_PROBE to this list, and it HAD to: the C/M2b gates are told
@@ -767,7 +785,7 @@ static uint32_t    g_route_infer;             /* dispatched to Gemma — today's
  * are derived from). With the old gate that combination could not link —
  * "undefined reference to build_probe_jctl" — so reuse-by-extension is the only
  * consistent resolution, and it is the same one M5-recall and 6-6/B/M1 took. */
-#if (JARVIS_CONTROL_IN_PROBE || JARVIS_CONTROL_IN_RECALL_PROBE || JARVIS_ROUTING_PROBE || JARVIS_EMBED_PROBE)   /* M5-recall + 6-6/B/M1 + C/M2b reuse this staging */
+#if (JARVIS_CONTROL_IN_PROBE || JARVIS_CONTROL_IN_RECALL_PROBE || JARVIS_ROUTING_PROBE || JARVIS_EMBED_PROBE || JARVIS_ROUTE_VETO_PROBE)   /* M5-recall + 6-6/B/M1 + C/M2b + C/M4 reuse this staging */
 static void ctrl_put_be16(uint8_t *p, uint16_t v){ p[0]=(uint8_t)(v>>8); p[1]=(uint8_t)v; }
 static void ctrl_put_be32(uint8_t *p, uint32_t v){ p[0]=(uint8_t)(v>>24); p[1]=(uint8_t)(v>>16); p[2]=(uint8_t)(v>>8); p[3]=(uint8_t)v; }
 static void ctrl_put_be64(uint8_t *p, uint64_t v){ for(int i=0;i<8;i++) p[i]=(uint8_t)(v>>(56-8*i)); }
@@ -2555,10 +2573,21 @@ static uint32_t g_embed_probe_fired       = 0;
 static int      g_embed_probe_interleaved = 0;   /* 1 = the request really was outstanding */
 #endif
 
+#if JARVIS_ROUTE_VETO_PROBE
+/* C/M4 leg 4: how many MSG_EMBED round trips a turn actually issued. The reuse claim is that a
+ * vetoed turn pays ONE embed, not two — and the argument for that is textual (the veto and the
+ * recall lane read the same `qs` buffer). This counter is what turns the argument into a
+ * measurement, which is the whole point of the leg. Probe-only. */
+static uint32_t g_veto_probe_embeds;
+#endif
+
 static int pa_embed_request(const char *text, uint16_t text_len, float *out)
 {
     if (!g_embed_region_ready || !text || !out) return -1;
     if (text_len == 0 || text_len > SHMEM_MAX_PAYLOAD) return -1;
+#if JARVIS_ROUTE_VETO_PROBE
+    g_veto_probe_embeds++;
+#endif
 
     uint32_t seq = ++g_embed_seq;   /* fresh; uint32 wrap is fine — the predicate uses equality */
 
@@ -2679,16 +2708,30 @@ static int embed_idx_find(uint32_t owner_seq)
  * be somewhere that can afford it — after the reply has been sent, or in the
  * bounded backfill. Never in front of a user-visible response.
  */
+/* `pre_v128` (C/M4): an ALREADY-PROJECTED 128-vector for exactly this text, or NULL to embed.
+ *
+ * It is a PARAMETER rather than a global read on purpose. This function has two callers with
+ * opposite needs: the answered exit, where the veto has just embedded THIS turn's query and the
+ * vector is reusable, and the bounded backfill, which walks OTHER records and must never touch
+ * the current turn's stash. A global read here would be correct at one call site and a
+ * wrong-vector store at the other — and a wrong vector is undetectable downstream, because a
+ * unit vector of the wrong text scores a perfectly plausible cosine. The compiler now makes each
+ * caller say which it means. */
 static int ctrl_embed_store_one(uint32_t owner_seq, uint64_t owner_key,
-                                const char *text, uint16_t text_len)
+                                const char *text, uint16_t text_len,
+                                const float *pre_v128)
 {
     if (!g_embed_sem_ok || !text || text_len == 0) return -1;
     if (g_embed_idx_n >= EMBED_STORE_MAX_VECS)     return -2;   /* index full — bounded, not a leak */
     if (embed_idx_find(owner_seq) >= 0)            return 1;    /* already vectored — idempotent */
 
+    if (pre_v128) {
+        for (int _pi = 0; _pi < G3_SEM_DIM_DEFAULT; _pi++) g_embed_q128[_pi] = pre_v128[_pi];
+    } else {
     if (pa_embed_request(text, text_len, g_embed_raw) != 0) return -3;
     if (embed_project(g_embed_raw, EMBED_DIM, g_embed_q128, G3_SEM_DIM_DEFAULT) != EMBED_PROJ_OK)
         return -4;
+    }
     if (embed_rec_fill(&g_embed_wrec, owner_seq, owner_key, g_embed_q128, G3_SEM_DIM_DEFAULT) != 0)
         return -5;
 
@@ -3433,6 +3476,14 @@ static void pa_ctrl_gate(const control_result_t *cres)
     }
     qs[qm] = 0;
 
+#if JARVIS_ROUTE_VETO
+    /* Clear the per-turn stash FIRST, before anything can read it. A stale vector here would be
+     * a wrong-vector recall — right shape, right norm, wrong query — which nothing downstream
+     * can detect, because a unit vector of the wrong text scores a perfectly plausible cosine.
+     * Same hazard class as embed_region's seq guard, and the same reason it is not optional. */
+    g_ctrl_qvec_valid = 0;
+#endif
+
 #if JARVIS_ROUTING
     /* ── 6-6/B/M1: classify the validated query, then pick ONE handler ──────────────────────────
      * route_classify sees ONLY QS_ALLOW queries — query_shield is the exclusive UPSTREAM gate and
@@ -3479,6 +3530,87 @@ static void pa_ctrl_gate(const control_result_t *cres)
     uint16_t crk_cos  = 0;
     route_result_t rr;
     route_class_t  rc = route_classify((const char *)cres->query, cres->query_len, &rr);
+
+#if JARVIS_ROUTE_VETO
+    /* ---- C/M4: the hybrid routing VETO -------------------------------------------------
+     *
+     * Placed HERE, between route_classify and the branch, for a reason that is structural
+     * rather than stylistic: rewriting `rc` at this point is UPSTREAM of every g_route_*
+     * increment below, so the v12 routing counters record the POST-veto final decision with
+     * no counter site moved at all. A vetoed query increments route_infer, not route_sysfacts,
+     * because it genuinely took the INFER path.
+     *
+     * SCOPE: SYSFACTS captures only. route_veto_should() enforces that itself (DECLINE and
+     * INFER always return 0), so the `rc == ROUTE_SYSFACTS` test here is a cost guard — it
+     * keeps the ~300-800 ms embed off the DECLINE and INFER paths — not the scope guard.
+     * Both exist on purpose; the scope must not depend on this call site remembering it.
+     *
+     * EVERY OBSTACLE DEGRADES TO EXACTLY TODAY. Each precondition below simply leaves the
+     * keyword verdict standing, which is the deployed behaviour. Nothing here can make the
+     * lane worse than it is with the flag off — that is what makes this safe to gate on.
+     *
+     * COST, stated: a SYSFACTS-classified control-IN query now pays one embed (~300-800 ms
+     * measured at C/M2b) that it did not pay before. It is NOT free, and the honest framing
+     * is that a fast local answer becomes a slightly slower one in exchange for not being
+     * confidently wrong. The workload lane is untouched — this runs on control-IN only. */
+    if (rc == ROUTE_SYSFACTS && g_route_veto_armed
+        && g_embed_ready && !g_embed_bad && PB_DISPATCH_OK()) {
+        /* §6.3 BELT-AND-BRACES, and the reachability verdict is recorded rather than assumed:
+         * PA is single-threaded and every PB dispatch is synchronous (send -> wait_for_response
+         * in straight-line code), so control flow cannot reach pa_ctrl_gate with a generation
+         * outstanding — this condition is UNREACHABLE on the live path. It is one flag read,
+         * kept because the cost is a compare and the failure it would prevent (queueing an
+         * embed behind a ~46 s generation) is one an assumption should not be guarding. */
+        if (!g_infer_active) {
+            uint16_t vqlen = 0;
+            while (vqlen < (uint16_t)(sizeof qs - 1) && qs[vqlen] != '\0') vqlen++;
+
+            uint64_t v_t0 = jarvis_uptime_ms();
+            int verc = pa_embed_request(qs, vqlen, g_embed_raw);
+            int vprc = (verc == 0)
+                     ? embed_project(g_embed_raw, EMBED_DIM, g_ctrl_qvec128, G3_SEM_DIM_DEFAULT)
+                     : EMBED_PROJ_E_ARGS;
+            uint64_t v_ms = jarvis_uptime_ms() - v_t0;
+
+            if (verc == 0 && vprc == EMBED_PROJ_OK) {
+                /* The stash: this exact vector is what the recall lane's cplen==0 fall-through
+                 * would otherwise re-embed a few hundred lines below, from the SAME qs bytes.
+                 * One embed per turn, not two. */
+                g_ctrl_qvec_valid = 1;
+                g_route_veto_checked++;
+
+                if (route_veto_should(g_ctrl_qvec128, ROUTE_SYSFACTS)) {
+                    rc = ROUTE_INFER;
+                    rr.field = SF_NONE;   /* the field belonged to a capture that no longer stands */
+                    g_route_vetoed++;
+                    puts_serial("[VETO] fired ms="); put_dec((uint32_t)v_ms);
+                    puts_serial(" -> INFER\n");
+                } else {
+                    puts_serial("[VETO] held ms="); put_dec((uint32_t)v_ms);
+                    puts_serial("\n");
+                }
+            } else {
+                /* Embed or projection failed. NOT a q_error and NOT a miss — pa_embed_request
+                 * already owns that policy (KM2B_LANE_EMBED is attribution-only), and a veto is
+                 * best-effort by design: its absence is the status quo, not a fault. */
+                puts_serial("[VETO] skip reason=");
+                puts_serial(verc != 0 ? "embed" : "project");
+                puts_serial(" rc="); put_dec((uint32_t)(verc != 0 ? -verc : -vprc));
+                puts_serial("\n");
+            }
+        } else {
+            puts_serial("[VETO] skip reason=busy\n");
+        }
+    } else if (rc == ROUTE_SYSFACTS) {
+        /* A SYSFACTS capture the veto could not even attempt. Distinguished from the failure
+         * skips above because the causes are different operationally: this is "the mechanism
+         * is not available", those are "the mechanism ran and could not answer". */
+        puts_serial("[VETO] skip reason=");
+        puts_serial(!g_route_veto_armed ? "disarmed"
+                    : (!PB_DISPATCH_OK() ? "pb" : "embed-off"));
+        puts_serial("\n");
+    }
+#endif
 
     if (rc == ROUTE_SYSFACTS) {
         /* Fill the whitelisted struct from the SAME PA sources jarvis_telemetry_emit() reads, so a
@@ -3672,10 +3804,32 @@ static void pa_ctrl_gate(const control_result_t *cres)
             uint16_t qlen = 0;
             while (qlen < (uint16_t)(sizeof qs - 1) && qs[qlen] != '\0') qlen++;
             uint64_t t_e0 = jarvis_uptime_ms();
-            int erc = pa_embed_request(qs, qlen, g_embed_raw);
-            int prc = (erc == 0)
+            int erc, prc;
+#if JARVIS_ROUTE_VETO
+            /* C/M4 EMBED REUSE. If the veto already embedded this turn, consume its vector
+             * instead of paying a second ~300-800 ms round trip. The bytes are provably
+             * identical, not assumed: the veto embeds `qs` and so does this site — the SAME
+             * buffer, built once at the top of the turn and never rewritten between them.
+             * Verified rather than trusted by the probe's reuse leg, which counts MSG_EMBED
+             * markers for a vetoed turn and requires exactly one.
+             *
+             * Note the veto only ever runs on a SYSFACTS capture, and a vetoed turn arrives
+             * here as ROUTE_INFER — so this consumes the stash on exactly the path where the
+             * veto rerouted the query, which is the path that would otherwise embed twice. */
+            if (g_ctrl_qvec_valid) {
+                for (int _qi = 0; _qi < G3_SEM_DIM_DEFAULT; _qi++)
+                    g_embed_q128[_qi] = g_ctrl_qvec128[_qi];
+                erc = 0;
+                prc = EMBED_PROJ_OK;
+                puts_serial("[EMBED-REUSE] veto vector consumed (no second embed)\n");
+            } else
+#endif
+            {
+                erc = pa_embed_request(qs, qlen, g_embed_raw);
+                prc = (erc == 0)
                     ? embed_project(g_embed_raw, EMBED_DIM, g_embed_q128, G3_SEM_DIM_DEFAULT)
                     : EMBED_PROJ_E_ARGS;
+            }
             uint64_t t_e1 = jarvis_uptime_ms();
 
             int sn = 0, ss = 0;
@@ -3950,8 +4104,18 @@ static void pa_ctrl_gate(const control_result_t *cres)
          */
         if (g_embed_sem_ok && g_ctrl_last_vecable && g_ctrl_last_qlen > 0) {
             uint64_t _w0 = jarvis_uptime_ms();
+            /* C/M4: hand over the veto's vector when it embedded THIS turn's query. g_ctrl_last_q
+             * is episodic_fill's verbatim copy of the same `qs` the veto embedded, so the vector
+             * is the one this call would recompute — at another ~300-800 ms. Without this a
+             * vetoed turn pays TWO embeds, which was measured (leg 1 read embeds=2) rather than
+             * reasoned about. NULL when the veto did not run, which is the unchanged path. */
             int _wrc = ctrl_embed_store_one(g_ctrl_last_seq, g_ctrl_last_key,
-                                            g_ctrl_last_q, g_ctrl_last_qlen);
+                                            g_ctrl_last_q, g_ctrl_last_qlen,
+#if JARVIS_ROUTE_VETO
+                                            g_ctrl_qvec_valid ? g_ctrl_qvec128 : NULL);
+#else
+                                            NULL);
+#endif
             puts_serial("[EMBED-WRITE] seq="); put_dec(g_ctrl_last_seq);
             puts_serial(" rc=");               put_dec((uint32_t)(_wrc < 0 ? -_wrc : _wrc));
             puts_serial(" ms=");               put_dec((uint32_t)(jarvis_uptime_ms() - _w0));
@@ -4965,6 +5129,29 @@ static void *main_continued(void *arg UNUSED)
                                         } else {
                                             puts_serial("[EMBED-SEM] vector store init FAILED — semantic recall DISABLED (non-fatal)\n");
                                         }
+#endif
+#if JARVIS_ROUTE_VETO
+                                        /* C/M4: arm the veto ONCE, and fail CLOSED to the keyword
+                                         * verdict. Deliberately NOT nested inside the vector-store
+                                         * branch above: the veto needs mu (via embed_project) and the
+                                         * centroids, but NOT the JVEC store — coupling it to the store
+                                         * would disarm routing help on a box whose recall lane happens
+                                         * to be unavailable, which are unrelated capabilities.
+                                         *
+                                         * Gated once at init rather than per call ON PURPOSE. A
+                                         * per-call check could only fail by returning "no veto", which
+                                         * is INDISTINGUISHABLE from the common healthy answer — the
+                                         * corruption would present as "the veto quietly stopped
+                                         * helping". Here it presents as a line the operator can see.
+                                         *
+                                         * NOTE THE POLARITY: route_veto_centroids_ok() is 1-on-OK,
+                                         * matching embed_mu_verify(). It was renamed from a 0-on-OK
+                                         * _verify() before any caller existed precisely so this line
+                                         * cannot be written backwards. */
+                                        g_route_veto_armed = route_veto_centroids_ok() ? 1 : 0;
+                                        puts_serial("[VETO] centroids=");
+                                        puts_serial(g_route_veto_armed ? "OK armed\n"
+                                                                       : "MISMATCH — veto DISABLED for this boot (keyword verdict stands)\n");
 #endif
 #if JARVIS_ACTIONS
                                         /* Phase 6 K/M1: init the action-audit store (same NVMe bounce
@@ -6982,6 +7169,102 @@ static void *main_continued(void *arg UNUSED)
         puts_serial("[ROUTE-PROBE] SKIPPED (key/input/floor down)\n");
     }
 #endif /* JARVIS_ROUTING_PROBE */
+
+#if JARVIS_ROUTE_VETO_PROBE
+    /* C/M4 — the veto demonstration. KVM has no NIC, so every query is staged through the same
+     * signed-JCTL split pipeline (PA -> jarvis-input -> PA verify) every other control-IN probe
+     * uses: these are REAL validated control-IN queries, not direct calls into pa_ctrl_gate.
+     * Seqs come from the LIVE replay floor (a fixed seq DROP_REPLAYs against the M3-3 persisted
+     * floor on a second boot and reads as a veto failure — the mode-4 lesson) and the nonce seed
+     * VARIES per frame (build_probe_jctl derives the whole nonce from the seed, and control_replay
+     * keeps a 128-entry ring, so a constant seed makes every frame after the first DROP_REPLAY).
+     *
+     * THE QUERIES ARE NOT ARBITRARY. Each is a measured case from cm4_routing_results.json, and
+     * each was checked against `cm4_veto_parity.py --sims` to have |margin| well above the 0.0094
+     * max box-vs-host cosine delta, so a Q8_0-vs-F32 wobble cannot flip a pinned expectation:
+     *   leg 1 "what causes page faults?"                 FIRES  margin 0.657  (a measured FP, fixed)
+     *   leg 2 "how long have you been up?"               HELD   margin 0.678  (genuine status)
+     *   leg 3 "how many cpus does a raspberry pi have"    HELD   margin 0.103  (one of the 6
+     *         SURVIVING FPs — the wrong answer PERSISTS, and that is the honest residual proven
+     *         present rather than hidden. A probe that only showed wins would misrepresent the
+     *         ceiling this whole slice is documented against.)
+     *
+     * There is deliberately NO leg for the busy-skip branch: the §6.3 analysis established it is
+     * unreachable (PA is single-threaded, every dispatch synchronous), and a probe leg for an
+     * unreachable branch would be a vacuous check wearing a probe costume. The analysis and the
+     * label at the call site are the evidence.
+     *
+     * The PB-dead skip leg is LAST and terminal — g_pb_dead never clears, so anything after it
+     * would be starved (the 6-3/M1 B5 lesson). */
+    if (g_ctrl_key_ok && g_input_ready && g_ctrl_floor_ok) {
+        static uint8_t pjv[CONTROL_MSG_MAX], pfv[512];
+        control_result_t prv;
+        static const char *vq_fire = "what causes page faults?";
+        static const char *vq_hold = "how long have you been up?";
+        static const char *vq_resid = "how many cpus does a raspberry pi have";
+
+        puts_serial("[VETO-PROBE] start armed="); put_dec((uint32_t)g_route_veto_armed);
+        puts_serial("\n");
+
+        #define VETO_PROBE_SEND(TAG, NONCE, TEXT)                                                  \
+            do {                                                                                   \
+                uint32_t _e0 = g_veto_probe_embeds;                                                \
+                uint64_t sv  = g_ctrl_replay.seq_floor + 1u;                                       \
+                uint16_t jlv = build_probe_jctl(pjv, g_ctrl_key, sv, (NONCE), (TEXT));             \
+                int      flv = net_build_udp_broadcast(pfv, sizeof pfv, g_net.nic.mac,             \
+                                                       JARVIS_BOX_IP, 40000,                       \
+                                                       (uint16_t)CONTROL_PORT, pjv, jlv);          \
+                control_verdict_t vv = (flv > 0) ? ctrl_roundtrip_sync(pfv, (size_t)flv, &prv)     \
+                                                 : CV_DROP_PARSE;                                  \
+                puts_serial("[VETO-PROBE] leg=" TAG " q=\""); puts_serial(TEXT);                   \
+                puts_serial("\"\n");                                                               \
+                if (vv == CV_ACCEPT) {                                                             \
+                    pa_ctrl_gate(&prv);                                                            \
+                    puts_serial("[VETO-PROBE] leg=" TAG " embeds="); put_dec(g_veto_probe_embeds - _e0); \
+                    puts_serial(" checked="); put_dec(g_route_veto_checked);                       \
+                    puts_serial(" vetoed="); put_dec(g_route_vetoed);                              \
+                    puts_serial(" route_sys="); put_dec(g_route_sysfacts);                         \
+                    puts_serial(" route_inf="); put_dec(g_route_infer);                            \
+                    puts_serial("\n");                                                             \
+                } else {                                                                           \
+                    puts_serial("[VETO-PROBE] leg=" TAG " FAIL frame not accepted verdict=");      \
+                    put_dec((uint32_t)vv); puts_serial("\n");                                      \
+                }                                                                                  \
+            } while (0)
+
+        /* leg 1 — the veto FIRES: a conceptual question keyword captured as SYSFACTS is rerouted
+         * to the model. Expect [VETO] fired, then a coherent answer through the NORMAL exit, and
+         * route_infer (not route_sysfacts) to advance — the post-veto counter semantics. */
+        VETO_PROBE_SEND("1-fires", 0xA1, vq_fire);
+        /* leg 4 rides leg 1: embeds MUST be 1. The veto embeds, then the recall lane's cplen==0
+         * fall-through consumes the stash instead of embedding the same bytes again. 2 would mean
+         * the reuse is not wired; 0 would mean the veto never ran. */
+
+        /* leg 2 — HELD: a genuine status question keeps its SYSFACTS answer, rendered from PA
+         * state with no PB dispatch. This is the false-negative direction the FN band guards. */
+        VETO_PROBE_SEND("2-held-genuine", 0xB2, vq_hold);
+
+        /* leg 3 — HELD, and WRONG on purpose: one of the 6 measured surviving false positives.
+         * A raspberry-pi CPU-count question is still answered with the box's worker count. The
+         * ceiling, demonstrated rather than described. */
+        VETO_PROBE_SEND("3-held-residual-FP", 0xC3, vq_resid);
+
+        /* leg 5 — TERMINAL, strictly last. With PB unreachable the veto cannot embed, so it must
+         * SKIP and leave the keyword verdict standing: SYSFACTS still answers locally (the
+         * box-proven degraded property), checked/vetoed do NOT advance. */
+        puts_serial("[VETO-PROBE] latching g_pb_dead (terminal skip leg)\n");
+        g_pb_dead = 1;
+        VETO_PROBE_SEND("5-skip-pb-dead", 0xD5, vq_fire);
+
+        puts_serial("[VETO-PROBE] done checked="); put_dec(g_route_veto_checked);
+        puts_serial(" vetoed="); put_dec(g_route_vetoed);
+        puts_serial(" total_embeds="); put_dec(g_veto_probe_embeds);
+        puts_serial("\n");
+        #undef VETO_PROBE_SEND
+    } else {
+        puts_serial("[VETO-PROBE] SKIPPED (key/input/floor not ready)\n");
+    }
+#endif /* JARVIS_ROUTE_VETO_PROBE */
 #endif /* JARVIS_CONTROL_IN */
 
     while (1) {
@@ -8295,7 +8578,11 @@ static void *main_continued(void *arg UNUSED)
                     if (_bq == 0) continue;
                     if (_bq > EPI_QUERY_MAX) _bq = EPI_QUERY_MAX;
                     uint64_t _b0 = jarvis_uptime_ms();
-                    int _brc = ctrl_embed_store_one(_brec.seq, _brec.query_key, _brec.query, _bq);
+                    /* NULL: the backfill walks OTHER records, so the current turn's stashed
+                     * vector would be the wrong text entirely. Stated at the call site because
+                     * this is the one place where reusing it would be silently corrupting. */
+                    int _brc = ctrl_embed_store_one(_brec.seq, _brec.query_key, _brec.query, _bq,
+                                                    NULL);
                     g_embed_backfilled++;   /* counts the ATTEMPT: a failing record must not be
                                              * retried every window forever within this boot */
                     puts_serial("[EMBED-BACKFILL] seq="); put_dec(_brec.seq);

@@ -38,7 +38,7 @@ static uint32_t bits_of(float f)
     return u;
 }
 
-int route_veto_centroids_verify(void)
+int route_veto_centroids_ok(void)
 {
     uint32_t x = 0;
 
@@ -46,8 +46,9 @@ int route_veto_centroids_verify(void)
         for (int i = 0; i < ROUTE_CENTROIDS_DIM; i++)
             x ^= bits_of(ROUTE_CENTROIDS[r][i]);
 
-    /* 0 == OK. Opposite polarity to embed_mu_verify() — see route_veto.h. */
-    return x == ROUTE_CENTROIDS_XOR ? 0 : 1;
+    /* 1 == INTACT, matching embed_mu_verify()'s polarity on purpose — see the
+     * fail-open hazard written up in route_veto.h. */
+    return x == ROUTE_CENTROIDS_XOR ? 1 : 0;
 }
 
 int route_veto_should(const float *v128, route_class_t kw_cls)
