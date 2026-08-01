@@ -29,8 +29,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import telemetry_receiver as tr_mod  # noqa: E402  (module handle: guard-#2 wiring test stubs into it)
 from telemetry_receiver import (  # noqa: E402
     decode_packet, packet_to_record, iter_pcap_telemetry, FMT, MAGIC, PKT_SIZE, FLAG_NAMES,
-    FMT_V10, FMT_V11, FMT_V12, FMT_V13,
-    PKT_SIZE_V10, PKT_SIZE_V11, PKT_SIZE_V12, PKT_SIZE_V13, BANNED_RECORD_KEYS,
+    FMT_V10, FMT_V11, FMT_V12, FMT_V13, FMT_V14,
+    PKT_SIZE_V10, PKT_SIZE_V11, PKT_SIZE_V12, PKT_SIZE_V13, PKT_SIZE_V14, BANNED_RECORD_KEYS,
     # --- 6-5/M3-4b: the two-way SEND path ---
     build_control_frame, decode_control_reply, validate_query, resolve_http_bind,
     reply_to_record, ControlSender, TelemetryHub, _SSEHandler,
@@ -149,16 +149,18 @@ def _flip(buf, off):
 def main():
     print("== telemetry receiver wire-compat ==")
 
-    # Layout (v13 = the current wire). The sizes stay EXPLICIT here on purpose: this suite is the
+    # Layout (v14 = the current wire). The sizes stay EXPLICIT here on purpose: this suite is the
     # wire contract, so it must pin absolute numbers rather than re-derive them from the code it
     # is testing (a derived assertion would pass against any struct change).
-    check(struct.calcsize(FMT) == 270, "struct.calcsize(FMT) == 270 (v13)")
-    check(PKT_SIZE == 270, "PKT_SIZE == 270 (v13)")
+    check(struct.calcsize(FMT) == 276, "struct.calcsize(FMT) == 276 (v14)")
+    check(PKT_SIZE == 276, "PKT_SIZE == 276 (v14)")
     check(PKT_SIZE_V10 == 246 and PKT_SIZE_V11 == 254 and PKT_SIZE_V12 == 262
-          and PKT_SIZE_V13 == 270,
-          "version-tolerant sizes: v10=246, v11=254, v12=262, v13=270")
+          and PKT_SIZE_V13 == 270 and PKT_SIZE_V14 == 276,
+          "version-tolerant sizes: v10=246, v11=254, v12=262, v13=270, v14=276")
     check(struct.calcsize(FMT_V13) - struct.calcsize(FMT_V12) == 8,
           "v13 appends exactly 8 bytes (3xu16 + 2xu8) — append-only, prefix unchanged")
+    check(struct.calcsize(FMT_V14) - struct.calcsize(FMT_V13) == 6,
+          "v14 appends exactly 6 bytes (2xu16 + 2xu8) — append-only, prefix unchanged")
 
     # Canonical zlib CRC vector — same CRC the C side proved (jarvis_telemetry.c)
     check(zlib.crc32(b"123456789") & 0xFFFFFFFF == 0xCBF43926,
@@ -166,7 +168,7 @@ def main():
 
     # Valid packet round-trips
     pkt = build_packet()
-    check(len(pkt) == 270, "built packet is 270 bytes (v13)")
+    check(len(pkt) == 276, "built packet is 276 bytes (v14)")
     d = decode_packet(pkt)
     check(d['crc_ok'] is True, "valid packet crc_ok True")
     check(d['kind_name'] == 'STATS', "kind_name == STATS")
@@ -237,7 +239,7 @@ def main():
     pkt_retr = build_packet(retrieval_hits=3, retrieval_latency_us=40, flags=0x01 | 0x10 | 0x80)
     dretr = decode_packet(pkt_retr)
     check(dretr['crc_ok'] is True, "retrieval packet crc_ok True (CRC over [:PKT_SIZE-4])")
-    check(dretr["version"] == 13, "current-wire packet version == 13")
+    check(dretr["version"] == 14, "current-wire packet version == 14")
     check(dretr['retrieval_hits'] == 3 and dretr['retrieval_latency_us'] == 40,
           "retrieval_hits/retrieval_latency_us decode")
     check('RETRIEVAL' in dretr['flags_list'], "TLM_F_RETRIEVAL 0x80 -> 'RETRIEVAL' in flags_list")
@@ -312,7 +314,7 @@ def main():
                            flags=0x01 | 0x10 | 0x1000)
     dmon = decode_packet(pkt_mon)
     check(dmon['crc_ok'] is True, "v8 monitors packet crc_ok True (CRC over [:PKT_SIZE-4])")
-    check(dmon['version'] == 13, "monitors packet version == 13 (current wire)")
+    check(dmon['version'] == 14, "monitors packet version == 14 (current wire)")
     check(dmon['monitors_fired'] == 5 and dmon['last_monitor_event'] == 3,
           "monitors_fired/last_monitor_event decode")
     check('MONITORS' in dmon['flags_list'], "TLM_F_MONITORS 0x1000 -> 'MONITORS' in flags_list")
@@ -332,7 +334,7 @@ def main():
                             flags=0x01 | 0x10 | 0x2000)
     dwake = decode_packet(pkt_wake)
     check(dwake['crc_ok'] is True, "wake packet crc_ok True (CRC over [:PKT_SIZE-4])")
-    check(dwake['version'] == 13, "current-wire packet version == 13")
+    check(dwake['version'] == 14, "current-wire packet version == 14")
     check(dwake['wakes_fired'] == 3 and dwake['last_wake_event'] == 1,
           "wakes_fired/last_wake_event decode")
     check('WAKE' in dwake['flags_list'], "TLM_F_WAKE 0x2000 -> 'WAKE' in flags_list")
@@ -356,7 +358,7 @@ def main():
                            flags=0x01 | 0x10 | 0x4000)
     dbeh = decode_packet(pkt_beh)
     check(dbeh['crc_ok'] is True, "v10 behavior packet crc_ok True (CRC over [:242])")
-    check(dbeh['version'] == 13, "current-wire packet version == 13")
+    check(dbeh['version'] == 14, "current-wire packet version == 14")
     check(dbeh['behaviors_fired'] == 3 and dbeh['behaviors_mask'] == 21
           and dbeh['last_behavior'] == 5,
           "behaviors_fired/behaviors_mask/last_behavior decode (mask 21 = 0b10101 = B1+B3+B5)")
@@ -379,7 +381,7 @@ def main():
     pkt_ci = build_packet(control_in_answered=3, control_in_blocked=1, control_in_dropped=5,
                           flags=0x01 | 0x10 | 0x8000)
     dci = decode_packet(pkt_ci)
-    check(len(pkt_ci) == 270, "control-IN packet is 270 bytes (built on the current v13 wire)")
+    check(len(pkt_ci) == 276, "control-IN packet is 276 bytes (built on the current v14 wire)")
     check(dci['crc_ok'] is True, "v11 control-IN packet crc_ok True (CRC over [:250])")
     check(dci['control_in_answered'] == 3 and dci['control_in_blocked'] == 1
           and dci['control_in_dropped'] == 5,
@@ -419,9 +421,9 @@ def main():
     pkt_rt = build_packet(route_sysfacts=2, route_decline=1, route_infer=3, route_inited=1,
                           control_in_answered=3, flags=0x01 | 0x8000)
     drt = decode_packet(pkt_rt)
-    check(len(pkt_rt) == 270, "routing packet is 270 bytes (built on the current v13 wire)")
-    check(drt['crc_ok'] is True, "v13 packet crc_ok True (CRC over [:266])")
-    check(drt['version'] == 13, "current-wire packet version byte == 13")
+    check(len(pkt_rt) == 276, "routing packet is 276 bytes (built on the current v14 wire)")
+    check(drt['crc_ok'] is True, "v14 packet crc_ok True (CRC over [:272])")
+    check(drt['version'] == 14, "current-wire packet version byte == 14")
     check(drt['route_sysfacts'] == 2 and drt['route_decline'] == 1 and drt['route_infer'] == 3,
           "route_sysfacts/decline/infer decode (2/1/3)")
     check(drt['route_inited'] == 1, "route_inited decodes (the live-vs-gated indicator)")
@@ -466,9 +468,9 @@ def main():
     pkt_sm = build_packet(sem_recall_hits=4, sem_recall_tried=9, sem_recall_floor=3,
                           sem_inited=1, semantic_fact_count=1, flags=0x01 | 0x8000)
     dsm = decode_packet(pkt_sm)
-    check(len(pkt_sm) == 270, "v13 semantic-recall packet is 270 bytes")
-    check(dsm['crc_ok'] is True, "v13 packet crc_ok True (CRC over [:266], NOT [:258] — per-version)")
-    check(dsm['version'] == 13, "v13 packet version byte == 13")
+    check(len(pkt_sm) == 276, "semantic-recall packet is 276 bytes (built on the current v14 wire)")
+    check(dsm['crc_ok'] is True, "v14 packet crc_ok True (CRC over [:272], NOT [:266] — per-version)")
+    check(dsm['version'] == 14, "current-wire packet version byte == 14")
     check(dsm['sem_recall_hits'] == 4 and dsm['sem_recall_tried'] == 9
           and dsm['sem_recall_floor'] == 3,
           "sem_recall_hits/tried/floor decode (4/9/3)")
@@ -494,15 +496,68 @@ def main():
     check(dsm['semantic_fact_count'] == 1 and dsm['sem_recall_hits'] == 4,
           "semantic_fact_count (v6 distill) != sem_recall_hits (v13 embedding) — distinct fields")
 
-    # VERSION-TOLERANCE for the EMBED-flip deferral, and this one is LIVE not hypothetical: the
-    # deployed box emits v12 and will until JARVIS_EMBED flips, so a v12 packet must decode
-    # CLEANLY with the 4 semantic fields ABSENT (None). A fabricated 0 would be worse here than
-    # anywhere else — sem_inited==0 means "lane live, gated off" while None means "this box does
-    # not report the lane at all", and rendering the second as the first is a false claim.
+    # --- Phase C / C/M4: route_veto_checked/route_vetoed + veto_inited (the v14 270->276
+    # size-bump). The ROUTING VETO: keyword decides, the embedder may only reroute a SYSFACTS
+    # capture to the model — never the reverse. Like routing and semantic recall there is NO new
+    # flag bit (the u16 flags word stayed exhausted at TLM_F_CONTROL_IN 0x8000), so veto_inited
+    # is the live-vs-gated indicator. ---
+    pkt_vt = build_packet(route_veto_checked=5, route_vetoed=2, veto_inited=1,
+                          route_sysfacts=2, route_decline=1, route_infer=3, route_inited=1,
+                          flags=0x01 | 0x8000)
+    dvt = decode_packet(pkt_vt)
+    check(len(pkt_vt) == 276, "v14 veto packet is 276 bytes")
+    check(dvt['crc_ok'] is True, "v14 packet crc_ok True (CRC over [:272], NOT [:266] — per-version)")
+    check(dvt['version'] == 14, "v14 packet version byte == 14")
+    check(dvt['route_veto_checked'] == 5 and dvt['route_vetoed'] == 2,
+          "route_veto_checked/route_vetoed decode (5/2)")
+    check(dvt['veto_inited'] == 1, "veto_inited decodes (the live-vs-gated indicator)")
+    rec_vt = packet_to_record(dvt)
+    check(rec_vt['route_veto_checked'] == 5 and rec_vt['route_vetoed'] == 2
+          and rec_vt['veto_inited'] == 1,
+          "record carries the 3 veto fields")
+    check(all(k in REQUIRED_RECORD_KEYS for k in
+              ('route_veto_checked', 'route_vetoed', 'veto_inited')),
+          "route_veto_checked/route_vetoed/veto_inited are REQUIRED_RECORD_KEYs")
+    # HONESTY (the load-bearing one): checked is the DENOMINATOR. vetoed=0 alone cannot
+    # distinguish "no conceptual questions arrived" from "the veto is silently skipping" — only
+    # checked can. The 5/2 pair is deliberately NON-DERIVABLE so a consumer computing one from
+    # the other fails here rather than coincides; vetoed <= checked is the one real invariant.
+    check(dvt['route_vetoed'] <= dvt['route_veto_checked'],
+          "vetoed is bounded by checked (checked is the denominator)")
+    check(dvt['route_veto_checked'] != dvt['route_vetoed'],
+          "checked != vetoed on the golden pair — neither may be derived from the other")
+
+    # VERSION-TOLERANCE for the VETO-flip deferral, and this one is LIVE not hypothetical: the
+    # deployed box emits v13 (the C/M3b EMBED-flip image) and will until the next deploy, so a
+    # v13 packet must decode CLEANLY with the 3 veto fields ABSENT (None). A fabricated 0 would
+    # be worse here than anywhere else — veto_inited==0 means "the box reports the veto and it
+    # is gated off" while None means "this box does not report the veto at all", and rendering
+    # the second as the first is a false claim.
+    pkt_v13 = build_packet(wire_version=13, sem_recall_hits=4, sem_recall_tried=9,
+                           sem_recall_floor=3, sem_inited=1, route_sysfacts=2, route_inited=1,
+                           control_in_answered=3, flags=0x01 | 0x8000)
+    dv13 = decode_packet(pkt_v13)
+    check(len(pkt_v13) == 270, "synthetic v13 packet is 270 bytes (the LIVE deployed box's shape)")
+    check(dv13['crc_ok'] is True, "v13 packet crc_ok True (CRC over [:266], NOT [:272] — per-version)")
+    check(dv13['version'] == 13, "v13 packet version byte == 13")
+    check(dv13['sem_recall_hits'] == 4 and dv13['sem_inited'] == 1,
+          "v13 packet: semantic fields still decode (the prefix is unchanged by v14)")
+    check(dv13['route_sysfacts'] == 2 and dv13['control_in_answered'] == 3,
+          "v13 packet: route/control_in fields still decode")
+    check(dv13['route_veto_checked'] is None and dv13['route_vetoed'] is None
+          and dv13['veto_inited'] is None,
+          "v13 packet: veto fields ABSENT (None) — no misparse of the live deployed box")
+    rec_v13 = packet_to_record(dv13)
+    check(set(rec_v13.keys()) == set(REQUIRED_RECORD_KEYS),
+          "v13 record still carries the full key contract (veto keys present, valued None)")
+
+    # VERSION-TOLERANCE, older tails (v12 = pre-semantic; retained for captured/replayed pcaps).
+    # sem_inited==0 means "lane live, gated off" while None means "this box does not report the
+    # lane at all" — the same distinction veto_inited inherits above.
     pkt_v12 = build_packet(wire_version=12, route_sysfacts=2, route_decline=1, route_infer=3,
                            route_inited=1, control_in_answered=3, flags=0x01 | 0x8000)
     dv12 = decode_packet(pkt_v12)
-    check(len(pkt_v12) == 262, "synthetic v12 packet is 262 bytes (the LIVE deployed box's shape)")
+    check(len(pkt_v12) == 262, "synthetic v12 packet is 262 bytes (the pre-semantic shape)")
     check(dv12['crc_ok'] is True, "v12 packet crc_ok True (CRC over [:258], NOT [:266] — per-version)")
     check(dv12['version'] == 12, "v12 packet version byte == 12")
     check(dv12['route_sysfacts'] == 2 and dv12['route_inited'] == 1,
@@ -510,23 +565,34 @@ def main():
     check(dv12['control_in_answered'] == 3, "v12 packet: control_in fields still decode")
     check(dv12['sem_recall_hits'] is None and dv12['sem_recall_tried'] is None
           and dv12['sem_recall_floor'] is None and dv12['sem_inited'] is None,
-          "v12 packet: semantic fields ABSENT (None) — no misparse of the live deployed box")
+          "v12 packet: semantic fields ABSENT (None) — no misparse of an older capture")
+    check(dv12['route_veto_checked'] is None and dv12['veto_inited'] is None,
+          "v12 packet: veto fields ABSENT (None) too")
     rec_v12 = packet_to_record(dv12)
     check(set(rec_v12.keys()) == set(REQUIRED_RECORD_KEYS),
           "v12 record still carries the full key contract (sem keys present, valued None)")
-    # v11 and v10 must ALSO still degrade cleanly now that THREE tails exist.
+    # v11 and v10 must ALSO still degrade cleanly now that FOUR tails exist.
     check(dv11['sem_recall_hits'] is None and dv11['sem_inited'] is None,
           "v11 packet: semantic fields ABSENT (None) too")
     check(dv10['sem_recall_hits'] is None and dv10['sem_inited'] is None,
           "v10 packet: semantic fields ABSENT (None) too")
-    # An EMBED=0 box on the v13 wire is a DIFFERENT state from a v12 box: it reports the lane and
-    # says it is off. Both are honest; they must stay distinguishable.
-    pkt_off = build_packet(sem_inited=0, flags=0x01 | 0x8000)
+    check(dv11['route_veto_checked'] is None and dv11['veto_inited'] is None,
+          "v11 packet: veto fields ABSENT (None) too")
+    check(dv10['route_veto_checked'] is None and dv10['veto_inited'] is None,
+          "v10 packet: veto fields ABSENT (None) too")
+    # A gated-off mechanism on the current wire is a DIFFERENT state from an older box that does
+    # not report it. Both are honest; they must stay distinguishable — for the sem lane AND the
+    # veto alike.
+    pkt_off = build_packet(sem_inited=0, veto_inited=0, flags=0x01 | 0x8000)
     doff = decode_packet(pkt_off)
     check(doff['sem_inited'] == 0 and doff['sem_recall_hits'] == 0,
-          "EMBED=0 on v13: sem_inited 0 + zero counts (honest 'gated off', NOT None)")
+          "EMBED=0 on the current wire: sem_inited 0 + zero counts (honest 'gated off', NOT None)")
     check(doff['sem_inited'] is not None and dv12['sem_inited'] is None,
           "gated-off (0) and not-reported (None) are DISTINCT — never collapse them")
+    check(doff['veto_inited'] == 0 and doff['route_veto_checked'] == 0,
+          "VETO=0 on the current wire: veto_inited 0 + zero counts (honest 'gated off', NOT None)")
+    check(doff['veto_inited'] is not None and dv13['veto_inited'] is None,
+          "veto gated-off (0) and veto not-reported (None) are DISTINCT — never collapse them")
 
     # --- N-c-3a: iter_pcap_telemetry on a synthetic 1-packet pcap ---
     pcap = _build_pcap_one(pkt, ts_s=1700000001)

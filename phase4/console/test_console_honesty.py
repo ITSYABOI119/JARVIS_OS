@@ -106,6 +106,14 @@ BANNED = [
     "conversational memory",
     "finds related answers",
     "knows what you meant",
+    # Phase C / C/M4: the ROUTING VETO. It is an 81% measured cut in ONE defect class (32->6 FP
+    # at 1 FN on the measured corpus) — the 6 surviving quantity-question FPs and the 1 FN are
+    # the ceiling. "Fixed" claims the ceiling away; "understands" claims a semantic router the
+    # veto is not (it is one cosine comparison against two frozen centroids).
+    "routing is fixed",
+    "fixes routing",
+    "understands the question",
+    "understands intent",
 ]
 
 # (b) Honest-framing markers that MUST stay present somewhere in the console
@@ -128,6 +136,11 @@ REQUIRED = [
     "about half of paraphrases recall",   # the MEASURED rate (19/36), never a bare capability claim
     "not an error",                        # a miss is not a failure state...
     "degrades to exactly",                 # ...it degrades to today's no-preamble path
+    # Phase C / C/M4: the routing veto's ONE-DIRECTION property and its counter semantics must
+    # be on the surface. The veto can turn a status capture into an inference, never the reverse
+    # — stating the direction is what stops the card reading as a general re-router.
+    "may only reroute a status capture to the model, never the reverse",
+    "after the veto",                      # the route counts are POST-veto final decisions
 ]
 
 # At least one spelling of the verification-stance marker must be present.
@@ -559,6 +572,48 @@ def main():
           "the workload aggregate KEEPS its 'not per-query routing' caveat (separate population)")
     check('not live in the deployed build' in rt,
           "the specialist roadmap diagram keeps its 'not live in the deployed build' badge")
+
+    # --- Phase C / C/M4: the ROUTING VETO rows inside the control-IN routing card. FIELD-DERIVED
+    # (no Capabilities auto-row exists — the u16 flags word is exhausted), so veto_inited is the
+    # live-vs-gated signal. The veto is one cosine comparison against two frozen centroids that
+    # can only turn a SYSFACTS capture into an inference — never the reverse — and the honest
+    # claim is a measured cut in ONE defect class, never a fixed or semantic router. ---
+    check('route_veto_checked' in rt and 'route_vetoed' in rt and 'veto_inited' in rt,
+          "the veto rows source the REAL v14 fields")
+    check('Vetoes checked' in rt,
+          "the denominator is RENDERED ('Vetoes checked') — vetoed alone cannot prove the veto ran")
+    check('captures rerouted to the model' in rt.lower(),
+          "the fired count is labelled as reroutes TO the model (the one legal direction)")
+    check('decisions after the veto' in rt.lower(),
+          "the route counts carry the POST-veto semantic in their caption")
+    check('one defect class' in rt.lower(),
+          "the card scopes the claim to ONE defect class (the measured cut, not 'routing fixed')")
+    # THREE states, never collapsed: armed (1) / gated off (0) / not reported (None). Rendering
+    # None as 0 would claim a mechanism the box never reported.
+    check('veto gated off' in rt.lower(),
+          "a veto_inited==0 box renders 'veto gated off', never a live-looking 0")
+    check('does not report the veto' in rt.lower(),
+          "an older frame (veto_inited null) renders 'does not report the veto', never 0")
+    # TEETH: the two counts must be RENDERED, never DERIVED from each other. checked=5/vetoed=2
+    # is the golden fixture's deliberately non-derivable pair, and a card that computed a third
+    # number ("held") or one count from the other would assert arithmetic the fill does not
+    # honour (checked counts comparisons; skips are deliberately absent from both).
+    #
+    # The patterns are IDENTIFIER-shaped on purpose (the recorded self-matching-grep trap): they
+    # appear in expressions, not in English, so they can only fire on real arithmetic.
+    for derived in ('route_veto_checked -', 'route_veto_checked-',
+                    'route_vetoed +', 'route_vetoed+', '- rec.route_vetoed'):
+        check(derived not in rt,
+              "veto rows never derive one count from the other (%r absent)" % derived)
+    # Scoped agency ban: nothing in Routing.jsx may claim understanding or autonomous decision —
+    # the veto is a cosine comparison, and the router it guards is a keyword classifier.
+    for kw in ('understands', 'the ai decided', 'decided on its own'):
+        check(kw not in rt.lower(),
+              "Routing.jsx does NOT say '%s' (scoped overclaim ban)" % kw)
+    # The stale pre-flip framing must not return: routing has been default-ON since 2026-07-23,
+    # so a flag-less/zero frame means gated-off-or-older, never "ships off until the flip".
+    check('until the flip' not in rt.lower(),
+          "Routing.jsx carries no 'until the flip' promise (rots the day the flip lands)")
 
     print("\n== Results: %d PASS, %d FAIL ==" % (_PASS, _FAIL))
     return 1 if _FAIL else 0

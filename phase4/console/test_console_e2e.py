@@ -265,6 +265,56 @@ def main():
                   "== live route_* fields, DECISIONS framing present, no answered-breakdown (snap=%r)"
                   % (rt_dbg,))
 
+            # (Phase C / C/M4) PIN the ROUTING-VETO rows. The golden 'infer' frame carries
+            # veto_inited=1 + checked=5 / vetoed=2 — a deliberately NON-DERIVABLE pair, so a card
+            # that computed one count from the other (or rendered a derived "held" number in a
+            # count's place) fails this pin rather than coinciding. Four things must hold:
+            #  (a) veto_inited drives live-vs-gated (no flag bit exists for the veto);
+            #  (b) BOTH rendered counts == the live veto fields (TEETH: fails on a mis-wire,
+            #      a '—', or a removed row);
+            #  (c) the one-direction line + the post-veto counter semantic render on the surface;
+            #  (d) no fixed-router overclaim anywhere on the page.
+            vt_ok = False
+            vt_dbg = None
+            deadline = time.time() + 12
+            while time.time() < deadline:
+                snap = page.evaluate(
+                    "() => {"
+                    " const rec = (window.JarvisTelemetry.getState().latest) || {};"
+                    " const want = { 'Vetoes checked': rec.route_veto_checked,"
+                    "                'captures rerouted to the model': rec.route_vetoed };"
+                    " const got = {};"
+                    " Array.from(document.querySelectorAll('div')).forEach(d => {"
+                    "   const t = d.textContent.trim();"
+                    "   if (Object.prototype.hasOwnProperty.call(want, t) && d.previousElementSibling) {"
+                    "     got[t] = d.previousElementSibling.textContent.trim();"
+                    "   }"
+                    " });"
+                    " const body = document.body.innerText.toLowerCase();"
+                    " return { inited: rec.veto_inited, want, got,"
+                    "          direction: body.indexOf('may only reroute a status capture to the model, never the reverse') >= 0,"
+                    "          postveto: body.indexOf('after the veto') >= 0,"
+                    "          oneclass: body.indexOf('one defect class') >= 0,"
+                    "          banned: body.indexOf('routing is fixed') >= 0"
+                    "                  || body.indexOf('fixes routing') >= 0"
+                    "                  || body.indexOf('understands the question') >= 0"
+                    "                  || body.indexOf('understands intent') >= 0 };"
+                    "}")
+                vt_dbg = snap
+                if snap['inited'] == 1 and len(snap['got']) == 2:
+                    matched = all(
+                        str(snap['got'][k]).replace(',', '') == str(snap['want'][k])
+                        for k in snap['want'])
+                    if (matched and snap['direction'] and snap['postveto']
+                            and snap['oneclass'] and not snap['banned']):
+                        vt_ok = True
+                        break
+                time.sleep(0.1)
+            check(vt_ok,
+                  "(C/M4) Routing-veto rows: veto_inited drives live, BOTH counts render == the live "
+                  "veto fields (5/2 — the non-derivable pair), one-direction + after-the-veto framing "
+                  "on screen, no fixed-router overclaim (snap=%r)" % (vt_dbg,))
+
             # --- Models screen renders; bench speeds carry the llama.cpp provenance ---
             page.get_by_title('Models', exact=True).click()
             expect(page.get_by_text('Quality bench-off')).to_be_visible(timeout=10000)

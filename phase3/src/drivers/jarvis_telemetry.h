@@ -1,15 +1,15 @@
 /**
  * jarvis_telemetry.h - JARVIS binary telemetry packet (goal #2b N-c)
  *
- * A versioned, CRC'd, fixed-270-byte (v13) binary packet the box emits over UDP
+ * A versioned, CRC'd, fixed-276-byte (v14) binary packet the box emits over UDP
  * (255.255.255.255:51000, via net_udp.c + the I211) so a remote console can
  * render live, honest box state. Pure logic / host-testable (CRC + finalize);
  * the emit site is in main_x86.c.
  *
  * Wire format: little-endian (x86), packed, no padding. The CRC-32 is the
  * standard zlib/IEEE CRC (poly 0xEDB88320, init/xorout 0xFFFFFFFF) over the
- * first 266 bytes [0 .. offsetof(crc32)), so a Python receiver validates with
- * `zlib.crc32(pkt[:266]) == struct.unpack_from('<I', pkt, 266)[0]`.
+ * first 272 bytes [0 .. offsetof(crc32)), so a Python receiver validates with
+ * `zlib.crc32(pkt[:272]) == struct.unpack_from('<I', pkt, 272)[0]`.
  *
  * JARVIS AI-OS - Phase 4 (goal #2b Remote Telemetry Console)
  */
@@ -20,7 +20,7 @@
 #include <stdint.h>
 
 #define JARVIS_TLM_MAGIC   0x4A54454Cu  /* "JTEL" (LE on wire: 4C 45 54 4A) */
-#define JARVIS_TLM_VERSION 13
+#define JARVIS_TLM_VERSION 14
 
 /* flags (bitfield) */
 #define TLM_F_MODEL_LOADED  0x01
@@ -136,7 +136,32 @@
  * would attribute embed/backfill states to a similarity decision. A miss is NOT
  * an error — it degrades to EXACTLY the no-preamble path the box takes today.
  * The fill is gated JARVIS_EMBED so the EMBED=0 deploy emits v13 with all three
- * counts 0 and sem_inited 0 — honest "semantic recall gated off". */
+ * counts 0 and sem_inited 0 — honest "semantic recall gated off".
+ *
+ * v14 (Phase C / C/M4) appends route_veto_checked/route_vetoed/veto_inited/
+ * veto_pad -> 276 B, CRC@272, again with NO NEW FLAG BIT (the u16 flags word
+ * stayed EXHAUSTED at TLM_F_CONTROL_IN 0x8000), so the routing veto rides the
+ * EXISTING TLM_F_CONTROL_IN — it runs only on the control-IN lane — with
+ * veto_inited as its live-vs-gated indicator, exactly as routing (v12) and
+ * semantic recall (v13) do. Consequence, by construction: the veto gets NO
+ * Capabilities auto-row and is surfaced as field-derived console rows.
+ *
+ * HONESTY, and the reason there are TWO counters rather than one:
+ *   route_veto_checked = comparisons actually RUN — the honest denominator.
+ *                        vetoed=0 alone cannot distinguish "no conceptual
+ *                        questions arrived" from "the veto is silently
+ *                        skipping" (the sem_* three-counter lesson).
+ *   route_vetoed       = SYSFACTS captures rerouted to INFER (fired).
+ * The veto may ONLY reroute a SYSFACTS capture to the model, never the
+ * reverse, and never touches DECLINE (fabrication asymmetry) — so when
+ * JARVIS_ROUTE_VETO=1 the v12 route_* counters record the POST-veto FINAL
+ * decision (a vetoed query counts in route_infer, not route_sysfacts; the
+ * increment sites sit downstream of the veto, nothing moved). The honest
+ * claim is "an 81% measured cut in ONE defect class" (32->6 FP at 1 FN on the
+ * measured corpus), NEVER "routing is fixed" — the 6 surviving FPs and the
+ * 1 FN are the ceiling. The fill is gated JARVIS_ROUTE_VETO so the VETO=0
+ * deploy — which is what ships today — emits v14 with both counts 0 and
+ * veto_inited 0, honest "veto gated off". */
 typedef struct __attribute__((packed)) {
     uint32_t magic; uint8_t version; uint8_t kind; uint16_t flags; uint32_t boot_id; uint32_t seq;  /* 16 */
     uint32_t uptime_ms;                                                                              /*  4 */
@@ -192,15 +217,31 @@ typedef struct __attribute__((packed)) {
     uint16_t sem_recall_floor;    /* v13 @262 — candidates existed and NONE reached the 0.55 floor (a similarity decision, never an embed failure) */ /* 2 */
     uint8_t  sem_inited;          /* v13 @264 — 1 iff the semantic lane is LIVE (mu verified AND vector store ready); the live-vs-gated indicator (no flag bit of its own) */ /* 1 */
     uint8_t  sem_pad;             /* v13 @265 — alignment pad, always 0 (the mon_pad/wake_pad/beh_pad/route_pad precedent) */ /* 1 */
-    uint32_t crc32;          /* zlib CRC-32 over the first 266 bytes [0 .. offsetof(crc32)) */       /*  4 */
+    /* v14 (Phase C / C/M4) — the ROUTING VETO on the control-IN path. checked is the honest
+     * denominator (comparisons RUN — vetoed=0 alone cannot distinguish "no conceptual questions"
+     * from "veto silently skipping"); vetoed counts SYSFACTS captures rerouted to INFER. The veto
+     * can only fire in that ONE direction and never touches DECLINE; when it is live the v12
+     * route_* counters above record the POST-veto final decision. */
+    uint16_t route_veto_checked;  /* v14 @266 — veto comparisons actually run (the denominator; g_route_veto_checked, sat 0xFFFF) */ /* 2 */
+    uint16_t route_vetoed;        /* v14 @268 — SYSFACTS captures rerouted to the model (g_route_vetoed, sat 0xFFFF) */ /* 2 */
+    uint8_t  veto_inited;         /* v14 @270 — 1 iff the veto is ARMED this boot (centroids XOR-verified at init, JARVIS_ROUTE_VETO=1); the live-vs-gated indicator (no flag bit of its own) */ /* 1 */
+    uint8_t  veto_pad;            /* v14 @271 — alignment pad, always 0 (the mon_pad/wake_pad/beh_pad/route_pad/sem_pad precedent) */ /* 1 */
+    uint32_t crc32;          /* zlib CRC-32 over the first 272 bytes [0 .. offsetof(crc32)) */       /*  4 */
 } telemetry_packet_t;
 
-_Static_assert(sizeof(telemetry_packet_t) == 270, "telemetry packet must be 270 bytes (v13)");
+_Static_assert(sizeof(telemetry_packet_t) == 276, "telemetry packet must be 276 bytes (v14)");
+/* The §6a offsets are RECOMPUTED here, not trusted: a silent re-layout (packing change, field
+ * reorder) must break the BUILD, because the Python receiver unpacks these by absolute offset. */
+_Static_assert(__builtin_offsetof(telemetry_packet_t, route_veto_checked) == 266, "route_veto_checked must sit at 266");
+_Static_assert(__builtin_offsetof(telemetry_packet_t, route_vetoed)       == 268, "route_vetoed must sit at 268");
+_Static_assert(__builtin_offsetof(telemetry_packet_t, veto_inited)        == 270, "veto_inited must sit at 270");
+_Static_assert(__builtin_offsetof(telemetry_packet_t, veto_pad)           == 271, "veto_pad must sit at 271");
+_Static_assert(__builtin_offsetof(telemetry_packet_t, crc32)              == 272, "crc32 must sit at 272 (the CRC region end)");
 
 /* Standard zlib/IEEE CRC-32 (poly 0xEDB88320, init/xorout 0xFFFFFFFF) — equals Python zlib.crc32. */
 uint32_t jarvis_tlm_crc32(const void *data, uint32_t len);
 
-/* Stamp magic/version and compute+store crc32 over the first 266 bytes (v13).
+/* Stamp magic/version and compute+store crc32 over the first 272 bytes (v14).
  * offsetof-based, so a future append auto-extends the CRC region with NO .c change. */
 void jarvis_tlm_finalize(telemetry_packet_t *pkt);
 

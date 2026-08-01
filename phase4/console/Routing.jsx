@@ -28,6 +28,18 @@ function Routing({ store }) {
     { k: 'route_infer',    label: 'inference (to the model)',               v: rec.route_infer },
   ];
 
+  /* C/M4: the ROUTING VETO. veto_inited is its live-vs-gated indicator (no flag bit exists —
+   * the route_inited/sem_inited precedent). THREE states, never collapsed: 1 = armed and live;
+   * 0 = the box reports the veto and it is gated off; null = this frame does not carry the veto
+   * fields at all (an older telemetry format). Rendering null as 0 would claim a mechanism the
+   * box never reported; rendering 0 as live would show a live-looking zero for a gated lane. */
+  const vetoInited = rec ? rec.veto_inited : null;
+  const vetoLive = vetoInited === 1;
+  const vetoRows = !vetoLive ? [] : [
+    { k: 'route_veto_checked', label: 'Vetoes checked', v: rec.route_veto_checked },
+    { k: 'route_vetoed',       label: 'captures rerouted to the model', v: rec.route_vetoed },
+  ];
+
   const specialists = [
     { name: 'device-manager', icon: 'cpu', domain: 'Hardware, disk, memory, thermal' },
     { name: 'network', icon: 'wifi', domain: 'Connectivity, ping, ports, routes' },
@@ -76,8 +88,10 @@ function Routing({ store }) {
         right={<Badge tone={routeLive ? 'accent' : 'neutral'}>{routeLive ? 'live' : 'not live'}</Badge>} padding="md">
         {!routeLive ? (
           <div style={{ font: '400 var(--text-sm)/1.5 var(--font-sans)', color: 'var(--text-muted)' }}>
-            {rec ? 'routing gated off on the box (not yet live) — the router is wired but its flag ships off until the flip.'
-                 : '—'}
+            {rec == null ? '—'
+              : rec.route_inited === 0
+                ? 'routing gated off on the box (not yet live) — a build with routing compiled out reports zero decisions and says so.'
+                : 'this box does not report routing (an older telemetry format carries no routing fields).'}
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -90,10 +104,53 @@ function Routing({ store }) {
               ))}
             </div>
             <p style={{ margin: 0, font: '400 var(--text-xs)/1.5 var(--font-sans)', color: 'var(--text-muted)', maxWidth: 720 }}>
-              Each count is one <strong>routing decision</strong>, recorded when the query was classified. They are
+              Each count is one <strong>routing decision</strong>, recorded when the query was classified — and the
+              counts are <strong>decisions after the veto</strong>: when the routing veto below is armed, a rerouted
+              status capture is counted as inference, because that is the path it actually took. They are
               deliberately <strong>not a breakdown of queries answered</strong> and do not add up to it — a query routed
               to the model can still end up degraded or timed out, so it is counted here but never answered.
             </p>
+
+            {/* C/M4: the routing veto — field-derived rows gated on veto_inited (three states,
+              * never collapsed). The veto can only run where routing runs, so it lives inside
+              * the routing branch; a routing-off or older frame never reaches here. */}
+            <div style={{ borderTop: '1px solid var(--border-hairline)', paddingTop: 12,
+              display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ font: 'var(--type-eyebrow)', letterSpacing: 'var(--tracking-caps)', textTransform: 'uppercase',
+                  color: 'var(--text-muted)' }}>Routing veto</span>
+                <Badge tone={vetoLive ? 'accent' : 'neutral'}>
+                  {vetoLive ? 'armed' : vetoInited === 0 ? 'gated off' : 'not reported'}
+                </Badge>
+              </div>
+              {!vetoLive ? (
+                <div style={{ font: '400 var(--text-sm)/1.5 var(--font-sans)', color: 'var(--text-muted)' }}>
+                  {vetoInited === 0
+                    ? 'veto gated off (not yet live) — the box reports the mechanism and it is switched off in this build.'
+                    : 'this box does not report the veto (an older telemetry format carries no veto fields).'}
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 'var(--space-3)' }}>
+                    {vetoRows.map((r) => (
+                      <div key={r.k} style={{ border: '1px solid var(--border-hairline)', borderRadius: 'var(--radius-lg)', padding: 'var(--space-4)' }}>
+                        <div style={{ font: '500 var(--text-xl)/1 var(--font-mono)', color: 'var(--text-primary)' }}>{num(r.v)}</div>
+                        <div style={{ font: '400 var(--text-xs)/1.4 var(--font-sans)', color: 'var(--text-secondary)', marginTop: 6 }}>{r.label}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <p style={{ margin: 0, font: '400 var(--text-xs)/1.5 var(--font-sans)', color: 'var(--text-muted)', maxWidth: 720 }}>
+                    Before a status question is answered from box state, an embedding check may overrule the keyword
+                    capture: <strong>the embedder may only reroute a status capture to the model, never the reverse</strong>;
+                    counts are decisions after the veto. Checked is the denominator — how many comparisons ran — and
+                    rerouted counts the captures sent to the model instead. This is a measured cut in
+                    <strong> one defect class</strong> (a conceptual question keyword-captured as box state), not a
+                    semantic router: some wrong captures survive it, and it costs a genuine status question a
+                    slightly slower answer.
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </Card>

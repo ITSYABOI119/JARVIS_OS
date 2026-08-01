@@ -4557,6 +4557,29 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
      * residency would advertise a lane that cannot select anything. */
     pkt.sem_inited       = g_embed_sem_ok ? 1u : 0u;
 #endif
+#if JARVIS_ROUTE_VETO
+    /* v14 (Phase C / C/M4): the ROUTING VETO. Like routing (v12) and semantic recall (v13),
+     * no flag bit is left to announce it (the u16 flags word is EXHAUSTED at TLM_F_CONTROL_IN
+     * 0x8000), so it rides that flag — the veto runs only on the control-IN lane — and
+     * veto_inited is the live-vs-gated indicator.
+     *
+     * HONESTY: checked is the DENOMINATOR (comparisons actually run). vetoed alone cannot
+     * distinguish "no conceptual questions arrived" from "the veto is silently skipping" — the
+     * sem_* three-counter lesson one bump earlier. The veto may only reroute a SYSFACTS capture
+     * to INFER, never the reverse, so when this is live the v12 route_* counts above are the
+     * POST-veto final decisions (the veto rewrites rc UPSTREAM of every increment site).
+     *
+     * veto_inited mirrors the call site's own arming terms (g_route_veto_armed = centroids
+     * XOR-verified at init, plus the embedder resident and healthy) — NOT merely the flag being
+     * compiled in: an armed-but-embedless boot can never run a comparison, and reporting it
+     * "live" would advertise a mechanism that cannot fire.
+     *
+     * Gated, so the VETO=0 deploy — which is what ships today — emits v14 with both counts 0
+     * and veto_inited 0, the honest "veto gated off" shape (the v5..v13 pattern). */
+    pkt.route_veto_checked = g_route_veto_checked > 0xFFFFu ? 0xFFFFu : (uint16_t)g_route_veto_checked;
+    pkt.route_vetoed       = g_route_vetoed       > 0xFFFFu ? 0xFFFFu : (uint16_t)g_route_vetoed;
+    pkt.veto_inited        = (g_route_veto_armed && g_embed_ready && !g_embed_bad) ? 1u : 0u;
+#endif
     /* model display name (matches the on-screen panel) + last response, NUL-bounded (pkt is zeroed) */
     { const char *mn = "Gemma 4 E2B";
       for (int i = 0; i < (int)sizeof(pkt.model_name) - 1 && mn[i]; i++) pkt.model_name[i] = mn[i]; }
@@ -8128,6 +8151,18 @@ static void *main_continued(void *arg UNUSED)
             puts_serial(" floor=");  put_dec(g_embed_sem_below_floor);
             puts_serial(" inited="); put_dec((uint32_t)(g_embed_sem_ok ? 1 : 0));
             puts_serial(" (hits+floor != tried by design; residual is real)\n");
+#endif
+#if JARVIS_ROUTE_VETO
+            /* C/M4 (v14) box proof: the exact veto counters + the live-vs-gated indicator
+             * jarvis_telemetry_emit fills into the v14 packet. On-wire I211 validation is
+             * DEFERRED to the veto flip (no NIC in QEMU) — the [TLM-V8..V13] precedent.
+             * checked= is the denominator (comparisons RUN); vetoed= counts SYSFACTS captures
+             * rerouted to INFER — one direction only, never the reverse. */
+            puts_serial("[TLM-V14] veto checked="); put_dec(g_route_veto_checked);
+            puts_serial(" vetoed="); put_dec(g_route_vetoed);
+            puts_serial(" inited=");
+            put_dec((uint32_t)((g_route_veto_armed && g_embed_ready && !g_embed_bad) ? 1 : 0));
+            puts_serial(" (checked is the denominator; vetoed=0 alone proves nothing)\n");
 #endif
 #if JARVIS_MONITORS
             /* 6-1/M1: the q_errors-delta watcher -> ACTION_NOTIFY_ANOMALY through the shared

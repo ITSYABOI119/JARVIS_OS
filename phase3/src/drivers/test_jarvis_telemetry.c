@@ -32,7 +32,7 @@ static int pass = 0, fail = 0;
 
 static void test_layout(void)
 {
-    CHECK(sizeof(telemetry_packet_t) == 270, "sizeof(telemetry_packet_t) == 270 (v13)");
+    CHECK(sizeof(telemetry_packet_t) == 276, "sizeof(telemetry_packet_t) == 276 (v14)");
     OFF(magic, 0);
     OFF(flags, 6);
     OFF(boot_id, 8);
@@ -89,8 +89,15 @@ static void test_layout(void)
     OFF(sem_recall_floor, 262);
     OFF(sem_inited, 264);
     OFF(sem_pad, 265);
-    OFF(crc32, 266);
-    /* The three counts deliberately do NOT sum (tried - hits - floor is a real residual),
+    /* v14 (Phase C / C/M4): the ROUTING-VETO counts + its live-vs-gated indicator.
+     * checked is the DENOMINATOR (comparisons run); vetoed counts SYSFACTS captures
+     * rerouted to INFER — one direction only, and neither derivable from the other. */
+    OFF(route_veto_checked, 266);
+    OFF(route_vetoed, 268);
+    OFF(veto_inited, 270);
+    OFF(veto_pad, 271);
+    OFF(crc32, 272);
+    /* The three sem counts deliberately do NOT sum (tried - hits - floor is a real residual),
      * so nothing here may assert an arithmetic relation between them. Pinning the OFFSETS
      * is the contract; pinning a sum would encode a falsehood the fill does not honour. */
 }
@@ -159,12 +166,19 @@ static void test_finalize_roundtrip(void)
     pkt.sem_recall_tried = 9;
     pkt.sem_recall_floor = 3;
     pkt.sem_inited       = 1;               /* the semantic lane is live in this build */
+    /* v14 (Phase C / C/M4): the ROUTING VETO. checked=5 / vetoed=2 is the golden fixture's
+     * deliberately NON-DERIVABLE pair — a consumer computing one from the other fails
+     * rather than coincides. vetoed <= checked is the ONLY real invariant (every firing
+     * was a comparison); no other relation may be asserted. */
+    pkt.route_veto_checked = 5;
+    pkt.route_vetoed       = 2;
+    pkt.veto_inited        = 1;             /* the veto is armed in this build */
 
     jarvis_tlm_finalize(&pkt);
 
     CHECK(pkt.magic == JARVIS_TLM_MAGIC, "finalize sets magic == JTEL");
-    CHECK(pkt.version == JARVIS_TLM_VERSION, "finalize sets version == 13");
-    CHECK(JARVIS_TLM_VERSION == 13, "wire version is 13 (v13)");
+    CHECK(pkt.version == JARVIS_TLM_VERSION, "finalize sets version == 14");
+    CHECK(JARVIS_TLM_VERSION == 14, "wire version is 14 (v14)");
     CHECK(pkt.infer_active == 1 && pkt.infer_duty_pct == 42, "infer_active/infer_duty_pct survive finalize");
     CHECK(pkt.log_cursor == 137 && pkt.nvme_total_mb == 1953892u, "log_cursor/nvme_total_mb survive finalize");
     CHECK(pkt.total_ram_mb == 30000u, "total_ram_mb survives finalize");
@@ -229,9 +243,22 @@ static void test_finalize_roundtrip(void)
     CHECK(pkt.semantic_fact_count == 1u && pkt.sem_recall_hits == 4u,
           "semantic_fact_count (v6 distill) and sem_recall_hits (v13 embedding) are distinct fields");
 
-    /* The stored crc matches a recompute over the first 266 bytes (offsetof(crc32)). */
+    /* v14 (Phase C / C/M4): the veto counts survive finalize. checked is the honest
+     * DENOMINATOR — vetoed=0 alone cannot distinguish "no conceptual questions arrived" from
+     * "the veto is silently skipping"; only checked can. vetoed <= checked is the one real
+     * invariant (every firing was a comparison); the 5/2 pair is deliberately non-derivable
+     * so a consumer computing one from the other fails here. */
+    CHECK(pkt.route_veto_checked == 5u && pkt.route_vetoed == 2u,
+          "route_veto_checked/route_vetoed survive finalize (5/2, CRC covers 266-269)");
+    CHECK(pkt.veto_inited == 1u, "veto_inited survives finalize (live-vs-gated indicator, no flag bit)");
+    CHECK(pkt.route_vetoed <= pkt.route_veto_checked,
+          "vetoed is bounded by checked (checked is the denominator)");
+    CHECK(pkt.route_veto_checked != pkt.route_vetoed,
+          "the 5/2 golden pair is non-derivable — a consumer equating them fails");
+
+    /* The stored crc matches a recompute over the first 272 bytes (offsetof(crc32)). */
     uint32_t recomputed = jarvis_tlm_crc32(&pkt, offsetof(telemetry_packet_t, crc32));
-    CHECK(pkt.crc32 == recomputed, "stored crc32 == recompute over first 266 B");
+    CHECK(pkt.crc32 == recomputed, "stored crc32 == recompute over first 272 B");
     CHECK(pkt.crc32 != 0u, "crc32 is non-zero for a populated packet");
 
     /* The magic bytes are "JTEL" little-endian: 4C 45 54 4A. */
@@ -239,7 +266,7 @@ static void test_finalize_roundtrip(void)
     CHECK(raw[0] == 0x4C && raw[1] == 0x45 && raw[2] == 0x54 && raw[3] == 0x4A,
           "magic on wire (LE) == 4C 45 54 4A (\"JTEL\")");
 
-    /* Flipping any byte in [0,266) must break the CRC check. */
+    /* Flipping any byte in [0,272) must break the CRC check. */
     int detected_all = 1;
     for (uint32_t i = 0; i < offsetof(telemetry_packet_t, crc32); i++) {
         raw[i] ^= 0xFF;
@@ -247,7 +274,7 @@ static void test_finalize_roundtrip(void)
             detected_all = 0;   /* a flip went undetected */
         raw[i] ^= 0xFF;         /* restore */
     }
-    CHECK(detected_all, "every single-byte flip in [0,266) breaks the CRC");
+    CHECK(detected_all, "every single-byte flip in [0,272) breaks the CRC");
 
     /* CONTROL_IN=0 honest-deploy shape: the control-IN fields left 0 + TLM_F_CONTROL_IN NOT set is the
      * deployed CONTROL_IN=0 box's honest v11 shape ("channel gated off"). The struct is STILL v11/254 B
@@ -256,7 +283,7 @@ static void test_finalize_roundtrip(void)
     telemetry_packet_t z = {0};
     z.flags = TLM_F_MODEL_LOADED | TLM_F_SELFTEST_PASS;   /* deploy flags, NO CONTROL_IN */
     jarvis_tlm_finalize(&z);
-    CHECK(sizeof z == 270u, "honest-0: still v13/270 B for everyone (no OFF-identity claim at a size bump)");
+    CHECK(sizeof z == 276u, "honest-0: still v14/276 B for everyone (no OFF-identity claim at a size bump)");
     CHECK(z.control_in_answered == 0u && z.control_in_blocked == 0u && z.control_in_dropped == 0u,
           "honest-0: control_in fields all 0 (the CONTROL_IN=0 deploy fill)");
 
@@ -275,7 +302,15 @@ static void test_finalize_roundtrip(void)
     CHECK(z.sem_recall_hits == 0u && z.sem_recall_tried == 0u && z.sem_recall_floor == 0u,
           "honest-0: EMBED=0 emits zero semantic-recall counts");
     CHECK(z.sem_inited == 0u, "honest-0: sem_inited 0 == 'semantic recall gated off' (no flag bit exists)");
-    CHECK(z.version == JARVIS_TLM_VERSION, "honest-0: version stamped == 13");
+
+    /* The VETO=0 deploy — which is what ships today — emits v14 with both veto counts 0 AND
+     * veto_inited 0. veto_inited==0 is what stops the console rendering a live-looking zero:
+     * a gated-off veto and an armed veto that has checked nothing are otherwise
+     * indistinguishable on the wire, and only one is honest to render as "0 checked". */
+    CHECK(z.route_veto_checked == 0u && z.route_vetoed == 0u,
+          "honest-0: VETO=0 emits zero veto counts");
+    CHECK(z.veto_inited == 0u, "honest-0: veto_inited 0 == 'veto gated off' (no flag bit exists)");
+    CHECK(z.version == JARVIS_TLM_VERSION, "honest-0: version stamped == 14");
 }
 
 int main(void)
