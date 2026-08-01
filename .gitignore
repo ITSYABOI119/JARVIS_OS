@@ -119,3 +119,26 @@ ctrl_key*.bin
 
 # bench-off raw model outputs are evidence, but model WEIGHTS never get committed
 models/*.gguf
+
+# ---------------------------------------------------------------------------
+# STRATEGIST / CODER WORKING FILES — NEVER COMMIT. These are live scratch state
+# handed between sessions (task prompts, handoffs, backlogs, operator runbooks).
+# They are perishable by design, frequently mid-edit in ANOTHER session, and they
+# quote box state and in-flight reasoning that has no business in public history —
+# this repo is PUBLIC (MIT).
+#
+# BACKLOG-STRAG.md was committed in error (8783e9b) and is untracked in the same
+# commit that adds these patterns. Note what `git rm --cached` does and does not
+# do: it removes the file from the INDEX only. The working file is untouched, so a
+# session mid-edit on it is unaffected — what this blocks is committing it again.
+#
+# Every task prompt in this workstream already carries "NEVER commit HANDOFF-*,
+# PROMPT-*, RUNBOOK-*, BACKLOG-*" as a rule the coder must follow by hand, staging
+# by explicit path. That rule held, but it is a discipline, and one broad `git add`
+# during a long session defeats it. This is the mechanism behind the discipline.
+#
+# briefings/ is DELIBERATELY NOT LISTED: those are a committed, dated record.
+BACKLOG-*.md
+HANDOFF-*.md
+PROMPT-*.md
+RUNBOOK-*.md
