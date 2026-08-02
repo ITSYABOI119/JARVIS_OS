@@ -615,7 +615,7 @@
  * (the only lane it runs on). NOT deployed: the flip is a separate operator-supervised
  * decision, and the defect stays LIVE on the deployed image until then. */
 #ifndef JARVIS_ROUTE_VETO
-#define JARVIS_ROUTE_VETO 0
+#define JARVIS_ROUTE_VETO 1
 #endif
 #if JARVIS_ROUTE_VETO && !JARVIS_ROUTING
 #error "JARVIS_ROUTE_VETO requires JARVIS_ROUTING (it wraps route_classify's result)"
