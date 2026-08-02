@@ -612,8 +612,15 @@
  * move: the veto rewrites `rc` UPSTREAM of every increment site.
  *
  * Requires ROUTING (the classifier it wraps), EMBED (the vector it needs) and CONTROL_IN
- * (the only lane it runs on). NOT deployed: the flip is a separate operator-supervised
- * decision, and the defect stays LIVE on the deployed image until then. */
+ * (the only lane it runs on). DEPLOYED default-ON since the C/M4 flip (boot_id=49,
+ * 2026-08-02): 8/8 pre-registered legs matched, incl. the wobble leg (margin 0.004835)
+ * matching the host and the SYSFACTS-only scope holding on hardware (a DECLINE capture
+ * left route_veto_checked unmoved). The honest claim is unchanged and bounded: the
+ * bare-word false-positive class is cut 32 -> 6; the 6 residual quantity-question FPs
+ * and the 1 measured FN ARE the ceiling; a genuine SYSFACTS question pays ~300-800 ms
+ * it previously did not. NEVER "routing is fixed" -- and note the flip moves a question
+ * to the model, it does not make the model right (boot 49's V4 was correctly rerouted
+ * and still answered 0.05% where 5.56% was correct). */
 #ifndef JARVIS_ROUTE_VETO
 #define JARVIS_ROUTE_VETO 1
 #endif
