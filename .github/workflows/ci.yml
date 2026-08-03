@@ -1005,3 +1005,78 @@ jobs:
     # because the seL4 tier cannot be host-compiled and would fail it by construction.
     - name: "Invariant: every test_*.c / fuzz_*.c has a CI step (or a stated reason)"
       run: python3 phase3/scripts/check_ci_completeness.py
+
+    # A4 -- a PARSE-LEVEL floor over the operator PowerShell tooling (~2,200 lines).
+    #
+    # THE HONEST CEILING, stated here so this is never mistaken for coverage: this step
+    # PARSES and lints. It NEVER RUNS anything. It would NOT have caught the $Lines
+    # defect (PowerShell variable names are case-INSENSITIVE, so a local `$lines`
+    # silently shadowed the `$Lines` parameter and the -Lines option never worked) --
+    # that parses perfectly and is only visible by EXECUTING the script. `-Check` remains
+    # the execution substitute, and the "CI: N/A by design" stance for these scripts is
+    # unchanged: a Windows .ps1 cannot be RUN in this Linux CI.
+    #
+    # NETWORK DEPENDENCY: Install-Module fetches from PSGallery -- this step's one
+    # external dependency. The version is pinned so the gate is reproducible; an
+    # unpinned analyzer silently changes what "green" means when upstream ships a rule.
+    - name: "Phase C: PowerShell parse + pinned PSScriptAnalyzer (parse-level only, never executes)"
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $files = @(Get-ChildItem phasec/scripts -Filter *.ps1 | Sort-Object Name)
+        if ($files.Count -eq 0) {
+          Write-Output "::error::no .ps1 found under phasec/scripts -- this gate must not pass vacuously"
+          exit 1
+        }
+        Write-Output "pwsh $($PSVersionTable.PSVersion) | $($files.Count) script(s)"
+
+        # 1. PARSE GATE -- a syntax error here is unambiguous breakage.
+        $bad = 0
+        foreach ($f in $files) {
+          $errs = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errs)
+          if ($errs -and @($errs).Count -gt 0) {
+            $bad++
+            Write-Output "::error::$($f.Name): $(@($errs).Count) parse error(s)"
+            foreach ($e in $errs) { Write-Output "    line $($e.Extent.StartLineNumber): $($e.Message)" }
+          } else {
+            Write-Output "  parse OK: $($f.Name)"
+          }
+        }
+        if ($bad -gt 0) { exit 1 }
+
+        # 2. PSScriptAnalyzer, PINNED. Errors fail; warnings are printed but do not.
+        #    A wall of style warnings on day one is how a gate gets deleted.
+        Install-Module PSScriptAnalyzer -RequiredVersion 1.24.0 -Force -Scope CurrentUser -AllowClobber
+        Import-Module PSScriptAnalyzer
+        Write-Output "PSScriptAnalyzer $((Get-Module PSScriptAnalyzer).Version)"
+        # Analyse each file EXPLICITLY rather than pointing at the directory. Invoke-
+        # ScriptAnalyzer has no -Filter parameter, and a mis-bound call returns nothing,
+        # which reads as "0 findings = clean" -- a gate that inspects nothing and passes.
+        # Looping the same $files the parse gate used makes the count checkable below.
+        $all = @()
+        $analysed = 0
+        foreach ($f in $files) {
+          $all += @(Invoke-ScriptAnalyzer -Path $f.FullName)
+          $analysed++
+        }
+        if ($analysed -ne $files.Count) {
+          Write-Output "::error::analysed $analysed of $($files.Count) scripts -- refusing to report a partial run as clean"
+          exit 1
+        }
+        $errors = @($all | Where-Object Severity -eq 'Error')
+        $warns  = @($all | Where-Object Severity -eq 'Warning')
+        Write-Output "analyzer: $($errors.Count) error(s), $($warns.Count) warning(s) (warnings are non-fatal)"
+        # Warnings are summarised BY RULE, not dumped line by line: one rule
+        # (PSAvoidUsingWriteHost) accounts for the large majority, and 130+ identical
+        # lines per run is how a gate's output stops being read. Rules with few hits are
+        # listed in full, because those are the ones worth a human glance.
+        foreach ($g in ($warns | Group-Object RuleName | Sort-Object Count -Descending)) {
+          Write-Output ("  [warn] {0,4}x {1}" -f $g.Count, $g.Name)
+          if ($g.Count -le 5) {
+            foreach ($w in $g.Group) { Write-Output "           $($w.ScriptName):$($w.Line) -- $($w.Message)" }
+          }
+        }
+        foreach ($e in $errors) { Write-Output "::error::$($e.ScriptName):$($e.Line) $($e.RuleName) -- $($e.Message)" }
+        if ($errors.Count -gt 0) { exit 1 }
+        Write-Output "PowerShell parse-level floor holds (parsed, not executed)"
