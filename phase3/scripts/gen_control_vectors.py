@@ -21,10 +21,12 @@ Run:
   python3 phase3/scripts/gen_control_vectors.py
 """
 
+import argparse
 import hashlib
 import hmac
 import os
 import random
+import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
@@ -44,7 +46,7 @@ def c_byte_array(data):
     return ", ".join("0x%02x" % b for b in data)
 
 
-def gen_sha256_header(path):
+def gen_sha256_header():
     # The 3 canonical NIST FIPS-180 SHA-256 vectors.
     vectors = [
         (b"", "empty string"),
@@ -89,12 +91,10 @@ def gen_sha256_header(path):
     lines.append("#endif /* JARVIS_SHA256_VECTORS_H */")
     lines.append("")
 
-    with open(path, "w", newline="\n") as f:
-        f.write("\n".join(lines))
-    return len(lines)
+    return "\n".join(lines)
 
 
-def gen_hmac_header(path):
+def gen_hmac_header():
     rng = random.Random(SEED)
 
     triples = []
@@ -143,20 +143,62 @@ def gen_hmac_header(path):
     lines.append("#endif /* JARVIS_HMAC_VECTORS_H */")
     lines.append("")
 
-    with open(path, "w", newline="\n") as f:
-        f.write("\n".join(lines))
-    return len(lines)
+    return "\n".join(lines)
+
+
+def _check_one(path, text):
+    """True if the committed file matches regeneration.
+
+    Compares CONTENT, not line endings (the gen_embed_mu.py --check precedent): a
+    checkout under autocrlf=true would otherwise fail on every line.
+    """
+    name = os.path.basename(path)
+    if not os.path.exists(path):
+        print("FAIL: %s does not exist - run without --check to generate it" % name)
+        return False
+    with open(path, "r", newline="") as f:
+        on_disk = f.read()
+    if on_disk.replace("\r\n", "\n") != text.replace("\r\n", "\n"):
+        print("FAIL: %s is STALE - regenerate with gen_control_vectors.py" % name)
+        print("      on disk %d chars, regenerated %d chars" % (len(on_disk), len(text)))
+        return False
+    print("OK: %s matches regeneration (%d chars)" % (name, len(on_disk)))
+    return True
 
 
 def main():
-    os.makedirs(OUT_DIR, exist_ok=True)
+    ap = argparse.ArgumentParser(
+        description="Generate (or verify) the committed SHA-256 / HMAC test vectors.")
+    ap.add_argument("--check", action="store_true",
+                    help="verify the committed headers match regeneration; write nothing")
+    args = ap.parse_args()
+
     sha_path = os.path.join(OUT_DIR, "sha256_vectors.h")
     hmac_path = os.path.join(OUT_DIR, "hmac_vectors.h")
-    n_sha = gen_sha256_header(sha_path)
-    n_hmac = gen_hmac_header(hmac_path)
-    print("wrote %s (%d lines, 3 vectors)" % (sha_path, n_sha))
-    print("wrote %s (%d lines, %d vectors)" % (hmac_path, n_hmac, N_HMAC))
+    sha_text = gen_sha256_header()
+    hmac_text = gen_hmac_header()
+
+    if args.check:
+        # DRIFT GATE. These headers are fuzz_control_in.c's differential oracle: it
+        # checks our C SHA-256/HMAC against vectors Python computed. If the committed
+        # headers stop matching what the generator produces, the fuzzer is still green
+        # while attesting something nobody generated -- a weakened oracle with no red
+        # light. Generation is deterministic (fixed SEED, no time, no urandom), so a
+        # mismatch is real drift, never flake.
+        ok = _check_one(sha_path, sha_text) & _check_one(hmac_path, hmac_text)
+        return 0 if ok else 1
+
+    os.makedirs(OUT_DIR, exist_ok=True)
+    with open(sha_path, "w", newline="\n") as f:
+        f.write(sha_text)
+    with open(hmac_path, "w", newline="\n") as f:
+        f.write(hmac_text)
+    print("wrote %s (%d lines, 3 vectors)" % (sha_path, sha_text.count("\n")))
+    print("wrote %s (%d lines, %d vectors)" % (hmac_path, hmac_text.count("\n"), N_HMAC))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    # sys.exit(main()) -- NOT a bare main(): --check signals drift through the exit
+    # code, and discarding it would make the CI gate incapable of ever failing.
+    sys.exit(main())

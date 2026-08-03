@@ -310,6 +310,36 @@ jobs:
           -o /tmp/test_nvme_log
         /tmp/test_nvme_log
 
+    # A6a -- the round-trip parse_nvme_log.py lacked (parse_episodic and
+    # parse_action_audit both have one). This parser is the ONLY way the box's durable
+    # log is read off-hardware, so a decode bug is invisible until someone is mid-
+    # diagnosis. Fixtures are produced by driving the REAL nvme_log.c through its mock
+    # disk, so the assertions are against bytes the shipping writer produced.
+    # THREE cases because wrap-order is the subtle half; `wrapped` and `migrated` are
+    # dumped FULL SIZE (2701 sectors) because parse_nvme_log derives its wrap modulus
+    # from the buffer it is given, not from NVME_LOG_MAX_ENTRIES -- a truncated wrapped
+    # capture would rotate by a different modulus than the writer used.
+    - name: "Phase 3: NVMe-log parser round-trip (C -> Python)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -D_POSIX_C_SOURCE=200809L \
+          -I phase3/src/drivers \
+          phase3/src/drivers/test_nvme_log.c phase3/src/drivers/nvme_log.c \
+          -o /tmp/tnvl
+        /tmp/tnvl
+        /tmp/tnvl --dump plain    /tmp/nvl_plain.bin
+        /tmp/tnvl --dump wrapped  /tmp/nvl_wrapped.bin
+        /tmp/tnvl --dump migrated /tmp/nvl_migrated.bin
+        python3 phase3/scripts/test_parse_nvme_log.py \
+          /tmp/nvl_plain.bin /tmp/nvl_wrapped.bin /tmp/nvl_migrated.bin
+
+    # A6b -- drift gate on the fuzzer's differential oracle. hmac_vectors.h and
+    # sha256_vectors.h are what fuzz_control_in.c checks our C crypto AGAINST. If the
+    # committed headers stop matching what the generator produces, the fuzzer stays
+    # green while attesting vectors nobody generated. Generation is deterministic
+    # (fixed SEED, no clock, no urandom), so a mismatch is real drift, never flake.
+    - name: "Phase 6: control-vector generator drift gate (Python)"
+      run: python3 phase3/scripts/gen_control_vectors.py --check
+
     - name: "Phase 5: Episodic Store (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 -D_POSIX_C_SOURCE=200809L \

@@ -298,8 +298,98 @@ static void test_log_wrap(void)
  * Main
  * ================================================================ */
 
-int main(void)
+/* ================================================================
+ * A6a -- deterministic fixture dump for the C -> Python round-trip
+ * ================================================================
+ *
+ * Follows test_episodic_store.c / test_action_audit.c: --dump runs INSTEAD of the
+ * suite and writes a byte-stable fixture that phase3/scripts/test_parse_nvme_log.py
+ * asserts against. Determinism: mock_disk is zeroed first (an invalid header forces
+ * boot_id = 1), payloads are fixed literals, and nothing reads a clock or rand.
+ *
+ * THREE cases, hence `--dump <case> <path>` rather than the siblings' `--dump <path>`:
+ * the wrap-order logic is the subtle half of the parser and cannot be exercised by one
+ * fixture. Cases: plain | wrapped | migrated.
+ *
+ * THE FILE LENGTH IS LOAD-BEARING, and it is why `wrapped` and `migrated` are written
+ * FULL SIZE. parse_nvme_log.py derives its wrap modulus from the FILE
+ * (`slots = len(data)//512 - 1`), not from NVME_LOG_MAX_ENTRIES. A truncated wrapped
+ * fixture would therefore make the parser rotate by a different modulus than
+ * nvme_log.c used when writing, and the round-trip would compare two different
+ * orderings while both sides looked self-consistent.
+ */
+static int write_fixture(const char *path, size_t sectors)
 {
+    FILE *f = fopen(path, "wb");
+    if (!f) { printf("dump: cannot open %s\n", path); return 1; }
+    size_t n = fwrite(mock_disk, 1, sectors * 512, f);
+    fclose(f);
+    if (n != sectors * 512) { printf("dump: short write to %s\n", path); return 1; }
+    printf("dumped %zu sectors to %s\n", sectors, path);
+    return 0;
+}
+
+static int dump_fixture(const char *which, const char *path)
+{
+    char buf[64];
+
+    if (strcmp(which, "plain") == 0) {
+        /* Non-wrapped: 5 entries. File = header + 5 slots, so the parser sees
+         * slots == total == 5 and takes its non-wrapped branch. */
+        memset(mock_disk, 0, sizeof(mock_disk));
+        if (nvme_log_init(&mock_ctrl, dma_buf, 0x1000) != 0) return 1;
+        for (int i = 0; i < 5; i++) {
+            snprintf(buf, sizeof(buf), "plain-entry-%d", i);
+            if (nvme_log_write(&mock_ctrl, dma_buf, 0x1000,
+                               (uint16_t)(LOG_BOOT + i), buf) != 0) return 1;
+        }
+        return write_fixture(path, 1 + 5);
+    }
+
+    if (strcmp(which, "wrapped") == 0) {
+        /* Wrapped: MAX + 5 writes, so cursor lands at 5 and total is MAX + 5. Written
+         * FULL SIZE (see the note above) so the parser's modulus == NVME_LOG_MAX_ENTRIES. */
+        memset(mock_disk, 0, sizeof(mock_disk));
+        if (nvme_log_init(&mock_ctrl, dma_buf, 0x1000) != 0) return 1;
+        for (int i = 0; i < NVME_LOG_MAX_ENTRIES + 5; i++) {
+            snprintf(buf, sizeof(buf), "w%d", i);
+            if (nvme_log_write(&mock_ctrl, dma_buf, 0x1000, LOG_IPC_STATS, buf) != 0) return 1;
+        }
+        return write_fixture(path, MOCK_SECTORS);
+    }
+
+    if (strcmp(which, "migrated") == 0) {
+        /* The stale pre-wrap cursor: a header from the old no-wrap build carries
+         * cursor == NVME_LOG_MAX_ENTRIES. nvme_log_init clamps it to 0, so the next
+         * writes land in slots 0,1,2 while total_entries continues from MAX. */
+        nvme_log_header_t stale;
+        memset(&stale, 0, sizeof(stale));
+        stale.magic         = NVME_LOG_MAGIC;
+        stale.version       = NVME_LOG_VERSION;
+        stale.cursor        = NVME_LOG_MAX_ENTRIES;
+        stale.total_entries = NVME_LOG_MAX_ENTRIES;
+        stale.boot_id       = 5;
+        stale.checksum      = test_compute_checksum(&stale);
+        memset(mock_disk, 0, sizeof(mock_disk));
+        memcpy(mock_disk, &stale, sizeof(stale));
+
+        if (nvme_log_init(&mock_ctrl, dma_buf, 0x1000) != 0) return 1;  /* boot_id 5 -> 6 */
+        for (int i = 0; i < 3; i++) {
+            snprintf(buf, sizeof(buf), "post-migration-%d", i);
+            if (nvme_log_write(&mock_ctrl, dma_buf, 0x1000, LOG_ERROR, buf) != 0) return 1;
+        }
+        return write_fixture(path, MOCK_SECTORS);
+    }
+
+    printf("dump: unknown case '%s' (want plain|wrapped|migrated)\n", which);
+    return 1;
+}
+
+int main(int argc, char **argv)
+{
+    if (argc >= 4 && strcmp(argv[1], "--dump") == 0)
+        return dump_fixture(argv[2], argv[3]);
+
     printf("=== NVMe Log Tests ===\n");
 
     test_fresh_init();
