@@ -620,6 +620,19 @@ jobs:
           -o /tmp/cm4vd -lm
         printf '' | /tmp/cm4vd
 
+    # A7 -- the cache suite that attests the SHIPPING copies.
+    # "Phase 1: Decision Cache (C)" above compiles PHASE1's decision_cache.c +
+    # cache_patterns.c. The copies linked into the deployed image are phase3's, and
+    # decision_cache.c diverges by one hunk (SEC-024 LRU eviction, 708aa15). This step
+    # runs the same assertions against the files that actually ship. It is also the
+    # FIRST CI step ever to compile phase3/src/ai/cache_patterns.c.
+    - name: "Phase 3: Decision cache + patterns — the SHIPPING copies (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
+          phase3/src/ai/test_decision_cache.c phase3/src/ai/decision_cache.c \
+          phase3/src/ai/cache_patterns.c -o /tmp/tdc3
+        /tmp/tdc3
+
     - name: "Phase 5: Decision-cache LRU eviction (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
