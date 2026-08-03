@@ -377,10 +377,19 @@ echo ""
 echo -e "${GREEN}Verifying...${NC}"
 VERIFY_MNT=$(mktemp -d)
 if mount -o ro "$DATA_PART" "$VERIFY_MNT" 2>/dev/null; then
+    # shellcheck disable=SC2012  # These `ls` calls exist to render HUMAN-READABLE
+    # verification output ("1.3M" via `ls -lh | awk '{print $5}'`). `find`/`stat` would
+    # report raw byte counts in a different layout, i.e. a visible change to the
+    # confirmation an operator reads before trusting a freshly written USB — on a
+    # DESTRUCTIVE script. The paths are our own fixed image names on a filesystem this
+    # script just created, so the non-alphanumeric-filename hazard cannot arise here.
     echo -e "  Kernel:     $(ls -lh "$VERIFY_MNT/boot/$KERNEL_IMAGE" 2>/dev/null | awk '{print $5}' || echo 'MISSING')"
+    # shellcheck disable=SC2012
     echo -e "  Rootserver: $(ls -lh "$VERIFY_MNT/boot/$ROOTSERVER_IMAGE" 2>/dev/null | awk '{print $5}' || echo 'MISSING')"
+    # shellcheck disable=SC2012
     echo -e "  grub.cfg:   $(ls -lh "$VERIFY_MNT/boot/grub/grub.cfg" 2>/dev/null | awk '{print $5}' || echo 'MISSING')"
     if [ "$BOOT_MODE" = "uefi" ] || [ "$BOOT_MODE" = "both" ]; then
+        # shellcheck disable=SC2012  # same reason: a space-joined human-readable listing
         echo -e "  EFI:        $(ls "$VERIFY_MNT/EFI/BOOT/" 2>/dev/null | tr '\n' ' ' || echo 'MISSING')"
     fi
     umount "$VERIFY_MNT"

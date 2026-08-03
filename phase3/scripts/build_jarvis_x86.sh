@@ -1097,7 +1097,7 @@ cmake -DKernelIOMMU=OFF \
       -DKernelXSaveFeatureSet=7 \
       -DKernelXSaveSize=832 \
       -DSMP=ON \
-      -DNUM_NODES=${NN} \
+      -DNUM_NODES="${NN}" \
       . >/dev/null 2>&1
 # Pass 2: KernelXSaveFeatureSet DEPENDS on KernelFPUXSave, which only flips ON during
 # pass 1; on the pass where it first becomes selectable it takes its default (3 =
@@ -1145,6 +1145,9 @@ IMAGES_DIR="$BUILD_DIR/images"
 if [ -d "$IMAGES_DIR" ]; then
     echo -e "${GREEN}────────────────────────────────────────────────${NC}"
     echo -e "${BOLD}Build output:${NC}"
+    # shellcheck disable=SC2012  # `ls -lh` is the point: this prints the human-readable
+    # build listing for the operator. `find` would change that operator-visible format
+    # for no safety gain, and these are our own build artifacts with fixed names.
     ls -lh "$IMAGES_DIR"/ 2>/dev/null | while read -r line; do
         echo "  $line"
     done

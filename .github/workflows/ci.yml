@@ -242,11 +242,35 @@ jobs:
     - name: "Phase 4: Console E2E (Playwright, real SSE via --replay)"
       run: python3 phase4/console/test_console_e2e.py
 
-    - name: "Phase 4: Installer shellcheck"
+    # A3 -- shellcheck coverage extended from 4 scripts to all 16 in phase3/scripts.
+    # Two tiers, because the risk is not uniform:
+    #   FULL severity  -- the scripts that write to a device or build the shipped image.
+    #   -S error       -- the bench/qemu helpers: catch real breakage, do not gate style.
+    # build_jarvis_x86.sh and create_boot_usb.sh needed one proven fix and five targeted
+    # SC2012 disables to reach full severity; no behaviour-affecting edit was required, so
+    # the pre-registered escape hatch (disable-annotate and defer) was NOT used.
+    - name: "Phase 4: Installer + build/USB shellcheck (full); bench/qemu helpers (-S error)"
       run: |
         sudo apt-get update && sudo apt-get install -y shellcheck
-        shellcheck phase3/scripts/install_jarvis_x86.sh phase3/scripts/test_install_jarvis_x86.sh
-        shellcheck -S error phase3/scripts/setup_nvme_partition.sh phase3/scripts/reflash_usb.sh
+        shellcheck --version
+        # Tier 1 -- full severity: device writes and the shipped-image build.
+        shellcheck phase3/scripts/install_jarvis_x86.sh phase3/scripts/test_install_jarvis_x86.sh \
+                   phase3/scripts/build_jarvis_x86.sh phase3/scripts/create_boot_usb.sh
+        # Tier 2 -- errors only.
+        shellcheck -S error phase3/scripts/setup_nvme_partition.sh phase3/scripts/reflash_usb.sh \
+                   phase3/scripts/bench_engine_failed.sh phase3/scripts/bench_engine_models.sh \
+                   phase3/scripts/bench_models.sh phase3/scripts/bench_quality.sh \
+                   phase3/scripts/bench_sel4_inference.sh phase3/scripts/bench_single_speed.sh \
+                   phase3/scripts/bench_speed_local.sh phase3/scripts/clear_nvme_log.sh \
+                   phase3/scripts/qemu_test.sh phase3/scripts/qemu_test_nvme.sh
+        # Coverage invariant: every .sh in phase3/scripts must appear in one tier above.
+        # Without this, adding a script silently lands OUTSIDE the gate -- the same
+        # "new file, no step" hole the A5 completeness gate closes for tests.
+        for f in phase3/scripts/*.sh; do
+          grep -q "$(basename "$f")" .github/workflows/ci.yml || {
+            echo "::error::$f is not covered by either shellcheck tier -- add it (full severity if it writes to a device or builds the image, -S error otherwise)"; exit 1; }
+        done
+        echo "shellcheck: 16/16 phase3/scripts covered (4 full severity, 12 at -S error)"
 
     - name: "Phase 4: Installer dry-run + helper tests"
       run: |
