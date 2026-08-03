@@ -1081,13 +1081,33 @@ static int        g_pb_dead = 0;                /* §5-F: crash-loop bound hit -
  * budget timeout (N2-measured ~5.9 s in KVM against a dead/wedged PB, when PA spins the 5M-
  * iteration loop; bare-metal wall-time is a carry-forward), inflates q_errors, and churns the
  * K/M2c miss-counter, making the "cache-only, PB dispatch STOPPED" log a lie. This makes it TRUE:
- * a cache HIT still serves; a cache MISS / HB / shield is simply not sent. OFF (JARVIS_ACTIONS=0)
- * has no degraded state -> always 1 -> the compiler folds the guard out -> deployed path
- * byte-identical. */
+ * a cache HIT still serves; a cache MISS / HB / shield is simply not sent.
+ *
+ * N3 FIX (2026-08-03) — g_model_bad IS A SECOND REASON NOT TO DISPATCH, and it now lives HERE
+ * rather than at the call sites. The macro's name is the argument: "is it OK to dispatch to PB".
+ * When the model is unusable it is NOT ok, in any configuration.
+ *
+ * WHY IT MOVED. g_model_bad sends PB down its "No model available — idle mode" path, where it
+ * deliberately does not serve. The inference lane carried an explicit `&& !g_model_bad`, but the
+ * HEARTBEAT, SHIELD, control-IN and WAKE lanes did not — so they kept dispatching to an
+ * intentionally-idle PB, the shared g_pb_miss counter reached KM2B_MISS_THRESHOLD, and the K/M2c
+ * hang detector RESTARTED a PB that was behaving exactly as designed. The respawn then faulted
+ * (VMFault at a near-null address) and crash-looped to the bound -> g_pb_dead -> [FATAL].
+ * MEASURED, not theorised: the N3 mode-2 KVM pre-gate produced 5 restarts, 4 faults, 1 [FATAL]
+ * and err=15 on a box whose ONLY real problem was one unmapped page. Four call sites each needing
+ * the same conjunction is how three of them came to be missing it; one definition cannot be
+ * forgotten by the next lane that is added.
+ *
+ * The OFF (JARVIS_ACTIONS=0) branch takes it too. That branch used to fold to a compile-time 1,
+ * and the note here used to claim byte-identity from that — no longer true, and deliberately so:
+ * a model-bad box must not dispatch whether or not the self-heal spine is compiled in. OFF has no
+ * restart machinery, so it could not hit the crash-loop above, but it would still burn poll
+ * budgets and inflate q_errors talking to a PB that cannot answer. ACTIONS=0 has not been a
+ * deployed configuration since 2026-07-08. */
 #if JARVIS_ACTIONS
-#define PB_DISPATCH_OK()  (!g_pb_dead)
+#define PB_DISPATCH_OK()  (!g_pb_dead && !g_model_bad)
 #else
-#define PB_DISPATCH_OK()  1
+#define PB_DISPATCH_OK()  (!g_model_bad)
 #endif
 
 static uint32_t total_queries = 0;
@@ -7743,7 +7763,9 @@ static void *main_continued(void *arg UNUSED)
                     puts_serial(") - serving cache only\n");
                 }
             }
-            if (!cg_served_now && PB_DISPATCH_OK() && !g_model_bad) {
+            /* N3: the `&& !g_model_bad` that used to be spelled out here now lives inside
+             * PB_DISPATCH_OK(), so every lane inherits it instead of only this one. */
+            if (!cg_served_now && PB_DISPATCH_OK()) {
             q_infer++;
 
 #if JARVIS_G3_PROBE
