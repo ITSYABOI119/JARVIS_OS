@@ -904,3 +904,80 @@ jobs:
           phase3/src/ai/gguf_parser.c \
           -lm -o /tmp/fuzz_harness
         /tmp/fuzz_harness
+
+    # A1 -- the copy-drift invariant.
+    # Several sources exist as identical copies across phases, but CI compiles only
+    # ONE copy of each. Editing the un-compiled copy therefore leaves CI green while
+    # the suite attests the other file. This turns that coincidence into an invariant.
+    #
+    # Compared with `diff --strip-trailing-cr`, NOT `cmp`: 4 of these pairs are
+    # content-identical but differ in COMMITTED line endings (phase1 is LF, phase3 is
+    # CRLF; core.autocrlf=false and there is no .gitattributes, so Linux CI sees
+    # exactly these bytes). A raw `cmp` would red instantly on files that have not
+    # drifted at all. The hazard is CONTENT drift, so content is what is gated.
+    #
+    # EXCLUDED, deliberately -- these pairs share a name but have genuinely forked, and
+    # gating them would be an instant useless red (backlog A7 owns reconciling them):
+    #   phase1 cache/decision_cache.c   vs phase3 ai/decision_cache.c    (318 vs 342 lines)
+    #   phase1 sel4/dual_ring_buffer.c  vs phase2+3 ipc/dual_ring_buffer.c (490 vs 495)
+    #   phase1 sel4/ipc_handler.{c,h}   vs phase2+3 ipc/ipc_handler.{c,h}
+    #   phase2 drivers/net_cmd.c        vs phase3 drivers/net_cmd.c      (479 vs 530)
+    #   phase2 drivers/net_stack.c      vs phase3 drivers/net_stack.c    (728 vs 759)
+    - name: "Invariant: duplicated sources stay identical across phases (copy-drift gate)"
+      run: |
+        set -e
+        fail() { echo "::error::$1"; exit 1; }
+        chk() {
+          diff --strip-trailing-cr -q "$1" "$2" >/dev/null 2>&1 || \
+            fail "COPY DRIFT: $1 and $2 must stay identical -- CI compiles only one of them, so editing the other leaves this suite attesting the wrong bytes. If the divergence is INTENTIONAL, move the tests to the shipping copy (backlog A7) instead of editing past this gate."
+        }
+        chk phase1/src/cache/cache_patterns.c    phase3/src/ai/cache_patterns.c
+        chk phase1/src/cache/decision_cache.h    phase3/src/ai/decision_cache.h
+        chk phase2/src/ipc/dual_ring_buffer.c    phase3/src/ipc/dual_ring_buffer.c
+        chk phase1/src/sel4/dual_ring_buffer.h   phase2/src/ipc/dual_ring_buffer.h
+        chk phase2/src/ipc/dual_ring_buffer.h    phase3/src/ipc/dual_ring_buffer.h
+        chk phase2/src/ipc/ipc_handler.c         phase3/src/ipc/ipc_handler.c
+        chk phase2/src/ipc/ipc_handler.h         phase3/src/ipc/ipc_handler.h
+        chk phase2/src/drivers/net_cmd.h         phase3/src/drivers/net_cmd.h
+        chk phase2/src/drivers/net_stack.h       phase3/src/drivers/net_stack.h
+        chk phase1/src/ipc/ring_buffer.c         phase3/src/ipc/ring_buffer.c
+        chk phase1/src/ipc/ring_buffer.h         phase3/src/ipc/ring_buffer.h
+        chk phase1/src/ipc/sel4_atomics.h        phase3/src/ipc/sel4_atomics.h
+        # Non-vacuity: the comparator MUST reject a genuinely forked pair. If this
+        # ever passes, `chk` has stopped detecting drift and every line above is a lie.
+        if diff --strip-trailing-cr -q phase1/src/cache/decision_cache.c \
+             phase3/src/ai/decision_cache.c >/dev/null 2>&1; then
+          fail "self-test failed: the known-forked decision_cache.c pair compared EQUAL, so this gate cannot detect drift"
+        fi
+        echo "12 duplicated pairs identical (content) -- the suite attests the shipping bytes"
+
+    # A2 -- the operator-tooling write invariant, in BOTH directions.
+    # jarvis_menu is read-only BY CONSTRUCTION; jarvis_admin is where device writes live.
+    # This recipe deliberately lives HERE and never inside the scripts: a grep stored in
+    # the file it greps matches itself, and the invariant becomes permanently unverifiable
+    # (the recorded self-matching-grep trap).
+    - name: "Invariant: operator menu cannot write to the box; admin provably can"
+      run: |
+        set -e
+        # 1. menu .ps1 + .bat carry NO device-write tokens -- the read-only property
+        if grep -nE 'of=|seek=' phasec/scripts/jarvis_menu.ps1 phasec/scripts/jarvis_menu.bat; then
+          echo "::error::jarvis_menu gained a device-write token (of= / seek=). The menu's safety property is that it CANNOT write to the box. Put the write in jarvis_admin.ps1, which is the file whose name says so."
+          exit 1
+        fi
+        # 2. positive control -- the grep is not vacuous: READ tokens are present, so a
+        #    pattern that matches nothing would be caught here rather than passing silently
+        grep -qE 'if=|skip=' phasec/scripts/jarvis_menu.ps1 || {
+          echo "::error::positive control failed: no if=/skip= found in jarvis_menu.ps1, so the of=/seek= check above proves nothing"; exit 1; }
+        # 3. admin .ps1 MUST contain the write -- the invariant is two-sided
+        grep -qE 'of=|seek=' phasec/scripts/jarvis_admin.ps1 || {
+          echo "::error::jarvis_admin.ps1 no longer contains a device write. Either the re-key path was removed, or it moved somewhere that is not the file named 'admin'."; exit 1; }
+        # 4. the admin .bat is a thin wrapper and carries no writes of its own
+        if grep -nE 'of=|seek=' phasec/scripts/jarvis_admin.bat; then
+          echo "::error::jarvis_admin.bat should be a thin wrapper; the write belongs in the .ps1"; exit 1; fi
+        echo "menu read-only (positive control passed); admin holds the write -- both directions verified"
+
+    # A5 -- makes CLAUDE.md's "new test file => new CI step" rule mechanical.
+    # Completeness direction ONLY: the inverse (modules with no test) is not gated,
+    # because the seL4 tier cannot be host-compiled and would fail it by construction.
+    - name: "Invariant: every test_*.c / fuzz_*.c has a CI step (or a stated reason)"
+      run: python3 phase3/scripts/check_ci_completeness.py

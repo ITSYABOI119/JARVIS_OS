@@ -1,0 +1,19 @@
+# CI test-completeness allowlist
+#
+# Every test_*.c / fuzz_*.c under phase3/src/ MUST be referenced by a step in
+# .github/workflows/ci.yml, OR be listed here with a reason. The gate is
+# phase3/scripts/check_ci_completeness.py, run as its own CI step.
+#
+# SCOPE: the completeness direction ONLY (every test has a step). The inverse —
+# nagging about modules that have no test — is deliberately NOT a gate: the
+# sel4 tier (main_x86.c, inference_server.c) cannot be host-compiled and would
+# fail it by construction. That is a separate conversation (backlog A9).
+#
+# An entry here is a claim that the file CANNOT run on a hermetic CI runner,
+# not that testing it is unimportant. Blanket-allowlisting to silence the gate
+# defeats it; if a new orphan appears, disposition it honestly or wire it up.
+#
+# Format: <basename>  #  <reason>
+
+test_gemma4_native.c    # dev-only: needs the real ~2.89 GiB Gemma 4 GGUF at runtime (argv[1]); hermetic runners have no model. Self-documented at the top of the file.
+test_ggml_integration.c # dev-only: needs external ggml objects (ggml.o/ggml-alloc.o/ggml-quants.o) that are NOT in-repo — the ggml-backend approach was abandoned. Self-documented at the top of the file.
