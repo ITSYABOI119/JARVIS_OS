@@ -483,6 +483,17 @@ jobs:
           -o /tmp/tpbprog
         /tmp/tpbprog
 
+    # ASAN because T3's bounds teeth are an exact-length heap array: an overflow past it must be
+    # REPORTED by the sanitizer, not inferred from a survivor check. -O1 -g for a usable report.
+    - name: "Phase 6: A9/1 control-IN index maintenance (C, ASAN)"
+      run: |
+        gcc -Wall -Werror -O1 -g -std=c11 -fsanitize=address,undefined \
+          -D_POSIX_C_SOURCE=200809L -I phase3/src/ai \
+          phase3/src/ai/test_ctrl_epi_index.c phase3/src/ai/ctrl_epi_index.c \
+          phase3/src/ai/episodic_store.c phase3/src/ai/decision_cache.c \
+          -o /tmp/tcei
+        /tmp/tcei
+
     - name: "Phase C: C/M1b-3 embed region staleness (C)"
       run: |
         cd phase3/src/ipc
