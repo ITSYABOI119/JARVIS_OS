@@ -185,6 +185,8 @@ AI_FILES=(
     "route_centroids.h"
     # Phase 6 N2: the PB liveness-tick wait verdict (host-pure; call sites gated JARVIS_PB_TICK)
     "pb_progress.c"       "pb_progress.h"
+    # Phase 6 A9/1: control-IN recall-index maintenance (host-pure, host-tested; storage stays in PA)
+    "ctrl_epi_index.c"    "ctrl_epi_index.h"
 )
 
 for f in "${AI_FILES[@]}"; do
@@ -708,6 +710,22 @@ if [ -f "$CMAKE_FILE" ]; then
         fi
     else
         echo -e "  ${CYAN}OK${NC}  src/ai/route.c already in source list"
+    fi
+
+    # Phase 6 A9/1: add src/ai/ctrl_epi_index.c to the Process A source list if missing.
+    # UNCONDITIONAL, the route.c / episodic_store.c precedent: host-pure with no external
+    # dependency (g3_candidate_usable is a static inline in the header), so linking it is benign.
+    # PA owns the index STORAGE; this module owns the maintenance.
+    if ! grep -q "src/ai/ctrl_epi_index.c" "$CMAKE_FILE"; then
+        sed -i '/src\/ai\/route.c/a\    src/ai/ctrl_epi_index.c' "$CMAKE_FILE" 2>/dev/null
+        if grep -q "src/ai/ctrl_epi_index.c" "$CMAKE_FILE"; then
+            echo -e "  ${GREEN}ADDED${NC}  src/ai/ctrl_epi_index.c to source list (A9/1)"
+            PATCHED=1
+        else
+            echo -e "  ${RED}FAILED${NC}  Could not add ctrl_epi_index.c — edit CMakeLists.txt manually"
+        fi
+    else
+        echo -e "  ${CYAN}OK${NC}  src/ai/ctrl_epi_index.c already in source list"
     fi
 
     # Phase C / C/M2a + C/M2b: add src/ai/embed_store.c and src/ai/embed_project.c to the

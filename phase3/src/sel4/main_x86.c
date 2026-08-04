@@ -53,6 +53,9 @@
 #include "nvme_log.h"
 #include "fat32.h"
 #include "episodic_store.h"
+#include "ctrl_epi_index.h"     /* Phase 6 A9/1: control-IN recall-index maintenance (host-pure, host-tested).
+                                 * UNCONDITIONAL — the route.c / episodic_store.c precedent: host-pure with no
+                                 * external dependency, so linking it is benign and inert until called. */
 #include "shared_context.h"
 #include "framebuffer.h"
 #include "nic_i211.h"
@@ -268,9 +271,21 @@ static epi_record_t      g_epi_recall_rec;     /* single-record fetch buffer (on
 static epi_store_t       g_ctrl_episodic;
 static int               g_ctrl_episodic_ready = 0;
 static epi_index_entry_t g_ctrl_epi_index[CTRL_EPI_MAX_ENTRIES];
-static int               g_ctrl_epi_index_n = 0;
+/* A9/1: the maintenance (add / build / lookup) moved to ctrl_epi_index.c, which is host-tested;
+ * the STORAGE stays here because the module is deliberately allocation-free and takes caller-owned
+ * memory. g_ctrl_ix.n replaced the old g_ctrl_epi_index_n — one count, owned by the handle, so the
+ * array and its length can no longer drift apart. Direct readers below still index the array by
+ * name (it IS the handle's storage) and take their bound from g_ctrl_ix.n. */
+static ctrl_epi_index_t  g_ctrl_ix;
 static epi_record_t      g_ctrl_recall_rec;    /* control-IN single-record fetch buffer */
 static uint32_t          g_ctrl_recall_hits;   /* control-IN queries served a non-empty preamble */
+
+/* A9/1: the boot scan's per-record read, as a callback so ctrl_index_build stays free of device
+ * I/O — the episodic_store / semantic_store / action_audit callback pattern. */
+static int ctrl_epi_read_cb(void *ctx, uint32_t logical_index, epi_record_t *out)
+{
+    return epi_store_read((epi_store_t *)ctx, logical_index, out);
+}
 #endif
 
 /* ---- Phase 5 G2/M2: live shared context pool (additive; gated on g_sctx_ready) ----
@@ -484,13 +499,13 @@ static void ctrl_epi_write(const char *qs, uint8_t outcome, const char *resp, ui
      * newest-wins returns it, the usable filter rejects it, and that key reads hit=0
      * forever. The 6-6 false-positive question is a LIVE instance -- it was DECLINEd
      * before 5224a85 and is INFERred after, so both tags exist under one key. */
-    int idxable = (cnt > 0) && g3_candidate_usable(rec.action, rec.outcome, rec.resp_len,
-                                                   EPI_ACT_CONTROL_IN, EPI_OUT_OK);
-    if (idxable && g_ctrl_epi_index_n < (int)CTRL_EPI_MAX_ENTRIES) {
-        g_ctrl_epi_index[g_ctrl_epi_index_n].key = rec.query_key;
-        g_ctrl_epi_index[g_ctrl_epi_index_n].logical_index = cnt - 1u;
-        g_ctrl_epi_index_n++;
-    }
+    /* A9/1: the predicate + bounds + the cnt-1 arithmetic now live in ctrl_index_add, which is
+     * host-tested; this site and the boot scan below call the SAME function, so the two can no
+     * longer disagree. `idxable` keeps its exact meaning — "recallable", NOT "was indexed" —
+     * because ctrl_index_add returns -1 for a recallable record that found no room, and !=0
+     * folds 1 and -1 together. That distinction is load-bearing for the embed gate below and for
+     * the FULL warning further down, both of which fire on recallability, not on the add. */
+    int idxable = (cnt > 0) && (ctrl_index_add(&g_ctrl_ix, &rec, cnt - 1u) != 0);
 
 #if JARVIS_EMBED
     /* C/M2b: publish what was committed, for embed-on-write at the answered exit.
@@ -523,14 +538,17 @@ static void ctrl_epi_write(const char *qs, uint8_t outcome, const char *resp, ui
     /* The index is bounded while the store rolls, so a long-lived box can saturate it and then
      * silently stop recalling NEW turns. Say so ONCE rather than degrading in silence. */
     static int warned_full = 0;
-    if (idxable && g_ctrl_epi_index_n >= (int)CTRL_EPI_MAX_ENTRIES && !warned_full) {
+    /* Condition kept in its ORIGINAL form rather than rewritten to ctrl_index_add's -1: today this
+     * fires on the add that FILLS the index (n reaching cap), not on the first refusal after it.
+     * Keying it off the -1 would move the warning one turn later — a real behaviour change. */
+    if (idxable && g_ctrl_ix.n >= (int)CTRL_EPI_MAX_ENTRIES && !warned_full) {
         warned_full = 1;
         puts_serial("[CTRL-EPI] index FULL - new turns will not recall until reboot\n");
     }
 
     puts_serial("[CTRL-EPI] stored count="); put_dec(cnt);
     puts_serial(" total=");                  put_dec(g_ctrl_episodic.hdr.total_entries);
-    puts_serial(" idx=");                    put_dec((uint32_t)g_ctrl_epi_index_n);
+    puts_serial(" idx=");                    put_dec((uint32_t)g_ctrl_ix.n);
     puts_serial("\n");
 }
 #endif /* JARVIS_CONTROL_IN_RECALL */
@@ -2813,7 +2831,7 @@ static int ctrl_sem_gather(void)
 {
     int n = 0;
     /* g_ctrl_epi_index is built oldest->newest, so walk it BACKWARDS for newest-first. */
-    for (int i = g_ctrl_epi_index_n - 1; i >= 0 && n < CTRL_SEM_MAX_CANDS; i--) {
+    for (int i = g_ctrl_ix.n - 1; i >= 0 && n < CTRL_SEM_MAX_CANDS; i--) {
         uint32_t li = g_ctrl_epi_index[i].logical_index;
         if (epi_store_read(&g_ctrl_episodic, li, &g_sem_recs[n]) != 0) continue;
         /* The index is already usable-filtered, but the read-back is re-checked for
@@ -3717,8 +3735,10 @@ static void pa_ctrl_gate(const control_result_t *cres)
      * loop, making the "PB dispatch STOPPED" log a lie. Suppress ONLY the route — the
      * QS_REFUSE branch above already ran + audited (it touches no PB state); honest FAIL, audited
      * EXECUTED/FAIL to mirror the wake lane's degraded semantics. Placed BEFORE the duty fold so
-     * no window opens, no F9 drain / preamble-clear runs, no g_ctrl_route_seq is consumed. Folds
-     * out OFF (PB_DISPATCH_OK()==1 when !JARVIS_ACTIONS). */
+     * no window opens, no F9 drain / preamble-clear runs, no g_ctrl_route_seq is consumed.
+     * (This used to end "folds out OFF (PB_DISPATCH_OK()==1 when !JARVIS_ACTIONS)" — RETIRED at
+     * 8e4c5be: the OFF branch is now (!g_model_bad), a runtime check, so this gate is live in both
+     * configurations. That is deliberate — a model-bad box must not dispatch either way.) */
     if (!PB_DISPATCH_OK()) {
         puts_serial("[CTRL-IN-RESP] q=\""); puts_serial(qs);
         puts_serial("\" -> DEGRADED (no dispatch)\n");
@@ -3773,7 +3793,7 @@ static void pa_ctrl_gate(const control_result_t *cres)
          * wrong recall. The usable filter stays too — a FAILED turn (timeout/degraded, resp_len 0)
          * must never be recalled as if it were an answer. */
         int cn = 0, crecall = 0;
-        int cli = epi_index_lookup(g_ctrl_epi_index, g_ctrl_epi_index_n, ckey);
+        int cli = ctrl_index_lookup(&g_ctrl_ix, ckey);   /* A9/1: delegates to epi_index_lookup (newest-wins) */
         if (cli >= 0 && epi_store_read(&g_ctrl_episodic, (uint32_t)cli, &g_ctrl_recall_rec) == 0
             && g_ctrl_recall_rec.query_key == ckey
             && g3_candidate_usable(g_ctrl_recall_rec.action, g_ctrl_recall_rec.outcome,
@@ -5155,31 +5175,29 @@ static void *main_continued(void *arg UNUSED)
                                             puts_serial(" count="); put_dec(epi_store_count(&g_ctrl_episodic));
                                             puts_serial(")\n");
 
-                                            uint32_t _ccnt = epi_store_count(&g_ctrl_episodic);
-                                            if (_ccnt > CTRL_EPI_MAX_ENTRIES) _ccnt = CTRL_EPI_MAX_ENTRIES;
-                                            g_ctrl_epi_index_n = 0;
-                                            /* SAME recallability predicate as ctrl_epi_write(): index only
-                                             * turns that can pass pa_ctrl_gate's usable filter. Without it a
-                                             * PERSISTED failed turn shadows its own good prior answer across a
-                                             * REBOOT — newest-wins returns the failure, the filter rejects it,
-                                             * and that key reads hit=0 permanently. Failed records stay in the
-                                             * store (forensics); they just never enter the index. */
-                                            for (uint32_t _cli = 0; _cli < _ccnt; _cli++) {
-                                                /* action checked HERE too: the boot scan is the half that
-                                                 * cannot see what route a turn took, which is exactly why the
-                                                 * tag is STORED rather than derived. */
-                                                if (epi_store_read(&g_ctrl_episodic, _cli, &g_ctrl_recall_rec) == 0
-                                                    && g3_candidate_usable(g_ctrl_recall_rec.action,
-                                                                           g_ctrl_recall_rec.outcome,
-                                                                           g_ctrl_recall_rec.resp_len,
-                                                                           EPI_ACT_CONTROL_IN, EPI_OUT_OK)) {
-                                                    g_ctrl_epi_index[g_ctrl_epi_index_n].key = g_ctrl_recall_rec.query_key;
-                                                    g_ctrl_epi_index[g_ctrl_epi_index_n].logical_index = _cli;
-                                                    g_ctrl_epi_index_n++;
-                                                }
-                                            }
+                                            /* A9/1: the clamp, the reset and the filtered walk are
+                                             * ctrl_index_build's now (host-tested); the scratch is
+                                             * still g_ctrl_recall_rec, so no new 512 B appears on
+                                             * this frame. Same predicate as the write path by
+                                             * construction — both go through ctrl_index_add. */
+                                            ctrl_index_init(&g_ctrl_ix, g_ctrl_epi_index,
+                                                            (int)CTRL_EPI_MAX_ENTRIES);
+                                            ctrl_index_build(&g_ctrl_ix,
+                                                             epi_store_count(&g_ctrl_episodic),
+                                                             ctrl_epi_read_cb, &g_ctrl_episodic,
+                                                             &g_ctrl_recall_rec);
+                                            /* WHY the predicate is applied at BUILD and not only at fetch
+                                             * (the reason ctrl_index_build calls ctrl_index_add rather than
+                                             * indexing everything): a PERSISTED failed turn would shadow its
+                                             * own good prior answer across a REBOOT — newest-wins returns the
+                                             * failure, the fetch filter rejects it, and that key reads hit=0
+                                             * permanently. Failed records stay in the store (forensics); they
+                                             * just never enter the index. The action tag is part of it because
+                                             * the boot scan is the half that cannot see what route a turn
+                                             * took, which is exactly why the tag is STORED rather than
+                                             * derived. */
                                             puts_serial("[CTRL-RECALL] index built n=");
-                                            put_dec((uint32_t)g_ctrl_epi_index_n);
+                                            put_dec((uint32_t)g_ctrl_ix.n);
                                             puts_serial("\n");
                                         } else {
                                             puts_serial("[CTRL-EPI] store init FAILED (non-fatal — no recall)\n");
@@ -6870,7 +6888,7 @@ static void *main_continued(void *arg UNUSED)
 
         puts_serial(boot1 ? "[CTRL-RECALL-PROBE] boot1 (fresh floor) - seeding the prior session\n"
                           : "[CTRL-RECALL-PROBE] boot2 (resumed floor) - expecting recall\n");
-        puts_serial("[CTRL-RECALL-PROBE] ctrl-store index n="); put_dec((uint32_t)g_ctrl_epi_index_n);
+        puts_serial("[CTRL-RECALL-PROBE] ctrl-store index n="); put_dec((uint32_t)g_ctrl_ix.n);
         puts_serial(" stored="); put_dec(epi_store_count(&g_ctrl_episodic));
         puts_serial("\n");
 
@@ -6919,7 +6937,7 @@ static void *main_continued(void *arg UNUSED)
         puts_serial("[CTRL-RECALL-PROBE] durable by construction (ctrl_episodic_ready=");
         put_dec(g_ctrl_episodic_ready ? 1u : 0u);
         puts_serial(" count="); put_dec(epi_store_count(&g_ctrl_episodic));
-        puts_serial(" idx=");   put_dec((uint32_t)g_ctrl_epi_index_n);
+        puts_serial(" idx=");   put_dec((uint32_t)g_ctrl_ix.n);
         puts_serial(") - safe to reboot\n");
     } else {
         puts_serial("[CTRL-RECALL-PROBE] SKIPPED (key/input/floor down)\n");
@@ -6944,7 +6962,7 @@ static void *main_continued(void *arg UNUSED)
         puts_serial("[EMBED-GATE] mode="); put_dec((uint32_t)JARVIS_EMBED_PROBE);
         puts_serial(" sem_ok=");           put_dec((uint32_t)g_embed_sem_ok);
         puts_serial(" vec_idx_n=");        put_dec((uint32_t)g_embed_idx_n);
-        puts_serial(" ctrl_idx_n=");       put_dec((uint32_t)g_ctrl_epi_index_n);
+        puts_serial(" ctrl_idx_n=");       put_dec((uint32_t)g_ctrl_ix.n);
         puts_serial(" mu=");               puts_serial(embed_mu_verify() ? "OK" : "MISMATCH");
         puts_serial(" store_stored=");     put_dec(embed_store_count(&g_embed_store));
         puts_serial("\n");
@@ -7742,8 +7760,10 @@ static void *main_continued(void *arg UNUSED)
              * JARVIS_CACHE_GROWTH — an ACTIONS=1 CACHE_GROWTH=0 build must ALSO skip dispatch to a
              * dead PB after g_pb_dead trips). A cache MISS is simply not served: no dead-PB send,
              * no full poll-budget timeout (N2-measured ~5.9 s in KVM against a dead/wedged PB), no
-             * q_error, no miss churn. PB_DISPATCH_OK() is a compile-time 1
-             * when JARVIS_ACTIONS=0 -> the guard folds out -> byte-identical. */
+             * q_error, no miss churn. (This used to add that PB_DISPATCH_OK() is a compile-time 1
+             * at JARVIS_ACTIONS=0 and therefore folds out byte-identically — RETIRED at 8e4c5be,
+             * which moved !g_model_bad inside the macro: BOTH branches are runtime checks now, and
+             * a model-bad box must not dispatch whether or not the self-heal spine is built in.) */
             /* C/M1b pre-fix: REFUSE inference on a model we know is unusable — partial map (serving
              * from garbage weights) or a truncated frame allocation (PB is model-less, so a send
              * would only buy a full poll-budget timeout per query — N2-measured ~5.9 s in KVM
@@ -8845,7 +8865,7 @@ static void *main_continued(void *arg UNUSED)
              * semantic candidate in the meantime, which is the graceful degradation.
              */
             if (g_embed_sem_ok && g_embed_backfilled < EMBED_BACKFILL_PER_BOOT) {
-                for (int _bi = 0; _bi < g_ctrl_epi_index_n; _bi++) {
+                for (int _bi = 0; _bi < g_ctrl_ix.n; _bi++) {
                     static epi_record_t _brec;
                     uint32_t _bli = g_ctrl_epi_index[_bi].logical_index;
                     if (epi_store_read(&g_ctrl_episodic, _bli, &_brec) != 0) continue;
