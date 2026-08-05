@@ -187,6 +187,8 @@ AI_FILES=(
     "pb_progress.c"       "pb_progress.h"
     # Phase 6 A9/1: control-IN recall-index maintenance (host-pure, host-tested; storage stays in PA)
     "ctrl_epi_index.c"    "ctrl_epi_index.h"
+    # Phase 6 A9/2: the PB crash-loop window (host-pure, host-tested; g_pb_dead stays in PA)
+    "pb_health.c"         "pb_health.h"
 )
 
 for f in "${AI_FILES[@]}"; do
@@ -726,6 +728,20 @@ if [ -f "$CMAKE_FILE" ]; then
         fi
     else
         echo -e "  ${CYAN}OK${NC}  src/ai/ctrl_epi_index.c already in source list"
+    fi
+
+    # Phase 6 A9/2: add src/ai/pb_health.c to the Process A source list if missing.
+    # UNCONDITIONAL, the route.c / ctrl_epi_index.c precedent: host-pure, no external dependency.
+    if ! grep -q "src/ai/pb_health.c" "$CMAKE_FILE"; then
+        sed -i '/src\/ai\/ctrl_epi_index.c/a\    src/ai/pb_health.c' "$CMAKE_FILE" 2>/dev/null
+        if grep -q "src/ai/pb_health.c" "$CMAKE_FILE"; then
+            echo -e "  ${GREEN}ADDED${NC}  src/ai/pb_health.c to source list (A9/2)"
+            PATCHED=1
+        else
+            echo -e "  ${RED}FAILED${NC}  Could not add pb_health.c — edit CMakeLists.txt manually"
+        fi
+    else
+        echo -e "  ${CYAN}OK${NC}  src/ai/pb_health.c already in source list"
     fi
 
     # Phase C / C/M2a + C/M2b: add src/ai/embed_store.c and src/ai/embed_project.c to the

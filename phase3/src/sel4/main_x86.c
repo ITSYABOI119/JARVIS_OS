@@ -53,6 +53,8 @@
 #include "nvme_log.h"
 #include "fat32.h"
 #include "episodic_store.h"
+#include "pb_health.h"          /* Phase 6 A9/2: the crash-loop window (host-pure, host-tested).
+                                 * UNCONDITIONAL, same reasoning as ctrl_epi_index.h below. */
 #include "ctrl_epi_index.h"     /* Phase 6 A9/1: control-IN recall-index maintenance (host-pure, host-tested).
                                  * UNCONDITIONAL — the route.c / episodic_store.c precedent: host-pure with no
                                  * external dependency, so linking it is benign and inert until called. */
@@ -1089,8 +1091,12 @@ static int           g_embed_region_ready = 0;
 static uint16_t      g_embed_seq          = 0;
 #endif
 static uint64_t   g_pb_last_ack_ms = 0;         /* K/M2c: uptime at the last genuine typed PB dequeue (age instrument) */
-static uint32_t   g_restart_window = 0;         /* windowed consecutive restarts (crash-loop bound) */
-static uint32_t   g_healthy_since_restart = 0;  /* coherent PB responses since the last restart */
+/* A9/2: the windowed-restart counters moved to pb_health.c, which is host-tested — this is the
+ * logic that decides whether the box self-heals or permanently gives up, and its one shipped defect
+ * (KM2B_HEALTHY_RESET defined but never incremented -> a LIFETIME cap) is now a regression test.
+ * g_pb_dead deliberately STAYS here: it is a degraded-mode flag with several causes, of which the
+ * crash-loop bound is one. The module counts; this file latches. */
+static pb_health_t g_pbh;                       /* {window, healthy} — see pb_health.h */
 static int        g_pb_dead = 0;                /* §5-F: crash-loop bound hit -> stop dispatching to PB */
 #endif
 
@@ -3321,7 +3327,7 @@ static int ctrl_floor_persist_ahead(uint64_t seq)
 static void pa_restart_pb(const char *reason, uint16_t lane, uint32_t missed, uint64_t age_ms,
                           seL4_Word flabel, seL4_Word fbadge)
 {
-    if (g_restart_in_progress || g_pb_dead) return;
+    if (!pb_health_may_restart(g_restart_in_progress, g_pb_dead)) return;
     g_restart_in_progress = 1;
 
     char trig[ACT_TRIGGER_MAX];
@@ -3331,17 +3337,21 @@ static void pa_restart_pb(const char *reason, uint16_t lane, uint32_t missed, ui
     spine_decision_t d = spine_decide(ACTION_RESTART_PB, &ctx, NULL, 0);   /* learn=NULL (§5-E) */
 
     uint16_t verdict = AUDIT_BLOCKED, outcome = AUDIT_OUT_NA;
+    /* A9/2: captured where the bump happens, ACTED ON after the [RESTART] print — the deployed
+     * print sits between the increment and the bound test, and that ordering is observable. */
+    int tripped = 0;
     if (d.dec == ACT_EXECUTE || d.dec == ACT_NOTIFY) {
         g_infer_active = 0; g_infer_t0 = 0;   /* §5-E: clear the duty latch (stale t0 corrupts) */
         int ok = km2b_do_respawn();
         verdict = AUDIT_EXECUTED;
         outcome = ok ? AUDIT_OUT_OK : AUDIT_OUT_FAIL;
-        g_restart_count++; g_restart_window++; g_healthy_since_restart = 0;
+        g_restart_count++;   /* LIFETIME (v7 telemetry) — a different counter, deliberately NOT in the module */
+        tripped = pb_health_on_restart(&g_pbh, KM2B_CRASHLOOP_BOUND);
         puts_serial("[RESTART] reason="); puts_serial(reason);
         puts_serial(" risk="); put_dec(d.risk_x100);
         puts_serial(" -> EXECUTED outcome="); puts_serial(ok ? "OK" : "FAIL");
         puts_serial(" restart_count="); put_dec(g_restart_count);
-        puts_serial(" window="); put_dec(g_restart_window); puts_serial("\n");
+        puts_serial(" window="); put_dec(g_pbh.window); puts_serial("\n");
     } else {
         puts_serial("[RESTART] reason="); puts_serial(reason);
         puts_serial(" risk="); put_dec(d.risk_x100); puts_serial(" -> REFUSED (not executed)\n");
@@ -3350,7 +3360,11 @@ static void pa_restart_pb(const char *reason, uint16_t lane, uint32_t missed, ui
     spine_record(ACTION_RESTART_PB, &d, verdict, outcome, trig, (uint16_t)tl,
                  (d.dec == ACT_EXECUTE || d.dec == ACT_NOTIFY));
 
-    if (g_restart_window >= KM2B_CRASHLOOP_BOUND) {   /* §5-F: crash-loop -> degraded (stop SENDS) */
+    /* A9/2: the deployed test here was UNCONDITIONAL and so also ran on the SHIELD-REFUSED branch,
+     * where the window was never bumped. That branch is dead code for any non-zero bound: dead is
+     * set only at >= bound and the funnel early-returns on dead, so on entry window < bound always.
+     * Evaluating the bound on the executed path only is therefore behaviour-neutral here. */
+    if (tripped) {                                   /* §5-F: crash-loop -> degraded (stop SENDS) */
         g_pb_dead = 1;
         puts_serial("[FATAL] PB crash-loop bound hit — degraded: cache-only, PB dispatch STOPPED\n");
     }
@@ -3363,7 +3377,7 @@ static void pa_restart_pb(const char *reason, uint16_t lane, uint32_t missed, ui
  * per seL4_Yield). If a fault is pending, funnel a restart. Returns 1 if it restarted. */
 static int pa_fault_check(void)
 {
-    if (g_restart_in_progress || g_pb_dead) return 0;
+    if (!pb_health_may_restart(g_restart_in_progress, g_pb_dead)) return 0;
     seL4_Word badge, label, ip;
     if (pa_poll_fault(&badge, &label, &ip) > 0) {   /* pa_poll_fault prints the full detail */
         pa_restart_pb("fault", 0, 0, 0, label, badge);
@@ -6225,7 +6239,7 @@ static void *main_continued(void *arg UNUSED)
             int ok = km2b_probe_recovery("pbmain-fault", pseq++);
             puts_serial("[ACTION-PROBE] PB-main cycle "); put_dec((uint32_t)c);
             puts_serial(ok ? " recovery=COHERENT\n" : " recovery=FAILED\n");
-            g_restart_window = 0; g_healthy_since_restart = 0;   /* isolate the next induced cycle */
+            pb_health_init(&g_pbh);   /* A9/2: zeroes window+healthy — same as the two assignments */   /* isolate the next induced cycle */
             if (!ok) break;
         }
         for (int c = 1; c <= N_PROBE; c++) {
@@ -6239,7 +6253,7 @@ static void *main_continued(void *arg UNUSED)
             int ok = km2b_probe_recovery("worker-fault", pseq++);
             puts_serial("[ACTION-PROBE] worker cycle "); put_dec((uint32_t)c);
             puts_serial(ok ? " recovery=COHERENT\n" : " recovery=FAILED\n");
-            g_restart_window = 0; g_healthy_since_restart = 0;
+            pb_health_init(&g_pbh);   /* A9/2: zeroes window+healthy — same as the two assignments */
             if (!ok) break;
         }
 
@@ -6285,7 +6299,7 @@ static void *main_continued(void *arg UNUSED)
             int ok = km2b_probe_recovery("hang", pseq++);
             puts_serial("[ACTION-PROBE] hang cycle "); put_dec((uint32_t)c);
             puts_serial(ok ? " recovery=COHERENT\n" : " recovery=FAILED\n");
-            g_restart_window = 0; g_healthy_since_restart = 0;
+            pb_health_init(&g_pbh);   /* A9/2: zeroes window+healthy — same as the two assignments */
             if (!ok) break;
         }
 
@@ -6342,7 +6356,7 @@ static void *main_continued(void *arg UNUSED)
                 puts_serial("[HARDLOOP-EXP] marker="); puts_serial(hl_marker[mk]);
                 puts_serial(ok ? " -> OUTCOME-A: DETECTED + recovery=COHERENT\n"
                                : " -> recovery=FAILED\n");
-                g_restart_window = 0; g_healthy_since_restart = 0;
+                pb_health_init(&g_pbh);   /* A9/2: zeroes window+healthy — same as the two assignments */
                 if (!ok) break;
             }
         }
@@ -8079,12 +8093,16 @@ static void *main_continued(void *arg UNUSED)
              * g_pb_dead), not a lifetime cap. STEP-2 defined KM2B_HEALTHY_RESET + zeroed the counter
              * on restart but NEVER incremented it, so the window never reset (a latent
              * permanent-degrade bug: any 5 lifetime self-heals -> degraded). Only ticks while a
-             * window is open (g_restart_window > 0). */
-            if (resp_offset > 0 && g_restart_window > 0 &&
-                ++g_healthy_since_restart >= KM2B_HEALTHY_RESET) {
-                puts_serial("[RESTART] window reset ("); put_dec(g_healthy_since_restart);
+             * window is open. THAT DEFECT IS NOW A NAMED REGRESSION TEST (test_pb_health.c T2b),
+             * so it cannot silently return. */
+            /* A9/2: pb_health_on_healthy owns the short-circuit (no window open -> the counter is
+             * not incremented AT ALL, not merely discarded) and the reset. The printed count is
+             * KM2B_HEALTHY_RESET rather than a live read because it is ALWAYS exactly that: the
+             * counter is zeroed on every restart and on every reset and rises by one per call, so
+             * it fires the first time it reaches the value and can never overshoot (pinned host-side). */
+            if (resp_offset > 0 && pb_health_on_healthy(&g_pbh, KM2B_HEALTHY_RESET)) {
+                puts_serial("[RESTART] window reset ("); put_dec(KM2B_HEALTHY_RESET);
                 puts_serial(" healthy inferences)\n");
-                g_restart_window = 0; g_healthy_since_restart = 0;
             }
 #endif
 #if JARVIS_DBG_INFER_SUMMARY
@@ -8637,9 +8655,9 @@ static void *main_continued(void *arg UNUSED)
                         pro_heal_done = 1;
                         puts_serial("[PROACTIVE-PROBE] inducing 2 real respawns for B2\n");
                         pa_restart_pb("hang", 0, 0, 0, 0, 0);
-                        g_restart_window = 0; g_healthy_since_restart = 0;
+                        pb_health_init(&g_pbh);   /* A9/2: zeroes window+healthy — same as the two assignments */
                         pa_restart_pb("hang", 0, 0, 0, 0, 0);
-                        g_restart_window = 0; g_healthy_since_restart = 0;
+                        pb_health_init(&g_pbh);   /* A9/2: zeroes window+healthy — same as the two assignments */
                     }
                 }
 #endif
@@ -8656,9 +8674,9 @@ static void *main_continued(void *arg UNUSED)
                         mon_heal_probe_done = 1;
                         puts_serial("[MON-PROBE] inducing 2 real respawns for heal-rate\n");
                         pa_restart_pb("hang", 0, 0, 0, 0, 0);
-                        g_restart_window = 0; g_healthy_since_restart = 0;
+                        pb_health_init(&g_pbh);   /* A9/2: zeroes window+healthy — same as the two assignments */
                         pa_restart_pb("hang", 0, 0, 0, 0, 0);
-                        g_restart_window = 0; g_healthy_since_restart = 0;
+                        pb_health_init(&g_pbh);   /* A9/2: zeroes window+healthy — same as the two assignments */
                     }
                 }
 #endif
@@ -9263,7 +9281,7 @@ static void *main_continued(void *arg UNUSED)
          * crash lane uses — idempotent via g_restart_in_progress, feeds the crash-loop window,
          * one JACT record. Cache iterations never fed the counter (D4), so this never fires on a
          * healthy cache-heavy run. age = time since the last genuine ACK (0 if PB never ACKed). */
-        if (!g_restart_in_progress && !g_pb_dead &&
+        if (pb_health_may_restart(g_restart_in_progress, g_pb_dead) &&
             km2b_miss_tripped(&g_pb_miss, KM2B_MISS_THRESHOLD)) {
             /* D2: a PB CRASH during an HB/shield wait (those lanes have no pre-miss fault poll,
              * unlike the inference lane) would otherwise be MIS-audited as "hang". Poll the fault EP
