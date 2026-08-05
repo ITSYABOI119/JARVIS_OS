@@ -494,6 +494,13 @@ jobs:
           -o /tmp/tcei
         /tmp/tcei
 
+    - name: "Phase 6: A9/2 PB crash-loop window (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
+          phase3/src/ai/test_pb_health.c phase3/src/ai/pb_health.c \
+          -o /tmp/tpbh
+        /tmp/tpbh
+
     - name: "Phase C: C/M1b-3 embed region staleness (C)"
       run: |
         cd phase3/src/ipc
