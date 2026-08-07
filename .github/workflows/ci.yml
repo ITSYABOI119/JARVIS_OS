@@ -77,67 +77,6 @@ jobs:
         path: phase3/scripts/coverage_report.json
         if-no-files-found: error
 
-  # =====================================================================
-  # COVERAGE INSTRUMENT -- manual (workflow_dispatch) only.
-  #
-  # THIS JOB MUST NEVER FAIL ON A COVERAGE NUMBER. Not now, and not later as a
-  # "we only added a small threshold" change. It exists to PRODUCE A JUDGED LIST
-  # of branches that neither the unit suites nor the fuzzers reach, so a human
-  # can decide which are worth aiming a corpus at. A percentage gate would turn
-  # that list into a number to be gamed, and would start failing builds for
-  # branches this repo has already judged unreachable-by-construction or
-  # defensive. The ONLY legitimate failures here are its own infrastructure
-  # errors: a missing tool, a compile failure, or a harness that exits non-zero.
-  #
-  # It is a SEPARATE job from `test` and is not in `test`'s dependency chain, so
-  # it can never block a push or a PR.
-  # =====================================================================
-  coverage:
-    name: "Coverage instrument (manual, non-gating)"
-    if: github.event_name == 'workflow_dispatch'
-    # ubuntu-24.04, NOT the `test` job's ubuntu-22.04, and pinned rather than
-    # -latest so it cannot drift silently. 24.04 ships gcc/gcov 13, which is the
-    # toolchain this instrument was verified end-to-end against locally; 22.04
-    # ships gcc 11, whose gcov spells the JSON flag -i instead of -j. The script
-    # probes for that difference and handles both, but a measurement instrument
-    # should run on the toolchain its numbers were checked on rather than rely on
-    # a fallback nobody has executed.
-    runs-on: ubuntu-24.04
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
-
-    - name: "Coverage: build + run unit suites and fuzzers under gcov, judge the gaps"
-      # gcov is driven directly (it ships with gcc); gcovr/lcov are deliberately
-      # NOT installed -- pip refuses gcovr under PEP 668 without
-      # --break-system-packages, and gcov's own JSON carries the per-line and
-      # per-branch counts this instrument needs.
-      run: bash phase3/scripts/coverage_report.sh
-
-    - name: "Coverage: summarise the judged gaps (never a pass/fail criterion)"
-      run: |
-        python3 - <<'PY'
-        import json
-        d = json.load(open('phase3/scripts/coverage_report.json'))
-        print('reviewed by lead:', d['judgements_reviewed'])
-        print('total gaps:', d['totals']['uncovered_gaps'], d['totals']['by_judgement'])
-        for r in d['results']:
-            print('\n== %s' % r['module'])
-            for u in r['uncovered']:
-                print('  %-6s L%-5d %-28s %s' % (u['kind'], u['line'], u['judgement'], u['source'][:70]))
-        PY
-
-    - uses: actions/upload-artifact@v4
-      with:
-        name: coverage-report
-        path: phase3/scripts/coverage_report.json
-        if-no-files-found: error
-
   test:
     runs-on: ubuntu-22.04
 
