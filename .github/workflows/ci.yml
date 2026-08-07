@@ -5,6 +5,11 @@ on:
     branches: [ master, main ]
   pull_request:
     branches: [ master, main ]
+  # Manual trigger for the `coverage` job below. Deliberately NOT a schedule:
+  # this repo has no scheduled workflows today, and a nightly is new
+  # infrastructure with its own failure modes (silent drift, notification
+  # fatigue) for an instrument that is read on demand, not watched.
+  workflow_dispatch:
 
 jobs:
   test:
@@ -310,6 +315,21 @@ jobs:
           -o /tmp/test_nvme_log
         /tmp/test_nvme_log
 
+    # A8/1 -- SANITIZED PARSER SUITE. nvme_log decodes the durable telemetry log's header
+    # and 512 B records off raw LBA, including the WRAP path where cursor arithmetic drives
+    # the read offset -- an off-by-one there indexes outside the buffer, which is exactly the
+    # class -O2 alone cannot see. This log is the headless box's only persistent record, so a
+    # decode bug is discovered mid-diagnosis.
+    - name: "Phase 3: NVMe Log (C, ASAN+UBSAN)"
+      run: |
+        gcc -Wall -Werror -fsanitize=address,undefined -fno-omit-frame-pointer -O1 -g -std=c11 \
+          -D_POSIX_C_SOURCE=200809L -I phase3/src/drivers \
+          phase3/src/drivers/test_nvme_log.c phase3/src/drivers/nvme_log.c \
+          -o /tmp/test_nvme_log_san
+        ASAN_OPTIONS=halt_on_error=1:detect_leaks=0 \
+        UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+          /tmp/test_nvme_log_san
+
     # A6a -- the round-trip parse_nvme_log.py lacked (parse_episodic and
     # parse_action_audit both have one). This parser is the ONLY way the box's durable
     # log is read off-hardware, so a decode bug is invisible until someone is mid-
@@ -398,6 +418,27 @@ jobs:
           -o /tmp/tsem
         /tmp/tsem
 
+    # A8/1 -- SANITIZED PARSER SUITE. semantic_store decodes 512 B fact records off raw LBA.
+    #
+    # -O2 HERE, NOT THE -O1 THE OTHER SANITIZED STEPS USE, AND THE REASON IS RECORDED SO IT IS
+    # NOT "TIDIED" BACK: at -O1 gcc's value-range propagation cannot prove the loop counter in
+    # test_wrap() is bounded 1..6, so -Wformat-truncation computes snprintf("fact %d") as
+    # "between 7 and 17 bytes into a destination of size 16" and -Werror rejects the build.
+    # At -O2 VRP proves the bound and the warning does not arise. That is a COMPILE-TIME
+    # analysis difference, NOT a defect and NOT a sanitizer finding -- the code is correct.
+    # ASan and UBSan are fully functional at -O2; only stack-trace quality degrades slightly,
+    # which -g -fno-omit-frame-pointer mitigates. The alternative was editing a test file to
+    # satisfy an optimiser heuristic, which would have changed source to suit the gate.
+    - name: "Phase 5: Semantic store (C, ASAN+UBSAN)"
+      run: |
+        gcc -Wall -Werror -fsanitize=address,undefined -fno-omit-frame-pointer -O2 -g -std=c11 \
+          -I phase3/src/ai \
+          phase3/src/ai/test_semantic_store.c phase3/src/ai/semantic_store.c \
+          -o /tmp/tsem_san
+        ASAN_OPTIONS=halt_on_error=1:detect_leaks=0 \
+        UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+          /tmp/tsem_san
+
     - name: "Phase 5: Semantic distill (C)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -I phase3/src/ai \
@@ -412,6 +453,20 @@ jobs:
           phase3/src/ai/test_embed_store.c phase3/src/ai/embed_store.c \
           -o /tmp/tembs
         /tmp/tembs
+
+    # A8/1 -- SANITIZED PARSER SUITE. embed_store decodes TWO-SECTOR records off raw LBA with a
+    # checksum spanning both halves, so its offset arithmetic straddles a sector boundary --
+    # the one place in the store family where a torn or miscomputed record reads past the
+    # buffer rather than merely failing a checksum.
+    - name: "Phase C: C/M2a Embedding vector store (C, ASAN+UBSAN)"
+      run: |
+        gcc -Wall -Werror -fsanitize=address,undefined -fno-omit-frame-pointer -O1 -g -std=c11 \
+          -I phase3/src/ai \
+          phase3/src/ai/test_embed_store.c phase3/src/ai/embed_store.c \
+          -o /tmp/tembs_san
+        ASAN_OPTIONS=halt_on_error=1:detect_leaks=0 \
+        UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+          /tmp/tembs_san
 
     # THE ANCHOR for embed_mu.h: reads golden_vectors.npz's raw bytes (stdlib
     # zipfile, no numpy) and compares them bit-for-bit against the header's hex
@@ -485,6 +540,14 @@ jobs:
 
     # ASAN because T3's bounds teeth are an exact-length heap array: an overflow past it must be
     # REPORTED by the sanitizer, not inferred from a survivor check. -O1 -g for a usable report.
+    #
+    # UBSAN_OPTIONS=halt_on_error=1 IS LOAD-BEARING, NOT BOILERPLATE. gcc's UBSan defaults to
+    # print-and-continue: a "runtime error: ..." diagnostic goes to stderr and the process still
+    # EXITS 0, so the step stays green. Measured on this exact toolchain with a signed-left-shift
+    # probe -- plain run printed the diagnostic and exited 0; with halt_on_error=1 it exited 1.
+    # Without these two vars every ASan/UBSan step here is vacuous against UBSan findings.
+    # detect_leaks=0 because these are short-lived test binaries that deliberately do not free;
+    # LeakSanitizer is a separate decision, not one to make silently inside a bounds gate.
     - name: "Phase 6: A9/1 control-IN index maintenance (C, ASAN)"
       run: |
         gcc -Wall -Werror -O1 -g -std=c11 -fsanitize=address,undefined \
@@ -492,7 +555,9 @@ jobs:
           phase3/src/ai/test_ctrl_epi_index.c phase3/src/ai/ctrl_epi_index.c \
           phase3/src/ai/episodic_store.c phase3/src/ai/decision_cache.c \
           -o /tmp/tcei
-        /tmp/tcei
+        ASAN_OPTIONS=halt_on_error=1:detect_leaks=0 \
+        UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+          /tmp/tcei
 
     - name: "Phase 6: A9/2 PB crash-loop window (C)"
       run: |
@@ -549,6 +614,19 @@ jobs:
           -o /tmp/t_ac
         /tmp/t_ac
 
+    # A8/1 -- SANITIZED PARSER SUITE. The JACT store decodes 512 B records off raw LBA, and
+    # its wrap + corruption paths are exercised here. This is goal 6-7's PRIMARY evidence
+    # store, so a decode bug would corrupt the audit trail the phase exit rests on.
+    - name: "Phase 6: Action-audit store (C, ASAN+UBSAN)"
+      run: |
+        gcc -Wall -Werror -fsanitize=address,undefined -fno-omit-frame-pointer -O1 -g -std=c11 \
+          -I phase3/src/ai \
+          phase3/src/ai/test_action_audit.c phase3/src/ai/action_audit.c \
+          -o /tmp/t_ac_san
+        ASAN_OPTIONS=halt_on_error=1:detect_leaks=0 \
+        UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+          /tmp/t_ac_san
+
     - name: "Phase 6: Action-audit parser round-trip (Python)"
       run: |
         gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
@@ -572,14 +650,58 @@ jobs:
     - name: "Phase 6: 6-5/M3-3 Control floor (C)"
       run: gcc -Wall -Werror -O2 -std=c11 -I phase3/src/net phase3/src/net/test_control_floor.c phase3/src/net/control_floor.c -o /tmp/test_control_floor && /tmp/test_control_floor
 
+    # A8/1 -- SANITIZED PARSER SUITE. ctrl_floor_parse decodes a 512 B sector read off disk,
+    # and the A/B select path chooses between two slots where either may be torn garbage. It
+    # is a SECURITY parser: it is the cross-reboot replay floor, so a decode fault is a
+    # replay-window question, not just a bad read.
+    - name: "Phase 6: 6-5/M3-3 Control floor (C, ASAN+UBSAN)"
+      run: |
+        gcc -Wall -Werror -fsanitize=address,undefined -fno-omit-frame-pointer -O1 -g -std=c11 \
+          -I phase3/src/net \
+          phase3/src/net/test_control_floor.c phase3/src/net/control_floor.c \
+          -o /tmp/test_control_floor_san
+        ASAN_OPTIONS=halt_on_error=1:detect_leaks=0 \
+        UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+          /tmp/test_control_floor_san
+
     - name: "Phase 6: 6-5/M4a Console-addr slot (C)"
       run: gcc -Wall -Werror -O2 -std=c11 -I phase3/src/net phase3/src/net/test_control_console.c phase3/src/net/control_console.c -o /tmp/test_control_console && /tmp/test_control_console
+
+    # A8/1 -- SANITIZED PARSER SUITE. ctrl_console_parse decodes a 512 B sector off disk into
+    # the reply destination MAC/IP. A parse fault here does not merely fail -- it decides
+    # where a signed reply is ADDRESSED, so memory safety on this path is a confidentiality
+    # property, not only a robustness one.
+    - name: "Phase 6: 6-5/M4a Console-addr slot (C, ASAN+UBSAN)"
+      run: |
+        gcc -Wall -Werror -fsanitize=address,undefined -fno-omit-frame-pointer -O1 -g -std=c11 \
+          -I phase3/src/net \
+          phase3/src/net/test_control_console.c phase3/src/net/control_console.c \
+          -o /tmp/test_control_console_san
+        ASAN_OPTIONS=halt_on_error=1:detect_leaks=0 \
+        UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+          /tmp/test_control_console_san
 
     - name: "Phase C: Control-IN key generator (Python)"
       run: python3 phasec/scripts/test_gen_control_key.py
 
     - name: "Phase 6: 6-5/M4b Control reply builder (C)"
       run: gcc -Wall -Werror -O2 -std=c11 -I phase3/src/net -I phase3/src/crypto phase3/src/net/test_control_reply.c phase3/src/net/control_reply.c phase3/src/crypto/hmac_sha256.c phase3/src/crypto/sha256.c -o /tmp/t_reply && /tmp/t_reply
+
+    # A8/1 -- SANITIZED SUITE. A builder rather than a parser, included deliberately: the text
+    # it copies is MODEL OUTPUT influenced by an attacker-supplied query, and it does bounded
+    # length math into a fixed frame right up against the 1426 B MTU text ceiling. That is the
+    # same buffer-arithmetic class as a parser even though the bytes flow outward, and the M2
+    # transport work raised every one of those ceilings.
+    - name: "Phase 6: 6-5/M4b Control reply builder (C, ASAN+UBSAN)"
+      run: |
+        gcc -Wall -Werror -fsanitize=address,undefined -fno-omit-frame-pointer -O1 -g -std=c11 \
+          -I phase3/src/net -I phase3/src/crypto \
+          phase3/src/net/test_control_reply.c phase3/src/net/control_reply.c \
+          phase3/src/crypto/hmac_sha256.c phase3/src/crypto/sha256.c \
+          -o /tmp/t_reply_san
+        ASAN_OPTIONS=halt_on_error=1:detect_leaks=0 \
+        UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+          /tmp/t_reply_san
 
     - name: "Phase 6: 6-5/M1 Control rate-limit (C)"
       run: gcc -Wall -Werror -O2 -std=c11 -I phase3/src/net phase3/src/net/test_control_ratelimit.c phase3/src/net/control_ratelimit.c -o /tmp/t_rl && /tmp/t_rl
@@ -602,7 +724,9 @@ jobs:
           phase3/src/net/fuzz_control_in.c phase3/src/net/control_verify.c phase3/src/net/control_parser.c \
           phase3/src/net/control_replay.c phase3/src/net/control_ratelimit.c \
           phase3/src/crypto/hmac_sha256.c phase3/src/crypto/sha256.c -lm -o /tmp/fuzz_control_in
-        /tmp/fuzz_control_in
+        ASAN_OPTIONS=halt_on_error=1:detect_leaks=0 \
+        UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+          /tmp/fuzz_control_in
 
     - name: "Phase 6: 6-5/M3-1 Query SHIELD (C)"
       run: |
@@ -617,7 +741,9 @@ jobs:
         gcc -Wall -Werror -O1 -std=c11 -fsanitize=address,undefined -I phase3/src/ai \
           phase3/src/ai/fuzz_query_shield.c phase3/src/ai/query_shield.c \
           -lm -o /tmp/fuzz_qs
-        /tmp/fuzz_qs
+        ASAN_OPTIONS=halt_on_error=1:detect_leaks=0 \
+        UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+          /tmp/fuzz_qs
 
     - name: "Phase 6: 6-6/B0 Query router (C)"
       run: |
@@ -631,7 +757,9 @@ jobs:
         gcc -Wall -Werror -O1 -g -std=c11 -fsanitize=address,undefined -I phase3/src/ai \
           phase3/src/ai/fuzz_route.c phase3/src/ai/route.c \
           -o /tmp/fuzz_route
-        /tmp/fuzz_route
+        ASAN_OPTIONS=halt_on_error=1:detect_leaks=0 \
+        UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+          /tmp/fuzz_route
 
     # C/M4 arm-A driver: COMPILE-ONLY (it asserts nothing — it is a stdin->route_classify
     # harness for the off-box routing measurement, which needs a 1.2 GB embedder and cannot
@@ -695,6 +823,24 @@ jobs:
           phase3/src/drivers/test_fat32.c phase3/src/drivers/fat32.c \
           -o /tmp/test_fat32
         /tmp/test_fat32
+
+    # A8/1 -- SANITIZED PARSER SUITE. fat32 decodes on-disk structures the box did not
+    # author (BPB, directory entries, cluster chains), so a malformed field is a memory-
+    # safety question and not merely a wrong return value. It is also the module with the
+    # recorded overflow history: the H3 fix ("fat32_read_file final partial-sector overflow")
+    # wrote up to bytes_per_sector-1 bytes PAST the caller's buffer, and the existing -O2
+    # step could only observe that as a canary check the test had to think to add. ASan
+    # observes it structurally. See the A9/1 step for why the two *_OPTIONS vars are
+    # load-bearing rather than boilerplate.
+    - name: "Phase 3: FAT32 Reader (C, ASAN+UBSAN)"
+      run: |
+        gcc -Wall -Werror -fsanitize=address,undefined -fno-omit-frame-pointer -O1 -g -std=c11 \
+          -DJARVIS_TEST_MOCK -I phase3/src/drivers \
+          phase3/src/drivers/test_fat32.c phase3/src/drivers/fat32.c \
+          -o /tmp/test_fat32_san
+        ASAN_OPTIONS=halt_on_error=1:detect_leaks=0 \
+        UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+          /tmp/test_fat32_san
 
     - name: "Phase 3: VGA Text Mode (C)"
       run: |
@@ -863,7 +1009,9 @@ jobs:
           phase3/src/ai/test_gguf_vocab_overflow.c \
           phase3/src/ai/tokenizer.c phase3/src/ai/gguf_parser.c \
           -lm -o /tmp/test_gguf_vocab_overflow
-        /tmp/test_gguf_vocab_overflow
+        ASAN_OPTIONS=halt_on_error=1:detect_leaks=0 \
+        UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+          /tmp/test_gguf_vocab_overflow
 
     - name: "Phase 3: F32 vs Quantized Forward Compare (C)"
       run: |
@@ -988,7 +1136,9 @@ jobs:
           phase3/src/ipc/shmem_ipc.c \
           phase3/src/ai/gguf_parser.c \
           -lm -o /tmp/fuzz_harness
-        /tmp/fuzz_harness
+        ASAN_OPTIONS=halt_on_error=1:detect_leaks=0 \
+        UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+          /tmp/fuzz_harness
 
     # A1 -- the copy-drift invariant.
     # Several sources exist as identical copies across phases, but CI compiles only
