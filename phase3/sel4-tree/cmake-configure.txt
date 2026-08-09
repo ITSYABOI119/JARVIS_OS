@@ -1,0 +1,23 @@
+# Extracted from ~/sel4-x86/jbuild/CMakeCache.txt on 2026-08-09T12:18:41Z
+# Source of truth: the box. Read-only extract.
+
+CMAKE_HOME_DIRECTORY:INTERNAL=/home/jarvis/sel4-x86/projects/jarvis-x86
+
+CMAKE_BUILD_TYPE:STRING=Debug
+CMAKE_TOOLCHAIN_FILE:FILEPATH=/home/jarvis/sel4-x86/jbuild/gcc.cmake
+KernelDebugBuild:BOOL=ON
+KernelFastpath:BOOL=ON
+KernelFPU:STRING=XSAVE
+KernelIOMMU:BOOL=OFF
+KernelPrinting:BOOL=ON
+KernelRootCNodeSizeBits:INTERNAL=22
+KernelVerificationBuild:BOOL=OFF
+KernelXSaveFeatureSet:STRING=7
+KernelXSaveSize:STRING=832
+KernelXSave:STRING=XSAVEOPT
+LibSel4MuslcSysMorecoreBytes:STRING=134217728
+NUM_NODES:STRING=6
+PLATFORM:STRING=x86_64
+RELEASE:BOOL=OFF
+SIMULATION:BOOL=OFF
+SMP:BOOL=ON

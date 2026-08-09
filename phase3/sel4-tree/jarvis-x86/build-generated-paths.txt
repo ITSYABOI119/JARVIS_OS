@@ -1,0 +1,15 @@
+# Tracked files that build_jarvis_x86.sh REWRITES at build time.
+#
+# They are excluded from tracked-hashes.txt, because that baseline describes the
+# tree as reconstruct_sel4_tree.sh leaves it — i.e. BEFORE the build script has
+# run. The box's copies are post-build and therefore legitimately differ; including
+# them made the comparison apples-to-oranges and produced a false MISMATCH on the
+# first CI proof run.
+#
+# Both are regenerated from THIS repo on every build, so they are already in
+# version control by another route and are not part of the rescued delta.
+#
+#   src/main.c      <- copied from phase3/src/sel4/main_x86.c  (build_jarvis_x86.sh)
+#   CMakeLists.txt  <- sed-patched with the AVX2 flags          (build_jarvis_x86.sh [6/6])
+apps/sel4test-driver/CMakeLists.txt
+apps/sel4test-driver/src/main.c

@@ -1,0 +1,22 @@
+diff --git a/settings.cmake b/settings.cmake
+index 461d46d..f7cc6a3 100644
+--- a/settings.cmake
++++ b/settings.cmake
+@@ -63,7 +63,7 @@ if(NOT Sel4testAllowSettingsOverride)
+         ApplyCommonSimulationSettings(${KernelSel4Arch})
+     else()
+         if(KernelArchX86)
+-            set(KernelIOMMU ON CACHE BOOL "" FORCE)
++            set(KernelIOMMU OFF CACHE BOOL "" FORCE)  # JARVIS: NVMe needs direct DMA (no VT-d)
+         endif()
+     endif()
+ 
+@@ -116,3 +116,8 @@ if(NOT Sel4testAllowSettingsOverride)
+     endif()
+ 
+ endif()
++
++# JARVIS: Increase root CNode to handle 8GB+ RAM with embedded model
++# Default is 13 (8192 slots), which overflows with 8GB QEMU.
++# 19 = 524288 slots, matching the verified x86 config.
++set(KernelRootCNodeSizeBits 22 CACHE STRING "" FORCE)
