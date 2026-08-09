@@ -1189,6 +1189,13 @@ if [ -f "$GEN_CFG" ]; then
     # cannot fail the very build it guards).
     check_cfg '#define CONFIG_PRINTING[[:space:]]+1'           "PRINTING=1 (kernel can emit)              [A10]"
     check_cfg '#define CONFIG_DEBUG_BUILD[[:space:]]+1'        "DEBUG_BUILD=1 (seL4_DebugPutChar exists)  [A10]"
+    # And the tenth, for the same reason as the ninth: a kernel can satisfy all nine
+    # above and still be unable to run the rootserver. At the sel4test default of 13
+    # the root CNode holds 2^13 = 8192 slots, and PA exhausts that during boot —
+    # "ERROR: can't add another cap, all 8192 slots used", after a clean build and a
+    # PASSING gate. Measured on a from-scratch CI reconstruction (A10). The deployed
+    # box reads 22, but only as a persisted cache value, so this makes it checked.
+    check_cfg '#define CONFIG_ROOT_CNODE_SIZE_BITS[[:space:]]+22' "Root CNode 2^22 slots (PA needs > 2^13)   [A10]"
     if [ "$cfg_fail" -ne 0 ]; then
         echo -e "${RED}Kernel config verification FAILED — not the intended M2 config. Aborting.${NC}"
         exit 1

@@ -111,6 +111,15 @@ jobs:
         grep -n "KernelIOMMU" "$S"
         grep -q 'set(KernelIOMMU OFF CACHE BOOL "" FORCE)' "$S" \
           || { echo "::error::the sel4test IOMMU force did not get patched"; exit 1; }
+        # Same class, and it is what actually stops the boot: the root CNode.
+        # jarvis-x86/CMakeLists.txt sets KernelRootCNodeSizeBits 22, but a from-scratch
+        # configure still ends up at 13 (2^13 = 8192 slots) and the rootserver dies with
+        # "can't add another cap, all 8192 slots used" AFTER a clean build and a passing
+        # config gate. sel4test's own CMakeLists hardcodes 13; patch it too so the value
+        # is derived. On the box this is, again, only a persisted cache value.
+        C="$HOME/sel4-x86/projects/sel4test/CMakeLists.txt"
+        sed -i 's/set(KernelRootCNodeSizeBits 13 CACHE INTERNAL "")/set(KernelRootCNodeSizeBits 22 CACHE INTERNAL "")  # A10 CI: derive, do not inherit/' "$C"
+        grep -n "KernelRootCNodeSizeBits" "$C" || echo "  (not present in sel4test CMakeLists)"
 
     - name: "enable JARVIS_MODEL_FAIL_PROBE=1 (runner-local, never committed)"
       run: |
@@ -143,6 +152,13 @@ jobs:
           -C ../projects/jarvis-x86/settings.cmake ../projects/jarvis-x86 > /tmp/cfg.log 2>&1 \
           || { echo "::error::configure failed"; tail -30 /tmp/cfg.log; exit 1; }
         c=$(date +%s); echo "T_CONFIGURE=$((c-s))s"
+        # Print the decisive cache values unconditionally. CMAKE_HOME_DIRECTORY in
+        # particular: the box configures projects/jarvis-x86, and configuring
+        # projects/sel4test instead yields a tree that builds and then behaves
+        # differently, which is not visible anywhere else in the output.
+        echo "--- cache after configure ---"
+        grep -E "^CMAKE_HOME_DIRECTORY|^Kernel(IOMMU|RootCNodeSizeBits|MaxNumNodes|DebugBuild|Printing)|^(SMP|NUM_NODES|SIMULATION):" \
+          CMakeCache.txt || true
         cd "$GITHUB_WORKSPACE"
         # build_jarvis_x86.sh copies phase3/src into the tree, re-asserts the kernel
         # flags, runs ninja, and finishes in the config gate -- now NINE invariants,
@@ -214,8 +230,12 @@ jobs:
       run: |
         L=/tmp/boot.log
         fail=0
-        must_eq() { n=$(grep -c -- "$2" "$L" || true); if [ "$n" -eq "$3" ]; then echo "  OK    $1 = $3"; else echo "  FAIL  $1 = $n (expected $3)"; fail=1; fi; }
-        must_ge() { n=$(grep -c -- "$2" "$L" || true); if [ "$n" -ge "$3" ]; then echo "  OK    $1 = $n (>= $3)"; else echo "  FAIL  $1 = $n (expected >= $3)"; fail=1; fi; }
+        # grep -F is REQUIRED, not stylistic. Every marker here contains brackets, so
+        # without -F "[FATAL]" is a CHARACTER CLASS: it matches any line containing
+        # F, A, T or L (it reported 34 on a log with zero), and "[MODEL-FAIL-PROBE]"
+        # dies outright with "Invalid range end" on the L-F range. Fixed strings only.
+        must_eq() { n=$(grep -cF -- "$2" "$L" || true); if [ "$n" -eq "$3" ]; then echo "  OK    $1 = $3"; else echo "  FAIL  $1 = $n (expected $3)"; fail=1; fi; }
+        must_ge() { n=$(grep -cF -- "$2" "$L" || true); if [ "$n" -ge "$3" ]; then echo "  OK    $1 = $n (>= $3)"; else echo "  FAIL  $1 = $n (expected >= $3)"; fail=1; fi; }
 
         echo "--- the image ran ---"
         must_eq "reached user space"   "Booting all finished" 1
