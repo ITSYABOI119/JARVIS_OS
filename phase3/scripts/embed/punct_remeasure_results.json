@@ -1,0 +1,454 @@
+{
+  "_comment": "Does semantic recall survive real punctuation? MEASURE ONLY. Arm A is a hard control against the recorded C/M2b numbers (useful=19, false=0 at 128/meanproj/0.55). Pipeline and metric are IMPORTED from cm2_floor.py, never reimplemented. NOTHING here proposes a fix: normalising before embedding would invalidate the floor it appears to rescue.",
+  "model": "Qwen/Qwen3-Embedding-0.6B",
+  "config": {
+    "dim": 128,
+    "projection": "meanproj",
+    "floor": 0.55,
+    "comparison": ">="
+  },
+  "corpus": {
+    "source": "cm0_recall_set.json",
+    "distinct_positives": 36,
+    "adversarial_positives": 6,
+    "negatives": 14,
+    "n_positive_queries_scored": 42
+  },
+  "shaping_rules": {
+    "evidence_source": "the box's own control-IN episodic store @ LBA 21,140,000, read via parse_episodic.py: 99 records, 49 DISTINCT queries",
+    "applied": [
+      {
+        "rule": "R1 trailing '?' when the string reads as a question",
+        "evidence": "12/49 distinct real queries (24.5%) carry a trailing '?'",
+        "kind": "additive"
+      },
+      {
+        "rule": "R2 leading capital",
+        "evidence": "4/49 distinct real queries (8.2%) begin with a capital",
+        "kind": "additive"
+      }
+    ],
+    "excluded": [
+      {
+        "rule": "trailing '.'",
+        "reason": "0/49 observed \u2014 applying it would be INVENTED"
+      },
+      {
+        "rule": "contractions (does not -> doesn't)",
+        "reason": "5/49 (10.2%) but it is a WORD-LEVEL REWRITE, not punctuation; a different experiment, and the corpus already contains a natural contraction (isn't) which would muddy the clean/shaped split"
+      }
+    ],
+    "strings_changed": {
+      "later": 42,
+      "stored": 42,
+      "of": 42
+    }
+  },
+  "arm_A_control_reproduces_recorded": true,
+  "_metric_note": "total_false_recalls is the PRE-REGISTERED metric and is reported unchanged. content_aware_false_on_positives is SUPPLEMENTARY: this corpus duplicates two stored texts BY CONSTRUCTION ('what is a mutex' at 11 and 36, 'what is a page fault' at 0 and 39, because the adversarial positives are harder paraphrases of distinct-set questions), so argmax landing on the other copy of byte-identical text scores as a false recall while the injected context is exactly what the correct record holds. Both numbers are reported; neither replaces the other, and the disposition is the strategist's.",
+  "results": [
+    {
+      "arm": "A_clean_clean",
+      "operational_at_floor_0.55": {
+        "floor": 0.55,
+        "useful_recall_queries": 19,
+        "missed_recall_queries": 16,
+        "false_recall_on_positives": 0,
+        "false_recall_on_negatives": 0,
+        "total_false_recalls": 0,
+        "false_recall_rate_pct": 0.0
+      },
+      "full_floor_sweep": [
+        {
+          "floor": 0.5,
+          "useful_recall_queries": 27,
+          "missed_recall_queries": 8,
+          "false_recall_on_positives": 3,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 3,
+          "false_recall_rate_pct": 5.4
+        },
+        {
+          "floor": 0.55,
+          "useful_recall_queries": 19,
+          "missed_recall_queries": 16,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        },
+        {
+          "floor": 0.6,
+          "useful_recall_queries": 11,
+          "missed_recall_queries": 24,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        },
+        {
+          "floor": 0.65,
+          "useful_recall_queries": 8,
+          "missed_recall_queries": 27,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        },
+        {
+          "floor": 0.7,
+          "useful_recall_queries": 1,
+          "missed_recall_queries": 34,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        },
+        {
+          "floor": 0.75,
+          "useful_recall_queries": 0,
+          "missed_recall_queries": 35,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        }
+      ],
+      "content_aware_false_on_positives": 0,
+      "duplicate_text_artifacts": 0,
+      "flagged_positives": [],
+      "true_pair_cosine_delta_vs_A": {
+        "mean": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "max": 0.0,
+        "n_abs_gt_0.02": 0,
+        "n": 42
+      }
+    },
+    {
+      "arm": "B_shaped_shaped",
+      "operational_at_floor_0.55": {
+        "floor": 0.55,
+        "useful_recall_queries": 22,
+        "missed_recall_queries": 9,
+        "false_recall_on_positives": 1,
+        "false_recall_on_negatives": 0,
+        "total_false_recalls": 1,
+        "false_recall_rate_pct": 1.8
+      },
+      "full_floor_sweep": [
+        {
+          "floor": 0.5,
+          "useful_recall_queries": 26,
+          "missed_recall_queries": 5,
+          "false_recall_on_positives": 8,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 8,
+          "false_recall_rate_pct": 14.3
+        },
+        {
+          "floor": 0.55,
+          "useful_recall_queries": 22,
+          "missed_recall_queries": 9,
+          "false_recall_on_positives": 1,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 1,
+          "false_recall_rate_pct": 1.8
+        },
+        {
+          "floor": 0.6,
+          "useful_recall_queries": 18,
+          "missed_recall_queries": 13,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        },
+        {
+          "floor": 0.65,
+          "useful_recall_queries": 11,
+          "missed_recall_queries": 20,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        },
+        {
+          "floor": 0.7,
+          "useful_recall_queries": 7,
+          "missed_recall_queries": 24,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        },
+        {
+          "floor": 0.75,
+          "useful_recall_queries": 1,
+          "missed_recall_queries": 30,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        }
+      ],
+      "content_aware_false_on_positives": 0,
+      "duplicate_text_artifacts": 1,
+      "flagged_positives": [
+        {
+          "query_index": 36,
+          "won_index": 11,
+          "cos": 0.558,
+          "correct_cos": 0.558,
+          "injected_text_identical_to_correct": true
+        }
+      ],
+      "true_pair_cosine_delta_vs_A": {
+        "mean": 0.02537,
+        "median": 0.03525,
+        "min": -0.19215,
+        "max": 0.09568,
+        "n_abs_gt_0.02": 29,
+        "n": 42
+      }
+    },
+    {
+      "arm": "C1_storedClean_queryShaped",
+      "operational_at_floor_0.55": {
+        "floor": 0.55,
+        "useful_recall_queries": 18,
+        "missed_recall_queries": 16,
+        "false_recall_on_positives": 0,
+        "false_recall_on_negatives": 0,
+        "total_false_recalls": 0,
+        "false_recall_rate_pct": 0.0
+      },
+      "full_floor_sweep": [
+        {
+          "floor": 0.5,
+          "useful_recall_queries": 26,
+          "missed_recall_queries": 8,
+          "false_recall_on_positives": 2,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 2,
+          "false_recall_rate_pct": 3.6
+        },
+        {
+          "floor": 0.55,
+          "useful_recall_queries": 18,
+          "missed_recall_queries": 16,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        },
+        {
+          "floor": 0.6,
+          "useful_recall_queries": 11,
+          "missed_recall_queries": 23,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        },
+        {
+          "floor": 0.65,
+          "useful_recall_queries": 7,
+          "missed_recall_queries": 27,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        },
+        {
+          "floor": 0.7,
+          "useful_recall_queries": 1,
+          "missed_recall_queries": 33,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        },
+        {
+          "floor": 0.75,
+          "useful_recall_queries": 0,
+          "missed_recall_queries": 34,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        }
+      ],
+      "content_aware_false_on_positives": 0,
+      "duplicate_text_artifacts": 0,
+      "flagged_positives": [],
+      "true_pair_cosine_delta_vs_A": {
+        "mean": -0.01084,
+        "median": 0.00056,
+        "min": -0.08054,
+        "max": 0.03484,
+        "n_abs_gt_0.02": 20,
+        "n": 42
+      }
+    },
+    {
+      "arm": "C2_storedShaped_queryClean",
+      "operational_at_floor_0.55": {
+        "floor": 0.55,
+        "useful_recall_queries": 21,
+        "missed_recall_queries": 12,
+        "false_recall_on_positives": 0,
+        "false_recall_on_negatives": 0,
+        "total_false_recalls": 0,
+        "false_recall_rate_pct": 0.0
+      },
+      "full_floor_sweep": [
+        {
+          "floor": 0.5,
+          "useful_recall_queries": 26,
+          "missed_recall_queries": 7,
+          "false_recall_on_positives": 6,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 6,
+          "false_recall_rate_pct": 10.7
+        },
+        {
+          "floor": 0.55,
+          "useful_recall_queries": 21,
+          "missed_recall_queries": 12,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        },
+        {
+          "floor": 0.6,
+          "useful_recall_queries": 16,
+          "missed_recall_queries": 17,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        },
+        {
+          "floor": 0.65,
+          "useful_recall_queries": 9,
+          "missed_recall_queries": 24,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        },
+        {
+          "floor": 0.7,
+          "useful_recall_queries": 3,
+          "missed_recall_queries": 30,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        },
+        {
+          "floor": 0.75,
+          "useful_recall_queries": 0,
+          "missed_recall_queries": 33,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        }
+      ],
+      "content_aware_false_on_positives": 0,
+      "duplicate_text_artifacts": 0,
+      "flagged_positives": [],
+      "true_pair_cosine_delta_vs_A": {
+        "mean": 0.0167,
+        "median": 0.02263,
+        "min": -0.21873,
+        "max": 0.08368,
+        "n_abs_gt_0.02": 26,
+        "n": 42
+      }
+    },
+    {
+      "arm": "D_qmark_only_query",
+      "operational_at_floor_0.55": {
+        "floor": 0.55,
+        "useful_recall_queries": 20,
+        "missed_recall_queries": 14,
+        "false_recall_on_positives": 0,
+        "false_recall_on_negatives": 0,
+        "total_false_recalls": 0,
+        "false_recall_rate_pct": 0.0
+      },
+      "full_floor_sweep": [
+        {
+          "floor": 0.5,
+          "useful_recall_queries": 25,
+          "missed_recall_queries": 9,
+          "false_recall_on_positives": 3,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 3,
+          "false_recall_rate_pct": 5.4
+        },
+        {
+          "floor": 0.55,
+          "useful_recall_queries": 20,
+          "missed_recall_queries": 14,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        },
+        {
+          "floor": 0.6,
+          "useful_recall_queries": 13,
+          "missed_recall_queries": 21,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        },
+        {
+          "floor": 0.65,
+          "useful_recall_queries": 8,
+          "missed_recall_queries": 26,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        },
+        {
+          "floor": 0.7,
+          "useful_recall_queries": 1,
+          "missed_recall_queries": 33,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        },
+        {
+          "floor": 0.75,
+          "useful_recall_queries": 0,
+          "missed_recall_queries": 34,
+          "false_recall_on_positives": 0,
+          "false_recall_on_negatives": 0,
+          "total_false_recalls": 0,
+          "false_recall_rate_pct": 0.0
+        }
+      ],
+      "content_aware_false_on_positives": 0,
+      "duplicate_text_artifacts": 0,
+      "flagged_positives": [],
+      "true_pair_cosine_delta_vs_A": {
+        "mean": -0.00059,
+        "median": -0.00184,
+        "min": -0.03719,
+        "max": 0.03151,
+        "n_abs_gt_0.02": 13,
+        "n": 42
+      }
+    }
+  ]
+}
