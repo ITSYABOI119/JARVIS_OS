@@ -67,9 +67,14 @@ jobs:
         sudo apt-get install -y -qq build-essential cmake ninja-build python3-pip \
           gcc-multilib g++-multilib repo git libxml2-utils qemu-system-x86 \
           dosfstools mtools
-        # lxml is NOT in SEL4_X86_QEMU_SETUP.md's dependency list, and without it
-        # the build dies at step 29/264 (syscall_stub_gen.py imports it).
-        pip3 install --break-system-packages -q protobuf grpcio-tools pyelftools lxml
+        # SEL4_X86_QEMU_SETUP.md lists only protobuf / grpcio-tools / pyelftools.
+        # That list is SHORT BY THREE, each found by the build dying on it:
+        #   lxml  -- syscall_stub_gen.py            -> dies at step 29/264
+        #   ply   -- the bitfield/types generators  -> FAILED shared_types_gen.h
+        #   jinja2 / future -- carried from the seL4 tool chain's own requirements
+        # Install all of them; the doc gap is recorded in the A10 feasibility doc.
+        pip3 install --break-system-packages -q \
+          protobuf grpcio-tools pyelftools lxml ply jinja2 future
         git config --global user.email "ci@example.com"
         git config --global user.name "ci"
         e=$(date +%s); echo "T_DEPS=$((e-s))s"
