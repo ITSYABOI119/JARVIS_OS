@@ -85,6 +85,33 @@ jobs:
         bash phase3/scripts/reconstruct_sel4_tree.sh --tree "$HOME/sel4-x86"
         e=$(date +%s); echo "T_RECONSTRUCT=$((e-s))s"
 
+    - name: "neutralise sel4test's IOMMU force (a from-scratch tree needs this; the box does not)"
+      run: |
+        # A10 finding, and it is about the BOX more than about CI.
+        #
+        # jarvis-x86/settings.cmake force-sets KernelIOMMU OFF, but that force sits
+        # behind `if(KernelArchX86)` and settings.cmake is included at
+        # jarvis-x86/CMakeLists.txt:8 -- BEFORE find_package(seL4):12 and
+        # sel4_import_kernel():21 define that variable. So it NEVER FIRES. Meanwhile
+        # projects/sel4test/settings.cmake:66 force-sets KernelIOMMU **ON**, and that
+        # one does reach the configure. -D cannot beat a FORCE, which is why passing
+        # -DKernelIOMMU=OFF on three separate cmake passes still yielded
+        # KernelIOMMU:BOOL=ON here.
+        #
+        # The deployed box does not hit this because its cache has held OFF since some
+        # early hand-configure and nothing re-derives it -- i.e. that setting is
+        # PERSISTED CACHE STATE, not a property of the tree. A cache wipe on the box
+        # would produce an IOMMU=ON kernel too; the config gate would catch it.
+        #
+        # Patched HERE rather than in the reconstruction on purpose: the reconstruction
+        # must reproduce the box's tree, and the box's copy of this file says ON.
+        S="$HOME/sel4-x86/projects/sel4test/settings.cmake"
+        grep -n "KernelIOMMU" "$S"
+        sed -i 's/set(KernelIOMMU ON CACHE BOOL "" FORCE)/set(KernelIOMMU OFF CACHE BOOL "" FORCE)  # A10 CI: derive, do not inherit/' "$S"
+        grep -n "KernelIOMMU" "$S"
+        grep -q 'set(KernelIOMMU OFF CACHE BOOL "" FORCE)' "$S" \
+          || { echo "::error::the sel4test IOMMU force did not get patched"; exit 1; }
+
     - name: "enable JARVIS_MODEL_FAIL_PROBE=1 (runner-local, never committed)"
       run: |
         # WHY the probe rather than simply omitting a model: with no usable model
