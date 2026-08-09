@@ -1138,7 +1138,19 @@ cmake -DKernelIOMMU=OFF \
 # Pass 2: KernelXSaveFeatureSet DEPENDS on KernelFPUXSave, which only flips ON during
 # pass 1; on the pass where it first becomes selectable it takes its default (3 =
 # FPU+SSE). Re-assert =7 (FPU+SSE+AVX) now that it is available, else AVX is excluded.
-cmake -DKernelXSaveFeatureSet=7 -DKernelXSaveSize=832 . >/dev/null 2>&1
+#
+# KernelIOMMU is re-asserted here for the SAME reason, added at A10 (2026-08-09).
+# jarvis-x86/settings.cmake force-sets it OFF, but that force sits behind
+# `if(KernelArchX86)` and settings.cmake is included at CMakeLists.txt:8 — BEFORE
+# find_package(seL4):12 and sel4_import_kernel():21 define that variable. So the
+# force NEVER FIRES, on this box or anywhere; the deployed tree's KernelIOMMU=OFF has
+# been surviving purely as a PERSISTED CACHE VALUE from some earlier configure. On a
+# tree built from scratch the option takes its x86 default (ON) on the pass where it
+# first becomes selectable, exactly like XSaveFeatureSet above — which is how a clean
+# CI reconstruction produced an IOMMU=ON kernel and the config gate caught it.
+# Re-asserting it on pass 2 makes the setting DERIVED rather than inherited, so a
+# cache reset on the box can no longer silently change it either.
+cmake -DKernelIOMMU=OFF -DKernelXSaveFeatureSet=7 -DKernelXSaveSize=832 . >/dev/null 2>&1
 ninja
 
 echo ""
