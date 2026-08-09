@@ -228,15 +228,36 @@ jobs:
         ls -l /dev/kvm
         sudo chmod 666 /dev/kvm
         [ -w /dev/kvm ] || { echo "::error::/dev/kvm not writable"; exit 1; }
+        # POLL FOR THE MARKER rather than running a fixed wall-clock timeout.
+        # A fixed `timeout 120` made this job FLAKY: of the first three runs, two
+        # finished everything in well under 120 s (140 KB of serial) while the third
+        # was still inside spawn_inference_process at the cut-off, having emitted only
+        # 7 KB. Nothing was wrong with it -- runner throughput just varies -- but the
+        # assertions saw a truncated log and failed. Polling makes a fast runner fast
+        # and lets a slow one finish, which is what a smoke test should do.
+        # The workload loop never exits, so SOMETHING must stop it either way.
         s=$(date +%s)
-        timeout 120 qemu-system-x86_64 -enable-kvm -cpu host -smp 6 -m 12G -no-reboot \
+        qemu-system-x86_64 -enable-kvm -cpu host -smp 6 -m 12G -no-reboot \
           -nographic -serial file:/tmp/boot.log \
           -kernel "$HOME/sel4-x86/jbuild/images/kernel-x86_64-pc99" \
           -initrd "$HOME/sel4-x86/jbuild/images/sel4test-driver-image-x86_64-pc99" \
           -drive file=/tmp/nvme.img,if=none,id=nvme0,format=raw \
-          -device nvme,serial=QEMU_NVME,drive=nvme0 </dev/null > /dev/null 2>&1
+          -device nvme,serial=QEMU_NVME,drive=nvme0 </dev/null > /dev/null 2>&1 &
+        QPID=$!
+        DEADLINE=$(( $(date +%s) + 300 ))
+        while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+          # [CTRL-IN-STATS] is emitted at the [STATS] cadence, AFTER [MODEL-BAD] and
+          # [SNAP], so seeing it means every asserted marker has already been printed.
+          if grep -qF "[CTRL-IN-STATS]" /tmp/boot.log 2>/dev/null; then
+            echo "marker reached after $(( $(date +%s) - s ))s"; break
+          fi
+          kill -0 "$QPID" 2>/dev/null || { echo "qemu exited early"; break; }
+          sleep 2
+        done
+        sleep 3   # let the current [STATS] block finish writing
+        kill "$QPID" 2>/dev/null; wait "$QPID" 2>/dev/null
         e=$(date +%s)
-        echo "T_BOOT=$((e-s))s (exit 124 is EXPECTED: our timeout; the workload loop never exits)"
+        echo "T_BOOT=$((e-s))s (poll-until-marker, 300 s cap)"
         echo "serial bytes: $(stat -c%s /tmp/boot.log 2>/dev/null || echo 0)"
         echo "===== first 60 lines ====="; head -60 /tmp/boot.log
         echo "===== last 30 lines ====="; tail -30 /tmp/boot.log
