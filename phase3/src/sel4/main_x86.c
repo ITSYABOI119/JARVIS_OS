@@ -8343,7 +8343,11 @@ static void *main_continued(void *arg UNUSED)
             /* 6-5/M2a: control-IN totals (honest counters; every drop is silent per-frame).
              * DURABLE via nvme_log_write so the acc/drop proof survives BOOT_LOG=0 + wrap. */
             {
-                char cl[192]; char *cp = cl;   /* +recall= at RECALL=1 needs headroom over cl[160] */
+                /* WORST CASE ENUMERATED, not eyeballed: 76 literal chars + 10 u32 fields at their
+                 * 10-digit max (UINT32_MAX = 4294967295) + NUL = 177 bytes. cl[192] fits with 15
+                 * to spare. RE-COMPUTE THIS WHEN ADDING A FIELD — each new " name=" + u32 costs
+                 * len(literal) + 10, so one more field of average name length overflows it. */
+                char cl[192]; char *cp = cl;   /* recall= then idx= at RECALL=1 needed headroom over cl[160] */
                 cp = fbp_str(cp, "[CTRL-IN-STATS] acc="); cp = fbp_u32(cp, g_ctrl_accepted);
                 cp = fbp_str(cp, " drop=");   cp = fbp_u32(cp, g_ctrl_dropped);
                 cp = fbp_str(cp, " (parse="); cp = fbp_u32(cp, g_ctrl_d_parse);
@@ -8361,6 +8365,16 @@ static void *main_continued(void *arg UNUSED)
                  * 0 each boot -> a nonzero value means a prior-session (or earlier same-session) turn
                  * was recalled from the dedicated store. */
                 cp = fbp_str(cp, " recall="); cp = fbp_u32(cp, g_ctrl_recall_hits);
+                /* A9/1 follow-up: the in-RAM recall index SIZE — how many stored turns this boot
+                 * considers recallable (ctrl_index_build's count at boot, plus any turn indexed
+                 * since). Here for the SAME reason recall= is: the line that already prints it,
+                 * [CTRL-RECALL] index built n=, is a bare puts_serial and is therefore captured
+                 * ZERO times on any BOOT_LOG=0 image — measured on boot 51, 0 occurrences against
+                 * 807 [SNAP] from the same windows. That cost the boot-51 deploy its one
+                 * pre-registered falsifiable leg, which could then only be corroborated
+                 * arithmetically off the store. Published durably here, that leg re-runs for free
+                 * on every future boot. */
+                cp = fbp_str(cp, " idx=");    cp = fbp_u32(cp, (uint32_t)g_ctrl_ix.n);
 #endif
                 *cp = '\0';
                 puts_serial(cl); puts_serial("\n");
