@@ -113,7 +113,16 @@ KVM_OPTS=""
 if [ -e /dev/kvm ]; then
     KVM_OPTS="-enable-kvm -cpu host"
 else
-    echo "WARNING: /dev/kvm absent — falling back to emulation (inference will be very slow)."
+    echo "WARNING: /dev/kvm absent — falling back to the TCG line below, which for the"
+    echo "         CURRENT kernel config DOES NOT BOOT AT ALL. Measured at A10"
+    echo "         (2026-08-09): the kernel dies at 'XSAVE not supported' ->"
+    echo "         'boot_sys failed', because this -cpu line is a pre-AVX Nehalem with"
+    echo "         xsave/xsaveopt/xsavec explicitly disabled, while the kernel is built"
+    echo "         CONFIG_XSAVE=1 (feature-set 7) since Phase 4 M0. The old wording here"
+    echo "         said only 'very slow', which is wrong in a way that wastes time."
+    echo "         If you need a no-KVM run, '-accel tcg -cpu max' DOES boot (QEMU >= 7.2"
+    echo "         implements AVX2 and xsaveopt under TCG) but is ~2 orders of magnitude"
+    echo "         slower. That fallback is deliberately NOT rewritten here."
 fi
 
 if [ -n "$LOGFILE" ]; then
