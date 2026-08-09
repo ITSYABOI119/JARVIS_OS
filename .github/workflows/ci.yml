@@ -31,6 +31,191 @@ jobs:
   # appended to, and a job added at the file tail gets clobbered by a concurrent
   # whole-file write. (That is not hypothetical -- it already happened once.)
   # =====================================================================
+  # =====================================================================
+  # A10 BOOT SMOKE -- manual (workflow_dispatch) only. NON-GATING BY DESIGN.
+  #
+  # Nothing in CI had ever booted the image. All 134 gating steps in `test`
+  # exercise host-compilable modules; main_x86.c and inference_server.c are
+  # seL4-only, so the whole wiring/link/boot class was invisible to CI.
+  # This job reconstructs the build tree from version control, builds the
+  # shipped rootserver, and boots it under KVM.
+  #
+  # IT MUST NOT BECOME A REQUIRED CHECK until a stability distribution exists
+  # for it. Promoting it is a separate, deliberate decision with its own review.
+  #
+  # NO CACHE, deliberately -- do not "optimise" one back in. Measured in the A10
+  # spike: a pinned `repo sync` is ~6-8 s and a cold kernel+libs build ~21 s, so
+  # a cache saves almost nothing, while a stale cached kernel that silently
+  # diverges from the committed config is a WORSE failure than having no job.
+  # The build script's config gate validates CONFIG, so it would happily pass a
+  # right-config/stale-source cache -- exactly the C/M4 "undefined reference to
+  # route_veto_centroids_ok" class. Reasoning: phase6/docs/A10_CI_BOOT_FEASIBILITY.md
+  # =====================================================================
+  boot-smoke:
+    name: "A10 boot smoke (manual, NON-GATING)"
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: "deps"
+      run: |
+        s=$(date +%s)
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq build-essential cmake ninja-build python3-pip \
+          gcc-multilib g++-multilib repo git libxml2-utils qemu-system-x86 \
+          dosfstools mtools
+        # lxml is NOT in SEL4_X86_QEMU_SETUP.md's dependency list, and without it
+        # the build dies at step 29/264 (syscall_stub_gen.py imports it).
+        pip3 install --break-system-packages -q protobuf grpcio-tools pyelftools lxml
+        git config --global user.email "ci@example.com"
+        git config --global user.name "ci"
+        e=$(date +%s); echo "T_DEPS=$((e-s))s"
+
+    - name: "reconstruct the seL4 tree from version control (self-verifying)"
+      run: |
+        s=$(date +%s)
+        bash phase3/scripts/reconstruct_sel4_tree.sh --tree "$HOME/sel4-x86"
+        e=$(date +%s); echo "T_RECONSTRUCT=$((e-s))s"
+
+    - name: "enable JARVIS_MODEL_FAIL_PROBE=1 (runner-local, never committed)"
+      run: |
+        # WHY the probe rather than simply omitting a model: with no usable model
+        # the box takes one of two very different paths, and only one is worth
+        # asserting on.
+        #   probe=1        -> g_model_bad latches -> PB_DISPATCH_OK() false ->
+        #                     nothing is dispatched -> a CLEAN degraded boot.
+        #   no model file  -> the model is never read, g_model_bad never latches,
+        #                     PA keeps dispatching to a PB that cannot work, and
+        #                     it crash-loops to the bound and emits [FATAL].
+        # Both were measured in the A10 spike.
+        sed -i 's/^#define JARVIS_MODEL_FAIL_PROBE 0$/#define JARVIS_MODEL_FAIL_PROBE 1/' \
+            phase3/src/sel4/jarvis_debug.h
+        grep -E "^#define JARVIS_MODEL_FAIL_PROBE" phase3/src/sel4/jarvis_debug.h
+        grep -qE "^#define JARVIS_MODEL_FAIL_PROBE 1$" phase3/src/sel4/jarvis_debug.h \
+          || { echo "::error::the sed did not take -- the define's form changed"; exit 1; }
+
+    - name: "configure jbuild + build the shipped image"
+      run: |
+        s=$(date +%s)
+        mkdir -p "$HOME/sel4-x86/jbuild" && cd "$HOME/sel4-x86/jbuild"
+        # CMAKE_HOME_DIRECTORY on the box is projects/jarvis-x86, NOT projects/sel4test
+        # (recorded in phase3/sel4-tree/cmake-configure.txt). Configuring the wrong
+        # source dir produces a tree that builds and then behaves differently.
+        ../init-build.sh -DPLATFORM=x86_64 -DSIMULATION=OFF -DSMP=ON -DNUM_NODES=6 \
+          -DKernelFPU=XSAVE -DKernelXSave=XSAVEOPT -DKernelXSaveFeatureSet=7 \
+          -DKernelXSaveSize=832 -DKernelFastpath=ON \
+          -DKernelDebugBuild=ON -DKernelPrinting=ON \
+          -C ../projects/jarvis-x86/settings.cmake ../projects/jarvis-x86 > /tmp/cfg.log 2>&1 \
+          || { echo "::error::configure failed"; tail -30 /tmp/cfg.log; exit 1; }
+        c=$(date +%s); echo "T_CONFIGURE=$((c-s))s"
+        cd "$GITHUB_WORKSPACE"
+        # build_jarvis_x86.sh copies phase3/src into the tree, re-asserts the kernel
+        # flags, runs ninja, and finishes in the config gate -- now NINE invariants,
+        # including the PRINTING/DEBUG_BUILD pair whose absence killed the spike's
+        # hybrid boot with "unknown syscall 0xffffffffffffffe3" (seL4_DebugPutChar).
+        bash phase3/scripts/build_jarvis_x86.sh "$GITHUB_WORKSPACE" 2>&1 | tail -45
+        e=$(date +%s); echo "T_BUILD=$((e-c))s  T_BUILD_TOTAL=$((e-s))s"
+        ls -l "$HOME/sel4-x86/jbuild/images/"
+
+    - name: "NVMe image: >=10.1 GiB sparse, FAT32, with a >3.9 MiB GEMMA2B.GUF stub"
+      run: |
+        # SIZE is load-bearing: the raw-LBA stores start at LBA 21,100,000
+        # (10.06 GiB). A smaller image cannot hold them and every store silently
+        # fails to init. Sparse, so it costs 0 bytes on disk (measured).
+        #
+        # STUB SIZE is load-bearing too: JARVIS_MODEL_FAIL_PROBE=1 fires at
+        # p == 1000 INSIDE the frame-allocation loop, which runs `p < n_pages`
+        # where n_pages = ceil(model_size/4096). So the probe is reached only if
+        # the file is FOUND on FAT32 *and* is larger than 1000*4096 = 3.9 MiB.
+        # 8 MiB gives margin. Contents are irrelevant -- the probe aborts before
+        # the read -- but the 8.3 NAME is load-bearing: fat32.c's name_match
+        # compares exactly 11 bytes, "GEMMA2B GUF", with no separator.
+        truncate -s 11G /tmp/nvme.img
+        mkfs.vfat -F 32 -n JARVISDATA /tmp/nvme.img > /dev/null
+        head -c 8388608 /dev/urandom > /tmp/stub.gguf
+        mcopy -i /tmp/nvme.img /tmp/stub.gguf ::GEMMA2B.GUF
+        echo "--- FAT32 root directory ---"
+        mdir -i /tmp/nvme.img ::
+        echo "on-disk=$(du -h /tmp/nvme.img | cut -f1) apparent=$(du -h --apparent-size /tmp/nvme.img | cut -f1)"
+
+    - name: "boot under KVM"
+      run: |
+        set +e
+        ls -l /dev/kvm
+        sudo chmod 666 /dev/kvm
+        [ -w /dev/kvm ] || { echo "::error::/dev/kvm not writable"; exit 1; }
+        s=$(date +%s)
+        timeout 120 qemu-system-x86_64 -enable-kvm -cpu host -smp 6 -m 12G -no-reboot \
+          -nographic -serial file:/tmp/boot.log \
+          -kernel "$HOME/sel4-x86/jbuild/images/kernel-x86_64-pc99" \
+          -initrd "$HOME/sel4-x86/jbuild/images/sel4test-driver-image-x86_64-pc99" \
+          -drive file=/tmp/nvme.img,if=none,id=nvme0,format=raw \
+          -device nvme,serial=QEMU_NVME,drive=nvme0 </dev/null > /dev/null 2>&1
+        e=$(date +%s)
+        echo "T_BOOT=$((e-s))s (exit 124 is EXPECTED: our timeout; the workload loop never exits)"
+        echo "serial bytes: $(stat -c%s /tmp/boot.log 2>/dev/null || echo 0)"
+        echo "===== first 60 lines ====="; head -60 /tmp/boot.log
+        echo "===== last 30 lines ====="; tail -30 /tmp/boot.log
+
+    - name: "ASSERT"
+      run: |
+        L=/tmp/boot.log
+        fail=0
+        must_eq() { n=$(grep -c -- "$2" "$L" || true); if [ "$n" -eq "$3" ]; then echo "  OK    $1 = $3"; else echo "  FAIL  $1 = $n (expected $3)"; fail=1; fi; }
+        must_ge() { n=$(grep -c -- "$2" "$L" || true); if [ "$n" -ge "$3" ]; then echo "  OK    $1 = $n (>= $3)"; else echo "  FAIL  $1 = $n (expected >= $3)"; fail=1; fi; }
+
+        echo "--- the image ran ---"
+        must_eq "reached user space"   "Booting all finished" 1
+        must_eq "self-test 5/5"        "Self-Test: 5/5 PASS"  1
+
+        echo "--- the stub reached the probe (proves the chosen artefact works) ---"
+        must_eq "probe fired at p=1000" "[MODEL-FAIL-PROBE] forcing frame-alloc failure at p=1000" 1
+
+        echo "--- the fail-closed path ---"
+        must_ge "MODEL-BAD why=frame-alloc" "[MODEL-BAD] inference disabled why=frame-alloc" 1
+        must_ge "SNAP model=UNUSABLE"       "model=UNUSABLE" 1
+        must_eq "SNAP model=loaded"         "model=loaded"   0
+
+        echo "--- no crash-loop (the reason the probe path is the one asserted) ---"
+        must_eq "FATAL" "[FATAL]" 0
+
+        echo "--- the durable index count on an EMPTY CI store ---"
+        # A fresh sparse image carries no JEPI header at LBA 21,140,000, so the
+        # control-IN store initialises empty and ctrl_index_build indexes ZERO
+        # recallable records. The honest expectation is a SPECIFIC NUMBER, so
+        # assert idx=0 and assert no other value appears -- not mere presence.
+        must_ge "CTRL-IN-STATS idx=0" "idx=0" 1
+        n_other=$(grep -oE 'idx=[0-9]+' "$L" | grep -vc 'idx=0' || true)
+        if [ "$n_other" -eq 0 ]; then echo "  OK    no idx= value other than 0"; else echo "  FAIL  $n_other non-zero idx= values"; fail=1; fi
+
+        echo "--- err=0 is the ONLY err value ever printed ---"
+        vals=$(grep -oE 'err=[0-9]+' "$L" | sort -u | tr '\n' ' ')
+        echo "  observed: [$vals]"
+        if [ "$vals" = "err=0 " ]; then echo "  OK    err=0 only"; else echo "  FAIL  another err value appeared"; fail=1; fi
+
+        echo ""
+        echo "--- REPORTED, NOT ASSERTED: the runner is not representative ---"
+        # untyped_count is a function of guest RAM. The box has 181 at 32 GiB; the
+        # A10 spike measured 105 at -m 8G, and at 105 the M3 threadpool starts ZERO
+        # workers. This job runs -m 12G and PRINTS what it got. Threading is
+        # deliberately NOT asserted: a green that meant "0 workers is fine" would
+        # be worse than having no job at all.
+        grep -E "untyped_count|M3: started|numNodes|NN=" "$L" | head -6 | sed 's/^/  /' || echo "  (none printed)"
+        echo "  ^ reported only. This job makes NO claim about threading or worker count."
+
+        echo ""
+        if [ "$fail" -eq 0 ]; then echo "BOOT SMOKE PASS"; else echo "::error::boot smoke FAILED"; exit 1; fi
+
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: a10-boot-smoke-serial
+        path: /tmp/boot.log
+        if-no-files-found: warn
+
   coverage:
     name: "Coverage instrument (manual, non-gating)"
     if: github.event_name == 'workflow_dispatch'

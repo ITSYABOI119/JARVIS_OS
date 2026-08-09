@@ -1132,6 +1132,8 @@ cmake -DKernelIOMMU=OFF \
       -DKernelXSaveSize=832 \
       -DSMP=ON \
       -DNUM_NODES="${NN}" \
+      -DKernelDebugBuild=ON \
+      -DKernelPrinting=ON \
       . >/dev/null 2>&1
 # Pass 2: KernelXSaveFeatureSet DEPENDS on KernelFPUXSave, which only flips ON during
 # pass 1; on the pass where it first becomes selectable it takes its default (3 =
@@ -1164,6 +1166,17 @@ if [ -f "$GEN_CFG" ]; then
     check_cfg '/\* disabled: CONFIG_FXSAVE \*/'                "FPU: FXSAVE disabled                       [M0]"
     check_cfg '/\* disabled: CONFIG_IOMMU \*/'                 "IOMMU disabled (NVMe direct DMA)           [M1]"
     check_cfg '#define CONFIG_FASTPATH[[:space:]]+1'           "KernelFastpath=ON (unverified by design)"
+    # A10 (2026-08-09): the two the 7-check gate did NOT have, added because their absence
+    # was found by falling into it. The rootserver's FIRST output goes through
+    # seL4_DebugPutChar, which only exists in a debug/printing kernel. A kernel that
+    # satisfies all seven checks above can still lack that syscall — and then the
+    # rootserver dies on its first print with "unknown syscall 0xffffffffffffffe3", after
+    # a boot that otherwise looks perfect right up to "dropped to user space". Measured on
+    # a GitHub runner during the A10 spike; see phase6/docs/A10_CI_BOOT_FEASIBILITY.md.
+    # Both are ON in the deployed box config (verified before adding these, so the gate
+    # cannot fail the very build it guards).
+    check_cfg '#define CONFIG_PRINTING[[:space:]]+1'           "PRINTING=1 (kernel can emit)              [A10]"
+    check_cfg '#define CONFIG_DEBUG_BUILD[[:space:]]+1'        "DEBUG_BUILD=1 (seL4_DebugPutChar exists)  [A10]"
     if [ "$cfg_fail" -ne 0 ]; then
         echo -e "${RED}Kernel config verification FAILED — not the intended M2 config. Aborting.${NC}"
         exit 1
