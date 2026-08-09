@@ -112,7 +112,7 @@ jobs:
         ../init-build.sh -DPLATFORM=x86_64 -DSIMULATION=OFF -DSMP=ON -DNUM_NODES=6 \
           -DKernelFPU=XSAVE -DKernelXSave=XSAVEOPT -DKernelXSaveFeatureSet=7 \
           -DKernelXSaveSize=832 -DKernelFastpath=ON \
-          -DKernelDebugBuild=ON -DKernelPrinting=ON \
+          -DKernelDebugBuild=ON -DKernelPrinting=ON -DKernelIOMMU=OFF \
           -C ../projects/jarvis-x86/settings.cmake ../projects/jarvis-x86 > /tmp/cfg.log 2>&1 \
           || { echo "::error::configure failed"; tail -30 /tmp/cfg.log; exit 1; }
         c=$(date +%s); echo "T_CONFIGURE=$((c-s))s"
@@ -130,7 +130,13 @@ jobs:
         e=$(date +%s); echo "T_BUILD=$((e-c))s  T_BUILD_TOTAL=$((e-s))s  EXIT=$rc"
         if [ "$rc" -ne 0 ]; then
           echo "===== FAILED / error lines ====="
-          grep -nE "FAILED:|[Ee]rror:|ModuleNotFoundError|No such file" /tmp/build.log | head -30
+          # NB: the config gate prints "FAILED" with NO colon, so match both forms.
+          # A colon-only pattern once made a CLEAN build with a FAILING GATE look
+          # like a silent failure with no error line at all, which cost a re-run.
+          grep -nE "FAILED|[Ee]rror:|ModuleNotFoundError|No such file" /tmp/build.log | head -30
+          echo "===== kernel config as actually cached ====="
+          grep -E "^Kernel(IOMMU|FPU|XSave|Fastpath|DebugBuild|Printing|MaxNumNodes)|^(SMP|NUM_NODES|SIMULATION|RELEASE|Sel4testAllowSettingsOverride):" \
+            "$HOME/sel4-x86/jbuild/CMakeCache.txt" 2>/dev/null || echo "(no cache)"
           echo "===== last 40 ====="; tail -40 /tmp/build.log
           echo "::error::build failed (exit $rc)"; exit "$rc"
         fi
