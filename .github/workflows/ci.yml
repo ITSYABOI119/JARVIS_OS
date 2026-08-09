@@ -116,8 +116,20 @@ jobs:
         # flags, runs ninja, and finishes in the config gate -- now NINE invariants,
         # including the PRINTING/DEBUG_BUILD pair whose absence killed the spike's
         # hybrid boot with "unknown syscall 0xffffffffffffffe3" (seL4_DebugPutChar).
-        bash phase3/scripts/build_jarvis_x86.sh "$GITHUB_WORKSPACE" 2>&1 | tail -45
-        e=$(date +%s); echo "T_BUILD=$((e-c))s  T_BUILD_TOTAL=$((e-s))s"
+        # Capture in full: a build failure must be diagnosable from THIS run. A
+        # `| tail -45` here showed only muslc's trailing config chatter and hid the
+        # actual `FAILED:` line, costing a whole re-run to find.
+        set +e
+        bash phase3/scripts/build_jarvis_x86.sh "$GITHUB_WORKSPACE" > /tmp/build.log 2>&1
+        rc=$?
+        e=$(date +%s); echo "T_BUILD=$((e-c))s  T_BUILD_TOTAL=$((e-s))s  EXIT=$rc"
+        if [ "$rc" -ne 0 ]; then
+          echo "===== FAILED / error lines ====="
+          grep -nE "FAILED:|[Ee]rror:|ModuleNotFoundError|No such file" /tmp/build.log | head -30
+          echo "===== last 40 ====="; tail -40 /tmp/build.log
+          echo "::error::build failed (exit $rc)"; exit "$rc"
+        fi
+        tail -25 /tmp/build.log
         ls -l "$HOME/sel4-x86/jbuild/images/"
 
     - name: "NVMe image: >=10.1 GiB sparse, FAT32, with a >3.9 MiB GEMMA2B.GUF stub"
@@ -212,8 +224,11 @@ jobs:
     - uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: a10-boot-smoke-serial
-        path: /tmp/boot.log
+        name: a10-boot-smoke-logs
+        path: |
+          /tmp/boot.log
+          /tmp/build.log
+          /tmp/cfg.log
         if-no-files-found: warn
 
   coverage:
