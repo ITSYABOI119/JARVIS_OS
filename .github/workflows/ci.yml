@@ -118,6 +118,26 @@ jobs:
         echo "source-copy pass: $(grep -ciE '  (COPY|CREATED|SET) ' /tmp/copy.log || true) file actions"
         test -f "$HOME/sel4-x86/projects/jarvis-x86/apps/jarvis-inference/src/main.c" \
           || { echo "::error::the copy pass did not place Process B's sources"; tail -20 /tmp/copy.log; exit 1; }
+        # ---------------------------------------------------------------------
+        # A LIVE STALE-SOURCE CONDITION, found by this job and NOT fixed here.
+        #
+        # apps/jarvis-inference/CMakeLists.txt:35 compiles `src/ipc/shmem_ipc.c`,
+        # but build_jarvis_x86.sh copies the repo's shmem_ipc.c to `src/ai/`
+        # (:360-361). On the box BOTH paths exist: src/ai/ is today's copy and matches
+        # phase3/src/ipc/shmem_ipc.c byte for byte, while src/ipc/ is dated 2026-03-28
+        # with different content (4960 B vs 5290 B). So the deployed Process B is built
+        # from a ~4.5-month-old copy of the IPC layer, and edits to shmem_ipc.c have
+        # not been reaching it.
+        #
+        # CI places the CURRENT source at the path the build actually compiles. That is
+        # deliberately NOT what the box does -- it is the more correct thing, and the
+        # divergence is the finding. Reconciling the box is a separate change with its
+        # own gate and deploy; it must not ride a CI commit.
+        # ---------------------------------------------------------------------
+        mkdir -p "$HOME/sel4-x86/projects/jarvis-x86/apps/jarvis-inference/src/ipc"
+        cp phase3/src/ipc/shmem_ipc.c phase3/src/ipc/shmem_ipc.h \
+           "$HOME/sel4-x86/projects/jarvis-x86/apps/jarvis-inference/src/ipc/"
+        echo "NOTE: placed CURRENT shmem_ipc.c at src/ipc/ (the box compiles a 2026-03-28 copy there)"
         cd "$HOME/sel4-x86/jbuild"
         # CMAKE_HOME_DIRECTORY on the box is projects/jarvis-x86, NOT projects/sel4test
         # (recorded in phase3/sel4-tree/cmake-configure.txt). Configuring the wrong
