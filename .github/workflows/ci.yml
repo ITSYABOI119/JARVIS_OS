@@ -105,7 +105,20 @@ jobs:
     - name: "configure jbuild + build the shipped image"
       run: |
         s=$(date +%s)
-        mkdir -p "$HOME/sel4-x86/jbuild" && cd "$HOME/sel4-x86/jbuild"
+        # CHICKEN-AND-EGG, and it is inherent rather than a workaround: cmake cannot
+        # configure jarvis-x86 until the JARVIS sources exist (its add_executable lists
+        # them), but build_jarvis_x86.sh -- the thing that copies them out of this repo
+        # -- refuses to run until jbuild exists (:1032). So do the script's COPY pass
+        # first and tolerate it failing at its own cmake, then configure for real, then
+        # run it again to build. The copy is idempotent, so the second run re-copies
+        # harmlessly. On the box this never arises: jbuild was configured by hand years
+        # of commits ago and has simply persisted.
+        mkdir -p "$HOME/sel4-x86/jbuild"
+        bash phase3/scripts/build_jarvis_x86.sh "$GITHUB_WORKSPACE" > /tmp/copy.log 2>&1 || true
+        echo "source-copy pass: $(grep -ciE '  (COPY|CREATED|SET) ' /tmp/copy.log || true) file actions"
+        test -f "$HOME/sel4-x86/projects/jarvis-x86/apps/jarvis-inference/src/main.c" \
+          || { echo "::error::the copy pass did not place Process B's sources"; tail -20 /tmp/copy.log; exit 1; }
+        cd "$HOME/sel4-x86/jbuild"
         # CMAKE_HOME_DIRECTORY on the box is projects/jarvis-x86, NOT projects/sel4test
         # (recorded in phase3/sel4-tree/cmake-configure.txt). Configuring the wrong
         # source dir produces a tree that builds and then behaves differently.

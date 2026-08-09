@@ -52,8 +52,8 @@ documentation of *what* changed; nothing consumes them.
 | `jarvis-x86/deleted-paths.txt` | the 72 paths, sorted |
 | `jarvis-x86/files/` | the 3 modified CMake files (post-state) + `apps/jarvis-inference/CMakeLists.txt` |
 | `jarvis-x86/diffs/` | the same 3 changes as readable diffs vs upstream |
-| `jarvis-x86/tracked-hashes.txt` | sha256 of **25** files as they are on the box — the 27 tracked-and-present, minus the 2 the build script rewrites. The baseline the reconstruction is checked against. Generated with `LC_ALL=C` (a locale-ordering difference produced a false MISMATCH on the first proof run). |
-| `jarvis-x86/build-generated-paths.txt` | the 2 tracked files `build_jarvis_x86.sh` rewrites at build time, excluded from the baseline, with the reason |
+| `jarvis-x86/tracked-hashes.txt` | sha256 of **26** files as they are on the box — the 27 tracked-and-present, minus the 1 the build script fully rewrites. The baseline the reconstruction is checked against. Generated with `LC_ALL=C` (a locale-ordering difference produced a false MISMATCH on the first proof run). |
+| `jarvis-x86/build-generated-paths.txt` | the 1 tracked file `build_jarvis_x86.sh` fully rewrites (`src/main.c`), excluded from the baseline, with the reason |
 
 Reconstruct with **`phase3/scripts/reconstruct_sel4_tree.sh`**.
 
@@ -66,17 +66,26 @@ tree and diffing that against `tracked-hashes.txt`. It fails loudly on any misma
 the upstream revision **before** applying the delta, so a delta silently applied to the wrong base
 cannot pass.
 
-**Covered:** 25 files — that upstream is the right revision, that exactly the right 72 are gone, and
-that the 3 hand-edited CMake files are byte-identical to the box. Of the 27 tracked-and-present
-files, exactly 5 differ from pristine upstream (measured, not assumed): the 3 vendored here, plus
-the 2 `build_jarvis_x86.sh` rewrites.
+**Covered:** 26 files — that upstream is the right revision, that exactly the right 72 are gone, and
+that the **4** hand-edited files are byte-identical to the box. Of the 27 tracked-and-present files,
+exactly 5 differ from pristine upstream (measured): the 4 vendored here, plus `src/main.c`, which
+the build script copies wholesale from `phase3/src/sel4/main_x86.c`.
+
+> **A correction worth keeping, because the first version of this shipped wrong.**
+> `apps/sel4test-driver/CMakeLists.txt` was initially classified as build-script-generated and
+> excluded. That was false: the script seds exactly ONE line of it (the AVX2
+> `target_compile_options`), while the file carries **96 insertions / 69 deletions** of hand-made
+> delta — including removal of the `add_subdirectory()` calls for `libsel4testsupport` and
+> `sel4test-tests`, the very directories the 72-path list deletes. Excluding it produced a tree
+> cmake could not configure at all. The reconstruction proof PASSED anyway, because the exclusion
+> removed the file from the comparison — a scoping error, not a verification failure, and exactly
+> the kind a boot smoke catches and a hash check cannot.
 
 **NOT covered, and deliberately so:**
 
-- **The `apps/` sources**, and the 2 tracked files the build script rewrites
-  (`apps/sel4test-driver/src/main.c`, `apps/sel4test-driver/CMakeLists.txt`). All come from
-  `phase3/src` at build time; they are version controlled already and are not part of this delta.
-  Verifying them pre-build would compare a pre-build tree against a post-build one.
+- **The untracked `apps/` sources**, and `apps/sel4test-driver/src/main.c`, which the build script
+  copies wholesale from `phase3/src/sel4/main_x86.c`. Those are in version control already by
+  another route; verifying them pre-build would compare a pre-build tree against a post-build one.
 - **Byte-identity of the resulting binaries.** Build paths are embedded (`/home/jarvis` vs
   `/home/runner`), so a rebuilt kernel differs in bytes from the box's while matching in config.
   Config identity is the property that is checkable, and the build script's config gate checks it.

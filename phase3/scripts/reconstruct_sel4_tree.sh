@@ -147,7 +147,14 @@ if [ "$VERIFY_ONLY" -eq 0 ]; then
     mkdir -p "$JX/apps/jarvis-inference"
     cp "$DATA_DIR/jarvis-x86/files/apps/jarvis-inference/CMakeLists.txt" \
        "$JX/apps/jarvis-inference/CMakeLists.txt"
-    echo "  installed 4 vendored files"
+    # The rootserver app's CMakeLists is a hand rewrite (96+/69-), NOT just the AVX2
+    # sed build_jarvis_x86.sh applies: among other things it removes the
+    # add_subdirectory() calls for libsel4testsupport and sel4test-tests, which the
+    # 72-path deletion list deletes. Omitting it leaves a tree cmake CANNOT configure
+    # ("add_subdirectory given source ... which is not an existing directory").
+    cp "$DATA_DIR/jarvis-x86/files/apps/sel4test-driver/CMakeLists.txt" \
+       "$JX/apps/sel4test-driver/CMakeLists.txt"
+    echo "  installed 5 vendored files"
 fi
 
 # ---------------------------------------------------------------------------
