@@ -1570,6 +1570,27 @@ jobs:
     - name: "Invariant: every test_*.c / fuzz_*.c has a CI step (or a stated reason)"
       run: python3 phase3/scripts/check_ci_completeness.py
 
+    # A-ORPHAN -- the half of the 148551a ring divergence that went unseen for 4.5
+    # months, made mechanical: the build script wrote src/ai/shmem_ipc.c and nothing
+    # compiled it, while PB's CMakeLists compiled src/ipc/shmem_ipc.c and nothing
+    # wrote it. Three checks from committed sources alone (build_jarvis_x86.sh copy
+    # destinations incl. the jarvis-input heredoc, vs the vendored sel4-tree
+    # CMakeLists): (1) divergence -- same basename compiled from a DIFFERENT path,
+    # never allowlistable; (2) orphans -- copied .c the app never compiles,
+    # allowlisted by exact path with reasons, stale entries fail; (3) the reverse --
+    # every compiled .c must be a copy destination, because cmake fails loudly only
+    # on a CLEAN tree (on the box's long-lived tree a stale sibling satisfies it
+    # silently, which is the historical bug itself). HEADERS ARE NOT COVERED: a .h
+    # is included, not compiled, so CMakeLists source lists cannot see it -- the
+    # build script's rm -f teardown remains the header-shadowing guard.
+    # --self-test runs FIRST: control must pass, then an in-memory reconstruction
+    # of the pre-148551a defect must FAIL naming both files -- the gate cannot go
+    # vacuous without this step going red.
+    - name: "Invariant: every copied .c is compiled by the app that receives it"
+      run: |
+        python3 phase3/scripts/check_copy_orphans.py --self-test
+        python3 phase3/scripts/check_copy_orphans.py
+
     # A4 -- a PARSE-LEVEL floor over the operator PowerShell tooling (~2,200 lines).
     #
     # THE HONEST CEILING, stated here so this is never mistaken for coverage: this step
