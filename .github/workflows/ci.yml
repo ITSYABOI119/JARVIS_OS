@@ -919,6 +919,21 @@ jobs:
           -o /tmp/tpbh
         /tmp/tpbh
 
+    # A9/3 -- the control-IN exit verdict: what the user is TOLD, what the STORE
+    # records and what the AUDIT says are decided together (ctrl_exit_decide) and
+    # the truth table proves they can never drift apart. The table pins SHIPPED
+    # behaviour, including the one disagreement edge the extraction found (a
+    # seq-matched response with 0 usable bytes replies "answered" while the store
+    # records ERROR) -- a mutant that "fixes" that edge FAILS, because repairing
+    # it is a separate decision, not a refactor side effect. -I src/ipc is for
+    # PB_STOP_* (shmem_ipc.h), the same resolution the seL4 target uses.
+    - name: "Phase 6: A9/3 control-IN exit verdict (C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai -I phase3/src/ipc \
+          phase3/src/ai/test_ctrl_exit.c phase3/src/ai/ctrl_exit.c \
+          -o /tmp/tcex
+        /tmp/tcex
+
     - name: "Phase C: C/M1b-3 embed region staleness (C)"
       run: |
         cd phase3/src/ipc
