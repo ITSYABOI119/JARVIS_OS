@@ -356,9 +356,36 @@ for f in "${AI_FILES[@]}"; do
     copy_file "$AI_SRC/$f" "$PROC_B_DIR/ai/$f"
 done
 
-# Process B also needs IPC headers
-copy_file "$IPC3_SRC/shmem_ipc.h" "$PROC_B_DIR/ai/shmem_ipc.h"
-copy_file "$IPC3_SRC/shmem_ipc.c" "$PROC_B_DIR/ai/shmem_ipc.c"
+# Process B also needs the IPC ring — into src/ipc/, which is where its CMakeLists
+# actually compiles it from (`src/ipc/shmem_ipc.c`), and the same path PA uses.
+#
+# THIS USED TO COPY INTO src/ai/ AND IT WAS A REAL DEFECT, live 2026-03-28 -> 2026-08-10.
+# cmake compiled src/ipc/shmem_ipc.c while the script refreshed src/ai/shmem_ipc.c, so
+# PB's ring implementation was never updated and the two processes that talk through a
+# lock-free shared ring were built from DIFFERENT implementations of it. PB's compiled
+# copy still had `SHMEM_RING_SLOTS 16` — the value `2f0a552` reduced to 15 because 16
+# slots make sizeof(shmem_ring_t) 4160 B and overflow the 4096 B shared page.
+#
+# It never actually misbehaved, for one structural reason: `shmem_ipc_init` is the ONLY
+# place the compile-time slot count is used, and PB never calls it (Process A owns ring
+# init). Every hot path reads the RUNTIME header.size, which PA sets to 15. But that is a
+# COMMENT standing in for a guard, and this project has that exact failure on record
+# (`pb_can_log`'s ring reservation: "INTENT, NOT SHIPPED FACT"). One call to
+# shmem_ipc_init from PB would have set size=16 and made slot 15 addressable — 256 bytes
+# past the page.
+#
+# THE REAL WIN of this one-path change: the current header's
+# `_Static_assert(sizeof(shmem_ring_t) <= 4096)` now applies IN THE TRANSLATION UNIT THAT
+# COULD VIOLATE IT, and passes (3904 < 4096). The guard is back where the hazard is,
+# instead of being compiled out of the only file that mattered.
+copy_file "$IPC3_SRC/shmem_ipc.h" "$PROC_B_DIR/ipc/shmem_ipc.h"
+copy_file "$IPC3_SRC/shmem_ipc.c" "$PROC_B_DIR/ipc/shmem_ipc.c"
+# TEARDOWN, and it is load-bearing rather than tidiness: PB's include dirs are
+# "src" "src/ai" "src/ipc", so an orphaned src/ai/shmem_ipc.h left by a PRE-FIX build
+# would still be found by `-I src/ai` and would shadow the real one again for any TU
+# outside src/ipc/. Removing the files removes the mechanism. (The quoted-include rule —
+# the including file's own directory wins — is what made this bug possible at all.)
+rm -f "$PROC_B_DIR/ai/shmem_ipc.h" "$PROC_B_DIR/ai/shmem_ipc.c"
 # C/M1b-3: PB needs the embed region LAYOUT (the struct + magic + status/size macros) but NOT
 # embed_region.c — PB only ever PUBLISHES into the region; embed_result_usable() is PA's call.
 # Header only, so PB links no new object.
