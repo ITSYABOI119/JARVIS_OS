@@ -58,6 +58,10 @@
 #include "ctrl_epi_index.h"     /* Phase 6 A9/1: control-IN recall-index maintenance (host-pure, host-tested).
                                  * UNCONDITIONAL — the route.c / episodic_store.c precedent: host-pure with no
                                  * external dependency, so linking it is benign and inert until called. */
+#include "ctrl_exit.h"          /* Phase 6 A9/3: the control-IN exit verdict (host-pure, host-tested).
+                                 * UNCONDITIONAL, same reasoning. The module DECIDES what the user is told /
+                                 * the store records / the audit says at pa_ctrl_gate's exits; pa_ctrl_gate
+                                 * SEQUENCES — the 6-6 ONE-shared-exit invariant is untouched. */
 #include "shared_context.h"
 #include "framebuffer.h"
 #include "nic_i211.h"
@@ -3535,9 +3539,14 @@ static void pa_ctrl_gate(const control_result_t *cres)
     if (qv == QS_REFUSE) {
         const char *label = query_shield_reason_label(qsr.reason);   /* keyword-clean; NEVER the query */
         puts_serial("[CTRL-IN-REFUSE] reason="); puts_serial(label); puts_serial("\n");
-        g_ctrl_in_blocked++;
-        ctrl_in_jact(AUDIT_BLOCKED, AUDIT_OUT_NA, label, (uint16_t)strlen(label));
-        ctrl_send_reply((uint16_t)cres->seq, 1 /*refused*/, label, (int)strlen(label)); /* LABEL only, never the query */
+        /* A9/3: the refused exit's verdict set — reply 1 / JACT BLOCKED+NA / blocked counter /
+         * NO episodic write (the raw query never enters the store) — comes from the ONE
+         * host-tested mapping (ctrl_exit_decide, test_ctrl_exit T1). This site sequences. */
+        ctrl_exit_decision_t xd;
+        ctrl_exit_decide(/*refused=*/1, 0, 1, 0, 0, 0, PB_STOP_UNKNOWN, &xd);
+        if (xd.count_blocked) g_ctrl_in_blocked++;
+        ctrl_in_jact(xd.jact_verdict, xd.jact_outcome, label, (uint16_t)strlen(label));
+        ctrl_send_reply((uint16_t)cres->seq, xd.reply_verdict /*1 = refused*/, label, (int)strlen(label)); /* LABEL only, never the query */
         return;
     }
 
@@ -3756,16 +3765,21 @@ static void pa_ctrl_gate(const control_result_t *cres)
     if (!PB_DISPATCH_OK()) {
         puts_serial("[CTRL-IN-RESP] q=\""); puts_serial(qs);
         puts_serial("\" -> DEGRADED (no dispatch)\n");
+        /* A9/3: reply 2 / episodic ERROR+CONTROL_IN / JACT EXECUTED+FAIL / no counter, from
+         * the mapping (test_ctrl_exit T2). This exit is BEFORE the duty fold, so the mapping
+         * also grants no window close — the site simply has no window code to run. */
+        ctrl_exit_decision_t xd;
+        ctrl_exit_decide(0, /*served_locally=*/0, /*dispatch_ok=*/0, 0, 0, 0, PB_STOP_UNKNOWN, &xd);
 #if JARVIS_CONTROL_IN_RECALL
         /* Provenance NONE, stated literally rather than passing crk_*: this exit is BEFORE the
          * recall block, so no recall could have happened. Writing the literals makes that visible
          * at the call site instead of relying on the initialiser being read correctly. */
-        ctrl_epi_write(qs, EPI_OUT_ERROR, NULL, EPI_ACT_CONTROL_IN, EPI_RECALL_NONE, 0, 0);
+        ctrl_epi_write(qs, xd.epi_outcome, NULL, xd.epi_action, EPI_RECALL_NONE, 0, 0);
 #else
-        epi_batch_add(qs, EPI_ACT_CONTROL_IN, EPI_OUT_ERROR, NULL);
+        epi_batch_add(qs, xd.epi_action, xd.epi_outcome, NULL);
 #endif
-        ctrl_in_jact(AUDIT_EXECUTED, AUDIT_OUT_FAIL, "control-in degraded", 19);
-        ctrl_send_reply((uint16_t)cres->seq, 2 /*degraded*/, "degraded", 8);
+        ctrl_in_jact(xd.jact_verdict, xd.jact_outcome, "control-in degraded", 19);
+        ctrl_send_reply((uint16_t)cres->seq, xd.reply_verdict /*2 = degraded*/, "degraded", 8);
         return;
     }
 
@@ -4115,7 +4129,10 @@ static void pa_ctrl_gate(const control_result_t *cres)
     }   /* end if (!served_locally) — SYSFACTS/DECLINE skipped the whole PB dispatch above */
 #endif
 
-    uint16_t outcome;
+    /* A9/3: ONE decision struct for the answered/failed arms + the shared tail. What the
+     * user is TOLD, what the STORE records and what the AUDIT says are decided together
+     * by the host-tested mapping (ctrl_exit_decide); these sites sequence it. */
+    ctrl_exit_decision_t xd;
     if (got) {
         /* Drain the remaining chunks of THIS reply. PB RENUMBERS response chunks (chunk0 carries
          * cseq, then cseq+1, cseq+2 ...; SHMEM_MAX_PAYLOAD-sized, so a >240 B answer is 2-3 chunks),
@@ -4143,17 +4160,18 @@ static void pa_ctrl_gate(const control_result_t *cres)
 #if JARVIS_ROUTING
     }
 #endif
-        outcome = roff > 0 ? AUDIT_OUT_OK : AUDIT_OUT_FAIL;
 #if JARVIS_ROUTING
-        /* A LOCALLY-served answer is NOT evidence of PB contact. Resetting the miss-counter here
-         * would hand the K/M2c hang detector a fake ACK — a wedged PB could then be masked forever
-         * by a stream of SYSFACTS queries. Only a genuine MSG_RESPONSE dequeue clears it. */
-        if (!served_locally) { km2b_miss_on_pb_ack(&g_pb_miss); g_pb_last_ack_ms = jarvis_uptime_ms(); }
+        ctrl_exit_decide(0, served_locally, 1, /*got=*/1, 0, roff, g_infer_last_stop, &xd);
 #else
-        km2b_miss_on_pb_ack(&g_pb_miss);
-        g_pb_last_ack_ms = jarvis_uptime_ms();
+        ctrl_exit_decide(0, 0, 1, /*got=*/1, 0, roff, g_infer_last_stop, &xd);
 #endif
-        g_ctrl_in_answered++;
+        /* A LOCALLY-served answer is NOT evidence of PB contact (xd.ack_pb carries the
+         * !served_locally guard; at ROUTING=0 it is always granted). Resetting the
+         * miss-counter here would hand the K/M2c hang detector a fake ACK — a wedged PB
+         * could then be masked forever by a stream of SYSFACTS queries. Only a genuine
+         * MSG_RESPONSE dequeue clears it. */
+        if (xd.ack_pb) { km2b_miss_on_pb_ack(&g_pb_miss); g_pb_last_ack_ms = jarvis_uptime_ms(); }
+        if (xd.count_answered) g_ctrl_in_answered++;
         /* [CTRL-IN-RESP]: sanitized query head + sanitized answer head (both bounded). M3-2b sends
          * the answer to the console; M3-2a LOGS it. */
         puts_serial("[CTRL-IN-RESP] q=\""); puts_serial(qs); puts_serial("\" -> \"");
@@ -4168,12 +4186,10 @@ static void pa_ctrl_gate(const control_result_t *cres)
          * but never recalled. A FAILED turn stays tag 3 regardless of route: it has no
          * answer at all, and re-tagging it would conflate "answered from own state" with
          * "failed to answer". */
-        ctrl_epi_write(qs, roff > 0 ? EPI_OUT_OK : EPI_OUT_ERROR, roff > 0 ? resp : NULL,
-                       (served_locally && roff > 0) ? EPI_ACT_CONTROL_IN_LOCAL : EPI_ACT_CONTROL_IN,
+        ctrl_epi_write(qs, xd.epi_outcome, roff > 0 ? resp : NULL, xd.epi_action,
                        crk_kind, crk_src, crk_cos);
 #else
-        epi_batch_add(qs, (served_locally && roff > 0) ? EPI_ACT_CONTROL_IN_LOCAL : EPI_ACT_CONTROL_IN,
-                      roff > 0 ? EPI_OUT_OK : EPI_OUT_ERROR, roff > 0 ? resp : NULL);
+        epi_batch_add(qs, xd.epi_action, xd.epi_outcome, roff > 0 ? resp : NULL);
 #endif
         /* #9: ANSWERED (0) or ANSWERED-BUT-CUT-OFF (4). A new VALUE on the existing 1-byte verdict
          * field — no wire change, no version bump, no JRPL v3 and none of its 12-place lockstep.
@@ -4187,15 +4203,10 @@ static void pa_ctrl_gate(const control_result_t *cres)
          *
          * The text is sent EITHER WAY and is byte-identical: verdict 4 is a marker ON a genuine
          * answer, not an error state that withholds it. */
-        uint8_t rverdict = 0;   /* answered */
-#if JARVIS_ROUTING
-        if (!served_locally &&
-            (g_infer_last_stop == PB_STOP_CAP || g_infer_last_stop == PB_STOP_KV_FULL))
-            rverdict = 4;
-#else
-        if (g_infer_last_stop == PB_STOP_CAP || g_infer_last_stop == PB_STOP_KV_FULL)
-            rverdict = 4;
-#endif
+        uint8_t rverdict = xd.reply_verdict;   /* 0 answered / 4 answered-but-truncated —
+                                                * the CAP/KV-FULL latch mapping and its
+                                                * !served_locally guard live in ctrl_exit_decide
+                                                * (test_ctrl_exit T4/T5/T3b) */
         if (rverdict == 4) {
             puts_serial("[CTRL-IN-RESP] TRUNCATED (stop=");
             puts_serial(g_infer_last_stop == PB_STOP_CAP ? "CAP" : "KV-FULL");
@@ -4244,8 +4255,14 @@ static void pa_ctrl_gate(const control_result_t *cres)
         /* (§7.5b) timeout or fault-mid-route: honest FAIL. NEVER q_errors++ — a control-IN failure
          * is not a workload error. A pure timeout feeds the PB miss-counter under KM2B_LANE_CTRL
          * (honest PB-hang attribution); a fault was already funneled by pa_fault_check. */
-        outcome = AUDIT_OUT_FAIL;
-        if (!faulted) km2b_miss_on_pb_timeout(&g_pb_miss, KM2B_LANE_CTRL);
+#if JARVIS_ROUTING
+        ctrl_exit_decide(0, served_locally, 1, /*got=*/0, faulted, 0, PB_STOP_UNKNOWN, &xd);
+#else
+        ctrl_exit_decide(0, 0, 1, /*got=*/0, faulted, 0, PB_STOP_UNKNOWN, &xd);
+#endif
+        /* xd.miss_pb == !faulted here (test_ctrl_exit T7/T8): a fault was already funneled
+         * by pa_fault_check, so feeding the miss counter too would double-count it. */
+        if (xd.miss_pb) km2b_miss_on_pb_timeout(&g_pb_miss, KM2B_LANE_CTRL);
         puts_serial("[CTRL-IN-RESP] q=\""); puts_serial(qs);
         puts_serial(faulted ? "\" -> FAULT (self-heal)\n" : "\" -> TIMEOUT\n");
 #if JARVIS_CONTROL_IN_RECALL
@@ -4254,24 +4271,22 @@ static void pa_ctrl_gate(const control_result_t *cres)
          * a preamble from record N and still failed" is exactly the forensic the store exists to
          * answer. The record is unrecallable either way (resp_len 0 fails g3_candidate_usable), so
          * recording it costs nothing and hiding it would lose a real signal. */
-        ctrl_epi_write(qs, EPI_OUT_ERROR, NULL, EPI_ACT_CONTROL_IN, crk_kind, crk_src, crk_cos);
+        ctrl_epi_write(qs, xd.epi_outcome, NULL, xd.epi_action, crk_kind, crk_src, crk_cos);
 #else
-        epi_batch_add(qs, EPI_ACT_CONTROL_IN, EPI_OUT_ERROR, NULL);
+        epi_batch_add(qs, xd.epi_action, xd.epi_outcome, NULL);
 #endif
-        ctrl_send_reply((uint16_t)cres->seq, 3 /*failed*/, faulted ? "fault" : "timeout", faulted ? 5 : 7);
+        ctrl_send_reply((uint16_t)cres->seq, xd.reply_verdict /*3 = failed*/, faulted ? "fault" : "timeout", faulted ? 5 : 7);
     }
 
-    /* close the control-IN duty window (a fault path may have cleared it via pa_restart_pb). */
-#if JARVIS_ROUTING
-    /* A locally-served answer ran no inference and therefore never OPENED a window. Closing one
-     * here would fold — and clear — an open WORKLOAD window, misattributing that inference's cycles
-     * to the control-IN turn and under-reporting infer_duty_pct. */
-    if (!served_locally && g_infer_active) { g_infer_cycles += jarvis_rdtsc() - g_infer_t0; g_infer_active = 0; }
-#else
-    if (g_infer_active) { g_infer_cycles += jarvis_rdtsc() - g_infer_t0; g_infer_active = 0; }
-#endif
+    /* close the control-IN duty window (a fault path may have cleared it via pa_restart_pb).
+     * xd.close_window carries the guard: a locally-served answer ran no inference and therefore
+     * never OPENED a window — closing one here would fold, and clear, an open WORKLOAD window,
+     * misattributing that inference's cycles to the control-IN turn and under-reporting
+     * infer_duty_pct (at ROUTING=0 the permission is always granted, matching the old #else).
+     * The g_infer_active check stays HERE: the module grants permission, the site owns state. */
+    if (xd.close_window && g_infer_active) { g_infer_cycles += jarvis_rdtsc() - g_infer_t0; g_infer_active = 0; }
 
-    ctrl_in_jact(AUDIT_EXECUTED, outcome, "control-in answered", 19);
+    ctrl_in_jact(xd.jact_verdict, xd.jact_outcome, "control-in answered", 19);
 }
 
 #if JARVIS_EMBED_PROBE

@@ -102,7 +102,7 @@ _PB_UNCOMPILED_AI = (
     "semantic_distill.c", "action_allowlist.c", "shield_action.c", "action_audit.c",
     "km2b_trigger.c", "km2b_miss.c", "km2b_fault.c", "monitors.c", "wake.c",
     "behaviors.c", "query_shield.c", "route.c", "embed_store.c", "embed_project.c",
-    "route_veto.c", "ctrl_epi_index.c", "pb_health.c",
+    "route_veto.c", "ctrl_epi_index.c", "pb_health.c", "ctrl_exit.c",
 )
 ORPHAN_ALLOWLIST = {}
 for _f in _PA_UNCOMPILED_AI:

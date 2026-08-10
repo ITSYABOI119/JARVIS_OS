@@ -189,6 +189,8 @@ AI_FILES=(
     "ctrl_epi_index.c"    "ctrl_epi_index.h"
     # Phase 6 A9/2: the PB crash-loop window (host-pure, host-tested; g_pb_dead stays in PA)
     "pb_health.c"         "pb_health.h"
+    # Phase 6 A9/3: the control-IN exit verdict (host-pure, host-tested; pa_ctrl_gate sequences)
+    "ctrl_exit.c"         "ctrl_exit.h"
 )
 
 for f in "${AI_FILES[@]}"; do

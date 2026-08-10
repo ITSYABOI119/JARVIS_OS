@@ -66,6 +66,7 @@ add_executable(sel4test-driver EXCLUDE_FROM_ALL
     src/ai/route.c
     src/ai/ctrl_epi_index.c
     src/ai/pb_health.c
+    src/ai/ctrl_exit.c
     src/ai/pb_progress.c
     src/ai/route_veto.c
     src/ai/embed_project.c
