@@ -2,8 +2,8 @@
   "_comment": "COVERAGE INSTRUMENT, NOT A SCORE. The deliverable is the per-module 'uncovered' list -- branches and lines that NEITHER the unit suite NOR the fuzzer reaches -- so a human can decide which are worth aiming a corpus at. A repo-wide percentage is explicitly out of scope; the per-module 'incidental_*_pct' fields exist only to size the uncovered list against its module and are never a target, a threshold, or a gate. The CI job that produces this file MUST NEVER fail on a coverage number -- only on its own infrastructure errors.",
   "judgements_reviewed": false,
   "_judgements_note": "The judgement fields are a CANDIDATE reading produced by the agent that built this instrument. The lead reviews and finalises every one. Until judgements_reviewed is true, treat every judgement as unconfirmed. 'unclassified' means no human judgement is recorded; 'unclassified-stale' means the source at that line changed after a judgement was made and the judgement was refused rather than carried over.",
-  "measured_at_utc": "2026-08-11T05:41:13Z",
-  "repo_head": "032e0c9",
+  "measured_at_utc": "2026-08-11T05:56:18Z",
+  "repo_head": "4758ac3",
   "method": {
     "tool": "gcov (13.3.0) driven directly, parsed with stdlib Python",
     "why_not_gcovr_or_lcov": "neither is installed; pip refuses gcovr under PEP 668 without --break-system-packages, which would modify the system Python of every machine running this. gcov -j JSON carries per-line and per-branch counts, which is all this instrument needs.",
@@ -21,9 +21,9 @@
   },
   "totals": {
     "modules": 6,
-    "uncovered_gaps": 287,
+    "uncovered_gaps": 285,
     "by_judgement": {
-      "unreachable-by-construction": 10,
+      "unreachable-by-construction": 8,
       "defensive-guard": 14,
       "unclassified": 263
     }
@@ -99,14 +99,14 @@
       "unit_suite": "phase3/src/ai/test_route.c",
       "fuzz_harness": "phase3/src/ai/fuzz_route.c",
       "lines_total": 135,
-      "lines_never_executed": 2,
+      "lines_never_executed": 0,
       "branch_outcomes_total": 150,
       "branch_outcomes_never_taken": 4,
-      "incidental_line_pct": 98.52,
+      "incidental_line_pct": 100.0,
       "incidental_branch_pct": 97.33,
-      "uncovered_count": 6,
+      "uncovered_count": 4,
       "uncovered_by_judgement": {
-        "unreachable-by-construction": 6
+        "unreachable-by-construction": 4
       },
       "uncovered": [
         {
@@ -156,26 +156,6 @@
           "branch_outcomes_never_taken": 1,
           "judgement": "unreachable-by-construction",
           "reason": "Dead for the same reason as line 97: trailing-space trimming guarantees the skip always lands on a word."
-        },
-        {
-          "kind": "line",
-          "file": "phase3/src/ai/route.c",
-          "line": 367,
-          "function": "route_decline_text",
-          "source": "const char *route_decline_text(void)",
-          "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unreachable-by-construction",
-          "reason": "LEAD REVIEW 2026-08-07: reclassified from reachable-worth-fuzzing. UNREACHABLE BY THE FUZZER BY CONSTRUCTION -- route_decline_text() takes NO ARGUMENTS, so no corpus of any shape can reach it; listing it as a fuzz gap would send a future session chasing an impossible case. NOTE THE PRECISE SCOPE, because it is not dead code: it IS genuinely uncovered and it IS live (called at main_x86.c:3713 and :3728, and its exact string is load-bearing in g3_retrieval.h's recall reasoning). The honest disposition is a UNIT-TEST gap in test_route.c, NOT a fuzz gap and NOT dead code. Kept inside the three-value taxonomy deliberately: a fourth category would have to be taught to coverage_report.py's VALID_JUDGEMENTS, and this instrument answers 'can a corpus reach it', for which this judgement is exactly right."
-        },
-        {
-          "kind": "line",
-          "file": "phase3/src/ai/route.c",
-          "line": 369,
-          "function": "route_decline_text",
-          "source": "return \"I don't track that.\";",
-          "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unreachable-by-construction",
-          "reason": "LEAD REVIEW 2026-08-07: same as line 367 -- the body of the same zero-argument function. Unreachable by any corpus; a unit-test gap, not a fuzz gap, and not dead code."
         }
       ]
     },
@@ -996,7 +976,7 @@
           "line": 63,
           "function": "shmem_ipc_send",
           "source": "if (!ring || len > SHMEM_MAX_PAYLOAD)",
-          "detail": "2 of 4 branch outcomes on this line never taken (line executed 330338 times)",
+          "detail": "2 of 4 branch outcomes on this line never taken (line executed 342278 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 2,
           "judgement": "defensive-guard",
@@ -1018,7 +998,7 @@
           "line": 65,
           "function": "shmem_ipc_send",
           "source": "if (len > 0 && !payload)",
-          "detail": "1 of 4 branch outcomes on this line never taken (line executed 330338 times)",
+          "detail": "1 of 4 branch outcomes on this line never taken (line executed 342278 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 1,
           "judgement": "defensive-guard",

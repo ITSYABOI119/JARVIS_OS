@@ -253,6 +253,31 @@ static void t5_sysfacts_answer(void)
     }
 }
 
+/* T6 (closures sweep 2026-08-11): route_decline_text pinned by DIRECT CALL —
+ * the one coverage gap no corpus of any shape could reach, because the
+ * function takes NO arguments (the recorded unit-test-gap disposition in
+ * coverage_judgements.json's _taxonomy_note). It is LIVE at two main_x86.c
+ * call sites, and its string is load-bearing beyond display: it ends in a
+ * full stop, which makes it recallable under g3_clean_answer_len's
+ * complete-sentence rule (the recorded 19-byte most-recallable-record
+ * finding), so the trailing '.' is pinned EXPLICITLY — a rewording that
+ * drops it would silently change recall behaviour, not just the wording. */
+static void t6_decline_text(void)
+{
+    printf("\n--- T6: route_decline_text (direct call) ---\n");
+    const char *d = route_decline_text();
+    CHECK(d != NULL, "decline text is non-NULL");
+    CHECK(d && strcmp(d, "I don't track that.") == 0,
+          "decline text is the exact recorded literal");
+    CHECK(d && strlen(d) == 19, "decline text is 19 bytes");
+    CHECK(d && strlen(d) > 0 && d[strlen(d) - 1] == '.',
+          "decline text ends in a full stop (recallability depends on it)");
+    const char *d2 = route_decline_text();
+    CHECK(d2 == d, "repeated call returns the same pointer (stable literal)");
+    CHECK(d2 && strcmp(d2, "I don't track that.") == 0,
+          "repeated call returns identical content");
+}
+
 /* ---- accuracy harness: run a suite, print accuracy + confusion ---- */
 static void run_suite(const char *name, const routing_case_t *suite, size_t n,
                       int *out_correct, int *out_total)
@@ -291,6 +316,7 @@ int main(void)
     t3_decline_and_boundary();
     t4_robustness();
     t5_sysfacts_answer();
+    t6_decline_text();
 
     printf("\n--- ACCURACY (the done-when) ---\n");
     int dc = 0, dt = 0, hc = 0, ht = 0;
