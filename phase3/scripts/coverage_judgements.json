@@ -1870,7 +1870,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 261,
+      "line": 280,
       "kind": "branch",
       "source_at_judgement": "if (icmp_reply_count >= ICMP_MAX_REPLIES_PER_SEC) {",
       "judgement": "reachable-worth-fuzzing",
@@ -1878,7 +1878,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 262,
+      "line": 281,
       "kind": "line",
       "source_at_judgement": "return false;  /* Rate limited */",
       "judgement": "reachable-worth-fuzzing",
@@ -1886,7 +1886,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 272,
+      "line": 291,
       "kind": "branch",
       "source_at_judgement": "if (total_len > len) total_len = len;",
       "judgement": "unreachable-by-construction",
@@ -1894,7 +1894,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 273,
+      "line": 292,
       "kind": "branch",
       "source_at_judgement": "if (total_len > NET_MAX_FRAME) total_len = NET_MAX_FRAME;",
       "judgement": "reachable-worth-fuzzing",
@@ -1902,7 +1902,15 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 327,
+      "line": 328,
+      "kind": "branch",
+      "source_at_judgement": "uint32_t icmp_len = (total_len > icmp_off) ? (total_len - icmp_off) : 0;",
+      "judgement": "unreachable-by-construction",
+      "reason": "Introduced by the 2026-08-11 ICMP checksum fix. The never-taken outcome is the guard's FALSE arm, total_len <= icmp_off. It cannot occur: reaching this line requires len >= icmp_off + sizeof(net_icmp_echo_t) (the :234-era check) and ip_total >= ip_hdr_len (:230), and total_len = min(ETH_HLEN + ip_total, len, NET_MAX_FRAME) is therefore always > icmp_off = ETH_HLEN + ip_hdr_len. The guard is deliberate defence for a future edit that weakens either dominating check -- without it the subtraction would underflow a uint32 and hand net_checksum a ~4 GB length. Structurally unreachable, kept on purpose."
+    },
+    {
+      "file": "phase3/src/drivers/net_stack.c",
+      "line": 361,
       "kind": "branch",
       "source_at_judgement": "if (ip_hdr_len > 60 || ip_hdr_len > len - ETH_HLEN) {",
       "judgement": "unreachable-by-construction",
@@ -1910,7 +1918,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 352,
+      "line": 386,
       "kind": "branch",
       "source_at_judgement": "if (dst_ip != our_ip) {",
       "judgement": "reachable-worth-fuzzing",
@@ -1918,7 +1926,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 353,
+      "line": 387,
       "kind": "line",
       "source_at_judgement": "return false;  /* Not for us */",
       "judgement": "reachable-worth-fuzzing",
@@ -1926,7 +1934,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 357,
+      "line": 391,
       "kind": "branch",
       "source_at_judgement": "if (ip->protocol == IP_PROTO_ICMP) {",
       "judgement": "reachable-worth-fuzzing",
@@ -1934,7 +1942,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 361,
+      "line": 395,
       "kind": "line",
       "source_at_judgement": "return false;",
       "judgement": "reachable-worth-fuzzing",
@@ -1942,7 +1950,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 371,
+      "line": 405,
       "kind": "branch",
       "source_at_judgement": "if (!net_initialized || !frame || !reply_buf || !reply_len) {",
       "judgement": "defensive-guard",
@@ -1950,7 +1958,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 443,
+      "line": 477,
       "kind": "branch",
       "source_at_judgement": "if (arp_cache_used > 0 && arp_cache[0].ip != 0) {",
       "judgement": "unreachable-by-construction",
@@ -1958,7 +1966,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 461,
+      "line": 495,
       "kind": "branch",
       "source_at_judgement": "if (ip_be == 0) return;",
       "judgement": "reachable-worth-fuzzing",
@@ -1966,7 +1974,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 463,
+      "line": 497,
       "kind": "branch",
       "source_at_judgement": "for (uint32_t i = 0; i < arp_cache_used; i++) {",
       "judgement": "reachable-worth-fuzzing",
@@ -1974,7 +1982,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 464,
+      "line": 498,
       "kind": "branch",
       "source_at_judgement": "if (arp_cache[i].ip == ip_be) {",
       "judgement": "reachable-worth-fuzzing",
@@ -1982,7 +1990,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 464,
+      "line": 498,
       "kind": "line",
       "source_at_judgement": "if (arp_cache[i].ip == ip_be) {",
       "judgement": "reachable-worth-fuzzing",
@@ -1990,7 +1998,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 465,
+      "line": 499,
       "kind": "line",
       "source_at_judgement": "memcpy(arp_cache[i].mac, mac, ETH_ALEN);",
       "judgement": "reachable-worth-fuzzing",
@@ -1998,7 +2006,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 466,
+      "line": 500,
       "kind": "line",
       "source_at_judgement": "return;",
       "judgement": "reachable-worth-fuzzing",
@@ -2006,7 +2014,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 485,
+      "line": 519,
       "kind": "branch",
       "source_at_judgement": "if (buf_size < frame_len || !net_initialized) {",
       "judgement": "defensive-guard",
@@ -2014,7 +2022,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 527,
+      "line": 561,
       "kind": "branch",
       "source_at_judgement": "if (buf_size < frame_len || !net_initialized) {",
       "judgement": "reachable-worth-fuzzing",
@@ -2022,7 +2030,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 528,
+      "line": 562,
       "kind": "line",
       "source_at_judgement": "return 0;",
       "judgement": "reachable-worth-fuzzing",
@@ -2030,7 +2038,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 579,
+      "line": 613,
       "kind": "line",
       "source_at_judgement": "bool net_arp_resolve(uint32_t target_ip_be, uint8_t mac_out[ETH_ALEN],",
       "judgement": "unreachable-by-construction",
@@ -2038,7 +2046,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 583,
+      "line": 617,
       "kind": "branch",
       "source_at_judgement": "if (net_arp_lookup(target_ip_be, mac_out)) {",
       "judgement": "unreachable-by-construction",
@@ -2046,7 +2054,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 583,
+      "line": 617,
       "kind": "line",
       "source_at_judgement": "if (net_arp_lookup(target_ip_be, mac_out)) {",
       "judgement": "unreachable-by-construction",
@@ -2054,7 +2062,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 584,
+      "line": 618,
       "kind": "line",
       "source_at_judgement": "return true;",
       "judgement": "unreachable-by-construction",
@@ -2062,7 +2070,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 631,
+      "line": 665,
       "kind": "line",
       "source_at_judgement": "debug_puts(\"[NET] ARP resolve: not available on x86\\n\");",
       "judgement": "unreachable-by-construction",
@@ -2070,7 +2078,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 633,
+      "line": 667,
       "kind": "line",
       "source_at_judgement": "return false;",
       "judgement": "unreachable-by-construction",
@@ -2078,7 +2086,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 642,
+      "line": 676,
       "kind": "branch",
       "source_at_judgement": "if (len < ETH_HLEN + sizeof(net_arp_t)) {",
       "judgement": "reachable-worth-fuzzing",
@@ -2086,7 +2094,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 649,
+      "line": 683,
       "kind": "branch",
       "source_at_judgement": "if (ntohs(arp->htype) != 1 || ntohs(arp->ptype) != ETH_P_IP) {",
       "judgement": "reachable-worth-fuzzing",
@@ -2094,7 +2102,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 650,
+      "line": 684,
       "kind": "line",
       "source_at_judgement": "return;",
       "judgement": "reachable-worth-fuzzing",
@@ -2102,7 +2110,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 652,
+      "line": 686,
       "kind": "branch",
       "source_at_judgement": "if (arp->hlen != ETH_ALEN || arp->plen != 4) {",
       "judgement": "reachable-worth-fuzzing",
@@ -2110,7 +2118,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 653,
+      "line": 687,
       "kind": "line",
       "source_at_judgement": "return;",
       "judgement": "reachable-worth-fuzzing",
@@ -2118,7 +2126,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 685,
+      "line": 719,
       "kind": "branch",
       "source_at_judgement": "if (len < ETH_HLEN + IP_HDR_MIN_LEN + 8) {",
       "judgement": "reachable-worth-fuzzing",
@@ -2126,7 +2134,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 686,
+      "line": 720,
       "kind": "line",
       "source_at_judgement": "return false;",
       "judgement": "reachable-worth-fuzzing",
@@ -2134,7 +2142,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 691,
+      "line": 725,
       "kind": "branch",
       "source_at_judgement": "if (ethertype != ETH_P_IP) {",
       "judgement": "reachable-worth-fuzzing",
@@ -2142,7 +2150,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 692,
+      "line": 726,
       "kind": "line",
       "source_at_judgement": "return false;",
       "judgement": "reachable-worth-fuzzing",
@@ -2150,7 +2158,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 698,
+      "line": 732,
       "kind": "branch",
       "source_at_judgement": "if ((ip->ver_ihl >> 4) != 4 || ip->protocol != IP_PROTO_ICMP) {",
       "judgement": "reachable-worth-fuzzing",
@@ -2158,7 +2166,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 699,
+      "line": 733,
       "kind": "line",
       "source_at_judgement": "return false;",
       "judgement": "reachable-worth-fuzzing",
@@ -2166,7 +2174,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 705,
+      "line": 739,
       "kind": "branch",
       "source_at_judgement": "if (ip_hdr_len < 20 || ip_hdr_len > 60) {",
       "judgement": "reachable-worth-fuzzing",
@@ -2174,7 +2182,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 706,
+      "line": 740,
       "kind": "line",
       "source_at_judgement": "return false;",
       "judgement": "reachable-worth-fuzzing",
@@ -2182,7 +2190,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 708,
+      "line": 742,
       "kind": "branch",
       "source_at_judgement": "if (len < ETH_HLEN + ip_hdr_len) {",
       "judgement": "reachable-worth-fuzzing",
@@ -2190,7 +2198,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 709,
+      "line": 743,
       "kind": "line",
       "source_at_judgement": "return false;",
       "judgement": "reachable-worth-fuzzing",
@@ -2198,7 +2206,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 712,
+      "line": 746,
       "kind": "branch",
       "source_at_judgement": "if (len < icmp_off + 8) {",
       "judgement": "reachable-worth-fuzzing",
@@ -2206,7 +2214,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 713,
+      "line": 747,
       "kind": "line",
       "source_at_judgement": "return false;",
       "judgement": "reachable-worth-fuzzing",
@@ -2214,7 +2222,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 719,
+      "line": 753,
       "kind": "branch",
       "source_at_judgement": "if (icmp->type != ICMP_ECHO_REPLY || icmp->code != 0) {",
       "judgement": "reachable-worth-fuzzing",
@@ -2222,7 +2230,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 724,
+      "line": 758,
       "kind": "branch",
       "source_at_judgement": "if (ntohs(icmp->ident) != ident || ntohs(icmp->seq) != seq) {",
       "judgement": "reachable-worth-fuzzing",
@@ -2230,7 +2238,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 728,
+      "line": 762,
       "kind": "branch",
       "source_at_judgement": "if (ttl_out) {",
       "judgement": "defensive-guard",
@@ -2238,7 +2246,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 751,
+      "line": 785,
       "kind": "line",
       "source_at_judgement": "uint32_t net_arp_get_pending_ip(void)",
       "judgement": "unreachable-by-construction",
@@ -2246,7 +2254,7 @@
     },
     {
       "file": "phase3/src/drivers/net_stack.c",
-      "line": 753,
+      "line": 787,
       "kind": "line",
       "source_at_judgement": "return arp_pending_ip;",
       "judgement": "unreachable-by-construction",

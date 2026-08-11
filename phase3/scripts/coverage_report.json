@@ -2,8 +2,8 @@
   "_comment": "COVERAGE INSTRUMENT, NOT A SCORE. The deliverable is the per-module 'uncovered' list -- branches and lines that NEITHER the unit suite NOR the fuzzer reaches -- so a human can decide which are worth aiming a corpus at. A repo-wide percentage is explicitly out of scope; the per-module 'incidental_*_pct' fields exist only to size the uncovered list against its module and are never a target, a threshold, or a gate. The CI job that produces this file MUST NEVER fail on a coverage number -- only on its own infrastructure errors.",
   "judgements_reviewed": false,
   "_judgements_note": "The judgement fields are a CANDIDATE reading produced by the agent that built this instrument. The lead reviews and finalises every one. Until judgements_reviewed is true, treat every judgement as unconfirmed. 'unclassified' means no human judgement is recorded; 'unclassified-stale' means the source at that line changed after a judgement was made and the judgement was refused rather than carried over.",
-  "measured_at_utc": "2026-08-11T09:59:29Z",
-  "repo_head": "0135c0b",
+  "measured_at_utc": "2026-08-11T14:03:09Z",
+  "repo_head": "a66eebc",
   "method": {
     "tool": "gcov (13.3.0) driven directly, parsed with stdlib Python",
     "why_not_gcovr_or_lcov": "neither is installed; pip refuses gcovr under PEP 668 without --break-system-packages, which would modify the system Python of every machine running this. gcov -j JSON carries per-line and per-branch counts, which is all this instrument needs.",
@@ -23,9 +23,9 @@
     "modules": 6,
     "uncovered_gaps": 285,
     "by_judgement": {
-      "unreachable-by-construction": 101,
+      "unreachable-by-construction": 102,
       "defensive-guard": 22,
-      "reachable-worth-fuzzing": 162
+      "reachable-worth-fuzzing": 161
     }
   },
   "results": [
@@ -214,14 +214,14 @@
       "fuzz_harness": "phase3/src/drivers/fuzz_harness.c",
       "lines_total": 298,
       "lines_never_executed": 30,
-      "branch_outcomes_total": 153,
+      "branch_outcomes_total": 155,
       "branch_outcomes_never_taken": 46,
       "incidental_line_pct": 89.93,
-      "incidental_branch_pct": 69.93,
+      "incidental_branch_pct": 70.32,
       "uncovered_count": 64,
       "uncovered_by_judgement": {
-        "unreachable-by-construction": 16,
-        "reachable-worth-fuzzing": 45,
+        "unreachable-by-construction": 17,
+        "reachable-worth-fuzzing": 44,
         "defensive-guard": 3
       },
       "uncovered": [
@@ -307,7 +307,7 @@
           "line": 222,
           "function": "handle_icmp",
           "source": "if (ip_hdr_len < 20 || ip_hdr_len > 60) {",
-          "detail": "2 of 4 branch outcomes on this line never taken (line executed 4 times)",
+          "detail": "2 of 4 branch outcomes on this line never taken (line executed 5 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 2,
           "judgement": "unreachable-by-construction",
@@ -329,7 +329,7 @@
           "line": 227,
           "function": "handle_icmp",
           "source": "if (len < ETH_HLEN + ip_hdr_len) {",
-          "detail": "1 of 2 branch outcomes on this line never taken (line executed 4 times)",
+          "detail": "1 of 2 branch outcomes on this line never taken (line executed 5 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
           "judgement": "unreachable-by-construction",
@@ -351,7 +351,7 @@
           "line": 231,
           "function": "handle_icmp",
           "source": "if (ip_total < ip_hdr_len || ip_total > ip_available) {",
-          "detail": "1 of 4 branch outcomes on this line never taken (line executed 4 times)",
+          "detail": "1 of 4 branch outcomes on this line never taken (line executed 5 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 1,
           "judgement": "reachable-worth-fuzzing",
@@ -363,7 +363,7 @@
           "line": 235,
           "function": "handle_icmp",
           "source": "if (len < icmp_off + sizeof(net_icmp_echo_t)) {",
-          "detail": "1 of 2 branch outcomes on this line never taken (line executed 3 times)",
+          "detail": "1 of 2 branch outcomes on this line never taken (line executed 4 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
           "judgement": "reachable-worth-fuzzing",
@@ -385,7 +385,7 @@
           "line": 242,
           "function": "handle_icmp",
           "source": "if (icmp->type != ICMP_ECHO_REQUEST || icmp->code != 0) {",
-          "detail": "2 of 4 branch outcomes on this line never taken (line executed 3 times)",
+          "detail": "2 of 4 branch outcomes on this line never taken (line executed 4 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 2,
           "judgement": "reachable-worth-fuzzing",
@@ -404,10 +404,10 @@
         {
           "kind": "branch",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 261,
+          "line": 280,
           "function": "handle_icmp",
           "source": "if (icmp_reply_count >= ICMP_MAX_REPLIES_PER_SEC) {",
-          "detail": "1 of 2 branch outcomes on this line never taken (line executed 3 times)",
+          "detail": "1 of 2 branch outcomes on this line never taken (line executed 4 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
           "judgement": "reachable-worth-fuzzing",
@@ -416,7 +416,7 @@
         {
           "kind": "line",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 262,
+          "line": 281,
           "function": "handle_icmp",
           "source": "return false;  /* Rate limited */",
           "detail": "line never executed by either the unit suite or the fuzzer",
@@ -426,10 +426,10 @@
         {
           "kind": "branch",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 272,
+          "line": 291,
           "function": "handle_icmp",
           "source": "if (total_len > len) total_len = len;",
-          "detail": "1 of 2 branch outcomes on this line never taken (line executed 3 times)",
+          "detail": "1 of 2 branch outcomes on this line never taken (line executed 4 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
           "judgement": "unreachable-by-construction",
@@ -438,22 +438,22 @@
         {
           "kind": "branch",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 273,
+          "line": 328,
           "function": "handle_icmp",
-          "source": "if (total_len > NET_MAX_FRAME) total_len = NET_MAX_FRAME;",
-          "detail": "1 of 2 branch outcomes on this line never taken (line executed 3 times)",
+          "source": "uint32_t icmp_len = (total_len > icmp_off) ? (total_len - icmp_off) : 0;",
+          "detail": "1 of 2 branch outcomes on this line never taken (line executed 4 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "reachable-worth-fuzzing",
-          "reason": "The untaken TRUE polarity needs total_len = ETH_HLEN + ip_total > 1536, which line 231 in turn requires len >= 14 + ip_total \u2014 i.e. an oversized frame, e.g. 1600 bytes with total_len=1560, protocol=ICMP, dst=our IP and a valid header checksum. Worth aiming at specifically because reaching it exposes an inconsistency: the clamp bounds the line-274 memcpy, but line 294 computes icmp_len from the UNCLAMPED ip_total, so the line-295 checksum reads past NET_MAX_FRAME (see the accompanying report)."
+          "judgement": "unreachable-by-construction",
+          "reason": "Introduced by the 2026-08-11 ICMP checksum fix. The never-taken outcome is the guard's FALSE arm, total_len <= icmp_off. It cannot occur: reaching this line requires len >= icmp_off + sizeof(net_icmp_echo_t) (the :234-era check) and ip_total >= ip_hdr_len (:230), and total_len = min(ETH_HLEN + ip_total, len, NET_MAX_FRAME) is therefore always > icmp_off = ETH_HLEN + ip_hdr_len. The guard is deliberate defence for a future edit that weakens either dominating check -- without it the subtraction would underflow a uint32 and hand net_checksum a ~4 GB length. Structurally unreachable, kept on purpose."
         },
         {
           "kind": "branch",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 327,
+          "line": 361,
           "function": "handle_ip",
           "source": "if (ip_hdr_len > 60 || ip_hdr_len > len - ETH_HLEN) {",
-          "detail": "1 of 4 branch outcomes on this line never taken (line executed 10360 times)",
+          "detail": "1 of 4 branch outcomes on this line never taken (line executed 10361 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 1,
           "judgement": "unreachable-by-construction",
@@ -462,10 +462,10 @@
         {
           "kind": "branch",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 352,
+          "line": 386,
           "function": "handle_ip",
           "source": "if (dst_ip != our_ip) {",
-          "detail": "1 of 2 branch outcomes on this line never taken (line executed 4 times)",
+          "detail": "1 of 2 branch outcomes on this line never taken (line executed 5 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
           "judgement": "reachable-worth-fuzzing",
@@ -474,7 +474,7 @@
         {
           "kind": "line",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 353,
+          "line": 387,
           "function": "handle_ip",
           "source": "return false;  /* Not for us */",
           "detail": "line never executed by either the unit suite or the fuzzer",
@@ -484,10 +484,10 @@
         {
           "kind": "branch",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 357,
+          "line": 391,
           "function": "handle_ip",
           "source": "if (ip->protocol == IP_PROTO_ICMP) {",
-          "detail": "1 of 2 branch outcomes on this line never taken (line executed 4 times)",
+          "detail": "1 of 2 branch outcomes on this line never taken (line executed 5 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
           "judgement": "reachable-worth-fuzzing",
@@ -496,7 +496,7 @@
         {
           "kind": "line",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 361,
+          "line": 395,
           "function": "handle_ip",
           "source": "return false;",
           "detail": "line never executed by either the unit suite or the fuzzer",
@@ -506,10 +506,10 @@
         {
           "kind": "branch",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 371,
+          "line": 405,
           "function": "net_process_frame",
           "source": "if (!net_initialized || !frame || !reply_buf || !reply_len) {",
-          "detail": "1 of 8 branch outcomes on this line never taken (line executed 99015 times)",
+          "detail": "1 of 8 branch outcomes on this line never taken (line executed 99016 times)",
           "branch_outcomes_total": 8,
           "branch_outcomes_never_taken": 1,
           "judgement": "defensive-guard",
@@ -518,7 +518,7 @@
         {
           "kind": "branch",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 443,
+          "line": 477,
           "function": "net_arp_add",
           "source": "if (arp_cache_used > 0 && arp_cache[0].ip != 0) {",
           "detail": "2 of 4 branch outcomes on this line never taken (line executed 1 times)",
@@ -530,7 +530,7 @@
         {
           "kind": "branch",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 461,
+          "line": 495,
           "function": "net_arp_update_existing",
           "source": "if (ip_be == 0) return;",
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 1 times)",
@@ -542,7 +542,7 @@
         {
           "kind": "branch",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 463,
+          "line": 497,
           "function": "net_arp_update_existing",
           "source": "for (uint32_t i = 0; i < arp_cache_used; i++) {",
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 1 times)",
@@ -554,7 +554,7 @@
         {
           "kind": "branch",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 464,
+          "line": 498,
           "function": "net_arp_update_existing",
           "source": "if (arp_cache[i].ip == ip_be) {",
           "detail": "2 of 2 branch outcomes on this line never taken (line executed 0 times)",
@@ -566,7 +566,7 @@
         {
           "kind": "line",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 464,
+          "line": 498,
           "function": "net_arp_update_existing",
           "source": "if (arp_cache[i].ip == ip_be) {",
           "detail": "line never executed by either the unit suite or the fuzzer",
@@ -576,7 +576,7 @@
         {
           "kind": "line",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 465,
+          "line": 499,
           "function": "net_arp_update_existing",
           "source": "memcpy(arp_cache[i].mac, mac, ETH_ALEN);",
           "detail": "line never executed by either the unit suite or the fuzzer",
@@ -586,7 +586,7 @@
         {
           "kind": "line",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 466,
+          "line": 500,
           "function": "net_arp_update_existing",
           "source": "return;",
           "detail": "line never executed by either the unit suite or the fuzzer",
@@ -596,7 +596,7 @@
         {
           "kind": "branch",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 485,
+          "line": 519,
           "function": "net_build_arp_request",
           "source": "if (buf_size < frame_len || !net_initialized) {",
           "detail": "1 of 4 branch outcomes on this line never taken (line executed 3 times)",
@@ -608,7 +608,7 @@
         {
           "kind": "branch",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 527,
+          "line": 561,
           "function": "net_build_icmp_request",
           "source": "if (buf_size < frame_len || !net_initialized) {",
           "detail": "2 of 4 branch outcomes on this line never taken (line executed 1 times)",
@@ -620,7 +620,7 @@
         {
           "kind": "line",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 528,
+          "line": 562,
           "function": "net_build_icmp_request",
           "source": "return 0;",
           "detail": "line never executed by either the unit suite or the fuzzer",
@@ -630,7 +630,7 @@
         {
           "kind": "line",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 579,
+          "line": 613,
           "function": "net_arp_resolve",
           "source": "bool net_arp_resolve(uint32_t target_ip_be, uint8_t mac_out[ETH_ALEN],",
           "detail": "line never executed by either the unit suite or the fuzzer",
@@ -640,7 +640,7 @@
         {
           "kind": "branch",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 583,
+          "line": 617,
           "function": "net_arp_resolve",
           "source": "if (net_arp_lookup(target_ip_be, mac_out)) {",
           "detail": "2 of 2 branch outcomes on this line never taken (line executed 0 times)",
@@ -652,7 +652,7 @@
         {
           "kind": "line",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 583,
+          "line": 617,
           "function": "net_arp_resolve",
           "source": "if (net_arp_lookup(target_ip_be, mac_out)) {",
           "detail": "line never executed by either the unit suite or the fuzzer",
@@ -662,7 +662,7 @@
         {
           "kind": "line",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 584,
+          "line": 618,
           "function": "net_arp_resolve",
           "source": "return true;",
           "detail": "line never executed by either the unit suite or the fuzzer",
@@ -672,7 +672,7 @@
         {
           "kind": "line",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 631,
+          "line": 665,
           "function": "net_arp_resolve",
           "source": "debug_puts(\"[NET] ARP resolve: not available on x86\\n\");",
           "detail": "line never executed by either the unit suite or the fuzzer",
@@ -682,7 +682,7 @@
         {
           "kind": "line",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 633,
+          "line": 667,
           "function": "net_arp_resolve",
           "source": "return false;",
           "detail": "line never executed by either the unit suite or the fuzzer",
@@ -692,7 +692,7 @@
         {
           "kind": "branch",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 642,
+          "line": 676,
           "function": "net_process_arp_reply",
           "source": "if (len < ETH_HLEN + sizeof(net_arp_t)) {",
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 4 times)",
@@ -704,7 +704,7 @@
         {
           "kind": "branch",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 649,
+          "line": 683,
           "function": "net_process_arp_reply",
           "source": "if (ntohs(arp->htype) != 1 || ntohs(arp->ptype) != ETH_P_IP) {",
           "detail": "2 of 4 branch outcomes on this line never taken (line executed 4 times)",
@@ -716,7 +716,7 @@
         {
           "kind": "line",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 650,
+          "line": 684,
           "function": "net_process_arp_reply",
           "source": "return;",
           "detail": "line never executed by either the unit suite or the fuzzer",
@@ -726,7 +726,7 @@
         {
           "kind": "branch",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 652,
+          "line": 686,
           "function": "net_process_arp_reply",
           "source": "if (arp->hlen != ETH_ALEN || arp->plen != 4) {",
           "detail": "2 of 4 branch outcomes on this line never taken (line executed 4 times)",
@@ -738,7 +738,7 @@
         {
           "kind": "line",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 653,
+          "line": 687,
           "function": "net_process_arp_reply",
           "source": "return;",
           "detail": "line never executed by either the unit suite or the fuzzer",
@@ -748,7 +748,7 @@
         {
           "kind": "branch",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 685,
+          "line": 719,
           "function": "net_is_icmp_echo_reply",
           "source": "if (len < ETH_HLEN + IP_HDR_MIN_LEN + 8) {",
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 3 times)",
@@ -760,7 +760,7 @@
         {
           "kind": "line",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 686,
+          "line": 720,
           "function": "net_is_icmp_echo_reply",
           "source": "return false;",
           "detail": "line never executed by either the unit suite or the fuzzer",
@@ -770,7 +770,7 @@
         {
           "kind": "branch",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 691,
+          "line": 725,
           "function": "net_is_icmp_echo_reply",
           "source": "if (ethertype != ETH_P_IP) {",
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 3 times)",
@@ -782,7 +782,7 @@
         {
           "kind": "line",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 692,
+          "line": 726,
           "function": "net_is_icmp_echo_reply",
           "source": "return false;",
           "detail": "line never executed by either the unit suite or the fuzzer",
@@ -792,7 +792,7 @@
         {
           "kind": "branch",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 698,
+          "line": 732,
           "function": "net_is_icmp_echo_reply",
           "source": "if ((ip->ver_ihl >> 4) != 4 || ip->protocol != IP_PROTO_ICMP) {",
           "detail": "2 of 4 branch outcomes on this line never taken (line executed 3 times)",
@@ -804,7 +804,7 @@
         {
           "kind": "line",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 699,
+          "line": 733,
           "function": "net_is_icmp_echo_reply",
           "source": "return false;",
           "detail": "line never executed by either the unit suite or the fuzzer",
@@ -814,7 +814,7 @@
         {
           "kind": "branch",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 705,
+          "line": 739,
           "function": "net_is_icmp_echo_reply",
           "source": "if (ip_hdr_len < 20 || ip_hdr_len > 60) {",
           "detail": "2 of 4 branch outcomes on this line never taken (line executed 3 times)",
@@ -826,7 +826,7 @@
         {
           "kind": "line",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 706,
+          "line": 740,
           "function": "net_is_icmp_echo_reply",
           "source": "return false;",
           "detail": "line never executed by either the unit suite or the fuzzer",
@@ -836,7 +836,7 @@
         {
           "kind": "branch",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 708,
+          "line": 742,
           "function": "net_is_icmp_echo_reply",
           "source": "if (len < ETH_HLEN + ip_hdr_len) {",
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 3 times)",
@@ -848,7 +848,7 @@
         {
           "kind": "line",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 709,
+          "line": 743,
           "function": "net_is_icmp_echo_reply",
           "source": "return false;",
           "detail": "line never executed by either the unit suite or the fuzzer",
@@ -858,7 +858,7 @@
         {
           "kind": "branch",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 712,
+          "line": 746,
           "function": "net_is_icmp_echo_reply",
           "source": "if (len < icmp_off + 8) {",
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 3 times)",
@@ -870,7 +870,7 @@
         {
           "kind": "line",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 713,
+          "line": 747,
           "function": "net_is_icmp_echo_reply",
           "source": "return false;",
           "detail": "line never executed by either the unit suite or the fuzzer",
@@ -880,7 +880,7 @@
         {
           "kind": "branch",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 719,
+          "line": 753,
           "function": "net_is_icmp_echo_reply",
           "source": "if (icmp->type != ICMP_ECHO_REPLY || icmp->code != 0) {",
           "detail": "1 of 4 branch outcomes on this line never taken (line executed 3 times)",
@@ -892,7 +892,7 @@
         {
           "kind": "branch",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 724,
+          "line": 758,
           "function": "net_is_icmp_echo_reply",
           "source": "if (ntohs(icmp->ident) != ident || ntohs(icmp->seq) != seq) {",
           "detail": "1 of 4 branch outcomes on this line never taken (line executed 2 times)",
@@ -904,7 +904,7 @@
         {
           "kind": "branch",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 728,
+          "line": 762,
           "function": "net_is_icmp_echo_reply",
           "source": "if (ttl_out) {",
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 1 times)",
@@ -916,7 +916,7 @@
         {
           "kind": "line",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 751,
+          "line": 785,
           "function": "net_arp_get_pending_ip",
           "source": "uint32_t net_arp_get_pending_ip(void)",
           "detail": "line never executed by either the unit suite or the fuzzer",
@@ -926,7 +926,7 @@
         {
           "kind": "line",
           "file": "phase3/src/drivers/net_stack.c",
-          "line": 753,
+          "line": 787,
           "function": "net_arp_get_pending_ip",
           "source": "return arp_pending_ip;",
           "detail": "line never executed by either the unit suite or the fuzzer",
@@ -978,7 +978,7 @@
           "line": 63,
           "function": "shmem_ipc_send",
           "source": "if (!ring || len > SHMEM_MAX_PAYLOAD)",
-          "detail": "2 of 4 branch outcomes on this line never taken (line executed 267890 times)",
+          "detail": "2 of 4 branch outcomes on this line never taken (line executed 295445 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 2,
           "judgement": "defensive-guard",
@@ -1000,7 +1000,7 @@
           "line": 65,
           "function": "shmem_ipc_send",
           "source": "if (len > 0 && !payload)",
-          "detail": "1 of 4 branch outcomes on this line never taken (line executed 267890 times)",
+          "detail": "1 of 4 branch outcomes on this line never taken (line executed 295445 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 1,
           "judgement": "defensive-guard",

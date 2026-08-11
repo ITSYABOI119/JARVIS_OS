@@ -257,7 +257,26 @@ static bool handle_icmp(const uint8_t *frame, uint32_t len,
         icmp_reply_count++;
     }
 #else
-    /* x86: simple counter-based rate limiting (no timer available) */
+    /* x86: NOT a rate limit — a LIFETIME CAP, and the name above is wrong for
+     * this arm. There is no window here, so icmp_reply_count only ever rises:
+     * after ICMP_MAX_REPLIES_PER_SEC (10) echo replies this build stops
+     * answering pings PERMANENTLY, not for one second. The only reset is
+     * net_icmp_rate_reset(), which has no caller outside test_net_stack.c
+     * (measured 2026-08-11, with net_init's callers as the positive control).
+     *
+     * This is the same shape as the K/M2b-2 KM2B_HEALTHY_RESET defect — a
+     * windowed bound that silently became a lifetime one because nothing ever
+     * reset it — and it is recorded rather than "fixed" because a correct
+     * window needs a CLOCK THIS ARM DOES NOT HAVE. The Pi4 arm above has
+     * systimer_read(); the x86 side of this file has no timer dependency at
+     * all, and net_stack.c is in neither build_jarvis_x86.sh nor either
+     * vendored CMakeLists, so inventing a fake window (a call counter posing
+     * as a second) would add a wrong abstraction to code nothing compiles.
+     *
+     * TO FIX IT PROPERLY: give this arm a monotonic microsecond source (the
+     * x86 TSC via x86_timer.c is the obvious candidate) and mirror the Pi4
+     * window exactly. Until then the honest reading of this branch is "at most
+     * 10 ICMP replies per boot". */
     if (icmp_reply_count >= ICMP_MAX_REPLIES_PER_SEC) {
         return false;  /* Rate limited */
     }
@@ -291,7 +310,22 @@ static bool handle_icmp(const uint8_t *frame, uint32_t len,
     rep_icmp->type = ICMP_ECHO_REPLY;
     rep_icmp->checksum = 0;
 
-    uint32_t icmp_len = ip_total - ip_hdr_len;
+    /* Derive the checksum length from the CLAMPED copy, not from the claimed
+     * ip_total. The copy above is bounded by total_len = min(ETH_HLEN +
+     * ip_total, len, NET_MAX_FRAME); using ip_total here read up to
+     * ETH_HLEN + ip_total bytes out of `reply` — past the caller's buffer by
+     * up to 64 bytes on a 1600-byte frame (ASan heap-buffer-overflow READ in
+     * net_checksum, caught once fuzz_harness.c stopped over-allocating).
+     *
+     * VALUE-IDENTICAL FOR EVERY IN-CONTRACT FRAME: whenever total_len is not
+     * clamped, total_len == ETH_HLEN + ip_total, so total_len - icmp_off ==
+     * ip_total - ip_hdr_len exactly. Only a frame that was ALREADY truncated
+     * by the NET_MAX_FRAME clamp sees a different (and now correct) length —
+     * it checksums the bytes actually present instead of bytes it never
+     * copied. The guard covers the degenerate total_len < icmp_off, which the
+     * :230 and :234 checks make unreachable today but which must not underflow
+     * a uint32 if a future edit weakens them. */
+    uint32_t icmp_len = (total_len > icmp_off) ? (total_len - icmp_off) : 0;
     rep_icmp->checksum = htons(net_checksum(rep_icmp, icmp_len));
 
     *reply_len = total_len;

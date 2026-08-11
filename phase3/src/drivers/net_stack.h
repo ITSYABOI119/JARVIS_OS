@@ -86,7 +86,28 @@ void net_set_mac(const uint8_t mac[ETH_ALEN]);
 
 /* Process an incoming Ethernet frame.
  * If a reply is needed (ARP reply, ICMP echo reply), builds it in reply_buf
- * and sets *reply_len. Returns true if reply was generated. */
+ * and sets *reply_len. Returns true if reply was generated.
+ *
+ * REPLY_BUF SIZE CONTRACT (documented 2026-08-11; it was UNSTATED before, and
+ * that was part of a real defect — see below). reply_buf MUST be at least
+ *     min(len, NET_MAX_FRAME)
+ * bytes. The ICMP echo path copies the received frame in as the basis for its
+ * reply, clamped to exactly that, so a caller may size at NET_MAX_FRAME and be
+ * safe for any len.
+ *
+ * WHY THIS IS SPELLED OUT: with no stated contract, every in-tree caller
+ * guessed a different size — 64 (phase2 main_arm64.c arp_reply), 128
+ * (test_net_stack.c), 2048 (fuzz_harness.c). Each happens to be adequate for
+ * the frames that caller actually passes, so nothing failed; but "adequate by
+ * coincidence" is what let the ICMP checksum read past a 1536-byte buffer go
+ * unnoticed through ~900K ASan iterations, because the one caller big enough
+ * to be feeding oversized frames was also big enough to absorb the overrun in
+ * slack it owned. A size expectation that only exists in the callers cannot be
+ * violated visibly.
+ *
+ * len is NOT bounded by this function (only len >= ETH_HLEN is required): a
+ * caller may pass a frame larger than NET_MAX_FRAME, and the reply is then
+ * clamped to NET_MAX_FRAME. */
 bool net_process_frame(const uint8_t *frame, uint32_t len,
                        uint8_t *reply_buf, uint32_t *reply_len);
 
