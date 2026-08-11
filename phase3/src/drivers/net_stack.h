@@ -99,11 +99,22 @@ void net_set_mac(const uint8_t mac[ETH_ALEN]);
  * guessed a different size — 64 (phase2 main_arm64.c arp_reply), 128
  * (test_net_stack.c), 2048 (fuzz_harness.c). Each happens to be adequate for
  * the frames that caller actually passes, so nothing failed; but "adequate by
- * coincidence" is what let the ICMP checksum read past a 1536-byte buffer go
- * unnoticed through ~900K ASan iterations, because the one caller big enough
- * to be feeding oversized frames was also big enough to absorb the overrun in
- * slack it owned. A size expectation that only exists in the callers cannot be
- * violated visibly.
+ * coincidence" is what let an ICMP checksum overrun go unnoticed through ~900K
+ * ASan iterations, because the one caller big enough to be feeding oversized
+ * frames was also big enough to absorb the overrun in slack it owned. A size
+ * expectation that only exists in the callers cannot be violated visibly.
+ *
+ * THE DEFECT, AND WHERE IT STANDS IN EACH COPY (this header is byte-identical
+ * across phase2 and phase3 by CI invariant, so it states both): handle_icmp
+ * clamped the frame COPY to total_len but derived the ICMP checksum length
+ * from the UNCLAMPED ip_total, reading up to ETH_HLEN + ip_total into reply —
+ * past a 1536-byte buffer on a >1536-byte frame. FIXED 2026-08-11 in the
+ * PHASE3 copy (icmp_len = total_len - icmp_off, ASan red-then-green).
+ * The PHASE2 copy still carries the original line: it is unreachable there
+ * because its only production caller, main_arm64.c, passes self-built FIXED
+ * 42- and 74-byte frames, so len > NET_MAX_FRAME cannot arise. Recorded rather
+ * than changed — phase2 is a completed phase and its net_stack.c is outside
+ * the scope that fixed this.
  *
  * len is NOT bounded by this function (only len >= ETH_HLEN is required): a
  * caller may pass a frame larger than NET_MAX_FRAME, and the reply is then
