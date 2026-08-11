@@ -2,8 +2,8 @@
   "_comment": "COVERAGE INSTRUMENT, NOT A SCORE. The deliverable is the per-module 'uncovered' list -- branches and lines that NEITHER the unit suite NOR the fuzzer reaches -- so a human can decide which are worth aiming a corpus at. A repo-wide percentage is explicitly out of scope; the per-module 'incidental_*_pct' fields exist only to size the uncovered list against its module and are never a target, a threshold, or a gate. The CI job that produces this file MUST NEVER fail on a coverage number -- only on its own infrastructure errors.",
   "judgements_reviewed": false,
   "_judgements_note": "The judgement fields are a CANDIDATE reading produced by the agent that built this instrument. The lead reviews and finalises every one. Until judgements_reviewed is true, treat every judgement as unconfirmed. 'unclassified' means no human judgement is recorded; 'unclassified-stale' means the source at that line changed after a judgement was made and the judgement was refused rather than carried over.",
-  "measured_at_utc": "2026-08-11T05:33:46Z",
-  "repo_head": "f74d105",
+  "measured_at_utc": "2026-08-11T05:41:13Z",
+  "repo_head": "032e0c9",
   "method": {
     "tool": "gcov (13.3.0) driven directly, parsed with stdlib Python",
     "why_not_gcovr_or_lcov": "neither is installed; pip refuses gcovr under PEP 668 without --break-system-packages, which would modify the system Python of every machine running this. gcov -j JSON carries per-line and per-branch counts, which is all this instrument needs.",
@@ -21,9 +21,9 @@
   },
   "totals": {
     "modules": 6,
-    "uncovered_gaps": 293,
+    "uncovered_gaps": 287,
     "by_judgement": {
-      "unreachable-by-construction": 16,
+      "unreachable-by-construction": 10,
       "defensive-guard": 14,
       "unclassified": 263
     }
@@ -957,16 +957,15 @@
       "module": "phase3/src/ipc/shmem_ipc.c",
       "unit_suite": "phase3/src/ipc/test_shmem_ipc.c",
       "fuzz_harness": "phase3/src/drivers/fuzz_harness.c",
-      "lines_total": 76,
-      "lines_never_executed": 10,
-      "branch_outcomes_total": 48,
-      "branch_outcomes_never_taken": 12,
-      "incidental_line_pct": 86.84,
-      "incidental_branch_pct": 75.0,
-      "uncovered_count": 17,
+      "lines_total": 71,
+      "lines_never_executed": 5,
+      "branch_outcomes_total": 46,
+      "branch_outcomes_never_taken": 10,
+      "incidental_line_pct": 92.96,
+      "incidental_branch_pct": 78.26,
+      "uncovered_count": 11,
       "uncovered_by_judgement": {
-        "defensive-guard": 11,
-        "unreachable-by-construction": 6
+        "defensive-guard": 11
       },
       "uncovered": [
         {
@@ -997,7 +996,7 @@
           "line": 63,
           "function": "shmem_ipc_send",
           "source": "if (!ring || len > SHMEM_MAX_PAYLOAD)",
-          "detail": "2 of 4 branch outcomes on this line never taken (line executed 352703 times)",
+          "detail": "2 of 4 branch outcomes on this line never taken (line executed 330338 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 2,
           "judgement": "defensive-guard",
@@ -1019,7 +1018,7 @@
           "line": 65,
           "function": "shmem_ipc_send",
           "source": "if (len > 0 && !payload)",
-          "detail": "1 of 4 branch outcomes on this line never taken (line executed 352703 times)",
+          "detail": "1 of 4 branch outcomes on this line never taken (line executed 330338 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 1,
           "judgement": "defensive-guard",
@@ -1090,68 +1089,6 @@
           "detail": "line never executed by either the unit suite or the fuzzer",
           "judgement": "defensive-guard",
           "reason": "NULL / caller-contract guard. The single deployed caller pair (PA's main_x86.c and PB's inference_server.c) always passes non-NULL; a NULL here is a programming error, not attacker-controlled input, so a fuzz corpus is the wrong instrument. Cheap to pin with a unit assertion if the lead wants the guard exercised."
-        },
-        {
-          "kind": "line",
-          "file": "phase3/src/ipc/shmem_ipc.c",
-          "line": 166,
-          "function": "shmem_ipc_reset",
-          "source": "void shmem_ipc_reset(shmem_ring_t *ring)",
-          "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unreachable-by-construction",
-          "reason": "DEAD CODE, and the bucket is a compromise the lead is choosing knowingly. shmem_ipc_reset() has ZERO callers anywhere in phase3 (measured: no reference outside its own definition and its declaration in shmem_ipc.h), so neither the unit suite nor the harness reaches it and nothing in the deployed image does either. It is NOT 'reachable-worth-fuzzing': a corpus could trivially call it, but fuzzing unused API is the wrong response \u2014 delete-or-justify is. Filed here because the three-value taxonomy has no 'dead code, decide its fate' value, the same limitation _taxonomy_note already records for route_decline_text. FLAGGED FOR THE LEAD as a disposition question, not a coverage chore."
-        },
-        {
-          "kind": "branch",
-          "file": "phase3/src/ipc/shmem_ipc.c",
-          "line": 168,
-          "function": "shmem_ipc_reset",
-          "source": "if (!ring)",
-          "detail": "2 of 2 branch outcomes on this line never taken (line executed 0 times)",
-          "branch_outcomes_total": 2,
-          "branch_outcomes_never_taken": 2,
-          "judgement": "unreachable-by-construction",
-          "reason": "DEAD CODE, and the bucket is a compromise the lead is choosing knowingly. shmem_ipc_reset() has ZERO callers anywhere in phase3 (measured: no reference outside its own definition and its declaration in shmem_ipc.h), so neither the unit suite nor the harness reaches it and nothing in the deployed image does either. It is NOT 'reachable-worth-fuzzing': a corpus could trivially call it, but fuzzing unused API is the wrong response \u2014 delete-or-justify is. Filed here because the three-value taxonomy has no 'dead code, decide its fate' value, the same limitation _taxonomy_note already records for route_decline_text. FLAGGED FOR THE LEAD as a disposition question, not a coverage chore."
-        },
-        {
-          "kind": "line",
-          "file": "phase3/src/ipc/shmem_ipc.c",
-          "line": 168,
-          "function": "shmem_ipc_reset",
-          "source": "if (!ring)",
-          "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unreachable-by-construction",
-          "reason": "DEAD CODE, and the bucket is a compromise the lead is choosing knowingly. shmem_ipc_reset() has ZERO callers anywhere in phase3 (measured: no reference outside its own definition and its declaration in shmem_ipc.h), so neither the unit suite nor the harness reaches it and nothing in the deployed image does either. It is NOT 'reachable-worth-fuzzing': a corpus could trivially call it, but fuzzing unused API is the wrong response \u2014 delete-or-justify is. Filed here because the three-value taxonomy has no 'dead code, decide its fate' value, the same limitation _taxonomy_note already records for route_decline_text. FLAGGED FOR THE LEAD as a disposition question, not a coverage chore."
-        },
-        {
-          "kind": "line",
-          "file": "phase3/src/ipc/shmem_ipc.c",
-          "line": 169,
-          "function": "shmem_ipc_reset",
-          "source": "return;",
-          "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unreachable-by-construction",
-          "reason": "DEAD CODE, and the bucket is a compromise the lead is choosing knowingly. shmem_ipc_reset() has ZERO callers anywhere in phase3 (measured: no reference outside its own definition and its declaration in shmem_ipc.h), so neither the unit suite nor the harness reaches it and nothing in the deployed image does either. It is NOT 'reachable-worth-fuzzing': a corpus could trivially call it, but fuzzing unused API is the wrong response \u2014 delete-or-justify is. Filed here because the three-value taxonomy has no 'dead code, decide its fate' value, the same limitation _taxonomy_note already records for route_decline_text. FLAGGED FOR THE LEAD as a disposition question, not a coverage chore."
-        },
-        {
-          "kind": "line",
-          "file": "phase3/src/ipc/shmem_ipc.c",
-          "line": 171,
-          "function": "shmem_ipc_reset",
-          "source": "__atomic_store_n(&ring->header.write_idx, 0, __ATOMIC_RELEASE);",
-          "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unreachable-by-construction",
-          "reason": "DEAD CODE, and the bucket is a compromise the lead is choosing knowingly. shmem_ipc_reset() has ZERO callers anywhere in phase3 (measured: no reference outside its own definition and its declaration in shmem_ipc.h), so neither the unit suite nor the harness reaches it and nothing in the deployed image does either. It is NOT 'reachable-worth-fuzzing': a corpus could trivially call it, but fuzzing unused API is the wrong response \u2014 delete-or-justify is. Filed here because the three-value taxonomy has no 'dead code, decide its fate' value, the same limitation _taxonomy_note already records for route_decline_text. FLAGGED FOR THE LEAD as a disposition question, not a coverage chore."
-        },
-        {
-          "kind": "line",
-          "file": "phase3/src/ipc/shmem_ipc.c",
-          "line": 172,
-          "function": "shmem_ipc_reset",
-          "source": "__atomic_store_n(&ring->header.read_idx, 0, __ATOMIC_RELEASE);",
-          "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unreachable-by-construction",
-          "reason": "DEAD CODE, and the bucket is a compromise the lead is choosing knowingly. shmem_ipc_reset() has ZERO callers anywhere in phase3 (measured: no reference outside its own definition and its declaration in shmem_ipc.h), so neither the unit suite nor the harness reaches it and nothing in the deployed image does either. It is NOT 'reachable-worth-fuzzing': a corpus could trivially call it, but fuzzing unused API is the wrong response \u2014 delete-or-justify is. Filed here because the three-value taxonomy has no 'dead code, decide its fate' value, the same limitation _taxonomy_note already records for route_decline_text. FLAGGED FOR THE LEAD as a disposition question, not a coverage chore."
         }
       ]
     },

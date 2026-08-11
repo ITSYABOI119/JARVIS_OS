@@ -165,6 +165,5 @@ int  shmem_ipc_send(shmem_ring_t *ring, uint8_t type, uint16_t seq,
 int  shmem_ipc_recv(shmem_ring_t *ring, uint8_t *type, uint16_t *seq,
                      void *payload, uint16_t *len);
 int  shmem_ipc_pending(const shmem_ring_t *ring);
-void shmem_ipc_reset(shmem_ring_t *ring);
 
 #endif /* SHMEM_IPC_H */

@@ -159,15 +159,3 @@ int shmem_ipc_pending(const shmem_ring_t *ring)
 
     return (int)(wr - rd);
 }
-
-/*
- * Reset ring indices to zero, keeping magic/version/size intact.
- */
-void shmem_ipc_reset(shmem_ring_t *ring)
-{
-    if (!ring)
-        return;
-
-    __atomic_store_n(&ring->header.write_idx, 0, __ATOMIC_RELEASE);
-    __atomic_store_n(&ring->header.read_idx, 0, __ATOMIC_RELEASE);
-}
