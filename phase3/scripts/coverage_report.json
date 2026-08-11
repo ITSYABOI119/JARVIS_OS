@@ -2,8 +2,8 @@
   "_comment": "COVERAGE INSTRUMENT, NOT A SCORE. The deliverable is the per-module 'uncovered' list -- branches and lines that NEITHER the unit suite NOR the fuzzer reaches -- so a human can decide which are worth aiming a corpus at. A repo-wide percentage is explicitly out of scope; the per-module 'incidental_*_pct' fields exist only to size the uncovered list against its module and are never a target, a threshold, or a gate. The CI job that produces this file MUST NEVER fail on a coverage number -- only on its own infrastructure errors.",
   "judgements_reviewed": false,
   "_judgements_note": "The judgement fields are a CANDIDATE reading produced by the agent that built this instrument. The lead reviews and finalises every one. Until judgements_reviewed is true, treat every judgement as unconfirmed. 'unclassified' means no human judgement is recorded; 'unclassified-stale' means the source at that line changed after a judgement was made and the judgement was refused rather than carried over.",
-  "measured_at_utc": "2026-08-11T05:56:18Z",
-  "repo_head": "4758ac3",
+  "measured_at_utc": "2026-08-11T09:59:29Z",
+  "repo_head": "0135c0b",
   "method": {
     "tool": "gcov (13.3.0) driven directly, parsed with stdlib Python",
     "why_not_gcovr_or_lcov": "neither is installed; pip refuses gcovr under PEP 668 without --break-system-packages, which would modify the system Python of every machine running this. gcov -j JSON carries per-line and per-branch counts, which is all this instrument needs.",
@@ -23,9 +23,9 @@
     "modules": 6,
     "uncovered_gaps": 285,
     "by_judgement": {
-      "unreachable-by-construction": 8,
-      "defensive-guard": 14,
-      "unclassified": 263
+      "unreachable-by-construction": 101,
+      "defensive-guard": 22,
+      "reachable-worth-fuzzing": 162
     }
   },
   "results": [
@@ -220,7 +220,9 @@
       "incidental_branch_pct": 69.93,
       "uncovered_count": 64,
       "uncovered_by_judgement": {
-        "unclassified": 64
+        "unreachable-by-construction": 16,
+        "reachable-worth-fuzzing": 45,
+        "defensive-guard": 3
       },
       "uncovered": [
         {
@@ -230,8 +232,8 @@
           "function": "debug_hex32",
           "source": "static void debug_hex32(uint32_t val) { fprintf(stderr, \"%08x\", val); }",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "debug_hex32 has no call site anywhere in net_stack.c (every diagnostic site calls debug_puts), and the declaration on line 41 carries __attribute__((unused)) \u2014 the author's own acknowledgement that it is dead. No input through net_process_frame or any public API can reach a function nothing calls. Dead code, not a corpus gap."
         },
         {
           "kind": "branch",
@@ -242,8 +244,8 @@
           "detail": "2 of 4 branch outcomes on this line never taken (line executed 2 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 2,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Both TRUE polarities (htype != 1, ptype != IPv4) are untaken because only the 2 well-formed unit-suite ARP frames ever reach this line. The fuzzer's ARP sub-test builds frames of len = 14 + rand_range(28) = 14..41 bytes, always one byte short of the 42 that handle_arp's line-150 length check demands, so all 10,000 fuzz ARP frames die at line 150 (branch data confirms: 10,000 taken). A 42-byte ARP request with htype=6, or ptype=0x0806, reaches both outcomes."
         },
         {
           "kind": "line",
@@ -252,8 +254,8 @@
           "function": "handle_arp",
           "source": "return false;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The rejection arm of the line-157 htype/ptype check, never executed for the same reason: no frame of 42+ bytes with a malformed ARP hardware/protocol type has ever been fed to net_process_frame. A 42-byte ARP request with htype=6 reaches it."
         },
         {
           "kind": "branch",
@@ -264,8 +266,8 @@
           "detail": "2 of 4 branch outcomes on this line never taken (line executed 2 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 2,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Both TRUE polarities are untaken \u2014 the only two frames reaching this line carry hlen=6/plen=4. A 42-byte ARP request with hlen=8 or plen=6 reaches them. Same corpus cause as line 157: the fuzzer's ARP frames cap at 41 bytes and never clear the line-150 length gate."
         },
         {
           "kind": "line",
@@ -274,8 +276,8 @@
           "function": "handle_arp",
           "source": "return false;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The rejection arm of the line-160 hlen/plen check. Reached by the same directed case: a 42-byte ARP request with hlen=8 or plen=6."
         },
         {
           "kind": "branch",
@@ -286,8 +288,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 2 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The untaken outcome is the TRUE polarity (opcode is not a request). A 42-byte ARP frame with oper=2 \u2014 an ARP *reply* delivered to the main dispatcher instead of to net_process_arp_reply \u2014 reaches it, and the unit suite already has build_arp_reply_frame to produce exactly that frame. Worth testing that an ARP reply arriving via net_process_frame generates no reply of its own."
         },
         {
           "kind": "line",
@@ -296,8 +298,8 @@
           "function": "handle_arp",
           "source": "return false;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The rejection arm of the line-163 opcode check. Reached by feeding a 42-byte ARP reply (oper=2) to net_process_frame."
         },
         {
           "kind": "branch",
@@ -308,8 +310,8 @@
           "detail": "2 of 4 branch outcomes on this line never taken (line executed 4 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 2,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "handle_icmp is static with exactly one call site (line 358, inside handle_ip), and handle_ip has already rejected ihl < 5 (line 318) and ip_hdr_len > 60 (line 327) before calling it, so ip_hdr_len is guaranteed to be 20..60 here \u2014 both functions derive it from the same ver_ihl byte and neither re-reads the frame. The > 60 half is additionally impossible arithmetically: ihl is a 4-bit field, so ihl*4 <= 60. Redundant defence-in-depth, not a corpus gap."
         },
         {
           "kind": "line",
@@ -318,8 +320,8 @@
           "function": "handle_icmp",
           "source": "return false;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The rejection arm of the line-222 re-check, which handle_ip's line-318 and line-327 checks make unsatisfiable at handle_icmp's single call site. No input can reach it."
         },
         {
           "kind": "branch",
@@ -330,8 +332,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 4 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "handle_ip line 327 rejects any frame with ip_hdr_len > len - ETH_HLEN before calling handle_icmp, which is precisely the negation of this condition, so the TRUE polarity cannot occur at handle_icmp's single call site. (len >= 34 is guaranteed by line 308, so the line-327 subtraction cannot underflow.)"
         },
         {
           "kind": "line",
@@ -340,8 +342,8 @@
           "function": "handle_icmp",
           "source": "return false;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The rejection arm of the line-227 re-check, made unsatisfiable by handle_ip's line-327 guard on the only path into handle_icmp."
         },
         {
           "kind": "branch",
@@ -352,8 +354,8 @@
           "detail": "1 of 4 branch outcomes on this line never taken (line executed 4 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The single untaken outcome is the second clause, ip_total > ip_available \u2014 an IP header claiming more bytes than the frame actually carries (the first clause IS covered, by test_ip_total_len_too_small). A valid ICMP echo request addressed to our IP with total_len overstated, e.g. total_len=100 in a 46-byte frame with the IP checksum recomputed, reaches it. Worth aiming at: this is the guard that stops the line-274 memcpy over-reading the received frame."
         },
         {
           "kind": "branch",
@@ -364,8 +366,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 3 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The untaken TRUE polarity needs a frame that clears every IP check but carries no ICMP header. A 34-byte frame (ETH+IP only) with ver_ihl=0x45, total_len=20, protocol=ICMP, dst=our IP and a valid IP checksum passes lines 308/318/327/333/343/352 and 222/227/231, then fails here (34 < 42). All four ICMP frames the unit suite feeds are full-size, so the truncated-ICMP path has never run."
         },
         {
           "kind": "line",
@@ -374,8 +376,8 @@
           "function": "handle_icmp",
           "source": "return false;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The rejection arm of the line-235 truncated-ICMP check. Reached by the same 34-byte ETH+IP-only frame (total_len=20, protocol=ICMP, valid checksum, addressed to us)."
         },
         {
           "kind": "branch",
@@ -386,8 +388,8 @@
           "detail": "2 of 4 branch outcomes on this line never taken (line executed 3 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 2,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Both TRUE polarities are untaken: the 3 frames that reach this line are all type=8/code=0. A valid IPv4/ICMP frame to our IP with type=0 (echo reply) or type=3 reaches the first; type=8 with code=1 reaches the second. The unit suite's build_icmp_echo_reply already produces a suitable frame. Worth testing that the box does not answer arbitrary ICMP types."
         },
         {
           "kind": "line",
@@ -396,8 +398,8 @@
           "function": "handle_icmp",
           "source": "return false;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The rejection arm of the line-242 ICMP type/code check. Reached by an otherwise-valid ICMP frame addressed to us with type=0 or code!=0."
         },
         {
           "kind": "branch",
@@ -408,8 +410,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 3 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The untaken TRUE polarity is the SEC-006 rate limiter tripping. Only 3 echo requests ever reach it and the unit suite calls net_icmp_rate_reset() before each ICMP test, so the counter never passes 10. Eleven consecutive valid echo requests without an intervening reset reach it. Worth exercising: the x86 #else arm is a pure lifetime counter with no time window, so once tripped it latches until someone calls net_icmp_rate_reset() \u2014 and nothing outside the tests does."
         },
         {
           "kind": "line",
@@ -418,8 +420,8 @@
           "function": "handle_icmp",
           "source": "return false;  /* Rate limited */",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The rate-limited rejection arm, reached by the 11th valid echo request in a run with no net_icmp_rate_reset() call."
         },
         {
           "kind": "branch",
@@ -430,8 +432,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 3 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "Line 231 has already rejected ip_total > ip_available, where ip_available = len - ETH_HLEN, so total_len = ETH_HLEN + ip_total <= len always holds and this clamp can never fire. Redundant defence-in-depth sitting behind the line-231 check, not a corpus gap."
         },
         {
           "kind": "branch",
@@ -442,8 +444,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 3 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The untaken TRUE polarity needs total_len = ETH_HLEN + ip_total > 1536, which line 231 in turn requires len >= 14 + ip_total \u2014 i.e. an oversized frame, e.g. 1600 bytes with total_len=1560, protocol=ICMP, dst=our IP and a valid header checksum. Worth aiming at specifically because reaching it exposes an inconsistency: the clamp bounds the line-274 memcpy, but line 294 computes icmp_len from the UNCLAMPED ip_total, so the line-295 checksum reads past NET_MAX_FRAME (see the accompanying report)."
         },
         {
           "kind": "branch",
@@ -454,8 +456,8 @@
           "detail": "1 of 4 branch outcomes on this line never taken (line executed 10360 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The single untaken outcome is the first clause, ip_hdr_len > 60. ihl is read as ip->ver_ihl & 0x0F (line 316), a 4-bit value, so ihl*4 <= 60 by construction and the clause is arithmetically impossible; the second clause is well covered (86 hits). test_ip_ihl_too_large documents the same impossibility in its own comment."
         },
         {
           "kind": "branch",
@@ -466,8 +468,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 4 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The untaken TRUE polarity ('not for us') has never run: only 4 frames reach this line and all are unit-suite frames addressed to our IP. The fuzzer cannot get here at all \u2014 a random 16-bit IP checksum matches at ~1/65536, and only 6 of 10,274 candidates passed line 333, all 6 from the unit suite. A valid, unfragmented IPv4/ICMP frame addressed to a different IP reaches it."
         },
         {
           "kind": "line",
@@ -476,8 +478,8 @@
           "function": "handle_ip",
           "source": "return false;  /* Not for us */",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The 'not for us' rejection arm, reached by a valid IPv4/ICMP frame with a correct header checksum addressed to an IP other than ours."
         },
         {
           "kind": "branch",
@@ -488,8 +490,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 4 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The untaken FALSE polarity is a non-ICMP protocol. A valid, unfragmented IPv4 frame addressed to our IP with protocol=6 (TCP) or 17 (UDP) and a correct header checksum reaches it and falls through to line 361. Worth testing that unsupported protocols are silently ignored rather than mis-parsed."
         },
         {
           "kind": "line",
@@ -498,8 +500,8 @@
           "function": "handle_ip",
           "source": "return false;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "handle_ip's fall-through return for a protocol it does not handle. Reached by the same directed case as the line-357 gap: a valid IPv4 frame to our IP with protocol=6 or 17."
         },
         {
           "kind": "branch",
@@ -510,8 +512,8 @@
           "detail": "1 of 8 branch outcomes on this line never taken (line executed 99015 times)",
           "branch_outcomes_total": 8,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "defensive-guard",
+          "reason": "The single untaken outcome of the eight is !net_initialized TRUE; the other three conditions are NULL guards and are all covered by test_process_frame_null_args. net_initialized is a file-scope static set by net_init and never cleared (there is no de-init entry point), so this is a use-before-init caller-contract guard, not input-dependent \u2014 any harness that exercises this module at all must call net_init first."
         },
         {
           "kind": "branch",
@@ -522,8 +524,8 @@
           "detail": "2 of 4 branch outcomes on this line never taken (line executed 1 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 2,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "Both untaken outcomes are structurally impossible in this else-arm. It runs only when line 435's arp_cache_used < NET_ARP_CACHE_SIZE failed, so arp_cache_used == 8 and 'arp_cache_used > 0' cannot be false. And entries are only ever written at index arp_cache_used with a non-zero IP (net_arp_add returns early on ip_be == 0 at line 424, and both update paths overwrite only .mac), so arp_cache[0].ip cannot be 0 once 8 entries exist."
         },
         {
           "kind": "branch",
@@ -534,8 +536,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 1 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The untaken TRUE polarity is reachable through net_process_frame: handle_arp passes the sender protocol address straight from arp->spa (lines 179-180), so a 42-byte ARP request with spa = 0.0.0.0 \u2014 a real RFC 5227 ARP probe \u2014 reaches it. It is also directly callable as public API. Blocked today by the same 41-byte ceiling that stops the fuzzer's ARP frames reaching handle_arp's body at all."
         },
         {
           "kind": "branch",
@@ -546,8 +548,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 1 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The untaken outcome is entering the loop body. net_arp_update_existing has run exactly once, from the single unit-suite ARP request, and that call followed a net_init which clears the cache \u2014 so arp_cache_used was 0 and the loop never iterated. Populate the cache with net_arp_add and then feed a 42-byte ARP request through net_process_frame and the loop runs."
         },
         {
           "kind": "branch",
@@ -558,8 +560,8 @@
           "detail": "2 of 2 branch outcomes on this line never taken (line executed 0 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 2,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Both outcomes are untaken for the same reason as line 463 \u2014 the loop never iterated on the one call this function has had. A directed case that calls net_arp_add for a peer (plus at least one other entry) and then feeds a 42-byte ARP request carrying spa=peer_ip reaches both the match and the no-match polarity."
         },
         {
           "kind": "line",
@@ -568,8 +570,8 @@
           "function": "net_arp_update_existing",
           "source": "if (arp_cache[i].ip == ip_be) {",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The loop body of net_arp_update_existing has never executed, because the function's single call so far ran against an empty cache. Reached by pre-populating the ARP cache and then feeding an ARP request from a cached peer through net_process_frame."
         },
         {
           "kind": "line",
@@ -578,8 +580,8 @@
           "function": "net_arp_update_existing",
           "source": "memcpy(arp_cache[i].mac, mac, ETH_ALEN);",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "This is the SEC-004 update-existing write and it has never executed. Reachable by net_arp_add(peer_ip, mac_v1) followed by a 42-byte ARP request through net_process_frame carrying spa=peer_ip and a different sender MAC: the cached MAC should change while the entry count does not. Worth testing \u2014 SEC-004's 'update but never add' behaviour is currently proven only in its negative half."
         },
         {
           "kind": "line",
@@ -588,8 +590,8 @@
           "function": "net_arp_update_existing",
           "source": "return;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The early return after a successful SEC-004 in-place MAC update, reached by the same directed case as line 465."
         },
         {
           "kind": "branch",
@@ -600,8 +602,8 @@
           "detail": "1 of 4 branch outcomes on this line never taken (line executed 3 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "defensive-guard",
+          "reason": "The untaken outcome is the second clause, !net_initialized; the first clause is covered by test_build_arp_request_small_buf. net_initialized is set by net_init and never cleared, so this is the same use-before-init caller-contract guard as line 371 \u2014 not input-dependent, and unreachable once any harness has initialised the module."
         },
         {
           "kind": "branch",
@@ -612,8 +614,8 @@
           "detail": "2 of 4 branch outcomes on this line never taken (line executed 1 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 2,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Two outcomes are untaken here and they differ in kind. 'buf_size < frame_len' TRUE is a plain unit-test gap: net_build_icmp_request has never been called with a buffer under 74 bytes, even though its ARP sibling has exactly that test (test_build_arp_request_small_buf), and a 64-byte buffer reaches it. The other untaken outcome, !net_initialized, is the same use-before-init caller-contract guard as lines 371/485 and stays unreachable once net_init has run \u2014 so this entry can be improved but not driven to 4/4."
         },
         {
           "kind": "line",
@@ -622,8 +624,8 @@
           "function": "net_build_icmp_request",
           "source": "return 0;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The rejection arm of net_build_icmp_request's buffer-size check. Reached by the same directed case as the line-527 gap: call it with buf_size < 74, e.g. a 64-byte buffer, and it returns 0 here."
         },
         {
           "kind": "line",
@@ -632,8 +634,8 @@
           "function": "net_arp_resolve",
           "source": "bool net_arp_resolve(uint32_t target_ip_be, uint8_t mac_out[ETH_ALEN],",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "net_arp_resolve is called by nothing in this build: net_process_frame never routes to it, and neither the unit suite nor the fuzzer calls it (its only in-module call site, line 613, sits inside the JARVIS_PLATFORM_PI4 block, which is not compiled here). No corpus of frames can reach a function nothing calls \u2014 unit-test gap, not a fuzz gap."
         },
         {
           "kind": "branch",
@@ -644,8 +646,8 @@
           "detail": "2 of 2 branch outcomes on this line never taken (line executed 0 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 2,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "Both outcomes of the cache-hit test are untaken because net_arp_resolve is never called (see line 579). Note that test_net_stack.c's header comment claims the 'cache-hit path tested' for this function; the coverage data contradicts it \u2014 line 583 executed 0 times. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -654,8 +656,8 @@
           "function": "net_arp_resolve",
           "source": "if (net_arp_lookup(target_ip_be, mac_out)) {",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "Never executed because net_arp_resolve has no caller in this build \u2014 no corpus of frames can reach it. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -664,8 +666,8 @@
           "function": "net_arp_resolve",
           "source": "return true;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The cache-hit success return of net_arp_resolve, never executed because the function has no caller in this build. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -674,8 +676,8 @@
           "function": "net_arp_resolve",
           "source": "debug_puts(\"[NET] ARP resolve: not available on x86\\n\");",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "This is the x86 #else arm, which IS compiled in this build (JARVIS_PLATFORM_PI4 is undefined), so platform gating is not the cause \u2014 the sole cause is that net_arp_resolve is never called by net_process_frame, the unit suite, or the fuzzer. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -684,8 +686,8 @@
           "function": "net_arp_resolve",
           "source": "return false;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "net_arp_resolve's cache-miss return, compiled in this build but never executed because the function has no caller. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "branch",
@@ -696,8 +698,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 4 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The untaken TRUE polarity is a short frame: all 4 unit-suite calls to net_process_arp_reply pass full 42-byte frames, so calling it with len < 42 (e.g. 20) reaches the guard. Worth aiming at \u2014 this is the length check standing between attacker-controlled RX bytes and the net_arp_t cast on line 646. (Line 643's non-zero count is a gcov epilogue artifact: the returns at 656/665 are attributed there. The branch data is authoritative.)"
         },
         {
           "kind": "branch",
@@ -708,8 +710,8 @@
           "detail": "2 of 4 branch outcomes on this line never taken (line executed 4 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 2,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Both TRUE polarities are untaken \u2014 all 4 unit-suite reply frames are well-formed Ethernet/IPv4. A 42-byte ARP reply with htype=6 or ptype=0x0806 passed to net_process_arp_reply reaches them."
         },
         {
           "kind": "line",
@@ -718,8 +720,8 @@
           "function": "net_process_arp_reply",
           "source": "return;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The rejection arm of the line-649 htype/ptype check in the ARP reply path, reached by passing a 42-byte reply frame with htype=6 or ptype=0x0806 to net_process_arp_reply."
         },
         {
           "kind": "branch",
@@ -730,8 +732,8 @@
           "detail": "2 of 4 branch outcomes on this line never taken (line executed 4 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 2,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Both TRUE polarities are untaken \u2014 every unit-suite reply frame carries hlen=6/plen=4. A 42-byte ARP reply with hlen=8 or plen=6 passed to net_process_arp_reply reaches them."
         },
         {
           "kind": "line",
@@ -740,8 +742,8 @@
           "function": "net_process_arp_reply",
           "source": "return;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The rejection arm of the line-652 hlen/plen check in the ARP reply path, reached by a 42-byte reply frame with hlen=8 or plen=6."
         },
         {
           "kind": "branch",
@@ -752,8 +754,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 3 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The untaken TRUE polarity is a frame shorter than 42 bytes. All 3 unit-suite calls to net_is_icmp_echo_reply pass 46-byte frames; a 20-byte frame reaches the guard, which is the bounds check protecting the net_ip_hdr_t cast at line 695."
         },
         {
           "kind": "line",
@@ -762,8 +764,8 @@
           "function": "net_is_icmp_echo_reply",
           "source": "return false;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The rejection arm of net_is_icmp_echo_reply's minimum-length check, reached by calling it with a frame shorter than 42 bytes."
         },
         {
           "kind": "branch",
@@ -774,8 +776,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 3 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The untaken TRUE polarity is a non-IPv4 ethertype. Passing a 42-byte ARP frame (ethertype 0x0806) \u2014 the unit suite already builds these \u2014 to net_is_icmp_echo_reply reaches it."
         },
         {
           "kind": "line",
@@ -784,8 +786,8 @@
           "function": "net_is_icmp_echo_reply",
           "source": "return false;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The rejection arm of the ethertype check in net_is_icmp_echo_reply, reached by passing an ARP frame (or any non-0x0800 ethertype) of 42+ bytes."
         },
         {
           "kind": "branch",
@@ -796,8 +798,8 @@
           "detail": "2 of 4 branch outcomes on this line never taken (line executed 3 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 2,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Both TRUE polarities are untaken. A 46-byte frame with ver_ihl=0x65 (version 6) reaches the first; protocol=6 (TCP) reaches the second. The unit suite already builds a version-6 frame for test_ip_ihl_too_large, but feeds it to net_process_frame rather than to this entry point."
         },
         {
           "kind": "line",
@@ -806,8 +808,8 @@
           "function": "net_is_icmp_echo_reply",
           "source": "return false;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The rejection arm of the version/protocol check in net_is_icmp_echo_reply, reached by a frame with ver_ihl=0x65 or protocol=6."
         },
         {
           "kind": "branch",
@@ -818,8 +820,8 @@
           "detail": "2 of 4 branch outcomes on this line never taken (line executed 3 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 2,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The 'ip_hdr_len < 20' polarity is reachable: line 698 checks only the version nibble, so a 46-byte frame with ver_ihl=0x43 (version 4, IHL=3 -> 12) passes 698 and fails here. The other untaken polarity, ip_hdr_len > 60, is arithmetically impossible \u2014 ihl is a 4-bit field so ihl*4 <= 60 \u2014 so this entry can never reach 4/4 outcomes however good the corpus."
         },
         {
           "kind": "line",
@@ -828,8 +830,8 @@
           "function": "net_is_icmp_echo_reply",
           "source": "return false;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The rejection arm of the line-705 header-length check, reached by the same directed case: a 46-byte frame with ver_ihl=0x43, giving ip_hdr_len=12 < 20."
         },
         {
           "kind": "branch",
@@ -840,8 +842,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 3 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The untaken TRUE polarity needs a large IHL in a short frame: ver_ihl=0x4F (IHL=15, so ip_hdr_len=60) in a 50-byte frame passes line 685 (50 >= 42) and line 705 (60 is in range), then fails here (50 < 74)."
         },
         {
           "kind": "line",
@@ -850,8 +852,8 @@
           "function": "net_is_icmp_echo_reply",
           "source": "return false;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The rejection arm of the line-708 length check, reached by the same directed case: a 50-byte frame with ver_ihl=0x4F."
         },
         {
           "kind": "branch",
@@ -862,8 +864,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 3 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The untaken TRUE polarity is narrow but real. With the usual IHL=5 it is unreachable (line 685 already demands len >= 42 = icmp_off + 8), but with ver_ihl=0x46 (IHL=6, ip_hdr_len=24) a 44-byte frame passes line 685 (>= 42) and line 708 (>= 38) and then fails here (44 < 46). Stated precisely so it is not mis-filed as impossible on the IHL=5 arithmetic alone."
         },
         {
           "kind": "line",
@@ -872,8 +874,8 @@
           "function": "net_is_icmp_echo_reply",
           "source": "return false;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The rejection arm of the line-712 ICMP-header bounds check, reached by the same directed case: a 44-byte frame with ver_ihl=0x46."
         },
         {
           "kind": "branch",
@@ -884,8 +886,8 @@
           "detail": "1 of 4 branch outcomes on this line never taken (line executed 3 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The untaken outcome is the second clause, icmp->code != 0; the type clause is covered by test_is_icmp_echo_reply_rejects_request. An echo reply with type=0 but code=1 reaches it \u2014 a malformed reply that must not be accepted as a matching ping response."
         },
         {
           "kind": "branch",
@@ -896,8 +898,8 @@
           "detail": "1 of 4 branch outcomes on this line never taken (line executed 2 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The untaken outcome is the first clause, an ident mismatch; the seq clause is covered by test_is_icmp_echo_reply_wrong_seq. Calling net_is_icmp_echo_reply with the wrong ident but the matching seq \u2014 the exact mirror of the existing wrong-seq test \u2014 reaches it."
         },
         {
           "kind": "branch",
@@ -908,8 +910,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 1 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "defensive-guard",
+          "reason": "The untaken outcome is ttl_out == NULL. This is an optional out-parameter contract (the header documents ttl_out as set only on a match), decided by the caller and not by frame content; a unit call passing NULL would close it, but no corpus of frames can influence it."
         },
         {
           "kind": "line",
@@ -918,8 +920,8 @@
           "function": "net_arp_get_pending_ip",
           "source": "uint32_t net_arp_get_pending_ip(void)",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "net_arp_get_pending_ip is public API but is called by nothing \u2014 not net_process_frame, not the fuzzer, and not the unit suite, which uses only the setter net_arp_set_pending_ip (twice). A no-argument getter cannot be reached by any corpus: this is the route_decline_text shape \u2014 a unit-test gap, not a fuzz gap, closable by one assertion in an existing SEC-004 test."
         },
         {
           "kind": "line",
@@ -928,8 +930,8 @@
           "function": "net_arp_get_pending_ip",
           "source": "return arp_pending_ip;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The body of net_arp_get_pending_ip, never executed because nothing calls the function. Unit-test gap, not a fuzz gap."
         }
       ]
     },
@@ -976,7 +978,7 @@
           "line": 63,
           "function": "shmem_ipc_send",
           "source": "if (!ring || len > SHMEM_MAX_PAYLOAD)",
-          "detail": "2 of 4 branch outcomes on this line never taken (line executed 342278 times)",
+          "detail": "2 of 4 branch outcomes on this line never taken (line executed 267890 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 2,
           "judgement": "defensive-guard",
@@ -998,7 +1000,7 @@
           "line": 65,
           "function": "shmem_ipc_send",
           "source": "if (len > 0 && !payload)",
-          "detail": "1 of 4 branch outcomes on this line never taken (line executed 342278 times)",
+          "detail": "1 of 4 branch outcomes on this line never taken (line executed 267890 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 1,
           "judgement": "defensive-guard",
@@ -1084,7 +1086,9 @@
       "incidental_branch_pct": 50.18,
       "uncovered_count": 199,
       "uncovered_by_judgement": {
-        "unclassified": 199
+        "reachable-worth-fuzzing": 117,
+        "unreachable-by-construction": 77,
+        "defensive-guard": 5
       },
       "uncovered": [
         {
@@ -1094,8 +1098,8 @@
           "function": "read_i8",
           "source": "static int read_i8(FILE *fp, int8_t *out)    { return read_exact(fp, out, 1); }",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "read_i8 is called only from read_kv_pair's type switch (:239) and gguf_get_kv_arr_u32's element switch, and no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus. A directed gguf_open_memory buffer of magic + version 3 + n_tensors 0 + n_kv 1 + a short key + KV type = GGUF_TYPE_INT8 (1) + the value bytes reaches it."
         },
         {
           "kind": "line",
@@ -1104,8 +1108,8 @@
           "function": "read_u16",
           "source": "static int read_u16(FILE *fp, uint16_t *out) { return read_exact(fp, out, 2); }",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "read_u16 is called only from read_kv_pair's type switch (:240) and gguf_get_kv_arr_u32's element switch, and no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus. A directed gguf_open_memory buffer of magic + version 3 + n_tensors 0 + n_kv 1 + a short key + KV type = GGUF_TYPE_UINT16 (2) + the value bytes reaches it."
         },
         {
           "kind": "line",
@@ -1114,8 +1118,8 @@
           "function": "read_i16",
           "source": "static int read_i16(FILE *fp, int16_t *out)  { return read_exact(fp, out, 2); }",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "read_i16 is called only from read_kv_pair's type switch (:241) and gguf_get_kv_arr_u32's element switch, and no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus. A directed gguf_open_memory buffer of magic + version 3 + n_tensors 0 + n_kv 1 + a short key + KV type = GGUF_TYPE_INT16 (3) + the value bytes reaches it."
         },
         {
           "kind": "line",
@@ -1124,8 +1128,8 @@
           "function": "read_i32",
           "source": "static int read_i32(FILE *fp, int32_t *out)  { return read_exact(fp, out, 4); }",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "read_i32 is called only from read_kv_pair's type switch (:243) and gguf_get_kv_arr_u32's element switch, and no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus. A directed gguf_open_memory buffer of magic + version 3 + n_tensors 0 + n_kv 1 + a short key + KV type = GGUF_TYPE_INT32 (5) + the value bytes reaches it."
         },
         {
           "kind": "line",
@@ -1134,8 +1138,8 @@
           "function": "read_i64",
           "source": "static int read_i64(FILE *fp, int64_t *out)  { return read_exact(fp, out, 8); }",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "read_i64 is called only from read_kv_pair's type switch (:247) and gguf_get_kv_arr_u32's element switch, and no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus. A directed gguf_open_memory buffer of magic + version 3 + n_tensors 0 + n_kv 1 + a short key + KV type = GGUF_TYPE_INT64 (11) + the value bytes reaches it."
         },
         {
           "kind": "line",
@@ -1144,8 +1148,8 @@
           "function": "read_f64",
           "source": "static int read_f64(FILE *fp, double *out)   { return read_exact(fp, out, 8); }",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "read_f64 is called only from read_kv_pair's type switch (:248) and gguf_get_kv_arr_u32's element switch, and no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus. A directed gguf_open_memory buffer of magic + version 3 + n_tensors 0 + n_kv 1 + a short key + KV type = GGUF_TYPE_FLOAT64 (12) + the value bytes reaches it."
         },
         {
           "kind": "branch",
@@ -1156,8 +1160,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 58 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The err-true outcome (read_u64 of the string length failed) is never taken in 58 executions. A buffer that ends exactly at the start of a key string -- magic + version 3 + n_tensors 0 + n_kv 1 and nothing after the 24-byte header -- makes the length read fail and returns GGUF_ERR_READ."
         },
         {
           "kind": "branch",
@@ -1168,8 +1172,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 58 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The len >= buf_size outcome is never taken in 58 executions, so the ENTIRE over-long-string handler (:56-71) is dead in test. This is the length-overflow path -- the same class as the SEC-hardened gguf_vocab overflow. A KV whose key declares a u64 length of 300 (>= GGUF_MAX_KV_KEY_LEN 256) with 300 bytes present enters it; a STRING value needs length >= 4096."
         },
         {
           "kind": "line",
@@ -1178,8 +1182,8 @@
           "function": "read_gguf_string",
           "source": "size_t to_read = buf_size - 1;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Inside the over-long-string handler, which no input has entered because the len >= buf_size branch at :55 is never taken. It computes to_read = buf_size - 1 (255 for a key, 4095 for a string value). A KV key declaring a u64 length of 300 with 300 bytes present reaches it through gguf_open_memory."
         },
         {
           "kind": "line",
@@ -1188,8 +1192,8 @@
           "function": "read_gguf_string",
           "source": "err = read_exact(fp, buf, to_read);",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Inside the over-long-string handler, which no input has entered because the len >= buf_size branch at :55 is never taken. It reads the truncated prefix into buf. A KV key declaring a u64 length of 300 with 300 bytes present reaches it through gguf_open_memory."
         },
         {
           "kind": "branch",
@@ -1200,8 +1204,8 @@
           "detail": "2 of 2 branch outcomes on this line never taken (line executed 0 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 2,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Both outcomes need the over-long-string handler entered (:55 never true today). A key declaring length 300 with 300 bytes present takes the success outcome; the same key with only 50 bytes left in the buffer makes read_exact of the 255-byte prefix fail and takes the error outcome."
         },
         {
           "kind": "line",
@@ -1210,8 +1214,8 @@
           "function": "read_gguf_string",
           "source": "if (err) return err;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Guard inside the over-long-string handler; a KV key declaring a u64 length of 300 reaches it, and truncating the buffer to fewer than 255 bytes after the length exercises the error return."
         },
         {
           "kind": "line",
@@ -1220,8 +1224,8 @@
           "function": "read_gguf_string",
           "source": "buf[to_read] = '\\0';",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Inside the over-long-string handler, which no input has entered because the len >= buf_size branch at :55 is never taken. It NUL-terminates the truncated prefix. A KV key declaring a u64 length of 300 with 300 bytes present reaches it through gguf_open_memory."
         },
         {
           "kind": "line",
@@ -1230,8 +1234,8 @@
           "function": "read_gguf_string",
           "source": "uint64_t remaining = len - to_read;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Inside the over-long-string handler, which no input has entered because the len >= buf_size branch at :55 is never taken. It computes the remaining excess to discard. A KV key declaring a u64 length of 300 with 300 bytes present reaches it through gguf_open_memory."
         },
         {
           "kind": "branch",
@@ -1242,8 +1246,8 @@
           "detail": "2 of 2 branch outcomes on this line never taken (line executed 0 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 2,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Both outcomes need the over-long-string handler entered. A key declaring length 300 with all 300 bytes present takes both in one case: remaining = 45 enters the loop, then remaining = 0 exits it."
         },
         {
           "kind": "line",
@@ -1252,8 +1256,8 @@
           "function": "read_gguf_string",
           "source": "while (remaining > 0) {",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The excess-discard loop header, unreachable today only because :55 is never true; a key declaring length 300 with 300 bytes present executes it twice."
         },
         {
           "kind": "line",
@@ -1262,8 +1266,8 @@
           "function": "read_gguf_string",
           "source": "size_t chunk = remaining > sizeof(discard) ? sizeof(discard) : (size_t)remaining;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Inside the over-long-string handler, which no input has entered because the len >= buf_size branch at :55 is never taken. It picks the 256-byte discard chunk. A KV key declaring a u64 length of 300 with 300 bytes present reaches it through gguf_open_memory."
         },
         {
           "kind": "line",
@@ -1272,8 +1276,8 @@
           "function": "read_gguf_string",
           "source": "err = read_exact(fp, discard, chunk);",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Inside the over-long-string handler, which no input has entered because the len >= buf_size branch at :55 is never taken. It reads one discard chunk. A KV key declaring a u64 length of 300 with 300 bytes present reaches it through gguf_open_memory."
         },
         {
           "kind": "branch",
@@ -1284,8 +1288,8 @@
           "detail": "2 of 2 branch outcomes on this line never taken (line executed 0 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 2,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Both outcomes need the discard loop entered. A key declaring length 5000 with only 300 bytes present makes the first 256-byte discard read fail (error outcome); a key declaring 300 with 300 present takes the success outcome."
         },
         {
           "kind": "line",
@@ -1294,8 +1298,8 @@
           "function": "read_gguf_string",
           "source": "if (err) return err;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Guard inside the excess-discard loop; a KV key declaring a u64 length far beyond the buffer reaches it and returns GGUF_ERR_READ."
         },
         {
           "kind": "line",
@@ -1304,8 +1308,8 @@
           "function": "read_gguf_string",
           "source": "remaining -= chunk;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Inside the over-long-string handler, which no input has entered because the len >= buf_size branch at :55 is never taken. It advances the discard loop. A KV key declaring a u64 length of 300 with 300 bytes present reaches it through gguf_open_memory."
         },
         {
           "kind": "line",
@@ -1314,8 +1318,8 @@
           "function": "read_gguf_string",
           "source": "return GGUF_OK;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The success return of the over-long-string handler: reached when a declared length >= buf_size is fully present, e.g. a KV key declaring 300 bytes with all 300 in the buffer."
         },
         {
           "kind": "branch",
@@ -1326,8 +1330,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 58 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The err-true outcome (the string body read failed) is never taken in 58 executions. A KV key declaring a u64 length of 100 with only 50 bytes left in the buffer makes read_exact fail -- the ordinary truncated-file case, and it has never been fuzzed because no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus."
         },
         {
           "kind": "branch",
@@ -1338,8 +1342,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 33 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The n == 0 outcome is never taken. skip_bytes is only reached from skip_gguf_value, so n == 0 needs a zero-length element: a KV of type ARRAY (9) with elem_type STRING (8), count 1, and an element whose declared u64 length is 0."
         },
         {
           "kind": "branch",
@@ -1350,8 +1354,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 33 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The n > LONG_MAX outcome is never taken, so the SEC-017 chunked-seek clamp has never executed. A KV of type ARRAY, elem_type STRING, count 1, whose element declares a u64 length of 0xFFFFFFFFFFFFFFFF drives n past LONG_MAX and clamps chunk to LONG_MAX."
         },
         {
           "kind": "branch",
@@ -1362,8 +1366,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 33 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The fseek-fails outcome is never taken, so the whole SEC-017 read-and-discard fallback (:87-96) is dead in test. glibc's fmemopen seek fails when the target exceeds the buffer, so an ARRAY-of-STRING element declaring a length past the end of the fuzz buffer takes it -- reachable only through gguf_open_memory, since fseek past EOF SUCCEEDS on the gguf_open file path."
         },
         {
           "kind": "line",
@@ -1372,8 +1376,8 @@
           "function": "skip_bytes",
           "source": "uint64_t remaining = n;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "First line of the fseek-failure fallback; reached by an ARRAY-of-STRING element whose declared length seeks past the end of an fmemopen buffer."
         },
         {
           "kind": "branch",
@@ -1384,8 +1388,8 @@
           "detail": "2 of 2 branch outcomes on this line never taken (line executed 0 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 2,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Both outcomes are unexecuted today. The enter-loop outcome is reachable via a failed fseek on an fmemopen stream (n >= 1 always here, :83 having returned for n == 0). The loop-EXIT outcome is not reachable: fseek only fails when fewer than n bytes remain, so the discard loop always ends at the short read on :92-93 instead."
         },
         {
           "kind": "line",
@@ -1394,8 +1398,8 @@
           "function": "skip_bytes",
           "source": "while (remaining > 0) {",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The fallback discard-loop header, reached by an ARRAY-of-STRING element whose declared length seeks past the end of an fmemopen buffer."
         },
         {
           "kind": "line",
@@ -1404,8 +1408,8 @@
           "function": "skip_bytes",
           "source": "size_t rd = remaining > sizeof(discard) ? sizeof(discard) : (size_t)remaining;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Computes the 4096-byte discard chunk inside the fseek-failure fallback; same directed case as :89."
         },
         {
           "kind": "branch",
@@ -1416,8 +1420,8 @@
           "detail": "2 of 2 branch outcomes on this line never taken (line executed 0 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 2,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Both outcomes are unexecuted. The fread-short outcome is reachable now (any failed fseek on an fmemopen stream implies the bytes are missing). The fread-succeeded outcome additionally needs >= 4096 readable bytes after the failed seek, which needs a directed buffer larger than the harness's current 4096-byte cap (e.g. 8200 bytes with the skip starting near the front)."
         },
         {
           "kind": "line",
@@ -1426,8 +1430,8 @@
           "function": "skip_bytes",
           "source": "if (fread(discard, 1, rd, fp) != rd)",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The fallback's read check; reached by any ARRAY-of-STRING element whose declared length seeks past the end of an fmemopen buffer."
         },
         {
           "kind": "line",
@@ -1436,8 +1440,8 @@
           "function": "skip_bytes",
           "source": "return GGUF_ERR_READ;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The fallback's GGUF_ERR_READ return -- the outcome every fmemopen fseek failure currently leads to, since a failed seek implies the bytes are absent."
         },
         {
           "kind": "line",
@@ -1446,8 +1450,8 @@
           "function": "skip_bytes",
           "source": "remaining -= rd;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Needs one 4096-byte discard read to SUCCEED after fseek failed, i.e. >= 4096 readable bytes remaining while the declared skip runs past the buffer end. Impossible inside the harness's current 4096-byte buffer (the header alone consumes 24), but a directed ~8200-byte buffer with an ARRAY-of-STRING element declaring a huge length reaches it."
         },
         {
           "kind": "line",
@@ -1456,8 +1460,8 @@
           "function": "skip_bytes",
           "source": "return GGUF_OK;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "Structurally unreachable through both entry points: this return needs the discard loop to consume all n bytes, but the loop is only entered when fseek(chunk) FAILED, and on both an fmemopen stream (seek fails iff the target exceeds the buffer) and a regular file (seek past EOF succeeds; failure needs n > LONG_MAX) that failure implies fewer than n bytes are readable. The loop therefore always exits via the short read at :93."
         },
         {
           "kind": "branch",
@@ -1468,8 +1472,8 @@
           "detail": "9 of 12 branch outcomes on this line never taken (line executed 27 times)",
           "branch_outcomes_total": 12,
           "branch_outcomes_never_taken": 9,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Only UINT32, FLOAT32 and BOOL are exercised, all from the unit fixtures' array KVs. This switch is reached from skip_gguf_value's scalar path, so one directed gguf_open_memory buffer per elem_type -- a KV of type ARRAY (9) with elem_type set to each value and count 1 -- covers the remaining 9 outcomes."
         },
         {
           "kind": "line",
@@ -1478,8 +1482,8 @@
           "function": "gguf_value_type_size",
           "source": "case GGUF_TYPE_UINT8:   return 1;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by skipping an array element of this type: a KV of type ARRAY (9) with elem_type = GGUF_TYPE_UINT8 (0), count 1, and 1 value bytes. Only the three element types the unit fixtures happen to use are exercised today."
         },
         {
           "kind": "line",
@@ -1488,8 +1492,8 @@
           "function": "gguf_value_type_size",
           "source": "case GGUF_TYPE_INT8:    return 1;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by skipping an array element of this type: a KV of type ARRAY (9) with elem_type = GGUF_TYPE_INT8 (1), count 1, and 1 value bytes. Only the three element types the unit fixtures happen to use are exercised today."
         },
         {
           "kind": "line",
@@ -1498,8 +1502,8 @@
           "function": "gguf_value_type_size",
           "source": "case GGUF_TYPE_UINT16:  return 2;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by skipping an array element of this type: a KV of type ARRAY (9) with elem_type = GGUF_TYPE_UINT16 (2), count 1, and 2 value bytes. Only the three element types the unit fixtures happen to use are exercised today."
         },
         {
           "kind": "line",
@@ -1508,8 +1512,8 @@
           "function": "gguf_value_type_size",
           "source": "case GGUF_TYPE_INT16:   return 2;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by skipping an array element of this type: a KV of type ARRAY (9) with elem_type = GGUF_TYPE_INT16 (3), count 1, and 2 value bytes. Only the three element types the unit fixtures happen to use are exercised today."
         },
         {
           "kind": "line",
@@ -1518,8 +1522,8 @@
           "function": "gguf_value_type_size",
           "source": "case GGUF_TYPE_INT32:   return 4;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by skipping an array element of this type: a KV of type ARRAY (9) with elem_type = GGUF_TYPE_INT32 (5), count 1, and 4 value bytes. Only the three element types the unit fixtures happen to use are exercised today."
         },
         {
           "kind": "line",
@@ -1528,8 +1532,8 @@
           "function": "gguf_value_type_size",
           "source": "case GGUF_TYPE_UINT64:  return 8;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by skipping an array element of this type: a KV of type ARRAY (9) with elem_type = GGUF_TYPE_UINT64 (10), count 1, and 8 value bytes. Only the three element types the unit fixtures happen to use are exercised today."
         },
         {
           "kind": "line",
@@ -1538,8 +1542,8 @@
           "function": "gguf_value_type_size",
           "source": "case GGUF_TYPE_INT64:   return 8;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by skipping an array element of this type: a KV of type ARRAY (9) with elem_type = GGUF_TYPE_INT64 (11), count 1, and 8 value bytes. Only the three element types the unit fixtures happen to use are exercised today."
         },
         {
           "kind": "line",
@@ -1548,8 +1552,8 @@
           "function": "gguf_value_type_size",
           "source": "case GGUF_TYPE_FLOAT64: return 8;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by skipping an array element of this type: a KV of type ARRAY (9) with elem_type = GGUF_TYPE_FLOAT64 (12), count 1, and 8 value bytes. Only the three element types the unit fixtures happen to use are exercised today."
         },
         {
           "kind": "line",
@@ -1558,8 +1562,8 @@
           "function": "gguf_value_type_size",
           "source": "default:                return 0;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The unknown-scalar-type return, and it is a real validation path: a KV of type ARRAY with an elem_type that is neither STRING, ARRAY nor a known scalar (e.g. 42) returns 0 here, which makes skip_gguf_value reject the file at :218. Never exercised."
         },
         {
           "kind": "branch",
@@ -1570,8 +1574,8 @@
           "detail": "19 of 21 branch outcomes on this line never taken (line executed 14 times)",
           "branch_outcomes_total": 21,
           "branch_outcomes_never_taken": 19,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Only F32 and Q4_0 are exercised, both from the unit fixtures. The type field is 4 attacker-controlled bytes in each tensor-info block and feeds n_bytes via ggml_tensor_bytes, so one directed gguf_open_memory buffer with n_tensors = 1 and this type value covers each remaining outcome."
         },
         {
           "kind": "line",
@@ -1580,8 +1584,8 @@
           "function": "ggml_type_size",
           "source": "case GGML_TYPE_F16:     return 2;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by a directed gguf_open_memory buffer with n_tensors = 1 whose tensor-info type field is GGML_TYPE_F16 (1); ggml_type_size is called from ggml_tensor_bytes at read_tensor_info:313, and no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus."
         },
         {
           "kind": "line",
@@ -1590,8 +1594,8 @@
           "function": "ggml_type_size",
           "source": "case GGML_TYPE_BF16:    return 2;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by a directed gguf_open_memory buffer with n_tensors = 1 whose tensor-info type field is GGML_TYPE_BF16 (30); ggml_type_size is called from ggml_tensor_bytes at read_tensor_info:313, and no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus."
         },
         {
           "kind": "line",
@@ -1600,8 +1604,8 @@
           "function": "ggml_type_size",
           "source": "case GGML_TYPE_Q4_1:    return 20;  /* block of 32 values = 4 + 16 bytes */",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by a directed gguf_open_memory buffer with n_tensors = 1 whose tensor-info type field is GGML_TYPE_Q4_1 (3); ggml_type_size is called from ggml_tensor_bytes at read_tensor_info:313, and no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus."
         },
         {
           "kind": "line",
@@ -1610,8 +1614,8 @@
           "function": "ggml_type_size",
           "source": "case GGML_TYPE_Q5_0:    return 22;  /* block of 32 */",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by a directed gguf_open_memory buffer with n_tensors = 1 whose tensor-info type field is GGML_TYPE_Q5_0 (6); ggml_type_size is called from ggml_tensor_bytes at read_tensor_info:313, and no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus."
         },
         {
           "kind": "line",
@@ -1620,8 +1624,8 @@
           "function": "ggml_type_size",
           "source": "case GGML_TYPE_Q5_1:    return 24;  /* block of 32 */",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by a directed gguf_open_memory buffer with n_tensors = 1 whose tensor-info type field is GGML_TYPE_Q5_1 (7); ggml_type_size is called from ggml_tensor_bytes at read_tensor_info:313, and no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus."
         },
         {
           "kind": "line",
@@ -1630,8 +1634,8 @@
           "function": "ggml_type_size",
           "source": "case GGML_TYPE_Q8_0:    return 34;  /* block of 32 values = 2 + 32 bytes */",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by a directed gguf_open_memory buffer with n_tensors = 1 whose tensor-info type field is GGML_TYPE_Q8_0 (8); ggml_type_size is called from ggml_tensor_bytes at read_tensor_info:313, and no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus."
         },
         {
           "kind": "line",
@@ -1640,8 +1644,8 @@
           "function": "ggml_type_size",
           "source": "case GGML_TYPE_Q8_1:    return 36;  /* block of 32 */",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by a directed gguf_open_memory buffer with n_tensors = 1 whose tensor-info type field is GGML_TYPE_Q8_1 (9); ggml_type_size is called from ggml_tensor_bytes at read_tensor_info:313, and no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus."
         },
         {
           "kind": "line",
@@ -1650,8 +1654,8 @@
           "function": "ggml_type_size",
           "source": "case GGML_TYPE_Q2_K:    return 84;  /* block of 256 */",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by a directed gguf_open_memory buffer with n_tensors = 1 whose tensor-info type field is GGML_TYPE_Q2_K (10); ggml_type_size is called from ggml_tensor_bytes at read_tensor_info:313, and no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus."
         },
         {
           "kind": "line",
@@ -1660,8 +1664,8 @@
           "function": "ggml_type_size",
           "source": "case GGML_TYPE_Q3_K:    return 110; /* block of 256 */",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by a directed gguf_open_memory buffer with n_tensors = 1 whose tensor-info type field is GGML_TYPE_Q3_K (11); ggml_type_size is called from ggml_tensor_bytes at read_tensor_info:313, and no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus."
         },
         {
           "kind": "line",
@@ -1670,8 +1674,8 @@
           "function": "ggml_type_size",
           "source": "case GGML_TYPE_Q4_K:    return 144; /* block of 256 */",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by a directed gguf_open_memory buffer with n_tensors = 1 whose tensor-info type field is GGML_TYPE_Q4_K (12); ggml_type_size is called from ggml_tensor_bytes at read_tensor_info:313, and no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus."
         },
         {
           "kind": "line",
@@ -1680,8 +1684,8 @@
           "function": "ggml_type_size",
           "source": "case GGML_TYPE_Q5_K:    return 176; /* block of 256 */",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by a directed gguf_open_memory buffer with n_tensors = 1 whose tensor-info type field is GGML_TYPE_Q5_K (13); ggml_type_size is called from ggml_tensor_bytes at read_tensor_info:313, and no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus."
         },
         {
           "kind": "line",
@@ -1690,8 +1694,8 @@
           "function": "ggml_type_size",
           "source": "case GGML_TYPE_Q6_K:    return 210; /* block of 256 */",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by a directed gguf_open_memory buffer with n_tensors = 1 whose tensor-info type field is GGML_TYPE_Q6_K (14); ggml_type_size is called from ggml_tensor_bytes at read_tensor_info:313, and no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus."
         },
         {
           "kind": "line",
@@ -1700,8 +1704,8 @@
           "function": "ggml_type_size",
           "source": "case GGML_TYPE_Q8_K:    return 292; /* block of 256 */",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by a directed gguf_open_memory buffer with n_tensors = 1 whose tensor-info type field is GGML_TYPE_Q8_K (15); ggml_type_size is called from ggml_tensor_bytes at read_tensor_info:313, and no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus."
         },
         {
           "kind": "line",
@@ -1710,8 +1714,8 @@
           "function": "ggml_type_size",
           "source": "case GGML_TYPE_I8:      return 1;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by a directed gguf_open_memory buffer with n_tensors = 1 whose tensor-info type field is GGML_TYPE_I8 (24); ggml_type_size is called from ggml_tensor_bytes at read_tensor_info:313, and no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus."
         },
         {
           "kind": "line",
@@ -1720,8 +1724,8 @@
           "function": "ggml_type_size",
           "source": "case GGML_TYPE_I16:     return 2;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by a directed gguf_open_memory buffer with n_tensors = 1 whose tensor-info type field is GGML_TYPE_I16 (25); ggml_type_size is called from ggml_tensor_bytes at read_tensor_info:313, and no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus."
         },
         {
           "kind": "line",
@@ -1730,8 +1734,8 @@
           "function": "ggml_type_size",
           "source": "case GGML_TYPE_I32:     return 4;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by a directed gguf_open_memory buffer with n_tensors = 1 whose tensor-info type field is GGML_TYPE_I32 (26); ggml_type_size is called from ggml_tensor_bytes at read_tensor_info:313, and no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus."
         },
         {
           "kind": "line",
@@ -1740,8 +1744,8 @@
           "function": "ggml_type_size",
           "source": "case GGML_TYPE_I64:     return 8;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by a directed gguf_open_memory buffer with n_tensors = 1 whose tensor-info type field is GGML_TYPE_I64 (27); ggml_type_size is called from ggml_tensor_bytes at read_tensor_info:313, and no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus."
         },
         {
           "kind": "line",
@@ -1750,8 +1754,8 @@
           "function": "ggml_type_size",
           "source": "case GGML_TYPE_F64:     return 8;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by a directed gguf_open_memory buffer with n_tensors = 1 whose tensor-info type field is GGML_TYPE_F64 (28); ggml_type_size is called from ggml_tensor_bytes at read_tensor_info:313, and no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus."
         },
         {
           "kind": "line",
@@ -1760,8 +1764,8 @@
           "function": "ggml_type_size",
           "source": "default:                return 0;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The unknown-tensor-type return. A tensor-info block with a type outside the switch (e.g. 16 = IQ2_XXS, or 999) returns 0 here, which makes ggml_tensor_bytes report n_bytes = 0 at :187 rather than rejecting the tensor -- worth exercising precisely because it is a silent zero, not an error."
         },
         {
           "kind": "branch",
@@ -1772,8 +1776,8 @@
           "detail": "2 of 4 branch outcomes on this line never taken (line executed 14 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 2,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Only the 1-element and 32-element case groups are exercised (F32 and Q4_0 from the unit fixtures). A tensor-info type of GGML_TYPE_Q4_K (12) takes the 256 group and a type outside the switch (e.g. 999) takes the default, covering both remaining outcomes."
         },
         {
           "kind": "line",
@@ -1782,8 +1786,8 @@
           "function": "ggml_type_block_size",
           "source": "case GGML_TYPE_Q2_K:",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "gcov attributes a case GROUP's execution to its FIRST label line, so this bare 'case GGML_TYPE_Q2_K:' carries the count for the whole K-quant group whose executable statement is the 'return 256;' at :176. Any K-quant tensor type (10-15) covers it."
         },
         {
           "kind": "line",
@@ -1792,8 +1796,8 @@
           "function": "ggml_type_block_size",
           "source": "return 256;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The 256-element block-size return, reached by a tensor-info type of Q2_K..Q8_K (10-15); no unit fixture uses a K-quant type and no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus."
         },
         {
           "kind": "line",
@@ -1802,8 +1806,8 @@
           "function": "ggml_type_block_size",
           "source": "default:",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The default label of the block-size switch; gcov attributes the group execution to this line while the statement is the 'return 1;' at :178. A tensor type outside the switch (e.g. 999) covers it."
         },
         {
           "kind": "line",
@@ -1812,8 +1816,8 @@
           "function": "ggml_type_block_size",
           "source": "return 1;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The default block-size return, reached by a tensor-info type outside the switch. Combined with ggml_type_size's default it is what makes an unknown type yield n_bytes = 0."
         },
         {
           "kind": "branch",
@@ -1824,8 +1828,8 @@
           "detail": "2 of 4 branch outcomes on this line never taken (line executed 14 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 2,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Two outcomes untaken, and they differ in kind. type_sz == 0 IS reachable -- a tensor with a type outside ggml_type_size's switch (e.g. 999) -- and is worth a directed case. block_sz == 0 is NOT reachable: ggml_type_block_size returns only 1, 32 or 256 (its default returns 1), so that half of this line is structurally dead and will stay red."
         },
         {
           "kind": "branch",
@@ -1836,8 +1840,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 33 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The SEC-007 recursion bound has NEVER fired in test. read_kv_pair enters at depth 0 and the ARRAY branch recurses with depth+1, so a KV of type ARRAY whose elem_type is itself ARRAY (9), nested 10 levels deep, trips it. Each level costs 12 bytes (elem_type u32 + count u64), so ~150 bytes fits the existing 4096-byte harness buffer."
         },
         {
           "kind": "branch",
@@ -1848,8 +1852,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 6 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The err-true outcome (reading a string element's length failed) is never taken. A KV of type ARRAY, elem_type STRING (8), count 1, with the buffer ending immediately after the array header reaches it."
         },
         {
           "kind": "branch",
@@ -1860,8 +1864,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 27 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The type == GGUF_TYPE_ARRAY outcome is never taken -- no nested array has ever been parsed, so :205-215 is entirely dead in test. A KV of type ARRAY with elem_type = ARRAY (9) and count 1 enters it, and is also the prerequisite for the SEC-007 depth bound at :197."
         },
         {
           "kind": "line",
@@ -1870,8 +1874,8 @@
           "function": "skip_gguf_value",
           "source": "int err = read_u32(fp, &elem_type);",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reads a nested array's element type; needs a KV of type ARRAY whose elem_type is ARRAY (9), a shape no input has ever had."
         },
         {
           "kind": "branch",
@@ -1882,8 +1886,8 @@
           "detail": "2 of 2 branch outcomes on this line never taken (line executed 0 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 2,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Both outcomes need a nested array. Truncating the buffer immediately after the outer array's count takes the error outcome; supplying the nested elem_type takes the other."
         },
         {
           "kind": "line",
@@ -1892,8 +1896,8 @@
           "function": "skip_gguf_value",
           "source": "if (err) return err;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Guard on the nested array's element-type read; reached by a KV of type ARRAY with elem_type = ARRAY (9)."
         },
         {
           "kind": "line",
@@ -1902,8 +1906,8 @@
           "function": "skip_gguf_value",
           "source": "err = read_u64(fp, &count);",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reads a nested array's element count; reached by a KV of type ARRAY with elem_type = ARRAY (9)."
         },
         {
           "kind": "branch",
@@ -1914,8 +1918,8 @@
           "detail": "2 of 2 branch outcomes on this line never taken (line executed 0 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 2,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Both outcomes need a nested array. Ending the buffer after the nested elem_type takes the error outcome; supplying the 8-byte nested count takes the other."
         },
         {
           "kind": "line",
@@ -1924,8 +1928,8 @@
           "function": "skip_gguf_value",
           "source": "if (err) return err;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Guard on the nested array's count read; reached by a KV of type ARRAY with elem_type = ARRAY (9)."
         },
         {
           "kind": "branch",
@@ -1936,8 +1940,8 @@
           "detail": "2 of 2 branch outcomes on this line never taken (line executed 0 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 2,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Both outcomes need a nested array: count = 1 enters the recursion loop and then exits it, count = 0 takes only the exit outcome. NOTE this count is a raw attacker u64 with no cap (see the report's unbounded-count finding)."
         },
         {
           "kind": "line",
@@ -1946,8 +1950,8 @@
           "function": "skip_gguf_value",
           "source": "for (uint64_t i = 0; i < count; i++) {",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The nested array's element loop, reached by a KV of type ARRAY with elem_type = ARRAY (9) and a non-zero nested count."
         },
         {
           "kind": "line",
@@ -1956,8 +1960,8 @@
           "function": "skip_gguf_value",
           "source": "err = skip_gguf_value(fp, elem_type, depth + 1);",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The recursive skip of a nested array element -- the only route to the SEC-007 depth bound at :197. Reached by elem_type = ARRAY (9)."
         },
         {
           "kind": "branch",
@@ -1968,8 +1972,8 @@
           "detail": "2 of 2 branch outcomes on this line never taken (line executed 0 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 2,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Both outcomes need a nested array. A nested element that is truncated, or whose type is unknown (rejected at :218), takes the error outcome; a well-formed nested scalar takes the other."
         },
         {
           "kind": "line",
@@ -1978,8 +1982,8 @@
           "function": "skip_gguf_value",
           "source": "if (err) return err;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Error propagation out of the nested-array loop; reached by a KV of type ARRAY with elem_type = ARRAY (9)."
         },
         {
           "kind": "line",
@@ -1988,8 +1992,8 @@
           "function": "skip_gguf_value",
           "source": "return GGUF_OK;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The nested array's success return, reached once a KV of type ARRAY with elem_type = ARRAY (9) skips all its elements."
         },
         {
           "kind": "branch",
@@ -2000,8 +2004,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 27 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The sz == 0 outcome is never taken, so the unknown-array-element-type rejection has never fired. A KV of type ARRAY whose elem_type is an unknown scalar (e.g. 42) makes gguf_value_type_size return 0 here and rejects the file with GGUF_ERR_FORMAT."
         },
         {
           "kind": "branch",
@@ -2012,8 +2016,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 36 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The err-true outcome (the key string failed to read) is never taken in 36 executions. A directed buffer with n_kv = 1 that ends at the 24-byte header, or whose key declares more bytes than remain, reaches it -- and no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus."
         },
         {
           "kind": "branch",
@@ -2024,8 +2028,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 36 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The err-true outcome (the 4-byte value-type read failed) is never taken. A directed buffer with n_kv = 1 that ends immediately after the key bytes reaches it."
         },
         {
           "kind": "branch",
@@ -2036,8 +2040,8 @@
           "detail": "10 of 14 branch outcomes on this line never taken (line executed 36 times)",
           "branch_outcomes_total": 14,
           "branch_outcomes_never_taken": 10,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Only UINT32, FLOAT32, STRING and ARRAY are exercised -- the four types the unit fixtures happen to use -- so 10 of 14 outcomes are dead. One directed gguf_open_memory buffer per KV type (n_kv = 1, short key, type field set, value bytes appended) covers them, including the unknown-type rejection."
         },
         {
           "kind": "line",
@@ -2046,8 +2050,8 @@
           "function": "read_kv_pair",
           "source": "case GGUF_TYPE_UINT8:   return read_u8(fp, &kv->value.u8);",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by a directed gguf_open_memory buffer with n_kv = 1, a short key, KV type = GGUF_TYPE_UINT8 (0) and 1 value byte(s). Truncating those value bytes additionally exercises the read wrapper's error return and its propagation at parse_gguf:359."
         },
         {
           "kind": "line",
@@ -2056,8 +2060,8 @@
           "function": "read_kv_pair",
           "source": "case GGUF_TYPE_INT8:    return read_i8(fp, &kv->value.i8);",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by a directed gguf_open_memory buffer with n_kv = 1, a short key, KV type = GGUF_TYPE_INT8 (1) and 1 value byte(s). Truncating those value bytes additionally exercises the read wrapper's error return and its propagation at parse_gguf:359."
         },
         {
           "kind": "line",
@@ -2066,8 +2070,8 @@
           "function": "read_kv_pair",
           "source": "case GGUF_TYPE_UINT16:  return read_u16(fp, &kv->value.u16);",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by a directed gguf_open_memory buffer with n_kv = 1, a short key, KV type = GGUF_TYPE_UINT16 (2) and 2 value byte(s). Truncating those value bytes additionally exercises the read wrapper's error return and its propagation at parse_gguf:359."
         },
         {
           "kind": "line",
@@ -2076,8 +2080,8 @@
           "function": "read_kv_pair",
           "source": "case GGUF_TYPE_INT16:   return read_i16(fp, &kv->value.i16);",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by a directed gguf_open_memory buffer with n_kv = 1, a short key, KV type = GGUF_TYPE_INT16 (3) and 2 value byte(s). Truncating those value bytes additionally exercises the read wrapper's error return and its propagation at parse_gguf:359."
         },
         {
           "kind": "line",
@@ -2086,8 +2090,8 @@
           "function": "read_kv_pair",
           "source": "case GGUF_TYPE_INT32:   return read_i32(fp, &kv->value.i32);",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by a directed gguf_open_memory buffer with n_kv = 1, a short key, KV type = GGUF_TYPE_INT32 (5) and 4 value byte(s). Truncating those value bytes additionally exercises the read wrapper's error return and its propagation at parse_gguf:359."
         },
         {
           "kind": "line",
@@ -2096,8 +2100,8 @@
           "function": "read_kv_pair",
           "source": "case GGUF_TYPE_BOOL:    return read_u8(fp, &kv->value.u8);  /* bool stored as u8 */",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by a directed gguf_open_memory buffer with n_kv = 1, a short key, KV type = GGUF_TYPE_BOOL (7) and 1 value byte(s). Truncating those value bytes additionally exercises the read wrapper's error return and its propagation at parse_gguf:359."
         },
         {
           "kind": "line",
@@ -2106,8 +2110,8 @@
           "function": "read_kv_pair",
           "source": "case GGUF_TYPE_UINT64:  return read_u64(fp, &kv->value.u64);",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by a directed gguf_open_memory buffer with n_kv = 1, a short key, KV type = GGUF_TYPE_UINT64 (10) and 8 value byte(s). Truncating those value bytes additionally exercises the read wrapper's error return and its propagation at parse_gguf:359."
         },
         {
           "kind": "line",
@@ -2116,8 +2120,8 @@
           "function": "read_kv_pair",
           "source": "case GGUF_TYPE_INT64:   return read_i64(fp, &kv->value.i64);",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by a directed gguf_open_memory buffer with n_kv = 1, a short key, KV type = GGUF_TYPE_INT64 (11) and 8 value byte(s). Truncating those value bytes additionally exercises the read wrapper's error return and its propagation at parse_gguf:359."
         },
         {
           "kind": "line",
@@ -2126,8 +2130,8 @@
           "function": "read_kv_pair",
           "source": "case GGUF_TYPE_FLOAT64: return read_f64(fp, &kv->value.f64);",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "Reached by a directed gguf_open_memory buffer with n_kv = 1, a short key, KV type = GGUF_TYPE_FLOAT64 (12) and 8 value byte(s). Truncating those value bytes additionally exercises the read wrapper's error return and its propagation at parse_gguf:359."
         },
         {
           "kind": "branch",
@@ -2138,8 +2142,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 12 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The err-true outcome (the array's element-type read failed) is never taken. A KV of type ARRAY (9) with the buffer ending immediately after the type field reaches it."
         },
         {
           "kind": "branch",
@@ -2150,8 +2154,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 12 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The err-true outcome (the array's count read failed) is never taken. A KV of type ARRAY with the buffer ending after the 4-byte elem_type reaches it."
         },
         {
           "kind": "branch",
@@ -2162,8 +2166,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 12 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "ftell cannot fail on either entry point's stream in this build: gguf_open_memory hands parse_gguf an fmemopen stream and gguf_open a fopen'd regular file, both seekable, with positions far below LONG_MAX. No buffer can make this defensive libc-return check fire; it would need an unseekable stream, which nothing constructs."
         },
         {
           "kind": "branch",
@@ -2174,8 +2178,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 33 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The err-true outcome (an array element failed to skip) is never taken in 33 executions. A KV of type ARRAY whose element data is truncated, or whose elem_type is unknown (and so rejected at :218), reaches it."
         },
         {
           "kind": "line",
@@ -2184,8 +2188,8 @@
           "function": "read_kv_pair",
           "source": "default:",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The unknown-KV-type label. A KV whose 4-byte type field is outside 0-12 (e.g. 99) lands here; gcov attributes the case-group execution to this bare label while the statement is the return at :270."
         },
         {
           "kind": "line",
@@ -2194,8 +2198,8 @@
           "function": "read_kv_pair",
           "source": "return GGUF_ERR_FORMAT;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The GGUF_ERR_FORMAT return for an unknown KV type -- a real validation path, reached by a directed buffer with n_kv = 1 and a type field of 99. Never exercised because no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus."
         },
         {
           "kind": "branch",
@@ -2206,8 +2210,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 15 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The err-true outcome (the tensor name failed to read) is never taken in 15 executions. A directed buffer with n_tensors = 1 that ends at the tensor-info block, or whose name declares more bytes than remain, reaches it."
         },
         {
           "kind": "branch",
@@ -2218,8 +2222,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 15 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The err-true outcome (the 4-byte n_dims read failed) is never taken. A directed buffer ending immediately after the tensor name reaches it."
         },
         {
           "kind": "branch",
@@ -2230,8 +2234,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 15 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The n_dims > GGUF_MAX_DIMS outcome has NEVER been taken, so the bounds guard on the 4-element dims[] array is untested. A tensor-info block declaring n_dims = 5 (or 0xFFFFFFFF) trips it -- and without this guard the loop at :293 would write past dims[4], so it is the highest-value directed case in read_tensor_info."
         },
         {
           "kind": "line",
@@ -2240,8 +2244,8 @@
           "function": "read_tensor_info",
           "source": "return GGUF_ERR_FORMAT;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The GGUF_ERR_FORMAT return of the GGUF_MAX_DIMS guard; reached by a tensor-info block declaring n_dims = 5."
         },
         {
           "kind": "branch",
@@ -2252,8 +2256,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 23 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The err-true outcome (a dimension's 8-byte read failed) is never taken. A tensor-info block declaring n_dims = 4 with the buffer ending after two dimensions reaches it."
         },
         {
           "kind": "branch",
@@ -2264,8 +2268,8 @@
           "detail": "1 of 4 branch outcomes on this line never taken (line executed 23 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The untaken outcome is the FIRST clause being false, i.e. dims[i] == 0 -- both clauses are on this one line so no gcov attribution shift applies. A tensor with dims = [0, 4] reaches it and yields n_elements = 0, which then drives n_bytes = 0; the overflow clause itself is already covered by the unit suite's SEC-003 test."
         },
         {
           "kind": "branch",
@@ -2276,8 +2280,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 14 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The err-true outcome (the 4-byte tensor type read failed) is never taken. A tensor-info block with the buffer ending after its dimensions reaches it."
         },
         {
           "kind": "branch",
@@ -2288,8 +2292,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 14 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The err-true outcome (the 8-byte data offset read failed) is never taken. A tensor-info block with the buffer ending after the type field reaches it."
         },
         {
           "kind": "branch",
@@ -2300,8 +2304,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 40015 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The err-true outcome (the version read failed) is never taken in 40,015 executions because every fuzz sub-test that sets the magic also writes 4+ bytes after it. A directed 4-byte buffer containing exactly 'GGUF' reaches it."
         },
         {
           "kind": "branch",
@@ -2312,8 +2316,8 @@
           "detail": "1 of 4 branch outcomes on this line never taken (line executed 40015 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The untaken outcome is 'version < 2' being TRUE (both clauses are on this one line, so no attribution shift applies): every corpus buffer that reaches here carries version >= 3 because the sub-tests hardcode buf[4] = 3. A directed buffer with version = 0 or 1 covers the lower half of the accepted-version window."
         },
         {
           "kind": "branch",
@@ -2324,8 +2328,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 30013 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The err-true outcome (the n_kv read failed) is never taken -- sub-test 3's buffers are exactly 24 bytes, just enough. A directed 16-byte buffer (magic + version + n_tensors only) reaches it."
         },
         {
           "kind": "branch",
@@ -2336,8 +2340,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 10 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The calloc-failed outcome cannot be produced by any input: the SEC-008 cap at :346 bounds n_kv to 65536, so the request is at most ~286 MB, which succeeds on the host, and the harness has no allocator fault injection. Reaching it needs a malloc-failure hook, not a corpus case."
         },
         {
           "kind": "line",
@@ -2346,8 +2350,8 @@
           "function": "parse_gguf",
           "source": "return GGUF_ERR_ALLOC;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The GGUF_ERR_ALLOC return for the KV array; unreachable for the same structural reason as the guard at :351 -- the SEC-008 cap bounds the allocation to a size that always succeeds, so only allocator fault injection reaches it."
         },
         {
           "kind": "branch",
@@ -2358,8 +2362,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 36 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The err-true outcome is never taken in 36 executions: no malformed KV has EVER reached parse_gguf's error propagation, because no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus. Any directed KV case above (truncated key, truncated value, unknown type, bad array) covers it."
         },
         {
           "kind": "branch",
@@ -2370,8 +2374,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 8 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The calloc-failed outcome cannot be produced by any input: the SEC-008 cap at :345 bounds n_tensors to 65536, so the request is at most ~20 MB, which always succeeds, and the harness has no allocator fault injection."
         },
         {
           "kind": "line",
@@ -2380,8 +2384,8 @@
           "function": "parse_gguf",
           "source": "return GGUF_ERR_ALLOC;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The GGUF_ERR_ALLOC return for the tensor array; unreachable for the same structural reason as the guard at :372 -- the allocation is capped small enough to always succeed."
         },
         {
           "kind": "branch",
@@ -2392,8 +2396,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 10 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "ftell cannot fail on either entry point's stream: gguf_open_memory supplies an fmemopen stream and gguf_open a fopen'd regular file, both seekable with positions far below LONG_MAX. This defensive libc-return check has no input-driven failure mode in this build."
         },
         {
           "kind": "line",
@@ -2402,8 +2406,8 @@
           "function": "parse_gguf",
           "source": "return GGUF_ERR_READ;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The GGUF_ERR_READ return of the ftell guard at :384; unreachable for the same structural reason -- no entry point hands parse_gguf an unseekable stream."
         },
         {
           "kind": "branch",
@@ -2414,8 +2418,8 @@
           "detail": "1 of 4 branch outcomes on this line never taken (line executed 100000 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "defensive-guard",
+          "reason": "The untaken outcome is '!data' being TRUE -- a NULL buffer pointer, i.e. a caller-contract guard rather than an input property (the len == 0 half of this line IS covered, 440 times). A harness passing NULL would reach it; no buffer content can."
         },
         {
           "kind": "branch",
@@ -2426,8 +2430,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 99560 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The fmemopen-failed outcome has no input-driven cause: len == 0 is already filtered by the guard at :415 and data is non-NULL there, so with a valid pointer and len >= 1 fmemopen only fails on allocator exhaustion. Needs fault injection, not a corpus case."
         },
         {
           "kind": "line",
@@ -2436,8 +2440,8 @@
           "function": "gguf_open_memory",
           "source": "return GGUF_ERR_OPEN;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The GGUF_ERR_OPEN return for a failed fmemopen; unreachable for the same structural reason as :419 -- the only remaining failure mode is allocator exhaustion."
         },
         {
           "kind": "branch",
@@ -2448,8 +2452,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 99560 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "The untaken outcome is err == 0, i.e. SUCCESS: across 99,560 fuzz opens NOT ONE buffer has ever parsed successfully, because random n_tensors/n_kv are rejected by SEC-008 and the sub-test that sets them small dies on the version check. One directed minimal-but-VALID buffer (magic, version 3, n_tensors 0, n_kv 0) closes this and is the gateway to every other directed case in this module."
         },
         {
           "kind": "line",
@@ -2458,8 +2462,8 @@
           "function": "gguf_open_memory",
           "source": "return GGUF_OK;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "reachable-worth-fuzzing",
+          "reason": "gguf_open_memory's success return, never executed: no fuzz buffer has ever parsed cleanly. A directed 24-byte valid GGUF header (magic, version 3, n_tensors 0, n_kv 0) reaches it."
         },
         {
           "kind": "branch",
@@ -2470,8 +2474,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 99576 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "defensive-guard",
+          "reason": "The fp == NULL outcome is a caller-contract/idempotency guard: gguf_close is only ever called after a successful fmemopen (internally on the error path, or by the harness after a successful open), so fp is always set. A second gguf_close on the same ctx, or a close of a zeroed ctx, would reach it -- caller usage, not input."
         },
         {
           "kind": "branch",
@@ -2482,8 +2486,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 4 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The out-of-range outcome is not fuzz-reachable at all: the fuzzer calls only gguf_open_memory and gguf_close, never gguf_get_tensor_info, and the unit suite only ever asks for indices 0 and 1. Unit-test gap (call it with index == n_tensors), not a fuzz gap."
         },
         {
           "kind": "branch",
@@ -2494,8 +2498,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 2 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "defensive-guard",
+          "reason": "The !ctx->fp outcome is a caller-contract guard -- calling gguf_read_tensor_data on a closed or never-opened context. No buffer content can produce it, and the fuzzer never calls this function."
         },
         {
           "kind": "branch",
@@ -2506,8 +2510,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 2 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "Not fuzz-reachable: the fuzzer never calls gguf_read_tensor_data. Unit-test gap, not a fuzz gap -- and a pointed one, since abs_offset is cast to long unchecked, so a tensor declaring offset = 0x8000000000000000 seeks to a negative absolute position and fails here (on a regular file a merely-past-EOF seek SUCCEEDS, so a huge offset alone is not enough)."
         },
         {
           "kind": "line",
@@ -2516,8 +2520,8 @@
           "function": "gguf_read_tensor_data",
           "source": "return GGUF_ERR_READ;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The GGUF_ERR_READ return of the seek guard at :471; not fuzz-reachable because the fuzzer never calls gguf_read_tensor_data. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "branch",
@@ -2528,8 +2532,8 @@
           "detail": "1 of 4 branch outcomes on this line never taken (line executed 2 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The untaken outcome is '!kv' being TRUE -- a missing key. Not fuzz-reachable (the fuzzer never calls gguf_get_kv_string); the unit suite only looks up keys that exist, once with the right type and once with the wrong one. Unit-test gap: ask for a key that is not there."
         },
         {
           "kind": "line",
@@ -2538,8 +2542,8 @@
           "function": "gguf_get_kv_i32",
           "source": "bool gguf_get_kv_i32(const gguf_ctx_t *ctx, const char *key, int32_t *out)",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "gguf_get_kv_i32 is never called by either run -- the fuzzer calls only gguf_open_memory/gguf_close and the unit suite never exercises this getter. This is the function's opening line. Unit-test gap, not a fuzz gap; note also that the function has ZERO callers anywhere in phase3 outside its own declaration, so a delete-or-justify decision may be the better disposition."
         },
         {
           "kind": "line",
@@ -2548,8 +2552,8 @@
           "function": "gguf_get_kv_i32",
           "source": "const gguf_kv_t *kv = find_kv(ctx, key);",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "gguf_get_kv_i32 is never called by either run -- the fuzzer calls only gguf_open_memory/gguf_close and the unit suite never exercises this getter. This is the key lookup. Unit-test gap, not a fuzz gap; note also that the function has ZERO callers anywhere in phase3 outside its own declaration, so a delete-or-justify decision may be the better disposition."
         },
         {
           "kind": "branch",
@@ -2560,8 +2564,8 @@
           "detail": "4 of 4 branch outcomes on this line never taken (line executed 0 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 4,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "All four outcomes are unexecuted because gguf_get_kv_i32 is never called by either run. Unit-test gap, not a fuzz gap -- the fuzzer calls only gguf_open_memory/gguf_close. The function also has zero callers anywhere in phase3."
         },
         {
           "kind": "line",
@@ -2570,8 +2574,8 @@
           "function": "gguf_get_kv_i32",
           "source": "if (!kv || kv->type != GGUF_TYPE_INT32) return false;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The type guard of gguf_get_kv_i32, which no run calls. Unit-test gap, not a fuzz gap; the function has zero callers anywhere in phase3 outside its own declaration."
         },
         {
           "kind": "line",
@@ -2580,8 +2584,8 @@
           "function": "gguf_get_kv_i32",
           "source": "*out = kv->value.i32;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "gguf_get_kv_i32 is never called by either run -- the fuzzer calls only gguf_open_memory/gguf_close and the unit suite never exercises this getter. This is the value store. Unit-test gap, not a fuzz gap; note also that the function has ZERO callers anywhere in phase3 outside its own declaration, so a delete-or-justify decision may be the better disposition."
         },
         {
           "kind": "line",
@@ -2590,8 +2594,8 @@
           "function": "gguf_get_kv_i32",
           "source": "return true;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "gguf_get_kv_i32 is never called by either run -- the fuzzer calls only gguf_open_memory/gguf_close and the unit suite never exercises this getter. This is the success return. Unit-test gap, not a fuzz gap; note also that the function has ZERO callers anywhere in phase3 outside its own declaration, so a delete-or-justify decision may be the better disposition."
         },
         {
           "kind": "branch",
@@ -2602,8 +2606,8 @@
           "detail": "2 of 4 branch outcomes on this line never taken (line executed 1 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 2,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "Two untaken outcomes -- key-missing and wrong-type -- because the unit suite calls gguf_get_kv_f32 exactly once, on a key that exists with the right type, and the fuzzer never calls it. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -2612,8 +2616,8 @@
           "function": "gguf_get_kv_u64",
           "source": "bool gguf_get_kv_u64(const gguf_ctx_t *ctx, const char *key, uint64_t *out)",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "gguf_get_kv_u64 is never called by either run -- the fuzzer calls only gguf_open_memory/gguf_close and the unit suite never exercises this getter. This is the function's opening line. Unit-test gap, not a fuzz gap; the function also has ZERO callers anywhere in phase3 outside its own declaration."
         },
         {
           "kind": "line",
@@ -2622,8 +2626,8 @@
           "function": "gguf_get_kv_u64",
           "source": "const gguf_kv_t *kv = find_kv(ctx, key);",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "gguf_get_kv_u64 is never called by either run -- the fuzzer calls only gguf_open_memory/gguf_close and the unit suite never exercises this getter. This is the key lookup. Unit-test gap, not a fuzz gap; the function also has ZERO callers anywhere in phase3 outside its own declaration."
         },
         {
           "kind": "branch",
@@ -2634,8 +2638,8 @@
           "detail": "4 of 4 branch outcomes on this line never taken (line executed 0 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 4,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "All four outcomes are unexecuted because gguf_get_kv_u64 is never called by either run. Unit-test gap, not a fuzz gap; the function has zero callers anywhere in phase3."
         },
         {
           "kind": "line",
@@ -2644,8 +2648,8 @@
           "function": "gguf_get_kv_u64",
           "source": "if (!kv || kv->type != GGUF_TYPE_UINT64) return false;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The type guard of gguf_get_kv_u64, which no run calls. Unit-test gap, not a fuzz gap; the function has zero callers anywhere in phase3 outside its own declaration."
         },
         {
           "kind": "line",
@@ -2654,8 +2658,8 @@
           "function": "gguf_get_kv_u64",
           "source": "*out = kv->value.u64;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "gguf_get_kv_u64 is never called by either run -- the fuzzer calls only gguf_open_memory/gguf_close and the unit suite never exercises this getter. This is the value store. Unit-test gap, not a fuzz gap; the function also has ZERO callers anywhere in phase3 outside its own declaration."
         },
         {
           "kind": "line",
@@ -2664,8 +2668,8 @@
           "function": "gguf_get_kv_u64",
           "source": "return true;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "gguf_get_kv_u64 is never called by either run -- the fuzzer calls only gguf_open_memory/gguf_close and the unit suite never exercises this getter. This is the success return. Unit-test gap, not a fuzz gap; the function also has ZERO callers anywhere in phase3 outside its own declaration."
         },
         {
           "kind": "branch",
@@ -2676,8 +2680,8 @@
           "detail": "1 of 6 branch outcomes on this line never taken (line executed 7 times)",
           "branch_outcomes_total": 6,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "defensive-guard",
+          "reason": "The untaken outcome is the THIRD clause, '!ctx->fp' -- all three clauses sit on this one line so no attribution shift applies, and the key-missing and wrong-type halves are both covered. A NULL fp is a caller-contract condition (calling the getter on a closed context), not an input property."
         },
         {
           "kind": "branch",
@@ -2688,8 +2692,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 3 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "defensive-guard",
+          "reason": "The untaken outcome is out_count == NULL. That is a documented OPTIONAL out-parameter (see the header), so it is a caller-supplied-pointer condition, not input-dependent; every unit call passes &count and the fuzzer never calls this function."
         },
         {
           "kind": "branch",
@@ -2700,8 +2704,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 3 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The n == 0 outcome is not fuzz-reachable -- the fuzzer never calls gguf_get_kv_arr_u32. Unit-test gap, not a fuzz gap: either pass max_out = 0, or parse a file whose ARRAY KV declares count = 0."
         },
         {
           "kind": "branch",
@@ -2712,8 +2716,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 3 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "Structurally unreachable: data_off was captured by a SUCCESSFUL ftell on this very stream during read_kv_pair (:259-261), so seeking back to it cannot fail. Compounding that, the fuzzer never calls this function at all."
         },
         {
           "kind": "line",
@@ -2722,8 +2726,8 @@
           "function": "gguf_get_kv_arr_u32",
           "source": "return false;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The failure return of the seek at :558, which cannot fail because data_off came from a successful ftell on the same stream; the fuzzer also never calls this function."
         },
         {
           "kind": "branch",
@@ -2734,8 +2738,8 @@
           "detail": "5 of 7 branch outcomes on this line never taken (line executed 9 times)",
           "branch_outcomes_total": 7,
           "branch_outcomes_never_taken": 5,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "Five outcomes untaken (INT8, UINT16, INT16, INT32 and the fall-off), but none of them is fuzz-reachable: the fuzzer never calls gguf_get_kv_arr_u32. Unit-test gap, not a fuzz gap -- extend the fixture in build_array_gguf with one array per element type."
         },
         {
           "kind": "line",
@@ -2744,8 +2748,8 @@
           "function": "gguf_get_kv_arr_u32",
           "source": "case GGUF_TYPE_INT8: {",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "Part of gguf_get_kv_arr_u32's GGUF_TYPE_INT8 (1) element case, which no run reaches: the fuzzer never calls this function and build_array_gguf only builds u32, bool, f32 and string arrays. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -2754,8 +2758,8 @@
           "function": "gguf_get_kv_arr_u32",
           "source": "int8_t v = 0;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "Part of gguf_get_kv_arr_u32's GGUF_TYPE_INT8 (1) element case, which no run reaches: the fuzzer never calls this function and build_array_gguf only builds u32, bool, f32 and string arrays. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -2764,8 +2768,8 @@
           "function": "gguf_get_kv_arr_u32",
           "source": "err = read_i8(ctx->fp, &v);",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "Part of gguf_get_kv_arr_u32's GGUF_TYPE_INT8 (1) element case, which no run reaches: the fuzzer never calls this function and build_array_gguf only builds u32, bool, f32 and string arrays. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -2774,8 +2778,8 @@
           "function": "gguf_get_kv_arr_u32",
           "source": "out[i] = (uint32_t)(int32_t)v;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "Part of gguf_get_kv_arr_u32's GGUF_TYPE_INT8 (1) element case, which no run reaches: the fuzzer never calls this function and build_array_gguf only builds u32, bool, f32 and string arrays. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -2784,8 +2788,8 @@
           "function": "gguf_get_kv_arr_u32",
           "source": "break;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "Part of gguf_get_kv_arr_u32's GGUF_TYPE_INT8 (1) element case, which no run reaches: the fuzzer never calls this function and build_array_gguf only builds u32, bool, f32 and string arrays. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -2794,8 +2798,8 @@
           "function": "gguf_get_kv_arr_u32",
           "source": "case GGUF_TYPE_UINT16: {",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "Part of gguf_get_kv_arr_u32's GGUF_TYPE_UINT16 (2) element case, which no run reaches: the fuzzer never calls this function and build_array_gguf only builds u32, bool, f32 and string arrays. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -2804,8 +2808,8 @@
           "function": "gguf_get_kv_arr_u32",
           "source": "uint16_t v = 0;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "Part of gguf_get_kv_arr_u32's GGUF_TYPE_UINT16 (2) element case, which no run reaches: the fuzzer never calls this function and build_array_gguf only builds u32, bool, f32 and string arrays. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -2814,8 +2818,8 @@
           "function": "gguf_get_kv_arr_u32",
           "source": "err = read_u16(ctx->fp, &v);",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "Part of gguf_get_kv_arr_u32's GGUF_TYPE_UINT16 (2) element case, which no run reaches: the fuzzer never calls this function and build_array_gguf only builds u32, bool, f32 and string arrays. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -2824,8 +2828,8 @@
           "function": "gguf_get_kv_arr_u32",
           "source": "out[i] = v;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "Part of gguf_get_kv_arr_u32's GGUF_TYPE_UINT16 (2) element case, which no run reaches: the fuzzer never calls this function and build_array_gguf only builds u32, bool, f32 and string arrays. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -2834,8 +2838,8 @@
           "function": "gguf_get_kv_arr_u32",
           "source": "break;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "Part of gguf_get_kv_arr_u32's GGUF_TYPE_UINT16 (2) element case, which no run reaches: the fuzzer never calls this function and build_array_gguf only builds u32, bool, f32 and string arrays. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -2844,8 +2848,8 @@
           "function": "gguf_get_kv_arr_u32",
           "source": "case GGUF_TYPE_INT16: {",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "Part of gguf_get_kv_arr_u32's GGUF_TYPE_INT16 (3) element case, which no run reaches: the fuzzer never calls this function and build_array_gguf only builds u32, bool, f32 and string arrays. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -2854,8 +2858,8 @@
           "function": "gguf_get_kv_arr_u32",
           "source": "int16_t v = 0;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "Part of gguf_get_kv_arr_u32's GGUF_TYPE_INT16 (3) element case, which no run reaches: the fuzzer never calls this function and build_array_gguf only builds u32, bool, f32 and string arrays. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -2864,8 +2868,8 @@
           "function": "gguf_get_kv_arr_u32",
           "source": "err = read_i16(ctx->fp, &v);",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "Part of gguf_get_kv_arr_u32's GGUF_TYPE_INT16 (3) element case, which no run reaches: the fuzzer never calls this function and build_array_gguf only builds u32, bool, f32 and string arrays. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -2874,8 +2878,8 @@
           "function": "gguf_get_kv_arr_u32",
           "source": "out[i] = (uint32_t)(int32_t)v;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "Part of gguf_get_kv_arr_u32's GGUF_TYPE_INT16 (3) element case, which no run reaches: the fuzzer never calls this function and build_array_gguf only builds u32, bool, f32 and string arrays. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -2884,8 +2888,8 @@
           "function": "gguf_get_kv_arr_u32",
           "source": "break;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "Part of gguf_get_kv_arr_u32's GGUF_TYPE_INT16 (3) element case, which no run reaches: the fuzzer never calls this function and build_array_gguf only builds u32, bool, f32 and string arrays. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -2894,8 +2898,8 @@
           "function": "gguf_get_kv_arr_u32",
           "source": "case GGUF_TYPE_INT32: {",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "Part of gguf_get_kv_arr_u32's GGUF_TYPE_INT32 (5) element case, which no run reaches: the fuzzer never calls this function and build_array_gguf only builds u32, bool, f32 and string arrays. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -2904,8 +2908,8 @@
           "function": "gguf_get_kv_arr_u32",
           "source": "int32_t v = 0;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "Part of gguf_get_kv_arr_u32's GGUF_TYPE_INT32 (5) element case, which no run reaches: the fuzzer never calls this function and build_array_gguf only builds u32, bool, f32 and string arrays. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -2914,8 +2918,8 @@
           "function": "gguf_get_kv_arr_u32",
           "source": "err = read_i32(ctx->fp, &v);",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "Part of gguf_get_kv_arr_u32's GGUF_TYPE_INT32 (5) element case, which no run reaches: the fuzzer never calls this function and build_array_gguf only builds u32, bool, f32 and string arrays. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -2924,8 +2928,8 @@
           "function": "gguf_get_kv_arr_u32",
           "source": "out[i] = (uint32_t)v;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "Part of gguf_get_kv_arr_u32's GGUF_TYPE_INT32 (5) element case, which no run reaches: the fuzzer never calls this function and build_array_gguf only builds u32, bool, f32 and string arrays. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -2934,8 +2938,8 @@
           "function": "gguf_get_kv_arr_u32",
           "source": "break;",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "Part of gguf_get_kv_arr_u32's GGUF_TYPE_INT32 (5) element case, which no run reaches: the fuzzer never calls this function and build_array_gguf only builds u32, bool, f32 and string arrays. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "branch",
@@ -2946,8 +2950,8 @@
           "detail": "1 of 2 branch outcomes on this line never taken (line executed 9 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The err-true outcome is not fuzz-reachable (the fuzzer never calls this function). Unit-test gap, not a fuzz gap, and a real one: on the FILE path a truncated array still parses (skip_bytes' fseek past EOF succeeds), so a fixture whose ARRAY declares more elements than the file holds opens cleanly and then fails here."
         },
         {
           "kind": "branch",
@@ -2958,8 +2962,8 @@
           "detail": "8 of 9 branch outcomes on this line never taken (line executed 1 times)",
           "branch_outcomes_total": 9,
           "branch_outcomes_never_taken": 8,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "gguf_strerror is called exactly once by the unit suite (on GGUF_ERR_MAGIC) and never by the fuzzer, so 8 of 9 outcomes are unexecuted. Unit-test gap, not a fuzz gap -- a table test over every gguf_error_t value plus an out-of-range code covers it."
         },
         {
           "kind": "line",
@@ -2968,8 +2972,8 @@
           "function": "gguf_strerror",
           "source": "case GGUF_OK:           return \"OK\";",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The GGUF_OK (0) arm of gguf_strerror, which the fuzzer never calls and the unit suite reaches only for GGUF_ERR_MAGIC. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -2978,8 +2982,8 @@
           "function": "gguf_strerror",
           "source": "case GGUF_ERR_OPEN:     return \"cannot open file\";",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The GGUF_ERR_OPEN (-1) arm of gguf_strerror, which the fuzzer never calls and the unit suite reaches only for GGUF_ERR_MAGIC. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -2988,8 +2992,8 @@
           "function": "gguf_strerror",
           "source": "case GGUF_ERR_READ:     return \"read error / truncated file\";",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The GGUF_ERR_READ (-2) arm of gguf_strerror, which the fuzzer never calls and the unit suite reaches only for GGUF_ERR_MAGIC. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -2998,8 +3002,8 @@
           "function": "gguf_strerror",
           "source": "case GGUF_ERR_VERSION:  return \"unsupported GGUF version\";",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The GGUF_ERR_VERSION (-4) arm of gguf_strerror, which the fuzzer never calls and the unit suite reaches only for GGUF_ERR_MAGIC. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -3008,8 +3012,8 @@
           "function": "gguf_strerror",
           "source": "case GGUF_ERR_ALLOC:    return \"memory allocation failed\";",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The GGUF_ERR_ALLOC (-5) arm of gguf_strerror, which the fuzzer never calls and the unit suite reaches only for GGUF_ERR_MAGIC. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -3018,8 +3022,8 @@
           "function": "gguf_strerror",
           "source": "case GGUF_ERR_OVERFLOW: return \"value too large for buffer\";",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The GGUF_ERR_OVERFLOW (-6) arm of gguf_strerror, which the fuzzer never calls and the unit suite reaches only for GGUF_ERR_MAGIC. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -3028,8 +3032,8 @@
           "function": "gguf_strerror",
           "source": "case GGUF_ERR_FORMAT:   return \"malformed data\";",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The GGUF_ERR_FORMAT (-7) arm of gguf_strerror, which the fuzzer never calls and the unit suite reaches only for GGUF_ERR_MAGIC. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -3038,8 +3042,8 @@
           "function": "gguf_strerror",
           "source": "default:                return \"unknown error\";",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "gguf_strerror's unknown-code arm; the fuzzer never calls the function and the unit suite only passes GGUF_ERR_MAGIC. Unit-test gap, not a fuzz gap -- pass any value outside the gguf_error_t range."
         },
         {
           "kind": "branch",
@@ -3050,8 +3054,8 @@
           "detail": "15 of 20 branch outcomes on this line never taken (line executed 5 times)",
           "branch_outcomes_total": 20,
           "branch_outcomes_never_taken": 15,
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "gguf_type_name is called five times by the unit suite (F32, Q4_0, Q4_K, Q8_0 and an unknown code) and never by the fuzzer, leaving 15 outcomes unexecuted. Unit-test gap, not a fuzz gap -- a table test over every ggml_type_t value covers it."
         },
         {
           "kind": "line",
@@ -3060,8 +3064,8 @@
           "function": "gguf_type_name",
           "source": "case GGML_TYPE_F16:     return \"F16\";",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The GGML_TYPE_F16 (1) arm of gguf_type_name, which the fuzzer never calls and the unit suite never asks for. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -3070,8 +3074,8 @@
           "function": "gguf_type_name",
           "source": "case GGML_TYPE_Q4_1:    return \"Q4_1\";",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The GGML_TYPE_Q4_1 (3) arm of gguf_type_name, which the fuzzer never calls and the unit suite never asks for. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -3080,8 +3084,8 @@
           "function": "gguf_type_name",
           "source": "case GGML_TYPE_Q5_0:    return \"Q5_0\";",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The GGML_TYPE_Q5_0 (6) arm of gguf_type_name, which the fuzzer never calls and the unit suite never asks for. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -3090,8 +3094,8 @@
           "function": "gguf_type_name",
           "source": "case GGML_TYPE_Q5_1:    return \"Q5_1\";",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The GGML_TYPE_Q5_1 (7) arm of gguf_type_name, which the fuzzer never calls and the unit suite never asks for. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -3100,8 +3104,8 @@
           "function": "gguf_type_name",
           "source": "case GGML_TYPE_Q8_1:    return \"Q8_1\";",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The GGML_TYPE_Q8_1 (9) arm of gguf_type_name, which the fuzzer never calls and the unit suite never asks for. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -3110,8 +3114,8 @@
           "function": "gguf_type_name",
           "source": "case GGML_TYPE_Q2_K:    return \"Q2_K\";",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The GGML_TYPE_Q2_K (10) arm of gguf_type_name, which the fuzzer never calls and the unit suite never asks for. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -3120,8 +3124,8 @@
           "function": "gguf_type_name",
           "source": "case GGML_TYPE_Q3_K:    return \"Q3_K\";",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The GGML_TYPE_Q3_K (11) arm of gguf_type_name, which the fuzzer never calls and the unit suite never asks for. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -3130,8 +3134,8 @@
           "function": "gguf_type_name",
           "source": "case GGML_TYPE_Q5_K:    return \"Q5_K\";",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The GGML_TYPE_Q5_K (13) arm of gguf_type_name, which the fuzzer never calls and the unit suite never asks for. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -3140,8 +3144,8 @@
           "function": "gguf_type_name",
           "source": "case GGML_TYPE_Q6_K:    return \"Q6_K\";",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The GGML_TYPE_Q6_K (14) arm of gguf_type_name, which the fuzzer never calls and the unit suite never asks for. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -3150,8 +3154,8 @@
           "function": "gguf_type_name",
           "source": "case GGML_TYPE_Q8_K:    return \"Q8_K\";",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The GGML_TYPE_Q8_K (15) arm of gguf_type_name, which the fuzzer never calls and the unit suite never asks for. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -3160,8 +3164,8 @@
           "function": "gguf_type_name",
           "source": "case GGML_TYPE_I8:      return \"I8\";",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The GGML_TYPE_I8 (24) arm of gguf_type_name, which the fuzzer never calls and the unit suite never asks for. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -3170,8 +3174,8 @@
           "function": "gguf_type_name",
           "source": "case GGML_TYPE_I16:     return \"I16\";",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The GGML_TYPE_I16 (25) arm of gguf_type_name, which the fuzzer never calls and the unit suite never asks for. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -3180,8 +3184,8 @@
           "function": "gguf_type_name",
           "source": "case GGML_TYPE_I32:     return \"I32\";",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The GGML_TYPE_I32 (26) arm of gguf_type_name, which the fuzzer never calls and the unit suite never asks for. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -3190,8 +3194,8 @@
           "function": "gguf_type_name",
           "source": "case GGML_TYPE_I64:     return \"I64\";",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The GGML_TYPE_I64 (27) arm of gguf_type_name, which the fuzzer never calls and the unit suite never asks for. Unit-test gap, not a fuzz gap."
         },
         {
           "kind": "line",
@@ -3200,8 +3204,8 @@
           "function": "gguf_type_name",
           "source": "case GGML_TYPE_F64:     return \"F64\";",
           "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "unclassified",
-          "reason": "no judgement recorded for this gap yet"
+          "judgement": "unreachable-by-construction",
+          "reason": "The GGML_TYPE_F64 (28) arm of gguf_type_name, which the fuzzer never calls and the unit suite never asks for. Unit-test gap, not a fuzz gap."
         }
       ]
     }
