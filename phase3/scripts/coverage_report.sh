@@ -118,6 +118,50 @@ gcc --coverage -O0 -g -std=c11 -I phase3/src/net -I phase3/src/crypto \
 tail -1 "${BUILD_DIR}/t_cv.log"; tail -1 "${BUILD_DIR}/fuzz_ci.log"
 
 # ---------------------------------------------------------------------------
+# THE fuzz_harness.c TRIO — net_stack, shmem_ipc, gguf_parser.
+#
+# STRUCTURALLY DIFFERENT from the three modules above and the difference is the
+# whole trick: those are one-module-per-binary, whereas fuzz_harness.c links ALL
+# THREE modules into ONE binary. The merge property is preserved anyway -- each
+# module is compiled ONCE with coverage, and that SAME object is linked into
+# both its own unit binary AND the shared fuzz binary, so all four runs
+# accumulate into the same three .gcda files (gcov counters are additive). The
+# report still answers "what does NEITHER the unit suite NOR the fuzzer reach".
+#
+# Flags below are verbatim from the CI steps: the harness step carries
+# -DJARVIS_TEST_MOCK -D_POSIX_C_SOURCE=200809L and all three include dirs, and
+# each unit step carries its own (net_stack's needs -DJARVIS_TEST_MOCK; the
+# other two do not). Each module is compiled with the HARNESS's flag set so a
+# single coverage object is valid in both links.
+# ---------------------------------------------------------------------------
+TRIO_FLAGS=(-DJARVIS_TEST_MOCK -D_POSIX_C_SOURCE=200809L
+            -I phase3/src/drivers -I phase3/src/ipc -I phase3/src/ai)
+
+echo
+echo "--- net_stack.c / shmem_ipc.c / gguf_parser.c (the fuzz_harness trio)"
+build_module net_stack   phase3/src/drivers/net_stack.c "${TRIO_FLAGS[@]}"
+build_module shmem_ipc   phase3/src/ipc/shmem_ipc.c     "${TRIO_FLAGS[@]}"
+build_module gguf_parser phase3/src/ai/gguf_parser.c    "${TRIO_FLAGS[@]}"
+
+# unit suites -- one per module, each linking THAT module's coverage object
+gcc --coverage -O0 -g -std=c11 -DJARVIS_TEST_MOCK -I phase3/src/drivers \
+    phase3/src/drivers/test_net_stack.c "${BUILD_DIR}/net_stack.o" -o "${BUILD_DIR}/t_ns"
+gcc --coverage -O0 -g -std=c11 -I phase3/src/ipc \
+    phase3/src/ipc/test_shmem_ipc.c "${BUILD_DIR}/shmem_ipc.o" -o "${BUILD_DIR}/t_si"
+gcc --coverage -O0 -g -std=c11 -I phase3/src/ai \
+    phase3/src/ai/test_gguf_parser.c "${BUILD_DIR}/gguf_parser.o" -o "${BUILD_DIR}/t_gp"
+# the SHARED fuzz binary -- all three coverage objects, harness uninstrumented
+gcc --coverage -O0 -g -std=c11 "${TRIO_FLAGS[@]}" \
+    phase3/src/drivers/fuzz_harness.c \
+    "${BUILD_DIR}/net_stack.o" "${BUILD_DIR}/shmem_ipc.o" "${BUILD_DIR}/gguf_parser.o" \
+    -lm -o "${BUILD_DIR}/fuzz_harness"
+for b in t_ns t_si t_gp fuzz_harness; do
+    "${BUILD_DIR}/$b" > "${BUILD_DIR}/${b}.log" 2>&1 \
+        || { echo "FAIL: $b"; tail -20 "${BUILD_DIR}/${b}.log"; exit 1; }
+    tail -1 "${BUILD_DIR}/${b}.log"
+done
+
+# ---------------------------------------------------------------------------
 # gcov emits <name>.gcov.json.gz next to the object; the .gcda under it already
 # holds the SUM of the unit run and the fuzz run.
 #
@@ -134,11 +178,11 @@ else
     GCOV_JSON=-i
 fi
 echo "gcov json flag: $GCOV_JSON  ($(gcov --version | head -1))"
-( cd "$BUILD_DIR" && for m in query_shield route control_verify; do
+( cd "$BUILD_DIR" && for m in query_shield route control_verify net_stack shmem_ipc gguf_parser; do
     gcov -b "$GCOV_JSON" "${m}.gcno" > "${m}.gcov.txt" 2>&1
     [ -f "${m}.gcov.json.gz" ] || { echo "gcov produced no JSON for ${m}"; exit 1; }
 done )
-grep -h -A3 "^File .*\(query_shield\|route\|control_verify\)\.c'" "${BUILD_DIR}"/*.gcov.txt | grep -v '^--' || true
+grep -h -A3 "^File .*\(query_shield\|route\|control_verify\|net_stack\|shmem_ipc\|gguf_parser\)\.c'" "${BUILD_DIR}"/*.gcov.txt | grep -v '^--' || true
 
 echo
 echo "=== report"

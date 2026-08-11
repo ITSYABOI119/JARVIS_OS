@@ -149,6 +149,166 @@
       "reason": "LEAD REVIEW 2026-08-07: same as line 367 -- the body of the same zero-argument function. Unreachable by any corpus; a unit-test gap, not a fuzz gap, and not dead code."
     },
     {
+      "file": "phase3/src/ipc/shmem_ipc.c",
+      "line": 44,
+      "kind": "branch",
+      "source_at_judgement": "if (!ring)",
+      "judgement": "defensive-guard",
+      "reason": "NULL / caller-contract guard. The single deployed caller pair (PA's main_x86.c and PB's inference_server.c) always passes non-NULL; a NULL here is a programming error, not attacker-controlled input, so a fuzz corpus is the wrong instrument. Cheap to pin with a unit assertion if the lead wants the guard exercised."
+    },
+    {
+      "file": "phase3/src/ipc/shmem_ipc.c",
+      "line": 45,
+      "kind": "line",
+      "source_at_judgement": "return -1;",
+      "judgement": "defensive-guard",
+      "reason": "NULL / caller-contract guard. The single deployed caller pair (PA's main_x86.c and PB's inference_server.c) always passes non-NULL; a NULL here is a programming error, not attacker-controlled input, so a fuzz corpus is the wrong instrument. Cheap to pin with a unit assertion if the lead wants the guard exercised."
+    },
+    {
+      "file": "phase3/src/ipc/shmem_ipc.c",
+      "line": 63,
+      "kind": "branch",
+      "source_at_judgement": "if (!ring || len > SHMEM_MAX_PAYLOAD)",
+      "judgement": "defensive-guard",
+      "reason": "NULL / caller-contract guard. The single deployed caller pair (PA's main_x86.c and PB's inference_server.c) always passes non-NULL; a NULL here is a programming error, not attacker-controlled input, so a fuzz corpus is the wrong instrument. Cheap to pin with a unit assertion if the lead wants the guard exercised."
+    },
+    {
+      "file": "phase3/src/ipc/shmem_ipc.c",
+      "line": 64,
+      "kind": "line",
+      "source_at_judgement": "return -1;",
+      "judgement": "defensive-guard",
+      "reason": "NULL / caller-contract guard. The single deployed caller pair (PA's main_x86.c and PB's inference_server.c) always passes non-NULL; a NULL here is a programming error, not attacker-controlled input, so a fuzz corpus is the wrong instrument. Cheap to pin with a unit assertion if the lead wants the guard exercised."
+    },
+    {
+      "file": "phase3/src/ipc/shmem_ipc.c",
+      "line": 65,
+      "kind": "branch",
+      "source_at_judgement": "if (len > 0 && !payload)",
+      "judgement": "defensive-guard",
+      "reason": "NULL / caller-contract guard. The single deployed caller pair (PA's main_x86.c and PB's inference_server.c) always passes non-NULL; a NULL here is a programming error, not attacker-controlled input, so a fuzz corpus is the wrong instrument. Cheap to pin with a unit assertion if the lead wants the guard exercised."
+    },
+    {
+      "file": "phase3/src/ipc/shmem_ipc.c",
+      "line": 66,
+      "kind": "line",
+      "source_at_judgement": "return -1;",
+      "judgement": "defensive-guard",
+      "reason": "NULL / caller-contract guard. The single deployed caller pair (PA's main_x86.c and PB's inference_server.c) always passes non-NULL; a NULL here is a programming error, not attacker-controlled input, so a fuzz corpus is the wrong instrument. Cheap to pin with a unit assertion if the lead wants the guard exercised."
+    },
+    {
+      "file": "phase3/src/ipc/shmem_ipc.c",
+      "line": 69,
+      "kind": "branch",
+      "source_at_judgement": "if (ring->header.size == 0 || ring->header.size > SHMEM_RING_SLOTS)",
+      "judgement": "reachable-worth-fuzzing",
+      "reason": "THE RING-SIZE GUARD, and it is measurably UNREACHED \u2014 this is the question A8's follow-up singled out. fuzz_harness.c's fuzz_shmem_ipc() is described as 'send/recv with corrupted ring data' and it DOES randomise the indices (fuzz_harness.c:185-186 assign random write_idx/read_idx) but it NEVER touches header.size, and every sub-test calls shmem_ipc_init() first, which sets size = SHMEM_RING_SLOTS (15). So the guard's true outcome cannot occur for any input the current harness produces. It is live and trivially reachable: one sub-test that sets ring.header.size to 0 and to a value > SHMEM_RING_SLOTS before calling send/recv covers it. Worth having precisely because this is the module whose two implementations diverged for 4.5 months (fixed 148551a) and this guard is the thing standing between a bad size and slot addressing past the 4096 B shared page."
+    },
+    {
+      "file": "phase3/src/ipc/shmem_ipc.c",
+      "line": 70,
+      "kind": "line",
+      "source_at_judgement": "return -1;",
+      "judgement": "reachable-worth-fuzzing",
+      "reason": "THE RING-SIZE GUARD, and it is measurably UNREACHED \u2014 this is the question A8's follow-up singled out. fuzz_harness.c's fuzz_shmem_ipc() is described as 'send/recv with corrupted ring data' and it DOES randomise the indices (fuzz_harness.c:185-186 assign random write_idx/read_idx) but it NEVER touches header.size, and every sub-test calls shmem_ipc_init() first, which sets size = SHMEM_RING_SLOTS (15). So the guard's true outcome cannot occur for any input the current harness produces. It is live and trivially reachable: one sub-test that sets ring.header.size to 0 and to a value > SHMEM_RING_SLOTS before calling send/recv covers it. Worth having precisely because this is the module whose two implementations diverged for 4.5 months (fixed 148551a) and this guard is the thing standing between a bad size and slot addressing past the 4096 B shared page."
+    },
+    {
+      "file": "phase3/src/ipc/shmem_ipc.c",
+      "line": 105,
+      "kind": "branch",
+      "source_at_judgement": "if (!ring || !type || !seq || !len)",
+      "judgement": "defensive-guard",
+      "reason": "NULL / caller-contract guard. The single deployed caller pair (PA's main_x86.c and PB's inference_server.c) always passes non-NULL; a NULL here is a programming error, not attacker-controlled input, so a fuzz corpus is the wrong instrument. Cheap to pin with a unit assertion if the lead wants the guard exercised."
+    },
+    {
+      "file": "phase3/src/ipc/shmem_ipc.c",
+      "line": 106,
+      "kind": "line",
+      "source_at_judgement": "return -1;",
+      "judgement": "defensive-guard",
+      "reason": "NULL / caller-contract guard. The single deployed caller pair (PA's main_x86.c and PB's inference_server.c) always passes non-NULL; a NULL here is a programming error, not attacker-controlled input, so a fuzz corpus is the wrong instrument. Cheap to pin with a unit assertion if the lead wants the guard exercised."
+    },
+    {
+      "file": "phase3/src/ipc/shmem_ipc.c",
+      "line": 109,
+      "kind": "branch",
+      "source_at_judgement": "if (ring->header.size == 0 || ring->header.size > SHMEM_RING_SLOTS)",
+      "judgement": "reachable-worth-fuzzing",
+      "reason": "THE RING-SIZE GUARD, and it is measurably UNREACHED \u2014 this is the question A8's follow-up singled out. fuzz_harness.c's fuzz_shmem_ipc() is described as 'send/recv with corrupted ring data' and it DOES randomise the indices (fuzz_harness.c:185-186 assign random write_idx/read_idx) but it NEVER touches header.size, and every sub-test calls shmem_ipc_init() first, which sets size = SHMEM_RING_SLOTS (15). So the guard's true outcome cannot occur for any input the current harness produces. It is live and trivially reachable: one sub-test that sets ring.header.size to 0 and to a value > SHMEM_RING_SLOTS before calling send/recv covers it. Worth having precisely because this is the module whose two implementations diverged for 4.5 months (fixed 148551a) and this guard is the thing standing between a bad size and slot addressing past the 4096 B shared page."
+    },
+    {
+      "file": "phase3/src/ipc/shmem_ipc.c",
+      "line": 140,
+      "kind": "branch",
+      "source_at_judgement": "if (local_length > 0 && payload)",
+      "judgement": "defensive-guard",
+      "reason": "The never-taken polarity is payload == NULL with local_length > 0 \u2014 a caller asking recv to dequeue a message while supplying nowhere to put it. Same caller-contract class as the NULL guards above; not attacker-controlled."
+    },
+    {
+      "file": "phase3/src/ipc/shmem_ipc.c",
+      "line": 154,
+      "kind": "branch",
+      "source_at_judgement": "if (!ring)",
+      "judgement": "defensive-guard",
+      "reason": "NULL / caller-contract guard. The single deployed caller pair (PA's main_x86.c and PB's inference_server.c) always passes non-NULL; a NULL here is a programming error, not attacker-controlled input, so a fuzz corpus is the wrong instrument. Cheap to pin with a unit assertion if the lead wants the guard exercised."
+    },
+    {
+      "file": "phase3/src/ipc/shmem_ipc.c",
+      "line": 155,
+      "kind": "line",
+      "source_at_judgement": "return 0;",
+      "judgement": "defensive-guard",
+      "reason": "NULL / caller-contract guard. The single deployed caller pair (PA's main_x86.c and PB's inference_server.c) always passes non-NULL; a NULL here is a programming error, not attacker-controlled input, so a fuzz corpus is the wrong instrument. Cheap to pin with a unit assertion if the lead wants the guard exercised."
+    },
+    {
+      "file": "phase3/src/ipc/shmem_ipc.c",
+      "line": 166,
+      "kind": "line",
+      "source_at_judgement": "void shmem_ipc_reset(shmem_ring_t *ring)",
+      "judgement": "unreachable-by-construction",
+      "reason": "DEAD CODE, and the bucket is a compromise the lead is choosing knowingly. shmem_ipc_reset() has ZERO callers anywhere in phase3 (measured: no reference outside its own definition and its declaration in shmem_ipc.h), so neither the unit suite nor the harness reaches it and nothing in the deployed image does either. It is NOT 'reachable-worth-fuzzing': a corpus could trivially call it, but fuzzing unused API is the wrong response \u2014 delete-or-justify is. Filed here because the three-value taxonomy has no 'dead code, decide its fate' value, the same limitation _taxonomy_note already records for route_decline_text. FLAGGED FOR THE LEAD as a disposition question, not a coverage chore."
+    },
+    {
+      "file": "phase3/src/ipc/shmem_ipc.c",
+      "line": 168,
+      "kind": "branch",
+      "source_at_judgement": "if (!ring)",
+      "judgement": "unreachable-by-construction",
+      "reason": "DEAD CODE, and the bucket is a compromise the lead is choosing knowingly. shmem_ipc_reset() has ZERO callers anywhere in phase3 (measured: no reference outside its own definition and its declaration in shmem_ipc.h), so neither the unit suite nor the harness reaches it and nothing in the deployed image does either. It is NOT 'reachable-worth-fuzzing': a corpus could trivially call it, but fuzzing unused API is the wrong response \u2014 delete-or-justify is. Filed here because the three-value taxonomy has no 'dead code, decide its fate' value, the same limitation _taxonomy_note already records for route_decline_text. FLAGGED FOR THE LEAD as a disposition question, not a coverage chore."
+    },
+    {
+      "file": "phase3/src/ipc/shmem_ipc.c",
+      "line": 168,
+      "kind": "line",
+      "source_at_judgement": "if (!ring)",
+      "judgement": "unreachable-by-construction",
+      "reason": "DEAD CODE, and the bucket is a compromise the lead is choosing knowingly. shmem_ipc_reset() has ZERO callers anywhere in phase3 (measured: no reference outside its own definition and its declaration in shmem_ipc.h), so neither the unit suite nor the harness reaches it and nothing in the deployed image does either. It is NOT 'reachable-worth-fuzzing': a corpus could trivially call it, but fuzzing unused API is the wrong response \u2014 delete-or-justify is. Filed here because the three-value taxonomy has no 'dead code, decide its fate' value, the same limitation _taxonomy_note already records for route_decline_text. FLAGGED FOR THE LEAD as a disposition question, not a coverage chore."
+    },
+    {
+      "file": "phase3/src/ipc/shmem_ipc.c",
+      "line": 169,
+      "kind": "line",
+      "source_at_judgement": "return;",
+      "judgement": "unreachable-by-construction",
+      "reason": "DEAD CODE, and the bucket is a compromise the lead is choosing knowingly. shmem_ipc_reset() has ZERO callers anywhere in phase3 (measured: no reference outside its own definition and its declaration in shmem_ipc.h), so neither the unit suite nor the harness reaches it and nothing in the deployed image does either. It is NOT 'reachable-worth-fuzzing': a corpus could trivially call it, but fuzzing unused API is the wrong response \u2014 delete-or-justify is. Filed here because the three-value taxonomy has no 'dead code, decide its fate' value, the same limitation _taxonomy_note already records for route_decline_text. FLAGGED FOR THE LEAD as a disposition question, not a coverage chore."
+    },
+    {
+      "file": "phase3/src/ipc/shmem_ipc.c",
+      "line": 171,
+      "kind": "line",
+      "source_at_judgement": "__atomic_store_n(&ring->header.write_idx, 0, __ATOMIC_RELEASE);",
+      "judgement": "unreachable-by-construction",
+      "reason": "DEAD CODE, and the bucket is a compromise the lead is choosing knowingly. shmem_ipc_reset() has ZERO callers anywhere in phase3 (measured: no reference outside its own definition and its declaration in shmem_ipc.h), so neither the unit suite nor the harness reaches it and nothing in the deployed image does either. It is NOT 'reachable-worth-fuzzing': a corpus could trivially call it, but fuzzing unused API is the wrong response \u2014 delete-or-justify is. Filed here because the three-value taxonomy has no 'dead code, decide its fate' value, the same limitation _taxonomy_note already records for route_decline_text. FLAGGED FOR THE LEAD as a disposition question, not a coverage chore."
+    },
+    {
+      "file": "phase3/src/ipc/shmem_ipc.c",
+      "line": 172,
+      "kind": "line",
+      "source_at_judgement": "__atomic_store_n(&ring->header.read_idx, 0, __ATOMIC_RELEASE);",
+      "judgement": "unreachable-by-construction",
+      "reason": "DEAD CODE, and the bucket is a compromise the lead is choosing knowingly. shmem_ipc_reset() has ZERO callers anywhere in phase3 (measured: no reference outside its own definition and its declaration in shmem_ipc.h), so neither the unit suite nor the harness reaches it and nothing in the deployed image does either. It is NOT 'reachable-worth-fuzzing': a corpus could trivially call it, but fuzzing unused API is the wrong response \u2014 delete-or-justify is. Filed here because the three-value taxonomy has no 'dead code, decide its fate' value, the same limitation _taxonomy_note already records for route_decline_text. FLAGGED FOR THE LEAD as a disposition question, not a coverage chore."
+    },
+    {
       "file": "phase3/src/net/control_verify.c",
       "line": 31,
       "kind": "branch",

@@ -31,6 +31,16 @@ MODULES = [
      "phase3/src/ai/test_route.c",          "phase3/src/ai/fuzz_route.c"),
     ("control_verify", "phase3/src/net/control_verify.c",
      "phase3/src/net/test_control_verify.c", "phase3/src/net/fuzz_control_in.c"),
+    # The fuzz_harness.c trio. All three name the SAME fuzz harness, which is
+    # correct rather than a copy-paste slip: fuzz_harness.c links all three
+    # modules into one binary and exercises each in its own section. Each still
+    # has its own unit suite, so the unit+fuzz merge is per-module as usual.
+    ("net_stack",      "phase3/src/drivers/net_stack.c",
+     "phase3/src/drivers/test_net_stack.c",  "phase3/src/drivers/fuzz_harness.c"),
+    ("shmem_ipc",      "phase3/src/ipc/shmem_ipc.c",
+     "phase3/src/ipc/test_shmem_ipc.c",      "phase3/src/drivers/fuzz_harness.c"),
+    ("gguf_parser",    "phase3/src/ai/gguf_parser.c",
+     "phase3/src/ai/test_gguf_parser.c",     "phase3/src/drivers/fuzz_harness.c"),
 ]
 
 VALID_JUDGEMENTS = {
