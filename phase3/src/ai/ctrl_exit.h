@@ -24,6 +24,14 @@
  * "answered" and the store says ERROR — the truth table pins its exact
  * extent, and A9/3 reports it as a finding rather than silently "fixing" it
  * (behaviour-neutral extraction; changing it is a separate decision).
+ * REACHABILITY MEASURED 2026-08-11 (closures sweep): the edge IS reachable
+ * from shipped PB — inference_server.c's explicit empty-response branch
+ * (":984-era", locate by the "If empty response" comment) sends the
+ * seq-matched zero-length MSG_RESPONSE whenever text_len == 0, which n_gen
+ * == 0 produces (the model's FIRST sampled token is <eos>/tok->eos_id; the
+ * stop check breaks BEFORE storing) and a tokenizer_decode error (<0,
+ * coerced to 0) also produces. Not observed in any gate to date; the
+ * fix-vs-accept decision is with the strategist.
  *
  * Host-pure: no seL4 dependency; the caller passes every input. The
  * km2b_miss / wake / pb_progress / ctrl_epi_index / pb_health precedent.

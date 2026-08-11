@@ -453,6 +453,21 @@
 #if JARVIS_ROUTING && !(JARVIS_CONTROL_IN && JARVIS_ACTIONS)
 #error "JARVIS_ROUTING wires into pa_ctrl_gate and shares its signed+AUDITED exit -> requires JARVIS_CONTROL_IN && JARVIS_ACTIONS"
 #endif
+/* ROUTING=0 is NO LONGER OPTIONAL while control-IN is compiled in — ACCEPTED 2026-08-11.
+ * pa_ctrl_gate references served_locally and crk_kind/crk_src/crk_cos (declared only under
+ * #if JARVIS_ROUTING, main_x86.c ~:3590/:3603-3605) at unguarded sites (~:4172/:4175/:4173/
+ * :4257), so a CONTROL_IN=1 + ROUTING=0 build has been undeclared-identifier soup since the
+ * tag-4 change (49d797f) and the 2026-08-01 recall-provenance change — both landed AFTER the
+ * B/M1 OFF-object-identity measurement, and no ROUTING=0 build has been attempted since.
+ * A restore (hoisting the declarations) was REJECTED as UNVERIFIABLE: no CI can compile
+ * main_x86.c (seL4-only TU), so the hoist would rot again silently, exactly as this did.
+ * This #error turns the rot into ONE clear diagnostic. The guard is EXACTLY this
+ * conjunction on purpose: CONTROL_IN=0 && ROUTING=0 — the historical emergency-rollback
+ * shape — compiles the whole gate out and must NOT trip. See the CLAUDE.md JARVIS_ROUTING
+ * flag row for the dated record. */
+#if JARVIS_CONTROL_IN && !JARVIS_ROUTING
+#error "JARVIS_ROUTING=0 with JARVIS_CONTROL_IN=1 no longer compiles (served_locally/crk_* rot in pa_ctrl_gate, post-B/M1) and is ACCEPTED as unsupported 2026-08-11 -- ROUTING is not optional while control-IN is built. The rollback shape CONTROL_IN=0 && ROUTING=0 still compiles the gate out. See the CLAUDE.md JARVIS_ROUTING flag row."
+#endif
 
 /* 6-6/B/M1 routing probe (box/KVM only; KVM has no NIC, so queries are staged through the same
  * signed-JCTL split pipeline the CONTROL_IN_PROBE / RECALL_PROBE modes use). Routes THREE synthetic
