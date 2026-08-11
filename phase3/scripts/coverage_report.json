@@ -2,8 +2,8 @@
   "_comment": "COVERAGE INSTRUMENT, NOT A SCORE. The deliverable is the per-module 'uncovered' list -- branches and lines that NEITHER the unit suite NOR the fuzzer reaches -- so a human can decide which are worth aiming a corpus at. A repo-wide percentage is explicitly out of scope; the per-module 'incidental_*_pct' fields exist only to size the uncovered list against its module and are never a target, a threshold, or a gate. The CI job that produces this file MUST NEVER fail on a coverage number -- only on its own infrastructure errors.",
   "judgements_reviewed": false,
   "_judgements_note": "The judgement fields are a CANDIDATE reading produced by the agent that built this instrument. The lead reviews and finalises every one. Until judgements_reviewed is true, treat every judgement as unconfirmed. 'unclassified' means no human judgement is recorded; 'unclassified-stale' means the source at that line changed after a judgement was made and the judgement was refused rather than carried over.",
-  "measured_at_utc": "2026-08-11T14:03:09Z",
-  "repo_head": "a66eebc",
+  "measured_at_utc": "2026-08-11T14:05:07Z",
+  "repo_head": "3bf126c",
   "method": {
     "tool": "gcov (13.3.0) driven directly, parsed with stdlib Python",
     "why_not_gcovr_or_lcov": "neither is installed; pip refuses gcovr under PEP 668 without --break-system-packages, which would modify the system Python of every machine running this. gcov -j JSON carries per-line and per-branch counts, which is all this instrument needs.",
@@ -21,11 +21,11 @@
   },
   "totals": {
     "modules": 6,
-    "uncovered_gaps": 285,
+    "uncovered_gaps": 274,
     "by_judgement": {
       "unreachable-by-construction": 102,
       "defensive-guard": 22,
-      "reachable-worth-fuzzing": 161
+      "reachable-worth-fuzzing": 150
     }
   },
   "results": [
@@ -213,15 +213,15 @@
       "unit_suite": "phase3/src/drivers/test_net_stack.c",
       "fuzz_harness": "phase3/src/drivers/fuzz_harness.c",
       "lines_total": 298,
-      "lines_never_executed": 30,
+      "lines_never_executed": 29,
       "branch_outcomes_total": 155,
-      "branch_outcomes_never_taken": 46,
-      "incidental_line_pct": 89.93,
-      "incidental_branch_pct": 70.32,
-      "uncovered_count": 64,
+      "branch_outcomes_never_taken": 45,
+      "incidental_line_pct": 90.27,
+      "incidental_branch_pct": 70.97,
+      "uncovered_count": 63,
       "uncovered_by_judgement": {
         "unreachable-by-construction": 17,
-        "reachable-worth-fuzzing": 44,
+        "reachable-worth-fuzzing": 43,
         "defensive-guard": 3
       },
       "uncovered": [
@@ -241,21 +241,11 @@
           "line": 157,
           "function": "handle_arp",
           "source": "if (ntohs(arp->htype) != 1 || ntohs(arp->ptype) != ETH_P_IP) {",
-          "detail": "2 of 4 branch outcomes on this line never taken (line executed 2 times)",
+          "detail": "1 of 4 branch outcomes on this line never taken (line executed 350 times)",
           "branch_outcomes_total": 4,
-          "branch_outcomes_never_taken": 2,
+          "branch_outcomes_never_taken": 1,
           "judgement": "reachable-worth-fuzzing",
           "reason": "Both TRUE polarities (htype != 1, ptype != IPv4) are untaken because only the 2 well-formed unit-suite ARP frames ever reach this line. The fuzzer's ARP sub-test builds frames of len = 14 + rand_range(28) = 14..41 bytes, always one byte short of the 42 that handle_arp's line-150 length check demands, so all 10,000 fuzz ARP frames die at line 150 (branch data confirms: 10,000 taken). A 42-byte ARP request with htype=6, or ptype=0x0806, reaches both outcomes."
-        },
-        {
-          "kind": "line",
-          "file": "phase3/src/drivers/net_stack.c",
-          "line": 158,
-          "function": "handle_arp",
-          "source": "return false;",
-          "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "reachable-worth-fuzzing",
-          "reason": "The rejection arm of the line-157 htype/ptype check, never executed for the same reason: no frame of 42+ bytes with a malformed ARP hardware/protocol type has ever been fed to net_process_frame. A 42-byte ARP request with htype=6 reaches it."
         },
         {
           "kind": "branch",
@@ -978,7 +968,7 @@
           "line": 63,
           "function": "shmem_ipc_send",
           "source": "if (!ring || len > SHMEM_MAX_PAYLOAD)",
-          "detail": "2 of 4 branch outcomes on this line never taken (line executed 295445 times)",
+          "detail": "2 of 4 branch outcomes on this line never taken (line executed 326257 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 2,
           "judgement": "defensive-guard",
@@ -1000,7 +990,7 @@
           "line": 65,
           "function": "shmem_ipc_send",
           "source": "if (len > 0 && !payload)",
-          "detail": "1 of 4 branch outcomes on this line never taken (line executed 295445 times)",
+          "detail": "1 of 4 branch outcomes on this line never taken (line executed 326257 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 1,
           "judgement": "defensive-guard",
@@ -1079,14 +1069,14 @@
       "unit_suite": "phase3/src/ai/test_gguf_parser.c",
       "fuzz_harness": "phase3/src/drivers/fuzz_harness.c",
       "lines_total": 374,
-      "lines_never_executed": 136,
+      "lines_never_executed": 132,
       "branch_outcomes_total": 283,
-      "branch_outcomes_never_taken": 141,
-      "incidental_line_pct": 63.64,
-      "incidental_branch_pct": 50.18,
-      "uncovered_count": 199,
+      "branch_outcomes_never_taken": 134,
+      "incidental_line_pct": 64.71,
+      "incidental_branch_pct": 52.65,
+      "uncovered_count": 189,
       "uncovered_by_judgement": {
-        "reachable-worth-fuzzing": 117,
+        "reachable-worth-fuzzing": 107,
         "unreachable-by-construction": 77,
         "defensive-guard": 5
       },
@@ -1154,68 +1144,14 @@
         {
           "kind": "branch",
           "file": "phase3/src/ai/gguf_parser.c",
-          "line": 51,
-          "function": "read_gguf_string",
-          "source": "if (err) return err;",
-          "detail": "1 of 2 branch outcomes on this line never taken (line executed 58 times)",
-          "branch_outcomes_total": 2,
-          "branch_outcomes_never_taken": 1,
-          "judgement": "reachable-worth-fuzzing",
-          "reason": "The err-true outcome (read_u64 of the string length failed) is never taken in 58 executions. A buffer that ends exactly at the start of a key string -- magic + version 3 + n_tensors 0 + n_kv 1 and nothing after the 24-byte header -- makes the length read fail and returns GGUF_ERR_READ."
-        },
-        {
-          "kind": "branch",
-          "file": "phase3/src/ai/gguf_parser.c",
-          "line": 55,
-          "function": "read_gguf_string",
-          "source": "if (len >= buf_size) {",
-          "detail": "1 of 2 branch outcomes on this line never taken (line executed 58 times)",
-          "branch_outcomes_total": 2,
-          "branch_outcomes_never_taken": 1,
-          "judgement": "reachable-worth-fuzzing",
-          "reason": "The len >= buf_size outcome is never taken in 58 executions, so the ENTIRE over-long-string handler (:56-71) is dead in test. This is the length-overflow path -- the same class as the SEC-hardened gguf_vocab overflow. A KV whose key declares a u64 length of 300 (>= GGUF_MAX_KV_KEY_LEN 256) with 300 bytes present enters it; a STRING value needs length >= 4096."
-        },
-        {
-          "kind": "line",
-          "file": "phase3/src/ai/gguf_parser.c",
-          "line": 57,
-          "function": "read_gguf_string",
-          "source": "size_t to_read = buf_size - 1;",
-          "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "reachable-worth-fuzzing",
-          "reason": "Inside the over-long-string handler, which no input has entered because the len >= buf_size branch at :55 is never taken. It computes to_read = buf_size - 1 (255 for a key, 4095 for a string value). A KV key declaring a u64 length of 300 with 300 bytes present reaches it through gguf_open_memory."
-        },
-        {
-          "kind": "line",
-          "file": "phase3/src/ai/gguf_parser.c",
-          "line": 58,
-          "function": "read_gguf_string",
-          "source": "err = read_exact(fp, buf, to_read);",
-          "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "reachable-worth-fuzzing",
-          "reason": "Inside the over-long-string handler, which no input has entered because the len >= buf_size branch at :55 is never taken. It reads the truncated prefix into buf. A KV key declaring a u64 length of 300 with 300 bytes present reaches it through gguf_open_memory."
-        },
-        {
-          "kind": "branch",
-          "file": "phase3/src/ai/gguf_parser.c",
           "line": 59,
           "function": "read_gguf_string",
           "source": "if (err) return err;",
-          "detail": "2 of 2 branch outcomes on this line never taken (line executed 0 times)",
+          "detail": "1 of 2 branch outcomes on this line never taken (line executed 9482 times)",
           "branch_outcomes_total": 2,
-          "branch_outcomes_never_taken": 2,
+          "branch_outcomes_never_taken": 1,
           "judgement": "reachable-worth-fuzzing",
           "reason": "Both outcomes need the over-long-string handler entered (:55 never true today). A key declaring length 300 with 300 bytes present takes the success outcome; the same key with only 50 bytes left in the buffer makes read_exact of the 255-byte prefix fail and takes the error outcome."
-        },
-        {
-          "kind": "line",
-          "file": "phase3/src/ai/gguf_parser.c",
-          "line": 59,
-          "function": "read_gguf_string",
-          "source": "if (err) return err;",
-          "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "reachable-worth-fuzzing",
-          "reason": "Guard inside the over-long-string handler; a KV key declaring a u64 length of 300 reaches it, and truncating the buffer to fewer than 255 bytes after the length exercises the error return."
         },
         {
           "kind": "line",
@@ -2010,18 +1946,6 @@
         {
           "kind": "branch",
           "file": "phase3/src/ai/gguf_parser.c",
-          "line": 230,
-          "function": "read_kv_pair",
-          "source": "if (err) return err;",
-          "detail": "1 of 2 branch outcomes on this line never taken (line executed 36 times)",
-          "branch_outcomes_total": 2,
-          "branch_outcomes_never_taken": 1,
-          "judgement": "reachable-worth-fuzzing",
-          "reason": "The err-true outcome (the key string failed to read) is never taken in 36 executions. A directed buffer with n_kv = 1 that ends at the 24-byte header, or whose key declares more bytes than remain, reaches it -- and no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus."
-        },
-        {
-          "kind": "branch",
-          "file": "phase3/src/ai/gguf_parser.c",
           "line": 234,
           "function": "read_kv_pair",
           "source": "if (err) return err;",
@@ -2204,18 +2128,6 @@
         {
           "kind": "branch",
           "file": "phase3/src/ai/gguf_parser.c",
-          "line": 282,
-          "function": "read_tensor_info",
-          "source": "if (err) return err;",
-          "detail": "1 of 2 branch outcomes on this line never taken (line executed 15 times)",
-          "branch_outcomes_total": 2,
-          "branch_outcomes_never_taken": 1,
-          "judgement": "reachable-worth-fuzzing",
-          "reason": "The err-true outcome (the tensor name failed to read) is never taken in 15 executions. A directed buffer with n_tensors = 1 that ends at the tensor-info block, or whose name declares more bytes than remain, reaches it."
-        },
-        {
-          "kind": "branch",
-          "file": "phase3/src/ai/gguf_parser.c",
           "line": 286,
           "function": "read_tensor_info",
           "source": "if (err) return err;",
@@ -2325,7 +2237,7 @@
           "line": 342,
           "function": "parse_gguf",
           "source": "if (err) return err;",
-          "detail": "1 of 2 branch outcomes on this line never taken (line executed 30013 times)",
+          "detail": "1 of 2 branch outcomes on this line never taken (line executed 40013 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
           "judgement": "reachable-worth-fuzzing",
@@ -2337,7 +2249,7 @@
           "line": 351,
           "function": "parse_gguf",
           "source": "if (!ctx->kv)",
-          "detail": "1 of 2 branch outcomes on this line never taken (line executed 10 times)",
+          "detail": "1 of 2 branch outcomes on this line never taken (line executed 9008 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
           "judgement": "unreachable-by-construction",
@@ -2356,22 +2268,10 @@
         {
           "kind": "branch",
           "file": "phase3/src/ai/gguf_parser.c",
-          "line": 359,
-          "function": "parse_gguf",
-          "source": "if (err) return err;",
-          "detail": "1 of 2 branch outcomes on this line never taken (line executed 36 times)",
-          "branch_outcomes_total": 2,
-          "branch_outcomes_never_taken": 1,
-          "judgement": "reachable-worth-fuzzing",
-          "reason": "The err-true outcome is never taken in 36 executions: no malformed KV has EVER reached parse_gguf's error propagation, because no fuzz buffer has ever reached KV/tensor parsing (random n_tensors/n_kv are rejected by the SEC-008 caps at :345-346, and sub-test 4 dies earlier on the version check because it leaves buf[5..7] random), so this is unfuzzed parser surface, not merely an unlucky corpus. Any directed KV case above (truncated key, truncated value, unknown type, bad array) covers it."
-        },
-        {
-          "kind": "branch",
-          "file": "phase3/src/ai/gguf_parser.c",
           "line": 372,
           "function": "parse_gguf",
           "source": "if (!ctx->tensors)",
-          "detail": "1 of 2 branch outcomes on this line never taken (line executed 8 times)",
+          "detail": "1 of 2 branch outcomes on this line never taken (line executed 901 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
           "judgement": "unreachable-by-construction",
@@ -2393,7 +2293,7 @@
           "line": 384,
           "function": "parse_gguf",
           "source": "if (pos < 0)",
-          "detail": "1 of 2 branch outcomes on this line never taken (line executed 10 times)",
+          "detail": "1 of 2 branch outcomes on this line never taken (line executed 119 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
           "judgement": "unreachable-by-construction",
@@ -2442,28 +2342,6 @@
           "detail": "line never executed by either the unit suite or the fuzzer",
           "judgement": "unreachable-by-construction",
           "reason": "The GGUF_ERR_OPEN return for a failed fmemopen; unreachable for the same structural reason as :419 -- the only remaining failure mode is allocator exhaustion."
-        },
-        {
-          "kind": "branch",
-          "file": "phase3/src/ai/gguf_parser.c",
-          "line": 423,
-          "function": "gguf_open_memory",
-          "source": "if (err) {",
-          "detail": "1 of 2 branch outcomes on this line never taken (line executed 99560 times)",
-          "branch_outcomes_total": 2,
-          "branch_outcomes_never_taken": 1,
-          "judgement": "reachable-worth-fuzzing",
-          "reason": "The untaken outcome is err == 0, i.e. SUCCESS: across 99,560 fuzz opens NOT ONE buffer has ever parsed successfully, because random n_tensors/n_kv are rejected by SEC-008 and the sub-test that sets them small dies on the version check. One directed minimal-but-VALID buffer (magic, version 3, n_tensors 0, n_kv 0) closes this and is the gateway to every other directed case in this module."
-        },
-        {
-          "kind": "line",
-          "file": "phase3/src/ai/gguf_parser.c",
-          "line": 427,
-          "function": "gguf_open_memory",
-          "source": "return GGUF_OK;",
-          "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "reachable-worth-fuzzing",
-          "reason": "gguf_open_memory's success return, never executed: no fuzz buffer has ever parsed cleanly. A directed 24-byte valid GGUF header (magic, version 3, n_tensors 0, n_kv 0) reaches it."
         },
         {
           "kind": "branch",

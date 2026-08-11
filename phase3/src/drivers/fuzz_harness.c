@@ -116,7 +116,7 @@ static void fuzz_net_stack(void) {
     for (int i = 0; i < 10000; i++) {
         fill_random(frame, 42);
         frame[12] = 0x08; frame[13] = 0x06;  /* ARP ethertype */
-        uint32_t len = 14 + rand_range(28);   /* 14 to 41 bytes */
+        uint32_t len = 14 + rand_range(29);   /* 14 to 42 bytes (42 = a full ARP frame) */
         nfs_call(frame, len);
     }
 
@@ -414,7 +414,7 @@ static void fuzz_gguf_parser(void) {
         size_t len = 24 + rand_range(200);
         fill_random(buf, len);
         buf[0] = 0x47; buf[1] = 0x47; buf[2] = 0x55; buf[3] = 0x46;
-        buf[4] = 3;
+        buf[4] = 3; buf[5] = 0; buf[6] = 0; buf[7] = 0;   /* the FULL LE version word */
         /* Small n_tensors, small n_kv */
         uint64_t small_val = rand_range(10);
         memcpy(buf + 8, &small_val, 8);
