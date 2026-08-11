@@ -247,8 +247,16 @@ copy_file "$DRV_SRC/fat32.c" "$DRV_DST/fat32.c"
 copy_file "$DRV_SRC/fat32.h" "$DRV_DST/fat32.h"
 copy_file "$DRV_SRC/framebuffer.c" "$DRV_DST/framebuffer.c"
 copy_file "$DRV_SRC/framebuffer.h" "$DRV_DST/framebuffer.h"
-# Step 2c-2b: framebuffer.c #includes jarvis_ui_tokens.h — make it resolvable in src/drivers/ too
-copy_file "$JARVIS_DIR/phase3/src/sel4/jarvis_ui_tokens.h" "$DRV_DST/jarvis_ui_tokens.h"
+# Step 2c-2b used to ALSO copy jarvis_ui_tokens.h here so framebuffer.c's quoted
+# include resolved in src/drivers/ — REMOVED 2026-08-11 (closures sweep): the header
+# already resolves via the CMakeLists' "src" include dir (the $DEST/src/ copy at the
+# rootserver step is the ONE copy), and a second copy on the include path is exactly
+# the header-shadowing shape CHECK 4 of check_copy_orphans.py now forbids — one copy-
+# list edit away from the 148551a stale-sibling mechanism. The teardown rm below is
+# LOAD-BEARING, not hygiene: the box's long-lived tree still holds the historical
+# copy, and quoted-include searches the includer's OWN directory before any -I, so
+# without the rm every src/drivers TU would keep resolving to the orphan forever.
+rm -f "$DRV_DST/jarvis_ui_tokens.h"
 # goal #2b N-a: Intel I211 NIC driver (TX first-light)
 copy_file "$DRV_SRC/nic_i211.c" "$DRV_DST/nic_i211.c"
 copy_file "$DRV_SRC/nic_i211.h" "$DRV_DST/nic_i211.h"

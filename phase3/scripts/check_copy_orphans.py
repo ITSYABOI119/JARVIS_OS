@@ -24,6 +24,12 @@ committed sources of truth alone:
   CHECK 3  THE REVERSE: every .c the app's CMakeLists compiles must be a copy
            destination of the script. Pre-`148551a`, PB's `src/ipc/shmem_ipc.c` fails
            exactly this.
+  CHECK 4  HEADER SHADOWING (2026-08-11): no .h BASENAME may be copied to two or more
+           destinations that are BOTH on the receiving app's include path (include-dir
+           sets read from the vendored CMakeLists / the jarvis-input heredoc, never
+           hardcoded). Two on-path copies are refreshed-identical today and one
+           copy-list edit from being the 148551a stale-sibling mechanism applied to
+           headers, where no CMakeLists source list can ever see it.
 
 HOW THE COPY DESTINATIONS ARE RESOLVED (verified against the script, not assumed):
 every copy is a `copy_file "SRC" "DST"` call. DST is built from plain double-quoted
@@ -35,11 +41,13 @@ If the script grows an idiom this cannot see, the sanity floors below fail loudl
 rather than passing on a partial parse.
 
 SCOPE, stated honestly:
-- HEADERS ARE EXEMPT. A .h is copied to be *included*, not compiled; CMakeLists source
-  lists cannot see headers, so a header orphan is NOT detectable this way — and the
-  include-search shadowing hazard (`-I src/ai` finding a stale header first) is exactly
-  the part this check CANNOT cover. The build script's `rm -f` teardown remains the
-  guard for that; do not read this gate as covering headers.
+- HEADERS are covered on ONE axis only (CHECK 4): duplicate copies that the SCRIPT'S
+  OWN COPY LIST puts on an app's include path. A .h is included, not compiled, so
+  CMakeLists source lists cannot see it — no orphan/divergence/reverse check is
+  possible for headers — and a stale header ALREADY sitting in a long-lived tree from
+  history is invisible to any committed-source check. The build script's `rm -f`
+  teardown lines remain the guard for those. CHECK 4 narrows the recorded blind spot;
+  it does not eliminate it.
 - THE COMMITTED CONFIGURATION ONLY: the vendored CMakeLists are the box's
   JARVIS_CONTROL_IN=1 post-state, so this gate asserts the committed flag is 1 and
   refuses to run otherwise (at 0 the script tears down crypto/net and the vendored
@@ -47,8 +55,10 @@ SCOPE, stated honestly:
 
 CI runs `--self-test` first: the control (unmutated script) must PASS, then an
 in-memory reconstruction of the historical defect (the shmem_ipc copies redirected
-back to src/ai/) must FAIL with CHECK 1 and CHECK 3 naming the exact files — so the
-gate can never go vacuous without CI noticing.
+back to src/ai/) must FAIL with CHECK 1 and CHECK 3 naming the exact files, and a
+reconstruction of the pre-2026-08-11 jarvis_ui_tokens.h double-copy must FAIL with
+CHECK 4 naming the basename and both on-path destinations — so the gate can never go
+vacuous without CI noticing.
 """
 
 import argparse
@@ -244,6 +254,40 @@ def parse_build_script(text):
     return copies, input_cmake
 
 
+def cmake_include_dirs(text, where):
+    """Parse target_include_directories(...) into a deduped set of relative dirs.
+
+    Tokens may be quoted or bare (the vendored PA list mixes both and repeats
+    src/drivers); keywords and the target name are dropped. Same fail-loud
+    discipline as cmake_c_sources: a missing/unterminated block is an error,
+    never an empty pass.
+    """
+    m = re.search(r"target_include_directories\s*\(", text)
+    if not m:
+        print(f"::error::no target_include_directories( found in {where}")
+        sys.exit(1)
+    seg = text[m.end():]
+    close = seg.find(")")
+    if close < 0:
+        print(f"::error::unterminated target_include_directories in {where}")
+        sys.exit(1)
+    dirs = set()
+    for line in seg[:close].splitlines():
+        line = line.split("#", 1)[0]
+        for tok in line.split():
+            tok = tok.strip('"')
+            if tok in ("PRIVATE", "PUBLIC", "INTERFACE") or not tok:
+                continue
+            if re.match(r"[A-Za-z_][A-Za-z_0-9-]*$", tok) and "/" not in tok and tok != "src":
+                # bare identifier that is not a path (the target name)
+                continue
+            dirs.add(tok)
+    if not dirs:
+        print(f"::error::parsed ZERO include dirs from {where}")
+        sys.exit(1)
+    return dirs
+
+
 def cmake_c_sources(text, where):
     m = re.search(r"add_executable\s*\(", text)
     if not m:
@@ -352,6 +396,48 @@ def run_checks(script_text, quiet=False):
                 "clean tree cmake fails on it. Make the script write it, or allowlist "
                 "with a reason.")
 
+    # CHECK 4 — header shadowing (2026-08-11): no .h basename copied to two+
+    # destinations that are BOTH on the app's include path. Quoted includes resolve
+    # to whichever copy the search order finds first; two on-path copies are
+    # refreshed-identical today but one copy-list edit away from the 148551a
+    # stale-sibling mechanism — on the one file class (headers) where no CMakeLists
+    # source list could ever surface it. Include dirs are read from the same
+    # committed CMakeLists as the compile lists, never hardcoded.
+    inc_dirs = {}
+    for app, path in VENDORED_CMAKE.items():
+        inc_dirs[app] = cmake_include_dirs(path.read_text(encoding="utf-8"), str(path))
+    inc_dirs["jarvis-input"] = cmake_include_dirs(input_cmake, "jarvis-input heredoc")
+    # Sanity floors: PA's list must show the real breadth (6 dirs today) and the
+    # parse must have seen a realistic number of header copies, or the check is
+    # running vacuously on a partial parse.
+    h_copies = {(a, p) for (a, p) in copies if p.endswith(".h")}
+    if len(inc_dirs["sel4test-driver"]) < 4:
+        failures += fail(
+            f"parsed only {sorted(inc_dirs['sel4test-driver'])} include dirs for "
+            "sel4test-driver (expected the 6-dir set) — CMakeLists parse broken, "
+            "CHECK 4 would be vacuous")
+    if len(h_copies) < 20:
+        failures += fail(
+            f"only {len(h_copies)} .h copies parsed (expected ~60+) — partial parse, "
+            "CHECK 4 would be vacuous")
+    for app in APPS:
+        on_path = {}
+        for (a, rel) in sorted(h_copies):
+            if a != app:
+                continue
+            d = rel.rsplit("/", 1)[0] if "/" in rel else ""
+            if d in inc_dirs[app]:
+                on_path.setdefault(rel.rsplit("/", 1)[-1], set()).add(rel)
+        for base, dests in sorted(on_path.items()):
+            if len(dests) >= 2:
+                failures += fail(
+                    f"HEADER SHADOWING in {app}: '{base}' is copied to "
+                    f"{sorted(dests)} — two+ destinations on the app's include path "
+                    f"({sorted(inc_dirs[app])}). A quoted #include resolves to "
+                    "whichever copy the search order finds first, and one copy-list "
+                    "edit turns identical copies into the 148551a stale-sibling "
+                    "mechanism. Keep exactly ONE copy on the include path.")
+
     return failures
 
 
@@ -392,6 +478,29 @@ def self_test():
         return 1
     print(f"  FAILED AS REQUIRED ({n} findings; CHECK 1 named src/ai/shmem_ipc.c, "
           "CHECK 3 named src/ipc/shmem_ipc.c)")
+
+    # CHECK 4 teeth: reconstruct the pre-2026-08-11 state — jarvis_ui_tokens.h copied
+    # to BOTH $DEST/src/ and $DRV_DST/ (both on PA's include path). Appended at the
+    # end of the script text so every variable is already bound when the parser
+    # reaches it.
+    mutated4 = (text + '\ncopy_file "$JARVIS_DIR/phase3/src/sel4/jarvis_ui_tokens.h" '
+                       '"$DRV_DST/jarvis_ui_tokens.h"\n')
+    print("self-test mutant 2 (jarvis_ui_tokens.h double-copied -- the pre-fix header duplicate):")
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        n4 = run_checks(mutated4, quiet=True)
+    out4 = buf.getvalue()
+    ok4 = (n4 > 0
+           and "HEADER SHADOWING in sel4test-driver" in out4
+           and "jarvis_ui_tokens.h" in out4
+           and "src/jarvis_ui_tokens.h" in out4
+           and "src/drivers/jarvis_ui_tokens.h" in out4)
+    if not ok4:
+        print("::error::self-test mutant 2 did NOT fail as required. Output was:")
+        print(out4)
+        return 1
+    print(f"  FAILED AS REQUIRED ({n4} finding(s); CHECK 4 named jarvis_ui_tokens.h "
+          "and both on-path destinations)")
     return 0
 
 
@@ -413,7 +522,9 @@ def main():
         print(f"FAIL: {failures} finding(s)")
         sys.exit(1)
     print("OK: every copied .c is compiled by its app; every compiled .c is written "
-          "by the script; allowlist current (headers exempt -- see docstring)")
+          "by the script; no header basename is double-copied onto an app's include "
+          "path; allowlist current (header scope is CHECK 4's copy-list axis only "
+          "-- see docstring)")
 
 
 if __name__ == "__main__":

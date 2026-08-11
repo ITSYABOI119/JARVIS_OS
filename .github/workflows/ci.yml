@@ -1595,11 +1595,15 @@ jobs:
     # allowlisted by exact path with reasons, stale entries fail; (3) the reverse --
     # every compiled .c must be a copy destination, because cmake fails loudly only
     # on a CLEAN tree (on the box's long-lived tree a stale sibling satisfies it
-    # silently, which is the historical bug itself). HEADERS ARE NOT COVERED: a .h
-    # is included, not compiled, so CMakeLists source lists cannot see it -- the
-    # build script's rm -f teardown remains the header-shadowing guard.
+    # silently, which is the historical bug itself); (4, added 2026-08-11) HEADER
+    # SHADOWING -- no .h basename copied to two+ destinations both on an app's
+    # include path (include dirs read from the same committed CMakeLists). Header
+    # scope is CHECK 4's copy-list axis ONLY: a .h is included, not compiled, so no
+    # source-list check exists for it, and a stale header already in a long-lived
+    # tree is invisible here -- the build script's rm -f teardown remains that guard.
     # --self-test runs FIRST: control must pass, then an in-memory reconstruction
-    # of the pre-148551a defect must FAIL naming both files -- the gate cannot go
+    # of the pre-148551a defect must FAIL naming both files, and one of the pre-fix
+    # jarvis_ui_tokens.h double-copy must FAIL via CHECK 4 -- the gate cannot go
     # vacuous without this step going red.
     - name: "Invariant: every copied .c is compiled by the app that receives it"
       run: |
