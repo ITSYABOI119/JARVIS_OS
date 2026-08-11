@@ -2,8 +2,8 @@
   "_comment": "COVERAGE INSTRUMENT, NOT A SCORE. The deliverable is the per-module 'uncovered' list -- branches and lines that NEITHER the unit suite NOR the fuzzer reaches -- so a human can decide which are worth aiming a corpus at. A repo-wide percentage is explicitly out of scope; the per-module 'incidental_*_pct' fields exist only to size the uncovered list against its module and are never a target, a threshold, or a gate. The CI job that produces this file MUST NEVER fail on a coverage number -- only on its own infrastructure errors.",
   "judgements_reviewed": false,
   "_judgements_note": "The judgement fields are a CANDIDATE reading produced by the agent that built this instrument. The lead reviews and finalises every one. Until judgements_reviewed is true, treat every judgement as unconfirmed. 'unclassified' means no human judgement is recorded; 'unclassified-stale' means the source at that line changed after a judgement was made and the judgement was refused rather than carried over.",
-  "measured_at_utc": "2026-08-11T04:40:09Z",
-  "repo_head": "434495e",
+  "measured_at_utc": "2026-08-11T05:33:46Z",
+  "repo_head": "f74d105",
   "method": {
     "tool": "gcov (13.3.0) driven directly, parsed with stdlib Python",
     "why_not_gcovr_or_lcov": "neither is installed; pip refuses gcovr under PEP 668 without --break-system-packages, which would modify the system Python of every machine running this. gcov -j JSON carries per-line and per-branch counts, which is all this instrument needs.",
@@ -21,12 +21,11 @@
   },
   "totals": {
     "modules": 6,
-    "uncovered_gaps": 296,
+    "uncovered_gaps": 293,
     "by_judgement": {
       "unreachable-by-construction": 16,
       "defensive-guard": 14,
-      "unclassified": 263,
-      "reachable-worth-fuzzing": 3
+      "unclassified": 263
     }
   },
   "results": [
@@ -959,15 +958,14 @@
       "unit_suite": "phase3/src/ipc/test_shmem_ipc.c",
       "fuzz_harness": "phase3/src/drivers/fuzz_harness.c",
       "lines_total": 76,
-      "lines_never_executed": 11,
+      "lines_never_executed": 10,
       "branch_outcomes_total": 48,
-      "branch_outcomes_never_taken": 15,
-      "incidental_line_pct": 85.53,
-      "incidental_branch_pct": 68.75,
-      "uncovered_count": 20,
+      "branch_outcomes_never_taken": 12,
+      "incidental_line_pct": 86.84,
+      "incidental_branch_pct": 75.0,
+      "uncovered_count": 17,
       "uncovered_by_judgement": {
         "defensive-guard": 11,
-        "reachable-worth-fuzzing": 3,
         "unreachable-by-construction": 6
       },
       "uncovered": [
@@ -977,7 +975,7 @@
           "line": 44,
           "function": "shmem_ipc_init",
           "source": "if (!ring)",
-          "detail": "1 of 2 branch outcomes on this line never taken (line executed 60010 times)",
+          "detail": "1 of 2 branch outcomes on this line never taken (line executed 60011 times)",
           "branch_outcomes_total": 2,
           "branch_outcomes_never_taken": 1,
           "judgement": "defensive-guard",
@@ -999,7 +997,7 @@
           "line": 63,
           "function": "shmem_ipc_send",
           "source": "if (!ring || len > SHMEM_MAX_PAYLOAD)",
-          "detail": "2 of 4 branch outcomes on this line never taken (line executed 408424 times)",
+          "detail": "2 of 4 branch outcomes on this line never taken (line executed 352703 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 2,
           "judgement": "defensive-guard",
@@ -1021,7 +1019,7 @@
           "line": 65,
           "function": "shmem_ipc_send",
           "source": "if (len > 0 && !payload)",
-          "detail": "1 of 4 branch outcomes on this line never taken (line executed 408424 times)",
+          "detail": "1 of 4 branch outcomes on this line never taken (line executed 352703 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 1,
           "judgement": "defensive-guard",
@@ -1040,32 +1038,10 @@
         {
           "kind": "branch",
           "file": "phase3/src/ipc/shmem_ipc.c",
-          "line": 69,
-          "function": "shmem_ipc_send",
-          "source": "if (ring->header.size == 0 || ring->header.size > SHMEM_RING_SLOTS)",
-          "detail": "2 of 4 branch outcomes on this line never taken (line executed 408424 times)",
-          "branch_outcomes_total": 4,
-          "branch_outcomes_never_taken": 2,
-          "judgement": "reachable-worth-fuzzing",
-          "reason": "THE RING-SIZE GUARD, and it is measurably UNREACHED \u2014 this is the question A8's follow-up singled out. fuzz_harness.c's fuzz_shmem_ipc() is described as 'send/recv with corrupted ring data' and it DOES randomise the indices (fuzz_harness.c:185-186 assign random write_idx/read_idx) but it NEVER touches header.size, and every sub-test calls shmem_ipc_init() first, which sets size = SHMEM_RING_SLOTS (15). So the guard's true outcome cannot occur for any input the current harness produces. It is live and trivially reachable: one sub-test that sets ring.header.size to 0 and to a value > SHMEM_RING_SLOTS before calling send/recv covers it. Worth having precisely because this is the module whose two implementations diverged for 4.5 months (fixed 148551a) and this guard is the thing standing between a bad size and slot addressing past the 4096 B shared page."
-        },
-        {
-          "kind": "line",
-          "file": "phase3/src/ipc/shmem_ipc.c",
-          "line": 70,
-          "function": "shmem_ipc_send",
-          "source": "return -1;",
-          "detail": "line never executed by either the unit suite or the fuzzer",
-          "judgement": "reachable-worth-fuzzing",
-          "reason": "THE RING-SIZE GUARD, and it is measurably UNREACHED \u2014 this is the question A8's follow-up singled out. fuzz_harness.c's fuzz_shmem_ipc() is described as 'send/recv with corrupted ring data' and it DOES randomise the indices (fuzz_harness.c:185-186 assign random write_idx/read_idx) but it NEVER touches header.size, and every sub-test calls shmem_ipc_init() first, which sets size = SHMEM_RING_SLOTS (15). So the guard's true outcome cannot occur for any input the current harness produces. It is live and trivially reachable: one sub-test that sets ring.header.size to 0 and to a value > SHMEM_RING_SLOTS before calling send/recv covers it. Worth having precisely because this is the module whose two implementations diverged for 4.5 months (fixed 148551a) and this guard is the thing standing between a bad size and slot addressing past the 4096 B shared page."
-        },
-        {
-          "kind": "branch",
-          "file": "phase3/src/ipc/shmem_ipc.c",
           "line": 105,
           "function": "shmem_ipc_recv",
           "source": "if (!ring || !type || !seq || !len)",
-          "detail": "4 of 8 branch outcomes on this line never taken (line executed 80048 times)",
+          "detail": "4 of 8 branch outcomes on this line never taken (line executed 80052 times)",
           "branch_outcomes_total": 8,
           "branch_outcomes_never_taken": 4,
           "judgement": "defensive-guard",
@@ -1084,22 +1060,10 @@
         {
           "kind": "branch",
           "file": "phase3/src/ipc/shmem_ipc.c",
-          "line": 109,
-          "function": "shmem_ipc_recv",
-          "source": "if (ring->header.size == 0 || ring->header.size > SHMEM_RING_SLOTS)",
-          "detail": "1 of 4 branch outcomes on this line never taken (line executed 80048 times)",
-          "branch_outcomes_total": 4,
-          "branch_outcomes_never_taken": 1,
-          "judgement": "reachable-worth-fuzzing",
-          "reason": "THE RING-SIZE GUARD, and it is measurably UNREACHED \u2014 this is the question A8's follow-up singled out. fuzz_harness.c's fuzz_shmem_ipc() is described as 'send/recv with corrupted ring data' and it DOES randomise the indices (fuzz_harness.c:185-186 assign random write_idx/read_idx) but it NEVER touches header.size, and every sub-test calls shmem_ipc_init() first, which sets size = SHMEM_RING_SLOTS (15). So the guard's true outcome cannot occur for any input the current harness produces. It is live and trivially reachable: one sub-test that sets ring.header.size to 0 and to a value > SHMEM_RING_SLOTS before calling send/recv covers it. Worth having precisely because this is the module whose two implementations diverged for 4.5 months (fixed 148551a) and this guard is the thing standing between a bad size and slot addressing past the 4096 B shared page."
-        },
-        {
-          "kind": "branch",
-          "file": "phase3/src/ipc/shmem_ipc.c",
           "line": 140,
           "function": "shmem_ipc_recv",
           "source": "if (local_length > 0 && payload)",
-          "detail": "1 of 4 branch outcomes on this line never taken (line executed 28022 times)",
+          "detail": "1 of 4 branch outcomes on this line never taken (line executed 28023 times)",
           "branch_outcomes_total": 4,
           "branch_outcomes_never_taken": 1,
           "judgement": "defensive-guard",

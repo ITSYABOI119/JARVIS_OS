@@ -208,7 +208,55 @@ static void fuzz_shmem_ipc(void) {
         shmem_ipc_recv(&ring, &rtype, &rseq, rbuf, &rlen);
     }
 
-    printf("100000 malformed messages ... 0 crashes, %u CRC rejects  PASS\n", crc_rejects);
+    /* Sub-test 7 (DIRECTED — runs LAST and consumes NO RNG, so
+     * fuzz_gguf_parser draws the identical stream it drew before this
+     * existed): the 148551a ring-size guards.
+     *
+     * The random sub-tests cannot reach these outcomes: send is only ever
+     * called after shmem_ipc_init (header.size == 15, both guard outcomes
+     * impossible), and sub-test 6's fully-random header makes size == 0 a
+     * 2^-32 event on recv. The coverage instrument measured exactly that —
+     * send's guard (shmem_ipc.c:69/:70) never taken, recv's size==0
+     * outcome (:109) never taken. Directed corrupted sizes close them.
+     *
+     * Contract asserted: a corrupted size is rejected (-1) by BOTH send and
+     * recv, and a normal round-trip still works afterwards — the positive
+     * control proving the rejects corrupted nothing. */
+    {
+        static const uint32_t bad_sizes[] = { 0, SHMEM_RING_SLOTS + 1, 255 };
+        uint8_t dpayload[16] = "ring-size-guard";
+        int directed_ok = 1;
+        shmem_ipc_init(&ring);
+        for (size_t k = 0; k < sizeof(bad_sizes) / sizeof(bad_sizes[0]); k++) {
+            ring.header.size = bad_sizes[k];
+            if (shmem_ipc_send(&ring, MSG_QUERY, 77, dpayload, 16) != -1)
+                directed_ok = 0;
+            uint8_t rtype; uint16_t rseq, rlen;
+            uint8_t rbuf[SHMEM_MAX_PAYLOAD];
+            if (shmem_ipc_recv(&ring, &rtype, &rseq, rbuf, &rlen) != -1)
+                directed_ok = 0;
+        }
+        /* Positive control: restore the size; the rejected calls must have
+         * left the ring intact (indices unmoved, slots untouched). */
+        ring.header.size = SHMEM_RING_SLOTS;
+        uint8_t rtype = 0; uint16_t rseq = 0, rlen = 0;
+        uint8_t rbuf[SHMEM_MAX_PAYLOAD];
+        if (shmem_ipc_send(&ring, MSG_QUERY, 78, dpayload, 16) != 0)
+            directed_ok = 0;
+        if (shmem_ipc_recv(&ring, &rtype, &rseq, rbuf, &rlen) != 0 ||
+            rtype != MSG_QUERY || rseq != 78 || rlen != 16 ||
+            memcmp(rbuf, dpayload, 16) != 0)
+            directed_ok = 0;
+        if (!directed_ok) {
+            printf("directed ring-size guard cases FAILED\n");
+            fail_count++;
+            return;
+        }
+    }
+
+    printf("100000 malformed messages + 7 directed guard cases "
+           "(3 sizes x send+recv + round-trip) ... 0 crashes, %u CRC rejects  PASS\n",
+           crc_rejects);
     pass_count++;
 }
 
@@ -291,7 +339,7 @@ int main(void) {
     fuzz_shmem_ipc();
     fuzz_gguf_parser();
 
-    printf("\n=== Fuzz: %d/%d PASS (300000 iterations, 0 crashes) ===\n",
+    printf("\n=== Fuzz: %d/%d PASS (300007 iterations: 300000 random + 7 directed, 0 crashes) ===\n",
            pass_count, pass_count + fail_count);
     return fail_count > 0 ? 1 : 0;
 }
