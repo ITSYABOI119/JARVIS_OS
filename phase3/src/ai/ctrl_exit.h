@@ -16,22 +16,28 @@
  * order, the serial diagnostics, and the reply/trigger strings all stay in
  * main_x86.c. What moved is only the MAPPING from terminal state to verdicts.
  *
- * FAITHFUL, NOT IDEALISED. One shipped edge is reproduced on purpose: a
- * seq-matched MSG_RESPONSE whose chunk carried 0 usable bytes (got && resp_len
- * == 0) replies verdict 0 "answered" (empty text) while the store records
- * EPI_OUT_ERROR, the audit records AUDIT_OUT_FAIL, and control_in_answered is
- * still counted. That is the ONLY state family where the user hears
- * "answered" and the store says ERROR — the truth table pins its exact
- * extent, and A9/3 reports it as a finding rather than silently "fixing" it
- * (behaviour-neutral extraction; changing it is a separate decision).
- * REACHABILITY MEASURED 2026-08-11 (closures sweep): the edge IS reachable
- * from shipped PB — inference_server.c's explicit empty-response branch
- * (":984-era", locate by the "If empty response" comment) sends the
- * seq-matched zero-length MSG_RESPONSE whenever text_len == 0, which n_gen
- * == 0 produces (the model's FIRST sampled token is <eos>/tok->eos_id; the
- * stop check breaks BEFORE storing) and a tokenizer_decode error (<0,
- * coerced to 0) also produces. Not observed in any gate to date; the
- * fix-vs-accept decision is with the strategist.
+ * FAITHFUL, WITH ONE DELIBERATE REPAIR. A9/3 originally reproduced a shipped
+ * disagreement — a seq-matched MSG_RESPONSE carrying 0 usable bytes (got &&
+ * resp_len == 0) replied verdict 0 "answered" (empty text) while the store
+ * recorded EPI_OUT_ERROR, the audit recorded AUDIT_OUT_FAIL, and
+ * control_in_answered counted it — because a behaviour-neutral extraction
+ * that quietly repaired it would have been a behaviour change hiding inside a
+ * refactor. Its REACHABILITY was then measured (closures sweep 2026-08-11):
+ * inference_server.c's `if (text_len == 0)` branch sends that zero-length
+ * response with the ORIGINAL seq, and n_gen == 0 occurs when the first
+ * sampled token is the terminator (the 9d70f7f check breaks BEFORE storing);
+ * a negative tokenizer_decode, coerced to 0, reaches the same branch.
+ *
+ * REPAIRED 2026-08-11 (this module only): that state now replies verdict 3
+ * (failed) and is NOT counted answered. The store/audit values are unchanged
+ * — they were already failed-shaped, which is what made the old verdict a
+ * disagreement rather than a consistent misreading. The empty test runs
+ * BEFORE the CAP/KV-FULL truncation test on purpose: PB sets stop = CAP for
+ * n_gen >= max_tokens, which includes 0 >= 0, so the reachable shape is
+ * CAP with empty text and the other order would report it as verdict 4.
+ * HONEST SCOPE: this fixes ONE agreement defect on ONE lane. The empty
+ * generation itself is untouched and still possible; the user now learns the
+ * turn FAILED instead of being handed silence labelled "answered".
  *
  * Host-pure: no seL4 dependency; the caller passes every input. The
  * km2b_miss / wake / pb_progress / ctrl_epi_index / pb_health precedent.
@@ -56,7 +62,10 @@ typedef struct {
     uint16_t epi_action;      /* EPI_ACT_CONTROL_IN / _LOCAL  (valid iff epi_write) */
     uint16_t jact_verdict;    /* AUDIT_BLOCKED / AUDIT_EXECUTED */
     uint16_t jact_outcome;    /* AUDIT_OUT_NA / AUDIT_OUT_OK / AUDIT_OUT_FAIL */
-    uint8_t  count_answered;  /* 1 = bump g_ctrl_in_answered (the answered-arm
+    uint8_t  count_answered;  /* 1 = bump g_ctrl_in_answered. 0 for an EMPTY
+                               * response since the 2026-08-11 repair — a turn
+                               * that produced no text is not an answer.
+                               * (the answered-arm
                                * exit, REGARDLESS of resp_len — shipped
                                * behaviour, see the header note) */
     uint8_t  count_blocked;   /* 1 = bump g_ctrl_in_blocked (refused only) */
@@ -90,6 +99,9 @@ typedef struct {
  * resp_len    — bytes accumulated in the reply text (roff). Drives the
  *               OK/ERROR + tag decisions; the shipped `served_locally &&
  *               resp_len > 0` guard on the LOCAL tag is reproduced verbatim.
+ *               resp_len == 0 in the answered arm is the REPAIRED edge: it
+ *               decides verdict 3 and does not count, ahead of any
+ *               truncation test (see the repair note at the top).
  * stop_reason — the PB_STOP_* latch value AT THE EXIT (the caller clears it to
  *               PB_STOP_UNKNOWN before dispatch, so it belongs to THIS
  *               inference; UNKNOWN therefore reads "not truncated", never a

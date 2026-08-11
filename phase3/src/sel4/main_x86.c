@@ -6798,6 +6798,32 @@ static void *main_continued(void *arg UNUSED)
         } else {
             puts_serial("[CTRL-IN-PROBE] FAIL truncation-leg frame not accepted\n");
         }
+        /* T6-REPAIR leg — THE EMPTY RESPONSE (verdict 3, and specifically NOT 0 or 4).
+         *
+         * PB clamps this marker query's cap to PB_GEN_EMPTYPROBE_TOKENS = 0, so the generation
+         * loop exits before its first iteration: n_gen == 0 -> text_len == 0 -> the REAL
+         * `if (text_len == 0)` send fires with the original seq. PA reads pk_len == 0 -> copy = 0
+         * -> got = 1, roff = 0 — the state that until 2026-08-11 was reported to the user as
+         * verdict 0 "answered" with empty text while the store recorded ERROR.
+         *
+         * The leg is worth its own entry because of a trap: PB sets stop = CAP for
+         * n_gen >= max_tokens, and 0 >= 0 holds, so this frame arrives carrying stop=CAP. If the
+         * repaired mapping ever tested truncation before emptiness it would answer verdict 4 here
+         * and the repair would be defeated by its own probe. Expect exactly:
+         * [PB] EMPTYPROBE -> [PB] gen n=0 ... stop=CAP -> NO [CTRL-IN-RESP] TRUNCATED line ->
+         * [CTRL-IN-REPLY] verdict=3 len=0, and the episodic record ERROR/tag-3.
+         * Full poll budget; PB alive; still BEFORE the degraded latch. */
+        control_replay_init(&g_ctrl_replay, CONTROL_TEST_EPOCH);
+        pjl = build_probe_jctl(pj, g_ctrl_key, 16u, 0xF0, "EMPTYPROBE say nothing");
+        pfl = net_build_udp_broadcast(pf, sizeof pf, g_net.nic.mac, JARVIS_BOX_IP,
+                                      40000, (uint16_t)CONTROL_PORT, pj, pjl);
+        pv = (pfl > 0) ? ctrl_roundtrip_sync(pf, (size_t)pfl, &pr) : CV_DROP_PARSE;
+        if (pv == CV_ACCEPT) {
+            puts_serial("[CTRL-IN-PROBE] empty-response (expect verdict=3, NOT 0/4) q=\"EMPTYPROBE say nothing\"\n");
+            pa_ctrl_gate(&pr);            /* cap 0 -> n_gen=0 -> real empty send -> verdict=3 */
+        } else {
+            puts_serial("[CTRL-IN-PROBE] FAIL empty-response frame not accepted\n");
+        }
         /* FINAL leg — STRICTLY LAST (g_pb_dead is a TERMINAL latch that kills ALL PB dispatch for
          * the rest of the boot; sequencing it before the route/refuse legs would starve them — the
          * 6-3/M1 "B5 terminal latch LAST" lesson). Induce degraded, then a benign frame proves the

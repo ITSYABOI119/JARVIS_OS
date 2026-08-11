@@ -56,24 +56,49 @@ void ctrl_exit_decide(int refused, int served_locally, int dispatch_ok,
 
     /* Arm 3 — the answered arm (served_locally forces got upstream). */
     if (got) {
-        /* #9: ONLY CAP and KV_FULL are truncation, and never for a locally-
-         * served answer (no generation ran — the latch would belong to some
-         * earlier inference). UNKNOWN reads "not truncated": a stats message
-         * that never arrived must not become a fabricated claim. */
-        if (!served_locally &&
-            (stop_reason == PB_STOP_CAP || stop_reason == PB_STOP_KV_FULL))
-            out->reply_verdict = 4;
-        else
-            out->reply_verdict = 0;
+        /* THE REPAIR (2026-08-11). A response arrived but carried NO usable
+         * bytes, so there is no answer to report: verdict 3 (failed), and the
+         * answered counter does NOT count it. The store already said ERROR and
+         * the audit already said FAIL — this makes what the USER is told agree
+         * with them, rather than handing over silence labelled "answered".
+         *
+         * REACHABLE, which is why it is repaired and no longer merely pinned:
+         * inference_server.c's `if (text_len == 0)` branch sends an explicit
+         * zero-length MSG_RESPONSE carrying the ORIGINAL seq, and n_gen == 0
+         * occurs whenever the first sampled token is the terminator (the
+         * 9d70f7f stop check breaks BEFORE storing). PA reads pk_len == 0 ->
+         * copy = 0 -> got = 1, roff = 0.
+         *
+         * THE EMPTINESS TEST COMES FIRST, and the ordering is load-bearing
+         * rather than stylistic: PB sets stop = CAP whenever n_gen >=
+         * max_tokens, which INCLUDES 0 >= 0. The probe that exercises this
+         * path clamps max_tokens to 0, so the reachable shape is CAP *with*
+         * empty text — testing truncation first would label it "answered but
+         * cut off" (verdict 4) and the repair would be defeated by its own
+         * probe. Nothing was cut off; nothing was produced. */
+        if (resp_len == 0) {
+            out->reply_verdict  = 3;
+            out->count_answered = 0;
+        } else {
+            /* #9: ONLY CAP and KV_FULL are truncation, and never for a locally-
+             * served answer (no generation ran — the latch would belong to some
+             * earlier inference). UNKNOWN reads "not truncated": a stats message
+             * that never arrived must not become a fabricated claim. */
+            if (!served_locally &&
+                (stop_reason == PB_STOP_CAP || stop_reason == PB_STOP_KV_FULL))
+                out->reply_verdict = 4;
+            else
+                out->reply_verdict = 0;
+            out->count_answered = 1;
+        }
 
-        /* THE SHIPPED EDGE, reproduced: resp_len == 0 stores ERROR and audits
-         * FAIL while the reply verdict above still says answered — and the
-         * answered counter still counts. Pinned, not repaired. */
+        /* Unchanged by the repair — these were already failed-shaped for an
+         * empty response, which is precisely what made the old verdict 0 a
+         * disagreement rather than a consistent (if wrong) reading. */
         out->epi_outcome    = (resp_len > 0) ? EPI_OUT_OK : EPI_OUT_ERROR;
         out->epi_action     = (served_locally && resp_len > 0)
                               ? EPI_ACT_CONTROL_IN_LOCAL : EPI_ACT_CONTROL_IN;
         out->jact_outcome   = (resp_len > 0) ? AUDIT_OUT_OK : AUDIT_OUT_FAIL;
-        out->count_answered = 1;
 
         /* §3 honesty guards: a locally-served answer is NOT evidence of PB
          * contact (no fake ACK for the K/M2c detector) and never opened a

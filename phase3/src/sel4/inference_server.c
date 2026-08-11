@@ -344,6 +344,14 @@ static void pb_log_num(const char *prefix, uint32_t val, const char *suffix)
  * so the gate can confirm a truncated answer is still DELIVERED. */
 #define PB_GEN_CAPPROBE_TOKENS 12
 
+/* The T6-repair probe's clamp: ZERO, so the generation loop body never runs and n_gen == 0. That
+ * is the genuine empty-response condition — the same state the model reaches naturally when its
+ * FIRST sampled token is the terminator (the 9d70f7f check breaks BEFORE storing) — and it makes
+ * the REAL `if (text_len == 0)` send fire rather than PA simulating it. Note PB sets
+ * stop = PB_STOP_CAP for n_gen >= max_tokens, and 0 >= 0 holds, so this leg also proves the
+ * repaired mapping tests emptiness BEFORE truncation: it must report verdict 3, never 4. */
+#define PB_GEN_EMPTYPROBE_TOKENS 0
+
 /* Response-chunk send, wrapped ONLY so the ring-full branch can be induced. That branch had never
  * executed in a deployed build (text_out[512] capped a response at <=3 chunks into a 15-slot ring),
  * and commit 2 of this milestone raises exactly those ceilings — so it must be proven to work
@@ -610,6 +618,27 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
         puts_serial("[PB] CAPPROBE: cap clamped to ");
         put_dec((uint32_t)max_tokens);
         puts_serial(" to force the CAP stop (G4)");
+        seL4_DebugPutChar(10);
+    }
+
+    /* THE T6 REPAIR'S PROBE — the same shape as CAPPROBE above, and it exists for the same
+     * reason: a branch nothing runs is a branch nobody has checked.
+     *
+     * The empty-response path is REACHABLE in shipped code (the model's first sampled token being
+     * the terminator yields n_gen == 0, and a negative tokenizer_decode lands in the same place),
+     * but it is prompt-dependent under greedy sampling, so no gate has ever produced it. Clamping
+     * the cap to ZERO makes the generation loop exit before its first iteration — n_gen == 0,
+     * text_len == 0 — so the REAL `if (text_len == 0)` send fires with the original seq. PA is
+     * NOT asked to simulate the state: the point is to exercise the actual path from PB's send
+     * through the repaired mapping to the signed reply.
+     *
+     * Nothing else is altered — no fake stop reason, no synthesised message, and the deployed
+     * caps are untouched. Control-IN lane only, probe-gated. */
+    if (is_control_in && qlen >= 10 && memcmp(query_buf, "EMPTYPROBE", 10) == 0) {
+        max_tokens = PB_GEN_EMPTYPROBE_TOKENS;
+        puts_serial("[PB] EMPTYPROBE: cap clamped to ");
+        put_dec((uint32_t)max_tokens);
+        puts_serial(" -> n_gen=0 -> the real empty-response send (T6)");
         seL4_DebugPutChar(10);
     }
 #endif

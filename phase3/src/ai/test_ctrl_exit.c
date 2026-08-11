@@ -6,14 +6,18 @@
  * (JACT verdict + outcome) are decided together and must never drift apart —
  * plus the counters and the three §3 honesty guards.
  *
- * THE TABLE PINS SHIPPED BEHAVIOUR, NOT IDEALISED BEHAVIOUR. In particular
- * T6 pins the one disagreement edge the extraction FOUND (got && resp_len==0
- * -> verdict 0 "answered" to the user, EPI_OUT_ERROR in the store,
- * AUDIT_OUT_FAIL in the audit, and control_in_answered still counted), and
- * T9 proves that edge is the ONLY state family where the user hears
- * "answered" while the store says ERROR. A mutant that "fixes" the edge
- * FAILS T6 — behaviour-neutral extraction means the repair is a separate,
- * deliberate decision, not a silent side effect of a refactor.
+ * THE TABLE PINNED THE SHIPPED DISAGREEMENT UNTIL IT WAS PROVEN REACHABLE,
+ * AND NOW PINS THE REPAIR. A9/3's T6 recorded the edge the extraction found
+ * (got && resp_len==0 -> verdict 0 "answered" to the user, EPI_OUT_ERROR in
+ * the store, AUDIT_OUT_FAIL in the audit, control_in_answered counted) and
+ * deliberately failed any mutant that "fixed" it, because a behaviour-neutral
+ * extraction must not smuggle in a behaviour change. The closures sweep then
+ * MEASURED the edge reachable from shipped PB, so 2026-08-11 repairs it:
+ * verdict 3, not counted. THE MUTANT DIRECTION THEREFORE INVERTS — what used
+ * to be "the idealised fix must FAIL" is now "reverting to verdict 0 must
+ * FAIL" — and T9's edge assertion inverts with it, from "exactly 24 poisoned
+ * states" to "none", so a reintroduction ANYWHERE in the mapping is caught,
+ * not just at the repaired line.
  *
  * Compile (host):
  *   gcc -O2 -Wall -Werror -Iphase3/src/ai -Iphase3/src/ipc \
@@ -129,24 +133,37 @@ int main(void)
     CHECK(d.count_answered == 1,             "T5 verdict 4 -> counted answered");
     d = D(0, 0, 1, 1, 0, 900, PB_STOP_KV_FULL);
     CHECK(d.reply_verdict == 4,              "T5b stop=KV-FULL -> verdict 4");
-    /* T5c: defined-but-unreachable (a CAP stop implies ~250 generated tokens,
-     * so the text cannot be empty) — the mapping stays total and honest */
+    /* T5c: empty + CAP. Once "defined-but-unreachable"; the REACHABLE shape
+     * since the repair's probe — PB sets stop=CAP for n_gen >= max_tokens,
+     * which includes 0 >= 0, so the max_tokens=0 probe leg lands EXACTLY
+     * here. Emptiness outranks truncation: nothing was cut off, nothing was
+     * produced. If this ever reads 4 again, the two tests have been reordered
+     * and the repair is defeated by its own probe. */
     d = D(0, 0, 1, 1, 0, 0, PB_STOP_CAP);
-    CHECK(d.reply_verdict == 4 && d.epi_outcome == EPI_OUT_ERROR,
-          "T5c truncated-empty edge: defined, ERROR stored");
+    CHECK(d.reply_verdict == 3,              "T5c empty+CAP -> verdict 3, NOT 4 (emptiness outranks truncation)");
+    CHECK(d.epi_outcome == EPI_OUT_ERROR,    "T5c empty+CAP -> ERROR stored");
+    CHECK(d.count_answered == 0,             "T5c empty+CAP -> not counted answered");
 
-    /* ── T6: THE SHIPPED DISAGREEMENT EDGE — pinned, not repaired ──
-     * A seq-matched MSG_RESPONSE whose chunk carried 0 usable bytes: the user
-     * hears "answered" (verdict 0, empty text), the store records ERROR, the
-     * audit records FAIL, and control_in_answered still counts. This is what
-     * boot-52-era pa_ctrl_gate DOES; a mutant that "fixes" any leg of it
-     * fails here, which is the point — the repair is a separate decision. */
+    /* ── T6: THE REPAIRED EDGE — now pinning AGREEMENT ──
+     * A seq-matched MSG_RESPONSE whose chunk carried 0 usable bytes. Until
+     * 2026-08-11 this replied verdict 0 "answered" with EMPTY text while the
+     * store said ERROR, the audit said FAIL and control_in_answered counted
+     * it. Measured REACHABLE (inference_server.c's `if (text_len == 0)` send;
+     * n_gen == 0 when the first sampled token is the terminator), so it was
+     * repaired rather than documented. What the user is TOLD now agrees with
+     * what the store and the audit already said. A mutant that reverts the
+     * verdict to 0, or that re-counts it as answered, fails HERE. */
     d = D(0, 0, 1, 1, 0, 0, PB_STOP_MODEL_ENDED);
-    CHECK(d.reply_verdict == 0,              "T6 EDGE: user is told answered (verdict 0)");
-    CHECK(d.epi_outcome == EPI_OUT_ERROR,    "T6 EDGE: store records ERROR");
-    CHECK(d.jact_outcome == AUDIT_OUT_FAIL,  "T6 EDGE: audit records FAIL");
-    CHECK(d.count_answered == 1,             "T6 EDGE: still counted answered (shipped behaviour)");
-    CHECK(d.ack_pb == 1,                     "T6 EDGE: PB ack still permitted (a response DID arrive)");
+    CHECK(d.reply_verdict == 3,              "T6 REPAIRED: empty response -> verdict 3 (failed), not 0");
+    CHECK(d.epi_outcome == EPI_OUT_ERROR,    "T6 REPAIRED: store records ERROR (unchanged)");
+    CHECK(d.jact_outcome == AUDIT_OUT_FAIL,  "T6 REPAIRED: audit records FAIL (unchanged)");
+    CHECK(d.count_answered == 0,             "T6 REPAIRED: NOT counted answered");
+    CHECK(d.ack_pb == 1,                     "T6 REPAIRED: PB ack still permitted (a response DID arrive)");
+    /* T6b: the repair must not have moved a NON-empty answer. One byte is the
+     * whole difference between the repaired arm and the untouched one. */
+    d = D(0, 0, 1, 1, 0, 1, PB_STOP_MODEL_ENDED);
+    CHECK(d.reply_verdict == 0 && d.count_answered == 1 && d.epi_outcome == EPI_OUT_OK,
+          "T6b one byte of answer -> still verdict 0, counted, OK stored");
 
     /* ── T7: timeout ── */
     d = D(0, 0, 1, 0, 0, 0, PB_STOP_UNKNOWN);
@@ -186,6 +203,11 @@ int main(void)
 
             int arm_degraded = !rf && !sl && !dk;
             int arm_answered = !rf && !arm_degraded && gt;
+            /* Since the 2026-08-11 repair the answered ARM and an answered
+             * OUTCOME are no longer the same thing: an empty response takes
+             * the arm but reports failure. Every invariant that used to key
+             * off arm_answered alone now says which of the two it means. */
+            int arm_answered_nonempty = arm_answered && rl > 0;
             int ok = 1;
 
             /* the decision is total and the verdict is always a defined value */
@@ -197,9 +219,12 @@ int main(void)
             /* JACT verdict: BLOCKED for refused, EXECUTED everywhere else */
             ok &= (rf ? d.jact_verdict == AUDIT_BLOCKED
                       : d.jact_verdict == AUDIT_EXECUTED);
-            /* answered counting is exactly the answered arm */
-            ok &= ((d.count_answered == 1) == arm_answered);
-            ok &= ((d.reply_verdict == 0 || d.reply_verdict == 4) == arm_answered);
+            /* answered counting is exactly the answered arm WITH TEXT */
+            ok &= ((d.count_answered == 1) == arm_answered_nonempty);
+            ok &= ((d.reply_verdict == 0 || d.reply_verdict == 4) == arm_answered_nonempty);
+            /* the repaired arm: took the answered arm, produced nothing,
+             * reports failure — verdict 3, exactly as the timeout arm does */
+            ok &= ((arm_answered && rl == 0) ? (d.reply_verdict == 3) : 1);
             /* verdict 2/3 always mean ERROR stored + FAIL audited */
             if (d.reply_verdict == 2 || d.reply_verdict == 3)
                 ok &= (d.epi_outcome == EPI_OUT_ERROR &&
@@ -210,9 +235,10 @@ int main(void)
                        (d.jact_outcome == AUDIT_OUT_OK));
             ok &= ((d.epi_write && d.epi_outcome == EPI_OUT_OK)
                    ? (d.reply_verdict == 0 || d.reply_verdict == 4) : 1);
-            /* verdict 4 only for a PB-generated answer that hit CAP/KV-FULL */
+            /* verdict 4 only for a PB-generated answer WITH TEXT that hit
+             * CAP/KV-FULL — an empty CAP stop is verdict 3 (T5c) */
             if (d.reply_verdict == 4)
-                ok &= (!sl && gt &&
+                ok &= (!sl && gt && rl > 0 &&
                        (sp == PB_STOP_CAP || sp == PB_STOP_KV_FULL));
             /* the LOCAL tag is exactly a locally-served non-empty answer */
             if (d.epi_write)
@@ -231,12 +257,16 @@ int main(void)
                    (!rf && !arm_degraded && !gt && !fa && !sl));
             ok &= ((d.close_window == 1) == (!rf && !sl && dk));
 
-            /* THE EDGE EXTENT: the user hears answered(0/4) while the store
-             * says ERROR in EXACTLY the answered-arm states with empty text */
+            /* THE EDGE IS GONE: there is no state left in which the user
+             * hears answered(0/4) while the store says ERROR. This assertion
+             * carried the edge's exact extent (24 states) before the
+             * 2026-08-11 repair; it now demands ZERO, so any reintroduction
+             * anywhere in the mapping — not just at the repaired line — fails
+             * the sweep. */
             int told_ok_stored_err =
                 ((d.reply_verdict == 0 || d.reply_verdict == 4) &&
                  d.epi_write && d.epi_outcome == EPI_OUT_ERROR);
-            ok &= (told_ok_stored_err == (arm_answered && rl == 0));
+            ok &= (told_ok_stored_err == 0);
             if (told_ok_stored_err) edge_states++;
 
             if (!ok && sweep_bad < 5) {
@@ -252,10 +282,11 @@ int main(void)
         }
         CHECK(states == 384,   "T9 sweep covered all 384 states");
         CHECK(sweep_bad == 0,  "T9 agreement invariants hold across the sweep");
-        /* answered arm with rl==0: rf=0, (sl,dk) in {(0,1),(1,0),(1,1)}, got=1,
-         * fa in {0,1}, 4 stop values -> 3*2*4 = 24 poisoned states, no more */
-        CHECK(edge_states == 24,
-              "T9 the told-answered/stored-ERROR edge is EXACTLY the empty-text answered states");
+        /* Was 24 (rf=0, (sl,dk) in {(0,1),(1,0),(1,1)}, got=1, fa in {0,1},
+         * 4 stop values = 3*2*4) — the exact extent of the shipped edge.
+         * The repair eliminates the family, so the only honest number is 0. */
+        CHECK(edge_states == 0,
+              "T9 NO told-answered/stored-ERROR state survives the repair");
     }
 
     /* ── T10: determinism / full overwrite (the poisoned-output D() helper
