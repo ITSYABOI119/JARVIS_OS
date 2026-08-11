@@ -3,8 +3,9 @@
  *
  * The validated query is untrusted, length-carried bytes. This harness proves
  * route_classify + sysfacts_answer are crash/UB-free for ANY input and STABLE
- * under match-preserving noise, in three ~100K-iter modes (no accuracy claim —
- * crash/UB-freedom + the result-struct invariant only):
+ * under match-preserving noise, in three RANDOM ~100K-iter modes plus one small
+ * DETERMINISTIC directed mode (no accuracy claim — crash/UB-freedom + the
+ * result-struct invariant only):
  *
  *   (a) RAW              — random length 0..256 + random bytes into an EXACT-len
  *                          heap buffer (ASan redzone at data[len] — the M1
@@ -28,8 +29,19 @@
  *                          Asserts bounded (return < cap), NUL-terminated within
  *                          cap, no crash — for ANY cap 0..19.
  *
+ *   (d) DIRECTED         — a fixed table of inputs shaped to REACH classifier
+ *                          branches the random modes miss on STATISTICS rather
+ *                          than on structure (the write bound; the short-circuit-
+ *                          SHADOWED uptime clauses; the "day is" wall-clock
+ *                          sibling). Each case runs ONCE — this mode adds CASES,
+ *                          never iterations. It asserts the same invariant as (a)
+ *                          and deliberately asserts NO expected class; see
+ *                          run_directed(). It runs LAST and consumes no RNG, so
+ *                          (a)/(b)/(c) draw the identical stream they drew before
+ *                          it existed.
+ *
  * On ANY assertion failure: print the mode + iter + fixed seed and exit nonzero.
- * On success: "FUZZ OK <iters> iters".
+ * On success: "FUZZ OK <n> iters (<random> random + <n> directed cases)".
  *
  * Build/run (ASan/UBSan, -O1):
  *   gcc -Wall -Werror -O1 -g -std=c11 -fsanitize=address,undefined -I phase3/src/ai \
@@ -225,19 +237,124 @@ static int run_sysfacts(long iters, long *out_done)
     return 0;
 }
 
+/* ================================================================
+ * (d) DIRECTED — a fixed table of inputs aimed at classifier branches the random
+ *     modes miss on STATISTICS, not on structure. MEASURED against the coverage
+ *     instrument (phase3/scripts/coverage_report.sh), which is how the three
+ *     families below were identified.
+ *
+ *     ASSERTS THE HARNESS CONTRACT ONLY — no crash, plus the same result-struct
+ *     invariant mode (a) asserts. It deliberately does NOT pin an expected class:
+ *     a routing expectation belongs to test_route.c / routing_suite.h, and
+ *     asserting one here would make the FUZZER fail on a legitimate, reviewed
+ *     retune of the keyword tables. These cases exist to REACH code, and their
+ *     claim is "still crash-free and still structurally consistent".
+ *
+ *     (i)   LONG ALNUM -> the rt_normalize WRITE BOUND (`o + 1 < cap`), the exact
+ *           analogue of qs_normalize's. Mode (a) already feeds up to 256 bytes so
+ *           it is structurally able to reach the 191-char bound; random bytes
+ *           normalise to ~108 chars (only ~24% of byte values are alphanumeric
+ *           and every separator run collapses to one space), so it never arrives.
+ *
+ *     (ii)  SHADOWED UPTIME CLAUSES -> rt_seq2("since","when") /
+ *           rt_seq2("been","up") / rt_seq2("been","running"). These are live and
+ *           reachable, but every phrasing in the corpus that would reach them
+ *           ALSO contains "how long", and rt_seq2("how","long") sits EARLIER in
+ *           the same || chain and short-circuits first. The cases below omit
+ *           "how long" so each clause is the one that decides.
+ *
+ *     (iii) "day is" -> the wall-clock DECLINE sibling. Its "time is" neighbour
+ *           on the same line is covered; this one needs a query with no "time"
+ *           word, so the earlier disjunct is false and this one decides.
+ *
+ *     Each case is `fill` repeated `reps` times followed by `tail`, so one table
+ *     expresses both short literals and the long runs (i) needs.
+ * ================================================================ */
+typedef struct {
+    const char *fill;   /* repeated `reps` times (may be "") */
+    int         reps;
+    const char *tail;   /* appended once (may be "")         */
+} rt_directed_t;
+
+static const rt_directed_t RT_DIRECTED[] = {
+    /* (i) write bound — each normalises to more than RT_NORM_MAX-1 (191) chars. */
+    { "x",      240, ""                   },  /* one 240-char word              */
+    { "ab ",     80, ""                   },  /* 240 B, ~80 short words         */
+    { "Node7 ",  40, ""                   },  /* 280 B, mixed case + digits     */
+    { "pad ",    50, "have you been up"   },  /* the clause is pushed PAST the
+                                               * bound and truncated away       */
+    /* (ii) the short-circuit-shadowed uptime clauses — note NO "how long". */
+    { "", 0, "since when are you awake" },
+    { "", 0, "tell me since when"       },
+    { "", 0, "have you been up"         },
+    { "", 0, "have you been running"    },
+    { "", 0, "have you been on"      },  /* the LAST uptime clause; see the note below */
+    /* (iii) the "day is" wall-clock sibling — note NO "time" word. */
+    { "", 0, "what day is it"    },
+    { "", 0, "which day is today" },
+    { "", 0, "what date is it"   },      /* the "date is" sibling; see the note below */
+};
+
+/*
+ * A MEASURED PROPERTY OF THE INSTRUMENT, not of this table — read this before
+ * concluding that a clause here is "still uncovered".
+ *
+ * At -O0, gcov attributes each clause of a MULTI-LINE `||` chain to the line
+ * BEFORE it. Measured on route.c's UPTIME chain by running these inputs in
+ * isolation and counting: four `been running` inputs produced a true-count of
+ * exactly 4 on the line holding `been up`, and the line holding `been running`
+ * showed outcomes totalling exactly the 5 inputs that fell through to the NEXT
+ * clause. The same shift applies to the wall-clock chain.
+ *
+ * The consequence is a trap: a coverage report naming "route.c:269
+ * rt_seq2(been,running)" as uncovered is really naming `been on`, and one
+ * naming ":296 (... day is ...)" is really naming `date is`. Aiming at the
+ * quoted clause covers a DIFFERENT line and leaves the reported gap open,
+ * which looks exactly like the directed case not working. The last case in
+ * each family above is the one the report was actually asking for.
+ */
+#define RT_DIRECTED_N ((long)(sizeof RT_DIRECTED / sizeof RT_DIRECTED[0]))
+
+static int run_directed(long *out_done)
+{
+    uint8_t buf[512];   /* > the longest case (280 B); the builder is bounded anyway */
+
+    for (long i = 0; i < RT_DIRECTED_N; i++) {
+        const rt_directed_t *d = &RT_DIRECTED[i];
+        size_t n = 0;
+        for (int k = 0; k < d->reps; k++)
+            for (const char *p = d->fill; *p && n < sizeof buf; p++)
+                buf[n++] = (uint8_t)*p;
+        for (const char *p = d->tail; *p && n < sizeof buf; p++)
+            buf[n++] = (uint8_t)*p;
+
+        route_result_t r;
+        classify_exact(buf, n, &r);     /* exact-len heap: ASan redzones buf[n] */
+        FUZZ_ASSERT(invariant_ok(&r), "directed:invariant", i);
+    }
+    *out_done = RT_DIRECTED_N;
+    return 0;
+}
+
 int main(void)
 {
-    long total = 0, done = 0;
+    long rand_iters = 0, directed = 0, done = 0;
 
     if (run_raw(100000, &done)) return 1;
-    total += done;
+    rand_iters += done;
 
     if (run_structured(100000, &done)) return 1;
-    total += done;
+    rand_iters += done;
 
     if (run_sysfacts(100000, &done)) return 1;
-    total += done;
+    rand_iters += done;
 
-    printf("FUZZ OK %ld iters\n", total);
+    /* LAST and RNG-free, so the three random modes above draw exactly the stream
+     * they drew before this mode existed. */
+    if (run_directed(&done)) return 1;
+    directed += done;
+
+    printf("FUZZ OK %ld iters (%ld random + %ld directed cases)\n",
+           rand_iters + directed, rand_iters, directed);
     return 0;
 }

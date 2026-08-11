@@ -1,7 +1,8 @@
 {
   "_comment": "HUMAN judgements for the coverage instrument, consumed by coverage_report.py. Each entry stores the SOURCE TEXT it was judged against: if that line is edited or shifts, the report emits 'unclassified-stale' instead of carrying the judgement onto changed code. A gap with no entry here is 'unclassified' -- never dropped, never guessed. Same drift-gate discipline as gen_embed_mu.py --check.",
-  "_status": "FINALISED by the lead 2026-08-07. All 21 gaps reviewed against source: 2 reclassified (route_decline_text 367/369 -> unreachable-by-fuzzing-by-construction, a UNIT-test gap), 1 escalation verified and closed as no-defect (control_verify NULL guard), the remaining 18 stand as judged.",
-  "_taxonomy_note": "Two entries below (route.c:367/369, route_decline_text) are marked reachable-worth-fuzzing because it is the only 'this is a real gap' bucket available, but fuzzing is the WRONG instrument for them -- the function takes no arguments. The correct fix is a one-line unit assertion. Flagged for the lead: the three-value taxonomy has no 'reachable, worth a unit case, not fuzzable' value.",
+  "_status": "FINALISED by the lead 2026-08-07. All 21 gaps reviewed against source: 2 reclassified (route_decline_text 367/369 -> unreachable-by-construction, a UNIT-test gap), 1 escalation verified and closed as no-defect (control_verify NULL guard), the remaining 18 stand as judged. UPDATED 2026-08-11: all 8 reachable-worth-fuzzing gaps are now COVERED by directed cases added to the two structured fuzzers -- total gaps 21 -> 13, and the reachable-worth-fuzzing bucket is EMPTY. The 8 entries below are retained (inert while covered) so a future regression re-reads a judgement rather than a blank.",
+  "_taxonomy_note": "route.c:367/369 (route_decline_text) sit in the unreachable-by-construction bucket after the 2026-08-07 lead review, but the honest disposition is 'reachable, worth a UNIT case, not fuzzable' -- the function takes no arguments, so no corpus can reach it, while the code itself is live. The three-value taxonomy has no value for that, and adding a fourth would have to be taught to coverage_report.py's VALID_JUDGEMENTS. (This note previously said those two entries were 'marked reachable-worth-fuzzing', which contradicted the entries themselves after the reclassification recorded in _status -- prose that had drifted from the data. Corrected 2026-08-11.)",
+  "_instrument_line_attribution_warning": "MEASURED 2026-08-11, and it invalidates the CLAUSE NAMED in any judgement on a multi-line || chain: at -O0 gcov attributes each clause's branch to the line BEFORE it. Proven by running inputs in isolation and counting -- four 'been running' inputs produced a true-count of exactly 4 on the line holding 'been up' (route.c:268), while route.c:269 ('been running') showed outcomes totalling exactly the 5 inputs that fell through to the next clause. So a report naming ':269 rt_seq2(been,running)' is really naming 'been on' (line 270), and ':296 (... day is ...)' is really naming 'date is' (line 297). Two judgements below were written against the quoted text and therefore named the wrong clause; aiming at the quoted clause covers a different line and leaves the reported gap open, which reads exactly like the directed case not working. The LINE NUMBER is reliable; the SOURCE TEXT beside it may belong to the next clause down.",
   "judgements": [
     {
       "file": "phase3/src/ai/query_shield.c",
@@ -121,7 +122,7 @@
       "kind": "branch",
       "source_at_judgement": "rt_seq2(&W, \"been\", \"running\", 2) ||",
       "judgement": "reachable-worth-fuzzing",
-      "reason": "Same short-circuit shadowing as line 268. MEASURED: 'have you been running' reaches this clause and classifies SYSFACTS / SF_UPTIME. Note line 270 ('been','on') IS covered, so the gap is specific to these clauses, not the whole chain."
+      "reason": "COVERED 2026-08-11 -- but the clause named here was WRONG, and the correction is the durable lesson. This entry says 'been','running' and adds 'Note line 270 (been,on) IS covered'; the truth is the exact reverse. Per the _instrument_line_attribution_warning above, gcov shifts each ||-clause branch one line earlier at -O0, so THIS reported gap was the 'been','on' clause on line 270 and 'been','running' was already covered. Measured: adding 'have you been running' did NOT close this gap (outcome #0 stayed 0 while its true-count appeared on line 268); adding 'have you been on' closed it immediately (#0: 0 -> 1). The reachability claim was right, the attribution was not."
     },
     {
       "file": "phase3/src/ai/route.c",
@@ -129,7 +130,7 @@
       "kind": "branch",
       "source_at_judgement": "(rt_seq2(&W, \"time\", \"is\", 1) || rt_seq2(&W, \"day\", \"is\", 1) ||",
       "judgement": "reachable-worth-fuzzing",
-      "reason": "The 'day is' wall-clock DECLINE clause never evaluates true; the 'time is' sibling on the same line is covered. MEASURED: 'what day is it' and 'which day is today' both DECLINE (rule 5), so the clause is live and merely un-exercised."
+      "reason": "COVERED 2026-08-11 -- and, like line 269, this entry named the WRONG clause. It says the gap is the 'day is' sibling; per the _instrument_line_attribution_warning above it was actually 'date','is' from line 297. Measured: 'what day is it' and 'which day is today' both DECLINE as claimed but did NOT close this gap (outcome #3 stayed 0); 'what date is it' closed it immediately (#3: 0 -> 1). Reachability right, attribution wrong."
     },
     {
       "file": "phase3/src/ai/route.c",
