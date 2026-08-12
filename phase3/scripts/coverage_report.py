@@ -198,13 +198,36 @@ def main():
             "'incidental_*_pct' fields exist only to size the uncovered list against its "
             "module and are never a target, a threshold, or a gate. The CI job that "
             "produces this file MUST NEVER fail on a coverage number -- only on its own "
-            "infrastructure errors."
+            "infrastructure errors. "
+            "REPO_HEAD NAMES THE PARENT, NOT THE COMMIT THAT CHANGED THE NUMBERS, and "
+            "that is a trap for anyone diffing two reports: repo_head is `git rev-parse "
+            "HEAD` at MEASUREMENT time, so a report regenerated while preparing commit X "
+            "records X's PARENT and is then committed IN X. No committed report ever "
+            "names the commit whose effect it measures. Verified across three: a66eebc's "
+            "report records 0135c0b, 3bf126c's records a66eebc, cc70e3d's records "
+            "3bf126c. Self-consistent and honest -- just off by one commit in the "
+            "direction nobody expects. (Documented 2026-08-12; the convention itself is "
+            "unchanged.)"
         ),
+        # DELIBERATELY LEFT False, and the note below says why rather than
+        # flipping it: this is a HARDCODED literal, so it can never become
+        # true no matter how much review happens. Setting it True would make
+        # it permanently claim review for judgements nobody had looked at,
+        # which is strictly worse than a field known to carry no signal.
+        # The authoritative review status is coverage_judgements.json's
+        # human-maintained _status (dated per pass).
         "judgements_reviewed": False,
         "_judgements_note": (
-            "The judgement fields are a CANDIDATE reading produced by the agent that built "
-            "this instrument. The lead reviews and finalises every one. Until "
-            "judgements_reviewed is true, treat every judgement as unconfirmed. "
+            "READ THIS FLAG AS 'NO SIGNAL', NOT AS 'UNREVIEWED'. judgements_reviewed is "
+            "hardcoded False in coverage_report.py and is never computed, so it cannot "
+            "distinguish a reviewed judgement from an unreviewed one -- it contradicted "
+            "coverage_judgements.json's '_status: FINALISED by the lead 2026-08-07' from "
+            "the day that line was written. THE AUTHORITATIVE REVIEW STATUS IS THAT "
+            "_status FIELD, which records each pass and its date (A8's 21 finalised "
+            "2026-08-07; net_stack's 64 and gguf_parser's 199 lead-reviewed 2026-08-11; "
+            "the 32 harness-premise reasons re-judged 2026-08-12). The flag is retained "
+            "rather than deleted so that existing readers of this key are not silently "
+            "broken; resolved-by-documentation 2026-08-12. "
             "'unclassified' means no human judgement is recorded; 'unclassified-stale' "
             "means the source at that line changed after a judgement was made and the "
             "judgement was refused rather than carried over."
