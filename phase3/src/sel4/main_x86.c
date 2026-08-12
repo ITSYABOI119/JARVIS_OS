@@ -4203,10 +4203,15 @@ static void pa_ctrl_gate(const control_result_t *cres)
          *
          * The text is sent EITHER WAY and is byte-identical: verdict 4 is a marker ON a genuine
          * answer, not an error state that withholds it. */
-        uint8_t rverdict = xd.reply_verdict;   /* 0 answered / 4 answered-but-truncated —
-                                                * the CAP/KV-FULL latch mapping and its
-                                                * !served_locally guard live in ctrl_exit_decide
-                                                * (test_ctrl_exit T4/T5/T3b) */
+        uint8_t rverdict = xd.reply_verdict;   /* 0 answered / 4 answered-but-truncated /
+                                                * 3 failed — 3 is reachable HERE since the
+                                                * 2026-08-11 repair: a response that arrived
+                                                * carrying no usable bytes is not an answer
+                                                * (test_ctrl_exit T6). This site is a pure
+                                                * pass-through; the CAP/KV-FULL latch mapping,
+                                                * the empty-response rule and the
+                                                * !served_locally guard all live in
+                                                * ctrl_exit_decide (T4/T5/T3b/T6). */
         if (rverdict == 4) {
             puts_serial("[CTRL-IN-RESP] TRUNCATED (stop=");
             puts_serial(g_infer_last_stop == PB_STOP_CAP ? "CAP" : "KV-FULL");

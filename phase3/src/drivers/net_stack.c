@@ -260,9 +260,15 @@ static bool handle_icmp(const uint8_t *frame, uint32_t len,
     /* x86: NOT a rate limit — a LIFETIME CAP, and the name above is wrong for
      * this arm. There is no window here, so icmp_reply_count only ever rises:
      * after ICMP_MAX_REPLIES_PER_SEC (10) echo replies this build stops
-     * answering pings PERMANENTLY, not for one second. The only reset is
-     * net_icmp_rate_reset(), which has no caller outside test_net_stack.c
-     * (measured 2026-08-11, with net_init's callers as the positive control).
+     * answering pings PERMANENTLY, not for one second.
+     *
+     * TWO functions reset the counter, and the earlier version of this comment
+     * named only one (corrected 2026-08-12): net_icmp_rate_reset(), which has
+     * no caller outside test_net_stack.c, and net_init(), which resets it
+     * under "SEC-006: Reset ICMP rate limiter on re-init". THE CONCLUSION
+     * SURVIVES the correction — net_init runs once, at bring-up, before any
+     * echo request can have been answered, so neither reset ever recurs during
+     * a boot and the cap remains a per-boot lifetime cap.
      *
      * This is the same shape as the K/M2b-2 KM2B_HEALTHY_RESET defect — a
      * windowed bound that silently became a lifetime one because nothing ever
@@ -322,9 +328,16 @@ static bool handle_icmp(const uint8_t *frame, uint32_t len,
      * ip_total - ip_hdr_len exactly. Only a frame that was ALREADY truncated
      * by the NET_MAX_FRAME clamp sees a different (and now correct) length —
      * it checksums the bytes actually present instead of bytes it never
-     * copied. The guard covers the degenerate total_len < icmp_off, which the
-     * :230 and :234 checks make unreachable today but which must not underflow
-     * a uint32 if a future edit weakens them. */
+     * copied. The guard covers the degenerate total_len < icmp_off. Two
+     * dominating checks above make that unreachable today — the coherence test
+     * `ip_total < ip_hdr_len || ip_total > ip_available` and the ICMP-header
+     * bounds test `len < icmp_off + sizeof(net_icmp_echo_t)`. THEY ARE CITED
+     * BY CONTENT, NOT BY LINE NUMBER (corrected 2026-08-12: the previous
+     * ":230 and :234" citations pointed at neither) — the spine_decide
+     * precedent: cite the thing, not its coordinates, because coordinates rot
+     * and content does not. The guard stays regardless: if a future edit
+     * weakens either check the subtraction would underflow a uint32 and hand
+     * net_checksum a ~4 GB length. */
     uint32_t icmp_len = (total_len > icmp_off) ? (total_len - icmp_off) : 0;
     rep_icmp->checksum = htons(net_checksum(rep_icmp, icmp_len));
 

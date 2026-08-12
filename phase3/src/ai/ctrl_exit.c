@@ -1,12 +1,16 @@
 /*
  * JARVIS AI-OS — control-IN exit verdict (Phase 6 A9/3). See ctrl_exit.h.
  *
- * Every value below is a FAITHFUL transcription of pa_ctrl_gate's four exit
- * paths as shipped at boot 52 (main_x86.c). Nothing here is idealised — the
- * one disagreement edge (got && resp_len == 0 -> "answered" to the user,
- * ERROR in the store) is reproduced and pinned by the truth table, because a
- * behaviour-neutral extraction that quietly repaired it would be a behaviour
- * change hiding inside a refactor.
+ * Every value below is a faithful transcription of pa_ctrl_gate's four exit
+ * paths as shipped at boot 52 (main_x86.c), with ONE deliberate departure:
+ * the disagreement edge (got && resp_len == 0) is REPAIRED here, not
+ * reproduced — an empty response replies verdict 3 and is not counted
+ * answered (see the arm-3 comment below and ctrl_exit.h's repair note).
+ *
+ * The history matters and is one sentence: at A9/3 that edge WAS
+ * pinned-not-repaired, because a behaviour-neutral extraction that quietly
+ * fixed it would have been a behaviour change hiding inside a refactor. It
+ * was repaired on 2026-08-11 once measured reachable from shipped PB.
  */
 
 #include "ctrl_exit.h"
@@ -69,13 +73,30 @@ void ctrl_exit_decide(int refused, int served_locally, int dispatch_ok,
          * 9d70f7f stop check breaks BEFORE storing). PA reads pk_len == 0 ->
          * copy = 0 -> got = 1, roff = 0.
          *
-         * THE EMPTINESS TEST COMES FIRST, and the ordering is load-bearing
-         * rather than stylistic: PB sets stop = CAP whenever n_gen >=
-         * max_tokens, which INCLUDES 0 >= 0. The probe that exercises this
-         * path clamps max_tokens to 0, so the reachable shape is CAP *with*
-         * empty text — testing truncation first would label it "answered but
-         * cut off" (verdict 4) and the repair would be defeated by its own
-         * probe. Nothing was cut off; nothing was produced. */
+         * WHICH stop_reason ACCOMPANIES THE EMPTY RESPONSE — corrected
+         * 2026-08-12, because the first version of this comment named the
+         * wrong one and that is the kind of error that costs a later session
+         * an afternoon:
+         *
+         *   REAL trigger      MODEL_ENDED + empty. With n_gen == 0 and the
+         *                     deployed caps (PB_GEN_MAX_WORKLOAD 50 /
+         *                     PB_GEN_MAX_CONTROL_IN 250) the test
+         *                     `n_gen >= max_tokens` is FALSE, so stop_reason
+         *                     stays PB_STOP_MODEL_ENDED. Host-proven by T6.
+         *   PROBE/box evidence CAP + empty. Only PB_GEN_EMPTYPROBE_TOKENS == 0
+         *                     makes 0 >= max_tokens true. That is what the KVM
+         *                     leg produced, and it proves the ORDERING — not
+         *                     the reachability. Host-pinned by T5c.
+         *
+         * THE MAPPING IS stop_reason-INDEPENDENT for an empty response: the
+         * test below is on resp_len alone, so both shapes land on verdict 3.
+         * The ordering still matters, for exactly one combination — with the
+         * truncation test first, CAP + empty would report verdict 4 and the
+         * repair would be defeated by its own probe. Nothing was cut off;
+         * nothing was produced.
+         *
+         * (Commit 9155f3f's message carries the same misidentification and is
+         * immutable history — a record is a snapshot; this is the correction.) */
         if (resp_len == 0) {
             out->reply_verdict  = 3;
             out->count_answered = 0;

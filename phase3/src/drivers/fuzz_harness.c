@@ -210,7 +210,11 @@ static void fuzz_net_stack(void) {
     }
 
     /* If we got here, no crashes */
-    printf("100000 random frames + 1 directed oversized ICMP echo ... 0 crashes  PASS\n");
+    /* 99,000, not the 100,000 this printed until 2026-08-12: the sub-test
+     * bounds above sum to 1000+10000+10000+10000+10000+5000+53000 = 99,000.
+     * The LABEL was wrong, not the loops — a bound change would change the
+     * fuzzing, so only the number printed here moved. */
+    printf("99000 random frames + 1 directed oversized ICMP echo ... 0 crashes  PASS\n");
     pass_count++;
 }
 
@@ -443,7 +447,11 @@ int main(void) {
     fuzz_shmem_ipc();
     fuzz_gguf_parser();
 
-    printf("\n=== Fuzz: %d/%d PASS (300008 iterations: 300000 random + 8 directed "
+    /* 299,008 = 299,000 random + 8 directed. The random figure is
+     * 99,000 (net_stack) + 100,000 (shmem_ipc) + 100,000 (gguf_parser),
+     * re-derived from the loop bounds 2026-08-12; the long-printed "300,000"
+     * over-counted net_stack by 1,000. Label only — no bound was touched. */
+    printf("\n=== Fuzz: %d/%d PASS (299008 iterations: 299000 random + 8 directed "
            "[7 ring-guard, 1 oversized ICMP], 0 crashes) ===\n",
            pass_count, pass_count + fail_count);
     return fail_count > 0 ? 1 : 0;

@@ -62,12 +62,11 @@ typedef struct {
     uint16_t epi_action;      /* EPI_ACT_CONTROL_IN / _LOCAL  (valid iff epi_write) */
     uint16_t jact_verdict;    /* AUDIT_BLOCKED / AUDIT_EXECUTED */
     uint16_t jact_outcome;    /* AUDIT_OUT_NA / AUDIT_OUT_OK / AUDIT_OUT_FAIL */
-    uint8_t  count_answered;  /* 1 = bump g_ctrl_in_answered. 0 for an EMPTY
-                               * response since the 2026-08-11 repair — a turn
-                               * that produced no text is not an answer.
-                               * (the answered-arm
-                               * exit, REGARDLESS of resp_len — shipped
-                               * behaviour, see the header note) */
+    uint8_t  count_answered;  /* 1 = bump g_ctrl_in_answered, on the answered
+                               * arm with text. 0 for an EMPTY response since
+                               * the 2026-08-11 repair — a turn that produced
+                               * no text is not an answer (see the repair note
+                               * at the top of this header) */
     uint8_t  count_blocked;   /* 1 = bump g_ctrl_in_blocked (refused only) */
     uint8_t  ack_pb;          /* 1 = km2b_miss_on_pb_ack is PERMITTED. Never for
                                * a locally-served answer — a fake ACK would mask
