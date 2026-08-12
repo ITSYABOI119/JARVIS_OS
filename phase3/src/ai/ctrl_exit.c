@@ -18,6 +18,40 @@
 #include "action_audit.h"     /* AUDIT_*, AUDIT_OUT_* */
 #include "shmem_ipc.h"        /* PB_STOP_* (resolved via -I src/ipc, like the callers) */
 
+/* THE JACT TRIGGER LITERALS. Static, compiled-in, selected — never built from
+ * an argument (see the trigger note in ctrl_exit.h for why that direction is
+ * the safe one, and for the measured scope of the keyword-clean property).
+ *
+ * "control-in answered" is BYTE-IDENTICAL to the string this lane has written
+ * since 6-5/M3-2a, deliberately: boot-49's and boot-30's records read exactly
+ * that, and keeping it comparable across boots is worth more than tidier
+ * wording. The others are new, and each says what actually happened instead of
+ * what the shared tail used to assume.
+ *
+ * Every literal is keyword-clean against the canonical blocklist (delete,
+ * remove, kill, destroy, format, "rm -rf", "drop table", shutdown, halt) —
+ * pinned both ways by test_ctrl_exit, including the substring traps the record
+ * names ("skill" contains "kill", "information" contains "format"). */
+#define CX_TRIG(out, lit) do {                                   \
+        (out)->jact_trigger     = (lit);                         \
+        (out)->jact_trigger_len = (uint16_t)(sizeof(lit) - 1);   \
+    } while (0)
+
+#define CX_T_ANSWERED  "control-in answered"
+#define CX_T_EMPTY     "control-in empty response"
+#define CX_T_TIMEOUT   "control-in timeout"
+#define CX_T_FAULT     "control-in fault"
+#define CX_T_REFUSED   "control-in refused"
+#define CX_T_DEGRADED  "control-in degraded"
+
+/* Bounds, at compile time — ACT_TRIGGER_MAX is why the length is carried. */
+_Static_assert(sizeof(CX_T_EMPTY)    - 1 <= ACT_TRIGGER_MAX, "empty trigger too long");
+_Static_assert(sizeof(CX_T_ANSWERED) - 1 <= ACT_TRIGGER_MAX, "answered trigger too long");
+_Static_assert(sizeof(CX_T_TIMEOUT)  - 1 <= ACT_TRIGGER_MAX, "timeout trigger too long");
+_Static_assert(sizeof(CX_T_FAULT)    - 1 <= ACT_TRIGGER_MAX, "fault trigger too long");
+_Static_assert(sizeof(CX_T_REFUSED)  - 1 <= ACT_TRIGGER_MAX, "refused trigger too long");
+_Static_assert(sizeof(CX_T_DEGRADED) - 1 <= ACT_TRIGGER_MAX, "degraded trigger too long");
+
 void ctrl_exit_decide(int refused, int served_locally, int dispatch_ok,
                       int got, int faulted, int resp_len, uint8_t stop_reason,
                       ctrl_exit_decision_t *out)
@@ -34,6 +68,11 @@ void ctrl_exit_decide(int refused, int served_locally, int dispatch_ok,
     out->ack_pb         = 0;
     out->miss_pb        = 0;
     out->close_window   = 0;
+    /* Fail-safe default, overwritten by every arm below. It matches the
+     * verdict-3 default above: if a future edit ever added an arm and forgot
+     * the trigger, the record would read "timeout" alongside a verdict-3
+     * reply rather than claiming an answer. */
+    CX_TRIG(out, CX_T_TIMEOUT);
 
     /* Arm 1 — QS_REFUSE. Exits before routing: no episodic record (the raw
      * query must never enter the store; the audit carries the LABEL only),
@@ -44,6 +83,14 @@ void ctrl_exit_decide(int refused, int served_locally, int dispatch_ok,
         out->jact_verdict   = AUDIT_BLOCKED;
         out->jact_outcome   = AUDIT_OUT_NA;
         out->count_blocked  = 1;
+        /* THE ONE SANCTIONED OVERRIDE: the refuse SITE passes the query-SHIELD
+         * reason-class label instead of this literal, and should keep doing so
+         * — "refuse key-extraction" says WHICH defined abuse class fired, which
+         * is strictly more than "refused" and is what boot-49's BLOCKED records
+         * carry. This value exists so the decision set is TOTAL (every arm has
+         * a valid trigger) and so a caller that does not have the label still
+         * writes something true rather than nothing. */
+        CX_TRIG(out, CX_T_REFUSED);
         return;
     }
 
@@ -55,6 +102,7 @@ void ctrl_exit_decide(int refused, int served_locally, int dispatch_ok,
     if (!served_locally && !dispatch_ok) {
         out->reply_verdict = 2;
         /* epi ERROR / tag CONTROL_IN / EXECUTED / FAIL: the defaults above. */
+        CX_TRIG(out, CX_T_DEGRADED);   /* byte-identical to the site's old literal */
         return;
     }
 
@@ -100,6 +148,13 @@ void ctrl_exit_decide(int refused, int served_locally, int dispatch_ok,
         if (resp_len == 0) {
             out->reply_verdict  = 3;
             out->count_answered = 0;
+            /* THE DEFECT THIS COMMIT EXISTS FOR. Until 2026-08-12 this state
+             * reached a shared tail that wrote the FIXED literal "control-in
+             * answered", so the durable audit claimed an answer for the very
+             * turn the T6 repair had just made the box report as NOT answered
+             * — EXECUTED / FAIL / "control-in answered". The repair stopped
+             * the box telling three stories about one turn; it left two. */
+            CX_TRIG(out, CX_T_EMPTY);
         } else {
             /* #9: ONLY CAP and KV_FULL are truncation, and never for a locally-
              * served answer (no generation ran — the latch would belong to some
@@ -111,6 +166,9 @@ void ctrl_exit_decide(int refused, int served_locally, int dispatch_ok,
             else
                 out->reply_verdict = 0;
             out->count_answered = 1;
+            /* Verdicts 0 AND 4 are both genuine answers — 4 is a marker ON one,
+             * not an error state — so both keep the historical literal. */
+            CX_TRIG(out, CX_T_ANSWERED);
         }
 
         /* Unchanged by the repair — these were already failed-shaped for an
@@ -147,4 +205,17 @@ void ctrl_exit_decide(int refused, int served_locally, int dispatch_ok,
      * the shipped code; T9 pins this version and says so. */
     out->miss_pb      = (!faulted && !served_locally) ? 1 : 0;
     out->close_window = served_locally ? 0 : 1;
+    /* Distinguish the two, because the REPLY already does (ctrl_send_reply
+     * sends "fault" or "timeout") and the audit is the forensic record: "did
+     * PB fault, or did it simply never answer" is the first question a reader
+     * of this trail asks months later. Both previously wrote "control-in
+     * answered" — the pre-existing half of this defect, which the T6 repair
+     * did not create but did move a new case into.
+     *
+     * WRITTEN AS if/else DELIBERATELY, not CX_TRIG(out, faulted ? A : B): a
+     * ternary between two string literals of different lengths decays to
+     * char*, so sizeof inside the macro would measure the POINTER (8) and set
+     * a length of 7 for both. The macro must always see a literal. */
+    if (faulted) CX_TRIG(out, CX_T_FAULT);
+    else         CX_TRIG(out, CX_T_TIMEOUT);
 }

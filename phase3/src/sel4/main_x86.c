@@ -3395,9 +3395,13 @@ static int pa_fault_check(void)
  * spine_record) BY DESIGN: spine_record bumps g_actions_fired/g_actions_blocked, the v7 SHIELD-
  * ACTION-gate counters explicitly documented "NOT query-SHIELD" — a control-IN query is a QUERY-
  * SHIELD decision, so it must NOT conflate into those. The dedicated g_ctrl_in_answered/_blocked
- * counters (v11 sources) carry it instead. trig is a FIXED, keyword-clean system-facts label (the
- * reason class on refuse / "control-in answered" on route) — NEVER the raw attacker query, so a
- * re-audit can never self-block and the query never enters the store. */
+ * counters (v11 sources) carry it instead. trig is a FIXED, keyword-clean system-facts label —
+ * NEVER the raw attacker query, so a re-audit can never self-block and the query never enters the
+ * store. Its SOURCE is one of exactly two, both fixed by construction: the query-SHIELD
+ * reason-class label on the refuse exit (keyed on an enum), or xd.jact_trigger — a static literal
+ * SELECTED inside ctrl_exit.c, which takes no string argument at all. (Until 2026-08-12 the shared
+ * tail passed a single hardcoded "control-in answered" for BOTH the answered and the timeout/fault
+ * arms, so the audit claimed an answer for turns reported as not answered; see ctrl_exit.h.) */
 static void ctrl_in_jact(uint16_t verdict, uint16_t outcome, const char *trig, uint16_t tlen)
 {
     if (!g_action_audit_ready) return;
@@ -3545,6 +3549,13 @@ static void pa_ctrl_gate(const control_result_t *cres)
         ctrl_exit_decision_t xd;
         ctrl_exit_decide(/*refused=*/1, 0, 1, 0, 0, 0, PB_STOP_UNKNOWN, &xd);
         if (xd.count_blocked) g_ctrl_in_blocked++;
+        /* THE ONE SANCTIONED OVERRIDE of xd.jact_trigger, kept deliberately:
+         * the reason-class label says WHICH defined abuse class fired
+         * ("refuse key-extraction"), which is strictly more than the module's
+         * generic "control-in refused" and is what boot-49's BLOCKED records
+         * carry. The label is a fixed system-facts string from query_shield,
+         * never the raw query — the audit-hygiene property that keeps every
+         * raw-query probe at zero. */
         ctrl_in_jact(xd.jact_verdict, xd.jact_outcome, label, (uint16_t)strlen(label));
         ctrl_send_reply((uint16_t)cres->seq, xd.reply_verdict /*1 = refused*/, label, (int)strlen(label)); /* LABEL only, never the query */
         return;
@@ -3778,7 +3789,7 @@ static void pa_ctrl_gate(const control_result_t *cres)
 #else
         epi_batch_add(qs, xd.epi_action, xd.epi_outcome, NULL);
 #endif
-        ctrl_in_jact(xd.jact_verdict, xd.jact_outcome, "control-in degraded", 19);
+        ctrl_in_jact(xd.jact_verdict, xd.jact_outcome, xd.jact_trigger, xd.jact_trigger_len);
         ctrl_send_reply((uint16_t)cres->seq, xd.reply_verdict /*2 = degraded*/, "degraded", 8);
         return;
     }
@@ -4291,7 +4302,14 @@ static void pa_ctrl_gate(const control_result_t *cres)
      * The g_infer_active check stays HERE: the module grants permission, the site owns state. */
     if (xd.close_window && g_infer_active) { g_infer_cycles += jarvis_rdtsc() - g_infer_t0; g_infer_active = 0; }
 
-    ctrl_in_jact(xd.jact_verdict, xd.jact_outcome, "control-in answered", 19);
+    /* The trigger comes from the DECISION, not from adjacency. This tail is
+     * reached by BOTH the answered arm and the timeout/fault arm, so a fixed
+     * literal here wrote "control-in answered" into the durable audit for
+     * turns the box had just told the user it did not answer — including,
+     * after the T6 repair, the empty-generation case. ctrl_exit_decide owns
+     * every other member of the verdict set; the trigger was the last one
+     * decided by where the call happened to sit. */
+    ctrl_in_jact(xd.jact_verdict, xd.jact_outcome, xd.jact_trigger, xd.jact_trigger_len);
 }
 
 #if JARVIS_EMBED_PROBE

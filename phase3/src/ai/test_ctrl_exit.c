@@ -31,6 +31,11 @@
 #include "episodic_store.h"
 #include "action_audit.h"
 #include "shmem_ipc.h"
+/* T11 keyword-clean way 2: the REAL gate, not a re-implementation. Links
+ * shield_action.c + action_allowlist.c + shield_learn.c, the same set
+ * test_km2b_trigger.c uses for the same reason. */
+#include "shield_action.h"
+#include "action_allowlist.h"
 
 static int g_pass = 0, g_fail = 0;
 
@@ -46,6 +51,35 @@ static ctrl_exit_decision_t D(int refused, int sl, int dok, int got,
     memset(&d, 0xAA, sizeof d);   /* prove full overwrite: poison first */
     ctrl_exit_decide(refused, sl, dok, got, faulted, rlen, stop, &d);
     return d;
+}
+
+/* The canonical blocklist, TRANSCRIBED from shield_action.c rather than
+ * imported: a test that shared the list would still pass if the list itself
+ * were emptied, which is exactly the vacuity this scan exists to rule out. */
+static const char *const KW[] = {
+    "delete", "remove", "kill", "destroy", "format", "rm -rf", "drop table",
+    "shutdown", "halt",
+};
+
+/* Bounded, case-insensitive substring scan, independent of shield_action.c's
+ * implementation — so agreement between the two means something. */
+static int kw_clean(const char *s, size_t n)
+{
+    for (unsigned k = 0; k < sizeof KW / sizeof KW[0]; k++) {
+        size_t m = strlen(KW[k]);
+        if (m > n) continue;
+        for (size_t i = 0; i + m <= n; i++) {
+            size_t j = 0;
+            while (j < m) {
+                char a = s[i + j], b = KW[k][j];
+                if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+                if (a != b) break;
+                j++;
+            }
+            if (j == m) return 0;
+        }
+    }
+    return 1;
 }
 
 int main(void)
@@ -189,7 +223,7 @@ int main(void)
         static const int  RL[]   = { 0, 7, 256 };
         static const uint8_t SP[] = { PB_STOP_UNKNOWN, PB_STOP_MODEL_ENDED,
                                       PB_STOP_CAP, PB_STOP_KV_FULL };
-        int states = 0, edge_states = 0, sweep_bad = 0;
+        int states = 0, edge_states = 0, sweep_bad = 0, trig_lie = 0;
         for (int rf = 0; rf <= 1; rf++)
         for (int sl = 0; sl <= 1; sl++)
         for (int dk = 0; dk <= 1; dk++)
@@ -269,6 +303,21 @@ int main(void)
             ok &= (told_ok_stored_err == 0);
             if (told_ok_stored_err) edge_states++;
 
+            /* THE TRIGGER INVARIANT — the exact defect this commit fixed,
+             * pinned so it cannot return. No state may write the answered
+             * literal into the durable audit while reporting the turn as not
+             * answered. Checked over the whole sweep rather than at one site,
+             * because the old bug was a fixed literal on a SHARED tail: it was
+             * invisible from any single arm. */
+            if (d.jact_trigger && strcmp(d.jact_trigger, "control-in answered") == 0
+                && d.count_answered == 0)
+                trig_lie++;
+            /* and every state must carry a non-NULL trigger whose carried
+             * length is its ACTUAL length — computed here, never trusted */
+            ok &= (d.jact_trigger != NULL);
+            if (d.jact_trigger)
+                ok &= (d.jact_trigger_len == (uint16_t)strlen(d.jact_trigger));
+
             if (!ok && sweep_bad < 5) {
                 printf("SWEEP FAIL at rf=%d sl=%d dok=%d got=%d fa=%d rl=%d stop=%u "
                        "-> v=%u epi(w=%u,o=%u,a=%u) jact(%u,%u) cnt(a=%u,b=%u) "
@@ -281,6 +330,8 @@ int main(void)
             if (!ok) sweep_bad++;
         }
         CHECK(states == 384,   "T9 sweep covered all 384 states");
+        CHECK(trig_lie == 0,
+              "T9 NO state carries the answered trigger while not counted answered");
         CHECK(sweep_bad == 0,  "T9 agreement invariants hold across the sweep");
         /* Was 24 (rf=0, (sl,dk) in {(0,1),(1,0),(1,1)}, got=1, fa in {0,1},
          * 4 stop values = 3*2*4) — the exact extent of the shipped edge.
@@ -295,6 +346,96 @@ int main(void)
         ctrl_exit_decision_t a = D(0, 0, 1, 1, 0, 42, PB_STOP_CAP);
         ctrl_exit_decision_t b = D(0, 0, 1, 1, 0, 42, PB_STOP_CAP);
         CHECK(memcmp(&a, &b, sizeof a) == 0, "T10 deterministic");
+    }
+
+    /* ── T11: the JACT trigger — one literal per exit, keyword-clean both ways.
+     * THE DEFECT: pa_ctrl_gate's SHARED tail wrote the fixed literal
+     * "control-in answered" for BOTH the answered arm and the timeout/fault
+     * arm, so after the T6 repair a turn reported to the user as NOT answered
+     * (verdict 3, empty) still produced EXECUTED / FAIL / "control-in
+     * answered" in the durable audit — the field a human reads off the store
+     * months later, and the evidence base the 7-day exit rests on. ── */
+    {
+        printf("\n--- T11: JACT trigger per exit path ---\n");
+        struct { const char *name; ctrl_exit_decision_t d; const char *want; } C[6];
+        C[0].name = "T11 refused -> refused literal";
+        C[0].d = D(1, 0, 1, 0, 0, 0, PB_STOP_UNKNOWN);   C[0].want = "control-in refused";
+        C[1].name = "T11 degraded -> degraded literal";
+        C[1].d = D(0, 0, 0, 0, 0, 0, PB_STOP_UNKNOWN);   C[1].want = "control-in degraded";
+        C[2].name = "T11 answered -> answered literal";
+        C[2].d = D(0, 0, 1, 1, 0, 180, PB_STOP_MODEL_ENDED); C[2].want = "control-in answered";
+        C[3].name = "T11 truncated(4) is an ANSWER -> answered literal";
+        C[3].d = D(0, 0, 1, 1, 0, 900, PB_STOP_CAP);     C[3].want = "control-in answered";
+        C[4].name = "T11 EMPTY -> empty literal, NOT answered";
+        C[4].d = D(0, 0, 1, 1, 0, 0, PB_STOP_MODEL_ENDED); C[4].want = "control-in empty response";
+        C[5].name = "T11 fault -> fault literal";
+        C[5].d = D(0, 0, 1, 0, 1, 0, PB_STOP_UNKNOWN);   C[5].want = "control-in fault";
+
+        for (unsigned i = 0; i < 6; i++) {
+            const ctrl_exit_decision_t *p = &C[i].d;
+            CHECK(p->jact_trigger != NULL, "T11 trigger is non-NULL");
+            CHECK(p->jact_trigger && strcmp(p->jact_trigger, C[i].want) == 0, C[i].name);
+            /* length computed HERE, never trusted: a field echoing a wrong
+             * constant would otherwise prove nothing */
+            CHECK(p->jact_trigger &&
+                  p->jact_trigger_len == (uint16_t)strlen(p->jact_trigger),
+                  "T11 carried length == actual length");
+            CHECK(p->jact_trigger_len <= ACT_TRIGGER_MAX, "T11 within ACT_TRIGGER_MAX");
+            CHECK(p->jact_trigger && kw_clean(p->jact_trigger, p->jact_trigger_len),
+                  "T11 keyword-clean (independent substring scan)");
+        }
+
+        /* timeout is DISTINCT from fault — the reply already distinguishes
+         * them, and "did PB fault or simply never answer" is the first
+         * question a reader of this trail asks */
+        ctrl_exit_decision_t t = D(0, 0, 1, 0, 0, 0, PB_STOP_UNKNOWN);
+        CHECK(t.jact_trigger && strcmp(t.jact_trigger, "control-in timeout") == 0,
+              "T11 timeout literal is distinct from fault");
+
+        /* the historical string is BYTE-IDENTICAL: boot-49 and boot-30 records
+         * read exactly this, and staying comparable across boots matters */
+        CHECK(C[2].d.jact_trigger_len == 19, "T11 'control-in answered' is still 19 bytes");
+
+        /* KEYWORD-CLEAN WAY 2 — EXECUTED through the REAL shield_assess, using
+         * ACTION_NOTIFY_ANOMALY (allowlisted; the test_km2b_trigger precedent).
+         * DELIBERATELY NOT ACTION_CONTROL_IN_QUERY — see the pin below. */
+        for (unsigned i = 0; i < 6; i++) {
+            action_ctx_t ctx;
+            ctx.query_key = 0;
+            ctx.trigger = C[i].d.jact_trigger;
+            ctx.trigger_len = C[i].d.jact_trigger_len;
+            shield_action_result_t r = shield_assess(ACTION_NOTIFY_ANOMALY, &ctx, NULL, 0);
+            CHECK(r.verdict != SHIELD_VERDICT_BLOCKED,
+                  "T11 literal survives the REAL shield_assess (cannot self-block)");
+        }
+
+        /* TEETH for way 2: without this, the loop above could pass because the
+         * gate never blocks anything rather than because the literals are clean */
+        {
+            action_ctx_t ctx;
+            const char *poison = "control-in delete";
+            ctx.query_key = 0; ctx.trigger = poison;
+            ctx.trigger_len = (uint16_t)strlen(poison);
+            shield_action_result_t r = shield_assess(ACTION_NOTIFY_ANOMALY, &ctx, NULL, 0);
+            CHECK(r.verdict == SHIELD_VERDICT_BLOCKED, "T11 TEETH: a poisoned trigger DOES block");
+            CHECK(kw_clean(poison, ctx.trigger_len) == 0, "T11 TEETH: the substring scan sees it too");
+        }
+
+        /* PINNED FINDING (measured 2026-08-12): shield_assess on the id this
+         * site actually audits under returns BLOCKED even for a known-CLEAN
+         * literal, because ACTION_CONTROL_IN_QUERY is an AUDIT TAG with no
+         * allowlist entry — action_lookup fails and it refuses before scoring.
+         * So a keyword-clean check written against that id could never fail,
+         * clean or poisoned. Pinned so nobody "restores" it as the check. */
+        {
+            action_ctx_t ctx;
+            ctx.query_key = 0;
+            ctx.trigger = C[2].d.jact_trigger;
+            ctx.trigger_len = C[2].d.jact_trigger_len;
+            shield_action_result_t r = shield_assess(ACTION_CONTROL_IN_QUERY, &ctx, NULL, 0);
+            CHECK(r.verdict == SHIELD_VERDICT_BLOCKED,
+                  "T11 ACTION_CONTROL_IN_QUERY is unallowlisted -> blocks even a clean literal");
+        }
     }
 
     printf("test_ctrl_exit: %d PASS, %d FAIL\n", g_pass, g_fail);

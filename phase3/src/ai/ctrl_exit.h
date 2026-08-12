@@ -81,7 +81,38 @@ typedef struct {
                                * open WORKLOAD window (§3 honesty guard 2). The
                                * call site keeps its own g_infer_active check:
                                * this is the permission, not the state. */
+    const char *jact_trigger; /* The JACT trigger_snapshot text for THIS exit.
+                               * Always non-NULL and always a STATIC STRING
+                               * LITERAL owned by ctrl_exit.c — see the trigger
+                               * note below. */
+    uint16_t jact_trigger_len;/* Its length, carried. NEVER strlen() it at the
+                               * call site: the house rule that ACT_TRIGGER_MAX
+                               * exists to enforce. Set from sizeof(lit)-1 at
+                               * compile time. */
 } ctrl_exit_decision_t;
+
+/* THE JACT TRIGGER IS AN OUTPUT, NEVER AN INPUT — and this is stated because
+ * the neighbouring behaviors.c deliberately forbids a char* PARAMETER for the
+ * opposite reason, so a reader who knows that rule will otherwise wonder why
+ * this one is allowed.
+ *
+ * behaviors.c's rule stops free text being SMUGGLED IN: behavior_build_digest
+ * takes no char*, so a caller cannot inject attacker-controlled bytes into an
+ * audit record. Here the direction is reversed. ctrl_exit_decide takes no
+ * string at all; it SELECTS one of a fixed set of literals compiled into this
+ * file, keyed only on the decision it has already made. No inbound byte can
+ * reach the trigger, by construction rather than by discipline — the K-b
+ * select-never-synthesize boundary, applied to a label instead of an action.
+ *
+ * THE LITERALS ARE KEYWORD-CLEAN against the canonical blocklist and the tests
+ * pin that both ways. NOTE the honest scope, measured 2026-08-12 rather than
+ * assumed: ctrl_in_jact does NOT route the trigger through shield_assess — it
+ * fills and appends the record directly, deliberately bypassing spine_record
+ * so a query-SHIELD decision never conflates into the v7 SHIELD-ACTION
+ * counters. So keyword-cleanliness is NOT load-bearing at today's call site;
+ * it is defence-in-depth for any future path that does re-audit through the
+ * spine, and it is exactly the invariant ctrl_in_jact's own comment already
+ * claims ("a re-audit can never self-block"). Cheap to keep, so kept. */
 
 /*
  * ctrl_exit_decide — map a terminal state to the decision set.
