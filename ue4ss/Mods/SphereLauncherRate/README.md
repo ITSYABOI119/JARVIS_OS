@@ -32,26 +32,86 @@ Install UE4SS per its own instructions into:
 so that `Pal\Binaries\Win64\ue4ss\` exists and the game boots with the UE4SS
 console available.
 
-## Install
+## Install — step by step
 
-Copy the `SphereLauncherRate` folder into the UE4SS `Mods` directory:
+### 1. Find your Palworld folder
+
+In Steam: right-click **Palworld** in your library → **Manage** →
+**Browse local files**. That opens the game folder, typically:
+
+```
+C:\Program Files (x86)\Steam\steamapps\common\Palworld\
+```
+
+From there, navigate into `Pal\Binaries\Win64\`. Everything below happens
+inside that `Win64` folder.
+
+### 2. Install UE4SS first (one-time)
+
+If you haven't already: download the latest zip from the Okaetsu fork's
+releases page (link above) and extract it directly into `Win64\`, so that
+`Win64\dwmapi.dll` and the `Win64\ue4ss\` folder exist. Start the game once
+— a **UE4SS console window** (separate black log window) should appear
+alongside the game. If it does, UE4SS is working; close the game.
+
+> If no console appears, open `Win64\ue4ss\UE4SS-settings.ini` and make sure
+> `ConsoleEnabled = 1` (and/or `GuiConsoleEnabled = 1`) under `[Debug]`.
+> You'll want the console visible for this mod's discovery mode and logs.
+
+### 3. Copy this mod in
+
+Copy the **entire `SphereLauncherRate` folder** from this repo
+(`ue4ss/Mods/SphereLauncherRate/`) into the UE4SS `Mods` folder, so you end
+up with:
 
 ```
 Palworld\Pal\Binaries\Win64\ue4ss\Mods\SphereLauncherRate\
 ├── enabled.txt
+├── README.md            (optional, harmless)
 └── Scripts\
     ├── main.lua
     └── config.lua
 ```
 
-`enabled.txt` (empty file) tells UE4SS to load the mod. If your UE4SS build
-uses `Mods\mods.txt` instead, add a line: `SphereLauncherRate : 1`.
-
-On launch, the UE4SS console should show lines prefixed `[SphereRate]`,
-ending with `loaded. intervals: ...`.
+Copy the folder itself, not just its contents — the path must contain
+`\Mods\SphereLauncherRate\Scripts\main.lua` exactly, or UE4SS won't find it.
 
 > Older UE4SS builds place `Mods\` directly in `Win64\` rather than under
-> `Win64\ue4ss\`. Use whichever `Mods` folder your UE4SS install created.
+> `Win64\ue4ss\`. Use whichever `Mods` folder your UE4SS install created —
+> the right one already contains folders like `shared\` and `Keybinds\`.
+
+### 4. Enable it
+
+`enabled.txt` (an empty file, already included) tells UE4SS to load the mod
+— nothing more to do. If your UE4SS build instead uses a `Mods\mods.txt`
+list, add this line to it:
+
+```
+SphereLauncherRate : 1
+```
+
+### 5. Launch and verify
+
+Launch Palworld normally through Steam (UE4SS injects itself; there is no
+separate launcher). In the UE4SS console window, look for lines prefixed
+`[SphereRate]` — a healthy load looks like:
+
+```
+[SphereRate] config.lua loaded (Enabled=true Debug=false)
+[SphereRate] hooked single-shot sphere launcher
+[SphereRate] hooked scatter sphere launcher
+[SphereRate] hooked homing sphere launcher
+[SphereRate] loaded. intervals: single=0 scatter=0 homing=0 (0 = pre-1.0.3 spam fire)
+```
+
+Then load a save, equip a sphere launcher, and fire: a
+`[SphereRate] ... set <property> = 0.000` line should appear when the weapon
+spawns, and spheres should throw as fast as you can trigger.
+
+**If you see no `[SphereRate]` lines at all**, the mod isn't loading — check
+step 3's folder layout and step 4. **If you see a `WARNING: no interval
+property found`**, the mod loaded but couldn't auto-detect the interval
+field — run discovery (next section).
 
 ## Configure
 
