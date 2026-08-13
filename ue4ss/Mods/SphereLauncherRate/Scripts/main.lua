@@ -12,12 +12,11 @@
 -- HOW THIS MOD WORKS
 --   1. DISCOVERY (Debug = true in config.lua):
 --      The exact property that 1.0.3 introduced is undocumented, so debug
---      mode registers NotifyOnNewObject on each launcher blueprint class and
---      dumps every float/double property (with its current value) plus every
---      function name on the instance to the UE4SS console. Equip and fire
---      each launcher once, then paste the dump back so the interval field
---      can be identified (expected: something like ShootInterval,
---      FireInterval, or a cooldown float).
+--      mode dumps every float/double property (with its current value) plus
+--      every function name on each launcher instance to the UE4SS console.
+--      Equip and fire each launcher once, then paste the dump back so the
+--      interval field can be identified (expected: something like
+--      ShootInterval, FireInterval, or a cooldown float).
 --   2. MAIN MOD (Enabled = true):
 --      On every launcher spawn, writes the configured interval to the
 --      interval property. Until discovery pins the real name, a candidate
@@ -26,6 +25,19 @@
 --   3. If discovery shows the interval is enforced inside a fire function
 --      rather than stored on a property, see the RegisterHook template at
 --      the bottom of this file.
+--
+-- REGISTRATION LIFECYCLE (why hooks are deferred)
+--   NotifyOnNewObject requires the target class to already exist, and these
+--   /Game/... blueprint classes are usually NOT loaded when UE4SS runs this
+--   script at startup — a launcher BP typically loads the first time such a
+--   weapon spawns. So instead of registering once and giving up:
+--     - registration is attempted only after StaticFindObject confirms the
+--       class is loaded;
+--     - pending registrations are retried on player spawn
+--       (PlayerController:ClientRestart) and via a cheap poll (LoopAsync);
+--     - on a successful late registration, FindAllOf sweeps instances that
+--       ALREADY exist — including the very instance whose spawn loaded the
+--       class, which the notify would otherwise have missed.
 --
 -- Everything user-reachable is wrapped in pcall: if a game update renames a
 -- class/property, the mod logs an error instead of crashing the game.
@@ -91,18 +103,24 @@ local Config = load_config()
 local LAUNCHERS = {
     {
         Class     = "/Game/Pal/Blueprint/Weapon/BP_SphereLauncher.BP_SphereLauncher_C",
+        ShortName = "BP_SphereLauncher_C",
         Label     = "single-shot sphere launcher",
         ConfigKey = "SingleShotInterval",
+        Registered = false,
     },
     {
         Class     = "/Game/Pal/Blueprint/Weapon/BP_ScatterSphereLauncher.BP_ScatterSphereLauncher_C",
+        ShortName = "BP_ScatterSphereLauncher_C",
         Label     = "scatter sphere launcher",
         ConfigKey = "ScatterInterval",
+        Registered = false,
     },
     {
         Class     = "/Game/Pal/Blueprint/Weapon/BP_HomingSphereLauncher.BP_HomingSphereLauncher_C",
+        ShortName = "BP_HomingSphereLauncher_C",
         Label     = "homing sphere launcher",
         ConfigKey = "HomingInterval",
+        Registered = false,
     },
 }
 
@@ -275,49 +293,138 @@ local function apply_interval(obj, launcher)
     end
 end
 
---------------------------------------------------------------------------------
--- Hook registration
---------------------------------------------------------------------------------
-
-local function register_all()
-    for _, launcher in ipairs(LAUNCHERS) do
-        local ok, err = pcall(function()
-            NotifyOnNewObject(launcher.Class, function(obj)
-                local h_ok, h_err = pcall(function()
-                    if Config.Debug then
-                        local cls_key = launcher.Class
-                        if not dumped_classes[cls_key] then
-                            dumped_classes[cls_key] = true
-                            dump_instance(obj, launcher)
-                        end
-                    end
-                    if Config.Enabled then
-                        apply_interval(obj, launcher)
-                    end
-                end)
-                if not h_ok then
-                    log("ERROR in spawn hook for " .. launcher.Label .. ": "
-                        .. tostring(h_err))
-                end
-            end)
-        end)
-        if ok then
-            log("hooked " .. launcher.Label)
-        else
-            log("ERROR: failed to register hook for " .. launcher.Class .. ": "
-                .. tostring(err) .. " (game update may have moved/renamed the"
-                .. " blueprint)")
+-- Shared handler: called for freshly-constructed instances (notify) and for
+-- instances that already existed when the hook registered late (sweep).
+local function on_instance(obj, launcher)
+    local ok, err = pcall(function()
+        if Config.Debug and not dumped_classes[launcher.Class] then
+            dumped_classes[launcher.Class] = true
+            dump_instance(obj, launcher)
         end
+        if Config.Enabled then
+            apply_interval(obj, launcher)
+        end
+    end)
+    if not ok then
+        log("ERROR handling " .. launcher.Label .. " instance: " .. tostring(err))
     end
 end
 
-register_all()
+--------------------------------------------------------------------------------
+-- Hook registration (deferred until each BP class is actually loaded)
+--------------------------------------------------------------------------------
+
+local function class_is_loaded(path)
+    local ok, cls = pcall(StaticFindObject, path)
+    if not ok or cls == nil then return false end
+    local ok_valid, valid = pcall(function() return cls:IsValid() end)
+    return (ok_valid and valid) and true or false
+end
+
+-- Catch instances that already exist by the time the hook registers — in
+-- particular the instance whose own spawn loaded the class, which fired
+-- before NotifyOnNewObject could be installed.
+local function sweep_existing(launcher)
+    pcall(function()
+        local instances = FindAllOf(launcher.ShortName)
+        if type(instances) == "table" then
+            for _, inst in ipairs(instances) do
+                pcall(function()
+                    if inst:IsValid() then
+                        on_instance(inst, launcher)
+                    end
+                end)
+            end
+        end
+    end)
+end
+
+local function try_register(launcher)
+    if launcher.Registered then return true end
+    if not class_is_loaded(launcher.Class) then return false end
+
+    local ok, err = pcall(NotifyOnNewObject, launcher.Class, function(obj)
+        on_instance(obj, launcher)
+    end)
+    if not ok then
+        log("ERROR: NotifyOnNewObject failed for " .. launcher.Class .. ": "
+            .. tostring(err))
+        return false
+    end
+
+    launcher.Registered = true
+    log("hooked " .. launcher.Label)
+    sweep_existing(launcher)
+    return true
+end
+
+-- Returns the number of launchers still awaiting registration.
+local function try_register_all()
+    local remaining = 0
+    for _, launcher in ipairs(LAUNCHERS) do
+        if not try_register(launcher) then
+            remaining = remaining + 1
+        end
+    end
+    return remaining
+end
+
+local remaining = try_register_all()
+if remaining > 0 then
+    log(remaining .. " launcher class(es) not loaded yet (normal at startup)"
+        .. " - hooks will register automatically once they load")
+
+    -- Event-driven retry: player (re)spawn. Native class, so this hook can
+    -- register at startup. Launcher BPs usually load later than this (on
+    -- first weapon spawn), so this mostly helps after level transitions.
+    pcall(function()
+        RegisterHook("/Script/Engine.PlayerController:ClientRestart",
+            function()
+                pcall(try_register_all)
+            end)
+    end)
+
+    -- Poll fallback: the workhorse. A launcher BP loads at the moment its
+    -- first instance spawns; the next tick registers the notify and the
+    -- sweep in try_register() applies the interval to that first instance.
+    -- Cheap (StaticFindObject per pending class every 3 s), stops when done.
+    local poll_ok, poll_err = pcall(function()
+        LoopAsync(3000, function()
+            local pending = false
+            for _, launcher in ipairs(LAUNCHERS) do
+                if not launcher.Registered then
+                    pending = true
+                    break
+                end
+            end
+            if not pending then return true end -- all hooked: stop polling
+
+            -- LoopAsync runs off the game thread; object work belongs on it.
+            if type(ExecuteInGameThread) == "function" then
+                ExecuteInGameThread(function()
+                    pcall(try_register_all)
+                end)
+            else
+                pcall(try_register_all)
+            end
+            return false
+        end)
+    end)
+    if not poll_ok then
+        log("ERROR: LoopAsync retry unavailable (" .. tostring(poll_err)
+            .. ") - hooks will only retry on player spawn")
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Startup summary
+--------------------------------------------------------------------------------
 
 if Config.Debug then
     log("DEBUG MODE ON - discovery instructions:")
     log("  1. Load into your world.")
     log("  2. Equip and fire the single-shot, scatter, and homing sphere")
-    log("     launchers once each.")
+    log("     launchers once each (the dump appears when the weapon spawns).")
     log("  3. Copy each [SphereRate] DISCOVERY DUMP block from this console")
     log("     and paste it back so the interval field can be identified.")
 end
@@ -337,7 +444,9 @@ log("loaded. intervals: single=" .. tostring(Config.SingleShotInterval)
 --
 -- Replace <FireFunctionName> with the function identified from the dump,
 -- then adapt: either zero the cooldown state before the check runs, or
--- override the check's inputs. Uncomment and adjust.
+-- override the check's inputs. Note RegisterHook on a /Game/... BP function
+-- has the same lifecycle constraint as NotifyOnNewObject: defer it until
+-- class_is_loaded() is true (reuse the retry machinery above).
 --------------------------------------------------------------------------------
 -- local fn = "/Game/Pal/Blueprint/Weapon/BP_SphereLauncher.BP_SphereLauncher_C:<FireFunctionName>"
 -- local ok, err = pcall(function()

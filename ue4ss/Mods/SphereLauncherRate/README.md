@@ -98,15 +98,27 @@ separate launcher). In the UE4SS console window, look for lines prefixed
 
 ```
 [SphereRate] config.lua loaded (Enabled=true Debug=false)
-[SphereRate] hooked single-shot sphere launcher
-[SphereRate] hooked scatter sphere launcher
-[SphereRate] hooked homing sphere launcher
+[SphereRate] 3 launcher class(es) not loaded yet (normal at startup) - hooks will register automatically once they load
 [SphereRate] loaded. intervals: single=0 scatter=0 homing=0 (0 = pre-1.0.3 spam fire)
 ```
 
-Then load a save, equip a sphere launcher, and fire: a
-`[SphereRate] ... set <property> = 0.000` line should appear when the weapon
-spawns, and spheres should throw as fast as you can trigger.
+The "not loaded yet" line is expected: the launcher blueprint classes only
+load the first time such a weapon spawns, so the mod defers its hooks and
+retries automatically (on player spawn and via a cheap 3-second poll) — no
+action needed.
+
+Then load a save, equip a sphere launcher, and fire. Shortly after the
+weapon spawns you should see:
+
+```
+[SphereRate] hooked single-shot sphere launcher
+[SphereRate] single-shot sphere launcher: set <property> = 0.000
+```
+
+and spheres should throw as fast as you can trigger. (The first-ever
+launcher of each type may take up to one 3-second poll tick before the hook
+lands and applies — the mod sweeps already-spawned instances when it does,
+so the weapon in your hand is covered.)
 
 **If you see no `[SphereRate]` lines at all**, the mod isn't loading — check
 step 3's folder layout and step 4. **If you see a `WARNING: no interval
