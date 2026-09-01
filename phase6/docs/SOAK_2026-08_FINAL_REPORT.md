@@ -136,9 +136,59 @@ append-with-checksum and all four headers verify OK).
 
 ## 7. Follow-ups surfaced (report-only; none done here)
 
-1. `main_x86.c:4504` "~2 LOG_IPC_STATS entries/100q" comment is stale (3 since `9c772f8`) — fix on
-   the next commit touching that file.
+1. ~~`main_x86.c:4504` "~2 LOG_IPC_STATS entries/100q" comment is stale (3 since `9c772f8`) — fix on
+   the next commit touching that file.~~ **DONE 2026-09-01** — corrected in the mode-4 commit, which
+   was the next commit to touch that file. Four facts were stale, not one: 3 entries/100q not 2,
+   ~198 q/s not ~3k/day, the ring is circular (no "no-wrap cap"), and it retains ~7.5 minutes.
 2. The `[23:00110]` provenance-vs-answer inconsistency (§4) deserves a KVM probe.
+   **MEASURED 2026-09-01 (`JARVIS_EMBED_PROBE` mode 4, KVM). PARTIAL — the mechanism is
+   identified and leakage is ruled out for this shape, but the anomaly is NOT closed.**
+
+   The probe restaged the turn with a NON-argmax colour (chartreuse), so leakage,
+   confabulation and a provenance bug would each look different. Verbatim, T4:
+
+   ```
+   [CTRL-SEM] cands=3 sel=2 len=185 embed_ms=354
+   [PROV] sem winner seq=17 cos_x1000=932
+   [PROV] preamble len=185 text="Notes from a previous answer (use as reference; add new detail, do not repeat):
+   I do not know what your favorite color is because you have not told me.
+   My favorite color is chartreuse.
+   "
+   [PROV] src_resp len=71 text="I do not know what your favorite color is because you have not told me."
+   [PROV] derived=yes
+   [CTRL-IN-RESP] q="whats my favourite colour" -> "Your favorite color is chartreuse."
+   [PROV] stored kind=2 src=17 cos_x1000=932
+   ```
+
+   (The `[CTRL-IN-RESP]` text is reassembled across a serial interleave; the reassembly is
+   confirmed independently by `[CTRL-IN-REPLY] verdict=0 seq=1546 len=34`, and
+   "Your favorite color is chartreuse." is exactly 34 bytes.)
+
+   **THE FINDING: the preamble is MULTI-FACT, the provenance is SINGLE-SRC.** `sel=2` — the
+   selector picked TWO records, and the 185-byte preamble carried both seq 17's
+   "I do not know…" AND the chartreuse statement. Provenance recorded only `ctrl_sel[0].seq`
+   = 17. **So a stored triple can point at an "I don't know" record while the prompt actually
+   contained the answer** — which is exactly the shape `[23:00110]` has, and it needs neither
+   leakage nor confabulation to produce it.
+
+   Pre-registered rows that fired: **P-HONEST** (both recalling turns `derived=yes`; each
+   stored triple matches its printed winner — T2 17/712, T4 17/932) **+ L-RECALL-OK** (T4's
+   preamble CONTAINS chartreuse and the answer says chartreuse). **L-LEAK did NOT fire** — the
+   answer's colour was in the preamble, so this run shows no cross-query state leakage, though
+   it also does not test H3 (nothing forced a leak-only path). **C-CONFAB did not fire.**
+
+   **WHY THIS DOES NOT CLOSE THE ANOMALY.** H1 as written was "the injected preamble contained
+   something other than (**or more than**) the recorded src's answer" — the "more than" case is
+   precisely what happened, and the pre-registered P-MISMATCH test (`derived=`, a PREFIX check)
+   structurally cannot detect it. So the mechanism is demonstrated on a reproduction, not on the
+   original: `[23:00110]`'s own preamble bytes were never logged — that absence is why this
+   instrumentation exists — and they are unrecoverable. The honest status is
+   **explained-by-mechanism, not proven**. Corroboration that the reproduction was faithful:
+   T2's cosine came out at **712**, matching the soak's `[23:00108] cos=0.712` exactly.
+
+   Follow-up this opens (report-only, not done): provenance records one src for a preamble that
+   may carry several. Recording the full selected set — or at least the count — would make a
+   future occurrence self-explaining.
 3. Emission-rate wording ("~1 Hz") in telemetry docs understates the STATS-dominated ~2 Hz reality
    at deployed query rates.
 4. Pi hardening for future runs: persistent journald (`Storage=persistent`) so an outage doesn't
