@@ -146,3 +146,54 @@ append-with-checksum and all four headers verify OK).
    operator being home.
 5. The return-path reply loss (2 of 39 replies never rendered) is real but unattributable box-side;
    if it matters, the receiver needs reply-drop logging surfaced somewhere durable.
+
+## Evidence archive + pre-resume baselines (2026-09-01)
+
+The capture ring's seven data files plus the truncated `pcap00` artifact were the SOLE copy of
+the soak's wire history and sat in the live tcpdump ring's write path. Archived 2026-09-01:
+
+- **Pi:** `/home/pi/soak-archive-2026-08/` (moved out of `/home/pi/soak/` with the capture
+  service stopped; service restarted `active`+`enabled` after — the fresh ring in
+  `/home/pi/soak/` is disposable, the archive is not)
+- **Main PC (second copy, off the SD card):** `C:\Users\jluca\soak-archive-2026-08\` —
+  verified `sha256sum -c manifest.sha256`, 8/8 OK
+- Manifest (sha256, canonical):
+
+  ```
+  e3f42e2687636327d7f18c9635173252505b4a838fa6829a755bab06c9c69749  jarvis_soak.pcap00
+  3cebf85c33caaf41c53ed4821ddf9afa46e5ca2d4a9af732338d56bcfbf81292  jarvis_soak.pcap01
+  8a16a38884dad043868ceb690a591bff6f08edbf71bb1b370256b48d4d66c717  jarvis_soak.pcap02
+  6c4671bcac4855115299128740e290b57169030d2dedb715572af7010b3b4199  jarvis_soak.pcap03
+  a0414f67573cd7b673c34a4312674f55fbb5b319d7c101212fb1de4e5d9e3c88  jarvis_soak.pcap04
+  1aab173a8716d9e5c3868fb99524b02f1823089ac2f147d85c47ca58e7743d85  jarvis_soak.pcap05
+  ace2a14a53b56f83da1c2d031ca26ab8fc74ffa6838ef59cdc6d7256afccb334  jarvis_soak.pcap06
+  ce569e6a028ff7111c13f40807357d5548958934251e79df9ba71b8316e17ba2  jarvis_soak.pcap07
+  ```
+
+  Total 683,008,503 bytes across the 8 files, byte-identical on both hosts. `pcap00` at 24 bytes
+  is the bare pcap global header — the service-restart truncation artifact, retained deliberately
+  as evidence of the post-outage restart, not as data.
+
+Pre-resume checklist items also closed today:
+
+- **Pi journald is now `Storage=persistent`** — an outage can no longer erase the capture
+  host's timeline (the pre-outage journal loss is §7 of this report). **The obvious fix does not
+  work on this host and the naive verification reports success anyway:** Raspberry Pi OS ships a
+  vendor drop-in `/usr/lib/systemd/journald.conf.d/40-rpi-volatile-storage.conf` setting
+  `Storage=volatile`, which overrides `/etc/systemd/journald.conf` — so editing the main conf makes
+  `grep ^Storage= /etc/systemd/journald.conf` print `persistent` while journald stays volatile. The
+  effective fix is a higher-sorting drop-in, `/etc/systemd/journald.conf.d/99-jarvis-persistent.conf`.
+  A restart alone was also insufficient: journald opened only the Runtime Journal until an explicit
+  `journalctl --flush` migrated 2,070 entries and created
+  `/var/log/journal/<machine-id>/{system,user-1000}.journal`. Verified behaviourally, not from
+  config text — `System Journal (/var/log/journal/…) is 8M, max 4G` with the runtime store drained
+  to 0.
+- **Store lifetime baselines, read from the parked box (valid until the next JARVIS boot —
+  the stores only move while JARVIS runs):** workload episodic @21,100,000: lifetime total
+  **185,368,413**, store boot counter **48**, cursor 8029, 8192 records decoded, checksum OK;
+  control-IN episodic @21,140,000: lifetime total **141**, store boot counter **23**, cursor 141,
+  141 records decoded, checksum OK. (Both boot counters are the stores' OWN counters, independent
+  of the telemetry `boot_id` — the soak ran as telemetry boot 54.)
+
+Still owed before the next run (operator-scheduled): the standard probe-flag pre-flight and
+the one-shot `--bootnext` discipline, per the run plan.
