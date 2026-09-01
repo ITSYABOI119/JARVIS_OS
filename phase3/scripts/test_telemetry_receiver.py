@@ -19,9 +19,12 @@ import io
 import json
 import os
 import re
+import shutil
+import socket
 import struct
 import sys
 import tempfile
+import types
 import time
 import zlib
 
@@ -35,7 +38,9 @@ from telemetry_receiver import (  # noqa: E402
     build_control_frame, decode_control_reply, validate_query, resolve_http_bind,
     reply_to_record, ControlSender, TelemetryHub, _SSEHandler,
     CONTROL_MAGIC, CONTROL_QUERY_MAX, CONTROL_HDR_LEN, CONTROL_TEST_EPOCH, VERDICT_NAMES,
-    host_is_loopback, allowed_origins, CONTROL_REPLY_PORT, BOX_MAC, BOX_IP)
+    host_is_loopback, allowed_origins, CONTROL_REPLY_PORT, BOX_MAC, BOX_IP,
+    # --- reply-path log (2026-09-01) ---
+    ReplyLog, REPLY_DROP_SOURCE, REPLY_LOG_NAME, default_reply_log_dir)
 from telemetry_fixture import (  # noqa: E402  -- shared packer (moved out of this file)
     _DEFAULTS, build_packet, _build_pcap_one, build_pcap_many, REQUIRED_RECORD_KEYS,
     frame_to_packet, FLAG_BITS)
@@ -784,7 +789,10 @@ def main():
             replay=None, replay_rate=1.0, bind='', port=51000, http_port=8801,
             http_bind='', web_dir='.', send=True, key_file=keyf,
             epoch=CONTROL_TEST_EPOCH, box_mac=BOX_MAC, box_ip=BOX_IP,
-            reply_port=CONTROL_REPLY_PORT)
+            reply_port=CONTROL_REPLY_PORT,
+            # no_reply_log=True: this test is about the HTTP bind, and the suite must
+            # NEVER touch the real ~/.jarvis/receiver (every log test uses a temp dir).
+            no_reply_log=True, reply_log_dir=None)
         try:
             tr_mod._run_sse(args)
         except KeyboardInterrupt:
@@ -1017,6 +1025,253 @@ def main():
     code, body = _fake_post(('127.0.0.1', 1), fs2, raw=b'"a string"')
     check(code == 400 and 'error' in body, "POST /send rejects a non-object JSON body -> 400")
     check(fs2.calls == [], "no invalid request ever reached the signer")
+
+
+    # ---------------------------------------------------------------------------
+    # (g) REPLY-PATH LOG (2026-09-01) — T-A..T-H.
+    #
+    # WHY: the 2026-08 soak lost two replies the box recorded as answered/OK, and no
+    # receiver transcript survived to say WHICH LEG lost them. These pin the transcript that
+    # makes the next occurrence attributable.
+    #
+    # Every test drives the REAL _reply_listener through a stub socket, so the assertions
+    # cover the actual control flow (source pre-filter, decode drop, accept) rather than a
+    # reimplementation of it. NOTHING here touches the real ~/.jarvis — ground rule 2.
+    # ---------------------------------------------------------------------------
+    print("\n== reply-path log (T-A..T-H) ==")
+
+    class _DrainedSock:
+        """Yields queued datagrams, then raises OSError so the listener loop returns."""
+
+        def __init__(self, datagrams):
+            self._d = list(datagrams)
+
+        def setsockopt(self, *a):
+            pass
+
+        def bind(self, *a):
+            pass
+
+        def close(self):
+            pass
+
+        def recvfrom(self, _n):
+            if self._d:
+                return self._d.pop(0)
+            raise OSError("drained")
+
+    class _ShimSocketMod:
+        AF_INET = socket.AF_INET
+        SOCK_DGRAM = socket.SOCK_DGRAM
+        SOL_SOCKET = socket.SOL_SOCKET
+        SO_REUSEADDR = socket.SO_REUSEADDR
+
+        def __init__(self, sock):
+            self._sock = sock
+
+        def socket(self, *a, **k):
+            return self._sock
+
+    class _CapHub:
+        def __init__(self):
+            self.published = []
+
+        def publish_event(self, rec):
+            self.published.append(rec)
+
+    def _run_listener(datagrams, rlog, key=REPLY_KEY, box_ip=BOX_IP):
+        """Drive the real listener over a stub socket; return the capturing hub."""
+        hub = _CapHub()
+        real = tr_mod.socket
+        tr_mod.socket = _ShimSocketMod(_DrainedSock(datagrams))
+        try:
+            tr_mod._reply_listener(hub, '', CONTROL_REPLY_PORT, box_ip, key, rlog)
+        finally:
+            tr_mod.socket = real
+        return hub
+
+    def _read_log(path):
+        if not os.path.exists(path):
+            return []
+        with open(path, encoding='utf-8') as fh:
+            return [json.loads(ln) for ln in fh if ln.strip()]
+
+    _logdir = tempfile.mkdtemp(prefix='jarvis_replylog_')
+    _BOX_ADDR = (BOX_IP, 51002)
+
+    # T-A accepted --------------------------------------------------------------
+    d_a = os.path.join(_logdir, 'a')
+    rl_a = ReplyLog(d_a)
+    hub_a = _run_listener([(_build_reply(0, 4242, b'a page fault is a trap'), _BOX_ADDR)], rl_a)
+    ev_a = _read_log(rl_a.path)
+    acc = [e for e in ev_a if e['event'] == 'reply_accepted']
+    check(len(acc) == 1, "T-A: a valid signed reply logs exactly one reply_accepted (got %d)"
+          % len(acc))
+    check(bool(acc) and acc[0]['seq'] == 4242, "T-A: logged seq matches the frame")
+    check(bool(acc) and acc[0]['verdict'] == 0, "T-A: logged verdict matches the frame")
+    check(bool(acc) and acc[0]['text'] == 'a page fault is a trap',
+          "T-A: logged text matches the frame")
+    check(bool(acc) and 'ts' in acc[0] and 'src' in acc[0],
+          "T-A: every line carries ts + src (JSON-parseable, one object per line)")
+    check(len(hub_a.published) == 1, "T-A: the accepted reply is still PUBLISHED to SSE")
+
+    # T-B hmac drop -------------------------------------------------------------
+    # The reason must be the string decode_control_reply already returns - not a parallel set.
+    d_b = os.path.join(_logdir, 'b')
+    rl_b = ReplyLog(d_b)
+    _bad_tag = _flip(_build_reply(0, 4243, b'forged'), len(_build_reply(0, 4243, b'forged')) - 1)
+    _, _expect_b = decode_control_reply(_bad_tag, REPLY_KEY)
+    hub_b = _run_listener([(_bad_tag, _BOX_ADDR)], rl_b)
+    ev_b = _read_log(rl_b.path)
+    drop_b = [e for e in ev_b if e['event'] == 'reply_dropped']
+    check(len(drop_b) == 1 and drop_b[0]['reason'] == _expect_b,
+          "T-B: a flipped tag logs reply_dropped with the SAME reason the decoder returns (%r)"
+          % (_expect_b,))
+    check(not [e for e in ev_b if e['event'] == 'reply_accepted'],
+          "T-B: a bad-hmac reply logs NO reply_accepted")
+    check(hub_b.published == [], "T-B: a bad-hmac reply is never published")
+
+    # T-C crc drop --------------------------------------------------------------
+    d_c = os.path.join(_logdir, 'c')
+    rl_c = ReplyLog(d_c)
+    _bad_crc = _build_reply(0, 4244, b'corrupt me', corrupt_crc=True)
+    _, _expect_c = decode_control_reply(_bad_crc, REPLY_KEY)
+    _run_listener([(_bad_crc, _BOX_ADDR)], rl_c)
+    drop_c = [e for e in _read_log(rl_c.path) if e['event'] == 'reply_dropped']
+    check(len(drop_c) == 1 and drop_c[0]['reason'] == _expect_c,
+          "T-C: a corrupt CRC logs reply_dropped with the decoder's crc reason (%r)"
+          % (_expect_c,))
+
+    # T-D source drop -----------------------------------------------------------
+    # HONEST NOTE: the source pre-filter was a BARE `continue` - no reason string, no counter,
+    # no print. REPLY_DROP_SOURCE is introduced (not reused), and this asserts the module
+    # constant rather than a copy of the literal.
+    d_d = os.path.join(_logdir, 'd')
+    rl_d = ReplyLog(d_d)
+    hub_d = _run_listener([(_build_reply(0, 4245, b'from a stranger'), ('10.9.9.9', 51002))],
+                          rl_d)
+    drop_d = [e for e in _read_log(rl_d.path) if e['event'] == 'reply_dropped']
+    check(len(drop_d) == 1 and drop_d[0]['reason'] == REPLY_DROP_SOURCE,
+          "T-D: a wrong-source datagram logs reply_dropped with the source-filter reason")
+    check(bool(drop_d) and drop_d[0]['src'].startswith('10.9.9.9'),
+          "T-D: the logged src is the actual sender (a misprovisioned box IP is now visible)")
+    check(hub_d.published == [], "T-D: a wrong-source datagram is never published")
+
+    # T-E correlation -----------------------------------------------------------
+    # Exercises the REAL ControlSender.send() by injecting a stub scapy.all, so the 'sent'
+    # event comes from the production code path (inside the send lock), not a hand-written line.
+    d_e = os.path.join(_logdir, 'e')
+    rl_e = ReplyLog(d_e)
+    _sent_frames = []
+
+    class _StubPkt:
+        def __truediv__(self, other):
+            return self
+
+    def _stub_layer(*a, **k):
+        return _StubPkt()
+
+    class _StubRoute:
+        @staticmethod
+        def route(_ip):
+            return ('iface0',)
+
+    class _StubConf:
+        route = _StubRoute
+
+    _fake_scapy = types.ModuleType('scapy')
+    _fake_all = types.ModuleType('scapy.all')
+    _fake_all.Ether = _stub_layer
+    _fake_all.IP = _stub_layer
+    _fake_all.UDP = _stub_layer
+    _fake_all.Raw = _stub_layer
+    _fake_all.conf = _StubConf
+    _fake_all.sendp = lambda *a, **k: _sent_frames.append(1)
+    _fake_scapy.all = _fake_all
+    _saved = (sys.modules.get('scapy'), sys.modules.get('scapy.all'))
+    sys.modules['scapy'] = _fake_scapy
+    sys.modules['scapy.all'] = _fake_all
+    try:
+        _snd = ControlSender(REPLY_KEY, rlog=rl_e)
+        _seq_e = _snd.send(b'what is a page fault?')
+    finally:
+        for _n, _m in zip(('scapy', 'scapy.all'), _saved):
+            if _m is None:
+                sys.modules.pop(_n, None)
+            else:
+                sys.modules[_n] = _m
+    check(len(_sent_frames) == 1, "T-E: the stubbed transmit actually fired once")
+    # The box echoes seq as u16 LE, so the reply carries the MASKED value - and the join
+    # must use it. A join on the raw ms-derived seq finds nothing; that is why the sent
+    # event carries seq16.
+    _seq16 = _seq_e & 0xFFFF
+    _run_listener([(_build_reply(0, _seq16, b'it is a trap into the kernel'), _BOX_ADDR)], rl_e)
+    ev_e = _read_log(rl_e.path)
+    _sent_j = [e for e in ev_e if e['event'] == 'sent' and e.get('seq16') == _seq16]
+    _acc_j = [e for e in ev_e if e['event'] == 'reply_accepted' and e.get('seq') == _seq16]
+    check(len(_sent_j) == 1 and len(_acc_j) == 1,
+          "T-E: a per-seq join (sent.seq16 == reply.seq) yields exactly one sent + one "
+          "reply_accepted for seq16 %d" % _seq16)
+    check(bool(_sent_j) and _sent_j[0]['seq'] == _seq_e,
+          "T-E: the sent event keeps the FULL ms-derived seq alongside seq16")
+    _sent_ev = [e for e in ev_e if e['event'] == 'sent']
+    check(bool(_sent_ev) and _sent_ev[0]['query'] == 'what is a page fault?'
+          and _sent_ev[0]['qlen'] == 21,
+          "T-E: the sent event carries the query text and its byte length")
+    check(not any('key' in json.dumps(e).lower() and REPLY_KEY.hex()[:16] in json.dumps(e)
+                  for e in ev_e), "T-E: no key material appears anywhere in the log")
+
+    # T-F fail-open -------------------------------------------------------------
+    # An unwritable dir: a path UNDER a regular file. makedirs raises NotADirectoryError.
+    _blocker = os.path.join(_logdir, 'blocker')
+    with open(_blocker, 'w', encoding='utf-8') as fh:
+        fh.write('x')
+    rl_f = ReplyLog(os.path.join(_blocker, 'nope'))
+    _cap_f = io.StringIO()
+    _real_stdout = sys.stdout
+    sys.stdout = _cap_f
+    try:
+        hub_f = _run_listener([(_build_reply(0, 4246, b'still delivered'), _BOX_ADDR),
+                               (_build_reply(0, 4247, b'and this one too'), _BOX_ADDR)], rl_f)
+    finally:
+        sys.stdout = _real_stdout
+    check(len(hub_f.published) == 2,
+          "T-F: an unwritable log does NOT stop replies being accepted/published (got %d)"
+          % len(hub_f.published))
+    check(_cap_f.getvalue().count('[reply-log] WARNING') == 1,
+          "T-F: the log failure warns exactly ONCE, not per datagram")
+    check(not os.path.isdir(os.path.join(_blocker, 'nope')),
+          "T-F: nothing was created at the unwritable path")
+
+    # T-G opt-out ---------------------------------------------------------------
+    _optout = os.path.join(_logdir, 'optout')
+    hub_g = _run_listener([(_build_reply(0, 4248, b'no log please'), _BOX_ADDR)], None)
+    check(len(hub_g.published) == 1, "T-G: with logging off the reply is still published")
+    check(not os.path.exists(_optout),
+          "T-G: rlog=None creates no directory and no file")
+    check('--no-reply-log' in open(tr_mod.__file__, encoding='utf-8').read()
+          and '--reply-log-dir' in open(tr_mod.__file__, encoding='utf-8').read(),
+          "T-G: --no-reply-log and --reply-log-dir are real CLI flags")
+    check(default_reply_log_dir().endswith(os.path.join('.jarvis', 'receiver')),
+          "T-G: the default log dir is ~/.jarvis/receiver (OUTSIDE the repo)")
+    check(REPLY_LOG_NAME.endswith('.jsonl'), "T-G: the log is line-oriented JSONL")
+
+    # T-H append-only -----------------------------------------------------------
+    d_h = os.path.join(_logdir, 'h')
+    rl_h = ReplyLog(d_h)
+    _run_listener([(_build_reply(0, 4249, b'first'), _BOX_ADDR)], rl_h)
+    _size1 = os.path.getsize(rl_h.path)
+    _run_listener([(_build_reply(0, 4250, b'second'), _BOX_ADDR)], rl_h)
+    _size2 = os.path.getsize(rl_h.path)
+    _lines_h = _read_log(rl_h.path)
+    check(len(_lines_h) == 2, "T-H: two events produce two lines (got %d)" % len(_lines_h))
+    check(_size2 > _size1,
+          "T-H: the file is APPENDED, never truncated between writes (%d -> %d)"
+          % (_size1, _size2))
+    check([e['seq'] for e in _lines_h] == [4249, 4250],
+          "T-H: lines are in write order, oldest first")
+
+    shutil.rmtree(_logdir, ignore_errors=True)
 
     print("\n== Results: %d PASS, %d FAIL ==" % (_PASS, _FAIL))
     return 1 if _FAIL else 0

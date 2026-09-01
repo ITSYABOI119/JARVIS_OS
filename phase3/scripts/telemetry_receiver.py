@@ -77,6 +77,7 @@ never summed). The uptime is from an uncalibrated TSC, shown with "≈".
 """
 
 import argparse
+import datetime
 import hashlib
 import hmac
 import json
@@ -759,7 +760,8 @@ class ControlSender:
     threading, so two browser tabs can POST concurrently)."""
 
     def __init__(self, key, epoch=CONTROL_TEST_EPOCH, box_mac=BOX_MAC, box_ip=BOX_IP,
-                 port=CONTROL_PORT):
+                 port=CONTROL_PORT, rlog=None):
+        self.rlog = rlog
         self.key = key
         self.epoch = epoch
         self.box_mac = box_mac
@@ -824,6 +826,15 @@ class ControlSender:
             except Exception as e:
                 raise ScapyUnavailable("raw L2 send failed (%s); Npcap installed? running "
                                        "elevated?" % e)
+            # Inside the lock, so the log's ORDER matches the wire's. The key is never
+            # logged - only the seq, the length and the (operator-authored) query text.
+            if self.rlog:
+                # seq16 is NOT redundant: the JRPL reply echoes seq as u16 LE while
+                # this seq is ms-derived and ~1.8e12, so a join on `seq` alone finds
+                # NOTHING. The console masks both sides to 16 bits for the same reason.
+                self.rlog.event('sent', seq=seq, seq16=seq & 0xFFFF,
+                                qlen=len(query_bytes),
+                                query=query_bytes.decode('utf-8', 'replace'))
         return seq
 
 
@@ -855,7 +866,95 @@ REPLY_DROP_LOG_FIRST = 5     # log the first few verbatim (bring-up / misprovisi
 REPLY_DROP_LOG_EVERY = 100   # then one line per N (a flood must not spam the terminal)
 
 
-def _reply_listener(hub, bind, port, box_ip=BOX_IP, key=None):
+# ---------------------------------------------------------------------------
+# Reply-path event log (2026-09-01).
+#
+# WHY THIS EXISTS: during the 2026-08 soak two control-IN turns were answered and stored
+# /OK BOX-SIDE (acc=39 drop=0 bp=0 down=0 — every box drop counter zero) yet never rendered
+# at the console, and the question "where did they die?" was UNANSWERABLE: the receiver's
+# drop prints go to a console window that closes, so no transcript survived. With this log
+# the next occurrence is attributable:
+#
+#   nothing logged for that seq   -> the datagram never arrived  (wire loss; UDP, no retransmit)
+#   reply_dropped + reason        -> it arrived and THIS receiver rejected it, and why
+#   reply_accepted, not rendered  -> it was published to SSE; the browser side is next
+#
+# RULES, each load-bearing rather than stylistic:
+#   - OUTSIDE the repo (~/.jarvis/receiver/). Reply text is the operator's conversation
+#     content; the operator-menu transcript precedent puts such output under %USERPROFILE%.
+#   - APPEND-ONLY and NEVER self-rotating. A tool that trims its own audit log is one whose
+#     audit log cannot be trusted (the jarvis_menu transcript rule). Volume is human-paced.
+#   - NEVER key material, in any event, ever. Reasons + metadata + the (wire-public) text.
+#   - The :51000 TELEMETRY stream is NEVER logged here. It runs ~2 Hz forever; this is the
+#     REPLY path only (:51002 + /send).
+#   - FAIL-OPEN: a log-write failure warns ONCE and never breaks receiving or publishing.
+#     Losing the transcript is an observability loss; dropping a reply would be a functional
+#     one, and this feature exists to prevent exactly that confusion.
+# ---------------------------------------------------------------------------
+
+REPLY_LOG_NAME = 'reply_log.jsonl'
+
+# The source pre-filter had NO reason string, no counter and no print — it is a bare
+# `continue`. Every OTHER drop reason is reused verbatim from decode_control_reply. This one
+# is introduced here because none existed, and it is a named constant so the test asserts the
+# same string the code emits rather than a copy of it.
+REPLY_DROP_SOURCE = 'source-filter (not the provisioned box ip)'
+
+
+def default_reply_log_dir():
+    """~/.jarvis/receiver — outside the repo, beside the operator-menu transcripts."""
+    return os.path.join(os.path.expanduser('~'), '.jarvis', 'receiver')
+
+
+class ReplyLog:
+    """Append-only JSONL transcript of the reply path. One JSON object per line."""
+
+    def __init__(self, directory, name=REPLY_LOG_NAME):
+        self.dir = directory
+        self.path = os.path.join(directory, name)
+        self._io_lock = threading.Lock()
+        self._warn_lock = threading.Lock()
+        self._warned = False
+        self._last_error = None
+
+    @staticmethod
+    def _line(event, fields):
+        rec = {'ts': datetime.datetime.now().astimezone().isoformat(timespec='seconds'),
+               'event': event}
+        rec.update(fields)
+        return json.dumps(rec, ensure_ascii=False)
+
+    def _write(self, line):
+        try:
+            with self._io_lock:
+                os.makedirs(self.dir, exist_ok=True)
+                with open(self.path, 'a', encoding='utf-8') as fh:
+                    fh.write(line + '\n')
+                    fh.flush()
+            return True
+        except Exception as e:          # noqa: BLE001 - fail-open is the point
+            self._last_error = e
+            return False
+
+    def event(self, event, **fields):
+        """Append one event. NEVER raises — the receive path must survive a broken log."""
+        if self._write(self._line(event, fields)):
+            return
+        first = False
+        with self._warn_lock:
+            if not self._warned:
+                self._warned = True
+                first = True
+        if first:
+            print("[reply-log] WARNING: cannot write %s (%s) -- reply logging is degraded "
+                  "for this run; RECEIVING AND PUBLISHING ARE UNAFFECTED"
+                  % (self.path, self._last_error), flush=True)
+            # One attempt to record the failure in the file itself, in case whatever broke
+            # has since recovered. Ignored if it fails again.
+            self._write(self._line('log_error', {'error': repr(self._last_error)}))
+
+
+def _reply_listener(hub, bind, port, box_ip=BOX_IP, key=None, rlog=None):
     """Bind UDP :51002 and fan every AUTHENTICATED JRPL reply out over the existing SSE
     stream. A bind failure is NON-FATAL (the display half keeps working).
 
@@ -884,6 +983,11 @@ def _reply_listener(hub, bind, port, box_ip=BOX_IP, key=None):
         except OSError:
             return
         if box_ip and addr[0] != box_ip:
+            # Logged (it never was): a misprovisioned box IP looks EXACTLY like wire
+            # loss from the console, and that ambiguity is what this log removes.
+            if rlog:
+                rlog.event('reply_dropped', reason=REPLY_DROP_SOURCE,
+                           src='%s:%d' % addr, len=len(data))
             continue  # cheap pre-filter, not the defence (see the docstring)
         rep, err = decode_control_reply(data, key)
         if rep is None:
@@ -894,9 +998,18 @@ def _reply_listener(hub, bind, port, box_ip=BOX_IP, key=None):
             if n <= REPLY_DROP_LOG_FIRST or n % REPLY_DROP_LOG_EVERY == 0:
                 print("[reply] DROP unverified (%s) from %s -- %d dropped so far"
                       % (err, addr[0], n), flush=True)
+            # Logged on EVERY drop, not at the bounded print rate: the print exists to
+            # keep a flood off the terminal, the log exists to miss nothing.
+            if rlog:
+                rlog.event('reply_dropped', reason=err, src='%s:%d' % addr,
+                           len=len(data))
             continue
         # Only authenticated replies get here.
-        hub.publish_event(reply_to_record(rep, time.time()))
+        rec = reply_to_record(rep, time.time())
+        if rlog:
+            rlog.event('reply_accepted', seq=rep['seq'], verdict=rep['verdict'],
+                       tlen=rep['tlen'], text=rec['text'], src='%s:%d' % addr)
+        hub.publish_event(rec)
 
 
 class TelemetryHub:
@@ -1213,14 +1326,21 @@ def _run_sse(args) -> int:
         # FAIL-CLOSED: a missing/invalid key leaves sender.key None -> POST /send answers
         # 500 while the whole DISPLAY half keeps running.
         key = load_control_key(args.key_file)
+        # Reply-path log: ON by default with --send, never in display-only mode (no
+        # listener, no log, no directory created).
+        rlog = None
+        if not args.no_reply_log:
+            rlog = ReplyLog(args.reply_log_dir or default_reply_log_dir())
+            print("[reply-log] %s (append-only; sent/accepted/dropped-with-reason; "
+                  "telemetry :%d is never logged)" % (rlog.path, args.port), flush=True)
         _SSEHandler.sender = ControlSender(key, epoch=args.epoch, box_mac=args.box_mac,
-                                           box_ip=args.box_ip)
+                                           box_ip=args.box_ip, rlog=rlog)
         # The reply arrives from the box over the LAN, so this socket uses --bind (only the
         # HTTP/signing surface is loopback-pinned).
         # The SAME symmetric key authenticates BOTH directions (M4b): no key => replies are
         # dropped rather than shown unverified.
         threading.Thread(target=_reply_listener,
-                         args=(hub, args.bind, args.reply_port, args.box_ip, key),
+                         args=(hub, args.bind, args.reply_port, args.box_ip, key, rlog),
                          daemon=True).start()
         print("[send] POST /send enabled on http://%s:%d/send (loopback only; key=%s; "
               "box %s / %s :%d)"
@@ -1330,6 +1450,13 @@ def main(argv=None) -> int:
                     help="HTTP/SSE bind address (default: follow --bind; forced to loopback with --send)")
     ap.add_argument('--reply-port', type=int, default=CONTROL_REPLY_PORT,
                     help="UDP port for the box's replies (default: %d)" % CONTROL_REPLY_PORT)
+    ap.add_argument('--no-reply-log', action='store_true',
+                    help="disable the reply-path JSONL log (it is ON by default with "
+                         "--send: an observability feature that needs opting in is "
+                         "missing exactly when it is needed)")
+    ap.add_argument('--reply-log-dir', default=None,
+                    help="directory for the reply log (default: ~/.jarvis/receiver). "
+                         "Outside the repo by design - reply text is conversation content.")
     args = ap.parse_args(argv)
 
     if args.send and not args.sse:
