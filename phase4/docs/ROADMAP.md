@@ -167,6 +167,7 @@ These are direction, not commitments. Start only after Phase 7 exit criteria are
 | **Custom hardware** | NPU/ASIC for inference or decision-cache acceleration |
 | **True agency research** | Explore bounded autonomy within formally verified capability sets — the safe habitat goal |
 | **Operates a workspace** | JARVIS gets its own read-write filesystem + a scratch/project region (separate from its own code) and a sandboxed task/command executor, so it can make files and run code/projects on request — every file-write and process-launch an allowlisted, SHIELD-scored, JACT-audited action. Data-and-projects by default, NOT self-modifying code (that stays Phase 7 #3). |
+| **Ambient voice wearable** | The owner's "bracelet" idea (2026-09-01): an offline recorder wearable + USB-C batch ingest on the Main PC (Whisper → own-voice filter → distill → JARVIS memory), later wake-word voice commands through the existing control-IN channel. Pipeline-first (provable with no hardware); non-owner speech DISCARDED at ingest by rule. Full idea doc: `BEYOND_PHASE7_VOICE_WEARABLE.md`. |
 
 > **On "Operates a workspace"** — the north star toward a *do-things* AI-OS (the Model B design already
 > places user-space filesystems + applications at Ring 3 with the AI coordinating them): the jump from
