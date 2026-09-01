@@ -518,6 +518,20 @@
  *       ctrl_roundtrip_sync) — these are REAL validated control-IN queries that
  *       passed auth+replay, not direct calls into the gate.
  *
+ *   4 = THE [23:00110] RECALL-PROVENANCE DISCRIMINATOR. Stages four validated
+ *       control-IN turns — ask the colour, STATE it as chartreuse, one filler turn,
+ *       then re-ask as a paraphrase (contraction + British spelling) so the exact
+ *       lane misses and the SEMANTIC lane selects, reproducing the soak turn's shape.
+ *
+ *       chartreuse is chosen because it is NOT the argmax colour, which is what makes
+ *       the three hypotheses separable: leakage surfaces chartreuse in an answer whose
+ *       preamble does not contain it; confabulation surfaces a different colour
+ *       (expected "blue"); and a preamble not derived from its recorded src is a
+ *       provenance bug. Prints [PROV] per turn — query/exact-hit/key, the semantic
+ *       winner, the FULL injected preamble verbatim, the winner's stored answer
+ *       verbatim, a mechanical derived=yes|no, and the provenance triple actually
+ *       written. Gated == 4 (not truthy) so modes 1-3 output stays byte-stable.
+ *
  *   3 = LEG A ONLY: embed BOTH sides of every MEASURED recall pair
  *       (embed_gate_pairs.h, generated from cm0_recall_set.json) and print the
  *       per-pair cosine, for comparison against the host reference in

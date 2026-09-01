@@ -479,6 +479,14 @@ static void ctrl_epi_write(const char *qs, uint8_t outcome, const char *resp, ui
     rec.recall_kind      = recall_kind;
     rec.recall_src_seq   = recall_src_seq;
     rec.recall_cos_x1000 = recall_cos_x1000;
+#if JARVIS_EMBED_PROBE == 4
+    /* The triple ACTUALLY WRITTEN, printed from inside the writer so every exit path
+     * (answered, refused, timeout/fault) is covered rather than just the answered one. */
+    puts_serial("[PROV] stored kind="); put_dec((uint32_t)recall_kind);
+    puts_serial(" src=");             put_dec(recall_src_seq);
+    puts_serial(" cos_x1000=");       put_dec((uint32_t)recall_cos_x1000);
+    puts_serial("\n");
+#endif
     if (epi_store_append(&g_ctrl_episodic, &rec) != 0) {
         puts_serial("[CTRL-EPI] append FAILED (non-fatal — this turn will not recall)\n");
         return;
@@ -907,6 +915,16 @@ static void puts_serial(const char *s)
 {
     while (*s) putc_serial(*s++);
 }
+
+#if JARVIS_EMBED_PROBE == 4
+/* Mode 4 only: print n bytes VERBATIM. The stored resp is length-carried and NOT
+ * NUL-terminated, so puts_serial cannot be used on it. */
+static void prov_put_n(const char *s, int n)
+{
+    if (!s) return;
+    for (int i = 0; i < n; i++) putc_serial(s[i]);
+}
+#endif
 
 static void put_hex(uint32_t val)
 {
@@ -3623,6 +3641,15 @@ static void pa_ctrl_gate(const control_result_t *cres)
     uint8_t  crk_kind = EPI_RECALL_NONE;
     uint32_t crk_src  = 0;
     uint16_t crk_cos  = 0;
+#if JARVIS_EMBED_PROBE == 4
+    /* Captured BY VALUE at the moment each winner is established, for the same reason the
+     * crk_* triple is: ctrl_sel[] holds POINTERS into candidate buffers and the semantic
+     * path REUSES the array, and #if JARVIS_EMBED closes before the pack site, so csem/ss
+     * are not even in scope there. */
+    const char *prov_src_resp = NULL;
+    uint16_t    prov_src_rlen = 0;
+    int         prov_exact    = 0;
+#endif
     route_result_t rr;
     route_class_t  rc = route_classify((const char *)cres->query, cres->query_len, &rr);
 
@@ -3869,6 +3896,11 @@ static void pa_ctrl_gate(const control_result_t *cres)
                                                * got no preamble did not recall. */
             crk_kind = EPI_RECALL_EXACT;
             crk_src  = ctrl_sel[0].seq;
+#if JARVIS_EMBED_PROBE == 4
+            prov_exact    = 1;
+            prov_src_resp = ctrl_sel[0].resp;
+            prov_src_rlen = ctrl_sel[0].resp_len;
+#endif
         }
 #if JARVIS_EMBED
         int csem = 0;   /* 1 = this preamble came from a SEMANTIC match, not exact-key */
@@ -3961,6 +3993,12 @@ static void pa_ctrl_gate(const control_result_t *cres)
                 if (ss > 0) {                 /* the semantic pick REPLACED ctrl_sel[0] */
                     crk_kind = csem ? EPI_RECALL_SEMANTIC : crk_kind;
                     if (csem) crk_src = ctrl_sel[0].seq;
+#if JARVIS_EMBED_PROBE == 4
+                    if (csem) {
+                        prov_src_resp = ctrl_sel[0].resp;
+                        prov_src_rlen = ctrl_sel[0].resp_len;
+                    }
+#endif
                 }
             }
             /* BEST COSINE — HOISTED OUT OF #if JARVIS_EMBED_PROBE (2026-08-01).
@@ -4023,6 +4061,58 @@ static void pa_ctrl_gate(const control_result_t *cres)
             else if (prc != EMBED_PROJ_OK)  { puts_serial(" proj_rc=");  put_dec((uint32_t)(-prc)); }
             puts_serial("\n");
             if (csem) g_embed_sem_hits++;
+        }
+#endif
+#if JARVIS_EMBED_PROBE == 4
+        /* ---------------- [PROV]: the mode-4 evidence set ----------------
+         * The FULL injected preamble printed verbatim beside the winner's stored answer and
+         * the recorded provenance triple. That is what discriminates H1 (provenance
+         * under-reports) from H2 (the model overrode the preamble) from H3 (state leaked):
+         * without the preamble bytes, all three look identical in the store.
+         *
+         * derived=: the builder appends the RAW resp truncated to the CLEANED length
+         * (g3_retrieval.c: g3_append(out,...,sel[i].resp, clean[i])), so the payload after
+         * the fixed header is a PREFIX of the winner's stored resp. g3_clean_answer_len is
+         * static to g3_retrieval.c and not callable here, so the check compares against
+         * ctrl_sel[0].resp -- the same value the build consumed, not a re-derivation. */
+        {
+            static const char PROV_HDR[] =
+                "Notes from a previous answer (use as reference; add new detail, do not repeat):\n";
+            const int hlen = (int)(sizeof PROV_HDR - 1);
+
+            puts_serial("[PROV] q=\""); puts_serial(qs);
+            puts_serial("\" exact=");   puts_serial(prov_exact ? "hit" : "miss");
+            puts_serial(" key=0x");     put_hex64(ckey);
+            puts_serial("\n");
+
+            if (crk_kind == EPI_RECALL_SEMANTIC) {
+                puts_serial("[PROV] sem winner seq="); put_dec(crk_src);
+                puts_serial(" cos_x1000=");            put_dec((uint32_t)crk_cos);
+                puts_serial("\n");
+            }
+
+            puts_serial("[PROV] preamble len="); put_dec((uint32_t)(cplen > 0 ? cplen : 0));
+            puts_serial(" text=\"");
+            if (cplen > 0) puts_serial(ctrl_pre);        /* ctrl_pre IS NUL-terminated */
+            puts_serial("\"\n");
+
+            puts_serial("[PROV] src_resp len="); put_dec((uint32_t)prov_src_rlen);
+            puts_serial(" text=\"");
+            prov_put_n(prov_src_resp, (int)prov_src_rlen);
+            puts_serial("\"\n");
+
+            int der = 0;
+            if (cplen > hlen && prov_src_resp && prov_src_rlen > 0) {
+                int n = cplen - hlen;
+                if (n > 40) n = 40;
+                if (n > (int)prov_src_rlen) n = (int)prov_src_rlen;
+                der = (n > 0);
+                for (int i = 0; i < n; i++) {
+                    if (ctrl_pre[hlen + i] != prov_src_resp[i]) { der = 0; break; }
+                }
+            }
+            puts_serial("[PROV] derived="); puts_serial(der ? "yes" : "no");
+            puts_serial("\n");
         }
 #endif
         sctx_pack_preamble(g_sctx, ctrl_pre, (uint32_t)(cplen > 0 ? cplen : 0));   /* 0 == the old clear */
@@ -4501,9 +4591,17 @@ static void fb_badge(const char *state, uint32_t color) {
  * so it runs with or without a framebuffer and is verifiable from the QEMU serial smoke. The
  * "what AND when" chokepoint that makes every later UI slice reconstructable from the log.
  * q_total/q_errors are workload-loop locals -> passed in. Worst case ~169 chars (<< 496 payload).
- * Durable write is always-on (init + every 100q) -> ~2 LOG_IPC_STATS entries/100q, ~1800 over a
- * 30-day run at the measured ~3k q/day — under the 2700-entry no-wrap cap, but tighter than before:
- * revisit the cadence if the query rate rises ~1.5x+. */
+ * Durable write is always-on (init + every 100q). FOUR FACTS IN THIS COMMENT WERE STALE and are
+ * corrected here (2026-09-01): it is THREE durable entries per 100q, not two — [SNAP], the bare
+ * q-line and [CTRL-IN-STATS] since 9c772f8; the measured deployed rate is ~198 q/s, not ~3k/day;
+ * the log has been CIRCULAR/rolling since 2026-06-24, so there is no "no-wrap cap" to stay under;
+ * and at deployed rates the 2700-entry ring therefore retains ~7.5 MINUTES, not a 30-day run (the
+ * 2026-08 soak measured 724+ complete wraps).
+ *
+ * CONSEQUENCE, and it is the reason this comment matters: the durable ring is a TAIL WINDOW, not
+ * the evidence base. Primary evidence for any long run is the JACT audit store plus the CUMULATIVE
+ * per-boot wire counters — a single packet read at the end yields whole-run totals, so the result
+ * survives total capture loss. See phase6/docs/PHASE_6_GOAL_6-7_SOAK.md for that ranking. */
 static void jarvis_log_snapshot(uint64_t q_total, uint64_t q_errors) {
     char ln[224]; char *p = ln;
     p = fbp_str(p, "[SNAP] T+"); p = fbp_u32(p, jarvis_uptime_ms());
@@ -7297,6 +7395,43 @@ static void *main_continued(void *arg UNUSED)
             puts_serial("\n[EMBED-GATE] LEG A complete\n");
         }
 #endif /* mode 3 */
+
+#if JARVIS_EMBED_PROBE == 4
+        /* ---------------- MODE 4: the [23:00110] recall-provenance discriminator --------
+         *
+         * THE ANOMALY: soak turn [23:00110] answered "Your favorite color is blue." carrying
+         * recall=semantic src=93 cos=0.944, but [18:00093]'s STORED answer is "As an AI, I do
+         * not know what your favorite color is." Three hypotheses that stored evidence alone
+         * cannot separate: provenance under-reports (H1), the model overrode the preamble and
+         * "blue" is simply the argmax colour (H2), or "blue" LEAKED from the statement turn
+         * two turns earlier through incompletely-reset PB state (H3 - the serious one).
+         *
+         * THE DISCRIMINATOR IS THE SEEDED COLOUR. chartreuse is deliberately NOT the argmax:
+         * leakage surfaces chartreuse in an answer whose preamble does not contain it;
+         * confabulation surfaces a different colour (expected "blue"); and printing the FULL
+         * preamble beside the recorded src tests H1 directly.
+         *
+         * T4 is a PARAPHRASE (contraction + British spelling) so its normalized key differs
+         * from T1's - the exact lane must miss for the semantic lane to select, which is the
+         * shape the soak turn had.
+         *
+         * Fixture noise is expected and handled BY DESIGN: the verdicts condition on the
+         * PRINTED preamble and answer, never on assumptions about what the store holds. */
+        {
+            puts_serial("\n[EMBED-GATE] MODE 4: recall-provenance discriminator\n");
+            puts_serial("[EMBED-GATE] seeded colour = CHARTREUSE (deliberately NOT the argmax)\n");
+            puts_serial("[EMBED-GATE] leak      => chartreuse in an answer whose preamble lacks it\n");
+            puts_serial("[EMBED-GATE] confab    => a colour that is NOT chartreuse\n");
+            puts_serial("[EMBED-GATE] prov bug  => a preamble not derived from its recorded src\n");
+
+            embed_probe_turn("what is my favorite color?",      "T1-baseline");
+            embed_probe_turn("my favorite color is chartreuse", "T2-statement");
+            embed_probe_turn("what is a semaphore used for?",   "T3-filler");
+            embed_probe_turn("whats my favourite colour",       "T4-measure");
+
+            puts_serial("\n[EMBED-GATE] MODE 4 complete\n");
+        }
+#endif /* mode 4 */
     } else {
         puts_serial("[EMBED-GATE] SKIPPED (control-IN channel not up: key/input/floor)\n");
     }
