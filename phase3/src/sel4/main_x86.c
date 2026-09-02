@@ -4082,7 +4082,7 @@ static void pa_ctrl_gate(const control_result_t *cres)
 
             puts_serial("[PROV] q=\""); puts_serial(qs);
             puts_serial("\" exact=");   puts_serial(prov_exact ? "hit" : "miss");
-            puts_serial(" key=0x");     put_hex64(ckey);
+            puts_serial(" key=");       put_hex64(ckey);
             puts_serial("\n");
 
             if (crk_kind == EPI_RECALL_SEMANTIC) {
@@ -4104,6 +4104,13 @@ static void pa_ctrl_gate(const control_result_t *cres)
             int der = 0;
             if (cplen > hlen && prov_src_resp && prov_src_rlen > 0) {
                 int n = cplen - hlen;
+                /* The first fact ends at the FIRST separator after the header (g3_retrieval.c
+                 * appends resp[0..clean) then '\n'), so never compare past it: with a second fact
+                 * behind a short first fact, the old clamp read the '\n' against resp[clean] and
+                 * reported derived=no on a preamble that WAS derived from the winner. */
+                for (int j = 0; j < n; j++) {
+                    if (ctrl_pre[hlen + j] == '\n') { n = j; break; }
+                }
                 if (n > 40) n = 40;
                 if (n > (int)prov_src_rlen) n = (int)prov_src_rlen;
                 der = (n > 0);
