@@ -141,8 +141,9 @@ append-with-checksum and all four headers verify OK).
    was the next commit to touch that file. Four facts were stale, not one: 3 entries/100q not 2,
    ~198 q/s not ~3k/day, the ring is circular (no "no-wrap cap"), and it retains ~7.5 minutes.
 2. The `[23:00110]` provenance-vs-answer inconsistency (§4) deserves a KVM probe.
-   **MEASURED 2026-09-01 (`JARVIS_EMBED_PROBE` mode 4, KVM). PARTIAL — the mechanism is
-   identified and leakage is ruled out for this shape, but the anomaly is NOT closed.**
+   **MEASURED 2026-09-01 (`JARVIS_EMBED_PROBE` mode 4, KVM) — PARTIAL. Then RECONSTRUCTED
+   2026-09-03 from the box's own stored vectors — CLOSED.** The mode-4 status below is kept
+   verbatim as the record of what was known then; the reconstruction that closes it follows.
 
    The probe restaged the turn with a NON-argmax colour (chartreuse), so leakage,
    confabulation and a provenance bug would each look different. Verbatim, T4:
@@ -182,9 +183,46 @@ append-with-checksum and all four headers verify OK).
    precisely what happened, and the pre-registered P-MISMATCH test (`derived=`, a PREFIX check)
    structurally cannot detect it. So the mechanism is demonstrated on a reproduction, not on the
    original: `[23:00110]`'s own preamble bytes were never logged — that absence is why this
-   instrumentation exists — and they are unrecoverable. The honest status is
+   instrumentation exists — ~~and they are unrecoverable~~ **(FALSE, corrected 2026-09-03: they
+   were recoverable. Every vector the selector compared that day, INCLUDING the query's own, is
+   in the JVEC store, so the turn could be re-run through the deployed code. See RECONSTRUCTED
+   below.)** The honest status AT THAT TIME was
    **explained-by-mechanism, not proven**. Corroboration that the reproduction was faithful:
    T2's cosine came out at **712**, matching the soak's `[23:00108] cos=0.712` exactly.
+
+   **RECONSTRUCTED 2026-09-03 — CLOSED.** The original turn was re-run through the DEPLOYED
+   `g3_select_semantic` + `g3_build_preamble_answer_only` (`phase3/scripts/embed/soak_prov_driver.c`
+   links the real `g3_retrieval.c`; driven by `soak_23_00110_reconstruct.py`) using the box's OWN
+   stored float32 vectors from the JVEC store at LBA 21,150,000 — including the query's own, since
+   embed-on-write reuses the vector the recall lane computed. No host embedding is involved, so the
+   measured ~0.0094 box-vs-host cosine delta, which would otherwise sit right on top of a
+   0.55-floor decision, does not apply. Candidate set mirrors `ctrl_sem_gather` (32 candidates, the
+   cap); full data in `phase3/scripts/embed/soak_23_00110_reconstruct.json`.
+
+   **Positive control (pre-registered, had to pass before any other number could be read):**
+   `SEL 1 = seq 93 at cos_x1000 = 944`, against the 944 the box recorded for this turn — identical,
+   not merely within the [943,945] band.
+
+   Top of the ranking, and the selection:
+
+   | rank | seq | cos_x1000 | selected |
+   |---|---|---|---|
+   | 1 | 93 | 944 | yes |
+   | 2 | 108 | 765 | yes |
+   | 3 | 107 | 443 | no — below the 0.55 floor |
+
+   The reconstructed preamble, verbatim (160 bytes; sha256 of the bytes
+   `8774922f2c9bfd407c1352d7e930e06a738794d498e7e0cfb89242b736e97c63`):
+
+   ```
+   Notes from a previous answer (use as reference; add new detail, do not repeat):
+   As an AI, I do not know what your favorite color is.
+   My favorite color is blue.
+   ```
+
+   `blue` entered the prompt as the second fact; `recall_src_seq` recorded only the first.
+   Explained AND reproduced on the original turn's own vectors. No leakage, no confabulation
+   required.
 
    Follow-up this opens (report-only, not done): provenance records one src for a preamble that
    may carry several. Recording the full selected set — or at least the count — would make a

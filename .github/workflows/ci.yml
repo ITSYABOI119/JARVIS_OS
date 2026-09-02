@@ -832,6 +832,68 @@ jobs:
         /tmp/tembs_dump --dump /tmp/embed_fixture.bin
         python3 phase3/scripts/test_parse_embed_store.py /tmp/embed_fixture.bin
 
+    # Compiles the [23:00110] reconstruction driver against the REAL g3_retrieval.c and drives
+    # it with a synthetic 3-candidate blob. This proves the blob I/O and the constant wiring
+    # (G3_MAX_FACTS, the 0.55 floor, dim 128) -- NOT the reconstruction itself, which needs a
+    # dump of the box's stores and is therefore model-gated-local, like cm2_floor.py and
+    # punct_remeasure.py. Candidates are fed WORST-first, so a pass also proves the selector
+    # ranks by cosine rather than by input order.
+    - name: "Phase C: [23:00110] provenance driver (C + synthetic blob)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
+          phase3/scripts/embed/soak_prov_driver.c phase3/src/ai/g3_retrieval.c \
+          -o /tmp/soak_prov_driver
+        python3 - <<'PYEOF'
+        import struct, subprocess, math
+        DIM, RESP_MAX = 128, 256
+        DRV, BLOB = "/tmp/soak_prov_driver", "/tmp/soak_prov_smoke.blob"
+
+        def unit(comps):
+            v = [0.0] * DIM
+            for i, x in enumerate(comps):
+                v[i] = x
+            n = math.sqrt(sum(x * x for x in v))
+            assert abs(n - 1.0) < 1e-6, n
+            return v
+
+        q = unit([1.0])
+        A = unit([1.0])                            # cos 1.000 -> rank 1
+        B = unit([0.6, 0.8])                       # cos 0.600 -> rank 2
+        C = unit([0.3, math.sqrt(1.0 - 0.09)])     # cos 0.300 -> below the 0.55 floor
+        cands = [(33, b"Gamma fact.", C), (22, b"Beta fact.", B), (11, b"Alpha fact.", A)]
+
+        blob = bytearray(struct.pack("<I", len(cands)))
+        for x in q:
+            blob += struct.pack("<f", x)
+        for seq, resp, vec in cands:
+            blob += struct.pack("<IHBBHH", seq, 3, 0, 0, len(resp), 0)
+            blob += resp + b"\x00" * (RESP_MAX - len(resp))
+            for x in vec:
+                blob += struct.pack("<f", x)
+        open(BLOB, "wb").write(bytes(blob))
+
+        p = subprocess.run([DRV, BLOB], capture_output=True)
+        assert p.returncode == 0, p.stderr.decode()
+        out = p.stdout
+        head = out[:out.index(b"PRE_BEGIN\n")].decode()
+        pre_len = int([l.split()[1] for l in head.splitlines() if l.startswith("PRE_LEN ")][0])
+        b0 = out.index(b"PRE_BEGIN\n") + 10
+        pre = out[b0:b0 + pre_len]
+        assert out[b0 + pre_len:b0 + pre_len + 9] == b"\nPRE_END\n", "closing marker not at PRE_LEN"
+
+        dot = [l.split() for l in head.splitlines() if l.startswith("DOT ")]
+        sel = [l.split() for l in head.splitlines() if l.startswith("SEL ")]
+        print(head.strip())
+        print("PREAMBLE %r" % pre)
+        assert len(dot) == 3, "want a DOT line per candidate, got %d" % len(dot)
+        assert len(sel) == 2, "want exactly 2 SEL lines, got %d" % len(sel)
+        assert sel[0][2] == "11" and sel[0][3] == "1000", sel[0]
+        assert sel[1][2] == "22" and 599 <= int(sel[1][3]) <= 601, sel[1]
+        assert b"Alpha fact.\nBeta fact.\n" in pre, "preamble missing the two facts in order"
+        assert b"Gamma" not in pre, "below-floor candidate leaked into the preamble"
+        print("OK: soak_prov_driver smoke passed")
+        PYEOF
+
     # THE ANCHOR for embed_mu.h: reads golden_vectors.npz's raw bytes (stdlib
     # zipfile, no numpy) and compares them bit-for-bit against the header's hex
     # float literals. Also runs the generator's --check drift gate, so a stale

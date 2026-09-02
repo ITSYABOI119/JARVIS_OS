@@ -1,0 +1,223 @@
+{
+  "method": "Re-ran soak control-IN turn [23:00110] through the DEPLOYED g3_select_semantic + g3_build_preamble_answer_only (soak_prov_driver.c links phase3/src/ai/g3_retrieval.c) using the box's OWN stored float32 vectors from the JVEC store at LBA 21,150,000 — including the query's own, so no host embedding is involved and no host-vs-box cosine delta applies. Candidate set mirrors ctrl_sem_gather (main_x86.c:2858-2894).",
+  "target_seq": 110,
+  "target_recorded_provenance": {
+    "recall_kind": "semantic",
+    "recall_src_seq": 93,
+    "recall_cos_x1000": 944
+  },
+  "candidate_count": 32,
+  "ranking": [
+    {
+      "seq": 93,
+      "cos_x1000": 944,
+      "selected_rank": 1
+    },
+    {
+      "seq": 108,
+      "cos_x1000": 765,
+      "selected_rank": 2
+    },
+    {
+      "seq": 107,
+      "cos_x1000": 443,
+      "selected_rank": null
+    },
+    {
+      "seq": 106,
+      "cos_x1000": 308,
+      "selected_rank": null
+    },
+    {
+      "seq": 104,
+      "cos_x1000": 297,
+      "selected_rank": null
+    },
+    {
+      "seq": 47,
+      "cos_x1000": 200,
+      "selected_rank": null
+    },
+    {
+      "seq": 72,
+      "cos_x1000": 185,
+      "selected_rank": null
+    },
+    {
+      "seq": 109,
+      "cos_x1000": 162,
+      "selected_rank": null
+    },
+    {
+      "seq": 46,
+      "cos_x1000": 136,
+      "selected_rank": null
+    },
+    {
+      "seq": 75,
+      "cos_x1000": 115,
+      "selected_rank": null
+    },
+    {
+      "seq": 83,
+      "cos_x1000": 104,
+      "selected_rank": null
+    },
+    {
+      "seq": 81,
+      "cos_x1000": 76,
+      "selected_rank": null
+    },
+    {
+      "seq": 82,
+      "cos_x1000": 74,
+      "selected_rank": null
+    },
+    {
+      "seq": 88,
+      "cos_x1000": 55,
+      "selected_rank": null
+    },
+    {
+      "seq": 103,
+      "cos_x1000": 44,
+      "selected_rank": null
+    },
+    {
+      "seq": 91,
+      "cos_x1000": 30,
+      "selected_rank": null
+    },
+    {
+      "seq": 73,
+      "cos_x1000": -25,
+      "selected_rank": null
+    },
+    {
+      "seq": 78,
+      "cos_x1000": -29,
+      "selected_rank": null
+    },
+    {
+      "seq": 77,
+      "cos_x1000": -33,
+      "selected_rank": null
+    },
+    {
+      "seq": 79,
+      "cos_x1000": -50,
+      "selected_rank": null
+    },
+    {
+      "seq": 97,
+      "cos_x1000": -84,
+      "selected_rank": null
+    },
+    {
+      "seq": 100,
+      "cos_x1000": -91,
+      "selected_rank": null
+    },
+    {
+      "seq": 76,
+      "cos_x1000": -134,
+      "selected_rank": null
+    },
+    {
+      "seq": 74,
+      "cos_x1000": -148,
+      "selected_rank": null
+    },
+    {
+      "seq": 102,
+      "cos_x1000": -164,
+      "selected_rank": null
+    },
+    {
+      "seq": 101,
+      "cos_x1000": -164,
+      "selected_rank": null
+    },
+    {
+      "seq": 80,
+      "cos_x1000": -222,
+      "selected_rank": null
+    },
+    {
+      "seq": 84,
+      "cos_x1000": -232,
+      "selected_rank": null
+    },
+    {
+      "seq": 96,
+      "cos_x1000": -236,
+      "selected_rank": null
+    },
+    {
+      "seq": 87,
+      "cos_x1000": -236,
+      "selected_rank": null
+    },
+    {
+      "seq": 89,
+      "cos_x1000": -249,
+      "selected_rank": null
+    },
+    {
+      "seq": 99,
+      "cos_x1000": -363,
+      "selected_rank": null
+    }
+  ],
+  "selected": [
+    {
+      "rank": 1,
+      "seq": 93,
+      "cos_x1000": 944
+    },
+    {
+      "rank": 2,
+      "seq": 108,
+      "cos_x1000": 765
+    }
+  ],
+  "preamble_len": 160,
+  "preamble": "Notes from a previous answer (use as reference; add new detail, do not repeat):\nAs an AI, I do not know what your favorite color is.\nMy favorite color is blue.\n",
+  "preamble_sha256_of_bytes": "8774922f2c9bfd407c1352d7e930e06a738794d498e7e0cfb89242b736e97c63",
+  "contains_blue": true,
+  "target_stored_answer": "Your favorite color is blue.",
+  "public_records": {
+    "93": {
+      "query": "what's my favorite color?",
+      "resp": "As an AI, I do not know what your favorite color is.",
+      "boot_id": 18
+    },
+    "108": {
+      "query": "well remember my favourite colour is blue",
+      "resp": "My favorite color is blue.",
+      "boot_id": 23
+    },
+    "110": {
+      "query": "whats my favourite colour?",
+      "resp": "Your favorite color is blue.",
+      "boot_id": 23
+    }
+  },
+  "fidelity_check": {
+    "target_vector_store_seq": 78,
+    "horizon_enforced_in_gather": true,
+    "candidates_excluded_by_the_horizon": 0,
+    "excluded_seqs": [],
+    "note": "0 means the naive \"a vector exists in the dump\" rule and the temporally faithful \"a vector existed BY THEN\" rule select the IDENTICAL candidate set for this turn. The faithful rule is the one that ran either way."
+  },
+  "control": {
+    "expected": "SEL 1 seq=93 with cos_x1000 in [943,945] (the box recorded 944)",
+    "observed": {
+      "rank": 1,
+      "seq": 93,
+      "cos_x1000": 944
+    },
+    "pass": true
+  },
+  "verdict": "MECHANISM-CONFIRMED"
+}
