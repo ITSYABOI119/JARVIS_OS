@@ -538,8 +538,103 @@ static void test_region_isolation(void)
     PASS("T13 region isolation (adjacent instances) + real constants by arithmetic");
 }
 
-int main(void)
+/* ---------------------------------------------------------------------------
+ * --dump <path>: write a DETERMINISTIC fixture through the REAL embed_store.c
+ * (the nvme_log / episodic --dump precedent) so the Python parser is validated
+ * against bytes this module actually produced, not against a Python idea of the
+ * layout. A layout change then breaks CI rather than the next forensic read.
+ *
+ * The vectors are L2-NORMALISED on purpose: g3_select_semantic skips non-unit
+ * candidates, so a fixture of non-unit vectors would not resemble real store
+ * content. The raw components are dyadic (k/8), hence exactly representable, and
+ * every arithmetic step below is done in DOUBLE with a SINGLE rounding to float
+ * at the end — that is what lets the Python side regenerate the same bits and
+ * compare them as bytes rather than with a float tolerance.
+ *
+ * NO SQUARE-ROOT LIBRARY CALL, and the reason is not stylistic: this file
+ * deliberately carries no math.h, and the two EXISTING embed-store CI steps
+ * compile this same translation unit without -lm. A sqrt() here (or
+ * __builtin_sqrt, which -O2 still resolves through libm for the errno path)
+ * breaks those steps, not just the new one. So the norm comes from a
+ * FIXED-ITERATION Newton-Raphson in double.
+ *
+ * Fixed-iteration, never convergence-tested: NR for sqrt can oscillate between
+ * two adjacent doubles at the fixed point, so a "stop when it stops changing"
+ * loop is not reproducible. A fixed count is, and IEEE-754 gives +, *, / identical
+ * semantics in C double and Python float — so the Python side runs the same
+ * recurrence and lands on the same bits.
+ * --------------------------------------------------------------------------- */
+static double nr_sqrt(double v)
 {
+    if (v <= 0.0)
+        return 0.0;
+    double x = (v > 1.0) ? v : 1.0;
+    for (int k = 0; k < 40; k++)
+        x = 0.5 * (x + v / x);
+    return x;
+}
+
+static int dump_fixture(const char *path)
+{
+    embed_store_t s;
+    embed_rec_t   r;
+
+    memset(mock_disk, 0, sizeof(mock_disk));
+    if (embed_store_init(&s, mock_read, mock_write,
+                         EMBED_STORE_BASE_LBA, EMBED_STORE_MAX_VECS) != 0) {
+        fprintf(stderr, "dump: embed_store_init failed\n");
+        return 1;
+    }
+
+    for (int i = 0; i < 6; i++) {
+        double raw[EMBED_STORE_DIM];
+        double ss = 0.0;
+        for (int d = 0; d < EMBED_STORE_DIM; d++) {
+            raw[d] = (double)(((d + i) % 7) - 3) / 8.0;
+            ss += raw[d] * raw[d];
+        }
+        double norm = nr_sqrt(ss);
+
+        memset(&r, 0, sizeof(r));
+        for (int d = 0; d < EMBED_STORE_DIM; d++)
+            r.vec[d] = (float)(raw[d] / norm);      /* ONE rounding, double -> float */
+        r.owner_seq = (uint32_t)(10 * i + 1);
+        r.owner_key = 0x1122334455667700ULL + (uint64_t)i;
+
+        int rc = embed_store_put(&s, &r);
+        if (rc != 0) {
+            fprintf(stderr, "dump: embed_store_put(%d) returned %d\n", i, rc);
+            return 1;
+        }
+    }
+
+    FILE *fh = fopen(path, "wb");
+    if (!fh) {
+        fprintf(stderr, "dump: cannot open %s\n", path);
+        return 1;
+    }
+    /* mock_disk[0] IS base_lba (mock_read/mock_write subtract it), and MOCK_SECTORS
+     * is exactly 1 + MAX_VECS*2 = 8193 — the whole region, which is what the
+     * recovery recipe dumps. A partial write would give the parser a different wrap
+     * modulus than the writer used. */
+    size_t want = sizeof(mock_disk);
+    size_t got  = fwrite(mock_disk, 1, want, fh);
+    fclose(fh);
+    if (got != want) {
+        fprintf(stderr, "dump: short write %zu of %zu\n", got, want);
+        return 1;
+    }
+    printf("dump: wrote %zu bytes (%zu sectors) to %s\n", want, want / 512, path);
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    /* --dump writes the fixture and exits WITHOUT running the suite, so the
+     * assert tally is untouched by this addition. */
+    if (argc == 3 && strcmp(argv[1], "--dump") == 0)
+        return dump_fixture(argv[2]);
+
     printf("=== JARVIS AI-OS: Embedding Vector Store Tests (Phase C / C/M2a) ===\n\n");
     test_fresh_init();
     test_append_roundtrip();

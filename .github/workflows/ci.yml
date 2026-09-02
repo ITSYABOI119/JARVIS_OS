@@ -821,6 +821,17 @@ jobs:
         UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
           /tmp/tembs_san
 
+    # The JVEC vector store was the last raw-LBA store with no off-box reader. The fixture is
+    # written through the REAL embed_store.c (the nvme_log/episodic --dump precedent), so a
+    # layout change breaks this step rather than the next forensic read.
+    - name: "Phase C: Embedding-store parser round-trip (C -> Python)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
+          phase3/src/ai/test_embed_store.c phase3/src/ai/embed_store.c \
+          -o /tmp/tembs_dump
+        /tmp/tembs_dump --dump /tmp/embed_fixture.bin
+        python3 phase3/scripts/test_parse_embed_store.py /tmp/embed_fixture.bin
+
     # THE ANCHOR for embed_mu.h: reads golden_vectors.npz's raw bytes (stdlib
     # zipfile, no numpy) and compares them bit-for-bit against the header's hex
     # float literals. Also runs the generator's --check drift gate, so a stale
