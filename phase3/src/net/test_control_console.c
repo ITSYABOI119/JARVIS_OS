@@ -1,6 +1,7 @@
 /* test_control_console.c — Phase 6 6-5/M4a host test for control_console.c (pure logic). */
 #include "control_console.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -39,8 +40,139 @@ static uint16_t rd_le16(const uint8_t *p) {
     return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
 }
 
-int main(void)
+
+/* ---------------------------------------------------------------------------
+ * Host CLI (appended 2026-09-03) — the slot PROVISIONER.
+ *
+ * The console-address slot was provisioned once at 6-5/M4a using a throwaway
+ * Python MIRROR of ctrl_console_build kept on the box. The project rule is that
+ * a sector the box will parse comes from the code the box parses it with, so the
+ * provisioner lives here instead:
+ *
+ *   --build  writes a slot through the REAL ctrl_console_build, then re-reads the
+ *            file and runs the REAL ctrl_console_parse over the bytes ON DISK --
+ *            proving what the box will accept, not merely that an in-memory
+ *            struct was right.
+ *   --parse  reads one back.
+ *
+ * The no-argument suite below is untouched and so is its tally: main() dispatches
+ * before it and returns.
+ *
+ * A file that fails to parse yields EXACTLY "INVALID" on stdout and nothing else.
+ * That matters because the JKEY sector holding the control-IN HMAC key is three
+ * sectors away from this one: if it is ever fed here by a slip of a `skip=`, this
+ * tool must not become a way to print any part of it.
+ * --------------------------------------------------------------------------- */
+
+static int parse_mac_str(const char *s, uint8_t out[6])
 {
+    unsigned b[6]; char tail;
+    if (strlen(s) != 17) return 0;          /* argv is NUL-terminated; the no-strlen rule is for FILE bytes */
+    int n = sscanf(s, "%2x:%2x:%2x:%2x:%2x:%2x%c",
+                   &b[0], &b[1], &b[2], &b[3], &b[4], &b[5], &tail);
+    if (n != 6) return 0;                   /* n == 7 means trailing junk */
+    for (int i = 0; i < 6; i++) {
+        if (b[i] > 0xFFu) return 0;
+        out[i] = (uint8_t)b[i];
+    }
+    return 1;
+}
+
+static int parse_ip_str(const char *s, uint32_t *out)
+{
+    unsigned a, b, c, d; char tail;
+    int n = sscanf(s, "%u.%u.%u.%u%c", &a, &b, &c, &d, &tail);
+    if (n != 4) return 0;
+    if (a > 255u || b > 255u || c > 255u || d > 255u) return 0;
+    *out = (a << 24) | (b << 16) | (c << 8) | d;   /* HOST-ORDER u32 -- the slot's convention */
+    return 1;
+}
+
+static int parse_port_str(const char *s, uint16_t *out)
+{
+    char *end = NULL;
+    unsigned long v = strtoul(s, &end, 10);
+    if (end == s || !end || *end != '\0' || v > 65535ul) return 0;
+    *out = (uint16_t)v;
+    return 1;
+}
+
+/* Exactly 512 bytes -- not "at least". A longer file is refused too, because a
+ * multi-sector dump fed here would silently be judged on its first sector. */
+static int read_sector_exact(const char *path, uint8_t buf[512])
+{
+    FILE *fh = fopen(path, "rb");
+    if (!fh) return 0;
+    size_t got = fread(buf, 1, 512, fh);
+    int extra = (got == 512) ? (fgetc(fh) != EOF) : 0;
+    fclose(fh);
+    return (got == 512 && !extra);
+}
+
+static void print_addr(const char *lead, const uint8_t mac[6], uint32_t ip, uint16_t port)
+{
+    printf("%s mac=%02x:%02x:%02x:%02x:%02x:%02x ip=%u.%u.%u.%u (0x%08X) port=%u",
+           lead, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+           (ip >> 24) & 0xFFu, (ip >> 16) & 0xFFu, (ip >> 8) & 0xFFu, ip & 0xFFu,
+           ip, (unsigned)port);
+}
+
+static int cli_build(char **a)      /* a[0]=mac a[1]=ip a[2]=port a[3]=out */
+{
+    uint8_t mac[6]; uint32_t ip = 0; uint16_t port = 0;
+    if (!parse_mac_str(a[0], mac))   { fprintf(stderr, "bad mac (want aa:bb:cc:dd:ee:ff)\n"); return 2; }
+    if (!parse_ip_str(a[1], &ip))    { fprintf(stderr, "bad ip (want a.b.c.d, each 0-255)\n"); return 2; }
+    if (!parse_port_str(a[2], &port)) { fprintf(stderr, "bad port (want 0-65535)\n"); return 2; }
+
+    uint8_t buf[512];
+    ctrl_console_build(buf, mac, ip, port);
+
+    FILE *fh = fopen(a[3], "wb");
+    if (!fh) { fprintf(stderr, "cannot open %s for writing\n", a[3]); return 2; }
+    size_t w = fwrite(buf, 1, 512, fh);
+    int cerr = fclose(fh);
+    if (w != 512 || cerr != 0) { fprintf(stderr, "short write to %s\n", a[3]); return 2; }
+
+    uint8_t back[512];
+    if (!read_sector_exact(a[3], back)) { fprintf(stderr, "read-back of %s failed\n", a[3]); return 2; }
+    uint8_t rmac[6]; uint32_t rip = 0; uint16_t rport = 0;
+    int ok = ctrl_console_parse(back, rmac, &rip, &rport);
+    if (ok != 1 || memcmp(rmac, mac, 6) != 0 || rip != ip || rport != port) {
+        fprintf(stderr, "read-back disagrees with the inputs -- refusing to report success\n");
+        return 1;
+    }
+    print_addr("built:", mac, ip, port);
+    printf(" checksum_ok=%d bytes16..19=%02x%02x%02x%02x\n",
+           ok, back[16], back[17], back[18], back[19]);
+    return 0;
+}
+
+static int cli_parse(const char *path)
+{
+    uint8_t buf[512];
+    if (!read_sector_exact(path, buf)) { fprintf(stderr, "need a file of exactly 512 bytes\n"); return 2; }
+    uint8_t mac[6]; uint32_t ip = 0; uint16_t port = 0;
+    if (ctrl_console_parse(buf, mac, &ip, &port) != 1) {
+        printf("INVALID\n");     /* stdout, and NOTHING else -- see the header note */
+        return 1;
+    }
+    print_addr("parsed:", mac, ip, port);
+    printf("\n");
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    if (argc >= 2 && strcmp(argv[1], "--build") == 0) {
+        if (argc != 6) { fprintf(stderr, "usage: %s --build <mac> <ip> <port> <out>\n", argv[0]); return 2; }
+        return cli_build(&argv[2]);
+    }
+    if (argc >= 2 && strcmp(argv[1], "--parse") == 0) {
+        if (argc != 3) { fprintf(stderr, "usage: %s --parse <file>\n", argv[0]); return 2; }
+        return cli_parse(argv[2]);
+    }
+    if (argc != 1) { fprintf(stderr, "usage: %s [--build <mac> <ip> <port> <out> | --parse <file>]\n", argv[0]); return 2; }
+
     printf("== test_control_console ==\n");
 
     /* ---- T1: build -> parse round-trip, reference values EXACT ---- */

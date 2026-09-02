@@ -1112,7 +1112,14 @@ jobs:
           /tmp/test_control_floor_san
 
     - name: "Phase 6: 6-5/M4a Console-addr slot (C)"
-      run: gcc -Wall -Werror -O2 -std=c11 -I phase3/src/net phase3/src/net/test_control_console.c phase3/src/net/control_console.c -o /tmp/test_control_console && /tmp/test_control_console
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -I phase3/src/net phase3/src/net/test_control_console.c phase3/src/net/control_console.c -o /tmp/test_control_console
+        /tmp/test_control_console
+        /tmp/test_control_console --build 9c:6b:00:ae:6a:ff 192.168.68.63 51002 /tmp/jcon.bin
+        /tmp/test_control_console --parse /tmp/jcon.bin | grep -qF 'ip=192.168.68.63 (0xC0A8443F)'
+        head -c 512 /dev/zero | tr '\000' '\377' > /tmp/jcon_ff.bin
+        if /tmp/test_control_console --parse /tmp/jcon_ff.bin > /tmp/jcon_ff.out; then echo "0xFF sector must be INVALID (exit 1)"; exit 1; fi
+        grep -qxF INVALID /tmp/jcon_ff.out && [ "$(wc -l < /tmp/jcon_ff.out)" -eq 1 ]
 
     # A8/1 -- SANITIZED PARSER SUITE. ctrl_console_parse decodes a 512 B sector off disk into
     # the reply destination MAC/IP. A parse fault here does not merely fail -- it decides
