@@ -21,6 +21,15 @@ _Static_assert(G3_R_MAX_CONTROL_IN <= EPI_RESP_MAX,
 _Static_assert(G3_R_MAX <= G3_R_MAX_CONTROL_IN,
                "the workload window must not exceed the control-IN window");
 
+/* The episodic record carries provenance for at most TWO selected facts (recall_src_seq +
+ * recall_src2_seq, episodic_store.h). g3_retrieval.h and episodic_store.h are deliberately
+ * decoupled, and this suite is the one place they meet -- so the coupling is pinned HERE.
+ * Raising G3_MAX_FACTS without widening the record would silently reintroduce exactly the
+ * [23:00110] shape: a preamble built from more records than the store can name. */
+_Static_assert(G3_MAX_FACTS <= 2,
+               "epi_record_t records provenance for at most TWO selected facts "
+               "(recall_src_seq + recall_src2_seq); widen the record before raising G3_MAX_FACTS");
+
 static int pass = 0, fail = 0;
 #define CHECK(cond, msg) do { \
     if (cond) { pass++; } \

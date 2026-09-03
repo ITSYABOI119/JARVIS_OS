@@ -226,7 +226,10 @@ append-with-checksum and all four headers verify OK).
 
    Follow-up this opens (report-only, not done): provenance records one src for a preamble that
    may carry several. Recording the full selected set — or at least the count — would make a
-   future occurrence self-explaining.
+   future occurrence self-explaining. **DONE 2026-09-03** — the episodic record now carries `recall_sel_count`
+   @495 plus the second `(seq, cos)` pair @496/@500 (pad 17 -> 10, record still 512 B), set at
+   the control-IN write site. NOT retroactive: records written 2026-08-01..2026-09-03 — this
+   one included — keep a single src and render `n=?`, which is 'unknown', never 'one'.
 3. Emission-rate wording ("~1 Hz") in telemetry docs understates the STATS-dominated ~2 Hz reality
    at deployed query rates.
 4. Pi hardening for future runs: persistent journald (`Storage=persistent`) so an outage doesn't

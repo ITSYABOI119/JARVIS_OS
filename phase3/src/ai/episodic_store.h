@@ -160,14 +160,61 @@ typedef struct __attribute__((packed)) {
      * version byte: boot_id identifies the era, and parse_episodic.py renders an all-zero
      * provenance block as UNKNOWN rather than asserting "none". Note the one thing that DOES
      * disambiguate going forward: a semantic MISS now stores a non-zero cosine, so a
-     * non-zero value anywhere in this block proves the record is post-change. */
+     * non-zero value anywhere in this block proves the record is post-change.
+     *
+     * WIDENED 2026-09-03. The [23:00110] reconstruction (37938fe) proved a shape the three
+     * fields above CANNOT express: the preamble was built from TWO selected records (seq 93
+     * at cos 0.944, then seq 108 at 0.765) and the ANSWER came from the second, while
+     * recall_src_seq named only the first. So a stored triple could point at an "I don't
+     * know" record while the prompt actually contained the answer. G3_MAX_FACTS is 2, so the
+     * full selected set is at most two records and seven more bytes close the gap for good:
+     * recall_sel_count @495, recall_src2_seq @496, recall_cos2_x1000 @500. pad 17 -> 10;
+     * sizeof is UNCHANGED at one sector.
+     *
+     * COMPATIBILITY, same discipline as above and with the same trap: a record written
+     * between 2026-08-01 and this change carries recall_kind != 0 with recall_sel_count 0.
+     * That is "count UNKNOWN", NEVER "one" -- [23:00110] itself is such a record and its true
+     * count was two. parse_episodic.py renders it n=? and says so once. A NON-ZERO
+     * recall_sel_count is what proves a record is post-widening.
+     *
+     * TWO TRAPS IN READING THESE SIX FIELDS, both found by an adversarial review of the
+     * widening itself and documented here rather than silently left for the next reader:
+     *
+     * (1) THE SRC FIELDS ARE THE SELECTOR'S ORDER, NOT PROOF OF CONTRIBUTION.
+     *     g3_build_preamble_answer_only cleans each selected fact and SKIPS one whose cleaned
+     *     length is 0 (no complete sentence). So with two selected records where the FIRST
+     *     cleans away, the preamble contains only the second -- while recall_src_seq still
+     *     names the first. That is reachable (a no-complete-sentence hit is common; 8 of 14
+     *     on the run that motivated the clean-sentence rule) and it is the SAME
+     *     misattribution shape as [23:00110], one level down. recall_sel_count is honest as
+     *     defined -- how many records the builder was HANDED -- but "handed" is not
+     *     "contributed", and a reader who treats src as the answer's origin can still be
+     *     wrong. Recording which facts actually survived cleaning would need clean[] out of
+     *     the builder, i.e. an out-param on a mutation-proven pure function, which is the
+     *     direction the 2026-08-01 comment on the cosine recompute already refuses.
+     *
+     * (2) cos AND cos2 ARE NOT DRAWN FROM THE SAME POPULATION -- do not compare them.
+     *     recall_cos_x1000 is the BEST score over every candidate ctrl_sem_gather collected,
+     *     which applies neither the thought-marker nor the unit-vector filter. The selector
+     *     applies both. So the best-scoring candidate can be one the selector refused, and
+     *     recall_cos_x1000 is then not even recall_src_seq's own cosine. recall_cos2_x1000,
+     *     by contrast, IS the score of the record recall_src2_seq names. Both are useful;
+     *     they measure different things. */
     uint8_t  recall_kind;      /* @488 — 0 = none/unknown · 1 = exact-key · 2 = semantic */
     uint32_t recall_src_seq;   /* @489 — seq of the record that supplied the preamble; 0 when none */
     uint16_t recall_cos_x1000; /* @493 — BEST cosine seen x1000, hit OR miss (0 on the exact-key path).
                                 * Recorded even on a miss ON PURPOSE: it makes near-misses readable
                                 * straight off the store. Boot 48's paraphrase scored 0.494 against a
                                 * 0.55 floor and it took a bespoke probe to learn that. */
-    uint8_t  pad[17];        /* pad to exactly 512 */
+    uint8_t  recall_sel_count;  /* @495 -- how many records the selector returned AND the builder
+                                * was handed (ss on the semantic lane, cns on the exact lane); 0
+                                * when recall_kind == 0. 0 WITH recall_kind != 0 means the record
+                                * predates this field: the count is UNKNOWN, never one. */
+    uint32_t recall_src2_seq;   /* @496 -- seq of the SECOND selected record; 0 when count < 2 */
+    uint16_t recall_cos2_x1000; /* @500 -- the second pick's cosine x1000, truncated and clamped
+                                * exactly as recall_cos_x1000 is, so it equals what the
+                                * reconstruction driver prints for rank 2. 0 when count < 2. */
+    uint8_t  pad[10];        /* pad to exactly 512 */
 } epi_record_t;
 
 _Static_assert(sizeof(epi_record_t) == 512, "episodic record must be exactly one sector");
@@ -177,6 +224,9 @@ _Static_assert(sizeof(epi_record_t) == 512, "episodic record must be exactly one
 _Static_assert(offsetof(epi_record_t, recall_kind)      == 488, "recall_kind must be @488");
 _Static_assert(offsetof(epi_record_t, recall_src_seq)   == 489, "recall_src_seq must be @489");
 _Static_assert(offsetof(epi_record_t, recall_cos_x1000) == 493, "recall_cos_x1000 must be @493");
+_Static_assert(offsetof(epi_record_t, recall_sel_count)  == 495, "recall_sel_count must be @495");
+_Static_assert(offsetof(epi_record_t, recall_src2_seq)   == 496, "recall_src2_seq must be @496");
+_Static_assert(offsetof(epi_record_t, recall_cos2_x1000) == 500, "recall_cos2_x1000 must be @500");
 
 /* recall_kind values */
 #define EPI_RECALL_NONE     0u   /* no preamble — or a pre-2026-08-01 record (ambiguous; see above) */

@@ -29,6 +29,8 @@ FIXTURE = [
     (500, "PING",              1, "CACHE", 0, "OK",    2, "pong"),
     (600, "semantic recall turn", 3, "CONTROLIN", 0, "OK", 0, "answered"),
     (700, "near miss turn",       3, "CONTROLIN", 0, "OK", 0, "un-augmented"),
+    (800, "exact recall turn",    3, "CONTROLIN", 0, "OK", 0, "answered from key"),
+    (900, "pre-widening semantic turn", 3, "CONTROLIN", 0, "OK", 0, "answered"),
 ]
 
 # Recall provenance (2026-08-01), indexed to FIXTURE above:
@@ -39,15 +41,35 @@ FIXTURE = [
 # Record 5 is a semantic hit; record 6 is a below-floor MISS that still carries its cosine,
 # which is both the field's reason for existing and the thing that proves a record is
 # post-change (any non-zero byte in the block disambiguates it from a legacy record).
+# WIDENED 2026-09-03 — the tuples gain the SELECTED-SET half:
+#   (kind, kind_name, src_seq, cos_x1000, sel_count, src2_seq, cos2_x1000, sel_count_name)
+# Row 7 is an EXACT hit (one selected -> no src2 on the line). Row 8 is the [23:00110] ERA
+# shape: a real recall source with NO count, which must render n=? and NEVER n=1 -- the very
+# record class whose true count turned out to be two.
 FIXTURE_PROV = [
-    (0, "unknown",  0,    0),
-    (0, "unknown",  0,    0),
-    (0, "unknown",  0,    0),
-    (0, "unknown",  0,    0),
-    (0, "unknown",  0,    0),
-    (2, "semantic", 4242, 713),
-    (0, "miss",     0,    494),
+    (0, "unknown",  0,    0,   0, 0,    0,   "n/a"),
+    (0, "unknown",  0,    0,   0, 0,    0,   "n/a"),
+    (0, "unknown",  0,    0,   0, 0,    0,   "n/a"),
+    (0, "unknown",  0,    0,   0, 0,    0,   "n/a"),
+    (0, "unknown",  0,    0,   0, 0,    0,   "n/a"),
+    (2, "semantic", 4242, 713, 2, 4343, 651, "2"),
+    (0, "miss",     0,    494, 0, 0,    0,   "n/a"),
+    (1, "exact",    4141, 0,   1, 0,    0,   "1"),
+    (2, "semantic", 4444, 702, 0, 0,    0,   "unknown"),
 ]
+
+# The EXACT pre-widening rendering of the rows that must not move (captured at 4615a33 before
+# the change). Legacy and miss lines carry no selected-set text at all, so they have to render
+# byte-identically -- that is the no-regression pin, not an eyeball.
+PRE_WIDENING_LINES = {
+    0: '  [1:00000] CACHE/OK key=0x779A65E7023CD2E7 q="  Hello   World  " r="hi there"',
+    1: '  [1:00001] INFER/OK key=0x4A0E05E73D1CD92F q="status check" r="all systems nominal"',
+    2: '  [1:00002] CACHE/ERROR key=0x6F92B8DE0DF025F7 q="DELETE everything" r=""',
+    3: '  [1:00003] INFER/OK key=0x882D2C128D3F5A49 q="what time is it" r="noon"',
+    4: '  [1:00004] CACHE/OK key=0xBF30E00DC53307A9 q="PING" r="pong"',
+    6: ('  [1:00006] CONTROLIN/OK key=0xBEBE94C33A5821E8 recall=miss cos=0.494'
+        ' q="near miss turn" r="un-augmented"'),
+}
 
 # ---- decision-cache parity: reimplement cache_normalize_query + cache_hash ----
 _WS = b" \t\n\x0b\x0c\r"   # C-locale isspace()
@@ -157,7 +179,7 @@ def main():
             # Recall provenance (2026-08-01) — the C writer's bytes decoded at the pinned
             # offsets. This is the half of the round-trip that proves the Python offsets
             # (488/489/493) agree with the C _Static_asserts.
-            pk, pname, psrc, pcos = FIXTURE_PROV[i]
+            pk, pname, psrc, pcos, pn, psrc2, pcos2, pnname = FIXTURE_PROV[i]
             check(r['recall_kind'] == pk, f"rec{i} recall_kind == {pk} (got {r['recall_kind']})")
             check(r['recall_src_seq'] == psrc,
                   f"rec{i} recall_src_seq == {psrc} (got {r['recall_src_seq']})")
@@ -165,6 +187,16 @@ def main():
                   f"rec{i} recall_cos_x1000 == {pcos} (got {r['recall_cos_x1000']})")
             check(r['recall_kind_name'] == pname,
                   f"rec{i} recall_kind_name == {pname!r} (got {r['recall_kind_name']!r})")
+            # The SELECTED-SET half (2026-09-03), decoded at +7 from the first triple.
+            check(r['recall_sel_count'] == pn,
+                  f"rec{i} recall_sel_count == {pn} (got {r['recall_sel_count']})")
+            check(r['recall_src2_seq'] == psrc2,
+                  f"rec{i} recall_src2_seq == {psrc2} (got {r['recall_src2_seq']})")
+            check(r['recall_cos2_x1000'] == pcos2,
+                  f"rec{i} recall_cos2_x1000 == {pcos2} (got {r['recall_cos2_x1000']})")
+            check(r['recall_sel_count_name'] == pnname,
+                  f"rec{i} recall_sel_count_name == {pnname!r} "
+                  f"(got {r['recall_sel_count_name']!r})")
 
         # §4 teeth, asserted once rather than per record: a LEGACY all-zero block must render
         # 'unknown', NEVER 'none'. Reading those bytes as "this turn did not recall" would be a
@@ -176,6 +208,31 @@ def main():
               "a below-floor MISS renders 'miss' WITH its cosine — the near-miss made readable")
         check(recs[6]['recall_kind'] == 0 and recs[6]['recall_kind_name'] != 'unknown',
               "kind 0 + non-zero cosine is DISTINGUISHABLE from a legacy record")
+
+        # ---- WIDENING (2026-09-03): what the LINE says ----
+        import subprocess as _sp
+        _script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'parse_episodic.py')
+        _out = _sp.run([sys.executable, _script, sys.argv[1]],
+                       capture_output=True, text=True, encoding='utf-8').stdout
+        _lines = [l for l in _out.splitlines() if l.startswith('  [1:')]
+        check(len(_lines) == 9, f"renderer prints 9 record lines (got {len(_lines)})")
+
+        check(' n=2 src2=4343 cos2=0.651' in _lines[5],
+              "a two-fact semantic recall renders the count AND the second (seq, cos)")
+        check(' n=1' in _lines[7] and 'src2' not in _lines[7],
+              "an exact hit renders n=1 and NO src2 -- there is no second pick to name")
+        check(' n=?' in _lines[8] and ' n=0' not in _lines[8],
+              "a pre-widening record renders n=? -- the count is unknown, NEVER guessed as one")
+
+        # The no-regression pin: legacy and miss lines are byte-identical to the pre-change
+        # output captured at 4615a33. Anything appended to them would be a silent format change
+        # for every historical record.
+        for _i, _want in PRE_WIDENING_LINES.items():
+            check(_lines[_i] == _want,
+                  f"rec{_i} line is BYTE-IDENTICAL to the pre-widening rendering")
+
+        check(_out.count('have a recall source but no selected-set count') == 1,
+              "the no-count NOTE appears exactly once, and only because row 8 exists")
 
     # ---- G4: wrapped region decodes oldest->newest (NOT raw slot order) ----
     # 4 record slots, total=6 (ring rolled twice), cursor=2 -> oldest is slot 2. A real store

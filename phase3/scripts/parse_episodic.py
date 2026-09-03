@@ -34,6 +34,26 @@ EPI_PROV_OFF = 488
 REC_PROV_FMT = '<BIH'                     # kind(B) src_seq(I) cos(H) — packed, deliberately unaligned
 RECALL_KINDS = {0: 'none', 1: 'exact', 2: 'semantic'}
 
+# The SELECTED-SET half (2026-09-03) — episodic_store.h took 7 more bytes from pad[17], leaving
+# pad[10]. Same shape as the first triple, at +7: recall_sel_count @495, src2 @496, cos2 @500.
+EPI_PROV2_OFF = 495
+REC_PROV2_FMT = '<BIH'                    # sel_count(B) src2_seq(I) cos2(H)
+
+
+def recall_sel_count_name(kind, sel_count):
+    """Render the selected-set COUNT, refusing to guess the one value it cannot know.
+
+    A record written between 2026-08-01 and 2026-09-03 has a recall kind but no count field,
+    so the byte reads 0. That is NOT 'one'. [23:00110] is exactly such a record and its real
+    count was TWO — the whole reason the field exists — so rendering 0 as 1, or as 'none',
+    would restate the very error the widening removes.
+    """
+    if kind == 0:
+        return 'n/a'              # no recall (or a legacy all-zero block): a count says nothing
+    if sel_count == 0:
+        return 'unknown'          # has a recall source but predates the count field
+    return str(sel_count)
+
 
 def recall_kind_name(kind, src_seq, cos_x1000):
     """Render provenance, distinguishing 'no recall' from 'record predates the field'.
@@ -124,6 +144,9 @@ def iter_records(data):
         # rather than extending REC_FMT, because REC_FMT deliberately covers only the 32-byte
         # header and query/resp are already read positionally the same way.
         rk_kind, rk_src, rk_cos = struct.unpack_from(REC_PROV_FMT, data, off + EPI_PROV_OFF)
+        # Read positionally at the pinned offset, exactly like the first triple, rather than
+        # extending REC_FMT — which deliberately covers only the 32-byte header.
+        rk_n, rk_src2, rk_cos2 = struct.unpack_from(REC_PROV2_FMT, data, off + EPI_PROV2_OFF)
         out.append({
             'boot_id': boot_id,
             'seq': seq,
@@ -142,6 +165,10 @@ def iter_records(data):
             'recall_kind_name': recall_kind_name(rk_kind, rk_src, rk_cos),
             'recall_src_seq': rk_src,
             'recall_cos_x1000': rk_cos,
+            'recall_sel_count': rk_n,
+            'recall_sel_count_name': recall_sel_count_name(rk_kind, rk_n),
+            'recall_src2_seq': rk_src2,
+            'recall_cos2_x1000': rk_cos2,
         })
     return out
 
@@ -183,6 +210,7 @@ def main():
     print(f"  Records:   {len(recs)} decoded")
     print()
     n_unknown = 0
+    n_nocount = 0
     for e in recs:
         # Provenance, rendered compactly and only when it says something. 'unknown' is the
         # all-zero block (no recall OR pre-2026-08-01) and is left OFF the line to keep it
@@ -199,8 +227,24 @@ def main():
                     f" cos={e['recall_cos_x1000'] / 1000:.3f}")
         else:
             prov = f" recall={k} src={e['recall_src_seq']}"
+        # The selected-set half. Appended ONLY to a line that already reports a recall, so
+        # legacy and miss lines render byte-identically to the pre-2026-09-03 output.
+        if k not in ('unknown', 'miss'):
+            cn = e['recall_sel_count_name']
+            prov += ' n=?' if cn == 'unknown' else f" n={cn}"
+            if cn == 'unknown':
+                n_nocount += 1
+            if e['recall_sel_count'] >= 2:
+                prov += (f" src2={e['recall_src2_seq']}"
+                         f" cos2={e['recall_cos2_x1000'] / 1000:.3f}")
         print(f"  [{e['boot_id']}:{e['seq']:05d}] {e['action_name']}/{e['outcome_name']} "
               f"key=0x{e['query_key']:016X}{prov} q=\"{e['query']}\" r=\"{e['resp']}\"")
+    if n_nocount:
+        print()
+        print(f"  NOTE: {n_nocount} record(s) have a recall source but no selected-set count:")
+        print("        written between 2026-08-01 and the 2026-09-03 widening. The count is")
+        print("        UNKNOWN, not one — [23:00110] is such a record and its real count was two,")
+        print("        which is why the field exists. Rendered n=? rather than guessed.")
     if n_unknown:
         print()
         print(f"  NOTE: {n_unknown} record(s) carry an all-zero provenance block, which is")

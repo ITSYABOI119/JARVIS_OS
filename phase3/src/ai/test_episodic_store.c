@@ -380,10 +380,27 @@ static int dump_fixture(const char *path)
         epi_record_t rec;
         episodic_fill(&rec, 600, "semantic recall turn", EPI_ACT_CONTROL_IN, EPI_OUT_OK, 0, "answered");
         rec.recall_kind = EPI_RECALL_SEMANTIC; rec.recall_src_seq = 4242u; rec.recall_cos_x1000 = 713u;
+        /* WIDENED (2026-09-03): a TWO-fact selection — the [23:00110] shape. */
+        rec.recall_sel_count = 2u; rec.recall_src2_seq = 4343u; rec.recall_cos2_x1000 = 651u;
         epi_store_append(&s, &rec);
 
         episodic_fill(&rec, 700, "near miss turn", EPI_ACT_CONTROL_IN, EPI_OUT_OK, 0, "un-augmented");
         rec.recall_kind = EPI_RECALL_NONE; rec.recall_src_seq = 0u; rec.recall_cos_x1000 = 494u;
+        epi_store_append(&s, &rec);
+
+        /* An EXACT hit: one selected record, so src2/cos2 stay 0 and the line must NOT show them. */
+        episodic_fill(&rec, 800, "exact recall turn", EPI_ACT_CONTROL_IN, EPI_OUT_OK, 0,
+                      "answered from key");
+        rec.recall_kind = EPI_RECALL_EXACT; rec.recall_src_seq = 4141u; rec.recall_cos_x1000 = 0u;
+        rec.recall_sel_count = 1u; rec.recall_src2_seq = 0u; rec.recall_cos2_x1000 = 0u;
+        epi_store_append(&s, &rec);
+
+        /* A PRE-WIDENING record: a real recall source with NO count. This is the [23:00110] era
+         * shape and the reason the parser renders n=? — it must never be shown as n=1. */
+        episodic_fill(&rec, 900, "pre-widening semantic turn", EPI_ACT_CONTROL_IN, EPI_OUT_OK, 0,
+                      "answered");
+        rec.recall_kind = EPI_RECALL_SEMANTIC; rec.recall_src_seq = 4444u; rec.recall_cos_x1000 = 702u;
+        rec.recall_sel_count = 0u; rec.recall_src2_seq = 0u; rec.recall_cos2_x1000 = 0u;
         epi_store_append(&s, &rec);
     }
 
@@ -691,7 +708,10 @@ static void test_recall_provenance(void)
     ASSERT(offsetof(epi_record_t, recall_kind) == 488, "recall_kind @488");
     ASSERT(offsetof(epi_record_t, recall_src_seq) == 489, "recall_src_seq @489");
     ASSERT(offsetof(epi_record_t, recall_cos_x1000) == 493, "recall_cos_x1000 @493");
-    ASSERT(sizeof(((epi_record_t *)0)->pad) == 17, "pad shrank 24 -> 17 (7 B consumed)");
+    /* Updated at the 2026-09-03 widening: this assertion pins the pad ARITHMETIC, and the
+     * pad legitimately moved again (T14 owns the new offsets). 24 -> 17 at the first
+     * provenance triple, 17 -> 10 at the selected-set half. */
+    ASSERT(sizeof(((epi_record_t *)0)->pad) == 10, "pad shrank 24 -> 17 -> 10 (14 B consumed)");
 
     memset(mock_disk, 0, sizeof(mock_disk));
     epi_store_t s;
@@ -758,6 +778,76 @@ static void test_recall_provenance(void)
          "a MISS keeps its cosine, and a legacy all-zero record still parses");
 }
 
+/* T14 — PROVENANCE WIDENING (2026-09-03). The [23:00110] reconstruction proved a two-fact
+ * preamble whose SECOND fact carried the answer while recall_src_seq named only the first, so
+ * the record now also carries the selected COUNT and the second (seq, cos) pair. */
+static void test_provenance_widening(void)
+{
+    /* (a) Layout. The sizeof assert alone would ALSO be satisfied by reordering these fields or
+     * by swapping two of their widths, which would misread every record written before the
+     * change — so the offsets are what make the layout the contract, not the size. */
+    ASSERT(offsetof(epi_record_t, recall_sel_count)  == 495, "recall_sel_count @495");
+    ASSERT(offsetof(epi_record_t, recall_src2_seq)   == 496, "recall_src2_seq @496");
+    ASSERT(offsetof(epi_record_t, recall_cos2_x1000) == 500, "recall_cos2_x1000 @500");
+    ASSERT(sizeof(((epi_record_t *)0)->pad) == 10, "pad shrank 17 -> 10, and no further");
+    ASSERT(sizeof(epi_record_t) == 512, "the record is STILL exactly one sector");
+
+    memset(mock_disk, 0, sizeof(mock_disk));
+    epi_store_t s;
+    ASSERT(epi_store_init(&s, mock_read, mock_write, EPI_STORE_BASE_LBA, EPI_STORE_MAX_ENTRIES) == 0,
+           "widening: fresh store init");
+
+    /* (b) Round-trip all SIX provenance fields through append + read, on four real shapes. */
+    struct { uint8_t kind; uint32_t src; uint16_t cos; uint8_t n; uint32_t src2; uint16_t cos2;
+             const char *q; const char *why; } cases[] = {
+        /* the REAL [23:00110]: two facts, the answer in the second (soak_23_00110_reconstruct.json) */
+        { EPI_RECALL_SEMANTIC, 93u, 944u, 2u, 108u, 765u, "whats my favourite colour",
+          "the [23:00110] shape: two selected, the answer in the SECOND" },
+        { EPI_RECALL_EXACT,    54u,   0u, 1u,   0u,   0u, "exact hit",
+          "an exact hit selects one; src2/cos2 stay 0" },
+        /* written before the count existed: it must survive AS WRITTEN, not be "repaired" to 1 */
+        { EPI_RECALL_SEMANTIC, 93u, 944u, 0u,   0u,   0u, "pre-widening turn",
+          "a pre-widening record round-trips with count 0 — the store never repairs it" },
+        { EPI_RECALL_NONE,      0u, 494u, 0u,   0u,   0u, "below-floor miss",
+          "a below-floor miss keeps its cosine and carries no selected set" },
+    };
+    for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        epi_record_t rec;
+        episodic_fill(&rec, 1000u + i, cases[i].q, EPI_ACT_CONTROL_IN, EPI_OUT_OK, 0, "answered");
+        rec.recall_kind = cases[i].kind; rec.recall_src_seq = cases[i].src;
+        rec.recall_cos_x1000 = cases[i].cos; rec.recall_sel_count = cases[i].n;
+        rec.recall_src2_seq = cases[i].src2; rec.recall_cos2_x1000 = cases[i].cos2;
+        ASSERT(epi_store_append(&s, &rec) == 0, "widening: append");
+        epi_record_t r;
+        ASSERT(epi_store_read(&s, i, &r) == 0, "widening: read back");
+        ASSERT(r.recall_kind == cases[i].kind && r.recall_src_seq == cases[i].src
+               && r.recall_cos_x1000 == cases[i].cos && r.recall_sel_count == cases[i].n
+               && r.recall_src2_seq == cases[i].src2 && r.recall_cos2_x1000 == cases[i].cos2,
+               cases[i].why);
+    }
+
+    /* (c) LEGACY: the whole 24-byte tail zero, as every pre-2026-08-01 record on disk is.
+     * All SIX fields must read back 0 — and the count reading 0 is exactly the ambiguity the
+     * parser refuses to resolve by guessing. */
+    {
+        epi_record_t legacy;
+        episodic_fill(&legacy, 3000u, "written before either field existed",
+                      EPI_ACT_CONTROL_IN, EPI_OUT_OK, 0, "an older answer");
+        ASSERT(legacy.recall_sel_count == 0 && legacy.recall_src2_seq == 0
+               && legacy.recall_cos2_x1000 == 0,
+               "episodic_fill zeroes the widened fields too — the legacy byte pattern");
+        ASSERT(epi_store_append(&s, &legacy) == 0, "widening: legacy record appends");
+        epi_record_t r;
+        ASSERT(epi_store_read(&s, 4, &r) == 0, "widening: legacy record reads back");
+        ASSERT(r.recall_kind == 0 && r.recall_src_seq == 0 && r.recall_cos_x1000 == 0
+               && r.recall_sel_count == 0 && r.recall_src2_seq == 0 && r.recall_cos2_x1000 == 0,
+               "legacy record decodes as all-zero across BOTH provenance halves");
+    }
+
+    PASS("provenance widening: offsets 495/496/500 pinned, pad 10, 512 B held, six fields "
+         "round-trip on four shapes, and a legacy record still parses");
+}
+
 int main(int argc, char **argv)
 {
     if (argc >= 3 && strcmp(argv[1], "--dump") == 0)
@@ -777,6 +867,7 @@ int main(int argc, char **argv)
     test_index_no_shadow();
     test_local_no_shadow();
     test_recall_provenance();
+    test_provenance_widening();
 
     printf("\nResults: %d PASS, %d FAIL\n", tests_passed, tests_failed);
     return tests_failed > 0 ? 1 : 0;
