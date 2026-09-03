@@ -892,6 +892,171 @@ static void test_semantic_select(void)
     }
 }
 
+
+/* ================================================================
+ * T-EMIT — the EMITTED mask (2026-09-03). g3_build_preamble_answer_only_ex reports WHICH
+ *      selected facts actually reached the buffer. The point is the gap between "selected"
+ *      and "emitted": the builder SKIPS a fact whose cleaned text has no complete sentence,
+ *      so a record naming the selector's first pick can name a fact that contributed nothing
+ *      -- the [23:00110] misattribution one level down. Every case below asserts the RETURN,
+ *      the MASK and the OUTPUT BYTES together, because any two of those can agree while the
+ *      third is wrong.
+ * ================================================================ */
+static void test_emit_mask(void)
+{
+    const char *SENT  = "seL4 is a formally verified microkernel.";   /* complete sentence */
+    const char *SENT2 = "The answer is here.";                        /* complete sentence */
+    const char *FRAG  = "just a fragment with no terminator";         /* cleans to 0 */
+
+    /* --- 1. EQUIVALENCE: _ex(..., NULL) is the wrapper, byte for byte, on three shapes the
+     *        existing suite already exercises: one good fact, the NULL/0 empty path, and a
+     *        fact with no sentence terminator. --- */
+    {
+        g3_candidate_t one[1] = {
+            { .query = "q", .query_len = 1, .resp = SENT, .resp_len = (uint16_t)strlen(SENT) },
+        };
+        char a[256], b[256], c[256];
+        uint8_t m = 0xFF;
+        int la = g3_build_preamble_answer_only(one, 1, a, (int)sizeof a, G3_R_MAX);
+        int lb = g3_build_preamble_answer_only_ex(one, 1, b, (int)sizeof b, G3_R_MAX, NULL);
+        int lc = g3_build_preamble_answer_only_ex(one, 1, c, (int)sizeof c, G3_R_MAX, &m);
+        CHECK(la == lb && lb == lc && la > 0, "T-EMIT eq: same return, wrapper vs _ex(NULL) vs _ex(&m)");
+        CHECK(memcmp(a, b, (size_t)la + 1) == 0 && memcmp(a, c, (size_t)la + 1) == 0,
+              "T-EMIT eq: same bytes (incl. the NUL) on all three calls");
+        CHECK(m == 1, "T-EMIT eq: one emitting fact -> mask 1");
+
+        char e1[64], e2[64];
+        uint8_t me = 0xFF;
+        int ea = g3_build_preamble_answer_only(NULL, 0, e1, (int)sizeof e1, G3_R_MAX);
+        int eb = g3_build_preamble_answer_only_ex(NULL, 0, e2, (int)sizeof e2, G3_R_MAX, &me);
+        CHECK(ea == 0 && eb == 0 && e1[0] == '\0' && e2[0] == '\0',
+              "T-EMIT eq: empty path identical");
+        CHECK(me == 0, "T-EMIT eq: mask written 0 on the early-return path (never left stale)");
+
+        g3_candidate_t frag[1] = {
+            { .query = "q", .query_len = 1, .resp = FRAG, .resp_len = (uint16_t)strlen(FRAG) },
+        };
+        char f1[256], f2[256];
+        uint8_t mf = 0xFF;
+        int fa = g3_build_preamble_answer_only(frag, 1, f1, (int)sizeof f1, G3_R_MAX);
+        int fb = g3_build_preamble_answer_only_ex(frag, 1, f2, (int)sizeof f2, G3_R_MAX, &mf);
+        CHECK(fa == 0 && fb == 0 && f1[0] == '\0' && f2[0] == '\0',
+              "T-EMIT eq: no-complete-sentence path identical (no preamble, no header)");
+        CHECK(mf == 0, "T-EMIT eq: mask 0 when no fact survived cleaning");
+    }
+
+    /* --- 2. Two good facts -> both bits, both texts, in selector order. --- */
+    {
+        g3_candidate_t sel[2] = {
+            { .query = "q0", .query_len = 2, .resp = SENT,  .resp_len = (uint16_t)strlen(SENT) },
+            { .query = "q1", .query_len = 2, .resp = SENT2, .resp_len = (uint16_t)strlen(SENT2) },
+        };
+        char buf[512];
+        uint8_t m = 0;
+        int len = g3_build_preamble_answer_only_ex(sel, 2, buf, (int)sizeof buf, G3_R_MAX, &m);
+        CHECK(len > 0 && m == 3, "T-EMIT 2: both facts emitted -> mask 3");
+        CHECK(strstr(buf, SENT) != NULL && strstr(buf, SENT2) != NULL,
+              "T-EMIT 2: both texts present");
+        CHECK(strstr(buf, SENT) < strstr(buf, SENT2), "T-EMIT 2: selector order preserved");
+    }
+
+    /* --- 3. THE [23:00110] SHAPE ONE LEVEL DOWN: the FIRST selected fact cleans away, the
+     *        second carries the answer. Mask 2 -- bit 0 clear -- is exactly the discriminator
+     *        that a src field alone cannot give: the record names fact 0 first, and this says
+     *        fact 0 contributed nothing. --- */
+    {
+        g3_candidate_t sel[2] = {
+            { .query = "q0", .query_len = 2, .resp = FRAG,  .resp_len = (uint16_t)strlen(FRAG) },
+            { .query = "q1", .query_len = 2, .resp = SENT2, .resp_len = (uint16_t)strlen(SENT2) },
+        };
+        char buf[512];
+        uint8_t m = 0xFF;
+        int len = g3_build_preamble_answer_only_ex(sel, 2, buf, (int)sizeof buf, G3_R_MAX, &m);
+        CHECK(len > 0, "T-EMIT 3: a preamble is still built from the surviving fact");
+        CHECK(m == 2, "T-EMIT 3: dropped-first shape -> mask 2 (bit 0 CLEAR)");
+        CHECK(strstr(buf, SENT2) != NULL, "T-EMIT 3: the second fact's text IS present");
+        CHECK(strstr(buf, FRAG) == NULL, "T-EMIT 3: the dropped fact's text is NOT present");
+    }
+
+    /* --- 4. Both cleaned away -> nothing at all. --- */
+    {
+        g3_candidate_t sel[2] = {
+            { .query = "q0", .query_len = 2, .resp = FRAG, .resp_len = (uint16_t)strlen(FRAG) },
+            { .query = "q1", .query_len = 2, .resp = FRAG, .resp_len = (uint16_t)strlen(FRAG) },
+        };
+        char buf[512];
+        uint8_t m = 0xFF;
+        int len = g3_build_preamble_answer_only_ex(sel, 2, buf, (int)sizeof buf, G3_R_MAX, &m);
+        CHECK(len == 0 && m == 0 && buf[0] == '\0',
+              "T-EMIT 4: no fact survived -> return 0, mask 0, empty out");
+    }
+
+    /* --- 5. One fact -> mask 1. --- */
+    {
+        g3_candidate_t sel[1] = {
+            { .query = "q0", .query_len = 2, .resp = SENT, .resp_len = (uint16_t)strlen(SENT) },
+        };
+        char buf[512];
+        uint8_t m = 0;
+        int len = g3_build_preamble_answer_only_ex(sel, 1, buf, (int)sizeof buf, G3_R_MAX, &m);
+        CHECK(len > 0 && m == 1, "T-EMIT 5: single fact -> mask 1");
+    }
+
+    /* --- 6. THE CAP CASE, and it is why the mask is measured from `pos` rather than from
+     *        clean[i]. Size the cap so the header plus fact 0 exactly fill `limit`: fact 1 has
+     *        a perfectly good cleaned length, the builder does not skip it, and g3_append still
+     *        copies ZERO bytes because the limit is already reached. clean[1] > 0 would claim
+     *        it emitted; the write position says otherwise, and the write position is right. --- */
+    {
+        g3_candidate_t sel[2] = {
+            { .query = "q0", .query_len = 2, .resp = SENT,  .resp_len = (uint16_t)strlen(SENT) },
+            { .query = "q1", .query_len = 2, .resp = SENT2, .resp_len = (uint16_t)strlen(SENT2) },
+        };
+        /* DERIVE the exact "header + fact 0 + its newline" length FROM THE BUILDER rather than
+         * hardcoding it. The header text lives in g3_retrieval.c, so a literal here can rot --
+         * and a wrong one still makes this case pass, just for a different reason: 79 (measured
+         * against the real 80) cut fact 0's trailing newline instead of fitting it. A one-fact
+         * preamble IS exactly that length, so ask for one. */
+        char probe[512];
+        int fit = g3_build_preamble_answer_only_ex(sel, 1, probe, (int)sizeof probe,
+                                                   G3_R_MAX, NULL);
+        char buf[512];
+        uint8_t m = 0xFF;
+        int len = g3_build_preamble_answer_only_ex(sel, 2, buf, fit + 1, G3_R_MAX, &m);
+        CHECK(len == fit, "T-EMIT 6: the cap stops the preamble exactly where expected");
+        CHECK(m == 1, "T-EMIT 6: fact 1 appended ZERO bytes at the cap -> bit 1 CLEAR "
+                      "(measured from pos, not from clean[])");
+        CHECK(strstr(buf, SENT) != NULL && strstr(buf, SENT2) == NULL,
+              "T-EMIT 6: only fact 0's text made it");
+    }
+
+    /* --- 7. INVARIANT across every shape above: a preamble exists iff some fact emitted. This
+     *        is what lets the store treat mask 0 with kind != 0 as "pre-mask record", never as
+     *        "a recall that emitted nothing" -- the latter cannot happen. --- */
+    {
+        const char *texts[3] = { SENT, FRAG, SENT2 };
+        int viol = 0;
+        for (int a = 0; a < 3; a++) {
+            for (int b = 0; b < 3; b++) {
+                for (int n = 0; n <= 2; n++) {
+                    g3_candidate_t sel[2] = {
+                        { .query = "q0", .query_len = 2, .resp = texts[a],
+                          .resp_len = (uint16_t)strlen(texts[a]) },
+                        { .query = "q1", .query_len = 2, .resp = texts[b],
+                          .resp_len = (uint16_t)strlen(texts[b]) },
+                    };
+                    char buf[512];
+                    uint8_t m = 0xFF;
+                    int len = g3_build_preamble_answer_only_ex(sel, n, buf, (int)sizeof buf,
+                                                               G3_R_MAX, &m);
+                    if ((len > 0) != (m != 0)) viol++;
+                }
+            }
+        }
+        CHECK(viol == 0, "T-EMIT 7: (return > 0) == (mask != 0) over every shape (18 combos)");
+    }
+}
+
 int main(void)
 {
     printf("=== G3 Retrieval Tests (Phase 5 G3/M0 + M2 budget + M3 filter + M6 hygiene) ===\n");
@@ -911,6 +1076,7 @@ int main(void)
     test_per_lane_window();
     test_local_not_a_memory();
     test_semantic_select();
+    test_emit_mask();
     printf("\n== Results: %d PASS, %d FAIL ==\n", pass, fail);
     return fail ? 1 : 0;
 }

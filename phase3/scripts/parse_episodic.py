@@ -39,6 +39,28 @@ RECALL_KINDS = {0: 'none', 1: 'exact', 2: 'semantic'}
 EPI_PROV2_OFF = 495
 REC_PROV2_FMT = '<BIH'                    # sel_count(B) src2_seq(I) cos2(H)
 
+# WHICH of the selected facts actually reached the preamble (2026-09-03) — one more byte out of
+# pad[10], leaving pad[9]. The selector's order and the builder's output are NOT the same thing:
+# the builder skips a fact whose cleaned text has no complete sentence, so a src can name a
+# record that contributed nothing.
+EPI_EMIT_OFF = 502
+REC_EMIT_FMT = '<B'
+
+
+def recall_emit_name(kind, mask):
+    """Render the emitted mask as 1-based fact positions, refusing to guess the missing case.
+
+    A record written before 2026-09-03 has a recall kind but no mask byte, so it reads 0. That
+    is NOT 'emitted nothing' — a set kind implies the builder returned a non-empty preamble,
+    which implies at least one fact emitted. So 0 with a kind is UNKNOWN, exactly as a count of
+    0 is, and it renders emit=? rather than a fabricated answer.
+    """
+    if kind == 0:
+        return 'n/a'              # no recall (or a legacy all-zero block): a mask says nothing
+    if mask == 0:
+        return 'unknown'          # has a recall source but predates the mask field
+    return ','.join(str(b + 1) for b in range(8) if mask & (1 << b))
+
 
 def recall_sel_count_name(kind, sel_count):
     """Render the selected-set COUNT, refusing to guess the one value it cannot know.
@@ -147,6 +169,7 @@ def iter_records(data):
         # Read positionally at the pinned offset, exactly like the first triple, rather than
         # extending REC_FMT — which deliberately covers only the 32-byte header.
         rk_n, rk_src2, rk_cos2 = struct.unpack_from(REC_PROV2_FMT, data, off + EPI_PROV2_OFF)
+        (rk_emit,) = struct.unpack_from(REC_EMIT_FMT, data, off + EPI_EMIT_OFF)
         out.append({
             'boot_id': boot_id,
             'seq': seq,
@@ -169,6 +192,8 @@ def iter_records(data):
             'recall_sel_count_name': recall_sel_count_name(rk_kind, rk_n),
             'recall_src2_seq': rk_src2,
             'recall_cos2_x1000': rk_cos2,
+            'recall_emit_mask': rk_emit,
+            'recall_emit_name': recall_emit_name(rk_kind, rk_emit),
         })
     return out
 
@@ -237,14 +262,20 @@ def main():
             if e['recall_sel_count'] >= 2:
                 prov += (f" src2={e['recall_src2_seq']}"
                          f" cos2={e['recall_cos2_x1000'] / 1000:.3f}")
+            # WHICH of them actually reached the preamble. Same guard, so legacy and miss lines
+            # are still byte-identical to the pre-2026-08-01 output.
+            en = e['recall_emit_name']
+            prov += ' emit=?' if en == 'unknown' else f" emit={en}"
         print(f"  [{e['boot_id']}:{e['seq']:05d}] {e['action_name']}/{e['outcome_name']} "
               f"key=0x{e['query_key']:016X}{prov} q=\"{e['query']}\" r=\"{e['resp']}\"")
     if n_nocount:
         print()
-        print(f"  NOTE: {n_nocount} record(s) have a recall source but no selected-set count:")
-        print("        written between 2026-08-01 and the 2026-09-03 widening. The count is")
-        print("        UNKNOWN, not one — [23:00110] is such a record and its real count was two,")
-        print("        which is why the field exists. Rendered n=? rather than guessed.")
+        print(f"  NOTE: {n_nocount} record(s) have a recall source but no selected-set count")
+        print("        / emitted mask: written between 2026-08-01 and the 2026-09-03 widening.")
+        print("        Both are UNKNOWN, not zero — [23:00110] is such a record and its real")
+        print("        count was two, which is why the fields exist. A set kind implies the")
+        print("        builder emitted something, so 'emitted nothing' is not a reachable state.")
+        print("        Rendered n=? and emit=? rather than guessed.")
     if n_unknown:
         print()
         print(f"  NOTE: {n_unknown} record(s) carry an all-zero provenance block, which is")

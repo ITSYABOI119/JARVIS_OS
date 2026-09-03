@@ -8,6 +8,7 @@
  */
 
 #include "g3_retrieval.h"
+#include <stddef.h>   /* NULL — the _ex wrapper passes it (freestanding-safe) */
 
 /* Is query_key already present in out[0..count)? (dedup-by-key check) */
 static int g3_key_selected(const g3_candidate_t *out, int count, uint64_t key)
@@ -256,8 +257,27 @@ static int g3_clean_answer_len(const char *resp, int resp_len, int r_max)
     return sentence_end;
 }
 
-int g3_build_preamble_answer_only(const g3_candidate_t *sel, int n, char *out, int cap, int r_max)
+/* The BODY lives here; g3_build_preamble_answer_only below is a one-line wrapper passing NULL.
+ * ONE decision point on purpose (the ctrl_index_add / PB_DISPATCH_OK precedent): the bytes and
+ * the mask are produced by the same code, so "the builder and the mask cannot disagree" is true
+ * by construction rather than by comment, and the workload lane keeps calling the old name.
+ *
+ * emitted_mask (when non-NULL) is written on EVERY return path, including the early ones, so a
+ * caller never reads a stale value. Bit i is set iff selected fact i put at least one byte into
+ * `out`, MEASURED FROM `pos` ACROSS THAT FACT'S APPEND -- deliberately not from clean[i] > 0.
+ * The two differ: g3_append stops at `limit`, so a fact with a perfectly good cleaned length can
+ * still contribute nothing when the cap is already reached. The trailing "\n" does not count.
+ *
+ * WHY IT EXISTS: recall_src_seq/recall_src2_seq record the SELECTOR's order, and the loop below
+ * SKIPS a fact whose cleaned length is 0. With two selected, the first cleaning away and the
+ * second surviving, the preamble holds only the second while the record names the first -- the
+ * [23:00110] misattribution one level down, and reachable (no-complete-sentence was 8 of 14 hits
+ * when measured at C/M2b). The mask is the discriminator; the src fields keep their meaning so
+ * every already-written record stays comparable. */
+int g3_build_preamble_answer_only_ex(const g3_candidate_t *sel, int n, char *out, int cap,
+                                     int r_max, uint8_t *emitted_mask)
 {
+    if (emitted_mask) *emitted_mask = 0;
     if (!out || cap <= 0)
         return 0;
     out[0] = '\0';
@@ -293,17 +313,42 @@ int g3_build_preamble_answer_only(const g3_candidate_t *sel, int n, char *out, i
     /* G3/M6b: reframe the label so the context reads as material to BUILD ON, not repeat (a soft
      * nudge against the P7 verbatim self-restatement). Kept short (counts against the token cap). */
     static const char HDR[] = "Notes from a previous answer (use as reference; add new detail, do not repeat):\n";
+    /* The emitted mask is a uint8_t, so a fact index past bit 7 would be SILENTLY DROPPED
+     * by the (uint8_t)(1u << i) narrowing below. test_g3_retrieval.c pins G3_MAX_FACTS <= 2,
+     * but that is a HOST-ONLY TU the seL4 build never compiles -- so the width is guarded
+     * HERE, where the shifting code actually lives and ships. */
+    _Static_assert(G3_MAX_FACTS <= 8, "recall_emit_mask is 8 bits: a fact index past bit 7 "
+                                      "would be silently dropped by (uint8_t)(1u << i)");
+    /* And THIS is what makes "a recall that emitted nothing" unreachable -- a property that
+     * is arithmetic, not structural, and was nearly recorded as an absolute. It holds only
+     * because the limit exceeds the header, so a returned preamble always carries a fact.
+     * Pinned here; the record comment says "at the deployed cap" rather than "never",
+     * because a caller passing a cap smaller than the header could still get mask 0. */
+    _Static_assert(PREAMBLE_MAX_BYTES > (int)sizeof HDR,
+                   "the header must not be able to fill the preamble limit by itself");
     g3_append(out, &pos, limit, HDR, (int)(sizeof HDR - 1));
 
+    uint8_t mask = 0;
     for (int i = 0; i < facts; i++) {
         if (clean[i] <= 0)
             continue;   /* a fact that cleaned away contributes nothing, not a blank line */
+        int before = pos;
         g3_append(out, &pos, limit, sel[i].resp, clean[i]);
+        if (pos > before)
+            mask |= (uint8_t)(1u << i);   /* it actually reached the buffer */
         g3_append(out, &pos, limit, "\n", 1);
     }
 
     out[pos] = '\0';   /* pos <= limit <= cap-1 — never past cap */
+    if (emitted_mask) *emitted_mask = mask;
     return pos;
+}
+
+/* The pre-2026-09-03 name and signature, unchanged for every existing caller (the workload lane
+ * and the whole G3 suite). Deliberately a wrapper rather than a copy. */
+int g3_build_preamble_answer_only(const g3_candidate_t *sel, int n, char *out, int cap, int r_max)
+{
+    return g3_build_preamble_answer_only_ex(sel, n, out, cap, r_max, NULL);
 }
 
 /* ---- Phase C / C/M2: semantic (cosine-topk) selection ---------------------------------------

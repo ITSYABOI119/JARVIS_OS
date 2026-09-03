@@ -470,7 +470,7 @@ static uint16_t g_ctrl_last_qlen    = 0;
 static void ctrl_epi_write(const char *qs, uint8_t outcome, const char *resp, uint16_t action,
                            uint8_t recall_kind, uint32_t recall_src_seq, uint16_t recall_cos_x1000,
                            uint8_t recall_sel_count, uint32_t recall_src2_seq,
-                           uint16_t recall_cos2_x1000)
+                           uint16_t recall_cos2_x1000, uint8_t recall_emit_mask)
 {
     if (!g_ctrl_episodic_ready) return;
 
@@ -484,6 +484,7 @@ static void ctrl_epi_write(const char *qs, uint8_t outcome, const char *resp, ui
     rec.recall_sel_count  = recall_sel_count;
     rec.recall_src2_seq   = recall_src2_seq;
     rec.recall_cos2_x1000 = recall_cos2_x1000;
+    rec.recall_emit_mask  = recall_emit_mask;
 #if JARVIS_EMBED_PROBE == 4
     /* The SIX values ACTUALLY WRITTEN, printed from inside the writer so every exit path
      * (answered, refused, timeout/fault) is covered rather than just the answered one. */
@@ -493,6 +494,7 @@ static void ctrl_epi_write(const char *qs, uint8_t outcome, const char *resp, ui
     puts_serial(" n=");               put_dec((uint32_t)recall_sel_count);
     puts_serial(" src2=");            put_dec(recall_src2_seq);
     puts_serial(" cos2=");            put_dec((uint32_t)recall_cos2_x1000);
+    puts_serial(" emit=");            put_dec((uint32_t)recall_emit_mask);
     puts_serial("\n");
 #endif
     if (epi_store_append(&g_ctrl_episodic, &rec) != 0) {
@@ -528,6 +530,7 @@ static void ctrl_epi_write(const char *qs, uint8_t outcome, const char *resp, ui
             puts_serial(" n=");           put_dec((uint32_t)rb.recall_sel_count);
             puts_serial(" src2=");        put_dec(rb.recall_src2_seq);
             puts_serial(" cos2=");        put_dec((uint32_t)rb.recall_cos2_x1000);
+            puts_serial(" emit=");        put_dec((uint32_t)rb.recall_emit_mask);
             puts_serial("\n");
         } else {
             puts_serial("[PROV] readback FAILED\n");
@@ -3677,6 +3680,9 @@ static void pa_ctrl_gate(const control_result_t *cres)
     uint8_t  crk_n    = 0;
     uint32_t crk_src2 = 0;
     uint16_t crk_cos2 = 0;
+    /* WHICH selected facts actually reached the preamble (2026-09-03). Same per-turn reset and
+     * the same set-only-where-crk_kind-is-set discipline as crk_n. */
+    uint8_t  crk_emit = 0;
 #if JARVIS_EMBED_PROBE == 4
     /* Captured BY VALUE at the moment each winner is established, for the same reason the
      * crk_* triple is: ctrl_sel[] holds POINTERS into candidate buffers and the semantic
@@ -3848,7 +3854,7 @@ static void pa_ctrl_gate(const control_result_t *cres)
         /* Provenance NONE, stated literally rather than passing crk_*: this exit is BEFORE the
          * recall block, so no recall could have happened. Writing the literals makes that visible
          * at the call site instead of relying on the initialiser being read correctly. */
-        ctrl_epi_write(qs, xd.epi_outcome, NULL, xd.epi_action, EPI_RECALL_NONE, 0, 0, 0, 0, 0);
+        ctrl_epi_write(qs, xd.epi_outcome, NULL, xd.epi_action, EPI_RECALL_NONE, 0, 0, 0, 0, 0, 0);
 #else
         epi_batch_add(qs, xd.epi_action, xd.epi_outcome, NULL);
 #endif
@@ -3917,7 +3923,12 @@ static void pa_ctrl_gate(const control_result_t *cres)
         int cns  = g3_select_exact_only(ctrl_cands, cn, ckey, ctrl_sel);
         /* CONTROL-IN lane: the whole stored answer (== EPI_RESP_MAX). The workload lane
          * deliberately keeps G3_R_MAX -- see g3_retrieval.h. */
-        int cplen = g3_build_preamble_answer_only(ctrl_sel, cns, ctrl_pre, sizeof ctrl_pre, G3_R_MAX_CONTROL_IN);
+        /* emit_tmp is written on EVERY return of _ex, so it is never stale. It is reused by the
+         * semantic lane below, which is safe by construction: that lane runs ONLY when this one
+         * produced cplen == 0, and a cplen of 0 means _ex wrote a mask of 0. */
+        uint8_t emit_tmp = 0;
+        int cplen = g3_build_preamble_answer_only_ex(ctrl_sel, cns, ctrl_pre, sizeof ctrl_pre,
+                                                     G3_R_MAX_CONTROL_IN, &emit_tmp);
 
         /* RECALL PROVENANCE (2026-08-01) — captured HERE, where the values are provably valid,
          * and carried to the episodic write as parameters. Declared OUTSIDE #if JARVIS_EMBED
@@ -3933,6 +3944,7 @@ static void pa_ctrl_gate(const control_result_t *cres)
             crk_kind = EPI_RECALL_EXACT;
             crk_src  = ctrl_sel[0].seq;
             crk_n    = (uint8_t)cns;   /* g3_select_exact_only returns at most 1; src2/cos2 stay 0 */
+            crk_emit = emit_tmp;
 #if JARVIS_EMBED_PROBE == 4
             prov_exact    = 1;
             prov_src_resp = ctrl_sel[0].resp;
@@ -4018,8 +4030,9 @@ static void pa_ctrl_gate(const control_result_t *cres)
                 if (ss > 0) {
                     /* The SAME untouched builder — P6 contamination hygiene and the
                      * complete-sentence rule apply identically to a semantic match. */
-                    cplen = g3_build_preamble_answer_only(ctrl_sel, ss, ctrl_pre,
-                                                          sizeof ctrl_pre, G3_R_MAX_CONTROL_IN);
+                    cplen = g3_build_preamble_answer_only_ex(ctrl_sel, ss, ctrl_pre,
+                                                             sizeof ctrl_pre,
+                                                             G3_R_MAX_CONTROL_IN, &emit_tmp);
                     csem = (cplen > 0);
                 }
                 /* C/M3a: a BELOW-FLOOR miss, and ONLY that. Guarded on sn > 0 deliberately:
@@ -4035,6 +4048,7 @@ static void pa_ctrl_gate(const control_result_t *cres)
                      * the same "cplen, not cns" rule the exact lane above follows. */
                     if (csem) {
                         crk_n = (uint8_t)ss;
+                        crk_emit = emit_tmp;
                         if (ss >= 2) crk_src2 = ctrl_sel[1].seq;
                     }
 #if JARVIS_EMBED_PROBE == 4
@@ -4354,7 +4368,7 @@ static void pa_ctrl_gate(const control_result_t *cres)
          * answer at all, and re-tagging it would conflate "answered from own state" with
          * "failed to answer". */
         ctrl_epi_write(qs, xd.epi_outcome, roff > 0 ? resp : NULL, xd.epi_action,
-                       crk_kind, crk_src, crk_cos, crk_n, crk_src2, crk_cos2);
+                       crk_kind, crk_src, crk_cos, crk_n, crk_src2, crk_cos2, crk_emit);
 #else
         epi_batch_add(qs, xd.epi_action, xd.epi_outcome, roff > 0 ? resp : NULL);
 #endif
@@ -4444,7 +4458,7 @@ static void pa_ctrl_gate(const control_result_t *cres)
          * answer. The record is unrecallable either way (resp_len 0 fails g3_candidate_usable), so
          * recording it costs nothing and hiding it would lose a real signal. */
         ctrl_epi_write(qs, xd.epi_outcome, NULL, xd.epi_action, crk_kind, crk_src, crk_cos,
-                       crk_n, crk_src2, crk_cos2);
+                       crk_n, crk_src2, crk_cos2, crk_emit);
 #else
         epi_batch_add(qs, xd.epi_action, xd.epi_outcome, NULL);
 #endif

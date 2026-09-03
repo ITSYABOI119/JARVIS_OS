@@ -382,6 +382,7 @@ static int dump_fixture(const char *path)
         rec.recall_kind = EPI_RECALL_SEMANTIC; rec.recall_src_seq = 4242u; rec.recall_cos_x1000 = 713u;
         /* WIDENED (2026-09-03): a TWO-fact selection — the [23:00110] shape. */
         rec.recall_sel_count = 2u; rec.recall_src2_seq = 4343u; rec.recall_cos2_x1000 = 651u;
+        rec.recall_emit_mask = 3u;   /* both selected facts reached the preamble */
         epi_store_append(&s, &rec);
 
         episodic_fill(&rec, 700, "near miss turn", EPI_ACT_CONTROL_IN, EPI_OUT_OK, 0, "un-augmented");
@@ -393,6 +394,7 @@ static int dump_fixture(const char *path)
                       "answered from key");
         rec.recall_kind = EPI_RECALL_EXACT; rec.recall_src_seq = 4141u; rec.recall_cos_x1000 = 0u;
         rec.recall_sel_count = 1u; rec.recall_src2_seq = 0u; rec.recall_cos2_x1000 = 0u;
+        rec.recall_emit_mask = 1u;
         epi_store_append(&s, &rec);
 
         /* A PRE-WIDENING record: a real recall source with NO count. This is the [23:00110] era
@@ -401,6 +403,18 @@ static int dump_fixture(const char *path)
                       "answered");
         rec.recall_kind = EPI_RECALL_SEMANTIC; rec.recall_src_seq = 4444u; rec.recall_cos_x1000 = 702u;
         rec.recall_sel_count = 0u; rec.recall_src2_seq = 0u; rec.recall_cos2_x1000 = 0u;
+        rec.recall_emit_mask = 0u;   /* pre-mask era: unknown, and the parser must say so */
+        epi_store_append(&s, &rec);
+
+        /* THE MISATTRIBUTION SHAPE, rendered self-explaining. Two selected, but the FIRST
+         * cleaned away, so the preamble carried only the second: mask 2, bit 0 CLEAR, while
+         * recall_src_seq still names 4545. Without the mask this record is indistinguishable
+         * from one where both facts contributed. */
+        episodic_fill(&rec, 1000, "dropped-first-fact turn", EPI_ACT_CONTROL_IN, EPI_OUT_OK, 0,
+                      "answered from the second fact");
+        rec.recall_kind = EPI_RECALL_SEMANTIC; rec.recall_src_seq = 4545u; rec.recall_cos_x1000 = 800u;
+        rec.recall_sel_count = 2u; rec.recall_src2_seq = 4646u; rec.recall_cos2_x1000 = 640u;
+        rec.recall_emit_mask = 2u;
         epi_store_append(&s, &rec);
     }
 
@@ -711,7 +725,7 @@ static void test_recall_provenance(void)
     /* Updated at the 2026-09-03 widening: this assertion pins the pad ARITHMETIC, and the
      * pad legitimately moved again (T14 owns the new offsets). 24 -> 17 at the first
      * provenance triple, 17 -> 10 at the selected-set half. */
-    ASSERT(sizeof(((epi_record_t *)0)->pad) == 10, "pad shrank 24 -> 17 -> 10 (14 B consumed)");
+    ASSERT(sizeof(((epi_record_t *)0)->pad) == 9, "pad shrank 24 -> 17 -> 10 -> 9 (15 B consumed)");
 
     memset(mock_disk, 0, sizeof(mock_disk));
     epi_store_t s;
@@ -789,7 +803,7 @@ static void test_provenance_widening(void)
     ASSERT(offsetof(epi_record_t, recall_sel_count)  == 495, "recall_sel_count @495");
     ASSERT(offsetof(epi_record_t, recall_src2_seq)   == 496, "recall_src2_seq @496");
     ASSERT(offsetof(epi_record_t, recall_cos2_x1000) == 500, "recall_cos2_x1000 @500");
-    ASSERT(sizeof(((epi_record_t *)0)->pad) == 10, "pad shrank 17 -> 10, and no further");
+    ASSERT(sizeof(((epi_record_t *)0)->pad) == 9, "pad shrank 17 -> 10 -> 9 (T15 owns the 502 pin)");
     ASSERT(sizeof(epi_record_t) == 512, "the record is STILL exactly one sector");
 
     memset(mock_disk, 0, sizeof(mock_disk));
@@ -848,6 +862,72 @@ static void test_provenance_widening(void)
          "round-trip on four shapes, and a legacy record still parses");
 }
 
+/* T15 -- THE EMITTED MASK (2026-09-03). T14 recorded WHICH records the selector chose; this
+ * records which of them actually reached the preamble. The gap between the two is the
+ * [23:00110] misattribution one level down: the builder skips a selected fact whose cleaned
+ * text has no complete sentence, so a record can name a source that contributed nothing. */
+static void test_emit_mask_record(void)
+{
+    ASSERT(offsetof(epi_record_t, recall_emit_mask) == 502, "recall_emit_mask @502");
+    ASSERT(sizeof(((epi_record_t *)0)->pad) == 9, "pad shrank 10 -> 9, and no further");
+    ASSERT(sizeof(epi_record_t) == 512, "the record is STILL exactly one sector");
+
+    memset(mock_disk, 0, sizeof(mock_disk));
+    epi_store_t s;
+    ASSERT(epi_store_init(&s, mock_read, mock_write, EPI_STORE_BASE_LBA, EPI_STORE_MAX_ENTRIES) == 0,
+           "emit mask: fresh store init");
+
+    struct { uint8_t kind; uint32_t src; uint16_t cos; uint8_t n; uint32_t src2; uint16_t cos2;
+             uint8_t mask; const char *q; const char *why; } cases[] = {
+        /* the real [23:00110]: two selected, BOTH emitted */
+        { EPI_RECALL_SEMANTIC, 93u, 944u, 2u, 108u, 765u, 3u, "whats my favourite colour",
+          "[23:00110]: two selected and both emitted -> mask 3" },
+        /* the shape the mask exists for: named first, contributed nothing */
+        { EPI_RECALL_SEMANTIC, 4545u, 800u, 2u, 4646u, 640u, 2u, "dropped-first-fact turn",
+          "dropped-first: src names a fact that emitted NOTHING -> mask 2, bit 0 clear" },
+        { EPI_RECALL_EXACT, 54u, 0u, 1u, 0u, 0u, 1u, "exact hit",
+          "an exact hit emits its single fact -> mask 1" },
+        /* pre-mask era: must survive AS WRITTEN; the store never repairs a 0 into a guess */
+        { EPI_RECALL_SEMANTIC, 93u, 944u, 2u, 108u, 765u, 0u, "pre-mask turn",
+          "a pre-mask record round-trips with mask 0 -- unknown, not 'emitted nothing'" },
+    };
+    for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        epi_record_t rec;
+        episodic_fill(&rec, 2000u + i, cases[i].q, EPI_ACT_CONTROL_IN, EPI_OUT_OK, 0, "answered");
+        rec.recall_kind = cases[i].kind; rec.recall_src_seq = cases[i].src;
+        rec.recall_cos_x1000 = cases[i].cos; rec.recall_sel_count = cases[i].n;
+        rec.recall_src2_seq = cases[i].src2; rec.recall_cos2_x1000 = cases[i].cos2;
+        rec.recall_emit_mask = cases[i].mask;
+        ASSERT(epi_store_append(&s, &rec) == 0, "emit mask: append");
+        epi_record_t r;
+        ASSERT(epi_store_read(&s, i, &r) == 0, "emit mask: read back");
+        ASSERT(r.recall_kind == cases[i].kind && r.recall_src_seq == cases[i].src
+               && r.recall_cos_x1000 == cases[i].cos && r.recall_sel_count == cases[i].n
+               && r.recall_src2_seq == cases[i].src2 && r.recall_cos2_x1000 == cases[i].cos2
+               && r.recall_emit_mask == cases[i].mask,
+               cases[i].why);
+    }
+
+    /* LEGACY: the whole tail zero. All SEVEN provenance fields must read back 0 -- and the mask
+     * reading 0 is exactly the ambiguity the parser refuses to resolve by guessing. */
+    {
+        epi_record_t legacy;
+        episodic_fill(&legacy, 3100u, "written before any provenance field existed",
+                      EPI_ACT_CONTROL_IN, EPI_OUT_OK, 0, "an older answer");
+        ASSERT(legacy.recall_emit_mask == 0, "episodic_fill zeroes the mask too");
+        ASSERT(epi_store_append(&s, &legacy) == 0, "emit mask: legacy record appends");
+        epi_record_t r;
+        ASSERT(epi_store_read(&s, 4, &r) == 0, "emit mask: legacy record reads back");
+        ASSERT(r.recall_kind == 0 && r.recall_src_seq == 0 && r.recall_cos_x1000 == 0
+               && r.recall_sel_count == 0 && r.recall_src2_seq == 0 && r.recall_cos2_x1000 == 0
+               && r.recall_emit_mask == 0,
+               "legacy record decodes as all-zero across ALL SEVEN provenance fields");
+    }
+
+    PASS("emitted mask: offset 502 pinned, pad 9, 512 B held, seven fields round-trip incl. "
+         "the dropped-first shape, and a legacy record still parses");
+}
+
 int main(int argc, char **argv)
 {
     if (argc >= 3 && strcmp(argv[1], "--dump") == 0)
@@ -868,6 +948,7 @@ int main(int argc, char **argv)
     test_local_no_shadow();
     test_recall_provenance();
     test_provenance_widening();
+    test_emit_mask_record();
 
     printf("\nResults: %d PASS, %d FAIL\n", tests_passed, tests_failed);
     return tests_failed > 0 ? 1 : 0;

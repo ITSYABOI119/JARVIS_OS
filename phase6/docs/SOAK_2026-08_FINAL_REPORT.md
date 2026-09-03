@@ -226,7 +226,7 @@ append-with-checksum and all four headers verify OK).
 
    Follow-up this opens (report-only, not done): provenance records one src for a preamble that
    may carry several. Recording the full selected set — or at least the count — would make a
-   future occurrence self-explaining. **DONE 2026-09-03** — the episodic record now carries `recall_sel_count`
+   future occurrence self-explaining. **DONE 2026-09-03 (count + second pair) + emitted mask (2026-09-03)** — the episodic record now carries `recall_sel_count`
    @495 plus the second `(seq, cos)` pair @496/@500 (pad 17 -> 10, record still 512 B), set at
    the control-IN write site. NOT retroactive: records written 2026-08-01..2026-09-03 — this
    one included — keep a single src and render `n=?`, which is 'unknown', never 'one'.

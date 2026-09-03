@@ -186,12 +186,14 @@ typedef struct __attribute__((packed)) {
      *     cleans away, the preamble contains only the second -- while recall_src_seq still
      *     names the first. That is reachable (a no-complete-sentence hit is common; 8 of 14
      *     on the run that motivated the clean-sentence rule) and it is the SAME
-     *     misattribution shape as [23:00110], one level down. recall_sel_count is honest as
-     *     defined -- how many records the builder was HANDED -- but "handed" is not
-     *     "contributed", and a reader who treats src as the answer's origin can still be
-     *     wrong. Recording which facts actually survived cleaning would need clean[] out of
-     *     the builder, i.e. an out-param on a mutation-proven pure function, which is the
-     *     direction the 2026-08-01 comment on the cosine recompute already refuses.
+     *     misattribution shape as [23:00110], one level down.
+     *     **CLOSED 2026-09-03 by recall_emit_mask @502.** The concern about needing clean[]
+     *     out of the builder was answered by not needing it: the builder gained an _ex variant
+     *     that reports which facts its OWN write position advanced across, so the mask is
+     *     measured rather than inferred, the old name stayed a wrapper, and there is still one
+     *     decision point. The src fields keep their selector-order meaning so every
+     *     already-written record stays comparable; the mask is the discriminator. Records
+     *     written before 2026-09-03 carry mask 0 with kind != 0 -- unknown, never "none".
      *
      * (2) cos AND cos2 ARE NOT DRAWN FROM THE SAME POPULATION -- do not compare them.
      *     recall_cos_x1000 is the BEST score over every candidate ctrl_sem_gather collected,
@@ -214,7 +216,22 @@ typedef struct __attribute__((packed)) {
     uint16_t recall_cos2_x1000; /* @500 -- the second pick's cosine x1000, truncated and clamped
                                 * exactly as recall_cos_x1000 is, so it equals what the
                                 * reconstruction driver prints for rank 2. 0 when count < 2. */
-    uint8_t  pad[10];        /* pad to exactly 512 */
+    uint8_t  recall_emit_mask;  /* @502 -- bit i (0-based, SELECTOR order) set iff selected
+                                * fact i contributed >= 1 byte to the preamble. 0 when
+                                * recall_kind == 0. 0 WITH recall_kind != 0 means the record
+                                * predates this field: UNKNOWN, never "none" -- a set kind
+                                * implies cplen > 0, which implies at least one set bit, so
+                                * "recalled but emitted nothing" is not reachable AT THE
+                                * DEPLOYED CAP. That clause is load-bearing and was
+                                * tightened after review: the property is ARITHMETIC, not
+                                * structural -- it holds because the preamble limit (511)
+                                * exceeds the 80-byte header, so a returned preamble always
+                                * carries a fact. g3_retrieval.c now _Static_asserts that
+                                * relation. A caller passing a cap smaller than the header
+                                * could still produce a genuine mask 0, which a reader
+                                * would then misread as "pre-field".
+                                * Bits above G3_MAX_FACTS are never set. */
+    uint8_t  pad[9];         /* pad to exactly 512 */
 } epi_record_t;
 
 _Static_assert(sizeof(epi_record_t) == 512, "episodic record must be exactly one sector");
@@ -227,6 +244,7 @@ _Static_assert(offsetof(epi_record_t, recall_cos_x1000) == 493, "recall_cos_x100
 _Static_assert(offsetof(epi_record_t, recall_sel_count)  == 495, "recall_sel_count must be @495");
 _Static_assert(offsetof(epi_record_t, recall_src2_seq)   == 496, "recall_src2_seq must be @496");
 _Static_assert(offsetof(epi_record_t, recall_cos2_x1000) == 500, "recall_cos2_x1000 must be @500");
+_Static_assert(offsetof(epi_record_t, recall_emit_mask)  == 502, "recall_emit_mask must be @502");
 
 /* recall_kind values */
 #define EPI_RECALL_NONE     0u   /* no preamble — or a pre-2026-08-01 record (ambiguous; see above) */

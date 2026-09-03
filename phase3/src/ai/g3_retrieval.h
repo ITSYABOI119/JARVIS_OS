@@ -88,6 +88,17 @@ int g3_select_exact_only(const g3_candidate_t *cands, int n, uint64_t query_key,
  * on purpose: the caller already knows which lane it is, and a number cannot be mapped wrongly. */
 int g3_build_preamble_answer_only(const g3_candidate_t *sel, int n, char *out, int cap, int r_max);
 
+/* As above, plus WHICH selected facts actually reached the buffer. Bit i (selector order,
+ * 0-based) is set iff fact i contributed >= 1 byte -- measured from the builder's own write
+ * position, NOT from its cleaned length, because g3_append stops at the cap and a good fact
+ * can still emit nothing. Written on EVERY return path (0 on the early ones) when non-NULL.
+ *
+ * The plain name above is a wrapper passing NULL and is what the WORKLOAD lane still calls;
+ * only the control-IN lane needs the mask, because only its turns are recorded per-record in
+ * the episodic store (recall_emit_mask @502). Bits above G3_MAX_FACTS are never set. */
+int g3_build_preamble_answer_only_ex(const g3_candidate_t *sel, int n, char *out, int cap,
+                                     int r_max, uint8_t *emitted_mask);
+
 /* Does `s` (length-carried, NOT NUL-terminated) contain the model's thinking-channel marker text
  * ("<|channel>" / "<channel|>" / "<|think|>")? Such a record is reasoning scratch, not an answer,
  * and must never be recalled: injecting it puts the literal marker back into the prompt and drives

@@ -31,6 +31,7 @@ FIXTURE = [
     (700, "near miss turn",       3, "CONTROLIN", 0, "OK", 0, "un-augmented"),
     (800, "exact recall turn",    3, "CONTROLIN", 0, "OK", 0, "answered from key"),
     (900, "pre-widening semantic turn", 3, "CONTROLIN", 0, "OK", 0, "answered"),
+    (1000, "dropped-first-fact turn", 3, "CONTROLIN", 0, "OK", 0, "answered from the second fact"),
 ]
 
 # Recall provenance (2026-08-01), indexed to FIXTURE above:
@@ -46,16 +47,22 @@ FIXTURE = [
 # Row 7 is an EXACT hit (one selected -> no src2 on the line). Row 8 is the [23:00110] ERA
 # shape: a real recall source with NO count, which must render n=? and NEVER n=1 -- the very
 # record class whose true count turned out to be two.
+# The tuples gain the EMITTED half (2026-09-03):
+#   (kind, kind_name, src, cos, n, src2, cos2, n_name, emit_mask, emit_name)
+# Row 9 is the shape the mask exists for: TWO selected, but the first cleaned away, so the
+# preamble carried only the second. src names 4545 while bit 0 is CLEAR -- without the mask that
+# record is indistinguishable from one where both facts contributed.
 FIXTURE_PROV = [
-    (0, "unknown",  0,    0,   0, 0,    0,   "n/a"),
-    (0, "unknown",  0,    0,   0, 0,    0,   "n/a"),
-    (0, "unknown",  0,    0,   0, 0,    0,   "n/a"),
-    (0, "unknown",  0,    0,   0, 0,    0,   "n/a"),
-    (0, "unknown",  0,    0,   0, 0,    0,   "n/a"),
-    (2, "semantic", 4242, 713, 2, 4343, 651, "2"),
-    (0, "miss",     0,    494, 0, 0,    0,   "n/a"),
-    (1, "exact",    4141, 0,   1, 0,    0,   "1"),
-    (2, "semantic", 4444, 702, 0, 0,    0,   "unknown"),
+    (0, "unknown",  0,    0,   0, 0,    0,   "n/a",     0, "n/a"),
+    (0, "unknown",  0,    0,   0, 0,    0,   "n/a",     0, "n/a"),
+    (0, "unknown",  0,    0,   0, 0,    0,   "n/a",     0, "n/a"),
+    (0, "unknown",  0,    0,   0, 0,    0,   "n/a",     0, "n/a"),
+    (0, "unknown",  0,    0,   0, 0,    0,   "n/a",     0, "n/a"),
+    (2, "semantic", 4242, 713, 2, 4343, 651, "2",       3, "1,2"),
+    (0, "miss",     0,    494, 0, 0,    0,   "n/a",     0, "n/a"),
+    (1, "exact",    4141, 0,   1, 0,    0,   "1",       1, "1"),
+    (2, "semantic", 4444, 702, 0, 0,    0,   "unknown", 0, "unknown"),
+    (2, "semantic", 4545, 800, 2, 4646, 640, "2",       2, "2"),
 ]
 
 # The EXACT pre-widening rendering of the rows that must not move (captured at 4615a33 before
@@ -179,7 +186,8 @@ def main():
             # Recall provenance (2026-08-01) — the C writer's bytes decoded at the pinned
             # offsets. This is the half of the round-trip that proves the Python offsets
             # (488/489/493) agree with the C _Static_asserts.
-            pk, pname, psrc, pcos, pn, psrc2, pcos2, pnname = FIXTURE_PROV[i]
+            (pk, pname, psrc, pcos, pn, psrc2, pcos2, pnname,
+             pmask, pemit) = FIXTURE_PROV[i]
             check(r['recall_kind'] == pk, f"rec{i} recall_kind == {pk} (got {r['recall_kind']})")
             check(r['recall_src_seq'] == psrc,
                   f"rec{i} recall_src_seq == {psrc} (got {r['recall_src_seq']})")
@@ -197,6 +205,10 @@ def main():
             check(r['recall_sel_count_name'] == pnname,
                   f"rec{i} recall_sel_count_name == {pnname!r} "
                   f"(got {r['recall_sel_count_name']!r})")
+            check(r['recall_emit_mask'] == pmask,
+                  f"rec{i} recall_emit_mask == {pmask} (got {r['recall_emit_mask']})")
+            check(r['recall_emit_name'] == pemit,
+                  f"rec{i} recall_emit_name == {pemit!r} (got {r['recall_emit_name']!r})")
 
         # §4 teeth, asserted once rather than per record: a LEGACY all-zero block must render
         # 'unknown', NEVER 'none'. Reading those bytes as "this turn did not recall" would be a
@@ -215,7 +227,7 @@ def main():
         _out = _sp.run([sys.executable, _script, sys.argv[1]],
                        capture_output=True, text=True, encoding='utf-8').stdout
         _lines = [l for l in _out.splitlines() if l.startswith('  [1:')]
-        check(len(_lines) == 9, f"renderer prints 9 record lines (got {len(_lines)})")
+        check(len(_lines) == 10, f"renderer prints 10 record lines (got {len(_lines)})")
 
         check(' n=2 src2=4343 cos2=0.651' in _lines[5],
               "a two-fact semantic recall renders the count AND the second (seq, cos)")
@@ -233,6 +245,18 @@ def main():
 
         check(_out.count('have a recall source but no selected-set count') == 1,
               "the no-count NOTE appears exactly once, and only because row 8 exists")
+
+        # ---- EMITTED MASK (2026-09-03): what the LINE says ----
+        check(' emit=1,2' in _lines[5],
+              "both facts emitted renders emit=1,2")
+        check(' emit=1' in _lines[7] and ' emit=1,' not in _lines[7],
+              "an exact hit renders emit=1 and names no second fact")
+        check(' emit=?' in _lines[8] and ' emit=0' not in _lines[8],
+              "a pre-mask record renders emit=? -- unknown, NEVER 'emitted nothing'")
+        check(' n=2 src2=4646 cos2=0.640 emit=2' in _lines[9],
+              "the dropped-first shape renders self-explaining: src names 4545, bit 0 CLEAR")
+        check('emit' not in _lines[6] and 'emit' not in _lines[0],
+              "miss and legacy lines carry no emit text at all")
 
     # ---- G4: wrapped region decodes oldest->newest (NOT raw slot order) ----
     # 4 record slots, total=6 (ring rolled twice), cursor=2 -> oldest is slot 2. A real store
