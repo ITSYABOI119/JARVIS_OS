@@ -1696,6 +1696,14 @@ jobs:
         python3 phase3/scripts/check_copy_orphans.py --self-test
         python3 phase3/scripts/check_copy_orphans.py
 
+    # CLAUDE.md is the MAP; docs/CLAUDE_RECORD.md is the evidence LEDGER carved out of it at the
+    # 2026-09-04 archive pass. A dangling pointer makes evidence unreachable and an orphaned heading
+    # makes it invisible -- both silent, since nothing in the build reads either file.
+    - name: "Invariant: every CLAUDE.md record pointer resolves (Python)"
+      run: |
+        python3 phase3/scripts/check_claude_record.py --self-test
+        python3 phase3/scripts/check_claude_record.py
+
     # A4 -- a PARSE-LEVEL floor over the operator PowerShell tooling (~2,200 lines).
     #
     # THE HONEST CEILING, stated here so this is never mistaken for coverage: this step
