@@ -13,7 +13,7 @@
 
 ## 1. Executive Summary
 
-Phase 4 turns the proven bare-metal beta into a **single-model, autonomous, remotely-observed v1.0 appliance**. On the same Ryzen 7 2700X, JARVIS now runs **Gemma 4 E2B at 5.46 tok/s** in the seL4 build (AVX2 + a 6-core seL4-native threadpool), renders a live **1024×768 GOP framebuffer HUD**, emits **~1 Hz CRC'd UDP telemetry** to a **read-only browser console**, ships a **one-script installer**, and **dual-boots from the internal NVMe alongside Ubuntu** — all verified on real hardware. The MIT open-source release is in progress.
+Phase 4 turns the proven bare-metal beta into a **single-model, autonomous, remotely-observed v1.0 appliance**. On the same Ryzen 7 2700X, JARVIS now runs **Gemma 4 E2B at 5.46 tok/s** in the seL4 build (AVX2 + a 6-core seL4-native threadpool), renders a live **1024×768 GOP framebuffer HUD**, emits **~1 Hz CRC'd UDP telemetry** (~2 Hz at deployed rates since — see the 2026-08 soak report) to a **read-only browser console**, ships a **one-script installer**, and **dual-boots from the internal NVMe alongside Ubuntu** — all verified on real hardware. The MIT open-source release is in progress.
 
 What is **deferred or cut** is stated plainly: GPU inference is deferred (no usable GPU), the system is CPU-only and single-model, the display is 1024×768 (firmware declined 1080p), the console is telemetry-out only (no control-in), the box is autonomous with no interactive input (USB keyboard cut), the `--target disk` installer is code + dry-run-only, and the **90-day stability soak has not been run** (owner-scheduled).
 
@@ -30,7 +30,7 @@ The seL4 build went from scalar single-thread (~0.2 tok/s) to AVX2-threaded acro
 A **1024×768×32 GOP framebuffer HUD** on the box's monitor (status panel + STATE badge + ROUTE/COUNTERS strip + scrolling event log + live model-load progress bar), driven over UEFI/`efi_gop`. Every render is mirrored to the durable NVMe log (`[PANEL]`/`[SNAP]`), so the UI is fully reconstructable from the log — the standing verify-from-log rule. 1080p was firmware-declined (needs an OS GPU driver the box doesn't have); the panel is resolution-agnostic.
 
 ### Goal #2b — Remote Telemetry Console
-Box-side telemetry-OUT brought the dormant **Intel I211 NIC to first light** on bare metal → minimal **Eth/IPv4/UDP** emit → a continuous **~1 Hz, 200-byte CRC'd `telemetry_packet_t`** (Wireshark-verified **914/914 packets CRC-valid**, mean 1.000 s, mid-inference keepalive). A Main-PC Python receiver (`telemetry_receiver.py`) decodes + CRC-validates and runs a UDP→SSE bridge; a **read-only** browser console (`phase4/console/`, 7 screens — CommandCenter / Routing / LastResponse / Models / SHIELD / Capabilities / System) renders live box state. Honesty-gated by a four-layer Playwright-Python test stack (honesty 40 + key-contract 81 + logic 14 + e2e 16, incl. a flag-parity invariant). **Telemetry-out only** — control-in is Phase 6.
+Box-side telemetry-OUT brought the dormant **Intel I211 NIC to first light** on bare metal → minimal **Eth/IPv4/UDP** emit → a continuous **~1 Hz, 200-byte CRC'd `telemetry_packet_t`** (Wireshark-verified **914/914 packets CRC-valid**, mean 1.000 s, mid-inference keepalive; ~2 Hz at deployed rates since — see the 2026-08 soak report). A Main-PC Python receiver (`telemetry_receiver.py`) decodes + CRC-validates and runs a UDP→SSE bridge; a **read-only** browser console (`phase4/console/`, 7 screens — CommandCenter / Routing / LastResponse / Models / SHIELD / Capabilities / System) renders live box state. Honesty-gated by a four-layer Playwright-Python test stack (honesty 40 + key-contract 81 + logic 14 + e2e 16, incl. a flag-parity invariant). **Telemetry-out only** — control-in is Phase 6.
 
 ### Goal #4 — Installer
 `install_jarvis_x86.sh` is feature-complete across three targets: **usb** (now a recovery/re-flash device), **esp** (reversible on-SSD dual-boot, additive `efibootmgr` keeping Ubuntu default), and **disk** (full single-OS wipe — **CODE + DRY-RUN ONLY, never run** on the dev box). A live F3 bug (BootOrder restore aborting under `set -e`) was fixed and regression-tested; the host test suite is 50 PASS, shellcheck-clean.
@@ -55,7 +55,7 @@ Source: `README.md` (canon) + `PHASE_4_GOAL1_BENCHMARK.md` + on-box logs. Every 
 | Models supported (engine) | 11/11 load, 6 families |
 | Decision cache hit rate | 85.7% |
 | Display | 1024×768×32 GOP HUD (1080p firmware-declined) |
-| Telemetry | ~1 Hz CRC'd UDP, 914/914 packets CRC-valid |
+| Telemetry | ~1 Hz CRC'd UDP, 914/914 packets CRC-valid (the June 2026 rate; ~2 Hz at deployed query rates since the q%100 STATS site began outrunning the keepalive — measured 2.08 Hz in the 2026-08 soak) |
 | SHIELD *(host harness only)* | 100% harmful blocked / 0% FP in `test_shield.c` — the **live PA↔PB path is passive/no-op, not a blocker** (SEC-039) |
 | Test suite | green ("JARVIS AI-OS Test Suite") |
 

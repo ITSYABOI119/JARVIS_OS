@@ -1,0 +1,29 @@
+[Unit]
+Description=JARVIS soak telemetry capture (UDP broadcast :51000)
+Documentation=JARVIS_OS PROMPT-DEPLOY-AND-SOAK.md section 6
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/bin/mkdir -p /home/pi/soak
+ExecStartPre=/bin/chown pi:pi /home/pi/soak
+# -i any        : the Pi is DUAL-HOMED (eth0 .161 / wlan0 .162). A named interface
+#                 would go silent if that one link dropped while the other still
+#                 received. Cost: each broadcast is captured once PER interface,
+#                 so raw packet counts are ~2x what the box sent. Accepted.
+# -C 100 -W 50  : ring of 50 files x 100 MB = 5 GB HARD CAP. Measured need is
+#                 ~2.1 GB/month (1 Hz x ~372 B x 2 interfaces); 47 G free.
+#                 A month can never fill the card.
+# -U            : packet-buffered, so a kill or power loss does not discard
+#                 whatever was still sitting in the buffer.
+# -n            : no DNS lookups (would add traffic and stalls).
+ExecStart=/usr/bin/tcpdump -i any -n -s 0 -U -Z pi \
+          -w /home/pi/soak/jarvis_soak.pcap -C 100 -W 50 \
+          udp port 51000
+Restart=always
+RestartSec=10
+User=root
+
+[Install]
+WantedBy=multi-user.target

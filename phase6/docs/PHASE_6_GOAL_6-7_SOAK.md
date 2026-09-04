@@ -28,7 +28,8 @@ and query routing — under sustained supervised use.
 The finished Phase-6 image `a865b830` (or its committed-source rebuild): the memory stack (episodic +
 shared context + retrieval + cache growth) · the K self-heal action gate · always-on monitors (v8) ·
 event-driven wake (v9) · the ≥5 proactive INFORM behaviors (v10) · control-IN two-way + cross-session
-recall · query routing (v12). Nothing new is deployed for the soak.
+recall · query routing (v12), semantic recall (v13), the routing veto (v14). Nothing new is
+deployed for the soak.
 
 ---
 
@@ -42,9 +43,10 @@ recall · query routing (v12). Nothing new is deployed for the soak.
   at EVERY check-in**, not just at the end:
   `sudo dd if=/dev/nvme0n1 bs=512 skip=21120000 count=4097 | python3 phase3/scripts/parse_action_audit.py`.
   `action_audit.c` is flush-after-every-write (per-record durable), so a live read is complete.
-- **STABILITY + TOTALS — captured v12 telemetry.** The box broadcasts v12 (262 B) at ~1 Hz over the
+- **STABILITY + TOTALS — captured v14 telemetry.** The box broadcasts v14 (276 B) at ~2 Hz at
+  deployed rates (2.08 Hz measured in the 2026-08 soak; the 1 Hz keepalive is the floor) over the
   I211. All Phase-6 counters are per-boot CUMULATIVE statics and `q_errors` is monotonic, so the LATEST
-  packet yields the boot's totals and `err=0` survives a capture gap. Telemetry is a 1 Hz SAMPLE of the
+  packet yields the boot's totals and `err=0` survives a capture gap. Telemetry is a ~2 Hz SAMPLE of the
   counters (not every ~0.44 s `[STATS]` window) — fine for the seconds-to-hours events that matter here.
 - **SUPPLEMENTARY — the durable NVMe telemetry log** (@ LBA 4000794624, ~20 min retention, wraps under
   load) **+ the live console** (`curl /events`, or the browser at `127.0.0.1:8800`) for spot state.
@@ -60,13 +62,19 @@ recall · query routing (v12). Nothing new is deployed for the soak.
 - **TOOL: dumpcap/tcpdump with the BPF `udp port 51000`** — NOT `telemetry_receiver.py`'s UDP :51000
   bind, which is Hyper-V-excluded (WinError 10013) on the Main PC. (The SSE bridge `curl /events` is fine
   for spot reads — it does not bind :51000.) Capture to a SINGLE complete file (or a `-b` ring sized to
-  hold ALL 7 days) — budget ~200 MB (7 d × ~1 Hz × ~320 B framed). NOT a small rolling ring: it would
+  hold ALL 7 days) — budget: measured, not estimated — ~2.1 GB/month with the Pi's `-i any` ring
+  (every broadcast captured once per interface, so raw counts are ~2×); ~1 GB single-interface. The
+  5 GB hard cap (50 × 100 MB) held for the whole 2026-08 run. NOT a small rolling ring: it would
   discard the early days needed for per-window FP adjudication. Analyse offline via
   `telemetry_receiver.py --replay`.
 - **LIVENESS: PROVE ≥1 h no-gap on the dumpcap path in readiness, AND check capture health at every
   check-in** (pcap still growing + last-frame age < N s + seq-gap count). A discovered capture gap is
   RECOVERABLE (re-establish capture; adjudicate any missed window from the JACT snapshot + the cumulative
   counters) — it does NOT void the week. Only a box reboot / power-loss restarts the clock.
+- **DATED SNAPSHOTS ARE THE DURABLE ARTEFACT:** the ring restarts at `pcap00` after any restart;
+  `jarvis-soak-snapshot.timer` on the Pi writes `snap_<date>.pcap` to `/home/pi/soak-snapshots/`
+  (outside the ring) daily, guarded by `timeout` so a parked box costs nothing; units + script in
+  `phase6/tools/pi/`.
 
 ---
 
@@ -115,9 +123,19 @@ recall · query routing (v12). Nothing new is deployed for the soak.
       complete. (NAND cold-power-loss durability matters ONLY for the forensics of a power-loss abort,
       which restarts the clock anyway — a non-blocking caveat, NOT a gate. Downgraded from the drafting
       pass's "hard start blocker".)
-- [ ] Rollbacks retained (the `a28d34a0` ROUTING=0 image + `379f6bdb` pre-65); Ubuntu `BootOrder[0]`;
+- [ ] Rollbacks retained (the current image `ba94eb04…` (boot 55) with `2c061aec…` retained as
+      `.bak-pre-provenance` in BOTH locations; whether the pending -Wall commit `3f676a2` is
+      deployed first is the operator's call); Ubuntu `BootOrder[0]`;
       the owner's presence model agreed (available for stability watch + real control-IN + FP judging —
       NOT 24/7, and nothing to approve).
+- [ ] Store lifetime baselines RE-READ on the parked box immediately before the run (they move at
+      every JARVIS boot; the 2026-09-01 figures went stale at boot 55): workload episodic
+      @21,100,000 and control-IN @21,140,000 header totals, JACT total.
+- [ ] NVMe SMART baseline recorded (`nvme smart-log`): percentage_used, unsafe_shutdowns,
+      media_errors, power_on_hours, data_units_written.
+- [ ] Pi: `jarvis-soak-snapshot.timer` active (daily 03:00, `Persistent=true`); capture service
+      active+enabled; the previous run's ring archived OUT of `/home/pi/soak/` with a sha256
+      manifest.
 
 ---
 

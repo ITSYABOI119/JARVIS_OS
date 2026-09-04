@@ -1,0 +1,12 @@
+[Unit]
+Description=JARVIS soak: daily dated telemetry snapshot
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+# Persistent: a run missed while the Pi was down fires at the next boot. That is the
+# outage case this timer exists for - the 2026-08 run lost its first ~21 h of ring to
+# a restart, and a snapshot skipped in silence would repeat that failure quietly.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

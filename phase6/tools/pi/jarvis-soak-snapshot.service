@@ -1,0 +1,11 @@
+[Unit]
+Description=JARVIS soak: one dated telemetry snapshot (outside the capture ring)
+# See phase6/tools/pi/README.md in the JARVIS_OS repo. Deliberately NOT a Documentation= key:
+# systemd parses that as a URL list and logs Invalid URL, ignoring for a repo-relative path.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/home/pi/bin/jarvis_snap.sh

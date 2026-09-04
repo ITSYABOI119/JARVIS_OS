@@ -4,8 +4,10 @@ telemetry_receiver.py - JARVIS Remote Telemetry Console receiver (goal #2b N-c-2
 
 Main-PC Python UDP receiver for the box-side telemetry stream. The JARVIS box
 (headless appliance) broadcasts a packed binary `telemetry_packet_t` over UDP
-to 255.255.255.255:51000 at ~1 Hz (see phase3/src/drivers/jarvis_telemetry.h and
-the N-c-1 emit site in phase3/src/sel4/main_x86.c). This tool binds the port,
+to 255.255.255.255:51000 at ~2 Hz at deployed query rates (the q%100 STATS emission
+outruns the 1 Hz keepalive, which is the floor — measured 2.08 Hz across the 2026-08
+soak). See phase3/src/drivers/jarvis_telemetry.h and the N-c-1 emit site in
+phase3/src/sel4/main_x86.c. This tool binds the port,
 decodes each datagram version-tolerantly by LENGTH, validates the zlib CRC-32 over
 the region for that version, and pretty-prints honest live box state.
 

@@ -230,11 +230,21 @@ append-with-checksum and all four headers verify OK).
    @495 plus the second `(seq, cos)` pair @496/@500 (pad 17 -> 10, record still 512 B), set at
    the control-IN write site. NOT retroactive: records written 2026-08-01..2026-09-03 — this
    one included — keep a single src and render `n=?`, which is 'unknown', never 'one'.
-3. Emission-rate wording ("~1 Hz") in telemetry docs understates the STATS-dominated ~2 Hz reality
-   at deployed query rates.
-4. Pi hardening for future runs: persistent journald (`Storage=persistent`) so an outage doesn't
+3. ~~Emission-rate wording ("~1 Hz") in telemetry docs understates the STATS-dominated ~2 Hz reality
+   at deployed query rates.~~ **DONE 2026-09-04** — the receiver docstring, `telemetry.js`, the 6-7
+   run plan, `PHASE_4_FINAL_REPORT.md` and `ROADMAP.md` now say ~2 Hz at deployed rates with the
+   1 Hz keepalive as the FLOOR. The keepalive comments in the C sources are deliberately
+   unchanged — 1 Hz is exactly what that timer does; the STREAM rate is what the docs describe,
+   and only those were wrong.
+4. ~~Pi hardening for future runs: persistent journald (`Storage=persistent`) so an outage doesn't
    erase the capture host's own timeline; a dated snapshot cadence that doesn't depend on the
-   operator being home.
+   operator being home.~~ **DONE 2026-09-01 (journald) + 2026-09-04 (snapshot cadence)** —
+   `jarvis-soak-snapshot.timer` fires daily at 03:00 with `Persistent=true` (a run missed while the
+   Pi is down fires at the next boot) and writes `snap_<date>.pcap` to `/home/pi/soak-snapshots/`,
+   OUTSIDE the capture ring's write path. Both outcomes were proven on the Pi before commit: no
+   telemetry → nothing written and the unit `inactive (dead)` not `failed`; synthetic broadcast
+   frames → 10 captured in seconds. Units + script committed at `phase6/tools/pi/`, together with
+   a byte-exact copy of the capture unit that has run since 2026-08-13.
 5. The return-path reply loss (2 of 39 replies never rendered) is real but unattributable box-side;
    if it matters, the receiver needs reply-drop logging surfaced somewhere durable.
 

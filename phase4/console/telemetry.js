@@ -1,7 +1,8 @@
 /* JARVIS OS — Remote Telemetry Console · telemetry layer
  * ---------------------------------------------------------------------------
  * Read-only. Connects to the receiver's /events SSE stream. Each message is one
- * JSON record per ~1 Hz packet, shape = telemetry_receiver.py packet_to_record:
+ * JSON record per ~1–2 Hz packet (the 1 Hz keepalive is the floor; STATS windows add
+ * the rest), shape = telemetry_receiver.py packet_to_record:
  *   recv_ts, version, kind, kind_name, flags, flags_list, boot_id, seq,
  *   uptime_ms, infer_active, infer_duty_pct, q_total, q_hits, q_infer,
  *   q_heartbeat, q_shield, q_errors, num_nodes, model_load_pct, fb_w, fb_h,
@@ -276,7 +277,8 @@
       };
     }
 
-    // first record promptly, then ~1 Hz
+    // first record promptly, then 1 Hz - the SIMULATOR's own setInterval cadence, not the box
+    // stream (which runs ~1-2 Hz: the 1 Hz keepalive is the floor, STATS windows add the rest)
     ingest(makeRecord());
     setInterval(() => ingest(makeRecord()), 1000);
   }
