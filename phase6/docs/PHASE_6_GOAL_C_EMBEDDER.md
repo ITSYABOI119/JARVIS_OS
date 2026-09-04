@@ -1,6 +1,6 @@
-# Phase C — Small Embedding Model (semantic matching) — PLAN-FIRST
+# Phase C — Small Embedding Model (semantic matching) — SHIPPED through C/M4
 
-**Status: PLAN-FIRST. The neural arc that follows the Phase-6 graduation (6-7). Grounded by a 4-lens
+**Status: SHIPPED through C/M4 and DORMANT — `JARVIS_EMBED` default-ON 2026-08-01 (boot 48), `JARVIS_ROUTE_VETO` default-ON 2026-08-02 (boot 49); the remaining lanes are measured-miss-gated with no miss measured. Originally: PLAN-FIRST. The neural arc that follows the Phase-6 graduation (6-7). Grounded by a 4-lens
 research pass 2026-07-24. C/M0 is off-box; box integration (C/M1+) gets its own pre-mortem.**
 
 > Line-number caveat: every `file:line` below was verified once at authoring against HEAD, but line

@@ -1,6 +1,6 @@
-# Phase 6 Goal 6-1 — Always-On Monitors (PLAN-FIRST)
+# Phase 6 Goal 6-1 — Always-On Monitors (COMPLETE 2026-07-09)
 
-**Status: PLAN-FIRST — for strategist review before any M1 box code. M0 (the pure host/CI framework) may proceed.**
+**Status: ✅ COMPLETE — M0–M3 + the `JARVIS_MONITORS` default-ON flip 2026-07-09 (boot 16, first on-wire v8). The plan-first text below is retained as the record.**
 **Depends on:** keystone K (✅ COMPLETE 2026-07-08 — the action spine is live in deploy: static allowlist +
 `shield_assess` + `trust_policy` + JACT audit + v7 telemetry, `JARVIS_ACTIONS` default-ON since `34a165e`).
 **Mirrors:** `PHASE_6_GOAL_K_IT_ACTS.md` (plan-first, milestones, honest ceiling). Authored 2026-07-08.

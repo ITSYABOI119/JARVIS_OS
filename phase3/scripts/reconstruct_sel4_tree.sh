@@ -13,9 +13,12 @@
 # have said so until someone tried.
 #
 # WHAT THE DELTA ACTUALLY IS. Upstream sel4test @808ff09 carries 99 tracked
-# files. The JARVIS tree DELETES 72 of them, KEEPS 27, and MODIFIES 3 of those
-# 27. That is the whole irreducible delta: three CMake files plus a deletion
-# list. Everything else under apps/ is copied in from phase3/src by
+# files. The JARVIS tree DELETES 72 of them, KEEPS 27, and MODIFIES 4 of those
+# 27. That is the whole irreducible delta: four hand-written diffs, all CMake
+# (CMakeLists.txt, apps/sel4test-driver/CMakeLists.txt, settings.cmake and
+# easy-settings.cmake), plus a deletion list; src/main.c is copied wholesale by
+# build_jarvis_x86.sh, which CLAUDE.md's A10 row counts separately as a fifth.
+# Everything else under apps/ is copied in from phase3/src by
 # build_jarvis_x86.sh at build time, so it was never missing in the first place.
 #
 # WHAT THIS SCRIPT DOES NOT DO. It does not build. It produces the tree that

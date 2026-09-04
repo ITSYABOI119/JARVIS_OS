@@ -1,6 +1,6 @@
 # Phase C / C/M1b — BOX plumbing for a co-resident embedding model: DESIGN + PRE-MORTEM
 
-**Status: PLAN-FIRST.** No code, no flag, no CI, no box build/flash. Authored 2026-07-25, after
+**Status: SHIPPED — C/M1b-1/2/3 landed 2026-07-25→30 and have been deployed since the C/M3b flip (2026-08-01).** Originally: **PLAN-FIRST.** No code, no flag, no CI, no box build/flash. Authored 2026-07-25, after
 C/M1a host parity closed GREEN (`ea1baf0`). Follows the `PHASE_6_GOAL_K_SYSTEM_DESIGN.md` precedent:
 components, data flow, and the concurrency/failure model read out of the **as-built code**, plus the
 preserve/teardown boundary, a milestone split with real gates, and an honest-ceiling section.
