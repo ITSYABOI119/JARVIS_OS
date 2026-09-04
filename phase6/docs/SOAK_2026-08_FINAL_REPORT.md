@@ -129,8 +129,12 @@ append-with-checksum and all four headers verify OK).
   ANSWERED exit 39 times (the `4531435` per-exit JACT literal is live-proven for that exit), but
   the timeout/empty/fault/degraded exits — including the `9155f3f` T6 repair — never fired and
   remain host/KVM-proven only.
-- NVMe SMART health: unobtainable (no smartctl/nvme-cli on the box; not installed — read-only
-  collection).
+- NVMe SMART health: unobtainable at the time (no smartctl/nvme-cli on the box; not installed —
+  read-only collection). **OBTAINABLE since 2026-09-04 — see the run plan's readiness baseline**
+  (`nvme-cli` installed on the box's Ubuntu; `phase6/docs/PHASE_6_GOAL_6-7_SOAK.md` §6 carries the
+  values). It cannot be back-filled for THIS run, and that limit is worth stating: SMART fields are
+  lifetime cumulative counters, so a read taken now describes the drive's whole history, not the
+  soak's share of it. A future run gets the before/after diff this one could not.
 - No pre-soak lifetime baseline was ever recorded for the workload episodic store; its soak-era
   write volume (≈132.7 M records, ≈16,200 ring wraps) is inferred from `q_total`, labelled as such.
 

@@ -131,8 +131,18 @@ deployed for the soak.
 - [ ] Store lifetime baselines RE-READ on the parked box immediately before the run (they move at
       every JARVIS boot; the 2026-09-01 figures went stale at boot 55): workload episodic
       @21,100,000 and control-IN @21,140,000 header totals, JACT total.
-- [ ] NVMe SMART baseline recorded (`nvme smart-log`): percentage_used, unsafe_shutdowns,
-      media_errors, power_on_hours, data_units_written.
+- [ ] NVMe SMART baseline RE-READ immediately before the run (`sudo nvme smart-log /dev/nvme0n1`):
+      percentage_used, unsafe_shutdowns, media_errors, power_on_hours, data_units_written; diff the
+      same fields after the run. **2026-09-04 reference values** (`nvme-cli` 2.8 installed on the
+      box's Ubuntu that day for this purpose — read-only for JARVIS: nothing under `EFI/jarvis`, no
+      LBA writes, no boot change) — Lexar SSD NM790 2TB, fw `18950`: `percentage_used` **1%**,
+      `available_spare` 100% (threshold 10%), `media_errors` **0**, `num_err_log_entries` 0,
+      `critical_warning` 0, temperature 35 °C, `power_on_hours` 9542, `power_cycles` 580,
+      `unsafe_shutdowns` **160**, `data_units_written` 22,686,771 (11.62 TB), `data_units_read`
+      27,176,254 (13.91 TB). The 160 unsafe shutdowns are the expected shape for a box that is
+      power-cycled out of bare-metal seL4 (there is no clean shutdown path) — NOT a count of the
+      2026-08-21 outage, and not a defect. What the run needs from this baseline is the endurance
+      picture: 1% used with zero media errors, so a month of writes is not a wear risk.
 - [ ] Pi: `jarvis-soak-snapshot.timer` active (daily 03:00, `Persistent=true`); capture service
       active+enabled; the previous run's ring archived OUT of `/home/pi/soak/` with a sha256
       manifest.
