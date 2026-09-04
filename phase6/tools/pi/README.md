@@ -88,7 +88,15 @@ jarvis-snap: wrote /home/pi/soak-snapshots/snap_2026-09-04_2244.pcap (10 frames,
 **DELETE the synthetic file afterwards** — it must never sit beside real snapshots, where a later reader
 would count it as box telemetry.
 
-That run also shows the dual-homing duplication in the raw capture, which is worth seeing once: five
+**The timer then proved itself unattended**, which is the property the whole thing exists for. Its first
+scheduled run fired at 03:00:05 on 2026-09-05 with nobody present and the box parked, and cost nothing:
+
+```
+Sep 05 03:05:05 pi jarvis_snap.sh[7465]: jarvis-snap: no telemetry within 300 s (box off?), nothing written (rc=124, frames=0)
+Sep 05 03:05:05 pi systemd[1]: Finished jarvis-soak-snapshot.service - JARVIS soak: one dated telemetry snapshot (outside the capture ring).
+```
+
+The POSITIVE control also shows the dual-homing duplication in the raw capture, worth seeing once: five
 sends produced ten frames, `eth0 Out` and `wlan0 B` for each. `-i any` captures a broadcast once per
 interface, so raw frame counts are ~2× what the box sent. That is accepted, not a defect — see below.
 
