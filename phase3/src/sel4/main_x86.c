@@ -33,6 +33,7 @@
 #include <sel4utils/thread.h>
 #include <sel4utils/thread_config.h>
 #include <sel4utils/api.h>
+#include <sel4utils/stack.h>
 
 #include "decision_cache.h"
 #include "cache_patterns.h"
@@ -599,14 +600,6 @@ static void ctrl_epi_write(const char *qs, uint8_t outcome, const char *resp, ui
     puts_serial("\n");
 }
 #endif /* JARVIS_CONTROL_IN_RECALL */
-
-static void nvme_timeout_debug(uint32_t cq_raw, uint32_t csts_val, uint8_t sq_op) {
-    puts_serial("[NVMe DBG] timeout: cq_status=");
-    put_hex(cq_raw);
-    puts_serial(" csts="); put_hex(csts_val);
-    puts_serial(" sq0_op="); put_hex(sq_op);
-    puts_serial("\n");
-}
 
 static uint32_t sel4_pci_inl(uint16_t port) {
     seL4_X86_IOPort_In32_t reply = seL4_X86_IOPort_In32(g_pci_ioport_cap, port);
@@ -1758,65 +1751,6 @@ static int map_frame_direct(seL4_CPtr frame, seL4_CPtr vspace_root,
     return err ? -1 : 0;
 }
 
-/* Expected GGUF model size range (Llama 3.2 1B Q4_K_M ≈ 771MB) */
-#define MODEL_SIZE_MIN (700UL * 1024 * 1024)   /* 700MB */
-#define MODEL_SIZE_MAX (900UL * 1024 * 1024)   /* 900MB */
-#define MODEL_MAX_LARGE_PAGES 512              /* 512 * 2MB = 1024MB max */
-
-/* Find the GRUB-loaded model in bootinfo untypeds.
- * Returns 0 if found, -1 if not found.
- * Scans for contiguous RAM untypeds totaling 700-900MB (the GGUF model).
- * Must be called BEFORE sel4utils_configure_process (which consumes untypeds). */
-static int find_model_untypeds(uintptr_t *model_paddr_out,
-                                size_t *model_size_out)
-{
-    int ut_count = (int)simple_get_untyped_count(&simple);
-
-    /* Collect RAM untypeds >= 64KB with paddr + size */
-    struct { uintptr_t paddr; size_t size; } cands[512];
-    int nc = 0;
-
-    for (int i = 0; i < ut_count && nc < 512; i++) {
-        size_t size_bits = 0;
-        uintptr_t paddr = 0;
-        bool device = false;
-        simple_get_nth_untyped(&simple, i, &size_bits, &paddr, &device);
-        size_t sz = (1UL << size_bits);
-        if (!device && size_bits >= 16) {  /* >= 64KB */
-            cands[nc].paddr = paddr;
-            cands[nc].size = sz;
-            nc++;
-        }
-    }
-
-    /* Find contiguous group in the 700-900MB range (model-sized).
-     * This avoids grabbing all of RAM (which would be >> 900MB). */
-    for (int start = 0; start < nc; start++) {
-        uintptr_t region_start = cands[start].paddr;
-        uintptr_t region_end = region_start + cands[start].size;
-        size_t total = cands[start].size;
-
-        for (int j = start + 1; j < nc; j++) {
-            if (cands[j].paddr == region_end) {
-                region_end += cands[j].size;
-                total += cands[j].size;
-                /* Stop growing if we've exceeded max — don't grab all RAM */
-                if (total > MODEL_SIZE_MAX) break;
-            } else {
-                break;
-            }
-        }
-
-        if (total >= MODEL_SIZE_MIN && total <= MODEL_SIZE_MAX) {
-            *model_paddr_out = region_start;
-            *model_size_out = total;
-            return 0;
-        }
-    }
-
-    return -1;
-}
-
 /* Fixed virtual addresses for shared memory */
 #define SHMEM_VADDR_A  0x10000000UL  /* In Process A */
 #define SHMEM_VADDR_B  0x50000000UL  /* In Process B */
@@ -2585,6 +2519,7 @@ static control_verdict_t pa_verify_candidate(control_result_t *out)
     return out->verdict;
 }
 
+#if (JARVIS_CONTROL_IN_PROBE || JARVIS_CONTROL_IN_RECALL_PROBE || JARVIS_ROUTING_PROBE || JARVIS_EMBED_PROBE || JARVIS_ROUTE_VETO_PROBE || JARVIS_PB_TICK_PROBE)
 /* SYNCHRONOUS round trip through the input process (used by the PROBE — the live poll
  * does the same two steps non-blocking). Stage `frame` in the raw mailbox, signal the
  * input process, bounded-poll the candidate seq (input runs on another core), then
@@ -2616,6 +2551,7 @@ static control_verdict_t ctrl_roundtrip_sync(const uint8_t *frame, size_t len,
     out->verdict = CV_DROP_PARSE;   /* timeout — the input process never answered */
     return out->verdict;
 }
+#endif /* probe-only: every ctrl_roundtrip_sync caller is inside one of these probe blocks */
 #endif /* JARVIS_CONTROL_IN */
 
 /* Poll the response ring for a specific message type, draining/discarding any
@@ -2988,7 +2924,7 @@ static int km2b_reset_workers(void)
 
 /* §5-A: non-blocking fault receipt. seL4_NBRecv (NEVER seL4_Poll — won't dequeue an endpoint;
  * NEVER seL4_Recv — blocks PA on the normal no-fault iteration => box dead). Loop-drains to empty
- * (SMP faults queue FIFO); fills *badge/*label/*ip from the FIRST fault. Returns count drained. */
+ * (SMP faults queue FIFO); fills *badge, *label and *ip from the FIRST fault. Returns count drained. */
 static int pa_poll_fault(seL4_Word *badge_out, seL4_Word *label_out, seL4_Word *ip_out)
 {
     int n = 0;
@@ -5318,7 +5254,6 @@ static void *main_continued(void *arg UNUSED)
                             }
                             /* dma[0]=admin_sq, dma[1]=admin_cq, dma[2]=io_sq, dma[3]=io_cq, dma[4]=identify */
                             static nvme_controller_t nvme_ctrl;
-                            /* nvme_ctrl.debug_fn = nvme_timeout_debug; — disabled, driver working */
 
                             int nvme_err = nvme_init(&nvme_ctrl,
                                 (volatile uint8_t *)nvme_bar_vaddr, bar0_phys,
