@@ -49,6 +49,16 @@ ENTRY_PREFIXES = (
     "Current Status (Phase 3) — ",
 )
 
+# Rows whose SOURCE text in CLAUDE.md was ALREADY markup-unbalanced before the 2026-09-04 archive pass
+# (verified against 8b49727: Net Stack 15 `**`, JARVIS_EMBED 169 `**`; seven lines of that file were
+# odd). A verbatim copy must reproduce the source, so these two pointer rows are odd by fidelity, not
+# by a bad cut. Listed explicitly, and checked for staleness, so the exemption cannot quietly outlive
+# the defect it excuses.
+BALANCE_EXEMPT = (
+    "Quick Reference — Net Stack",
+    "Flags — JARVIS_EMBED",
+)
+
 
 def read(path):
     with open(path, encoding="utf-8") as fh:
@@ -99,6 +109,48 @@ def check(claude_text, record_text):
         elif names.count(p) != 1:
             problems.append("pointer resolves to %d headings, expected 1: %s" % (names.count(p), p))
 
+    # Markup balance. A pointer row copies its identity and trap sentences VERBATIM out of the record
+    # entry, so a cut that lands inside a `**...**` or a backtick span leaves the row's bold name
+    # unclosed and, in several observed cases, mangled - which is how the 2026-09-04 archive pass first
+    # shipped. Cuts are now taken only where the running ** and backtick counts are both even; this
+    # asserts the result. Two rows are exempt because their SOURCE row was already unbalanced before
+    # the archive (verified against 8b49727), and copying it faithfully must reproduce that: inventing
+    # a closing ** would make the copy unfaithful. The exemption is keyed to the entry actually being
+    # odd, so it cannot go stale silently and cannot hide a NEW imbalance (a new one would come from a
+    # balanced entry and is therefore still caught).
+    entries = {}
+    cur = None
+    for line in record_text.split("\n"):
+        if line.startswith("### "):
+            cur = line[4:].strip()
+            entries[cur] = []
+        elif cur is not None:
+            entries[cur].append(line)
+    entries = {k: "\n".join(v) for k, v in entries.items()}
+
+    for line in claude_text.split("\n"):
+        if not (line.startswith("- **") or line.startswith("  - `JARVIS_")):
+            continue
+        m = POINTER_RE.search(line)
+        if m is None:
+            continue     # merely MENTIONS the record path (e.g. the Codebase Metrics line) - not a pointer
+        head = m.group(1)
+        src = entries.get(head, "")
+        for ch, what in (("**", "bold"), ("`", "backtick")):
+            if line.count(ch) % 2 == 0:
+                continue
+            if src and src.count(ch) % 2 == 1:
+                continue     # inherited from an already-unbalanced source row - see above
+            problems.append("pointer row has an odd %s count (cut inside a span?): %s"
+                            % (what, (head or line[:60])))
+
+    for head in BALANCE_EXEMPT:
+        src = entries.get(head)
+        if src is None:
+            problems.append("balance-exemption names a heading that no longer exists: %s" % head)
+        elif src.count("**") % 2 == 0 and src.count("`") % 2 == 0:
+            problems.append("balance-exemption is STALE - the source row is balanced now: %s" % head)
+
     # At least one pointer per entry. NOT exactly one: a second pointer is a legitimate
     # cross-reference (the Control-IN MODULE INDEX row points at the Query Router entry, because the
     # eight file-map sub-bullets are markdown-attached to that row rather than to MODULE INDEX).
@@ -148,6 +200,26 @@ def self_test():
         print("SELF-TEST mutant 2 (orphaned heading): NOT DETECTED - the check is vacuous")
         return 1
     print("SELF-TEST mutant 2 (orphaned heading): detected")
+
+    # mutant 3: a pointer row cut inside a bold span (a dangling **), the defect this invariant exists
+    # for. Applied to a row whose SOURCE is balanced, so the exemption cannot mask it.
+    victim_line = None
+    for line in claude.split("\n"):
+        if "CLAUDE_RECORD.md" not in line or not line.startswith("- **"):
+            continue
+        m = POINTER_RE.search(line)
+        if m and m.group(1) not in BALANCE_EXEMPT and line.count("**") % 2 == 0:
+            victim_line = line
+            break
+    if victim_line is None:
+        print("SELF-TEST: mutant 3 could not be applied (no balanced pointer row found)")
+        return 1
+    m3 = claude.replace(victim_line, victim_line + " **dangling", 1)
+    p3, _, _ = check(m3, record)
+    if not any("odd bold count" in x for x in p3):
+        print("SELF-TEST mutant 3 (dangling ** in a pointer row): NOT DETECTED - the check is vacuous")
+        return 1
+    print("SELF-TEST mutant 3 (dangling ** in a pointer row): detected")
 
     print("SELF-TEST: PASS")
     return 0
