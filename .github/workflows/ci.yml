@@ -44,6 +44,19 @@ jobs:
   # IT MUST NOT BECOME A REQUIRED CHECK until a stability distribution exists
   # for it. Promoting it is a separate, deliberate decision with its own review.
   #
+  # TWO LEGS since 2026-09-05 (one job definition, a matrix, one build per leg):
+  #   failprobe  -- the 8 MiB stub + JARVIS_MODEL_FAIL_PROBE=1: the fail-closed path
+  #                 (the original A10 leg, unchanged in substance).
+  #   generation -- the deploy config UNTOUCHED (no probe sed), the REAL hash-pinned
+  #                 Llama 3.2 1B Q4_K_M copied onto the FAT32 image as GEMMA2B.GUF:
+  #                 the shipped image reads a real model off the emulated NVMe, maps
+  #                 it, dispatches to Process B and generates. PLUMBING, NOT QUALITY:
+  #                 this is not the deployed Gemma, and Process B's prompt template
+  #                 hardcodes Gemma-4 token ids (105/106/107/2364/98) plus a <eos>=1
+  #                 stop, all junk for a Llama vocabulary -- so `err` (an empty
+  #                 response counts as one) and the response texts are REPORTED,
+  #                 never asserted. The model-independent invariants are asserted.
+  #
   # NO CACHE, deliberately -- do not "optimise" one back in. Measured in the A10
   # spike: a pinned `repo sync` is ~6-8 s and a cold kernel+libs build ~21 s, so
   # a cache saves almost nothing, while a stale cached kernel that silently
@@ -51,12 +64,21 @@ jobs:
   # The build script's config gate validates CONFIG, so it would happily pass a
   # right-config/stale-source cache -- exactly the C/M4 "undefined reference to
   # route_veto_centroids_ok" class. Reasoning: phase6/docs/A10_CI_BOOT_FEASIBILITY.md
+  #
+  # (The MODEL ARTEFACT the generation leg restores IS cached, and that is a
+  # different thing: an immutable 808 MB file whose sha256 AND size are re-verified
+  # on EVERY run by phase3/scripts/ci_fetch_pinned_gguf.sh, never build state. The
+  # no-cache rule above is about the TREE and the BUILD.)
   # =====================================================================
   boot-smoke:
-    name: "A10 boot smoke (manual, NON-GATING)"
+    name: "A10 boot smoke (manual, NON-GATING) [${{ matrix.mode }}]"
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [failprobe, generation]
 
     steps:
     - uses: actions/checkout@v4
@@ -87,6 +109,7 @@ jobs:
         e=$(date +%s); echo "T_RECONSTRUCT=$((e-s))s"
 
     - name: "enable JARVIS_MODEL_FAIL_PROBE=1 (runner-local, never committed)"
+      if: matrix.mode == 'failprobe'
       run: |
         # WHY the probe rather than simply omitting a model: with no usable model
         # the box takes one of two very different paths, and only one is worth
@@ -186,7 +209,27 @@ jobs:
         tail -25 /tmp/build.log
         ls -l "$HOME/sel4-x86/jbuild/images/"
 
+    - name: "restore the pinned GGUF from the Actions cache (generation leg)"
+      if: matrix.mode == 'generation'
+      id: gguf
+      uses: actions/cache/restore@v4
+      with:
+        path: phase3/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
+        key: gguf-bartowski-llama-3.2-1b-instruct-q4_k_m-6f85a640a97cf2bf
+
+    - name: "fetch if missing, then VERIFY sha256 + size (generation leg)"
+      if: matrix.mode == 'generation'
+      run: bash phase3/scripts/ci_fetch_pinned_gguf.sh "${{ steps.gguf.outputs.cache-hit }}"
+
+    - name: "save the GGUF to the cache (generation leg, miss only, once verified)"
+      if: matrix.mode == 'generation' && steps.gguf.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: phase3/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
+        key: gguf-bartowski-llama-3.2-1b-instruct-q4_k_m-6f85a640a97cf2bf
+
     - name: "NVMe image: >=10.1 GiB sparse, FAT32, with a >3.9 MiB GEMMA2B.GUF stub"
+      if: matrix.mode == 'failprobe'
       run: |
         # SIZE is load-bearing: the raw-LBA stores start at LBA 21,100,000
         # (10.06 GiB). A smaller image cannot hold them and every store silently
@@ -207,9 +250,26 @@ jobs:
         mdir -i /tmp/nvme.img ::
         echo "on-disk=$(du -h /tmp/nvme.img | cut -f1) apparent=$(du -h --apparent-size /tmp/nvme.img | cut -f1)"
 
+    - name: "NVMe image: >=10.1 GiB sparse, FAT32, carrying the REAL hash-pinned GGUF as GEMMA2B.GUF"
+      if: matrix.mode == 'generation'
+      run: |
+        # Same sparse 11 GiB geometry as the failprobe leg (the raw-LBA stores start at
+        # LBA 21,100,000 and a smaller image cannot hold them). The FILE is the real,
+        # hash-verified Llama 3.2 1B Q4_K_M under the 8.3 name the rootserver looks for:
+        # the NAME selects the file, the GGUF header selects the engine path.
+        truncate -s 11G /tmp/nvme.img
+        mkfs.vfat -F 32 -n JARVISDATA /tmp/nvme.img > /dev/null
+        s=$(date +%s)
+        mcopy -i /tmp/nvme.img phase3/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf ::GEMMA2B.GUF
+        echo "T_MCOPY=$(( $(date +%s) - s ))s"
+        echo "--- FAT32 root directory ---"
+        mdir -i /tmp/nvme.img ::
+        echo "on-disk=$(du -h /tmp/nvme.img | cut -f1) apparent=$(du -h --apparent-size /tmp/nvme.img | cut -f1)"
+
     - name: "boot under KVM"
       run: |
         set +e
+        MODE="${{ matrix.mode }}"
         ls -l /dev/kvm
         sudo chmod 666 /dev/kvm
         [ -w /dev/kvm ] || { echo "::error::/dev/kvm not writable"; exit 1; }
@@ -221,6 +281,19 @@ jobs:
         # assertions saw a truncated log and failed. Polling makes a fast runner fast
         # and lets a slow one finish, which is what a smoke test should do.
         # The workload loop never exits, so SOMETHING must stop it either way.
+        #
+        # failprobe : marker = [CTRL-IN-STATS], emitted at the [STATS] cadence AFTER every
+        #             asserted line; 300 s cap (measured 84-105 s in the A10 spike).
+        # generation: marker = the FIRST [STATS] window (q=100, i.e. 13 dispatched
+        #             inferences); 1500 s cap, because the 808 MB model is first read
+        #             through QEMU's emulated NVMe and that rate on a runner is being
+        #             MEASURED here, not assumed (the box's KVM does ~130 MB/min). The
+        #             two [JARVIS] lines that bracket the read are timestamped.
+        case "$MODE" in
+          failprobe)  MARKER='[CTRL-IN-STATS]'; CAP=300 ;;
+          generation) MARKER='[STATS] T+';      CAP=1500 ;;
+          *) echo "::error::unknown matrix mode $MODE"; exit 1 ;;
+        esac
         s=$(date +%s)
         qemu-system-x86_64 -enable-kvm -cpu host -smp 6 -m 12G -no-reboot \
           -nographic -serial file:/tmp/boot.log \
@@ -229,11 +302,16 @@ jobs:
           -drive file=/tmp/nvme.img,if=none,id=nvme0,format=raw \
           -device nvme,serial=QEMU_NVME,drive=nvme0 </dev/null > /dev/null 2>&1 &
         QPID=$!
-        DEADLINE=$(( $(date +%s) + 300 ))
+        DEADLINE=$(( $(date +%s) + CAP ))
+        seen_read=0; seen_loaded=0
         while [ "$(date +%s)" -lt "$DEADLINE" ]; do
-          # [CTRL-IN-STATS] is emitted at the [STATS] cadence, AFTER [MODEL-BAD] and
-          # [SNAP], so seeing it means every asserted marker has already been printed.
-          if grep -qF "[CTRL-IN-STATS]" /tmp/boot.log 2>/dev/null; then
+          if [ "$seen_read" -eq 0 ] && grep -qF "[JARVIS] Reading model from NVMe" /tmp/boot.log 2>/dev/null; then
+            seen_read=1; echo "T_READ_START=$(( $(date +%s) - s ))s"
+          fi
+          if [ "$seen_loaded" -eq 0 ] && grep -qF "[JARVIS] Model loaded:" /tmp/boot.log 2>/dev/null; then
+            seen_loaded=1; echo "T_MODEL_LOADED=$(( $(date +%s) - s ))s"
+          fi
+          if grep -qF -- "$MARKER" /tmp/boot.log 2>/dev/null; then
             echo "marker reached after $(( $(date +%s) - s ))s"; break
           fi
           kill -0 "$QPID" 2>/dev/null || { echo "qemu exited early"; break; }
@@ -242,12 +320,13 @@ jobs:
         sleep 3   # let the current [STATS] block finish writing
         kill "$QPID" 2>/dev/null; wait "$QPID" 2>/dev/null
         e=$(date +%s)
-        echo "T_BOOT=$((e-s))s (poll-until-marker, 300 s cap)"
+        echo "T_BOOT=$((e-s))s (poll-until-marker, $CAP s cap, mode=$MODE)"
         echo "serial bytes: $(stat -c%s /tmp/boot.log 2>/dev/null || echo 0)"
         echo "===== first 60 lines ====="; head -60 /tmp/boot.log
         echo "===== last 30 lines ====="; tail -30 /tmp/boot.log
 
-    - name: "ASSERT"
+    - name: "ASSERT (failprobe)"
+      if: matrix.mode == 'failprobe'
       run: |
         L=/tmp/boot.log
         fail=0
@@ -300,10 +379,71 @@ jobs:
         echo ""
         if [ "$fail" -eq 0 ]; then echo "BOOT SMOKE PASS"; else echo "::error::boot smoke FAILED"; exit 1; fi
 
+    - name: "ASSERT (generation)"
+      if: matrix.mode == 'generation'
+      run: |
+        L=/tmp/boot.log
+        fail=0
+        # grep -F is REQUIRED: every marker carries brackets (see the failprobe ASSERT).
+        must_eq() { n=$(grep -cF -- "$2" "$L" || true); if [ "$n" -eq "$3" ]; then echo "  OK    $1 = $3"; else echo "  FAIL  $1 = $n (expected $3)"; fail=1; fi; }
+        must_ge() { n=$(grep -cF -- "$2" "$L" || true); if [ "$n" -ge "$3" ]; then echo "  OK    $1 = $n (>= $3)"; else echo "  FAIL  $1 = $n (expected >= $3)"; fail=1; fi; }
+
+        echo "--- the image ran ---"
+        must_eq "reached user space"   "Booting all finished" 1
+        must_eq "self-test 5/5"        "Self-Test: 5/5 PASS"  1
+
+        echo "--- the REAL model was read off the emulated NVMe and mapped (807,694,464 B >> 20 = 770) ---"
+        must_eq "read started"         "[JARVIS] Reading model from NVMe" 1
+        must_eq "model loaded 770MB"   "[JARVIS] Model loaded: 770MB GGUF=" 1
+        must_eq "no probe line"        "[MODEL-FAIL-PROBE]" 0
+        must_eq "no MODEL-BAD"         "[MODEL-BAD]" 0
+        must_eq "no UNUSABLE"          "model=UNUSABLE" 0
+        must_ge "SNAP model=loaded"    "model=loaded" 1
+
+        echo "--- the embedder is ABSENT by design on this image: exactly one notice, no degradation ---"
+        must_eq "embed absent, once"   "embed capability OFF" 1
+
+        echo "--- the deploy signature MINUS err (hits/infer/hb/shield come from the PRNG mix + cache, not the model) ---"
+        must_eq "first STATS window"   "q=100 hits=71 infer=13 hb=11 shield=5" 1
+
+        echo "--- generation happened through the shipped PA<->PB path (13 dispatched in the first window) ---"
+        must_ge "INFER summaries"      '[INFER] "' 5
+
+        echo "--- nothing broke: no PB timeout, no fault, no respawn, no FATAL ---"
+        must_eq "PA TIMEOUT" "[PA] TIMEOUT" 0
+        must_eq "FATAL"      "[FATAL]"      0
+        must_eq "FAULT"      "[FAULT]"      0
+        must_eq "respawn"    "respawn"      0
+
+        echo "--- the durable index count on an EMPTY CI store ---"
+        must_ge "CTRL-IN-STATS idx=0" "idx=0" 1
+        n_other=$(grep -oE 'idx=[0-9]+' "$L" | grep -vc 'idx=0' || true)
+        if [ "$n_other" -eq 0 ]; then echo "  OK    no idx= value other than 0"; else echo "  FAIL  $n_other non-zero idx= values"; fail=1; fi
+
+        echo ""
+        echo "--- REPORTED, NOT ASSERTED ---"
+        # err: an EMPTY workload response bumps q_errors (main_x86.c, the resp_offset == 0
+        # branch), and this model is NOT the deployed Gemma: Process B's prompt template
+        # hardcodes Gemma-4 token ids (105/106/107/2364/98) and a belt-and-braces <eos>=1
+        # stop, all junk for a Llama vocabulary (id 1 is the '"' token there). So err>0
+        # here can be a vocabulary artefact, not a plumbing defect. Report; do not gate.
+        echo "  err values seen: [$(grep -oE 'err=[0-9]+' "$L" | sort -u | tr '\n' ' ')]"
+        echo "  INFER lines: $(grep -cF '[INFER] "' "$L" || true) (13 dispatched in the first window)"
+        grep -F '[INFER] "' "$L" | head -5 | sed 's/^/  /' || true
+        words=$(grep -F '[INFER] "' "$L" | sed 's/.*-> "//' | tr -c 'A-Za-z\n' ' ' | tr ' ' '\n' | grep -E '^[A-Za-z]{3,}$' | tr 'A-Z' 'a-z' | sort -u | wc -l)
+        echo "  distinct 3+-letter words across all INFER response heads: $words (a weak coherence proxy, reported only)"
+        grep -E "untyped_count|M3: started" "$L" | head -2 | sed 's/^/  /' || true
+        echo "  ^ reported only. This leg proves the PLUMBING (boot -> FAT32/NVMe read -> frame map ->"
+        echo "    PA<->PB IPC -> qmodel_forward -> decode -> [INFER]) with a NON-DEPLOYED model. It makes"
+        echo "    NO claim about answer quality, threading, worker count, or the deployed Gemma."
+
+        echo ""
+        if [ "$fail" -eq 0 ]; then echo "BOOT SMOKE (generation) PASS"; else echo "::error::boot smoke (generation) FAILED"; exit 1; fi
+
     - uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: a10-boot-smoke-logs
+        name: a10-boot-smoke-logs-${{ matrix.mode }}
         path: |
           /tmp/boot.log
           /tmp/build.log
