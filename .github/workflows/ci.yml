@@ -34,7 +34,8 @@ jobs:
   # =====================================================================
   # A10 BOOT SMOKE -- manual (workflow_dispatch) only. NON-GATING BY DESIGN.
   #
-  # Nothing in CI had ever booted the image. All 134 gating steps in `test`
+  # Nothing in CI had ever booted the image. All 135 gating steps in `test` (135 as
+  # re-measured 2026-09-05, after the four model-gated steps moved to `model-tests`)
   # exercise host-compilable modules; main_x86.c and inference_server.c are
   # seL4-only, so the whole wiring/link/boot class was invisible to CI.
   # This job reconstructs the build tree from version control, builds the
@@ -307,6 +308,166 @@ jobs:
           /tmp/boot.log
           /tmp/build.log
           /tmp/cfg.log
+        if-no-files-found: warn
+
+  # =====================================================================
+  # MODEL-GATED SUITES -- GATING. Runs on push / PR / dispatch, like `test`.
+  #
+  # Four host suites hardcode phase3/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
+  # and, until 2026-09-05, only ever SKIPPED in CI (with ::warning::) -- the
+  # engine had never generated a token on a runner. This job fetches that
+  # exact file -- the bartowski build, 807,694,464 B, sha256 6f85a640... --
+  # which is PROVEN to be the bytes the suites' expectations were tuned
+  # against (the box's phase3/models copy hashes identical), pins it by
+  # hash, caches it, and runs the four suites for real.
+  #
+  # HASH-PIN, NEVER NAME-MATCH: unsloth publishes a DIFFERENT file under the
+  # identical filename (807,694,368 B, sha256 3f5a2242...), and the box
+  # carries both. The hash check runs on EVERY run, cache hit or not: a
+  # corrupt cache must fail closed, never run the suites on wrong bytes.
+  #
+  # A SEPARATE job so `test`'s signal stays fast; neither job `needs` the
+  # other. Three suites gate on their exit code. test_forward_compare has NO
+  # assertions by design (a diagnostic harness that exits 0 unless a load
+  # fails), so its OK/WARN/DIVERGED counts are REPORTED, NOT ASSERTED -- a
+  # threshold is a separate decision, taken with numbers in hand.
+  #
+  # The four steps MOVED here out of `test` (one copy, no drift). Step names
+  # are unchanged on purpose.
+  #
+  # Licence: Llama 3.2 Community License. The file is fetched at run time from
+  # the public HF repo and held in this repo's private Actions cache; nothing
+  # is redistributed, and *.gguf is gitignored (.gitignore:34).
+  #
+  # Placed BEFORE `test` for the same reason `coverage` and `boot-smoke` are.
+  # =====================================================================
+  model-tests:
+    name: "Model-gated suites (real Llama 3.2 1B Q4_K_M, hash-pinned)"
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: "restore the pinned GGUF from the Actions cache"
+      id: gguf
+      uses: actions/cache/restore@v4
+      with:
+        path: phase3/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
+        key: gguf-bartowski-llama-3.2-1b-instruct-q4_k_m-6f85a640a97cf2bf
+
+    - name: "fetch if missing, then VERIFY sha256 + size (every run, hit or miss)"
+      run: |
+        set -euo pipefail
+        F=phase3/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
+        URL=https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf
+        SHA=6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83
+        SIZE=807694464
+        mkdir -p phase3/models
+        fetch() {
+          s=$(date +%s)
+          curl -fL --retry 5 --retry-delay 15 --retry-all-errors --max-time 1200 -o "$F" "$URL"
+          echo "T_FETCH=$(( $(date +%s) - s ))s"
+        }
+        verify() { echo "$SHA  $F" | sha256sum -c -; }
+        echo "cache-hit=${{ steps.gguf.outputs.cache-hit }}"
+        if [ -f "$F" ]; then
+          if ! verify; then
+            echo "::warning::cached GGUF failed the hash check -- discarding and re-fetching once"
+            rm -f "$F"; fetch; verify
+          fi
+        else
+          echo "no cached file -- fetching"; fetch; verify
+        fi
+        actual=$(stat -c%s "$F")
+        echo "size=$actual (expected $SIZE)"
+        [ "$actual" -eq "$SIZE" ] || { echo "::error::size mismatch"; exit 1; }
+
+    - name: "save the GGUF to the cache (only after a miss, only once verified)"
+      if: steps.gguf.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: phase3/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
+        key: gguf-bartowski-llama-3.2-1b-instruct-q4_k_m-6f85a640a97cf2bf
+
+    - name: "Phase 3: GGUF Memory API (C)"
+      run: |
+        set -o pipefail
+        gcc -Wall -Werror -O2 -std=c11 -D_POSIX_C_SOURCE=200809L \
+          -I phase3/src/ai \
+          phase3/src/ai/test_gguf_memory.c phase3/src/ai/gguf_parser.c \
+          -lm -o /tmp/test_gguf_memory
+        s=$(date +%s)
+        /tmp/test_gguf_memory | tee /tmp/model_gguf_memory.log
+        echo "T_GGUF_MEMORY=$(( $(date +%s) - s ))s"
+        # ANTI-VACUITY: the model is present and hash-verified, so a SKIP here is a
+        # path bug, and a green built on a skip is the failure this job exists to end.
+        if grep -qE '^SKIP|::warning::' /tmp/model_gguf_memory.log; then
+          echo "::error::suite SKIPPED despite the model being present"; exit 1
+        fi
+
+    - name: "Phase 3: GGUF Vocab Extraction (C)"
+      run: |
+        set -o pipefail
+        gcc -Wall -Werror -O2 -std=c11 -D_POSIX_C_SOURCE=200809L \
+          -I phase3/src/ai \
+          phase3/src/ai/test_gguf_vocab.c phase3/src/ai/gguf_vocab.c \
+          phase3/src/ai/gguf_parser.c phase3/src/ai/tokenizer.c \
+          -lm -o /tmp/test_gguf_vocab
+        s=$(date +%s)
+        /tmp/test_gguf_vocab | tee /tmp/model_gguf_vocab.log
+        echo "T_GGUF_VOCAB=$(( $(date +%s) - s ))s"
+        if grep -qE '^SKIP|::warning::' /tmp/model_gguf_vocab.log; then
+          echo "::error::suite SKIPPED despite the model being present"; exit 1
+        fi
+
+    - name: "Phase 3: F32 vs Quantized Forward Compare (C)"
+      run: |
+        set -o pipefail
+        gcc -Wall -Werror -O2 -std=c11 -D_POSIX_C_SOURCE=200809L \
+          -I phase3/src/ai \
+          phase3/src/ai/test_forward_compare.c phase3/src/ai/llama_quant.c \
+          phase3/src/ai/qdot.c \
+          phase3/src/ai/llama_forward.c phase3/src/ai/llama_load.c \
+          phase3/src/ai/tensor_ops.c phase3/src/ai/dequant.c \
+          phase3/src/ai/sampling.c phase3/src/ai/gguf_parser.c \
+          phase3/src/ai/tokenizer.c phase3/src/ai/ssm.c \
+          -lm -o /tmp/test_forward_compare
+        s=$(date +%s)
+        /tmp/test_forward_compare | tee /tmp/model_forward_compare.log
+        echo "T_FORWARD_COMPARE=$(( $(date +%s) - s ))s"
+        L=/tmp/model_forward_compare.log
+        if grep -qE '^SKIP|::warning::' "$L"; then
+          echo "::error::suite SKIPPED despite the model being present"; exit 1
+        fi
+        echo "--- REPORTED, NOT ASSERTED: this harness has no assertions; it exits 0 unless a load fails ---"
+        echo "  OK=$(grep -c '  OK$' "$L" || true)  WARN=$(grep -c '  WARN$' "$L" || true)  DIVERGED=$(grep -c 'DIVERGED!$' "$L" || true)  MATCH=$(grep -c ' MATCH$' "$L" || true)  MISMATCH=$(grep -c 'MISMATCH$' "$L" || true)  DIFFER=$(grep -c ' DIFFER$' "$L" || true)"
+        echo "  ^ reported only. A threshold is a separate decision, taken with these numbers in hand."
+
+    - name: "Phase 3: Generation Quality (C)"
+      run: |
+        set -o pipefail
+        gcc -Wall -Werror -O2 -std=c11 -D_POSIX_C_SOURCE=200809L \
+          -I phase3/src/ai \
+          phase3/src/ai/test_generation.c phase3/src/ai/llama_forward.c \
+          phase3/src/ai/llama_load.c phase3/src/ai/tensor_ops.c \
+          phase3/src/ai/dequant.c phase3/src/ai/sampling.c \
+          phase3/src/ai/gguf_parser.c phase3/src/ai/tokenizer.c \
+          phase3/src/ai/gguf_vocab.c \
+          -lm -o /tmp/test_generation
+        s=$(date +%s)
+        /tmp/test_generation | tee /tmp/model_generation.log
+        echo "T_GENERATION=$(( $(date +%s) - s ))s"
+        if grep -qE '^SKIP|::warning::' /tmp/model_generation.log; then
+          echo "::error::suite SKIPPED despite the model being present"; exit 1
+        fi
+        grep -F 'tests passed' /tmp/model_generation.log
+
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: model-tests-logs
+        path: /tmp/model_*.log
         if-no-files-found: warn
 
   coverage:
@@ -1439,23 +1600,6 @@ jobs:
           -lm -o /tmp/test_dequant_kq
         /tmp/test_dequant_kq
 
-    - name: "Phase 3: GGUF Memory API (C)"
-      run: |
-        gcc -Wall -Werror -O2 -std=c11 -D_POSIX_C_SOURCE=200809L \
-          -I phase3/src/ai \
-          phase3/src/ai/test_gguf_memory.c phase3/src/ai/gguf_parser.c \
-          -lm -o /tmp/test_gguf_memory
-        /tmp/test_gguf_memory
-
-    - name: "Phase 3: GGUF Vocab Extraction (C)"
-      run: |
-        gcc -Wall -Werror -O2 -std=c11 -D_POSIX_C_SOURCE=200809L \
-          -I phase3/src/ai \
-          phase3/src/ai/test_gguf_vocab.c phase3/src/ai/gguf_vocab.c \
-          phase3/src/ai/gguf_parser.c phase3/src/ai/tokenizer.c \
-          -lm -o /tmp/test_gguf_vocab
-        /tmp/test_gguf_vocab
-
     - name: "Phase 3: GGUF Vocab overflow guard (C, ASAN)"
       run: |
         gcc -Wall -Werror -O1 -std=c11 -fsanitize=address,undefined \
@@ -1466,19 +1610,6 @@ jobs:
         ASAN_OPTIONS=halt_on_error=1:detect_leaks=0 \
         UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
           /tmp/test_gguf_vocab_overflow
-
-    - name: "Phase 3: F32 vs Quantized Forward Compare (C)"
-      run: |
-        gcc -Wall -Werror -O2 -std=c11 -D_POSIX_C_SOURCE=200809L \
-          -I phase3/src/ai \
-          phase3/src/ai/test_forward_compare.c phase3/src/ai/llama_quant.c \
-          phase3/src/ai/qdot.c \
-          phase3/src/ai/llama_forward.c phase3/src/ai/llama_load.c \
-          phase3/src/ai/tensor_ops.c phase3/src/ai/dequant.c \
-          phase3/src/ai/sampling.c phase3/src/ai/gguf_parser.c \
-          phase3/src/ai/tokenizer.c phase3/src/ai/ssm.c \
-          -lm -o /tmp/test_forward_compare
-        /tmp/test_forward_compare
 
     - name: "Phase 3: Quantized Model (C)"
       run: |
@@ -1521,18 +1652,6 @@ jobs:
           phase3/src/ai/tokenizer.c \
           -lm -o /tmp/test_shield
         /tmp/test_shield
-
-    - name: "Phase 3: Generation Quality (C)"
-      run: |
-        gcc -Wall -Werror -O2 -std=c11 -D_POSIX_C_SOURCE=200809L \
-          -I phase3/src/ai \
-          phase3/src/ai/test_generation.c phase3/src/ai/llama_forward.c \
-          phase3/src/ai/llama_load.c phase3/src/ai/tensor_ops.c \
-          phase3/src/ai/dequant.c phase3/src/ai/sampling.c \
-          phase3/src/ai/gguf_parser.c phase3/src/ai/tokenizer.c \
-          phase3/src/ai/gguf_vocab.c \
-          -lm -o /tmp/test_generation
-        /tmp/test_generation
 
     - name: "Phase 3: Gemma 4 Config (C)"
       run: |
