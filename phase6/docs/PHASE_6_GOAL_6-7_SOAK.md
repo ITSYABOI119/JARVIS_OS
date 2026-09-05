@@ -25,7 +25,7 @@ and query routing — under sustained supervised use.
 
 ## 2. System under test (all default-ON, deployed)
 
-The finished Phase-6 image `a865b830` (or its committed-source rebuild): the memory stack (episodic +
+The deployed image — `ba94eb04…` at boot 55 (2026-09-03), or a fresh committed-source rebuild if the pending `3f676a2` -Wall cleanup is deployed first (the operator's call; `a865b830` was the 6-6 flip image of boot 38, superseded five deploys ago): the memory stack (episodic +
 shared context + retrieval + cache growth) · the K self-heal action gate · always-on monitors (v8) ·
 event-driven wake (v9) · the ≥5 proactive INFORM behaviors (v10) · control-IN two-way + cross-session
 recall · query routing (v12), semantic recall (v13), the routing veto (v14). Nothing new is
