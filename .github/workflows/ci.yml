@@ -400,8 +400,9 @@ jobs:
         must_eq "no UNUSABLE"          "model=UNUSABLE" 0
         must_ge "SNAP model=loaded"    "model=loaded" 1
 
-        echo "--- the embedder is ABSENT by design on this image: exactly one notice, no degradation ---"
-        must_eq "embed absent, once"   "embed capability OFF" 1
+        echo "--- the embedder is ABSENT by design on this image: PA and PB each say so exactly once, no degradation ---"
+        must_eq "PA embed-absent notice, once"  "[EMBED] no QWENEMB GUF on JARVIS_DATA" 1
+        must_eq "PB embed-absent notice, once"  "[EMBED-PB] no embed model in argv" 1
 
         echo "--- the deploy signature MINUS err (hits/infer/hb/shield come from the PRNG mix + cache, not the model) ---"
         must_eq "first STATS window"   "q=100 hits=71 infer=13 hb=11 shield=5" 1
