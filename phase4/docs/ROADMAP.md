@@ -108,7 +108,7 @@ This document is the simple forward roadmap. Each phase has specific goals and a
 
 **Goal:** JARVIS can run safely on its own for extended periods, retrieve memories associatively, and improve — within seL4 capability bounds.
 
-**Status:** ACTIVE 2026-09-05 — plan + live status board: `phase7/docs/PHASE_7_PLAN.md` (§0 is where Phase 7 is up to; a row reads DONE only with a commit hash). First arc: the operator's choice between 7.1 (paraphrase recall 53 % → ≥80 %) and the voice-ingest pipeline; the wearable is a CANDIDATE goal 8 in the plan, not yet canon. Goal 7.2's run is operator-scheduled.
+**Status:** ACTIVE 2026-09-05 — plan + live status board: `phase7/docs/PHASE_7_PLAN.md` (§0 is where Phase 7 is up to; a row reads DONE only with a commit hash). First arc: the operator's choice between 7.1 (paraphrase recall 53 % → ≥80 %) and the voice-ingest pipeline; goal 8 — the ambient voice wearable, household voice learning — joined the canon 2026-09-05 by the operator's decision and was shaped by his answers of 2026-09-06 (the idea doc's §8; goals 1–7 unchanged; its stages are board rows in the plan, V3 decided last). Goal 7.2's run is operator-scheduled.
 
 ### Goals
 
@@ -119,6 +119,7 @@ This document is the simple forward roadmap. Each phase has specific goals and a
 5. **Cross-session personality** — Consistent tone, remembered inside jokes, acknowledged mistakes from episodic log. Not roleplay — grounded in stored facts.
 6. **External security audit** — Third-party review of memory store, SHIELD, and capability system. All HIGH findings resolved before tag.
 7. **Release** — Git tag `v2.0.0` — "autonomous butler" milestone.
+8. **Ambient voice wearable (household voice learning)** — Voice as JARVIS's main way of learning the owner, and later a command front-end. The owner's voice is enrolled from the Main PC headset and mastered first; then a small wearable records the household all day to local storage (radios off, USB-C batch upload) and the Main PC transcribes everything, tags speakers by voice, deletes raw audio after transcription, and distills a household profile — who is who and to whom, what is talked about, the owner's style and preferences — into a purpose-built, state-of-the-art memory store (the owner's stated priority, worth a whole phase on its own; the same substrate goals 1 and 5 need). Only the owner is enrolled: JARVIS must work out on its own, over days, that the recurring second voice is the owner's wife and who she is to him. Inferred facts carry a confidence and are used without owner confirmation; non-household speech is the owner's to delete after transcription. Recall when asked, a clean console view of what JARVIS currently thinks, and new learning in its digest; wake-word commands through control-IN come second. Pipeline first, hardware last; ALL ASR/training on the Main PC or cloud, never the box. Added to the canon 2026-09-05, shaped by the owner's decisions of 2026-09-06 (design source `BEYOND_PHASE7_VOICE_WEARABLE.md` §8); goal 7's tag still closes the phase.
 
 ### Done when
 
@@ -126,6 +127,9 @@ This document is the simple forward roadmap. Each phase has specific goals and a
 - [ ] Associative retrieval returns relevant memory for paraphrased queries (test suite ≥80%)
 - [ ] One staged self-modification deployed and rolled back successfully in test
 - [ ] External audit complete with no open HIGH findings
+- [ ] The owner's voice, mastered first: enrolled from the Main PC headset mic; owner-versus-not speaker verification measured on held-out recordings at a pre-registered rate; everything transcribed, raw audio deleted after transcription — proven on the pipeline before any hardware
+- [ ] Household learning, the guess: with only the owner enrolled, days of recordings yield a household profile in a purpose-built, state-of-the-art memory store — who is who and to whom, the owner's style and preferences, habits, topics; each fact sourced, dated, stated-or-inferred with a confidence, used without confirmation — in which JARVIS has identified the recurring second voice as the owner's wife and who she is to him; surfaced by recall over control-IN, a clean console view, and a digest of new learning
+- [ ] Voice as a command front-end: one owner-voice command reaches JARVIS through control-IN and is answered (the headset first; speaker-verified from the wearable later)
 - [ ] `v2.0.0` tagged
 
 **Estimated effort:** 12–18 months
@@ -169,7 +173,7 @@ These are direction, not commitments. Start only after Phase 7 exit criteria are
 | **Custom hardware** | NPU/ASIC for inference or decision-cache acceleration |
 | **True agency research** | Explore bounded autonomy within formally verified capability sets — the safe habitat goal |
 | **Operates a workspace** | JARVIS gets its own read-write filesystem + a scratch/project region (separate from its own code) and a sandboxed task/command executor, so it can make files and run code/projects on request — every file-write and process-launch an allowlisted, SHIELD-scored, JACT-audited action. Data-and-projects by default, NOT self-modifying code (that stays Phase 7 #3). |
-| **Ambient voice wearable** | The owner's "bracelet" idea (2026-09-01): an offline recorder wearable + USB-C batch ingest on the Main PC (Whisper → own-voice filter → distill → JARVIS memory), later wake-word voice commands through the existing control-IN channel. Pipeline-first (provable with no hardware); non-owner speech DISCARDED at ingest by rule. Full idea doc: `BEYOND_PHASE7_VOICE_WEARABLE.md`. **Candidate Phase 7 goal 8 since 2026-09-05 — see `phase7/docs/PHASE_7_PLAN.md` §0; decision pending.** |
+| **Ambient voice wearable** | The owner's "bracelet" idea (2026-09-01): an offline recorder wearable + USB-C batch ingest on the Main PC (Whisper → own-voice filter → distill → JARVIS memory), later wake-word voice commands through the existing control-IN channel. Pipeline-first (provable with no hardware); non-owner speech DISCARDED at ingest by rule. Full idea doc: `BEYOND_PHASE7_VOICE_WEARABLE.md`. **PROMOTED 2026-09-05 to Phase 7 goal 8 by the operator's decision, scope set by him 2026-09-05/06 (the idea doc's §8) — this row stays as the idea's origin; the canon text is §Phase 7 goal 8, the stage rows are `phase7/docs/PHASE_7_PLAN.md` §0.** |
 
 > **On "Operates a workspace"** — the north star toward a *do-things* AI-OS (the Model B design already
 > places user-space filesystems + applications at Ring 3 with the AI coordinating them): the jump from
@@ -197,7 +201,7 @@ Keeps scope honest and prevents creep.
 | **4** | Memory across reboots, proactive behavior, multi-agent |
 | **5** | Proactive actions without user initiation, self-modification |
 | **6** | Unsupervised multi-week operation, model fine-tuning on device |
-| **7** | Unbounded self-modification, cloud dependency, general AGI claims |
+| **7** | Unbounded self-modification, cloud dependency, general AGI claims, keeping raw audio after transcription, any ASR or training on the box (the wearable's learning lives on the Main PC) |
 
 ---
 
@@ -230,5 +234,5 @@ Beyond               — research directions
 
 ---
 
-**Last updated:** September 2026 (2026-09-05: Phase 7 ACTIVE, plan + status board stood up; 2026-09-05: Phase 6 CLOSED by ADR, 6-7 supervised run deferred; 2026-09-05: B3 image-generation leg built (manual); 2026-09-05: B3 partial — host-engine generation is CI-gated; 2026-09-04 drift pass: Phase-5 status + tag, telemetry version. Earlier, July 2026: Beyond-Phase-7 vision: added the "Operates a workspace" arc — read-write FS + scratch/project region + sandboxed executor through the K action spine; data-and-projects by default, NOT self-modifying code. Earlier: Phase 5 memory arc: it-remembers MVP #1/#2/#3/#6 DONE + deployed default-ON; Arc 2 #4 semantic + #5 SHIELD-learning mechanism-proven gated-off; #7 folded into #4; telemetry v6; the cross-phase backlog B1 self-healing, B2 "it-acts" keystone, B3 QEMU quickstart + CI generation smoke)  
+**Last updated:** September 2026 (2026-09-06: Phase 7 goal 8 (the ambient voice wearable, household voice learning) added to the canon by the operator, goals 1–7 unchanged; 2026-09-05: Phase 7 ACTIVE, plan + status board stood up; 2026-09-05: Phase 6 CLOSED by ADR, 6-7 supervised run deferred; 2026-09-05: B3 image-generation leg built (manual); 2026-09-05: B3 partial — host-engine generation is CI-gated; 2026-09-04 drift pass: Phase-5 status + tag, telemetry version. Earlier, July 2026: Beyond-Phase-7 vision: added the "Operates a workspace" arc — read-write FS + scratch/project region + sandboxed executor through the K action spine; data-and-projects by default, NOT self-modifying code. Earlier: Phase 5 memory arc: it-remembers MVP #1/#2/#3/#6 DONE + deployed default-ON; Arc 2 #4 semantic + #5 SHIELD-learning mechanism-proven gated-off; #7 folded into #4; telemetry v6; the cross-phase backlog B1 self-healing, B2 "it-acts" keystone, B3 QEMU quickstart + CI generation smoke)  
 **Status:** Phase 4 engineering COMPLETE — v1.0 scope FROZEN 2026-06-26. Goals #1 (inference perf, CPU) / #2 (graphical output) / #2b (Remote Telemetry Console) / #4 (installer) / #6 (docs) DONE; **#3 (USB keyboard) CUT** (interactive input is Phase 6 console control-IN, not a local keyboard); #5 (90-day soak) NOT run — owner-scheduled; **#7 (v1.0.0 MIT release) ✅ DONE** (tagged bdf0951, 2026-06-26; LICENSE + doc-honesty pass + final report done). See `phase4/docs/PHASE_4_FINAL_REPORT.md`. **Phase 5 largely complete** — the memory stack is deployed (retrieval + cache-growth live default-ON); `v1.1.0-memory` tag proposed; the remaining Arc-2 items activate in Phase 6. See `phase5/docs/PHASE_5_PLAN.md`.

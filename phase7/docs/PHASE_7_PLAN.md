@@ -15,15 +15,24 @@ This board is the one place that says where Phase 7 is up to: one row per goal-a
 
 | Goal | Arc / milestone | Status | Evidence (commit · date · boot/run) | Source |
 |---|---|---|---|---|
-| 7.1 Associative memory | Baseline: the deployed semantic-recall lane | `MEASURED BASELINE` | 19/36 = 53 % paraphrases at the 0.55 floor (C/M2b, boot 48, 2026-08-01); done-when ≥80 % | CLAUDE.md `JARVIS_EMBED` flag row and the "C/M2b — SEMANTIC RECALL WIRED" row; `ROADMAP.md:126` |
+| 7.1 Associative memory | Baseline: the deployed semantic-recall lane | `MEASURED BASELINE` | 19/36 = 53 % paraphrases at the 0.55 floor (C/M2b, boot 48, 2026-08-01); done-when ≥80 % | CLAUDE.md `JARVIS_EMBED` flag row and the "C/M2b — SEMANTIC RECALL WIRED" row; `ROADMAP.md:127` |
 | 7.1 | Arc A: raise paraphrase recall to ≥80 % on the eval corpus (floor/dims/model measured first; the 2070 fine-tune only on a measured miss) | `NOT STARTED` | — | `phase3/scripts/embed/README.md:14-16`; `phase6/docs/PHASE_6_GOAL_C_EMBEDDER.md:24-26,101-107` |
-| 7.2 30-day autonomous operation | The run | `OPERATOR-SCHEDULED` | unattended envelope 7 d 18 h 18 m, err=0 (2026-08 soak) | `phase6/docs/SOAK_2026-08_FINAL_REPORT.md:13-19`; `ROADMAP.md:125` |
+| 7.2 30-day autonomous operation | The run | `OPERATOR-SCHEDULED` | unattended envelope 7 d 18 h 18 m, err=0 (2026-08 soak) | `phase6/docs/SOAK_2026-08_FINAL_REPORT.md:13-19`; `ROADMAP.md:126` |
 | 7.3 Self-modification (staged) | Design: sandbox → static checks → staged deploy → atomic rollback over the K spine + the ESP dual-boot | `NOT STARTED` | seeds: K spine, JACT, ESP rollback images, boot-smoke | CLAUDE.md rows "Action Allowlist", "SHIELD Action Gate", "Action-Audit Store", "x86 Installer", "CI boots the shipped image (A10, 2026-08-09)" |
 | 7.4 Larger models | GPU path | `BLOCKED (hardware; ADR 2026-06-16)` | — | `docs/decisions/2026-06-16-defer-gpu-inference.md`; CLAUDE.md §Hardware Setup |
 | 7.5 Cross-session personality | Design over the control-IN + episodic stores | `NOT STARTED` | seeds: control-IN store @21,140,000, cross-session recall since 2026-07-22 | CLAUDE.md `JARVIS_CONTROL_IN_RECALL` flag row; "Semantic Memory (Phase 5 #4/M0)" row |
 | 7.6 External security audit | Engagement | `NOT STARTED` | internal baseline: 41 fixed / 10 accepted-or-deferred / 0 open HIGH-MED | CLAUDE.md §Codebase Metrics, the Security bullet |
-| 7.7 Release v2.0.0 | Tag | `NOT STARTED` | — | `ROADMAP.md:121,129` |
-| CANDIDATE 8 Voice ingest (the wearable, pulled forward?) | V-pipe: audio file → Whisper (RTX 2070) → own-voice filter → distill → JARVIS memory; then V0 desk-mic commands via control-IN; V1–V3 later | `CANDIDATE (operator decision pending)` | idea doc `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md`; consent ingest rule §3 is load-bearing | `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md` §3–§4; `ROADMAP.md:172` |
+| 7.7 Release v2.0.0 | Tag | `NOT STARTED` | — | `ROADMAP.md:121,133` |
+| 7.8 Ambient voice wearable (household voice learning; canon since 2026-09-05, operator decision, scope per idea doc §8) | Owner's voice first: enrolled from the Main PC headset mic; owner-versus-not speaker verification measured on held-out recordings at a pre-registered rate | `NOT STARTED` | — | `ROADMAP.md:122`; `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md` §8 |
+| 7.8 | Transcribe-everything pipeline: Whisper (RTX 2070) → speaker clustering → raw audio deleted after transcription → one clean purge action per speaker cluster (non-household speech is the owner's to delete by hand) | `NOT STARTED` | — | idea doc §8 (supersedes §3) |
+| 7.8 | Memory research first: what state-of-the-art agent memory does today, with pre-registered questions, then the design of ours — the substrate 7.1 (associative memory), 7.5 (personality) and 7.8 share; the owner will spend a whole phase on this one thing if needed | `NOT STARTED` | — | idea doc §8; `ROADMAP.md:115` (goal 1), `:119` (goal 5) |
+| 7.8 | The memory store (purpose-built, state of the art, Main PC) + the guess: with only the owner enrolled, JARVIS names the recurring second voice as the owner's wife and who she is to him, over days, with a confidence; inferred facts used without confirmation | `NOT STARTED` | — | idea doc §8 |
+| 7.8 | Profile view: the household profile on the console, live from the store, designed clean in Claude Design — the UI–feature-parity rule applies, real source only | `NOT STARTED` | — | idea doc §8; CLAUDE.md row "Telemetry Console", the §Rules UI–feature-parity bullet, the §Technology Stack Claude Design bullet |
+| 7.8 | Digest: new learning surfaced proactively — a learned-this-week digest on the console from the same store; the box's own digest may count distilled facts received | `NOT STARTED` | — | idea doc §8; CLAUDE.md row "Behavior Registry (Phase 6 6-3/M0, host)" (B4 status digest is the box-side precedent) |
+| 7.8 | V0: a headset command → Whisper → the receiver-as-signer → control-IN (no new hardware) | `NOT STARTED` | — | idea doc §4; CLAUDE.md row "Telemetry Receiver / SSE bridge" |
+| 7.8 | V1: the continuous recorder wearable — any small form (the bracelet was the first idea); ESP32-S3-class, I2S mic, microSD, USB-C mass-storage/charge, radios off; all-day capture, nightly plug-in → pipeline → wipe | `NOT STARTED` | — | idea doc §2, §4, §8 |
+| 7.8 | V2: speaker-verified wake-word commands from the wearable → verify the owner's voice → control-IN | `NOT STARTED` | — | idea doc §4 |
+| 7.8 | V3: wireless or live variants; opt-in sessions for guests | `BLOCKED (decided last, per idea doc §4 — only if still wanted after the pipeline proves value)` | — | idea doc §4, §8 |
 
 ### Carried backlog (not goals; each row names its source)
 
@@ -43,7 +52,7 @@ Sources: as per row; the `head_dim` row is the only fresh measurement on this pa
 
 ## 1. Strategy — what can move now, and what only the calendar or hardware can move
 
-**Doable now, with no box week:** 7.1 (the eval corpus, the floor sweep and any embedder change are Main-PC work; only the final parity and flip touch the box); 7.5 design (a docs-first design over stores that already exist); 7.3 design (a docs-first design over the K spine and the ESP dual-boot that already exist); the V-pipe of candidate 8 (Main-PC only, zero box dependencies by its own doc).
+**Doable now, with no box week:** 7.1 (the eval corpus, the floor sweep and any embedder change are Main-PC work; only the final parity and flip touch the box); 7.5 design (a docs-first design over stores that already exist); 7.3 design (a docs-first design over the K spine and the ESP dual-boot that already exist); 7.8's pipeline (Main-PC only, zero box dependencies by its own doc).
 
 **Calendar-bound:** 7.2 — a 30-day run of the box. Its timing is the operator's alone; this plan never proposes or dates it.
 
@@ -53,19 +62,19 @@ Sources: as per row; the `head_dim` row is the only fresh measurement on this pa
 
 **Last:** 7.7 — the `v2.0.0` tag closes the phase after the others, with the external audit's HIGH findings resolved before it (canon).
 
-**The two candidates for the first arc.**
+**The two options for the first arc — both canon now.**
 
 *7.1 — paraphrase recall 53 % → ≥80 %.* Measurable today against the roadmap's own done-when, on an eval corpus that already exists (`cm0_recall_set.json`, ~36 distinct positives plus adversarial positives and negatives) with a scorer that already exists (`cm2_floor.py`, the pipeline that produced the 19/36 figure). Every candidate lever — the 0.55 floor, the 128-dim truncation, the mean-projection, the embedder itself — is measured off-box first, and training, if any, happens on the Main PC or cloud, never on the box. The ceiling to carry: the Phase C doc gates a 2070 contrastive fine-tune on a measured miss and nothing else, and 53 % against ≥80 % is that miss — but "0 false out of 36 is NO FAILURES OBSERVED, not a zero rate", and a recall gain bought with false recalls is not a gain.
 
-*The V-pipe — voice ingest on the Main PC.* Audio file → Whisper on the RTX 2070 → own-voice filter (diarization + speaker verification against the owner's enrolled voice) → transcript → distill → JARVIS memory, capture-device-agnostic and provable with a cheap recorder before any hardware is designed. It is Main-PC only, hardware-free, feeds the same memory 7.1 improves, and its consent rule is enforced in code — non-owner speech discarded before anything is stored, raw audio deleted after transcription. Its ceiling: it learns observable things the owner said, never "understands you"; commands, when they come (V0), enter only through control-IN and inherit K-b — a voice command can never mint an action that is not on the static allowlist.
+*7.8 — the pipeline, from the owner's headset.* The owner's voice is enrolled from the Main PC headset mic and mastered first (owner-versus-not verification measured on held-out recordings). Then everything recorded is transcribed by Whisper on the RTX 2070, tagged by speaker cluster, the raw audio deleted after transcription, and distilled into a household profile in a purpose-built Main-PC memory store — who is who and to whom, the owner's style and preferences, habits, topics — shown on a clean console screen as what JARVIS currently thinks. That store is to be state of the art — the owner's stated priority, a whole phase on it if needed — and it is the same substrate 7.1's associative memory and 7.5's grounded personality need: researched before it is designed, one memory serving three goals. Only the owner is enrolled: JARVIS must work out, over days and untold, that the recurring second voice is the owner's wife and who she is to him — the challenge the owner set. Inferred facts carry a confidence and are used without confirmation; non-household speech is the owner's to purge by hand after transcription (the idea doc's §3 rule superseded, its §8). Its ceiling: it learns observable things the household said and infers relationships with a stated confidence; each shipped slice claims what was measured — never "understands you". Commands, when they come (V0), enter only through control-IN and inherit K-b — a voice command can never mint an action that is not on the static allowlist.
 
 **First arc: the operator's choice.**
 
-Sources: `phase4/docs/ROADMAP.md:115-121` (the goals) and `:125-129` (the done-whens); `docs/decisions/2026-06-16-defer-gpu-inference.md` (Decision); CLAUDE.md §Hardware Setup (R9 280X display only) and the "C/M2b — SEMANTIC RECALL WIRED" row (19/36, the 0.55 floor, `cm2_floor`); CLAUDE.md "Embedding Vector Store" row ("0 false out of 36 is NO FAILURES OBSERVED, not a zero rate"); `phase3/scripts/embed/README.md:14-16`; `phase6/docs/PHASE_6_GOAL_C_EMBEDDER.md:24-26,101-107`; `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md` §3, §4 (V-pipe, V0), §5.
+Sources: `phase4/docs/ROADMAP.md:115-122` (the goals) and `:126-133` (the done-whens); `docs/decisions/2026-06-16-defer-gpu-inference.md` (Decision); CLAUDE.md §Hardware Setup (R9 280X display only) and the "C/M2b — SEMANTIC RECALL WIRED" row (19/36, the 0.55 floor, `cm2_floor`); CLAUDE.md "Embedding Vector Store" row ("0 false out of 36 is NO FAILURES OBSERVED, not a zero rate"); `phase3/scripts/embed/README.md:14-16`; `phase6/docs/PHASE_6_GOAL_C_EMBEDDER.md:24-26,101-107`; `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md` §3, §4 (V-pipe, V0), §5.
 
 ---
 
-## 2. Goals (canon, `ROADMAP.md:115-121`, verbatim)
+## 2. Goals (canon, `ROADMAP.md:115-122`, verbatim)
 
 1. **Associative memory (Instinct)** — Fast similarity retrieval over semantic memory (<100 MB budget). Hopfield or embedding index — retrieve relevant memories without exact query match.
 2. **30-day autonomous operation** — JARVIS PC runs 30 days: proactive monitoring + inference + memory consolidation. Human checks in weekly, not daily.
@@ -74,16 +83,13 @@ Sources: `phase4/docs/ROADMAP.md:115-121` (the goals) and `:125-129` (the done-w
 5. **Cross-session personality** — Consistent tone, remembered inside jokes, acknowledged mistakes from episodic log. Not roleplay — grounded in stored facts.
 6. **External security audit** — Third-party review of memory store, SHIELD, and capability system. All HIGH findings resolved before tag.
 7. **Release** — Git tag `v2.0.0` — "autonomous butler" milestone.
+8. **Ambient voice wearable (household voice learning)** — Voice as JARVIS's main way of learning the owner, and later a command front-end. The owner's voice is enrolled from the Main PC headset and mastered first; then a small wearable records the household all day to local storage (radios off, USB-C batch upload) and the Main PC transcribes everything, tags speakers by voice, deletes raw audio after transcription, and distills a household profile — who is who and to whom, what is talked about, the owner's style and preferences — into a purpose-built, state-of-the-art memory store (the owner's stated priority, worth a whole phase on its own; the same substrate goals 1 and 5 need). Only the owner is enrolled: JARVIS must work out on its own, over days, that the recurring second voice is the owner's wife and who she is to him. Inferred facts carry a confidence and are used without owner confirmation; non-household speech is the owner's to delete after transcription. Recall when asked, a clean console view of what JARVIS currently thinks, and new learning in its digest; wake-word commands through control-IN come second. Pipeline first, hardware last; ALL ASR/training on the Main PC or cloud, never the box. Added to the canon 2026-09-05, shaped by the owner's decisions of 2026-09-06 (design source `BEYOND_PHASE7_VOICE_WEARABLE.md` §8); goal 7's tag still closes the phase.
 
-### Candidate goal 8 (not canon; decision pending)
-
-The roadmap's §Beyond Phase 7 row, verbatim (`ROADMAP.md:172`): *"**Ambient voice wearable** — The owner's "bracelet" idea (2026-09-01): an offline recorder wearable + USB-C batch ingest on the Main PC (Whisper → own-voice filter → distill → JARVIS memory), later wake-word voice commands through the existing control-IN channel. Pipeline-first (provable with no hardware); non-owner speech DISCARDED at ingest by rule. Full idea doc: `BEYOND_PHASE7_VOICE_WEARABLE.md`."* Adding it to the Phase 7 canon is the operator's decision; until then it is a candidate on the board and the roadmap's canon is unchanged.
-
-Sources: `phase4/docs/ROADMAP.md:115-121,172`.
+Sources: `phase4/docs/ROADMAP.md:115-122`.
 
 ---
 
-## 3. Done when (canon, `ROADMAP.md:125-129`, verbatim) + which goal satisfies each + the measured state today
+## 3. Done when (canon, `ROADMAP.md:126-133`, verbatim) + which goal satisfies each + the measured state today
 
 | Criterion (canon) | Goal | Measured state today |
 |---|---|---|
@@ -91,9 +97,12 @@ Sources: `phase4/docs/ROADMAP.md:115-121,172`.
 | Associative retrieval returns relevant memory for paraphrased queries (test suite ≥80%) | 7.1 | 19/36 = 53 % of paraphrases at the 0.55 floor; a miss degrades to the no-preamble path |
 | One staged self-modification deployed and rolled back successfully in test | 7.3 | none yet — the seeds exist (§4) |
 | External audit complete with no open HIGH findings | 7.6 | none yet — two internal audits: 41 fixed / 10 accepted-or-deferred / 0 open HIGH-MED |
+| The owner's voice, mastered first: enrolled from the Main PC headset mic; owner-versus-not speaker verification measured on held-out recordings at a pre-registered rate; everything transcribed, raw audio deleted after transcription — proven on the pipeline before any hardware | 7.8 | none yet — no enrollment, no pipeline; the headset is the capture device |
+| Household learning, the guess: with only the owner enrolled, days of recordings yield a household profile in a purpose-built, state-of-the-art memory store — who is who and to whom, the owner's style and preferences, habits, topics; each fact sourced, dated, stated-or-inferred with a confidence, used without confirmation — in which JARVIS has identified the recurring second voice as the owner's wife and who she is to him; surfaced by recall over control-IN, a clean console view, and a digest of new learning | 7.8 | none yet — no store, no recordings, no guess |
+| Voice as a command front-end: one owner-voice command reaches JARVIS through control-IN and is answered (the headset first; speaker-verified from the wearable later) | 7.8 | none yet — the receiver-as-signer and control-IN exist; no voice in front of them |
 | `v2.0.0` tagged | 7.7 | none yet |
 
-Sources: `phase4/docs/ROADMAP.md:125-129`; `phase6/docs/SOAK_2026-08_FINAL_REPORT.md:13-19,27`; CLAUDE.md "C/M2b — SEMANTIC RECALL WIRED" row; CLAUDE.md §Codebase Metrics, the Security bullet.
+Sources: `phase4/docs/ROADMAP.md:126-133`; `phase6/docs/SOAK_2026-08_FINAL_REPORT.md:13-19,27`; CLAUDE.md "C/M2b — SEMANTIC RECALL WIRED" row; CLAUDE.md §Codebase Metrics, the Security bullet.
 
 ---
 
@@ -113,9 +122,9 @@ Sources: `phase4/docs/ROADMAP.md:125-129`; `phase6/docs/SOAK_2026-08_FINAL_REPOR
 
 **7.7 Release.** The `v1.0.0` (`bdf0951`) and `v1.1.0-memory` (`feeafd1`) precedents: an annotated tag, a final report, a doc-honesty pass. Rows: the phase table; "Phase 4 Final Report".
 
-**Candidate 8 Voice ingest.** Main-PC only: Whisper on the RTX 2070, the own-voice filter, the distill; the box's only new surface would be distilled facts arriving over channels that already exist; commands would enter through the receiver-as-signer (`telemetry_receiver.py --send`) into control-IN and inherit HMAC + replay floor + rate limit + query SHIELD + K-b. Rows: "Telemetry Receiver / SSE bridge", `JARVIS_CONTROL_IN`; `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md` §5–§6.
+**7.8 Ambient voice wearable.** Main-PC only for the learning: Whisper on the RTX 2070, speaker clustering and owner verification, the distill, and the purpose-built, state-of-the-art memory store — the substrate 7.1 and 7.5 share — all live there; the console (`phase4/console/`) gains a profile screen — designed clean in Claude Design against the console's design system — and a learned-this-week digest under the UI–feature-parity rule (a real live source, never hardcoded). The box's only new surface is distilled facts arriving over channels that already exist — statements over control-IN through the receiver-as-signer (`telemetry_receiver.py --send`), recalled later exactly as prior control-IN turns are — and, later, a digest count; the semantic fact store (Phase 5 #4, gated off) is a possible box-side landing for typed profile facts, a design question for the arc plan, not decided here. Commands enter through the same receiver-as-signer into control-IN and inherit HMAC + replay floor + rate limit + query SHIELD + K-b. Rows: "Telemetry Receiver / SSE bridge", "Telemetry Console", `JARVIS_CONTROL_IN`, `JARVIS_CONTROL_IN_RECALL`, "Semantic Memory (Phase 5 #4/M0)", the §Technology Stack Claude Design bullet; `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md` §5–§6, §8.
 
-Sources: the CLAUDE.md rows named per paragraph; `phase4/docs/ROADMAP.md:115-121`; `docs/decisions/2026-06-16-defer-gpu-inference.md`; `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md`.
+Sources: the CLAUDE.md rows named per paragraph; `phase4/docs/ROADMAP.md:115-122`; `docs/decisions/2026-06-16-defer-gpu-inference.md`; `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md`.
 
 ---
 
@@ -123,13 +132,14 @@ Sources: the CLAUDE.md rows named per paragraph; `phase4/docs/ROADMAP.md:115-121
 
 0. **The operator picks the first arc** — 7.1 Arc A or the V-pipe (§1). Nothing below starts before that choice.
 1. **The chosen first arc**, plan-first as every Phase 5 and Phase 6 goal was: a goal doc, pre-registered outcomes, host measurement before any box change, a gated flag if it touches the image, a supervised flip only with box proof.
+1b. **7.8 in its board order** — the owner's voice → the transcribe-everything pipeline → the memory research → the store and the guess → the console view → the digest → V0 → V1 → V2; V3 decided last. The memory research and the store are shared with 7.1 and 7.5. Whether 7.8 or 7.1 goes first is item 0.
 2. **7.5 design and 7.3 design, docs-first** — both build on stores and spines that already exist; neither needs the box until a gated implementation exists.
 3. **7.2** — when, and only when, the operator schedules it; run from the 6-7 run plan's discipline (JACT primary, capture on the Pi, `err=0` the spine).
 4. **7.4** — on a usable-GPU hardware change, per the ADR's own trigger; otherwise it stays blocked.
 5. **7.6** — the external engagement, before the tag, with every HIGH finding resolved.
 6. **7.7** — the `v2.0.0` tag, last.
 
-Sources: `phase4/docs/ROADMAP.md:115-121,125-129`; `docs/decisions/2026-06-16-defer-gpu-inference.md` ("Revisit GPU inference only on a usable-GPU hardware change"); `phase6/docs/PHASE_6_GOAL_6-7_SOAK.md` §3, §7.
+Sources: `phase4/docs/ROADMAP.md:115-122,126-133`; `docs/decisions/2026-06-16-defer-gpu-inference.md` ("Revisit GPU inference only on a usable-GPU hardware change"); `phase6/docs/PHASE_6_GOAL_6-7_SOAK.md` §3, §7.
 
 ---
 
@@ -137,10 +147,11 @@ Sources: `phase4/docs/ROADMAP.md:115-121,125-129`; `docs/decisions/2026-06-16-de
 
 - **Training and ASR happen on the Main PC (RTX 2070) or cloud — never on the box.** The box is a CPU-only seL4 appliance that receives distilled facts, not audio and not transcripts in bulk.
 - **Commands enter only through control-IN.** Voice, or any new front-end, becomes another signer in front of the existing HMAC + replay-floor + rate-limit + query-SHIELD channel and inherits K-b: it can never mint an action that is not on the static allowlist. No new inbound path to the box.
-- **The consent ingest rule for any audio** — non-owner speech discarded before anything is stored; raw audio deleted after transcription; implemented in code, not promised.
+- **The audio rule, as the owner set it (idea doc §8, superseding §3's discard-before-storage):** everything is transcribed; raw audio is deleted after transcription; non-household speech is the owner's to delete by hand after transcription — a weaker mitigation than §3, recorded as the owner's accepted risk; the pipeline makes that purge one clean action. Only the owner is enrolled.
 - **Honest-ceiling wording is inherited verbatim:** semantic recall reaches about half of paraphrases (19/36 at the 0.55 floor) and a miss degrades to the no-preamble path; the routing veto cut one defect class (32 → 6 at 1 FN) and "routing is fixed" is never written; the query SHIELD refuses defined abuse classes and is not a general injection detector; SEC-039 is closed for the ACTION path and control-IN queries while the workload PA↔PB lane stays passive/ALLOW by design; the running kernel configuration is outside seL4's verified X64 set.
 - **The 30-day run's timing is the operator's.** Never proposed, never dated, by any session.
 - **The status board rule (§0)** — a cell reads done only with the commit hash and date, written in the same commit that lands the work.
+- **Goal 8 is canon since 2026-09-05 by the operator's decision, shaped by his 2026-09-06 answers (idea doc §8); its V3 stage is decided last, never assumed.**
 
 Sources: `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md` §3, §5; CLAUDE.md rows "C/M2b — SEMANTIC RECALL WIRED", `JARVIS_ROUTE_VETO`, "Control-IN Query SHIELD", the Phase 6 table row, the §Architecture footnote, and the "Neural future" rule recorded in the "Phase C (Small Embedding Model …)" row; `docs/decisions/2026-09-05-close-phase-6-defer-supervised-exit.md` (What would trigger the supervised run).
 
@@ -154,20 +165,20 @@ Sources: `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md` §3, §5; CLAUDE.md rows 
 - **7.3 is the most dangerous goal and has only seeds.** The K spine bounds actions to a static allowlist today; a self-modification path must keep the immutable core untouchable by construction, and its rollback must be exercised in test before any staged deploy.
 - **7.4 has no hardware path today**; naming it a goal does not make a GPU appear.
 - **7.6's cost and timeline are unknown** — an external engagement is not something a session can schedule or estimate from the repo.
-- **Candidate 8 carries a legal and ethical line** — continuous recording of others without consent is illegal in most Australian states; the consent ingest rule is the mitigation and it must be in code before any capture beyond the owner's own voice.
+- **7.8 carries a legal and ethical line, now held by hand** — continuous recording of others without consent is illegal in most Australian states; the household is two consenting adults, but the structural discard rule is superseded (idea doc §8): the mitigation is raw-audio deletion after transcription plus the owner purging non-household transcripts himself, and it depends on him doing it — his own conversations in his own home are his to record; the exposure is other people's private conversations, guests at home and anywhere the wearable is worn outside. Recorded as the owner's accepted risk; guest opt-in sessions are V3, decided last.
 
 Sources: CLAUDE.md "Embedding Vector Store" row (the 8 % upper bound) and "C/M2b — SEMANTIC RECALL WIRED" row; `phase6/docs/SOAK_2026-08_FINAL_REPORT.md:13-19,122-125`; CLAUDE.md §Architecture footnote and `docs/decisions/2026-06-16-x86-verification-stance.md`; `phase4/docs/ROADMAP.md:117` (goal 3's immutable core); `docs/decisions/2026-06-16-defer-gpu-inference.md`; `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md` §3.
 
 ---
 
-## 8. Boundary — what is NOT Phase 7 (canon, `ROADMAP.md:200`)
+## 8. Boundary — what is NOT Phase 7 (canon, `ROADMAP.md:204`)
 
-The roadmap's scope table, verbatim: *| **7** | Unbounded self-modification, cloud dependency, general AGI claims |*. In addition, the wearable's V3 stage (live ambient learning — wireless or continuous variants, opt-in sessions for guests) is decided last, per its own doc, and only if still wanted after the V-pipe proves value; it is not part of candidate 8 as listed on the board.
+The roadmap's scope table, verbatim: *| **7** | Unbounded self-modification, cloud dependency, general AGI claims, keeping raw audio after transcription, any ASR or training on the box (the wearable's learning lives on the Main PC) |*. In addition, the wearable's V3 stage (live ambient learning — wireless or continuous variants, opt-in sessions for guests) is decided last, per its own doc, and only if still wanted after the V-pipe proves value; it is 7.8's last board row, BLOCKED until then.
 
-Sources: `phase4/docs/ROADMAP.md:200`; `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md` §4 (V3 "Decided LAST").
+Sources: `phase4/docs/ROADMAP.md:204`; `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md` §4 (V3 "Decided LAST").
 
 ---
 
 ## 9. Honest ceiling (authored)
 
-Phase 7's title is Autonomy; its honest content today is a bounded appliance that has run 7.76 days unattended at `err=0`, recalls about half of paraphrased questions, self-heals a single inference process through a four-entry allowlist, and holds an authenticated but unencrypted conversation with one provisioned console. Nothing on the board is done. The goals that can move now are measurement and design work off the box; the goals that would make the phase's name true — a 30-day run, staged self-modification with a proven rollback, an external audit — are the operator's to schedule, the most dangerous to build, and the one nobody inside the project can run, respectively. "Autonomous" will be written on this board only beside a hash.
+Phase 7's title is Autonomy; its honest content today is a bounded appliance that has run 7.76 days unattended at `err=0`, recalls about half of paraphrased questions, self-heals a single inference process through a four-entry allowlist, and holds an authenticated but unencrypted conversation with one provisioned console. Nothing on the board is done. The goals that can move now are measurement and design work off the box; the goals that would make the phase's name true — a 30-day run, staged self-modification with a proven rollback, an external audit — are the operator's to schedule, the most dangerous to build, and the one nobody inside the project can run, respectively. "Autonomous" will be written on this board only beside a hash. Goal 8 is canon as of 2026-09-05 and has no code, no enrolled voice and no hardware; its first deliverable is the owner's voice enrolled from his headset, then a pipeline that transcribes everything and has to guess who else lives in the house.
