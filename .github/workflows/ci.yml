@@ -357,31 +357,7 @@ jobs:
         key: gguf-bartowski-llama-3.2-1b-instruct-q4_k_m-6f85a640a97cf2bf
 
     - name: "fetch if missing, then VERIFY sha256 + size (every run, hit or miss)"
-      run: |
-        set -euo pipefail
-        F=phase3/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
-        URL=https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf
-        SHA=6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83
-        SIZE=807694464
-        mkdir -p phase3/models
-        fetch() {
-          s=$(date +%s)
-          curl -fL --retry 5 --retry-delay 15 --retry-all-errors --max-time 1200 -o "$F" "$URL"
-          echo "T_FETCH=$(( $(date +%s) - s ))s"
-        }
-        verify() { echo "$SHA  $F" | sha256sum -c -; }
-        echo "cache-hit=${{ steps.gguf.outputs.cache-hit }}"
-        if [ -f "$F" ]; then
-          if ! verify; then
-            echo "::warning::cached GGUF failed the hash check -- discarding and re-fetching once"
-            rm -f "$F"; fetch; verify
-          fi
-        else
-          echo "no cached file -- fetching"; fetch; verify
-        fi
-        actual=$(stat -c%s "$F")
-        echo "size=$actual (expected $SIZE)"
-        [ "$actual" -eq "$SIZE" ] || { echo "::error::size mismatch"; exit 1; }
+      run: bash phase3/scripts/ci_fetch_pinned_gguf.sh "${{ steps.gguf.outputs.cache-hit }}"
 
     - name: "save the GGUF to the cache (only after a miss, only once verified)"
       if: steps.gguf.outputs.cache-hit != 'true'
@@ -773,7 +749,8 @@ jobs:
                    phase3/scripts/bench_sel4_inference.sh phase3/scripts/bench_single_speed.sh \
                    phase3/scripts/bench_speed_local.sh phase3/scripts/clear_nvme_log.sh \
                    phase3/scripts/qemu_test.sh phase3/scripts/qemu_test_nvme.sh \
-                   phase3/scripts/coverage_report.sh
+                   phase3/scripts/coverage_report.sh \
+                   phase3/scripts/ci_fetch_pinned_gguf.sh
         # Coverage invariant: every .sh in phase3/scripts must be an ARGUMENT to one of
         # the two shellcheck commands above -- not merely mentioned somewhere in this file.
         #
