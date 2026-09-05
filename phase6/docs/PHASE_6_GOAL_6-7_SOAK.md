@@ -1,6 +1,6 @@
 # Phase 6 Goal 6-7 — 7-Day Supervised Exit — PLAN-FIRST
 
-**Status: PLAN-FIRST (a RUN plan: readiness + observability + measurement + runbook). No code unless
+**DEFERRED 2026-09-05, owner-scheduled (ADR `docs/decisions/2026-09-05-close-phase-6-defer-supervised-exit.md`): the done-when is met in substance by the 2026-08 unattended soak; this document stays the runbook for the supervised run and nothing below is changed by the closure.** **Status: PLAN-FIRST (a RUN plan: readiness + observability + measurement + runbook). No code unless
 readiness surfaces a gap. Pre-mortem-hardened 2026-07-24.**
 
 > Line-number caveat: every `file:line` below was verified once at authoring against HEAD, but line
