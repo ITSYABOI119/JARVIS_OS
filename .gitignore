@@ -141,4 +141,5 @@ models/*.gguf
 BACKLOG-*.md
 HANDOFF-*.md
 PROMPT-*.md
+REPORT-*.md
 RUNBOOK-*.md
