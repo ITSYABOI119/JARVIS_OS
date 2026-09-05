@@ -675,6 +675,9 @@ static void test_gemma4_e2b_smoke(void)
     const char *path = getenv("GEMMA4_E2B_GGUF");
     if (!path) {
         printf("SKIP (set GEMMA4_E2B_GGUF env var)\n");
+        /* The other model-gated suites tag their skip so a CI skip is never
+         * mistaken for coverage; this one was silent until 2026-09-05. */
+        printf("::warning::test_gemma4_forward: Gemma 4 E2B smoke SKIPPED (GEMMA4_E2B_GGUF not set) - assertions not run\n");
         pass_count++;  /* count as pass, not fail */
         return;
     }
