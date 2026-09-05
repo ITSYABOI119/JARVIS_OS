@@ -52,7 +52,8 @@ jobs:
   #                 the shipped image reads a real model off the emulated NVMe, maps
   #                 it, dispatches to Process B and generates. PLUMBING, NOT QUALITY:
   #                 this is not the deployed Gemma, and Process B's prompt template
-  #                 hardcodes Gemma-4 token ids (105/106/107/2364/98) plus a <eos>=1
+  #                 hardcodes Gemma-4 token ids (105/2364/107/106/4368 — id 98 <|think|>
+  #                 only under JARVIS_THINKING, default 0) plus a <eos>=1
   #                 stop, all junk for a Llama vocabulary -- so `err` (an empty
   #                 response counts as one) and the response texts are REPORTED,
   #                 never asserted. The model-independent invariants are asserted.
@@ -425,7 +426,8 @@ jobs:
         echo "--- REPORTED, NOT ASSERTED ---"
         # err: an EMPTY workload response bumps q_errors (main_x86.c, the resp_offset == 0
         # branch), and this model is NOT the deployed Gemma: Process B's prompt template
-        # hardcodes Gemma-4 token ids (105/106/107/2364/98) and a belt-and-braces <eos>=1
+        # hardcodes Gemma-4 token ids (105/2364/107/106/4368 — id 98 <|think|> only under
+        # JARVIS_THINKING, default 0) and a belt-and-braces <eos>=1
         # stop, all junk for a Llama vocabulary (id 1 is the '"' token there). So err>0
         # here can be a vocabulary artefact, not a plumbing defect. Report; do not gate.
         echo "  err values seen: [$(grep -oE 'err=[0-9]+' "$L" | sort -u | tr '\n' ' ')]"
