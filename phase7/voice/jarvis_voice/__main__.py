@@ -1,4 +1,8 @@
-"""CLI: python -m jarvis_voice <record|enroll|verify|transcribe|evaluate|selftest> ..."""
+"""CLI: python -m jarvis_voice <record|enroll|verify|transcribe|evaluate|split|selftest> ...
+
+split: extract speech from a long 16 kHz recording (energy gate, padded, short gaps merged) and pack
+whole runs into pieces so no word is cut at a boundary; evaluate: --neg-dir (WAV + FLAC) or --neg-json
+(the self-test's sets.negatives)."""
 import argparse
 import json
 import sys
@@ -77,14 +81,71 @@ def cmd_transcribe(a):
 
 def cmd_evaluate(a):
     from .enroll import EnrollmentStore
-    from .evaluate import evaluate
+    from .evaluate import evaluate, paths_from_json
+    if (a.neg_dir is None) == (a.neg_json is None):
+        print("ERROR: give exactly one of --neg-dir or --neg-json")
+        return 2
     enr = EnrollmentStore(name=a.name).load()
-    r = evaluate(enr, a.pos_dir, a.neg_dir)
+    neg_paths = paths_from_json(a.neg_json) if a.neg_json else None
+    if a.neg_json and not neg_paths:
+        print(f"ERROR: no negatives found in {a.neg_json}")
+        return 2
+    r = evaluate(enr, a.pos_dir, neg_dir=a.neg_dir, neg_paths=neg_paths)
     print(json.dumps({k: v for k, v in r.items() if k not in ("pos", "neg")}, indent=1))
     for name, s, d in r["pos"]:
         print(f"  POS {name}: {s:.4f} ({d:.1f}s)")
     for name, s, d in r["neg"]:
         print(f"  NEG {name}: {s:.4f} ({d:.1f}s)")
+    return 0
+
+
+def cmd_split(a):
+    """Extract speech from a long 16 kHz recording and pack whole runs into pieces (see split.py)."""
+    import shutil
+    import numpy as np
+    from .audio import load_wav, write_wav, TARGET_SR
+    from .split import frame_rms_dbfs, speech_mask, runs, pack_runs
+    src = Path(a.wav)
+    out_dir = Path(a.out_dir)
+    first = out_dir / f"{a.prefix}_001.wav"
+    if first.exists():
+        print(f"REFUSED: {first} already exists (a re-run must never double the set)")
+        return 2
+    wav, sr = load_wav(src)
+    if sr != TARGET_SR:
+        print(f"REFUSED: {src} is {sr} Hz, need {TARGET_SR}")
+        return 2
+    frame_s = 0.05
+    fl = int(sr * frame_s)
+    dbfs = frame_rms_dbfs(wav, sr, frame_s)
+    pad_frames = round(a.pad_ms / 50)
+    min_gap_frames = round(a.min_gap_ms / 50)
+    mask = speech_mask(dbfs, a.frame_dbfs, pad_frames, min_gap_frames)
+    rr = runs(mask)
+    lengths = [(b - s) * frame_s for s, b in rr]
+    pieces = pack_runs(lengths, a.target, a.min_keep)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    kept = 0.0
+    for n, piece in enumerate(pieces, start=1):
+        spans = [wav[rr[i][0] * fl: rr[i][1] * fl] for i in piece]
+        audio = np.concatenate(spans) if spans else np.zeros(0, dtype="float32")
+        p = out_dir / f"{a.prefix}_{n:03d}.wav"
+        write_wav(p, audio, sr)
+        secs = sum(lengths[i] for i in piece)
+        kept += secs
+        print(f"piece {n:03d}: runs={len(piece)} {secs:.1f}s (from {rr[piece[0]][0] * frame_s:.1f}s)")
+    speech = sum(lengths)
+    print(f"summary: total {len(wav) / sr:.1f}s speech {speech:.1f}s in {len(rr)} runs; pieces {len(pieces)} kept {kept:.1f}s; "
+          f"remainder dropped {speech - kept:.1f}s")
+    if a.move_source_to:
+        dest = Path(a.move_source_to)
+        dest.mkdir(parents=True, exist_ok=True)
+        target = dest / src.name
+        if target.exists():
+            print(f"REFUSED to move: {target} already exists (never overwrite a recording)")
+            return 2
+        shutil.move(str(src), str(target))
+        print(f"moved {src} -> {target}")
     return 0
 
 
@@ -103,8 +164,14 @@ def build_parser():
     v = sub.add_parser("verify"); v.add_argument("clips", nargs="+"); v.add_argument("--name", default="owner"); v.set_defaults(fn=cmd_verify)
     t = sub.add_parser("transcribe"); t.add_argument("inputs", nargs="+"); t.add_argument("--keep", action="store_true")
     t.add_argument("--model", default="large-v3"); t.add_argument("--compute-type", default="float16"); t.set_defaults(fn=cmd_transcribe)
-    ev = sub.add_parser("evaluate"); ev.add_argument("--pos-dir", required=True); ev.add_argument("--neg-dir", required=True)
+    ev = sub.add_parser("evaluate"); ev.add_argument("--pos-dir", required=True); ev.add_argument("--neg-dir")
+    ev.add_argument("--neg-json", help="a self-test JSON whose sets.negatives lists the negative paths")
     ev.add_argument("--name", default="owner"); ev.set_defaults(fn=cmd_evaluate)
+    sp = sub.add_parser("split"); sp.add_argument("wav"); sp.add_argument("--target", type=float, required=True)
+    sp.add_argument("--min-keep", type=float, required=True); sp.add_argument("--out-dir", required=True)
+    sp.add_argument("--prefix", required=True); sp.add_argument("--frame-dbfs", type=float, default=-45.0)
+    sp.add_argument("--pad-ms", type=float, default=200.0); sp.add_argument("--min-gap-ms", type=float, default=500.0)
+    sp.add_argument("--move-source-to"); sp.set_defaults(fn=cmd_split)
     s = sub.add_parser("selftest"); s.set_defaults(fn=cmd_selftest)
     return p
 

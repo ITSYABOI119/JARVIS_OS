@@ -1,6 +1,6 @@
 # Phase 7 Goal 8 — Ambient Voice Wearable (household voice learning) — Plan
 
-**Status:** ACTIVE — M0a landed 2026-09-06 (`feat(phase7): goal 8 M0a - the owner-voice tooling on the Main PC (record, enroll, verify, transcribe, evaluate) with a public-speaker self-test; goal doc PHASE_7_GOAL_8_VOICE.md; audio formats ignored by git`). The owner's own enrollment is M0b, a later prompt; the board row for the owner's voice stays `NOT STARTED` until M0b's band passes.
+**Status:** ACTIVE — M0a landed 2026-09-06 (`feat(phase7): goal 8 M0a - the owner-voice tooling on the Main PC (record, enroll, verify, transcribe, evaluate) with a public-speaker self-test; goal doc PHASE_7_GOAL_8_VOICE.md; audio formats ignored by git`). M0b prep landed 2026-09-06 (the owner enrolled from read plus natural speech; a same-day sanity EER, NOT the band — §6); the board row for the owner's voice reads `MEASURED BASELINE` until M0b's later-day band passes.
 **Prerequisite:** goal 8 canon `phase4/docs/ROADMAP.md:122` (done-when `:130-132`); the scope the owner set, `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md` §8; the board `phase7/docs/PHASE_7_PLAN.md` §0 (ten 7.8 rows).
 **Sources:** those three files at `49ac1c7`; `phase6/docs/PHASE_6_GOAL_6-1_MONITORS.md` (the shape this doc mirrors); the M0a self-test run of 2026-09-06 (`%USERPROFILE%\.jarvis\voice\selftest_2026-09-06.json`, quoted in §6); the venv freeze (`%USERPROFILE%\.jarvis\voice\freeze.txt`).
 
@@ -10,7 +10,7 @@
 
 **What this goal is, in the owner's words** (idea doc §8, recorded 2026-09-06): *"The owner's voice first. Enrolled from the Main PC headset mic and mastered — owner-versus-not speaker verification measured on held-out recordings — before any household learning."* — *"Everything is transcribed; nothing is discarded before storage."* — *"speech that is neither the owner's nor his wife's is the OWNER'S to delete, by hand, after transcription"* — *"a HOUSEHOLD PROFILE in a purpose-built store on the Main PC — who is who and to whom, the owner's style and preferences, habits and routines, topics, how each person speaks — every fact carrying its source recording, date, stated-or-inferred and a confidence."* — *"The store is to be STATE OF THE ART."* — *"Only the owner is enrolled: JARVIS is not told who the second voice is and must work out, over days of recordings, that the recurring second voice is the owner's wife and who she is to him."*
 
-This document is the goal's plan. M0a, landed with it, is the tooling for the first two board rows — record, enroll, verify, transcribe, evaluate — proven on PUBLIC speakers. Nothing about the owner has been recorded, embedded or stored.
+This document is the goal's plan. M0a, landed with it, is the tooling for the first two board rows — record, enroll, verify, transcribe, evaluate — proven on PUBLIC speakers; at M0a nothing about the owner had been recorded. The M0b prep of 2026-09-06 (§6) recorded and enrolled the owner's voice; every recording and embedding lives outside the repo.
 
 ### The honest signal set (real, measurable)
 
@@ -33,7 +33,7 @@ Sources: `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md` §3, §5, §8; `phase4/do
 ## 2. Locked decisions
 
 1. **Venue:** a dedicated venv at `C:\Users\jluca\.jarvis\voice\venv` created from `py -3.12` (Python 3.12.6) with `--system-site-packages`, so the system torch **2.5.1+cu121** (CUDA true on the RTX 2070) and torchaudio 2.5.1+cu121 are reused. Every command runs with that venv's `python.exe`. Not the miniconda 3.13 interpreter (that venue served the embedding work); not WSL (no torch there).
-2. **Code lives at `phase7/voice/`** as the package `jarvis_voice`, one CLI (`python -m jarvis_voice record|enroll|verify|transcribe|evaluate|selftest`), and one stdlib-only test `phase7/voice/test_voice_logic.py` (35 checks) with the CI step `"Phase 7: goal 8 voice logic (Python, stdlib-only)"`. The pure modules (`evaluate`, `verify`, `enroll`, the deletion rule in `transcribe`) import nothing beyond the standard library at module level; GPU code is never imported by the test.
+2. **Code lives at `phase7/voice/`** as the package `jarvis_voice`, one CLI (`python -m jarvis_voice record|enroll|verify|transcribe|evaluate|split|selftest`), and one stdlib-only test `phase7/voice/test_voice_logic.py` (53 checks since the M0b prep) with the CI step `"Phase 7: goal 8 voice logic (Python, stdlib-only)"`. The pure modules (`evaluate`, `verify`, `enroll`, the deletion rule in `transcribe`) import nothing beyond the standard library at module level; GPU code is never imported by the test.
 3. **Data layout, all outside the repo, under `%USERPROFILE%\.jarvis\voice\`:** `raw\` (recordings, deleted after transcription unless `--keep`), `enroll\` (the owner's enrollment clips + `owner.json`/`owner.npy`), `heldout\` (the owner's later clips), `public\` (the downloaded corpus and throwaway enrollments), `transcripts\` (one JSON per input), `models\` (the Hugging Face cache — `HF_HOME` is set there by `paths.set_hf_home()`), `venv\`. `JARVIS_VOICE_HOME` overrides the root for tests.
 4. **Audio format:** 16 kHz mono 16-bit WAV (PCM_16).
 5. **Tools kept, measured 2026-09-06** (freeze at `%USERPROFILE%\.jarvis\voice\freeze.txt`):
@@ -46,6 +46,11 @@ Sources: `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md` §3, §5, §8; `phase4/do
 8. **`transcribe` deletes the input WAV after the transcript JSON is written and fsync'd, unless `--keep`;** the JSON records the input's sha256 and `deleted: true|false`; a write failure leaves the input in place (test T6).
 9. **Owner-only enrollment; no confirmation gate; everything transcribed** — the owner's rules (idea doc §8). The tooling has no "wife" concept; speaker clustering of non-owner speech is M1.
 10. **The owner records his own enrollment (M0b) in a later prompt**, from the runbook in §6. M0a's evidence is public speakers only.
+
+11. **`split` extracts speech and packs whole runs (M0b prep, 2026-09-06).** Frames of 50 ms with RMS in dBFS; a frame is speech iff louder than −45 dBFS (strict), every loud run padded by 200 ms each side, then every interior gap shorter than 500 ms merged; the maximal speech runs are packed greedily in order into pieces, a piece closing the moment its total reaches the target (60 s for enrollment pieces, 10 s for sanity pieces) and the last open piece kept only if it reaches the minimum (20 s / 3 s); a piece is the concatenation of its runs' samples, so no word is cut at a boundary and no listening silence is embedded. The parameters are locked; `split` refuses to overwrite an existing first piece and refuses a non-16 kHz source; `--move-source-to` parks the long recording under `enroll\long\` after its pieces are written.
+12. **`evaluate --neg-json <selftest JSON>`** scores the self-test's `sets.negatives` (78 LibriSpeech FLACs from 39 speakers) as the negatives; `--neg-dir` (WAV and FLAC) remains, and exactly one of the two is given. The result carries `pos_min`, `neg_max` and `neg_speakers`.
+13. **Two new folders:** `heldout_sameday\` (same-day sanity pieces — never the band) and `heldout_neg\` (consented household negatives, if the owner records any — evaluated separately, never merged).
+14. **Two recordings, two roles:** `owner_natural_01.wav` → enrollment pieces (target 60 s, min-keep 20 s) into `enroll\`; `owner_natural_02.wav` → same-day sanity pieces (target 10 s, min-keep 3 s) into `heldout_sameday\`; both sources parked in `enroll\long\`; the read clips stay whole in the enrollment. The enrollment is built provisionally at threshold 0.5 so `evaluate` can run, then finally at the same-day EER threshold; M0b re-chooses the threshold at its own EER point on a later day.
 
 Sources: `%USERPROFILE%\.jarvis\voice\freeze.txt`; the M0a run (§6); `phase7/voice/jarvis_voice/*.py`; `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md` §8.
 
@@ -73,9 +78,9 @@ Sources: `phase7/docs/PHASE_7_PLAN.md` §0 (the ten 7.8 rows); `phase4/docs/BEYO
 
 ## 4. Storage / state
 
-**In the repo:** `phase7/voice/jarvis_voice/` (nine modules: `__init__`, `__main__`, `paths`, `audio`, `speaker`, `enroll`, `verify`, `transcribe`, `evaluate`, `selftest`), `phase7/voice/test_voice_logic.py`, this document, the CI step, and the `.gitignore` block (`*.wav *.flac *.mp3 *.m4a *.ogg *.opus *.webm`, `phase7/voice/.venv/`, `phase7/voice/**/*.npy`, `phase7/voice/**/*.pt`) — proven with a throwaway `phase7/voice/x.wav` showing `!!`.
+**In the repo:** `phase7/voice/jarvis_voice/` (eleven modules: `__init__`, `__main__`, `paths`, `audio`, `speaker`, `enroll`, `verify`, `transcribe`, `evaluate`, `selftest`, `split`), `phase7/voice/test_voice_logic.py`, this document, the CI step, and the `.gitignore` block (`*.wav *.flac *.mp3 *.m4a *.ogg *.opus *.webm`, `phase7/voice/.venv/`, `phase7/voice/**/*.npy`, `phase7/voice/**/*.pt`) — proven with a throwaway `phase7/voice/x.wav` showing `!!`.
 
-**Never in the repo:** every recording, embedding, transcript, corpus, the venv and the Hugging Face cache — all under `C:\Users\jluca\.jarvis\voice\` (`.jarvis/` is itself ignored at `.gitignore:115`). At M0a the cache holds the ECAPA model and the 2.9 GB `large-v3` snapshot; `public\` holds the 338 MB tarball and its extraction; `public\enroll_S1\` the throwaway enrollment of the pseudo-owner; `transcripts\` one JSON; `raw\` is empty (the copy was deleted); `enroll\` and `heldout\` are empty — nothing of the owner exists yet.
+**Never in the repo:** every recording, embedding, transcript, corpus, the venv and the Hugging Face cache — all under `C:\Users\jluca\.jarvis\voice\` (`.jarvis/` is itself ignored at `.gitignore:115`). At M0a the cache holds the ECAPA model and the 2.9 GB `large-v3` snapshot; `public\` holds the 338 MB tarball and its extraction; `public\enroll_S1\` the throwaway enrollment of the pseudo-owner; `transcripts\` one JSON; `raw\` is empty (the copy was deleted). The folders are created on first use: after the M0b prep of 2026-09-06, `enroll\` holds the owner's 3 read clips, 3 natural pieces and `owner.json`/`owner.npy`, `enroll\long\` the two 600 s natural recordings, and `heldout_sameday\` the 14 sanity pieces; `heldout\` (the later-day clips the M0b band is measured on) and `heldout_neg\` (consented household negatives) do not exist yet.
 
 Sources: `.gitignore`; `phase7/voice/jarvis_voice/paths.py`; the M0a run (§6).
 
@@ -131,14 +136,81 @@ Speaker-embedding cost: 0.0293 s per clip (111 clips), torch VRAM peak 494.1 MiB
 
 Tool table (candidate → kept/dropped, version, licence): SpeechBrain ECAPA → **kept**, 1.1.1, Apache-2.0 · WeSpeaker → not tried (first candidate met the band) · `pyannote/embedding` → not tried (gated; not needed) · faster-whisper → **kept**, 1.2.1, MIT, on CTranslate2 4.8.2, MIT · openai-whisper → not tried (CTranslate2 CUDA worked) · sounddevice 0.5.6 + soundfile 0.14.0 → **kept**. Two Windows findings, both fixed in code: SpeechBrain's default `LocalStrategy.SYMLINK` and the hub cache's symlinks both fail with WinError 1314; `LocalStrategy.COPY` and `HF_HUB_DISABLE_SYMLINKS=1` are the fixes.
 
+### M0b same-day sanity — 2026-09-06 — NOT the band
+
+The owner recorded three 60 s read-voice clips and two 600 s natural recordings (his side of a call through the headset boom mic). The natural recordings are ~20 % speech and ~80 % near-silence — a call, mostly listening — which is why `split` extracts speech (an energy gate, padded, short gaps merged) and packs whole runs into pieces rather than gating fixed windows: at 40 % speech a fixed-window split kept zero 60 s windows from either file. Everything below was measured 2026-09-06 20:35–20:38 AEST; nothing was tuned.
+
+Inventory of `enroll\` before the split (duration, RMS, peak, fraction of 50 ms frames below −45 dBFS, clipped samples):
+
+```
+owner_enroll_01.wav: 60.0s sr=16000 PCM_16 1ch size=1920044 rms=-35.9dBFS peak=-7.6dBFS below-45=76% clipped=0
+owner_enroll_02.wav: 60.0s sr=16000 PCM_16 1ch size=1920044 rms=-32.1dBFS peak=-6.6dBFS below-45=42% clipped=0
+owner_enroll_03.wav: 60.0s sr=16000 PCM_16 1ch size=1920044 rms=-32.4dBFS peak=-8.8dBFS below-45=36% clipped=0
+owner_natural_01.wav: 600.0s sr=16000 PCM_16 1ch size=19200044 rms=-31.3dBFS peak=-5.6dBFS below-45=78% clipped=0
+owner_natural_02.wav: 600.0s sr=16000 PCM_16 1ch size=19200044 rms=-32.8dBFS peak=-5.7dBFS below-45=81% clipped=0
+```
+
+The two splits (threshold −45 dBFS, pad 200 ms, min gap 500 ms; locked):
+
+```
+split owner_natural_01.wav --target 60 --min-keep 20 --out-dir enroll --prefix owner_natural_e --move-source-to enroll\long
+piece 001: runs=24 63.1s (from 4.9s)
+piece 002: runs=36 61.8s (from 131.6s)
+piece 003: runs=31 60.4s (from 371.0s)
+summary: total 600.0s speech 201.5s in 100 runs; pieces 3 kept 185.3s; remainder dropped 16.2s
+split owner_natural_02.wav --target 10 --min-keep 3 --out-dir heldout_sameday --prefix owner_sameday --move-source-to enroll\long
+summary: total 600.0s speech 176.8s in 81 runs; pieces 14 kept 176.7s; remainder dropped 0.0s   (14 pieces of 10.1–18.1 s)
+```
+
+Enrollment: the 3 read clips + the 3 natural pieces — `enrolled owner: 6 clips, 365.3s, dim=192` — built first at a provisional threshold 0.5, then finally at the same-day EER threshold **0.3461** (`enroll\owner.json` + `owner.npy`). The same-day evaluation, the 14 sanity pieces against the self-test's 78 public negatives (`evaluate --pos-dir heldout_sameday --neg-json selftest_2026-09-06.json`):
+
+```
+{
+ "n_pos": 14,
+ "n_neg": 78,
+ "neg_speakers": 39,
+ "eer": 0.0,
+ "threshold": 0.34614428192992575,
+ "far_at_threshold": 0.0,
+ "frr_at_threshold": 0.0,
+ "accuracy_at_threshold": 1.0,
+ "pos_mean": 0.7376042379371902,
+ "neg_mean": 0.06493026456725112,
+ "pos_min": 0.45631370096207474,
+ "neg_max": 0.2359748628977767
+}
+  POS owner_sameday_001.wav: 0.6950 (12.8s)
+  POS owner_sameday_002.wav: 0.7317 (10.3s)
+  POS owner_sameday_003.wav: 0.7622 (12.5s)
+  POS owner_sameday_004.wav: 0.7664 (10.1s)
+  POS owner_sameday_005.wav: 0.8297 (13.1s)
+  POS owner_sameday_006.wav: 0.8377 (10.8s)
+  POS owner_sameday_007.wav: 0.7388 (12.0s)
+  POS owner_sameday_008.wav: 0.5887 (18.1s)
+  POS owner_sameday_009.wav: 0.7398 (10.9s)
+  POS owner_sameday_010.wav: 0.8027 (11.1s)
+  POS owner_sameday_011.wav: 0.4563 (12.6s)
+  POS owner_sameday_012.wav: 0.8359 (15.8s)
+  POS owner_sameday_013.wav: 0.7941 (16.5s)
+  POS owner_sameday_014.wav: 0.7476 (10.2s)
+```
+(The 78 NEG scores, one per LibriSpeech FLAC from 39 speakers, range −0.0872 … 0.2360; all are in the M0b-prep report.)
+
+Smoke at the stored threshold: `owner_sameday_001.wav` → score 0.6950, owner **True**; the first public negative `84-121123-0001.flac` → score 0.1071, owner **False**; neither refused.
+
+**A same-day number is optimistic by construction — same session, same mic state; the M0b band (EER ≤ 3 %) is measured only on a later-day recording.** The weakest positive is piece 011 at 0.4563 (piece 008 at 0.5887 next); the gap to the strongest negative (0.2360) is 0.22 — narrower than the public self-test's 0.40, as natural speech against a read-speech-heavy centroid would predict. No consented household negatives exist (`heldout_neg\` was not created), so that harder comparison has not been made.
+
+Sources: the M0b-prep run of 2026-09-06 (`REPORT-VOICE-M0B-PREP-V2.md`); `enroll\owner.json`; `selftest_2026-09-06.json` (`sets.negatives`).
+
 ### The M0b runbook — the owner's enrollment (a later prompt; the operator records)
 
 What "PASS" means: **EER ≤ 3 %** on the owner's held-out clips against the public negatives, with the threshold chosen at M0b's own EER point, and every held-out owner clip ≥ 3 s. The board's first 7.8 row (the owner's voice) flips to DONE only on that band, in that prompt's commit B.
 
-1. **Enrollment, day 1** — ≥ 3 × 60 s on the headset (device 1 today: `record --list-devices` to confirm), reading text, at different times of day, into `enroll\`:
+1. **Enrollment, day 1 — DONE 2026-09-06** (3 × 60 s read clips + 3 natural pieces; `enroll\owner.json` at threshold 0.3461). The command, for a re-enrollment: ≥ 3 × 60 s on the headset (device 1 today: `record --list-devices` to confirm), reading text, at different times of day, into `enroll\`:
    `python -m jarvis_voice record --seconds 60 --device 1 --out %USERPROFILE%\.jarvis\voice\enroll\owner_enroll_01.wav` (repeat `_02`, `_03`, …).
-2. **Held-out, a LATER day** — ≥ 10 × 10 s clips into `heldout\`:
-   `python -m jarvis_voice record --seconds 10 --device 1 --out %USERPROFILE%\.jarvis\voice\heldout\owner_heldout_01.wav` (repeat).
+2. **Held-out, a LATER day** — either ≥ 10 × 10 s clips into `heldout\`
+   (`python -m jarvis_voice record --seconds 10 --device 1 --out %USERPROFILE%\.jarvis\voice\heldout\owner_heldout_01.wav`, repeated), or ONE long natural recording (≥ 10 min, e.g. his side of a call) split into pieces with
+   `python -m jarvis_voice split <wav> --target 10 --min-keep 3 --out-dir %USERPROFILE%\.jarvis\voice\heldout --prefix owner_heldout --move-source-to %USERPROFILE%\.jarvis\voice\heldout\long`.
 3. **Optional hardest negative** — a few consented clips of his wife into a `heldout_neg\` folder of the operator's choosing.
 4. **The later prompt** runs `python -m jarvis_voice enroll --threshold <t>` (the threshold from M0b's own EER sweep, computed by `evaluate` first with a provisional value) and `python -m jarvis_voice evaluate --pos-dir heldout --neg-dir <public negatives + the optional wife clips>`, records EER / threshold / FAR / FRR / counts, and flips the row only on PASS.
 5. Nothing under `enroll\` or `heldout\` ever enters the repo (`.gitignore`); the transcripts of any owner recording stay under `transcripts\`.

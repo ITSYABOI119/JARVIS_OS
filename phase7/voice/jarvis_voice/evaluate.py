@@ -11,8 +11,13 @@ candidate, that is the answer. If the sets are perfectly separable (a candidate 
 the threshold is the MIDPOINT of the gap between the highest negative and the lowest positive, so it
 sits strictly between the sets rather than on a sample. Otherwise the crossing is linearly
 interpolated between the two neighbouring candidates.
+
+Negatives may come from a directory (WAV and FLAC) or from a JSON list of paths — the self-test's
+`selftest_<date>.json` carries `sets.negatives` (78 LibriSpeech FLACs from 39 speakers).
 """
-from typing import Iterable, List, Sequence, Tuple
+import json
+from pathlib import Path
+from typing import Iterable, List, Optional, Sequence, Tuple
 
 
 def far_frr_at(threshold: float, pos: Sequence[float], neg: Sequence[float]) -> Tuple[float, float]:
@@ -66,37 +71,62 @@ def mean(xs: Iterable[float]) -> float:
     return sum(xs) / len(xs) if xs else float("nan")
 
 
-def evaluate(enrollment, pos_dir, neg_dir, embedder=None) -> dict:
-    """Score every WAV under pos_dir / neg_dir against the enrollment centroid and report EER + rates.
+def paths_from_json(path) -> List[Path]:
+    """The negatives list of a self-test JSON (`sets.negatives`), or a top-level JSON list of paths.
+    Anything else -> [] (no exception)."""
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    if isinstance(data, dict):
+        sets = data.get("sets")
+        if isinstance(sets, dict) and isinstance(sets.get("negatives"), list):
+            return [Path(p) for p in sets["negatives"]]
+        return []
+    if isinstance(data, list):
+        return [Path(p) for p in data]
+    return []
 
-    Imports the GPU stack lazily (never at module level) so the pure functions above stay
-    importable on a bare interpreter.
-    """
-    from pathlib import Path
+
+def audio_files(d) -> List[Path]:
+    """WAV and FLAC under a directory, sorted by name."""
+    d = Path(d)
+    return sorted(list(d.glob("*.wav")) + list(d.glob("*.flac")), key=lambda p: p.name)
+
+
+def evaluate(enrollment, pos_dir, neg_dir=None, neg_paths: Optional[Sequence] = None, embedder=None) -> dict:
+    """Score every audio file under pos_dir, and the negatives from neg_dir (WAV + FLAC) or neg_paths,
+    against the enrollment centroid; report EER + rates. Imports the GPU stack lazily."""
     from .speaker import SpeakerEmbedder
     from .verify import score as cos_score
     from .audio import load_wav, duration_s
 
+    if (neg_dir is None) == (neg_paths is None):
+        raise ValueError("give exactly one of neg_dir or neg_paths")
     emb = embedder or SpeakerEmbedder()
     centroid = enrollment["centroid"]
 
-    def scores_for(d: Path) -> List[Tuple[str, float, float]]:
+    def scores_for(paths) -> List[Tuple[str, float, float]]:
         out = []
-        for p in sorted(Path(d).glob("*.wav")):
+        for p in paths:
             wav, sr = load_wav(p)
-            out.append((p.name, cos_score(centroid, emb.embed(wav, sr)), duration_s(wav, sr)))
+            out.append((Path(p).name, cos_score(centroid, emb.embed(wav, sr)), duration_s(wav, sr)))
         return out
 
-    pos = scores_for(pos_dir)
-    neg = scores_for(neg_dir)
+    neg_list = [Path(p) for p in neg_paths] if neg_paths is not None else audio_files(neg_dir)
+    pos = scores_for(audio_files(pos_dir))
+    neg = scores_for(neg_list)
     ps = [s for _, s, _ in pos]
     ns = [s for _, s, _ in neg]
     e, thr = eer(ps, ns)
     far, frr = far_frr_at(thr, ps, ns)
     return {
         "n_pos": len(ps), "n_neg": len(ns),
+        "neg_speakers": len({Path(p).parent.parent.name for p in neg_list}),
         "eer": e, "threshold": thr, "far_at_threshold": far, "frr_at_threshold": frr,
         "accuracy_at_threshold": accuracy_at(thr, ps, ns),
         "pos_mean": mean(ps), "neg_mean": mean(ns),
+        "pos_min": min(ps) if ps else None, "neg_max": max(ns) if ns else None,
         "pos": pos, "neg": neg,
     }

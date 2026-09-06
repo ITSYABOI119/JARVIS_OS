@@ -153,5 +153,39 @@ with tempfile.TemporaryDirectory() as td:
     with open(out, encoding="utf-8") as fh:
         check("T6 the written JSON is complete and carries deleted: true", _json.load(fh)["deleted"] is True)
 
+# T7 — speech_mask / runs (the split's pure logic); T = True, F = False
+from jarvis_voice.split import speech_mask, runs, pack_runs  # noqa: E402
+from jarvis_voice.evaluate import paths_from_json  # noqa: E402
+T, F = True, False
+fdb = [-60, -60, -30, -30, -60, -60, -60, -30, -60, -60]
+check("T7a mask pad 0 gap 0", speech_mask(fdb, -45.0, 0, 0) == [F, F, T, T, F, F, F, T, F, F], str(speech_mask(fdb, -45.0, 0, 0)))
+check("T7b mask pad 1 gap 0", speech_mask(fdb, -45.0, 1, 0) == [F, T, T, T, T, F, T, T, T, F], str(speech_mask(fdb, -45.0, 1, 0)))
+check("T7c mask pad 0 gap 4 merges the 3-frame gap", speech_mask(fdb, -45.0, 0, 4) == [F, F, T, T, T, T, T, T, F, F], str(speech_mask(fdb, -45.0, 0, 4)))
+check("T7d mask pad 0 gap 3 keeps the 3-frame gap (3 is not < 3)", speech_mask(fdb, -45.0, 0, 3) == speech_mask(fdb, -45.0, 0, 0))
+check("T7e all-quiet -> all False", speech_mask([-60] * 5, -45.0, 2, 2) == [F] * 5)
+check("T7f all-loud -> all True", speech_mask([-30] * 3, -45.0, 2, 2) == [T] * 3)
+check("T7 runs", runs([F, T, T, F, T, F, F, T]) == [(1, 3), (4, 5), (7, 8)], str(runs([F, T, T, F, T, F, F, T])))
+check("T7 runs empty", runs([]) == [])
+check("T7 runs single", runs([T]) == [(0, 1)])
+
+# T8 — pack_runs: close the piece the moment its total >= target; keep the tail iff >= min_keep
+check("T8a [4]*5, 10, 3 -> [[0,1,2],[3,4]]", pack_runs([4, 4, 4, 4, 4], 10, 3) == [[0, 1, 2], [3, 4]], str(pack_runs([4, 4, 4, 4, 4], 10, 3)))
+check("T8b [4]*5, 10, 9 -> [[0,1,2]] (8 s tail < 9 dropped)", pack_runs([4, 4, 4, 4, 4], 10, 9) == [[0, 1, 2]])
+check("T8c [12], 10, 3 -> [[0]]", pack_runs([12], 10, 3) == [[0]])
+check("T8d [1,1], 10, 3 -> []", pack_runs([1, 1], 10, 3) == [])
+check("T8e [], 10, 3 -> []", pack_runs([], 10, 3) == [])
+check("T8f [5,5,2], 10, 3 -> [[0,1]] (2 s tail dropped)", pack_runs([5, 5, 2], 10, 3) == [[0, 1]])
+
+# T9 — paths_from_json
+import json as _json2  # noqa: E402
+with tempfile.TemporaryDirectory() as td:
+    td = Path(td)
+    (td / "a.json").write_text(_json2.dumps({"sets": {"negatives": ["a.flac", "b.wav"]}}), encoding="utf-8")
+    (td / "b.json").write_text(_json2.dumps(["a.flac", "b.wav"]), encoding="utf-8")
+    (td / "c.json").write_text(_json2.dumps({"other": 1}), encoding="utf-8")
+    check("T9 sets.negatives -> 2 paths", len(paths_from_json(td / "a.json")) == 2)
+    check("T9 top-level list -> 2 paths", len(paths_from_json(td / "b.json")) == 2)
+    check("T9 other -> [] without exception", paths_from_json(td / "c.json") == [])
+
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
 sys.exit(1 if FAILS else 0)

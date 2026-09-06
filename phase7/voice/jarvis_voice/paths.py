@@ -3,18 +3,21 @@
 %USERPROFILE%\\.jarvis\\voice\\
     raw\\          recordings; deleted after transcription unless --keep
     enroll\\       the owner's enrollment clips + owner.json / owner.npy
-    heldout\\      the owner's later clips (M0b)
+    heldout\\      the owner's later-day clips (the M0b band is measured here only)
+    heldout_sameday\\  same-day sanity pieces from the second natural recording (never the band)
+    heldout_neg\\  consented household negatives, if the owner records any (evaluated separately)
     public\\       the downloaded public corpus (LibriSpeech dev-clean) + throwaway enrollments
     transcripts\\  one JSON per input (sha256, duration, model, timings, segments, deleted flag)
     models\\       the Hugging Face cache (HF_HOME) so nothing lands in the repo
     venv\\         the Python venv (created by hand, see the goal doc)
+    enroll\\long\\ where `split --move-source-to` parks a long recording after its pieces are written
 
 `JARVIS_VOICE_HOME` overrides the root (the tests point it at a temp dir). Standard library only.
 """
 import os
 from pathlib import Path
 
-SUBDIRS = ("raw", "enroll", "heldout", "public", "transcripts", "models")
+SUBDIRS = ("raw", "enroll", "heldout", "heldout_sameday", "heldout_neg", "public", "transcripts", "models")
 
 
 def voice_home() -> Path:
