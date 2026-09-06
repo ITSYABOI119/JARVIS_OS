@@ -156,3 +156,8 @@ RUNBOOK-*.md
 phase7/voice/.venv/
 phase7/voice/**/*.npy
 phase7/voice/**/*.pt
+
+# Phase 7 goal 8 - memory store. The household database lives under %USERPROFILE%\.jarvis\memory\.
+phase7/memory/**/*.sqlite
+phase7/memory/**/*.sqlite-wal
+phase7/memory/**/*.sqlite-shm

@@ -523,5 +523,63 @@ check("T16d the close is audited",
 check("T16e no audit violations after the preference sequence",
       st.audit_violations() == [], str(st.audit_violations()))
 
+# ======================================================= T17 the benchmark corpus
+# The corpus is what every MS0 number is measured on, so its determinism and the transfer set's
+# word-disjointness are checks, not assumptions: a scenario sharing one word with its preference
+# would let the full-text lane score a hit for the wrong reason and quietly inflate the number the
+# design says only the embedding lane can earn.
+
+import json as _json  # noqa: E402
+
+from jarvis_memory.bench.corpus import (  # noqa: E402
+    SYNONYM_SCENARIOS, generate_household,
+)
+
+hh_a = generate_household(1)
+hh_b = generate_household(1)
+check("T17a the corpus is deterministic for a seed",
+      _json.dumps(hh_a, sort_keys=True) == _json.dumps(hh_b, sort_keys=True))
+check("T17b different seeds give different households",
+      _json.dumps(generate_household(2), sort_keys=True) != _json.dumps(hh_a, sort_keys=True))
+
+sets_a = hh_a["sets"]
+check("T17c the update set has at least six questions", len(sets_a["update"]) >= 6,
+      str(len(sets_a["update"])))
+check("T17d the coexisting set has at least three", len(sets_a["coexist"]) >= 3,
+      str(len(sets_a["coexist"])))
+check("T17e the transfer set has at least eight", len(sets_a["transfer"]) >= 8,
+      str(len(sets_a["transfer"])))
+check("T17f the relation set names the spouse edge both ways",
+      len(sets_a["relations"]) >= 2
+      and {(r["from"], r["to"]) for r in sets_a["relations"]} == {("owner", "partner"),
+                                                                  ("partner", "owner")},
+      str(sets_a["relations"]))
+check("T17g the growth filler is 30x the gold candidates",
+      len(sets_a["growth_filler"]) == 30 * len(hh_a["candidates"]),
+      f"{len(sets_a['growth_filler'])} vs 30*{len(hh_a['candidates'])}")
+
+bad_pairs = []
+for _topic, _scenarios in SYNONYM_SCENARIOS.items():
+    tw = set(_topic.lower().split())
+    for _q in _scenarios:
+        shared = tw & set(_q.lower().split())
+        if shared:
+            bad_pairs.append((_topic, _q, sorted(shared)))
+check("T17h every transfer scenario shares no word with its preference",
+      bad_pairs == [], str(bad_pairs))
+check("T17i the coexisting set carries a value the owner ended",
+      any(c["ended_object_norm"] for c in sets_a["coexist"]),
+      str([c["ended_object_norm"] for c in sets_a["coexist"]]))
+
+_days_by_cluster = {}
+for _sp in hh_a["spans"]:
+    _days_by_cluster.setdefault(_sp["cluster"], {}).setdefault(_sp["day"], 0)
+    _days_by_cluster[_sp["cluster"]][_sp["day"]] += 1
+_partner_full = [d for d, n in _days_by_cluster.get(2, {}).items() if n >= 5]
+check("T17j the partner speaks five or more times on six or more days",
+      len(_partner_full) >= 6, str(sorted(_partner_full)))
+check("T17k the visitor is heard on exactly two days",
+      len(_days_by_cluster.get(3, {})) == 2, str(sorted(_days_by_cluster.get(3, {}))))
+
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
 sys.exit(1 if FAILS else 0)
