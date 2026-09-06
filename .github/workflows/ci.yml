@@ -1421,6 +1421,9 @@ jobs:
     - name: "Phase 7: goal 8 voice logic (Python, stdlib-only)"
       run: python3 phase7/voice/test_voice_logic.py
 
+    - name: "Phase 7: memory store logic (Python, stdlib-only)"
+      run: python3 phase7/memory/test_memory_logic.py
+
     - name: "Phase 6: 6-5/M4b Control reply builder (C)"
       run: gcc -Wall -Werror -O2 -std=c11 -I phase3/src/net -I phase3/src/crypto phase3/src/net/test_control_reply.c phase3/src/net/control_reply.c phase3/src/crypto/hmac_sha256.c phase3/src/crypto/sha256.c -o /tmp/t_reply && /tmp/t_reply
 
