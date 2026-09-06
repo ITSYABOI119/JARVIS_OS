@@ -377,7 +377,7 @@ Defaults are read from the header, never from here — count probes with `grep -
 
 ### Rules
 - Always update CLAUDE.md after completing work: a pointer row gets its CURRENT numbers/status changed in place; the evidence narrative is APPENDED to the topic's entry in `docs/CLAUDE_RECORD.md` (verbatim, dated), never written back into the pointer. A new topic gets a CLAUDE.md row; it moves to the record only when it has grown into history. `phase3/scripts/check_claude_record.py` (CI) asserts every pointer resolves.
-- **Phase 7 status board:** `phase7/docs/PHASE_7_PLAN.md` §0 is the live where-are-we. A commit that completes a milestone flips that row in the SAME commit, writing the commit hash and date into the cell; a cell never reads DONE without a hash; the strategist's prompt names the row to flip.
+- **Phase 7 status board:** `phase7/docs/PHASE_7_PLAN.md` §0 is the live where-are-we. A commit that completes a milestone flips that row in the same change — the landing commit, or the flip commit immediately after it citing the landing hash — writing the hash and date into the cell; a cell never reads DONE without a hash; the strategist's prompt names the row to flip.
 - COMMIT WEEKLY with week number in message
 - Update `phase2/docs/PHASE_2_PROGRESS_TRACKER.md` when completing work
 - Test everything: aim for 100% pass rate
