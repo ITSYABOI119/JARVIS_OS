@@ -143,3 +143,16 @@ HANDOFF-*.md
 PROMPT-*.md
 REPORT-*.md
 RUNBOOK-*.md
+
+# Phase 7 goal 8 — voice. Recordings, embeddings, transcripts and corpora live under
+# %USERPROFILE%\.jarvis\voice\ (outside the repo); these rules make an accidental commit impossible.
+*.wav
+*.flac
+*.mp3
+*.m4a
+*.ogg
+*.opus
+*.webm
+phase7/voice/.venv/
+phase7/voice/**/*.npy
+phase7/voice/**/*.pt
