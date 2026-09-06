@@ -308,5 +308,220 @@ ranked = rank([rrow(1, "stated_owner", 400), rrow(2, "inferred", 0)], NOW)
 check("T8j an old stated fact still outranks a fresh inferred one (no decay)",
       [r["row_id"] for r in ranked] == [1, 2], str([r["row_id"] for r in ranked]))
 
+# ================================================================ the store
+# Every store check runs on an in-memory SQLite database. Nothing is written to disk and no
+# recording, transcript or embedding exists at MS0 - the spans are literal strings written here.
+
+from jarvis_memory import store as store_mod  # noqa: E402
+from jarvis_memory.store import MemoryStore  # noqa: E402
+
+STORE_TABLES = ("recording", "span", "cluster", "person", "event", "event_span", "fact",
+                "fact_span", "edge", "edge_span", "preference", "preference_span",
+                "style_snapshot", "audit", "embedding", "fact_fts", "span_fts")
+
+
+def fresh():
+    """A store with the owner (cluster 1) bound and a second cluster present."""
+    st = MemoryStore(":memory:")
+    c1 = st.add_cluster()
+    c2 = st.add_cluster()
+    owner = st.bind_owner(c1, "sam")
+    return st, c1, c2, owner
+
+
+def add_day(st, date, cluster, texts):
+    """One recording per day, so said_at lands on the date asked for."""
+    rec = st.add_recording(f"sha-{date}-{cluster}", f"{date}T08:00:00", 3600.0, "headset")
+    return [st.add_span(rec, i * 10.0, i * 10.0 + 5.0, cluster, t, 0.9)
+            for i, t in enumerate(texts)]
+
+
+def fact_cand(owner, span_ids, object_text, object_norm, said_at, predicate="person.lives_in",
+              source_kind="stated_owner", speaker=1, **over):
+    c = dict(predicate_id=predicate, subject={"kind": "person", "id": owner},
+             object=object_text, object_norm=object_norm, source_kind=source_kind,
+             speaker_cluster=speaker, span_ids=list(span_ids), about_time=None,
+             relation_id=None, polarity=None, strength=None, ended=False, said_at=said_at)
+    c.update(over)
+    return c
+
+
+# ---------------------------------------------------------------- T9 schema
+st, c1, c2, owner = fresh()
+have = {r[0] for r in st.conn.execute(
+    "select name from sqlite_master where type in ('table','view')").fetchall()}
+missing = [t for t in STORE_TABLES if t not in have]
+check("T9a every table of the design exists", missing == [], f"missing {missing}")
+check("T9b the owner person is kind owner",
+      st.conn.execute("select kind from person where id=?", (owner,)).fetchone()[0] == "owner")
+
+_real = store_mod.fts5_available
+try:
+    store_mod.fts5_available = lambda conn: False
+    try:
+        MemoryStore(":memory:")
+        check("T9c a build without FTS5 is refused by name", False, "no exception raised")
+    except Exception as exc:  # noqa: BLE001 - the message is the thing under test
+        check("T9c a build without FTS5 is refused by name", "ENABLE_FTS5" in str(exc), str(exc))
+finally:
+    store_mod.fts5_available = _real
+check("T9d the real build still opens", MemoryStore(":memory:") is not None)
+
+# ------------------------------------------------------- T10 ingest supersede
+st, c1, c2, owner = fresh()
+s_d1 = add_day(st, "2026-03-01", c1, ["we live in brisbane now"])
+s_d9 = add_day(st, "2026-03-09", c1, ["we moved to sydney"])
+r1 = st.ingest(fact_cand(owner, s_d1, "Brisbane", "brisbane", "2026-03-01T08:00:00"))
+r2 = st.ingest(fact_cand(owner, s_d9, "Sydney", "sydney", "2026-03-09T08:00:00"))
+check("T10a first fact appends", r1["outcome"] == "append", str(r1))
+check("T10b the later fact supersedes", r2["outcome"] == "supersede", str(r2))
+cur = st.current("fact", subject_kind="person", subject_id=owner, predicate_id="person.lives_in")
+check("T10c exactly one current row, the new one",
+      len(cur) == 1 and cur[0]["object_norm"] == "sydney", str([c["object_norm"] for c in cur]))
+old = st.conn.execute("select valid_to, superseded_by from fact where id=?", (r1["row_id"],)).fetchone()
+check("T10d the superseded row carries valid_to and superseded_by",
+      old[0] is not None and old[1] == r2["row_id"], str(old))
+aud = st.conn.execute(
+    "select op, loser_id, rule from audit where target_table='fact' and op='supersede'").fetchall()
+check("T10e exactly one supersede audit row naming the loser",
+      len(aud) == 1 and aud[0][1] == r1["row_id"], str(aud))
+
+# --------------------------------------------------------- T11 audit walker
+check("T11a a clean store has no audit violations", st.audit_violations() == [],
+      str(st.audit_violations()))
+st.conn.execute("update fact set valid_to='2026-04-01' where id=?", (r2["row_id"],))
+st.conn.commit()
+v = st.audit_violations()
+check("T11b a row closed behind the audit trail is caught",
+      len(v) == 1 and v[0]["row_id"] == r2["row_id"] and v[0]["table"] == "fact", str(v))
+
+# --------------------------------------------------------- T12 purge cascade
+st, c1, c2, owner = fresh()
+o_spans = add_day(st, "2026-03-01", c1, ["morning"])
+p_spans = add_day(st, "2026-03-02", c2, ["one", "two"])
+st.promote_persons()  # cluster 2 is not a person yet; the facts below are on the owner
+f_only_c2 = st.ingest(fact_cand(owner, [p_spans[0]], "Cairns", "cairns", "2026-03-02T08:00:00",
+                                predicate="person.habit", source_kind="inferred"))
+f_mixed = st.ingest(fact_cand(owner, [p_spans[1], o_spans[0]], "Perth", "perth",
+                              "2026-03-02T08:00:10", predicate="person.habit", source_kind="inferred"))
+f_owner = st.ingest(fact_cand(owner, [o_spans[0]], "Hobart", "hobart", "2026-03-01T08:00:00",
+                              predicate="person.habit", source_kind="inferred"))
+res = st.purge_cluster(c2)
+alive = {r[0] for r in st.conn.execute("select id from fact").fetchall()}
+check("T12a the wholly-owned row is deleted", f_only_c2["row_id"] not in alive, str(sorted(alive)))
+check("T12b the partly-owned row survives", f_mixed["row_id"] in alive, str(sorted(alive)))
+check("T12c the unrelated row survives", f_owner["row_id"] in alive, str(sorted(alive)))
+check("T12d the purged spans are gone from span",
+      st.conn.execute("select count(*) from span where id in (?,?)", tuple(p_spans)).fetchone()[0] == 0)
+check("T12e the purged spans are gone from span_fts",
+      st.conn.execute("select count(*) from span_fts where rowid in (?,?)",
+                      tuple(p_spans)).fetchone()[0] == 0)
+check("T12f the purge is audited", len(res["audit_ids"]) >= 2, str(res))
+check("T12g the purge leaves no audit violation", st.audit_violations() == [],
+      str(st.audit_violations()))
+check("T12h the return names spans, deletions and recomputations",
+      res["spans"] == 2 and res["deleted"].get("fact") == 1 and res["recomputed"].get("fact") == 1,
+      str(res))
+
+# -------------------------------------------------------------- T13 promote
+st, c1, c2, owner = fresh()
+for d in ("2026-03-01", "2026-03-02", "2026-03-03"):
+    add_day(st, d, c2, ["a", "b", "c", "d", "e"])
+new_ids = st.promote_persons()
+check("T13a three full days promotes exactly one cluster", len(new_ids) == 1, str(new_ids))
+check("T13b the cluster now points at its person",
+      st.conn.execute("select person_id from cluster where id=?", (c2,)).fetchone()[0] == new_ids[0])
+check("T13c promotion is idempotent", st.promote_persons() == [])
+st2, d1, d2, _own2 = fresh()
+for d in ("2026-03-01", "2026-03-02"):
+    add_day(st2, d, d2, ["a", "b", "c", "d", "e"])
+check("T13d two full days is not enough", st2.promote_persons() == [])
+
+# ---------------------------------------------------------------- T14 query
+st, c1, c2, owner = fresh()
+sp = add_day(st, "2026-03-01", c1, ["s1", "s2", "s3"])
+st.ingest(fact_cand(owner, [sp[0]], "Brisbane", "brisbane", "2026-03-01T08:00:00"))
+st.ingest(fact_cand(owner, [sp[1]], "Sydney", "sydney", "2026-03-01T08:00:10"))
+st.ingest(fact_cand(owner, [sp[2]], "a nurse", "a nurse", "2026-03-01T08:00:20",
+                    predicate="person.works_as"))
+hits = st.query("where does sam live", k=5, now="2026-03-02T00:00:00")
+top = hits[0] if hits else {}
+check("T14a the top hit is the current lives_in fact",
+      top.get("table") == "fact" and "sydney" in top.get("text", "").lower(),
+      str([(h["table"], h["text"]) for h in hits]))
+check("T14b the hit carries its span ids and their text",
+      bool(top.get("span_ids")) and bool(top.get("spans")) and "text" in top["spans"][0],
+      str(top.get("spans")))
+check("T14c the superseded row is absent",
+      not any("brisbane" in h.get("text", "").lower() and h["table"] == "fact" for h in hits),
+      str([h["text"] for h in hits]))
+# T14c alone is satisfied by the "valid_to is null" join filter, so it would still pass if the
+# index were never pruned; a mutation run proved exactly that. This checks the OTHER mechanism -
+# the superseded row really leaves the contentless FTS index - so both are held independently.
+check("T14c2 the superseded row is gone from the full-text index itself",
+      st.conn.execute("select count(*) from fact_fts where fact_fts match 'brisbane'"
+                      ).fetchone()[0] == 0,
+      str(st.conn.execute("select count(*) from fact_fts where fact_fts match 'brisbane'").fetchone()[0]))
+hits2 = st.query("sam nurse", k=5, now="2026-03-02T00:00:00")
+check("T14d a different question finds the works_as row",
+      any(h["table"] == "fact" and "nurse" in h["text"].lower() for h in hits2),
+      str([(h["table"], h["text"]) for h in hits2]))
+
+# ------------------------------------------------------- T15 R5 from spans
+st, c1, c2, owner = fresh()
+dates = ["2026-03-0%d" % d for d in (1, 2, 3, 4, 5)]
+per_day = {d: add_day(st, d, c2, ["a", "b", "c", "d", "e"]) for d in dates}
+partner = st.promote_persons()[0]
+support = [per_day[d][0] for d in dates]
+edge_cand = dict(predicate_id="person.relation_to", subject={"kind": "person", "id": owner},
+                 object=partner, object_norm="spouse", source_kind="inferred", speaker_cluster=c1,
+                 span_ids=support, about_time=None, relation_id="spouse", polarity=None,
+                 strength=None, ended=False, said_at="2026-03-05T08:00:00")
+r = st.ingest(edge_cand)
+check("T15a five supporting days give 0.8111",
+      close_to(r.get("confidence", -1), 0.8111), str(r))
+contra = add_day(st, "2026-03-06", c2, ["x", "y", "z", "p", "q"])
+c2nd = dict(edge_cand)
+c2nd["span_ids"] = [support[0]]
+c2nd["contradicts"] = [contra[0]]
+c2nd["said_at"] = "2026-03-06T08:00:00"
+r2 = st.ingest(c2nd)
+got = st.recompute_confidence("edge", r2["row_id"])
+check("T15b one contradicting day drops it to 0.7364", close_to(got, 0.7364), str(got))
+check("T15c the contradiction merged onto the same edge row",
+      r2["row_id"] == r["row_id"], f"{r['row_id']} vs {r2['row_id']}")
+
+# ------------------------------------------------- T16 preference routing
+st, c1, c2, owner = fresh()
+p1 = add_day(st, "2026-03-01", c1, ["i love spicy food"])
+p2 = add_day(st, "2026-03-08", c1, ["spicy food is too much for me now"])
+pref = dict(predicate_id="owner.prefers", subject={"kind": "person", "id": owner},
+            object="spicy food", object_norm="spicy food", source_kind="stated_owner",
+            speaker_cluster=c1, span_ids=p1, about_time=None, relation_id=None,
+            polarity="likes", strength=2, ended=False, said_at="2026-03-01T08:00:00")
+rp1 = st.ingest(pref)
+check("T16a a preference is routed to the preference table",
+      rp1["table"] == "preference" and st.conn.execute(
+          "select count(*) from preference").fetchone()[0] == 1, str(rp1))
+pref2 = dict(pref)
+pref2.update(polarity="dislikes", span_ids=p2, said_at="2026-03-08T08:00:00")
+rp2 = st.ingest(pref2)
+cur = st.current("preference", person_id=owner, topic_norm="spicy food")
+check("T16b the opposite polarity coexists rather than overwriting",
+      rp2["outcome"] == "coexist" and len(cur) == 2,
+      f"{rp2['outcome']} {[c['polarity'] for c in cur]}")
+pref3 = dict(pref)
+pref3.update(ended=True, span_ids=p2, said_at="2026-03-08T09:00:00")
+rp3 = st.ingest(pref3)
+cur = st.current("preference", person_id=owner, topic_norm="spicy food")
+check("T16c an owner statement that it ended closes just that row",
+      rp3["outcome"] == "close" and [c["polarity"] for c in cur] == ["dislikes"],
+      f"{rp3['outcome']} {[c['polarity'] for c in cur]}")
+check("T16d the close is audited",
+      st.conn.execute("select count(*) from audit where target_table='preference' and op='close'"
+                      ).fetchone()[0] == 1)
+check("T16e no audit violations after the preference sequence",
+      st.audit_violations() == [], str(st.audit_violations()))
+
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
 sys.exit(1 if FAILS else 0)
