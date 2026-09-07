@@ -29,12 +29,15 @@ def main(argv=None) -> int:
     p.add_argument("--latency-facts", type=int, default=0)
     p.add_argument("--out", default=None)
     p.add_argument("--assert-bands", action="store_true")
+    p.add_argument("--no-predicate-hint", dest="predicate_hint", action="store_false",
+                   help="the NEGATIVE CONTROL: run the MS0 lane, unrestricted by the registry hint")
     a = p.parse_args(argv)
 
     seeds = list(range(a.seed, a.seed + a.households))
-    res = harness.run(seeds, a.days, a.latency_facts, a.out)
+    res = harness.run(seeds, a.days, a.latency_facts, a.out, a.predicate_hint)
 
-    print(f"households : {len(seeds)}  seeds {seeds[0]}..{seeds[-1]}  days {a.days}")
+    print(f"households : {len(seeds)}  seeds {seeds[0]}..{seeds[-1]}  days {a.days}  "
+          f"predicate_hint {'ON' if a.predicate_hint else 'OFF (negative control)'}")
     print("aggregate  :")
     for k in sorted(res["aggregate"]):
         print(f"    {k:32s} {res['aggregate'][k]}")

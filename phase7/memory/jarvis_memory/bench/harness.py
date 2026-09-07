@@ -74,10 +74,10 @@ def _fact_row(st, row_id):
     return dict(r) if r else None
 
 
-def _score_update(st, items, ids, now):
+def _score_update(st, items, ids, now, hint="auto"):
     ok = 0
     for it in items:
-        hits = st.query(it["query"], k=5, now=now)
+        hits = st.query(it["query"], k=5, now=now, predicate_hint=hint)
         if not hits or hits[0]["table"] != "fact":
             continue
         row = _fact_row(st, hits[0]["row_id"])
@@ -89,11 +89,11 @@ def _score_update(st, items, ids, now):
     return ok / len(items) if items else 0.0
 
 
-def _score_coexist(st, items, ids, now):
+def _score_coexist(st, items, ids, now, hint="auto"):
     """Recall of the current values, with a hard zero if a value the owner ENDED comes back."""
     recalls, leaks = [], 0
     for it in items:
-        hits = st.query(it["query"], k=5, now=now)
+        hits = st.query(it["query"], k=5, now=now, predicate_hint=hint)
         found = set()
         leaked = False
         for h in hits:
@@ -114,7 +114,7 @@ def _score_coexist(st, items, ids, now):
     return (statistics.fmean(recalls) if recalls else 0.0), leaks
 
 
-def _score_transfer(st, items, owner_id, now):
+def _score_transfer(st, items, owner_id, now, hint="auto"):
     """Is the planted preference in the top five for a scenario worded without its own words?
 
     At MS0 the full-text lane is the only lane and preferences are not in it, so this is expected to
@@ -123,7 +123,7 @@ def _score_transfer(st, items, owner_id, now):
     """
     ok = 0
     for it in items:
-        hits = st.query(it["query"], k=5, now=now)
+        hits = st.query(it["query"], k=5, now=now, predicate_hint=hint)
         for h in hits:
             if h["table"] != "preference":
                 continue
@@ -146,7 +146,9 @@ def _score_relations(st, items, ids):
     return hit / len(surfaced), len(surfaced)
 
 
-def run_household(seed, days):
+def run_household(seed, days, predicate_hint=True):
+    """`predicate_hint=False` is the NEGATIVE CONTROL: the MS0 lane, unrestricted."""
+    hint = "auto" if predicate_hint else None
     hh = _corpus.generate_household(seed, days)
     st = MemoryStore(":memory:")
     clusters = {c: st.add_cluster() for c in hh["clusters"]}
@@ -196,9 +198,9 @@ def run_household(seed, days):
             spouse_day = day
 
     now = _corpus._said_at(days, 86000)
-    update_acc = _score_update(st, hh["sets"]["update"], ids, now)
-    coexist_recall, ended_leaks = _score_coexist(st, hh["sets"]["coexist"], ids, now)
-    transfer = _score_transfer(st, hh["sets"]["transfer"], ids["owner"], now)
+    update_acc = _score_update(st, hh["sets"]["update"], ids, now, hint)
+    coexist_recall, ended_leaks = _score_coexist(st, hh["sets"]["coexist"], ids, now, hint)
+    transfer = _score_transfer(st, hh["sets"]["transfer"], ids["owner"], now, hint)
     rel_prec, n_surfaced = _score_relations(st, hh["sets"]["relations"], ids)
     spouse_conf = _spouse_confidence(st, ids.get("owner"), ids.get("partner"))
 
@@ -223,7 +225,7 @@ def run_household(seed, days):
                    "source_kind": "stated_owner", "speaker_cluster": clusters[1],
                    "span_ids": [sid], "about_time": None, "relation_id": None,
                    "polarity": None, "strength": None, "ended": False, "said_at": f["said_at"]})
-    growth_acc = _score_update(st, hh["sets"]["update"], ids, now)
+    growth_acc = _score_update(st, hh["sets"]["update"], ids, now, hint)
 
     violations = len(st.audit_violations())
     n_facts = st.conn.execute("select count(*) from fact").fetchone()[0]
@@ -282,8 +284,8 @@ def measure_latency(n_facts, n_subjects=2000):
             "n_ingests": n_facts}
 
 
-def run(seeds, days, latency_facts, out_path=None) -> dict:
-    households = [run_household(s, days) for s in seeds]
+def run(seeds, days, latency_facts, out_path=None, predicate_hint=True) -> dict:
+    households = [run_household(s, days, predicate_hint) for s in seeds]
     agg = {}
     for field in ("update_acc", "coexist_recall", "transfer_recall5", "relation_precision",
                   "growth_update_acc", "growth_drop_points"):
@@ -304,6 +306,7 @@ def run(seeds, days, latency_facts, out_path=None) -> dict:
         "p99<=50ms": (latency["p99_ms"] <= 50.0) if latency else None,
     }
     out = {
+        "predicate_hint": bool(predicate_hint),
         "households": households,
         "aggregate": agg,
         "latency": latency,

@@ -190,4 +190,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS fact_fts
     USING fts5(text, content='', tokenize='porter unicode61');
 CREATE VIRTUAL TABLE IF NOT EXISTS span_fts
     USING fts5(text, content='', tokenize='porter unicode61');
+-- Preference rows joined the lane at MS0.1. Before that they were in no index at all, so the
+-- benchmark's transfer number was 0 for a structural reason before the vocabulary one.
+CREATE VIRTUAL TABLE IF NOT EXISTS pref_fts
+    USING fts5(text, content='', tokenize='porter unicode61');
 """

@@ -171,3 +171,180 @@ about the owner or his household. No row here supports the words "knows", "under
 "remembers your life"; what MS0 shows is that a belief can be written, superseded, contradicted,
 recalled with its evidence, and purged, with every loss auditable — and that at household scale the
 write path costs about a tenth of a millisecond.
+
+---
+
+## MS0.1 — 2026-09-07 — the predicate-aware full-text lane; the growth band re-measured against its negative control
+
+**The disposition.** MS0 met four of five bands and missed `growth_drop<=5` at 46.25 points, with the cause
+measured rather than argued: 30× filler about disjoint people and places put `works as` and `lives in` into
+roughly half of all rows, collapsing those terms' IDF to ≈ 0.02, after which BM25's length normalisation
+returned the SHORTER of two facts about the same person. The strategist's disposition, now in the design
+(§6), is the K-b instinct one level out: the registry carries a static, human-reviewed QUERY VOCABULARY per
+predicate, and a question matching **exactly one** predicate's vocabulary restricts the fact and preference
+lookups to that predicate; none or several leaves the lookup open. The rule SELECTS a predicate the store
+already types and can never invent one. The same slice puts preference rows into the index for the first
+time — MS0's transfer number was 0 for a structural reason before the vocabulary one.
+
+### The vocabulary (`registry.QUERY_VOCAB`, nine pairwise-disjoint sets, matched on raw lower-cased tokens)
+
+| predicate | words |
+|---|---|
+| `person.name` | name, named, called, call |
+| `person.relation_to` | wife, husband, married, marry, spouse, partner, related, relationship, relation, sister, brother, mother, father, mum, dad, son, daughter, friend, friends, colleague, family |
+| `person.lives_in` | live, lives, living, lived, home, address, reside, resides, residing |
+| `person.works_as` | work, works, working, worked, job, jobs, occupation, employed, employer, career, profession |
+| `person.habit` | habit, habits, routine, routines, usually, regularly |
+| `person.trait` | trait, traits, personality, tends, tend, tendency |
+| `household.topic` | talk, talks, talked, talking, discuss, discussed, discussing, topic, topics, conversation, conversations |
+| `household.routine` | schedule, schedules, household, weekly, chores, chore |
+| `owner.prefers` | like, likes, liked, love, loves, loved, prefer, prefers, preferred, favourite, favorite, hate, hates, hated, dislike, dislikes, avoid, avoids, enjoy, enjoys, want, wants |
+
+Inflections are spelled out because matching is on raw tokens, never stemmed. Disjointness and key-validity
+are asserted by the suite (T18l, T18m), so a word added to two sets fails the build rather than quietly
+making the hint ambiguous.
+
+### Run 1 — THE NEGATIVE CONTROL (the hint off), Main PC, the voice venv, 14.5 s
+
+```
+python.exe phase7/memory/bench_ms0.py --households 10 --days 14 --seed 1 \
+    --latency-facts 100000 --no-predicate-hint --out phase7/memory/bench/results/ms0_1_control_off.json
+```
+
+```
+households : 10  seeds 1..10  days 14  predicate_hint OFF (negative control)
+aggregate  :
+    coexist_recall                   1.0
+    growth_drop_points               46.25
+    growth_update_acc                0.5
+    relation_precision               1.0
+    spouse_surfaced_day_mean         8.0
+    spouse_surfaced_households       10/10
+    transfer_recall5                 0.0
+    update_acc                       0.9625
+latency    : p50 0.0972 ms  p99 0.3468 ms over 100000 ingests, 100000 facts in the store
+audit      : 0 violations
+bands      :
+    PASS audit==0
+    PASS coexist_recall>=0.95
+    FAIL growth_drop<=5
+    PASS p99<=50ms
+    PASS update_acc>=0.95
+```
+
+**This is the load-bearing result of the milestone.** Every band-relevant field reproduces MS0's recorded run
+exactly — `update_acc 0.9625`, `coexist_recall 1.0`, `growth_update_acc 0.5`, `growth_drop_points 46.25`,
+`transfer_recall5 0.0`, `relation_precision 1.0`, `spouse_surfaced_day_mean 8.0`, 0 audit violations — with
+only latency free to differ (p50 0.0972 against MS0's 0.0985, p99 0.3468 against 0.354). Nothing but the hint
+changed, so the ON numbers below measure the hint and nothing else.
+
+### Run 2 — the predicate-aware lane (the hint on), the same command plus `--assert-bands`, 14.5 s
+
+```
+households : 10  seeds 1..10  days 14  predicate_hint ON
+aggregate  :
+    coexist_recall                   1.0
+    growth_drop_points               0.0
+    growth_update_acc                1.0
+    relation_precision               1.0
+    spouse_surfaced_day_mean         8.0
+    spouse_surfaced_households       10/10
+    transfer_recall5                 0.0
+    update_acc                       1.0
+latency    : p50 0.099 ms  p99 0.3558 ms over 100000 ingests, 100000 facts in the store
+audit      : 0 violations
+bands      :
+    PASS audit==0
+    PASS coexist_recall>=0.95
+    PASS growth_drop<=5
+    PASS p99<=50ms
+    PASS update_acc>=0.95
+```
+
+`--assert-bands` exited 0. **All five bands are met.**
+
+| band (design §8, MS0 column) | hint OFF | hint ON | verdict |
+|---|---|---|---|
+| update accuracy ≥ 95 % | 96.25 % | **100 %** | PASS |
+| coexisting recall ≥ 95 % | 100 % | **100 %** | PASS |
+| audit completeness 100 % | 0 violations | **0 violations** | PASS |
+| write p99 ≤ 50 ms at 100 k | 0.3468 ms | **0.3558 ms** | PASS |
+| growth drop ≤ 5 points | **46.25** (MISS) | **0.0** | PASS |
+| transfer recall@5 | 0.0 | 0.0 | reported, not banded |
+| relation precision at ≥ 0.80 | 1.0 | 1.0 | reported (oracle) |
+
+### Per household, both runs
+
+```
+seed |  OFF update  drop  |  ON update  drop  | spouse day OFF/ON | ended leaks
+  1  |    1.0      50.0   |    1.0      0.0   |       8/8         |  0/0
+  2  |    0.875    37.5   |    1.0      0.0   |       8/8         |  0/0
+  3  |    1.0      50.0   |    1.0      0.0   |       8/8         |  0/0
+  4  |    1.0      50.0   |    1.0      0.0   |       8/8         |  0/0
+  5  |    0.875    37.5   |    1.0      0.0   |       8/8         |  0/0
+  6  |    1.0      50.0   |    1.0      0.0   |       8/8         |  0/0
+  7  |    0.875    37.5   |    1.0      0.0   |       8/8         |  0/0
+  8  |    1.0      50.0   |    1.0      0.0   |       8/8         |  0/0
+  9  |    1.0      50.0   |    1.0      0.0   |       8/8         |  0/0
+ 10  |    1.0      50.0   |    1.0      0.0   |       8/8         |  0/0
+```
+
+The three seeds that lost an update question at MS0 (2, 5, 7 — the habit *"cycles to work"* answering a work
+question) now answer all eight, and the write path is untouched: the spouse edge still surfaces on day 8 in
+10/10 households either way, which is the check that the hint changed retrieval and nothing else.
+
+### Tests
+
+`phase7/memory/test_memory_logic.py` — **144 checks, all passing** in WSL Python 3.12.3 / SQLite 3.45.1 (the
+CI form), the voice venv's 3.12.6 / 3.45.3, and the GitHub runner. T18 covers the hint and the vocabulary
+(including `does alex live near where he works` → None, two predicates, and the disjointness assertion),
+T19 the MS0 F2 collision resolved in the store, T20 preferences through index / close / purge, T21 the
+negative control in-process.
+
+One mutant, control first (144/144), applied to a throwaway copy outside the repo: **`predicate_hint`
+returning `None` always** →
+
+```
+FAIL T18 hint('where does alex live') -> person.lives_in got None      (and seven more T18 rows)
+FAIL T21c hint ON lifts seed-2 update accuracy to 1.0   0.875
+FAIL T21d hint ON removes the growth drop entirely      37.5
+134/144 checks passed
+```
+
+The mutant's T21 values fall back to exactly MS0's seed-2 figures, which is the sharpest available evidence
+that the hint is the whole mechanism and that nothing else moved.
+
+### A defect fixed on the way, latent since MS0
+
+Purging a cluster whose preference had already been ENDED raised `sqlite3.DatabaseError: database disk image
+is malformed`. FTS5's `'delete'` command on a contentless table does not tolerate being asked twice: the row
+had left the index at close time, and deleting an absent rowid corrupts the index outright. The same hazard
+was **latent for facts since MS0** — no test had yet purged a *superseded* fact. Both paths now go through
+`_drop_from_index`, which deletes only while `valid_to is null`, and T20i purges a superseded fact and reads
+the index back.
+
+### Honest scope
+
+The hint is a **rule over a fixed vocabulary**, measured on a **template corpus with fixed query shapes**. It
+is the deterministic baseline of the design's "route by fact type"; the general mechanism is the embedding
+lane at MS1. A real question whose words fall outside the vocabulary gets exactly the MS0 behaviour —
+unrestricted — which is why the rule is "exactly one match" rather than "best guess": a wrong restriction
+hides the answer completely, while no restriction only leaves MS0 in place.
+
+Three corpus queries hint other than their own predicate, and none was patched by adding a word (the table is
+human-reviewed, not a tuning knob):
+
+- `what household routine do we keep` → **None**, because *household* is in `household.routine` while
+  *routine* is in `person.habit`. It falls back to the MS0 behaviour and still scores 1.0, but the most
+  natural household-routine question straddles two sets.
+- `when should we schedule the appointment` → **`household.routine`** and `booking a flight time that works`
+  → **`person.works_as`**; both are transfer scenarios, so the hint restricts them away from the preference
+  table they are meant to find. Neither changes the reported number (transfer is 0.0 regardless — the
+  scenarios share no word with their preference), but they show the rule's real failure mode: a scenario
+  query that happens to contain one vocabulary word is restricted to the wrong predicate.
+
+`transfer_recall5` stays **0.0** and is still REPORTED, never banded. The structural zero is gone —
+preferences are in the index now, and T20a proves a preference question reaches one — so the remaining zero
+is purely the vocabulary gap the embedding lane exists for. `relation_precision` stays 1.0 **by
+construction**: the oracle plants only true relations, so it says the store surfaced what it was given.
+Nothing here is measured on real speech, on an extractor, or on the owner.

@@ -15,8 +15,44 @@ what the store believed on a given day, which is what the spouse-surfacing measu
 """
 import datetime as _dt
 
+from .registry import QUERY_VOCAB
+
 W_SOURCE = {"stated_owner": 1.0, "stated_other": 0.8, "inferred": 0.6}
 HALF_LIFE_DAYS = 90.0
+
+
+def tokens(text: str) -> list:
+    """The query words: lower-cased alphanumeric runs, nothing else.
+
+    One tokeniser serves both the hint and the FTS5 MATCH the store builds, so a word that steers
+    the hint is the same word that reaches the index. FTS5 syntax characters never survive this,
+    which is also what stops an operator's question being read as a MATCH expression.
+    """
+    out, cur = [], []
+    for ch in str(text).lower():
+        if ch.isalnum():
+            cur.append(ch)
+        elif cur:
+            out.append("".join(cur))
+            cur = []
+    if cur:
+        out.append("".join(cur))
+    return out
+
+
+def predicate_hint(text: str):
+    """Which predicate a question is about, when exactly one is unambiguous — else None.
+
+    Zero matches means the question uses none of the registry's words; several means it straddles
+    predicates ("does alex live near where he works"). Both are left UNRESTRICTED rather than
+    guessed at, because a wrong restriction hides the answer completely while no restriction only
+    leaves the MS0 behaviour in place. That asymmetry is the whole reason the rule is 'exactly one'.
+    """
+    words = set(tokens(text))
+    if not words:
+        return None
+    hits = [pid for pid, vocab in QUERY_VOCAB.items() if words & vocab]
+    return hits[0] if len(hits) == 1 else None
 
 
 def recency_weight(age_days: float, decays: bool) -> float:

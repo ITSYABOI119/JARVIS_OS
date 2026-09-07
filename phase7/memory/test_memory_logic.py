@@ -346,6 +346,14 @@ def fact_cand(owner, span_ids, object_text, object_norm, said_at, predicate="per
     return c
 
 
+def _fact_row_t(st, row_id):
+    """The fact row behind a query hit — query results carry the row id, not the columns."""
+    r = st.conn.execute(
+        "select subject_id, object_text, object_norm, predicate_id from fact where id=?",
+        (row_id,)).fetchone()
+    return dict(r) if r else None
+
+
 # ---------------------------------------------------------------- T9 schema
 st, c1, c2, owner = fresh()
 have = {r[0] for r in st.conn.execute(
@@ -580,6 +588,146 @@ check("T17j the partner speaks five or more times on six or more days",
       len(_partner_full) >= 6, str(sorted(_partner_full)))
 check("T17k the visitor is heard on exactly two days",
       len(_days_by_cluster.get(3, {})) == 2, str(sorted(_days_by_cluster.get(3, {}))))
+
+# ============================================ MS0.1 the predicate-aware lane
+# The hint is a RULE over a static, human-reviewed vocabulary - the K-b instinct applied to
+# retrieval: it selects a predicate the registry already types, and never invents one. Its whole
+# job is to stop a diluted predicate word from letting the shorter of two facts about the same
+# person win, which is what cost MS0 its growth band.
+
+from jarvis_memory.registry import QUERY_VOCAB  # noqa: E402
+from jarvis_memory.retrieve import predicate_hint, tokens  # noqa: E402
+
+# ------------------------------------------------------------------ T18 the hint
+for _q, _want in (
+    ("where does alex live", "person.lives_in"),
+    ("which city does alex live in", "person.lives_in"),
+    ("what does alex do for work", "person.works_as"),
+    ("what job does alex work as", "person.works_as"),
+    ("what habits does sam have", "person.habit"),
+    ("what does sam like", "owner.prefers"),
+    ("who is alex married to", "person.relation_to"),
+    ("tell me about alex", None),
+    ("does alex live near where he works", None),      # two predicates -> unrestricted
+    ("", None),
+    ("WHERE DOES ALEX LIVE?", "person.lives_in"),      # case and punctuation
+):
+    _got = predicate_hint(_q)
+    check(f"T18 hint({_q!r}) -> {_want}", _got == _want, f"got {_got!r}")
+
+check("T18l every vocabulary key is a real predicate",
+      all(k in PREDICATES for k in QUERY_VOCAB), str(sorted(set(QUERY_VOCAB) - set(PREDICATES))))
+_overlaps = []
+_keys = sorted(QUERY_VOCAB)
+for _i in range(len(_keys)):
+    for _j in range(_i + 1, len(_keys)):
+        _both = QUERY_VOCAB[_keys[_i]] & QUERY_VOCAB[_keys[_j]]
+        if _both:
+            _overlaps.append((_keys[_i], _keys[_j], sorted(_both)))
+check("T18m the nine vocabulary sets are pairwise disjoint", _overlaps == [], str(_overlaps))
+check("T18n tokens lower-cases and drops punctuation",
+      tokens("Where does Alex live?") == ["where", "does", "alex", "live"],
+      str(tokens("Where does Alex live?")))
+
+# --------------------------------- T19 the MS0 F2 collision, resolved in the store
+st, c1, c2, owner = fresh()
+_h = add_day(st, "2026-03-01", c1, ["i cycle in most days"])
+_w = add_day(st, "2026-03-03", c1, ["i am a pharmacist now"])
+st.ingest(fact_cand(owner, _h, "cycles to work", "cycles to work", "2026-03-01T08:00:00",
+                    predicate="person.habit"))
+st.ingest(fact_cand(owner, _w, "pharmacist", "pharmacist", "2026-03-03T08:00:00",
+                    predicate="person.works_as"))
+_hits = st.query("what does sam do for work", k=5, now="2026-03-04T00:00:00")
+_top = _hits[0] if _hits else {}
+_row = _fact_row_t(st, _top["row_id"]) if _top.get("table") == "fact" else None
+_off = st.query("what does sam do for work", k=5, now="2026-03-04T00:00:00", predicate_hint=None)
+_offtop = _off[0] if _off else {}
+_offrow = _fact_row_t(st, _offtop["row_id"]) if _offtop.get("table") == "fact" else None
+check("T19 a work question reaches the works_as fact, not the habit that says 'work'",
+      _row is not None and _row["object_text"] == "pharmacist",
+      f"hint-on top={_top.get('table')} {_row and _row['object_text']!r} | "
+      f"REPORTED hint-off top={_offtop.get('table')} {_offrow and _offrow['object_text']!r}")
+
+# ------------------------------------------------- T20 preferences in the index
+st, c1, c2, owner = fresh()
+_p1 = add_day(st, "2026-03-01", c1, ["i really do enjoy spicy food"])
+_p2 = add_day(st, "2026-03-08", c1, ["not any more"])
+
+
+def _pref(span_ids, said_at, **over):
+    d = dict(predicate_id="owner.prefers", subject={"kind": "person", "id": owner},
+             object="spicy food", object_norm="spicy food", source_kind="stated_owner",
+             speaker_cluster=c1, span_ids=list(span_ids), about_time=None, relation_id=None,
+             polarity="likes", strength=2, ended=False, said_at=said_at)
+    d.update(over)
+    return d
+
+
+_rp = st.ingest(_pref(_p1, "2026-03-01T08:00:00"))
+_hits = st.query("what does sam like", k=5, now="2026-03-02T00:00:00")
+_top = _hits[0] if _hits else {}
+check("T20a a preference is found by a preference question and comes first",
+      _top.get("table") == "preference" and "spicy food" in _top.get("text", "").lower()
+      and bool(_top.get("span_ids")),
+      f"{_top.get('table')} {_top.get('text')!r} spans={_top.get('span_ids')}")
+check("T20b it is in the preference index",
+      st.conn.execute("select count(*) from pref_fts where pref_fts match 'spicy'"
+                      ).fetchone()[0] == 1)
+st.ingest(_pref(_p2, "2026-03-08T08:00:00", ended=True))
+_hits = st.query("what does sam like", k=5, now="2026-03-09T00:00:00")
+check("T20c the ended preference is gone from the results",
+      not any(h["table"] == "preference" for h in _hits),
+      str([(h["table"], h["text"]) for h in _hits]))
+check("T20d and gone from the index itself (the T14c2 lesson)",
+      st.conn.execute("select count(*) from pref_fts where pref_fts match 'spicy'"
+                      ).fetchone()[0] == 0,
+      str(st.conn.execute("select count(*) from pref_fts where pref_fts match 'spicy'").fetchone()[0]))
+check("T20e no audit violations before the purge", st.audit_violations() == [],
+      str(st.audit_violations()))
+st.purge_cluster(c1)
+check("T20f the purge removes the preference row",
+      st.conn.execute("select count(*) from preference").fetchone()[0] == 0)
+check("T20g and its index entry",
+      st.conn.execute("select count(*) from pref_fts").fetchone()[0] == 0)
+check("T20h no audit violations after the purge", st.audit_violations() == [],
+      str(st.audit_violations()))
+
+# T20i - the same hazard one table over, latent since MS0: purging a SUPERSEDED fact used to ask
+# FTS5 to delete a rowid that close had already removed, which corrupts a contentless index
+# ("database disk image is malformed"). MS0's T12 only ever purged current facts.
+st, c1, c2, owner = fresh()
+_s1 = add_day(st, "2026-03-01", c1, ["brisbane for now"])
+_s2 = add_day(st, "2026-03-05", c1, ["sydney now"])
+st.ingest(fact_cand(owner, _s1, "Brisbane", "brisbane", "2026-03-01T08:00:00"))
+st.ingest(fact_cand(owner, _s2, "Sydney", "sydney", "2026-03-05T08:00:00"))
+try:
+    _res = st.purge_cluster(c1)
+    _ok = (st.conn.execute("select count(*) from fact").fetchone()[0] == 0
+           and st.conn.execute("select count(*) from fact_fts").fetchone()[0] == 0
+           and st.query("where does sam live", k=5, now="2026-03-06T00:00:00") == [])
+    check("T20i purging a superseded fact leaves a readable index", _ok, str(_res))
+except Exception as _exc:  # noqa: BLE001 - a corrupt index raises here
+    check("T20i purging a superseded fact leaves a readable index", False, repr(_exc))
+
+# --------------------------------------------- T21 the negative control, in process
+from jarvis_memory.bench import harness as _harness  # noqa: E402
+
+_off_hh = _harness.run_household(2, 14, predicate_hint=False)
+_on_hh = _harness.run_household(2, 14, predicate_hint=True)
+check("T21a hint OFF reproduces MS0's seed-2 update accuracy (0.875)",
+      close_to(_off_hh["update_acc"], 0.875), str(_off_hh["update_acc"]))
+check("T21b hint OFF reproduces MS0's seed-2 growth drop (37.5)",
+      close_to(_off_hh["growth_drop_points"], 37.5), str(_off_hh["growth_drop_points"]))
+check("T21c hint ON lifts seed-2 update accuracy to 1.0",
+      close_to(_on_hh["update_acc"], 1.0), str(_on_hh["update_acc"]))
+check("T21d hint ON removes the growth drop entirely",
+      close_to(_on_hh["growth_drop_points"], 0.0), str(_on_hh["growth_drop_points"]))
+check("T21e coexisting recall is 1.0 either way",
+      close_to(_off_hh["coexist_recall"], 1.0) and close_to(_on_hh["coexist_recall"], 1.0),
+      f"{_off_hh['coexist_recall']} {_on_hh['coexist_recall']}")
+check("T21f the hint touches retrieval only, never the write path",
+      _off_hh["spouse_surfaced_day"] == _on_hh["spouse_surfaced_day"],
+      f"{_off_hh['spouse_surfaced_day']} vs {_on_hh['spouse_surfaced_day']}")
 
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
 sys.exit(1 if FAILS else 0)

@@ -56,19 +56,11 @@ def _now_iso() -> str:
     return _dt.datetime.now().replace(microsecond=0).isoformat()
 
 
-def _tokens(text: str):
-    """The query words, lower-cased, alphanumeric runs only. FTS5 syntax characters never survive
-    this, so an operator question can never be read as a MATCH expression."""
-    out, cur = [], []
-    for ch in str(text).lower():
-        if ch.isalnum():
-            cur.append(ch)
-        elif cur:
-            out.append("".join(cur))
-            cur = []
-    if cur:
-        out.append("".join(cur))
-    return out
+# The tokeniser lives in retrieve.py from MS0.1 and is re-exported here for the callers that had
+# it as `store._tokens`. ONE tokeniser, not two: the words that steer the predicate hint must be
+# exactly the words that reach the FTS5 MATCH, or the lane could be narrowed by a word the index
+# never sees.
+_tokens = _retrieve.tokens
 
 
 class MemoryStore:
@@ -254,7 +246,14 @@ class MemoryStore:
                 (slot["person_id"], slot["topic_norm"], cand.get("polarity"), cand.get("strength"),
                  cand["source_kind"], 1.0, vf, new_row.get("valid_to"),
                  new_row["recorded_at"], new_row.get("superseded_by")))
-            return cur.lastrowid
+            row_id = cur.lastrowid
+            # Only CURRENT preferences are searchable, exactly as for facts.
+            if new_row.get("valid_to") is None:
+                self.conn.execute(
+                    "insert into pref_fts (rowid, text) values (?,?)",
+                    (row_id, self._pref_fts_text(slot["person_id"], cand.get("polarity"),
+                                                 slot["topic_norm"])))
+            return row_id
         cur = self.conn.execute(
             "insert into fact (subject_kind, subject_id, predicate_id, object_text, object_norm, "
             "source_kind, speaker_person_id, confidence, valid_from, valid_to, recorded_at, "
@@ -271,6 +270,24 @@ class MemoryStore:
                 (row_id, self._fact_fts_text(slot["subject_id"], slot["subject_kind"],
                                              slot["predicate_id"], cand.get("object"))))
         return row_id
+
+    def _pref_fts_text(self, person_id, polarity, topic_norm) -> str:
+        """What a preference looks like in the full-text lane: '<name> prefers <polarity> <topic>'.
+
+        The polarity is in the text on purpose - 'likes' and 'dislikes' on one topic are two
+        coexisting rows, and a reader of a search result has to be able to tell them apart.
+        """
+        return " ".join(x for x in (self.display_name(person_id), "prefers",
+                                    str(polarity or ""), str(topic_norm or "")) if x)
+
+    def _pref_index_text(self, row_id):
+        """Re-render what was indexed for a preference, for the contentless delete."""
+        r = self.conn.execute(
+            "select person_id, polarity, topic_norm from preference where id=?",
+            (row_id,)).fetchone()
+        if r is None:
+            return None
+        return self._pref_fts_text(r["person_id"], r["polarity"], r["topic_norm"])
 
     def _fact_index_text(self, row_id):
         """Re-render exactly what was indexed for a fact. A contentless FTS5 table keeps no copy of
@@ -299,11 +316,31 @@ class MemoryStore:
             f"insert into {fts_table} ({fts_table}, rowid, text) values ('delete', ?, ?)",
             (rowid, text))
 
+    def _drop_from_index(self, table, row_id):
+        """Remove a row from its full-text index, but ONLY if it is still in it.
+
+        A closed row left the index at close time. FTS5's 'delete' command on a contentless table
+        does not tolerate being asked twice: deleting a rowid that is not present corrupts the
+        index outright (`database disk image is malformed` on the next read), so the valid_to test
+        is a correctness requirement, not a saving. Found at MS0.1 by purging a cluster whose
+        preference had already been ended; the same hazard was latent for facts since MS0, where no
+        test had yet purged a superseded one.
+        """
+        row = self.conn.execute(f"select valid_to from {table} where id=?", (row_id,)).fetchone()
+        if row is None or row[0] is not None:
+            return
+        if table == "fact":
+            self._fts_delete("fact_fts", row_id, self._fact_index_text(row_id))
+        elif table == "preference":
+            self._fts_delete("pref_fts", row_id, self._pref_index_text(row_id))
+
     def _close_row(self, table, row_id, valid_to, winner_id):
         if table == "fact":
             # Read the indexed text BEFORE the row changes, then drop it from the lane: a
             # superseded belief must not answer a question.
             self._fts_delete("fact_fts", row_id, self._fact_index_text(row_id))
+        elif table == "preference":
+            self._fts_delete("pref_fts", row_id, self._pref_index_text(row_id))
         self.conn.execute(
             f"update {table} set valid_to=?, superseded_by=? where id=?",
             (valid_to, winner_id, row_id))
@@ -416,8 +453,7 @@ class MemoryStore:
         with self.conn:
             for table, row_id in plan["delete"]:
                 link, col = SPAN_LINK[table]
-                if table == "fact":
-                    self._fts_delete("fact_fts", row_id, self._fact_index_text(row_id))
+                self._drop_from_index(table, row_id)
                 self.conn.execute(f"delete from {link} where {col}=?", (row_id,))
                 self.conn.execute(f"delete from {table} where id=?", (row_id,))
                 deleted[table] = deleted.get(table, 0) + 1
@@ -479,35 +515,66 @@ class MemoryStore:
         r = self.conn.execute("select max(said_at) from span").fetchone()
         return r[0] or _now_iso()
 
-    def query(self, text, k=5, now=None) -> list:
+    def query(self, text, k=5, now=None, predicate_hint="auto") -> list:
         """The full-text lane plus the ranker, with the spans always attached.
 
         `lane_score` is 1/(1+position) within each lane, positions taken in bm25 order - a bounded,
-        monotone score, so the ranker's source, recency and confidence weights decide between two
-        lanes rather than being swamped by raw bm25 magnitudes.
+        monotone score. It is an ORDINAL, so a 7 % bm25 difference becomes a 2x gap; harmless while
+        every competitor shares source, recency and confidence, and the design pre-registers a
+        proper fusion for MS1 when the embedding lane joins.
 
         `now` defaults to the newest span in the store, so a query is deterministic and a benchmark
         can ask what was believed on a given day.
+
+        `predicate_hint` (MS0.1): 'auto' asks retrieve.predicate_hint for the question's predicate,
+        None forces the unrestricted MS0 behaviour, and an explicit predicate id forces that
+        restriction. With a hint the lookup is narrowed to the one table and predicate the question
+        is about - which is what stops a diluted predicate word letting the shorter of two facts
+        about the same person win. SPANS ARE NEVER RESTRICTED: they are raw evidence, not a typed
+        belief, and a question whose predicate we guessed must still be able to reach the words
+        actually spoken.
         """
         match = self._fts_match(text)
         if not match:
             return []
         now = now or self._newest_now()
+        hint = _retrieve.predicate_hint(text) if predicate_hint == "auto" else predicate_hint
+        want_prefs = hint is None or hint == PREFERENCE_PREDICATE
+        want_facts = hint is None or hint != PREFERENCE_PREDICATE
         rows = []
 
-        fact_rows = self.conn.execute(
-            "select f.id, f.object_text, f.source_kind, f.confidence, f.recorded_at, "
-            "       f.subject_kind, f.subject_id, f.predicate_id "
-            "from fact_fts j join fact f on f.id = j.rowid "
-            "where fact_fts match ? and f.valid_to is null order by bm25(fact_fts) limit 50",
-            (match,)).fetchall()
-        for i, r in enumerate(fact_rows):
-            rows.append({"table": "fact", "row_id": r["id"], "lane_score": 1.0 / (1 + i),
-                         "source_kind": r["source_kind"], "confidence": r["confidence"],
-                         "newest_span_at": self._newest_span_at("fact", r["id"]),
-                         "recorded_at": r["recorded_at"],
-                         "text": self._fact_fts_text(r["subject_id"], r["subject_kind"],
-                                                     r["predicate_id"], r["object_text"])})
+        if want_facts:
+            sql = ("select f.id, f.object_text, f.source_kind, f.confidence, f.recorded_at, "
+                   "       f.subject_kind, f.subject_id, f.predicate_id "
+                   "from fact_fts j join fact f on f.id = j.rowid "
+                   "where fact_fts match ? and f.valid_to is null")
+            args = [match]
+            if hint is not None:
+                sql += " and f.predicate_id = ?"
+                args.append(hint)
+            sql += " order by bm25(fact_fts) limit 50"
+            for i, r in enumerate(self.conn.execute(sql, tuple(args)).fetchall()):
+                rows.append({"table": "fact", "row_id": r["id"], "lane_score": 1.0 / (1 + i),
+                             "source_kind": r["source_kind"], "confidence": r["confidence"],
+                             "newest_span_at": self._newest_span_at("fact", r["id"]),
+                             "recorded_at": r["recorded_at"],
+                             "text": self._fact_fts_text(r["subject_id"], r["subject_kind"],
+                                                         r["predicate_id"], r["object_text"])})
+
+        if want_prefs:
+            pref_rows = self.conn.execute(
+                "select p.id, p.person_id, p.polarity, p.topic_norm, p.source_kind, p.confidence, "
+                "       p.recorded_at "
+                "from pref_fts j join preference p on p.id = j.rowid "
+                "where pref_fts match ? and p.valid_to is null "
+                "order by bm25(pref_fts) limit 50", (match,)).fetchall()
+            for i, r in enumerate(pref_rows):
+                rows.append({"table": "preference", "row_id": r["id"], "lane_score": 1.0 / (1 + i),
+                             "source_kind": r["source_kind"], "confidence": r["confidence"],
+                             "newest_span_at": self._newest_span_at("preference", r["id"]),
+                             "recorded_at": r["recorded_at"],
+                             "text": self._pref_fts_text(r["person_id"], r["polarity"],
+                                                         r["topic_norm"])})
 
         span_rows = self.conn.execute(
             "select s.id, s.text, s.said_at from span_fts j join span s on s.id = j.rowid "

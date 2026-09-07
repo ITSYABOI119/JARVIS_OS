@@ -57,6 +57,48 @@ EDGE_PREDICATE = "person.relation_to"
 PREFERENCE_PREDICATE = "owner.prefers"
 
 
+# The query vocabulary — the K-b instinct applied to RETRIEVAL (added at MS0.1).
+#
+# A question that uses exactly one predicate's words is asking about that predicate, so the lane may
+# restrict its lookup to it; a question that uses none, or several, is left unrestricted. The rule
+# SELECTS a predicate the registry already types and can never invent one, exactly as the extractor
+# selects a predicate id and never synthesises one.
+#
+# The measured reason it exists (design §6): MS0's growth set missed its band by 46.25 points because
+# 30x filler put `works as` and `lives in` into roughly half of all rows, collapsing those terms' IDF
+# to ~0.02, after which BM25's length normalisation returned the SHORTER of two facts about the same
+# person. Narrowing the lookup by predicate removes the competitor rather than reweighting it.
+#
+# Matching is on RAW lower-cased tokens, never stemmed — which is why the inflections are spelled
+# out. The nine sets are pairwise disjoint and every key is a predicate id; both are asserted by the
+# test suite, so a word added to two sets fails the build rather than silently making the hint
+# ambiguous. This table is human-reviewed: adding a word is a reviewed code change, never a tuning
+# knob turned to move a benchmark number.
+QUERY_VOCAB = {
+    "person.name": frozenset({"name", "named", "called", "call"}),
+    "person.relation_to": frozenset({
+        "wife", "husband", "married", "marry", "spouse", "partner", "related", "relationship",
+        "relation", "sister", "brother", "mother", "father", "mum", "dad", "son", "daughter",
+        "friend", "friends", "colleague", "family"}),
+    "person.lives_in": frozenset({
+        "live", "lives", "living", "lived", "home", "address", "reside", "resides", "residing"}),
+    "person.works_as": frozenset({
+        "work", "works", "working", "worked", "job", "jobs", "occupation", "employed", "employer",
+        "career", "profession"}),
+    "person.habit": frozenset({"habit", "habits", "routine", "routines", "usually", "regularly"}),
+    "person.trait": frozenset({"trait", "traits", "personality", "tends", "tend", "tendency"}),
+    "household.topic": frozenset({
+        "talk", "talks", "talked", "talking", "discuss", "discussed", "discussing", "topic",
+        "topics", "conversation", "conversations"}),
+    "household.routine": frozenset({
+        "schedule", "schedules", "household", "weekly", "chores", "chore"}),
+    "owner.prefers": frozenset({
+        "like", "likes", "liked", "love", "loves", "loved", "prefer", "prefers", "preferred",
+        "favourite", "favorite", "hate", "hates", "hated", "dislike", "dislikes", "avoid",
+        "avoids", "enjoy", "enjoys", "want", "wants"}),
+}
+
+
 def is_known(predicate_id: str) -> bool:
     """True iff the predicate is in the registry. Never raises."""
     return predicate_id in PREDICATES
