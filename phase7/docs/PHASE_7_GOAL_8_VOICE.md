@@ -44,7 +44,7 @@ Sources: `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md` §3, §5, §8; `phase4/do
 6. **Enrollment = a centroid** (mean of L2-normalised clip embeddings, itself normalised) over ≥ 60 s of speech in ≥ 3 clips, plus the per-clip embeddings; stored as `owner.json` (model, dim, clips with sha256 and durations, threshold, created, the vectors as lists) + `owner.npy`.
 7. **Verification = one decision per clip:** `cos(centroid, clip) ≥ threshold → owner`; clips shorter than 2 s are REFUSED and reported; score, threshold and decision are always printed together.
 8. **`transcribe` deletes the input WAV after the transcript JSON is written and fsync'd, unless `--keep`;** the JSON records the input's sha256 and `deleted: true|false`; a write failure leaves the input in place (test T6).
-9. **Owner-only enrollment; no confirmation gate; everything transcribed** — the owner's rules (idea doc §8). The tooling has no "wife" concept; speaker clustering of non-owner speech is M1.
+9. **Owner-only enrollment; no confirmation gate; everything transcribed** — the owner's rules (idea doc §8). The tooling has no "wife" concept; speaker clustering of non-owner speech is M1. **Commands are obeyed from the owner's verified voice only, and no wake word is a gate** (the operator, 2026-09-07): JARVIS is always listening — eventually 24/7 and live — learns from everyone, infers when it is being addressed (its name a cue, never a requirement), and acts for the owner alone; another voice's command is declined and logged; delegation is an explicit owner act designed later; verification says who spoke, not that it was live, so the signed channel and the allowlist remain the bound.
 10. **The owner records his own enrollment (M0b) in a later prompt**, from the runbook in §6. M0a's evidence is public speakers only.
 
 11. **`split` extracts speech and packs whole runs (M0b prep, 2026-09-06).** Frames of 50 ms with RMS in dBFS; a frame is speech iff louder than −45 dBFS (strict), every loud run padded by 200 ms each side, then every interior gap shorter than 500 ms merged; the maximal speech runs are packed greedily in order into pieces, a piece closing the moment its total reaches the target (60 s for enrollment pieces, 10 s for sanity pieces) and the last open piece kept only if it reaches the minimum (20 s / 3 s); a piece is the concatenation of its runs' samples, so no word is cut at a boundary and no listening silence is embedded. The parameters are locked; `split` refuses to overwrite an existing first piece and refuses a non-16 kHz source; `--move-source-to` parks the long recording under `enroll\long\` after its pieces are written.
@@ -67,8 +67,8 @@ Sources: `%USERPROFILE%\.jarvis\voice\freeze.txt`; the M0a run (§6); `phase7/vo
 | **M3** | The console profile view (designed in Claude Design, real source only) | the UI–feature-parity rule met: every rendered field has a live source | the profile-view row |
 | **M4** | The digest of new learning | a learned-this-week digest from the same store | the digest row |
 | **V0** | Headset command → Whisper → the receiver-as-signer → control-IN | one owner-voice command answered over control-IN | the V0 row |
-| **V1 / V2** | The recorder wearable; speaker-verified wake-word commands | per the idea doc §4 | the V1 / V2 rows |
-| **V3** | Live ambient variants | decided last, only if still wanted | BLOCKED |
+| **V1 / V2** | The recorder wearable; speaker-verified commands with no wake word as a gate (addressee inference; the owner's voice verified) | per the idea doc §4 as superseded by its §8 (2026-09-07) | the V1 / V2 rows |
+| **V3** | The always-on live listener — the operator's stated end state (2026-09-07) | decided last in order, designed after V2 | WANTED |
 
 None is dated; the first-arc choice (7.1 vs 7.8) is the operator's (`PHASE_7_PLAN.md` §1).
 
@@ -223,7 +223,7 @@ Sources: the run above; `%USERPROFILE%\.jarvis\voice\selftest_2026-09-06.json`; 
 
 - [ ] The owner's voice, mastered first: enrolled from the Main PC headset mic; owner-versus-not speaker verification measured on held-out recordings at a pre-registered rate; everything transcribed, raw audio deleted after transcription — proven on the pipeline before any hardware
 - [ ] Household learning, the guess: with only the owner enrolled, days of recordings yield a household profile in a purpose-built, state-of-the-art memory store — who is who and to whom, the owner's style and preferences, habits, topics; each fact sourced, dated, stated-or-inferred with a confidence, used without confirmation — in which JARVIS has identified the recurring second voice as the owner's wife and who she is to him; surfaced by recall over control-IN, a clean console view, and a digest of new learning
-- [ ] Voice as a command front-end: one owner-voice command reaches JARVIS through control-IN and is answered (the headset first; speaker-verified from the wearable later)
+- [ ] Voice as a command front-end: one owner-voice command reaches JARVIS through control-IN and is answered (the headset first; speaker-verified from the wearable later); no wake word is required — JARVIS infers that it is being addressed; a command in any other voice is declined and logged, never executed
 
 M0a advances the first line's pipeline half (verification measured, transcription with deletion proven) on public speakers; none of the three is ticked.
 
