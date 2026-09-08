@@ -348,3 +348,222 @@ preferences are in the index now, and T20a proves a preference question reaches 
 is purely the vocabulary gap the embedding lane exists for. `relation_precision` stays 1.0 **by
 construction**: the oracle plants only true relations, so it says the store surfaced what it was given.
 Nothing here is measured on real speech, on an extractor, or on the owner.
+
+---
+
+## MS1a — 2026-09-08 — the embedding lane, fused; the transfer band measured
+
+### The first attempt, and why the design changed
+
+MS1a was pre-registered with reciprocal-rank fusion AS the `lane_score`, then multiplied by the ranker's
+weights. Run with **no embedder at all**, that regressed the update set from 100 % to **50 % in all ten
+households**, and the mechanism was measured rather than argued. For `where does juno live`, the fts_fact lane:
+
+```
+ rank | source_kind  | MS0.1 lane | MS0.1 score | RRF lane | RRF score  | text
+   1  | stated_other |     1.0000 |      0.8000 |  0.01639 | 0.013115 | juno person lives in Launceston   <- CORRECT
+   2  | stated_other |     0.5000 |      0.4000 |  0.01613 | 0.012903 | juno person habit cycles to work
+   3  | stated_other |     0.3333 |      0.2667 |  0.01587 | 0.012698 | juno person habit bakes on fridays
+   4  | stated_other |     0.2500 |      0.2000 |  0.01562 | 0.012500 | juno person works as a pharmacist
+   5  | stated_owner |     0.2000 |      0.2000 |  0.01538 | 0.015385 | jo person lives in Sydney         <- WRONG PERSON, won
+```
+
+RRF's output is deliberately flat — five ranks span 6.6 % — while `w_source` differs by 20–40 %, so a
+`stated_owner` fact about ANOTHER PERSON at rank 5 beat the correct `stated_other` fact at rank 1. An
+isolation probe changed only the fused constant's spread, kept every other change, and every MS0.1 number
+returned exactly: the rewrite was faithful and the specification was the defect. The design was corrected to
+three steps — weights order a lane's own candidates, reciprocal rank is the FINAL relevance multiplied by
+nothing, the weighted score breaks ties — and this milestone is the second attempt.
+
+### The venue
+
+Main PC, the voice venv (`%USERPROFILE%\.jarvis\voice\venv\Scripts\python.exe`): Python 3.12.6,
+sentence-transformers 5.2.0, torch 2.5.1+cu121, CUDA on an RTX 2070, numpy 2.2.6. The model loads from the
+DEFAULT Hugging Face cache with `local_files_only=True` — **2.267–3.167 s**, dim 1024. Embeddings are written
+by `embed_pending` AFTER ingest and never during it, so the write path stays embedding-free and the p99 band
+still measures the store rather than a GPU.
+
+### Run C — the control, no embedder (11.8 s)
+
+```
+households : 10  seeds 1..10  days 14  predicate_hint ON  embedder none
+    coexist_recall                   1.0
+    growth_drop_paraphrase_points    0.0
+    growth_drop_points               0.0
+    growth_update_acc                1.0
+    growth_update_acc_paraphrase     0.5
+    relation_precision               1.0
+    spouse_surfaced_day_mean         8.0
+    spouse_surfaced_households       10/10
+    transfer_recall5                 0.0
+    update_acc                       1.0
+    update_acc_paraphrase            0.5
+latency    : p50 0.0666 ms  p99 0.2801 ms over 100000 ingests, 100000 facts in the store
+audit      : 0 violations
+bands      : PASS audit==0 · PASS coexist_recall>=0.95 · PASS growth_drop<=5 · PASS p99<=50ms · PASS update_acc>=0.95
+```
+
+`--assert-bands` exited 0. **Every band-relevant aggregate equals MS0.1's** — `update_acc 1.0`,
+`coexist_recall 1.0`, `growth_update_acc 1.0`, `growth_drop_points 0.0`, `transfer_recall5 0.0`,
+`relation_precision 1.0`, `spouse_surfaced_day_mean 8.0`, audit 0. The correction holds, and the ordering
+change is isolated to the merge exactly as the design says.
+
+### Run A — the embedding lane, symmetric query, BANDED (2 m 54 s)
+
+```
+embedder   : Qwen/Qwen3-Embedding-0.6B dim 1024 loaded in 3.167 s on cuda (sentence-transformers 5.2.0)
+households : 10  seeds 1..10  days 14  predicate_hint ON  embedder qwen
+    coexist_recall                   1.0
+    growth_drop_paraphrase_points    1.25
+    growth_drop_points               2.5
+    growth_update_acc                0.8875
+    growth_update_acc_paraphrase     0.4625
+    relation_precision               1.0
+    spouse_surfaced_day_mean         8.0
+    spouse_surfaced_households       10/10
+    transfer_recall5                 0.05
+    update_acc                       0.9125
+    update_acc_paraphrase            0.475
+latency    : p50 0.0667 ms  p99 0.2681 ms over 100000 ingests, 100000 facts in the store
+audit      : 0 violations
+bands      : PASS audit==0 · PASS coexist_recall>=0.95 · PASS growth_drop<=5 · PASS p99<=50ms
+             FAIL transfer_recall5>=0.60 · FAIL update_acc>=0.95
+transfer/topic: {early mornings 0, long drives 5, loud music 0, spicy food 1} of 30 scenarios each
+```
+
+**Two bands missed, and they share ONE cause.**
+
+| band | run C (no lane) | run A (with the lane) | verdict |
+|---|---|---|---|
+| update accuracy ≥ 95 % | 100 % | **91.25 %** | **MISSED** |
+| transfer recall@5 ≥ 60 % | 0 % (reported) | **5 %** | **MISSED** |
+| coexisting recall ≥ 95 % | 100 % | 100 % | PASS |
+| audit completeness | 0 violations | 0 violations | PASS |
+| write p99 ≤ 50 ms at 100 k | 0.2801 ms | 0.2681 ms | PASS |
+| growth drop ≤ 5 points | 0.0 | 2.5 | PASS (read beside the absolute: 100 % → 88.75 %) |
+
+### The one cause: cross-lane source weighting no longer exists
+
+Every update failure has the same shape — **a SPAN beats the FACT extracted from it**:
+
+```
+BAD what job does jo work as   want teacher
+    span  rel=0.032522 tie=0.5513 lanes={fts_span: 1, vec: 2}  i work as a teacher
+    fact  rel=0.032266 tie=1.0000 lanes={fts_fact: 1, vec: 3}  jo person works as a teacher
+
+BAD what job does kit work as  want librarian
+    span  rel=0.032787 tie=0.5513 lanes={fts_span: 1, vec: 1}  i work as a librarian
+    fact  rel=0.032522 tie=1.0000 lanes={fts_fact: 1, vec: 2}  kit person works as a librarian
+```
+
+The span is rank 1 in its full-text lane and one rank HIGHER in the vector lane, so its fused relevance beats
+the fact's by 0.00026 — and the tiebreak that would have chosen the fact (1.0 against 0.55) never runs,
+because it only applies when relevance is equal.
+
+The design says *"a stated fact outranks the raw utterance it came from"*. That property used to live in the
+multiplicative ranker, where `w_source` 1.0 against 0.6 compared a fact with a span directly. The correction
+moved the weights INSIDE each lane — and a fact and a span are never in the same lane, so nothing compares
+them any more. **Run C passes only because of an accident:** with no vector lane each row sits in exactly one
+lane, both at rank 1, so the relevances TIE at 1/61 and the tiebreak does choose the fact. Adding the vector
+lane gives both rows a second rank, the tie breaks on cosine order first, and the utterance wins.
+
+The transfer failure is the same cause seen from the other side. The gold preference's cosine is respectable
+but generic chatter spans out-rank it:
+
+```
+scenario                                   | topic          | cos   | gold rank | what won instead
+what should i order at the restaurant …    | spicy food     | 0.414 |   miss    | span  we should decide
+planning dinner for our anniversary        | spicy food     | 0.451 |   miss    | span  we planned the week together
+which cuisine would suit us both           | spicy food     | 0.531 |   miss    | span  we are both on the lease
+picking a venue for the party              | loud music     | 0.426 |   miss    | span  remember the bins go out on tu…
+is that bar going to be too much           | loud music     | 0.516 |   miss    | fact  household household routine bi…
+choosing background sound for the evening  | loud music     | 0.532 |   miss    | span  sounds good to me
+when should we schedule the appointment    | early mornings | 0.505 |   miss    | span  we should decide
+is a sunrise start reasonable              | early mornings | 0.599 |   miss    | fact  alex person works as a plumber
+booking a flight time that works           | early mornings | 0.498 |   miss    | fact  alex person works as a plumber
+how should we travel to the coast          | long drives    | 0.476 |   miss    | span  we should decide
+would a train be better than the car       | long drives    | 0.533 |   miss    | span  we shared the school run
+planning the route for our holiday         | long drives    | 0.544 |   miss    | span  we planned the week together
+```
+
+A household carries roughly seventy spans against four preferences, and generic conversational filler
+(*"we should decide"*, *"sounds good to me"*) embeds close to any conversational question. With no mechanism
+ranking a typed belief above a raw utterance across lanes, the spans crowd the top five out.
+
+### Run B — the instruction-prefixed query, REPORTED, never adopted (2 m 28 s)
+
+```
+embedder   : Qwen/Qwen3-Embedding-0.6B+instruct dim 1024 loaded in 2.267 s on cuda
+    transfer_recall5                 0.2833          (against 0.05 symmetric)
+    update_acc                       0.9125          (identical)
+    update_acc_paraphrase            0.45
+    growth_drop_points               5.0
+    coexist_recall                   1.0
+    relation_precision               1.0
+    spouse_surfaced_day_mean         8.0
+transfer/topic: {early mornings 12, long drives 12, loud music 0, spicy food 10} of 30 each
+```
+
+The instruction prefix is **5.7× better on transfer** (28.3 % against 5.0 %) and identical on the update set.
+It is reported, not adopted: the design fixes the symmetric form, C/M0.5 measured that form better for
+query-to-query retrieval, and one corpus is not grounds to change it. It is, however, the strongest single
+signal in this milestone about where the remaining transfer headroom is. `loud music` scores 0 in both arms.
+
+### Per household, run A
+
+```
+seed |  update  para   growth  growth-para  transfer  spouse
+   1 |  1.000   0.500   1.000     0.500       0.000      8
+   2 |  0.750   0.500   0.750     0.375       0.083      8
+   3 |  0.875   0.500   0.875     0.500       0.167      8
+   4 |  1.000   0.500   1.000     0.500       0.083      8
+   5 |  1.000   0.500   0.875     0.500       0.000      8
+   6 |  1.000   0.500   1.000     0.500       0.000      8
+   7 |  1.000   0.500   1.000     0.625       0.083      8
+   8 |  1.000   0.500   0.875     0.375       0.000      8
+   9 |  0.500   0.250   0.500     0.250       0.083      8
+  10 |  1.000   0.500   1.000     0.500       0.000      8
+```
+
+The spouse edge still surfaces on day 8 in 10/10 households in every run — the write path is untouched by any
+of this, which is the check that the lane changed retrieval and nothing else.
+
+### The paraphrase set
+
+Two paraphrases per updated slot, worded entirely outside `QUERY_VOCAB` so the predicate hint cannot fire
+(T27 asserts both the disjointness and that `predicate_hint` returns None for every one). Reported, never
+banded: **50.0 %** with the full-text lane alone, **47.5 %** with the vector lane. The lane does not help here
+either, for the same reason — spans win the top slots.
+
+### The vocabulary move
+
+`routine` and `routines` moved from `person.habit` to `household.routine`, MS0.1's report F1. The corpus's own
+question, *"what household routine do we keep"*, previously matched two sets and was left unrestricted; it now
+resolves to `household.routine`. The nine sets remain pairwise disjoint (T18m, T26f).
+
+### Tests
+
+`phase7/memory/test_memory_logic.py` — **190 checks**, all passing in WSL Python 3.12.3 (the CI form), the
+voice venv's 3.12.6. The GitHub runner reports ONE FEWER, because the numpy-agreement check skips with a
+printed note where numpy is absent — measured at commit 1, where the runner logged 177 against 178 locally. New at MS1a: T22 (vectors), T23 (RRF maths), T23h (`lane_order` — the
+weights inside a lane), T23i (`rank` — relevance first, tiebreak second), T24/T24e (the vector lane and the
+hint never restricting it), T25 (the embedding lifecycle), T26 (the vocabulary move), T27 (the paraphrase set).
+T8h–T8j were retargeted from `rank` to `lane_order`, because the behaviour they asserted moved there by design.
+
+Mutants, control first each time, on throwaway copies outside the repo:
+
+| mutant | result |
+|---|---|
+| `rank` sorts by tiebreak before relevance | `FAIL T23i4 relevance outranks the tiebreak` · 177/178 |
+| a paraphrase reintroduces a vocabulary word (`live`) | `FAIL T27b`, `T27c`, `T27e` · 187/190 |
+
+### Honest scope
+
+A **template corpus** with fixed query shapes, ORACLE candidates, and no extractor — MS1b is the bake-off, and
+until it runs nothing here says anything about extraction quality. The transfer cosines measured tonight are
+**thin** (0.41–0.60 to the gold preference) and the corpus's generic chatter sits in the same range, so the
+transfer number is as much a statement about span density as about the embedder. The vector lane does do the
+job the design asked of it — T24e shows a question the hint mis-routed still reaching its row by meaning — but
+at the top of the result list that gain is currently spent competing with raw utterances. Relation precision
+stays 1.0 **by construction** (the oracle plants only true relations). Nothing here is measured on real speech
+or on the owner; every store was in memory.

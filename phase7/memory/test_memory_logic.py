@@ -927,5 +927,67 @@ _order = [(h["table"], h["row_id"]) for h in _hits]
 check("T25g with no embedder the fact still outranks the span it came from",
       len(_order) >= 2 and _order[0][0] == "fact" and _order[1][0] == "span", str(_order))
 
+# ============================ T26 the vocabulary move, T27 the paraphrase set
+# MS0.1's report found `routine`/`routines` under person.habit while `household` sat under
+# household.routine, so the most natural household-routine question matched two sets and was left
+# unrestricted. The words move; the sets stay pairwise disjoint (T18m still asserts that).
+
+check("T26a a household routine question now reaches its own predicate",
+      predicate_hint("what is our routine") == "household.routine",
+      str(predicate_hint("what is our routine")))
+check("T26b the corpus's own phrasing resolves too",
+      predicate_hint("what household routine do we keep") == "household.routine",
+      str(predicate_hint("what household routine do we keep")))
+check("T26c a habit question still reaches person.habit",
+      predicate_hint("what habits does sam have") == "person.habit",
+      str(predicate_hint("what habits does sam have")))
+check("T26d routine left person.habit", "routine" not in QUERY_VOCAB["person.habit"])
+check("T26e and arrived at household.routine",
+      {"routine", "routines"} <= QUERY_VOCAB["household.routine"])
+_ov = []
+_ks = sorted(QUERY_VOCAB)
+for _i in range(len(_ks)):
+    for _j in range(_i + 1, len(_ks)):
+        _b = QUERY_VOCAB[_ks[_i]] & QUERY_VOCAB[_ks[_j]]
+        if _b:
+            _ov.append((_ks[_i], _ks[_j], sorted(_b)))
+check("T26f the nine sets are still pairwise disjoint after the move", _ov == [], str(_ov))
+
+_VOCAB_UNION = set()
+for _s in QUERY_VOCAB.values():
+    _VOCAB_UNION |= set(_s)
+
+_hh1 = generate_household(1)
+_upd, _para = _hh1["sets"]["update"], _hh1["sets"]["update_paraphrase"]
+# The dictated paraphrases are two per PREDICATE (lives_in gets two, works_as gets two), so each
+# updated SLOT (subject + predicate) carries exactly two - eight in all, against an update set of
+# eight questions that is itself two phrasings per slot.
+_slots_u = {(u["subject"], u["predicate_id"]) for u in _upd}
+_by_slot = {}
+for _p in _para:
+    _by_slot.setdefault((_p["subject"], _p["predicate_id"]), []).append(_p["query"])
+check("T27a exactly two paraphrases for every updated slot",
+      set(_by_slot) == _slots_u and all(len(v) == 2 for v in _by_slot.values()),
+      str({k: len(v) for k, v in _by_slot.items()}))
+check("T27a2 and they are distinct phrasings",
+      all(len(set(v)) == 2 for v in _by_slot.values()), str(_by_slot))
+_bad = [p["query"] for p in _para if set(p["query"].lower().split()) & _VOCAB_UNION]
+check("T27b every paraphrase is out of the hint's vocabulary entirely", _bad == [], str(_bad))
+_hinted = [(p["query"], predicate_hint(p["query"])) for p in _para
+           if predicate_hint(p["query"]) is not None]
+check("T27c so none of them hints at all", _hinted == [], str(_hinted))
+check("T27d each paraphrase keeps its gold answer and subject",
+      all(p.get("gold_object_norm") and p.get("subject") for p in _para),
+      str([p for p in _para if not p.get("gold_object_norm")][:1]))
+# Strengthening beyond the prompt: the household's NAME is substituted into every paraphrase, so a
+# name that happened to be a vocabulary word would hint. Sweep several seeds, not just seed 1.
+_bad_seeds = []
+for _sd in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10):
+    for _p in generate_household(_sd)["sets"]["update_paraphrase"]:
+        if predicate_hint(_p["query"]) is not None:
+            _bad_seeds.append((_sd, _p["query"]))
+check("T27e no household's names turn a paraphrase into a hinted question",
+      _bad_seeds == [], str(_bad_seeds[:3]))
+
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
 sys.exit(1 if FAILS else 0)

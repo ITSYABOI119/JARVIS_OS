@@ -31,13 +31,26 @@ def main(argv=None) -> int:
     p.add_argument("--assert-bands", action="store_true")
     p.add_argument("--no-predicate-hint", dest="predicate_hint", action="store_false",
                    help="the NEGATIVE CONTROL: run the MS0 lane, unrestricted by the registry hint")
+    p.add_argument("--embedder", choices=("none", "qwen"), default="none",
+                   help="none keeps the full-text lanes only; qwen adds the vector lane on the GPU")
+    p.add_argument("--query-instruction", action="store_true",
+                   help="the REPORTED arm: prefix the query with the instruction, never adopted")
     a = p.parse_args(argv)
 
     seeds = list(range(a.seed, a.seed + a.households))
-    res = harness.run(seeds, a.days, a.latency_facts, a.out, a.predicate_hint)
+    embedder = None
+    if a.embedder == "qwen":
+        from jarvis_memory.embed import QwenEmbedder   # imports torch; only on this path
+        embedder = QwenEmbedder(instruction=a.query_instruction)
+        print(f"embedder   : {embedder.model_id} dim {embedder.dim} "
+              f"loaded in {embedder.load_s} s on {embedder.device} "
+              f"(sentence-transformers {embedder.version})")
+    res = harness.run(seeds, a.days, a.latency_facts, a.out, a.predicate_hint, embedder,
+                      a.embedder)
 
     print(f"households : {len(seeds)}  seeds {seeds[0]}..{seeds[-1]}  days {a.days}  "
-          f"predicate_hint {'ON' if a.predicate_hint else 'OFF (negative control)'}")
+          f"predicate_hint {'ON' if a.predicate_hint else 'OFF (negative control)'}  "
+          f"embedder {a.embedder}{' +instruct' if a.query_instruction else ''}")
     print("aggregate  :")
     for k in sorted(res["aggregate"]):
         print(f"    {k:32s} {res['aggregate'][k]}")
@@ -57,6 +70,9 @@ def main(argv=None) -> int:
         if v is False:
             failed.append(k)
     print("reported   : " + json.dumps(res["reported"], sort_keys=True))
+    if res.get("transfer_by_topic_total"):
+        print("transfer/topic: " + json.dumps(res["transfer_by_topic_total"], sort_keys=True)
+              + f"  (of {3 * len(seeds)} scenarios each)")
     if a.out:
         print(f"written    : {a.out}")
     if a.assert_bands and failed:

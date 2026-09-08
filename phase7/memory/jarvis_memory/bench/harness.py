@@ -74,10 +74,10 @@ def _fact_row(st, row_id):
     return dict(r) if r else None
 
 
-def _score_update(st, items, ids, now, hint="auto"):
+def _score_update(st, items, ids, now, hint="auto", embedder=None):
     ok = 0
     for it in items:
-        hits = st.query(it["query"], k=5, now=now, predicate_hint=hint)
+        hits = st.query(it["query"], k=5, now=now, predicate_hint=hint, embedder=embedder)
         if not hits or hits[0]["table"] != "fact":
             continue
         row = _fact_row(st, hits[0]["row_id"])
@@ -89,11 +89,11 @@ def _score_update(st, items, ids, now, hint="auto"):
     return ok / len(items) if items else 0.0
 
 
-def _score_coexist(st, items, ids, now, hint="auto"):
+def _score_coexist(st, items, ids, now, hint="auto", embedder=None):
     """Recall of the current values, with a hard zero if a value the owner ENDED comes back."""
     recalls, leaks = [], 0
     for it in items:
-        hits = st.query(it["query"], k=5, now=now, predicate_hint=hint)
+        hits = st.query(it["query"], k=5, now=now, predicate_hint=hint, embedder=embedder)
         found = set()
         leaked = False
         for h in hits:
@@ -114,7 +114,7 @@ def _score_coexist(st, items, ids, now, hint="auto"):
     return (statistics.fmean(recalls) if recalls else 0.0), leaks
 
 
-def _score_transfer(st, items, owner_id, now, hint="auto"):
+def _score_transfer(st, items, owner_id, now, hint="auto", embedder=None):
     """Is the planted preference in the top five for a scenario worded without its own words?
 
     At MS0 the full-text lane is the only lane and preferences are not in it, so this is expected to
@@ -122,17 +122,21 @@ def _score_transfer(st, items, owner_id, now, hint="auto"):
     lane for exactly this reason.
     """
     ok = 0
+    by_topic = {}
     for it in items:
-        hits = st.query(it["query"], k=5, now=now, predicate_hint=hint)
+        topic = it["gold_topic_norm"]
+        by_topic.setdefault(topic, 0)
+        hits = st.query(it["query"], k=5, now=now, predicate_hint=hint, embedder=embedder)
         for h in hits:
             if h["table"] != "preference":
                 continue
             r = st.conn.execute("select topic_norm from preference where id=?",
                                 (h["row_id"],)).fetchone()
-            if r and r[0] == it["gold_topic_norm"]:
+            if r and r[0] == topic:
                 ok += 1
+                by_topic[topic] += 1
                 break
-    return ok / len(items) if items else 0.0
+    return (ok / len(items) if items else 0.0), by_topic
 
 
 def _score_relations(st, items, ids):
@@ -146,8 +150,12 @@ def _score_relations(st, items, ids):
     return hit / len(surfaced), len(surfaced)
 
 
-def run_household(seed, days, predicate_hint=True):
-    """`predicate_hint=False` is the NEGATIVE CONTROL: the MS0 lane, unrestricted."""
+def run_household(seed, days, predicate_hint=True, embedder=None):
+    """`predicate_hint=False` is the NEGATIVE CONTROL: the MS0 lane, unrestricted.
+
+    `embedder` adds the vector lane. It is applied by `embed_pending` AFTER ingest, never during:
+    the write path stays embedding-free so the p99 write band measures the store, not a GPU.
+    """
     hint = "auto" if predicate_hint else None
     hh = _corpus.generate_household(seed, days)
     st = MemoryStore(":memory:")
@@ -197,10 +205,16 @@ def run_household(seed, days, predicate_hint=True):
         if spouse_day is None and conf is not None and conf >= SURFACE_THRESHOLD:
             spouse_day = day
 
+    embed_stats = {"fact": 0, "preference": 0, "span": 0, "seconds": 0.0}
+    if embedder is not None:
+        embed_stats = st.embed_pending(embedder)
+
     now = _corpus._said_at(days, 86000)
-    update_acc = _score_update(st, hh["sets"]["update"], ids, now, hint)
-    coexist_recall, ended_leaks = _score_coexist(st, hh["sets"]["coexist"], ids, now, hint)
-    transfer = _score_transfer(st, hh["sets"]["transfer"], ids["owner"], now, hint)
+    update_acc = _score_update(st, hh["sets"]["update"], ids, now, hint, embedder)
+    update_para = _score_update(st, hh["sets"]["update_paraphrase"], ids, now, hint, embedder)
+    coexist_recall, ended_leaks = _score_coexist(st, hh["sets"]["coexist"], ids, now, hint, embedder)
+    transfer, by_topic = _score_transfer(st, hh["sets"]["transfer"], ids["owner"], now, hint,
+                                         embedder)
     rel_prec, n_surfaced = _score_relations(st, hh["sets"]["relations"], ids)
     spouse_conf = _spouse_confidence(st, ids.get("owner"), ids.get("partner"))
 
@@ -225,7 +239,13 @@ def run_household(seed, days, predicate_hint=True):
                    "source_kind": "stated_owner", "speaker_cluster": clusters[1],
                    "span_ids": [sid], "about_time": None, "relation_id": None,
                    "polarity": None, "strength": None, "ended": False, "said_at": f["said_at"]})
-    growth_acc = _score_update(st, hh["sets"]["update"], ids, now, hint)
+    if embedder is not None:
+        more = st.embed_pending(embedder)
+        for kk in ("fact", "preference", "span"):
+            embed_stats[kk] += more[kk]
+        embed_stats["seconds"] = round(embed_stats["seconds"] + more["seconds"], 3)
+    growth_acc = _score_update(st, hh["sets"]["update"], ids, now, hint, embedder)
+    growth_para = _score_update(st, hh["sets"]["update_paraphrase"], ids, now, hint, embedder)
 
     violations = len(st.audit_violations())
     n_facts = st.conn.execute("select count(*) from fact").fetchone()[0]
@@ -236,6 +256,10 @@ def run_household(seed, days, predicate_hint=True):
         "n_filler": len(hh["sets"]["growth_filler"]),
         "n_facts_after_growth": n_facts,
         "update_acc": round(update_acc, 4),
+        "update_acc_paraphrase": round(update_para, 4),
+        "transfer_by_topic": by_topic,
+        "embed_seconds": embed_stats["seconds"],
+        "n_embedded": embed_stats["fact"] + embed_stats["preference"] + embed_stats["span"],
         "coexist_recall": round(coexist_recall, 4),
         "coexist_ended_leaks": ended_leaks,
         "transfer_recall5": round(transfer, 4),
@@ -245,6 +269,8 @@ def run_household(seed, days, predicate_hint=True):
         "spouse_confidence_last_day": round(spouse_conf, 4) if spouse_conf is not None else None,
         "growth_update_acc": round(growth_acc, 4),
         "growth_drop_points": round(100.0 * (update_acc - growth_acc), 4),
+        "growth_update_acc_paraphrase": round(growth_para, 4),
+        "growth_drop_paraphrase_points": round(100.0 * (update_para - growth_para), 4),
         "audit_violations": violations,
     }
 
@@ -284,11 +310,13 @@ def measure_latency(n_facts, n_subjects=2000):
             "n_ingests": n_facts}
 
 
-def run(seeds, days, latency_facts, out_path=None, predicate_hint=True) -> dict:
-    households = [run_household(s, days, predicate_hint) for s in seeds]
+def run(seeds, days, latency_facts, out_path=None, predicate_hint=True, embedder=None,
+        embedder_name="none") -> dict:
+    households = [run_household(s, days, predicate_hint, embedder) for s in seeds]
     agg = {}
     for field in ("update_acc", "coexist_recall", "transfer_recall5", "relation_precision",
-                  "growth_update_acc", "growth_drop_points"):
+                  "growth_update_acc", "growth_drop_points", "update_acc_paraphrase",
+                  "growth_update_acc_paraphrase", "growth_drop_paraphrase_points"):
         agg[field] = round(statistics.fmean(h[field] for h in households), 4)
     surfaced_days = [h["spouse_surfaced_day"] for h in households
                      if h["spouse_surfaced_day"] is not None]
@@ -305,8 +333,21 @@ def run(seeds, days, latency_facts, out_path=None, predicate_hint=True) -> dict:
         "growth_drop<=5": agg["growth_drop_points"] <= 5.0,
         "p99<=50ms": (latency["p99_ms"] <= 50.0) if latency else None,
     }
+    # The transfer band applies only when a vector lane exists: the full-text lane cannot match a
+    # scenario that shares no word with its preference, which is why MS0/MS0.1 reported it instead.
+    if embedder_name != "none":
+        bands["transfer_recall5>=0.60"] = agg["transfer_recall5"] >= 0.60
+    topics = {}
+    for h in households:
+        for t, n in (h.get("transfer_by_topic") or {}).items():
+            topics[t] = topics.get(t, 0) + n
     out = {
         "predicate_hint": bool(predicate_hint),
+        "embedder": embedder_name,
+        "embedder_version": getattr(embedder, "version", None),
+        "embedder_load_s": getattr(embedder, "load_s", None),
+        "query_instruction": bool(getattr(embedder, "instruction", False)),
+        "transfer_by_topic_total": topics,
         "households": households,
         "aggregate": agg,
         "latency": latency,

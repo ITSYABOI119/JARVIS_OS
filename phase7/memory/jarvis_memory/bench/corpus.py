@@ -249,6 +249,23 @@ def generate_household(seed: int, days: int = 14) -> dict:
             update.append({"query": q, "gold_object_norm": gold, "subject": ref,
                            "predicate_id": pred})
 
+    # The paraphrase set (MS1a): the same questions worded entirely OUTSIDE the hint's vocabulary,
+    # so the growth result can be read on phrasings the predicate rule cannot help with. T27 asserts
+    # the disjointness against the union of QUERY_VOCAB and that none of them hints at all.
+    update_paraphrase = []
+    for ref, name, pred, gold in (("owner", owner_name, "person.lives_in", cities[1]),
+                                  ("partner", partner_name, "person.lives_in", cities[2]),
+                                  ("owner", owner_name, "person.works_as", jobs[0]),
+                                  ("partner", partner_name, "person.works_as", jobs[2])):
+        if pred == "person.lives_in":
+            qs = [f"which town is {name} based in these days",
+                  f"where is {name} settled now"]
+        else:
+            qs = [f"what is {name}s trade", f"what line of business is {name} in"]
+        for q in qs:
+            update_paraphrase.append({"query": q, "gold_object_norm": gold, "subject": ref,
+                                      "predicate_id": pred})
+
     coexist = [
         {"query": f"what habits does {owner_name} have", "subject": "owner",
          "predicate_id": "person.habit",
@@ -301,6 +318,7 @@ def generate_household(seed: int, days: int = 14) -> dict:
         "clusters": [1, 2, 3],
         "spans": spans,
         "candidates": cands,
-        "sets": {"update": update, "coexist": coexist, "transfer": transfer,
+        "sets": {"update": update, "update_paraphrase": update_paraphrase,
+                 "coexist": coexist, "transfer": transfer,
                  "relations": relations, "growth_filler": filler},
     }

@@ -85,13 +85,18 @@ QUERY_VOCAB = {
     "person.works_as": frozenset({
         "work", "works", "working", "worked", "job", "jobs", "occupation", "employed", "employer",
         "career", "profession"}),
-    "person.habit": frozenset({"habit", "habits", "routine", "routines", "usually", "regularly"}),
+    "person.habit": frozenset({"habit", "habits", "usually", "regularly"}),
     "person.trait": frozenset({"trait", "traits", "personality", "tends", "tend", "tendency"}),
     "household.topic": frozenset({
         "talk", "talks", "talked", "talking", "discuss", "discussed", "discussing", "topic",
         "topics", "conversation", "conversations"}),
+    # `routine`/`routines` moved here from person.habit at MS1a (MS0.1 report F1): a household's
+    # routine IS household.routine's predicate, and while those words sat under person.habit the
+    # most natural phrasing - "what household routine do we keep" - matched two sets and was
+    # left unrestricted, so the predicate was unreachable by its own obvious question.
     "household.routine": frozenset({
-        "schedule", "schedules", "household", "weekly", "chores", "chore"}),
+        "schedule", "schedules", "household", "weekly", "chores", "chore",
+        "routine", "routines"}),
     "owner.prefers": frozenset({
         "like", "likes", "liked", "love", "loves", "loved", "prefer", "prefers", "preferred",
         "favourite", "favorite", "hate", "hates", "hated", "dislike", "dislikes", "avoid",
