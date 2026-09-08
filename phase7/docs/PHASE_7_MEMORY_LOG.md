@@ -567,3 +567,178 @@ job the design asked of it — T24e shows a question the hint mis-routed still r
 at the top of the result list that gain is currently spent competing with raw utterances. Relation precision
 stays 1.0 **by construction** (the oracle plants only true relations). Nothing here is measured on real speech
 or on the owner; every store was in memory.
+
+
+## MS1a.2 — 2026-09-08 — one vector lane, the claim weight on the row, function words out, evidence collapsed; the bands re-measured
+
+**MS1a.1 was withdrawn before any GPU run, and that is a finding rather than a tidy-up.** It specified TYPED lanes —
+the vector lane split into `vec_fact` / `vec_pref` / `vec_span` — so that R2's source rank could act across lanes.
+Partitioning a cosine-ordered lane restarts the ranks, so the best row of EVERY table earns a full rank-1 term however
+unlike the query it is. The coder's T24c trace: on the untouched MS0.1 fixture a preference at cosine **1.000** and a
+fact at cosine **0.000** both landed at rank 1 of their own partition, tied at `1/61 = 0.016393`, and the tie-break
+(the within-lane weighted score, 1.000000 vs 0.994879 — a stated fact does not decay, a preference does) handed first
+place to the **cosine-0.0 fact**. Reciprocal rank is ordinal; it cannot see the 0.000. The design amendment `b166e22`
+stands in the record as what was proposed; the code was never committed. Its two test ideas are reused here: read the
+weight from the shipped constant, and give the fixture a decoy row so the weight alone decides.
+
+**What MS1a.2 does instead — four rules, each with a measured reason.**
+
+1. **ONE vector lane**, exactly as at MS1a. No partition, so no row earns rank-1 credit for being the best of an
+   irrelevant table. T24c passes unchanged (`lanes == {"vec": 1}`).
+2. **The claim-status weight sits on the ROW:** `relevance = Σ over lanes w_claim(row) / (60 + rank)`, `w_claim` 1.0
+   for a belief and `W_SOURCE["inferred"]` = 0.6 for a span — R2's own constant one level up, never a new knob.
+   Measured reason: MS1a §3.8, where every update miss was a span beating the fact extracted from it.
+3. **Function words leave the FULL-TEXT query** (`registry.STOPWORDS`, 125 words, disjoint from every `QUERY_VOCAB`
+   set by assertion). Measured reason: MS1a §3.9. **Kept as the default by the measurement below, not by argument.**
+4. **Evidence collapse:** a span that is an evidence span of a belief already in the fused set is not a second
+   result — the belief carries it in `spans`, with its verbatim text. The utterance and the fact extracted from it
+   never compete.
+
+### Rule 3, decided by measurement
+
+The rule was **pre-registered before any GPU number was seen** (`PROMPT-MEMORY-MS1A2-RESUME.md` R2), verbatim:
+
+> Run A (qwen, symmetric, rule 3 ON) and A′ (qwen, symmetric, function words KEPT) on the 10 households.
+> **KEEP rule 3 iff `transfer_recall5(A) − transfer_recall5(A′) > 0.05` AND `update_acc(A) ≥ update_acc(A′)`.**
+> Otherwise **DROP** it from the default (the switch and the list stay, so the arm remains measurable).
+
+Measured, and the verdict computed by code from those two conditions:
+
+| quantity | value |
+|---|---|
+| `transfer_recall5(A)` — function words dropped | **0.3583** |
+| `transfer_recall5(A′)` — function words kept | **0.2833** |
+| delta | **0.0750** > 0.05 ✓ |
+| `update_acc(A)` / `update_acc(A′)` | **1.0000 / 1.0000** — `≥` holds ✓ |
+| **verdict** | **KEEP** |
+
+**The cost is real, was measured first, and is confined.** Dropping function words costs one of the eight update
+questions in the HINT-OFF control on 3 of 10 seeds (mean update accuracy there 0.9625 → 0.9250, −3.75 points), and
+the mechanism is a single word. The question is `what job does juno work as`; with the words kept it returns
+`juno person works as a pharmacist`, with them dropped it returns `juno person habit cycles to work`. The
+discriminator is **"as"** — the store renders the predicate as `"… works **as** a …"` while the competing habit
+renders `"… cycles to work"`; both contain "work", only the answer contains "as". So rule 3 drops part of the
+predicate's own rendered surface form from the query while leaving it in the indexed text. With the hint ON — the
+deployed path, and every run below — the lookup is already restricted to `person.works_as`, the competitor never
+enters the lane, and both numbers stay perfect. `T21a`/`T21b` are re-pinned to the measured hint-OFF values (0.75 /
+25.0, from MS0's 0.875 / 37.5) with that mechanism in a comment; `T21c`/`T21d` keep their job of showing the hint
+lifting them to 1.0 / 0.0.
+
+**A′ and A have IDENTICAL vector-lane diagnostics** (`transfer_gold_pref_rank1` 0.6917, `transfer_gold_vec_rank_mean`
+78.483 in both) because rule 3 touches the full-text lane only. Its whole 0.075 of transfer therefore comes from
+removing full-text competitors from the fused set, not from changing what the embedder sees.
+
+### Run C — no embedder — equals MS0.1
+
+`--households 10 --days 14 --seed 1 --latency-facts 100000 --embedder none --assert-bands`, exit 0
+(`ms1a2_control_none.json`):
+
+| aggregate | MS0.1 | MS1a.2 run C |
+|---|---|---|
+| update_acc | 1.0 | **1.0** |
+| coexist_recall | 1.0 | **1.0** |
+| growth_update_acc | 1.0 | **1.0** |
+| growth_drop_points | 0.0 | **0.0** |
+| transfer_recall5 | 0.0 | **0.0** |
+| relation_precision | 1.0 | **1.0** |
+| spouse_surfaced_day_mean / households | 8.0, 10/10 | **8.0, 10/10** |
+| audit violations | 0 | **0** |
+
+All five bands PASS; p50 0.0981 ms, p99 **0.3698 ms** over 100,000 ingests. **All four rules leave the no-embedder
+path exactly where MS0.1 left it.**
+
+### Run A — the embedding lane, the default — two bands MISSED
+
+`--embedder qwen … --assert-bands` → exit 1, `BANDS MISSED: growth_drop<=5, transfer_recall5>=0.60`
+(`ms1a2_run.json`).
+
+| band | expected | measured | verdict |
+|---|---|---|---|
+| update_acc | ≥ 0.95 | **1.0000** | **MET** — MS1a measured 0.9125; the cross-lane loss is closed |
+| coexist_recall | ≥ 0.95 | **1.0000** | MET |
+| audit violations | 0 | **0** | MET |
+| p99 write latency | ≤ 50 ms | **0.3796 ms** | MET |
+| growth drop | ≤ 5 pts | **7.5** (absolute 1.0000 → 0.9250) | **MISSED** |
+| transfer recall@5 | ≥ 0.60 | **0.3583** | **MISSED** — MS1a measured 0.0500 |
+| `transfer_gold_pref_rank1` | reported | **0.6917** (mean pref rank 1.525) | reported |
+| `transfer_gold_vec_rank_mean` | reported | **78.483** | reported |
+
+Per household, read from the JSON, every mean recomputed and checked against the stored aggregate (MS1a's near-miss
+does not repeat — all six recomputations matched to 5e-5):
+
+| seed | update | coexist | growth_upd | drop | transfer | pref_rank1 | pref mean | vec mean |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 1.0000 | 1.0000 | 1.0000 | 0.0 | 0.3333 | 0.6667 | 1.500 | 87.500 |
+| 2 | 1.0000 | 1.0000 | 0.8750 | 12.5 | 0.5000 | 0.5833 | 1.667 | 71.250 |
+| 3 | 1.0000 | 1.0000 | 0.8750 | 12.5 | 0.5833 | 0.5833 | 1.750 | 44.583 |
+| 4 | 1.0000 | 1.0000 | 1.0000 | 0.0 | 0.3333 | 0.6667 | 1.500 | 67.417 |
+| 5 | 1.0000 | 1.0000 | 1.0000 | 0.0 | 0.3333 | 0.6667 | 1.500 | 80.167 |
+| 6 | 1.0000 | 1.0000 | 1.0000 | 0.0 | 0.3333 | 0.6667 | 1.583 | 93.417 |
+| 7 | 1.0000 | 1.0000 | 1.0000 | 0.0 | 0.2500 | 0.7500 | 1.583 | 90.833 |
+| 8 | 1.0000 | 1.0000 | 0.8750 | 12.5 | 0.3333 | 0.7500 | 1.500 | 76.500 |
+| 9 | 1.0000 | 1.0000 | 0.6250 | **37.5** | 0.2500 | 0.7500 | 1.500 | 92.500 |
+| 10 | 1.0000 | 1.0000 | 1.0000 | 0.0 | 0.3333 | 0.8333 | 1.167 | 80.667 |
+| **mean** | **1.0000** | **1.0000** | **0.9250** | **7.5** | **0.3583** | **0.6917** | 1.525 | 78.483 |
+
+**Every update miss traced: there are none.** `update_acc` is 1.0000 in all ten households, so the §3.8 shape this
+milestone was built to close leaves no residue in the update set.
+
+**The growth drop, traced.** It is 0.0 in six households and comes from four: seeds 2, 3 and 8 at 12.5 points and
+seed 9 at 37.5. It **arrives with the vector lane** — run C measures 0.0, A′ 7.5, B 3.75 — so 30× unrelated
+transcript hurts only once embeddings are in play, by adding rows that crowd the fused top five. It is the same
+crowding the transfer diagnostic measures, seen from the other side.
+
+### The two diagnostics, per topic — what they say about the transfer miss
+
+Run A (all 120 scenarios), then run B beside it:
+
+| topic | n | recalled (A) | pref_rank==1 | pref mean | vec mean | vec range |
+|---|---|---|---|---|---|---|
+| early mornings | 30 | 13 | 0.800 | 1.200 | 51.5 | 17..106 |
+| long drives | 30 | 17 | 1.000 | 1.000 | 42.0 | 1..113 |
+| **loud music** | 30 | **0** | **0.367** | 2.267 | **132.9** | 17..178 |
+| spicy food | 30 | 13 | 0.600 | 1.633 | 87.5 | 1..170 |
+
+| arm | transfer | pref_rank==1 | vec_rank mean | vec_rank ≤ 5 |
+|---|---|---|---|---|
+| **A** (symmetric, default) | 0.3583 | 0.6917 | **78.5** | 8/120 = 6.7 % |
+| **B** (instruction) | **0.7000** | 0.7750 | **16.4** | **71/120 = 59.2 %** |
+| **A′** (function words kept) | 0.2833 | 0.6917 | 78.5 | 8/120 = 6.7 % |
+
+**The diagnostics discriminate, and they point at the query form rather than at the fusion.** The embedder can
+already pick the right preference out of the household's other preferences 69 % of the time (mean rank 1.525) — that
+is not the failure. What fails is crowding: the planted preference sits a mean of **78 rows deep in the whole vector
+lane**, behind spans and facts. The instruction arm moves exactly that number — 78.5 → 16.4, and rows within the top
+five 6.7 % → 59.2 % — and transfer follows it from 0.3583 to 0.7000. `loud music` is the topic the embedder itself
+struggles with (rank-1 among preferences only 36.7 %, vec mean 132.9) and it recalls 0/30 in A and only 5/30 in B.
+
+### Run B — the instruction arm — REPORTED, never adopted
+
+`--embedder qwen --query-instruction` (`ms1a2_instruction.json`): transfer **0.7000** (the band MET), growth drop
+**3.75** (met), `pref_rank1` 0.7750, `vec_rank_mean` 16.367 — **but `update_acc` falls to 0.9375, below its 0.95
+band**. So the asymmetric query form buys the transfer band and spends the update band. It is recorded, not adopted;
+adopting it is a separate decision with its own pre-registration.
+
+### The residual, and whether the diagnostics point at it
+
+`T23j3` pins the residual the design states: evidence found in BOTH lanes (0.6/61 + 0.6/62 = **0.019513**) still
+outranks a belief found in ONE (1/61 = **0.016393**). **The diagnostics do not point at it as the binding
+constraint.** If the residual were binding, A and B would differ mainly in how often a two-lane span beat the
+preference; instead they differ 4.8× in how deep the preference sits in the vector lane before any fusion happens,
+and A′ — which changes the full-text lane and leaves the vector lane identical — moves transfer by only 0.075. The
+residual is real and stated; the crowding is what is costing the band.
+
+### Honest scope
+
+Synthetic seeded corpora, ORACLE candidates, in-memory stores, one embedder on one GPU. Nothing here is measured on
+real speech or on the owner. `relation_precision` is 1.0 **by construction** — the oracle plants only true relations.
+Two bands are MISSED and are written as MISSED. MS1b, the extractor bake-off, is what replaces the oracle.
+
+### Tests
+
+`test_memory_logic.py` **212 checks** in the file, **211 on the CI runner** (T22g skips without numpy) — CI green.
+New at MS1a.2: T23j0–j5 (the row weight, the §3.8 shape both ways, the residual, the 1.0 default), T23k1–k3 (the
+collapse and a span no belief stands on), T25g retargeted to pin the collapse, T29a–f (the list disjoint and
+tokeniser-stable, the filter on and off), T28a–e (the two rank diagnostics, None with no embedder). Three mutants
+bite, control green first: `W_CLAIM["span"] = 1.0` kills T23j0/j1/j3/j5 and T23k3; the collapse disabled kills
+T23k1/k2 and T25g; `query_terms` never dropping kills T21a/b and T29c/d/d2/e.

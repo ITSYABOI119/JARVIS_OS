@@ -1,0 +1,1100 @@
+{
+  "aggregate": {
+    "coexist_recall": 1.0,
+    "growth_drop_paraphrase_points": 1.25,
+    "growth_drop_points": 3.75,
+    "growth_update_acc": 0.9,
+    "growth_update_acc_paraphrase": 0.5125,
+    "relation_precision": 1.0,
+    "spouse_surfaced_day_mean": 8.0,
+    "spouse_surfaced_households": "10/10",
+    "transfer_gold_pref_rank1": 0.775,
+    "transfer_gold_pref_rank_mean": 1.3417,
+    "transfer_gold_vec_rank_mean": 16.3667,
+    "transfer_recall5": 0.7,
+    "update_acc": 0.9375,
+    "update_acc_paraphrase": 0.525
+  },
+  "audit_violations": 0,
+  "bands": {
+    "audit==0": true,
+    "coexist_recall>=0.95": true,
+    "growth_drop<=5": true,
+    "p99<=50ms": null,
+    "transfer_recall5>=0.60": true,
+    "update_acc>=0.95": false
+  },
+  "embedder": "qwen",
+  "embedder_load_s": 2.135,
+  "embedder_version": "5.2.0",
+  "households": [
+    {
+      "audit_violations": 0,
+      "coexist_ended_leaks": 0,
+      "coexist_recall": 1.0,
+      "embed_seconds": 7.39,
+      "growth_drop_paraphrase_points": 0.0,
+      "growth_drop_points": 0.0,
+      "growth_update_acc": 1.0,
+      "growth_update_acc_paraphrase": 0.5,
+      "n_candidates": 37,
+      "n_embedded": 2407,
+      "n_facts_after_growth": 1129,
+      "n_filler": 1110,
+      "relation_precision": 1.0,
+      "relations_surfaced": 2,
+      "seed": 1,
+      "spouse_confidence_last_day": 0.8647,
+      "spouse_surfaced_day": 8,
+      "transfer_by_topic": {
+        "early mornings": 3,
+        "long drives": 3,
+        "loud music": 1,
+        "spicy food": 2
+      },
+      "transfer_gold_pref_rank1": 0.75,
+      "transfer_gold_pref_rank_mean": 1.3333,
+      "transfer_gold_ranks": [
+        {
+          "pref_rank": 1,
+          "query": "what should i order at the restaurant tonight",
+          "topic": "spicy food",
+          "vec_rank": 25
+        },
+        {
+          "pref_rank": 1,
+          "query": "planning dinner for our anniversary",
+          "topic": "spicy food",
+          "vec_rank": 35
+        },
+        {
+          "pref_rank": 1,
+          "query": "which cuisine would suit us both",
+          "topic": "spicy food",
+          "vec_rank": 4
+        },
+        {
+          "pref_rank": 2,
+          "query": "picking a venue for the party",
+          "topic": "loud music",
+          "vec_rank": 57
+        },
+        {
+          "pref_rank": 3,
+          "query": "is that bar going to be too much",
+          "topic": "loud music",
+          "vec_rank": 37
+        },
+        {
+          "pref_rank": 1,
+          "query": "choosing background sound for the evening",
+          "topic": "loud music",
+          "vec_rank": 4
+        },
+        {
+          "pref_rank": 1,
+          "query": "when should we schedule the appointment",
+          "topic": "early mornings",
+          "vec_rank": 1
+        },
+        {
+          "pref_rank": 1,
+          "query": "is a sunrise start reasonable",
+          "topic": "early mornings",
+          "vec_rank": 19
+        },
+        {
+          "pref_rank": 2,
+          "query": "booking a flight time that works",
+          "topic": "early mornings",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 1,
+          "query": "how should we travel to the coast",
+          "topic": "long drives",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 1,
+          "query": "would a train be better than the car",
+          "topic": "long drives",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 1,
+          "query": "planning the route for our holiday",
+          "topic": "long drives",
+          "vec_rank": 3
+        }
+      ],
+      "transfer_gold_vec_rank_mean": 15.9167,
+      "transfer_recall5": 0.75,
+      "update_acc": 1.0,
+      "update_acc_paraphrase": 0.5
+    },
+    {
+      "audit_violations": 0,
+      "coexist_ended_leaks": 0,
+      "coexist_recall": 1.0,
+      "embed_seconds": 7.189,
+      "growth_drop_paraphrase_points": 12.5,
+      "growth_drop_points": 12.5,
+      "growth_update_acc": 0.5,
+      "growth_update_acc_paraphrase": 0.25,
+      "n_candidates": 37,
+      "n_embedded": 2407,
+      "n_facts_after_growth": 1129,
+      "n_filler": 1110,
+      "relation_precision": 1.0,
+      "relations_surfaced": 2,
+      "seed": 2,
+      "spouse_confidence_last_day": 0.8647,
+      "spouse_surfaced_day": 8,
+      "transfer_by_topic": {
+        "early mornings": 3,
+        "long drives": 3,
+        "loud music": 0,
+        "spicy food": 2
+      },
+      "transfer_gold_pref_rank1": 0.6667,
+      "transfer_gold_pref_rank_mean": 1.5,
+      "transfer_gold_ranks": [
+        {
+          "pref_rank": 1,
+          "query": "what should i order at the restaurant tonight",
+          "topic": "spicy food",
+          "vec_rank": 9
+        },
+        {
+          "pref_rank": 3,
+          "query": "planning dinner for our anniversary",
+          "topic": "spicy food",
+          "vec_rank": 112
+        },
+        {
+          "pref_rank": 1,
+          "query": "which cuisine would suit us both",
+          "topic": "spicy food",
+          "vec_rank": 4
+        },
+        {
+          "pref_rank": 3,
+          "query": "picking a venue for the party",
+          "topic": "loud music",
+          "vec_rank": 38
+        },
+        {
+          "pref_rank": 2,
+          "query": "is that bar going to be too much",
+          "topic": "loud music",
+          "vec_rank": 53
+        },
+        {
+          "pref_rank": 1,
+          "query": "choosing background sound for the evening",
+          "topic": "loud music",
+          "vec_rank": 3
+        },
+        {
+          "pref_rank": 1,
+          "query": "when should we schedule the appointment",
+          "topic": "early mornings",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 1,
+          "query": "is a sunrise start reasonable",
+          "topic": "early mornings",
+          "vec_rank": 21
+        },
+        {
+          "pref_rank": 2,
+          "query": "booking a flight time that works",
+          "topic": "early mornings",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 1,
+          "query": "how should we travel to the coast",
+          "topic": "long drives",
+          "vec_rank": 1
+        },
+        {
+          "pref_rank": 1,
+          "query": "would a train be better than the car",
+          "topic": "long drives",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 1,
+          "query": "planning the route for our holiday",
+          "topic": "long drives",
+          "vec_rank": 1
+        }
+      ],
+      "transfer_gold_vec_rank_mean": 20.6667,
+      "transfer_recall5": 0.6667,
+      "update_acc": 0.625,
+      "update_acc_paraphrase": 0.375
+    },
+    {
+      "audit_violations": 0,
+      "coexist_ended_leaks": 0,
+      "coexist_recall": 1.0,
+      "embed_seconds": 7.237,
+      "growth_drop_paraphrase_points": 0.0,
+      "growth_drop_points": 0.0,
+      "growth_update_acc": 1.0,
+      "growth_update_acc_paraphrase": 0.5,
+      "n_candidates": 37,
+      "n_embedded": 2407,
+      "n_facts_after_growth": 1129,
+      "n_filler": 1110,
+      "relation_precision": 1.0,
+      "relations_surfaced": 2,
+      "seed": 3,
+      "spouse_confidence_last_day": 0.8647,
+      "spouse_surfaced_day": 8,
+      "transfer_by_topic": {
+        "early mornings": 3,
+        "long drives": 3,
+        "loud music": 0,
+        "spicy food": 2
+      },
+      "transfer_gold_pref_rank1": 0.6667,
+      "transfer_gold_pref_rank_mean": 1.75,
+      "transfer_gold_ranks": [
+        {
+          "pref_rank": 2,
+          "query": "what should i order at the restaurant tonight",
+          "topic": "spicy food",
+          "vec_rank": 9
+        },
+        {
+          "pref_rank": 3,
+          "query": "planning dinner for our anniversary",
+          "topic": "spicy food",
+          "vec_rank": 45
+        },
+        {
+          "pref_rank": 1,
+          "query": "which cuisine would suit us both",
+          "topic": "spicy food",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 4,
+          "query": "picking a venue for the party",
+          "topic": "loud music",
+          "vec_rank": 47
+        },
+        {
+          "pref_rank": 4,
+          "query": "is that bar going to be too much",
+          "topic": "loud music",
+          "vec_rank": 39
+        },
+        {
+          "pref_rank": 1,
+          "query": "choosing background sound for the evening",
+          "topic": "loud music",
+          "vec_rank": 4
+        },
+        {
+          "pref_rank": 1,
+          "query": "when should we schedule the appointment",
+          "topic": "early mornings",
+          "vec_rank": 1
+        },
+        {
+          "pref_rank": 1,
+          "query": "is a sunrise start reasonable",
+          "topic": "early mornings",
+          "vec_rank": 18
+        },
+        {
+          "pref_rank": 1,
+          "query": "booking a flight time that works",
+          "topic": "early mornings",
+          "vec_rank": 1
+        },
+        {
+          "pref_rank": 1,
+          "query": "how should we travel to the coast",
+          "topic": "long drives",
+          "vec_rank": 1
+        },
+        {
+          "pref_rank": 1,
+          "query": "would a train be better than the car",
+          "topic": "long drives",
+          "vec_rank": 1
+        },
+        {
+          "pref_rank": 1,
+          "query": "planning the route for our holiday",
+          "topic": "long drives",
+          "vec_rank": 1
+        }
+      ],
+      "transfer_gold_vec_rank_mean": 14.0833,
+      "transfer_recall5": 0.6667,
+      "update_acc": 1.0,
+      "update_acc_paraphrase": 0.5
+    },
+    {
+      "audit_violations": 0,
+      "coexist_ended_leaks": 0,
+      "coexist_recall": 1.0,
+      "embed_seconds": 7.149,
+      "growth_drop_paraphrase_points": 0.0,
+      "growth_drop_points": 0.0,
+      "growth_update_acc": 1.0,
+      "growth_update_acc_paraphrase": 0.5,
+      "n_candidates": 37,
+      "n_embedded": 2407,
+      "n_facts_after_growth": 1129,
+      "n_filler": 1110,
+      "relation_precision": 1.0,
+      "relations_surfaced": 2,
+      "seed": 4,
+      "spouse_confidence_last_day": 0.8647,
+      "spouse_surfaced_day": 8,
+      "transfer_by_topic": {
+        "early mornings": 3,
+        "long drives": 3,
+        "loud music": 2,
+        "spicy food": 2
+      },
+      "transfer_gold_pref_rank1": 0.8333,
+      "transfer_gold_pref_rank_mean": 1.1667,
+      "transfer_gold_ranks": [
+        {
+          "pref_rank": 1,
+          "query": "what should i order at the restaurant tonight",
+          "topic": "spicy food",
+          "vec_rank": 5
+        },
+        {
+          "pref_rank": 1,
+          "query": "planning dinner for our anniversary",
+          "topic": "spicy food",
+          "vec_rank": 35
+        },
+        {
+          "pref_rank": 1,
+          "query": "which cuisine would suit us both",
+          "topic": "spicy food",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 1,
+          "query": "picking a venue for the party",
+          "topic": "loud music",
+          "vec_rank": 5
+        },
+        {
+          "pref_rank": 2,
+          "query": "is that bar going to be too much",
+          "topic": "loud music",
+          "vec_rank": 35
+        },
+        {
+          "pref_rank": 1,
+          "query": "choosing background sound for the evening",
+          "topic": "loud music",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 1,
+          "query": "when should we schedule the appointment",
+          "topic": "early mornings",
+          "vec_rank": 17
+        },
+        {
+          "pref_rank": 1,
+          "query": "is a sunrise start reasonable",
+          "topic": "early mornings",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 2,
+          "query": "booking a flight time that works",
+          "topic": "early mornings",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 1,
+          "query": "how should we travel to the coast",
+          "topic": "long drives",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 1,
+          "query": "would a train be better than the car",
+          "topic": "long drives",
+          "vec_rank": 1
+        },
+        {
+          "pref_rank": 1,
+          "query": "planning the route for our holiday",
+          "topic": "long drives",
+          "vec_rank": 1
+        }
+      ],
+      "transfer_gold_vec_rank_mean": 9.0833,
+      "transfer_recall5": 0.8333,
+      "update_acc": 1.0,
+      "update_acc_paraphrase": 0.5
+    },
+    {
+      "audit_violations": 0,
+      "coexist_ended_leaks": 0,
+      "coexist_recall": 1.0,
+      "embed_seconds": 7.27,
+      "growth_drop_paraphrase_points": 0.0,
+      "growth_drop_points": 0.0,
+      "growth_update_acc": 1.0,
+      "growth_update_acc_paraphrase": 0.5,
+      "n_candidates": 37,
+      "n_embedded": 2407,
+      "n_facts_after_growth": 1129,
+      "n_filler": 1110,
+      "relation_precision": 1.0,
+      "relations_surfaced": 2,
+      "seed": 5,
+      "spouse_confidence_last_day": 0.8647,
+      "spouse_surfaced_day": 8,
+      "transfer_by_topic": {
+        "early mornings": 3,
+        "long drives": 3,
+        "loud music": 0,
+        "spicy food": 2
+      },
+      "transfer_gold_pref_rank1": 0.75,
+      "transfer_gold_pref_rank_mean": 1.5,
+      "transfer_gold_ranks": [
+        {
+          "pref_rank": 1,
+          "query": "what should i order at the restaurant tonight",
+          "topic": "spicy food",
+          "vec_rank": 24
+        },
+        {
+          "pref_rank": 1,
+          "query": "planning dinner for our anniversary",
+          "topic": "spicy food",
+          "vec_rank": 37
+        },
+        {
+          "pref_rank": 1,
+          "query": "which cuisine would suit us both",
+          "topic": "spicy food",
+          "vec_rank": 4
+        },
+        {
+          "pref_rank": 4,
+          "query": "picking a venue for the party",
+          "topic": "loud music",
+          "vec_rank": 30
+        },
+        {
+          "pref_rank": 3,
+          "query": "is that bar going to be too much",
+          "topic": "loud music",
+          "vec_rank": 54
+        },
+        {
+          "pref_rank": 1,
+          "query": "choosing background sound for the evening",
+          "topic": "loud music",
+          "vec_rank": 5
+        },
+        {
+          "pref_rank": 1,
+          "query": "when should we schedule the appointment",
+          "topic": "early mornings",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 1,
+          "query": "is a sunrise start reasonable",
+          "topic": "early mornings",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 2,
+          "query": "booking a flight time that works",
+          "topic": "early mornings",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 1,
+          "query": "how should we travel to the coast",
+          "topic": "long drives",
+          "vec_rank": 3
+        },
+        {
+          "pref_rank": 1,
+          "query": "would a train be better than the car",
+          "topic": "long drives",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 1,
+          "query": "planning the route for our holiday",
+          "topic": "long drives",
+          "vec_rank": 3
+        }
+      ],
+      "transfer_gold_vec_rank_mean": 14.0,
+      "transfer_recall5": 0.6667,
+      "update_acc": 1.0,
+      "update_acc_paraphrase": 0.5
+    },
+    {
+      "audit_violations": 0,
+      "coexist_ended_leaks": 0,
+      "coexist_recall": 1.0,
+      "embed_seconds": 7.237,
+      "growth_drop_paraphrase_points": 0.0,
+      "growth_drop_points": 0.0,
+      "growth_update_acc": 1.0,
+      "growth_update_acc_paraphrase": 0.5,
+      "n_candidates": 37,
+      "n_embedded": 2407,
+      "n_facts_after_growth": 1129,
+      "n_filler": 1110,
+      "relation_precision": 1.0,
+      "relations_surfaced": 2,
+      "seed": 6,
+      "spouse_confidence_last_day": 0.8647,
+      "spouse_surfaced_day": 8,
+      "transfer_by_topic": {
+        "early mornings": 3,
+        "long drives": 3,
+        "loud music": 0,
+        "spicy food": 2
+      },
+      "transfer_gold_pref_rank1": 0.75,
+      "transfer_gold_pref_rank_mean": 1.25,
+      "transfer_gold_ranks": [
+        {
+          "pref_rank": 1,
+          "query": "what should i order at the restaurant tonight",
+          "topic": "spicy food",
+          "vec_rank": 6
+        },
+        {
+          "pref_rank": 1,
+          "query": "planning dinner for our anniversary",
+          "topic": "spicy food",
+          "vec_rank": 40
+        },
+        {
+          "pref_rank": 1,
+          "query": "which cuisine would suit us both",
+          "topic": "spicy food",
+          "vec_rank": 3
+        },
+        {
+          "pref_rank": 2,
+          "query": "picking a venue for the party",
+          "topic": "loud music",
+          "vec_rank": 60
+        },
+        {
+          "pref_rank": 2,
+          "query": "is that bar going to be too much",
+          "topic": "loud music",
+          "vec_rank": 70
+        },
+        {
+          "pref_rank": 1,
+          "query": "choosing background sound for the evening",
+          "topic": "loud music",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 1,
+          "query": "when should we schedule the appointment",
+          "topic": "early mornings",
+          "vec_rank": 18
+        },
+        {
+          "pref_rank": 1,
+          "query": "is a sunrise start reasonable",
+          "topic": "early mornings",
+          "vec_rank": 21
+        },
+        {
+          "pref_rank": 2,
+          "query": "booking a flight time that works",
+          "topic": "early mornings",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 1,
+          "query": "how should we travel to the coast",
+          "topic": "long drives",
+          "vec_rank": 1
+        },
+        {
+          "pref_rank": 1,
+          "query": "would a train be better than the car",
+          "topic": "long drives",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 1,
+          "query": "planning the route for our holiday",
+          "topic": "long drives",
+          "vec_rank": 3
+        }
+      ],
+      "transfer_gold_vec_rank_mean": 19.0,
+      "transfer_recall5": 0.6667,
+      "update_acc": 1.0,
+      "update_acc_paraphrase": 0.5
+    },
+    {
+      "audit_violations": 0,
+      "coexist_ended_leaks": 0,
+      "coexist_recall": 1.0,
+      "embed_seconds": 7.258,
+      "growth_drop_paraphrase_points": 0.0,
+      "growth_drop_points": 0.0,
+      "growth_update_acc": 1.0,
+      "growth_update_acc_paraphrase": 0.625,
+      "n_candidates": 37,
+      "n_embedded": 2407,
+      "n_facts_after_growth": 1129,
+      "n_filler": 1110,
+      "relation_precision": 1.0,
+      "relations_surfaced": 2,
+      "seed": 7,
+      "spouse_confidence_last_day": 0.8647,
+      "spouse_surfaced_day": 8,
+      "transfer_by_topic": {
+        "early mornings": 2,
+        "long drives": 3,
+        "loud music": 0,
+        "spicy food": 2
+      },
+      "transfer_gold_pref_rank1": 0.75,
+      "transfer_gold_pref_rank_mean": 1.4167,
+      "transfer_gold_ranks": [
+        {
+          "pref_rank": 1,
+          "query": "what should i order at the restaurant tonight",
+          "topic": "spicy food",
+          "vec_rank": 7
+        },
+        {
+          "pref_rank": 1,
+          "query": "planning dinner for our anniversary",
+          "topic": "spicy food",
+          "vec_rank": 40
+        },
+        {
+          "pref_rank": 1,
+          "query": "which cuisine would suit us both",
+          "topic": "spicy food",
+          "vec_rank": 3
+        },
+        {
+          "pref_rank": 3,
+          "query": "picking a venue for the party",
+          "topic": "loud music",
+          "vec_rank": 60
+        },
+        {
+          "pref_rank": 3,
+          "query": "is that bar going to be too much",
+          "topic": "loud music",
+          "vec_rank": 120
+        },
+        {
+          "pref_rank": 1,
+          "query": "choosing background sound for the evening",
+          "topic": "loud music",
+          "vec_rank": 4
+        },
+        {
+          "pref_rank": 1,
+          "query": "when should we schedule the appointment",
+          "topic": "early mornings",
+          "vec_rank": 66
+        },
+        {
+          "pref_rank": 1,
+          "query": "is a sunrise start reasonable",
+          "topic": "early mornings",
+          "vec_rank": 21
+        },
+        {
+          "pref_rank": 2,
+          "query": "booking a flight time that works",
+          "topic": "early mornings",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 1,
+          "query": "how should we travel to the coast",
+          "topic": "long drives",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 1,
+          "query": "would a train be better than the car",
+          "topic": "long drives",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 1,
+          "query": "planning the route for our holiday",
+          "topic": "long drives",
+          "vec_rank": 1
+        }
+      ],
+      "transfer_gold_vec_rank_mean": 27.3333,
+      "transfer_recall5": 0.5833,
+      "update_acc": 1.0,
+      "update_acc_paraphrase": 0.625
+    },
+    {
+      "audit_violations": 0,
+      "coexist_ended_leaks": 0,
+      "coexist_recall": 1.0,
+      "embed_seconds": 7.125,
+      "growth_drop_paraphrase_points": 0.0,
+      "growth_drop_points": 0.0,
+      "growth_update_acc": 1.0,
+      "growth_update_acc_paraphrase": 0.625,
+      "n_candidates": 37,
+      "n_embedded": 2407,
+      "n_facts_after_growth": 1129,
+      "n_filler": 1110,
+      "relation_precision": 1.0,
+      "relations_surfaced": 2,
+      "seed": 8,
+      "spouse_confidence_last_day": 0.8647,
+      "spouse_surfaced_day": 8,
+      "transfer_by_topic": {
+        "early mornings": 3,
+        "long drives": 3,
+        "loud music": 0,
+        "spicy food": 2
+      },
+      "transfer_gold_pref_rank1": 0.8333,
+      "transfer_gold_pref_rank_mean": 1.1667,
+      "transfer_gold_ranks": [
+        {
+          "pref_rank": 1,
+          "query": "what should i order at the restaurant tonight",
+          "topic": "spicy food",
+          "vec_rank": 4
+        },
+        {
+          "pref_rank": 1,
+          "query": "planning dinner for our anniversary",
+          "topic": "spicy food",
+          "vec_rank": 30
+        },
+        {
+          "pref_rank": 1,
+          "query": "which cuisine would suit us both",
+          "topic": "spicy food",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 1,
+          "query": "picking a venue for the party",
+          "topic": "loud music",
+          "vec_rank": 38
+        },
+        {
+          "pref_rank": 2,
+          "query": "is that bar going to be too much",
+          "topic": "loud music",
+          "vec_rank": 52
+        },
+        {
+          "pref_rank": 1,
+          "query": "choosing background sound for the evening",
+          "topic": "loud music",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 1,
+          "query": "when should we schedule the appointment",
+          "topic": "early mornings",
+          "vec_rank": 18
+        },
+        {
+          "pref_rank": 1,
+          "query": "is a sunrise start reasonable",
+          "topic": "early mornings",
+          "vec_rank": 21
+        },
+        {
+          "pref_rank": 2,
+          "query": "booking a flight time that works",
+          "topic": "early mornings",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 1,
+          "query": "how should we travel to the coast",
+          "topic": "long drives",
+          "vec_rank": 1
+        },
+        {
+          "pref_rank": 1,
+          "query": "would a train be better than the car",
+          "topic": "long drives",
+          "vec_rank": 1
+        },
+        {
+          "pref_rank": 1,
+          "query": "planning the route for our holiday",
+          "topic": "long drives",
+          "vec_rank": 1
+        }
+      ],
+      "transfer_gold_vec_rank_mean": 14.3333,
+      "transfer_recall5": 0.6667,
+      "update_acc": 1.0,
+      "update_acc_paraphrase": 0.625
+    },
+    {
+      "audit_violations": 0,
+      "coexist_ended_leaks": 0,
+      "coexist_recall": 1.0,
+      "embed_seconds": 7.121,
+      "growth_drop_paraphrase_points": 0.0,
+      "growth_drop_points": 25.0,
+      "growth_update_acc": 0.5,
+      "growth_update_acc_paraphrase": 0.625,
+      "n_candidates": 37,
+      "n_embedded": 2407,
+      "n_facts_after_growth": 1129,
+      "n_filler": 1110,
+      "relation_precision": 1.0,
+      "relations_surfaced": 2,
+      "seed": 9,
+      "spouse_confidence_last_day": 0.8647,
+      "spouse_surfaced_day": 8,
+      "transfer_by_topic": {
+        "early mornings": 3,
+        "long drives": 3,
+        "loud music": 0,
+        "spicy food": 2
+      },
+      "transfer_gold_pref_rank1": 0.75,
+      "transfer_gold_pref_rank_mean": 1.3333,
+      "transfer_gold_ranks": [
+        {
+          "pref_rank": 1,
+          "query": "what should i order at the restaurant tonight",
+          "topic": "spicy food",
+          "vec_rank": 8
+        },
+        {
+          "pref_rank": 1,
+          "query": "planning dinner for our anniversary",
+          "topic": "spicy food",
+          "vec_rank": 40
+        },
+        {
+          "pref_rank": 1,
+          "query": "which cuisine would suit us both",
+          "topic": "spicy food",
+          "vec_rank": 3
+        },
+        {
+          "pref_rank": 2,
+          "query": "picking a venue for the party",
+          "topic": "loud music",
+          "vec_rank": 39
+        },
+        {
+          "pref_rank": 3,
+          "query": "is that bar going to be too much",
+          "topic": "loud music",
+          "vec_rank": 72
+        },
+        {
+          "pref_rank": 1,
+          "query": "choosing background sound for the evening",
+          "topic": "loud music",
+          "vec_rank": 4
+        },
+        {
+          "pref_rank": 1,
+          "query": "when should we schedule the appointment",
+          "topic": "early mornings",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 1,
+          "query": "is a sunrise start reasonable",
+          "topic": "early mornings",
+          "vec_rank": 21
+        },
+        {
+          "pref_rank": 2,
+          "query": "booking a flight time that works",
+          "topic": "early mornings",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 1,
+          "query": "how should we travel to the coast",
+          "topic": "long drives",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 1,
+          "query": "would a train be better than the car",
+          "topic": "long drives",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 1,
+          "query": "planning the route for our holiday",
+          "topic": "long drives",
+          "vec_rank": 3
+        }
+      ],
+      "transfer_gold_vec_rank_mean": 16.5,
+      "transfer_recall5": 0.6667,
+      "update_acc": 0.75,
+      "update_acc_paraphrase": 0.625
+    },
+    {
+      "audit_violations": 0,
+      "coexist_ended_leaks": 0,
+      "coexist_recall": 1.0,
+      "embed_seconds": 7.153,
+      "growth_drop_paraphrase_points": 0.0,
+      "growth_drop_points": 0.0,
+      "growth_update_acc": 1.0,
+      "growth_update_acc_paraphrase": 0.5,
+      "n_candidates": 37,
+      "n_embedded": 2407,
+      "n_facts_after_growth": 1129,
+      "n_filler": 1110,
+      "relation_precision": 1.0,
+      "relations_surfaced": 2,
+      "seed": 10,
+      "spouse_confidence_last_day": 0.8647,
+      "spouse_surfaced_day": 8,
+      "transfer_by_topic": {
+        "early mornings": 3,
+        "long drives": 3,
+        "loud music": 2,
+        "spicy food": 2
+      },
+      "transfer_gold_pref_rank1": 1.0,
+      "transfer_gold_pref_rank_mean": 1.0,
+      "transfer_gold_ranks": [
+        {
+          "pref_rank": 1,
+          "query": "what should i order at the restaurant tonight",
+          "topic": "spicy food",
+          "vec_rank": 4
+        },
+        {
+          "pref_rank": 1,
+          "query": "planning dinner for our anniversary",
+          "topic": "spicy food",
+          "vec_rank": 41
+        },
+        {
+          "pref_rank": 1,
+          "query": "which cuisine would suit us both",
+          "topic": "spicy food",
+          "vec_rank": 3
+        },
+        {
+          "pref_rank": 1,
+          "query": "picking a venue for the party",
+          "topic": "loud music",
+          "vec_rank": 22
+        },
+        {
+          "pref_rank": 1,
+          "query": "is that bar going to be too much",
+          "topic": "loud music",
+          "vec_rank": 34
+        },
+        {
+          "pref_rank": 1,
+          "query": "choosing background sound for the evening",
+          "topic": "loud music",
+          "vec_rank": 3
+        },
+        {
+          "pref_rank": 1,
+          "query": "when should we schedule the appointment",
+          "topic": "early mornings",
+          "vec_rank": 17
+        },
+        {
+          "pref_rank": 1,
+          "query": "is a sunrise start reasonable",
+          "topic": "early mornings",
+          "vec_rank": 21
+        },
+        {
+          "pref_rank": 1,
+          "query": "booking a flight time that works",
+          "topic": "early mornings",
+          "vec_rank": 1
+        },
+        {
+          "pref_rank": 1,
+          "query": "how should we travel to the coast",
+          "topic": "long drives",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 1,
+          "query": "would a train be better than the car",
+          "topic": "long drives",
+          "vec_rank": 2
+        },
+        {
+          "pref_rank": 1,
+          "query": "planning the route for our holiday",
+          "topic": "long drives",
+          "vec_rank": 3
+        }
+      ],
+      "transfer_gold_vec_rank_mean": 12.75,
+      "transfer_recall5": 0.8333,
+      "update_acc": 1.0,
+      "update_acc_paraphrase": 0.5
+    }
+  ],
+  "latency": null,
+  "predicate_hint": true,
+  "query_instruction": true,
+  "reported": {
+    "relation_precision": 1.0,
+    "spouse_surfaced_day_mean": 8.0,
+    "transfer_gold_pref_rank1": 0.775,
+    "transfer_gold_vec_rank_mean": 16.3667,
+    "transfer_recall5": 0.7
+  },
+  "scope": "MS0: the full-text lane only, ORACLE candidates, a seeded template corpus. Transfer and relation precision are REPORTED, not banded - the embedding lane lands at MS1. Nothing here is measured on real speech or on the owner.",
+  "stopwords": "dropped",
+  "transfer_by_topic_total": {
+    "early mornings": 29,
+    "long drives": 30,
+    "loud music": 5,
+    "spicy food": 20
+  }
+}
