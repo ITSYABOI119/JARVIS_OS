@@ -20,6 +20,12 @@ from .registry import QUERY_VOCAB
 W_SOURCE = {"stated_owner": 1.0, "stated_other": 0.8, "inferred": 0.6}
 HALF_LIFE_DAYS = 90.0
 
+# Reciprocal-rank fusion, from MS1a. 60 is the constant the method was published with, not a
+# tuned value: it moves only with a measured reason written into the design. RRF is used
+# because the lanes are not comparable in magnitude - BM25 is negative-better and unbounded,
+# cosine is bounded - so only their ORDER can honestly be combined.
+RRF_K = 60
+
 
 def tokens(text: str) -> list:
     """The query words: lower-cased alphanumeric runs, nothing else.
@@ -53,6 +59,21 @@ def predicate_hint(text: str):
         return None
     hits = [pid for pid, vocab in QUERY_VOCAB.items() if words & vocab]
     return hits[0] if len(hits) == 1 else None
+
+
+def fuse(lanes: dict) -> dict:
+    """Reciprocal-rank fusion over any number of lanes.
+
+    Each lane is an ORDERED list of keys, best first; a key at 1-based rank r contributes
+    1 / (RRF_K + r), and a key found by several lanes sums its terms — which is the whole
+    point: agreement between the full-text and vector lanes outranks a strong showing in one.
+    A key in no lane is simply absent.
+    """
+    out = {}
+    for keys in (lanes or {}).values():
+        for i, key in enumerate(keys or (), start=1):
+            out[key] = out.get(key, 0.0) + 1.0 / (RRF_K + i)
+    return out
 
 
 def recency_weight(age_days: float, decays: bool) -> float:
@@ -91,22 +112,51 @@ def age_days(newest_span_at: str, now: str) -> float:
     return max(0.0, (b - a).total_seconds() / 86400.0)
 
 
-def rank(rows: list, now: str) -> list:
-    """Score every row and sort by score desc, then recorded_at desc.
+def lane_order(members: list, now: str) -> list:
+    """Order ONE lane's own candidates by the weighted score — step (1) of the design's §6.
 
-    Each row carries lane_score, source_kind, newest_span_at, confidence, table and recorded_at.
-    The rows are returned as new dicts with a 'score' key added; the inputs are not mutated.
+    A member arrives in the lane's raw order (bm25 or cosine) and is scored at its position with
+    MS0.1's formula, `1/(1+i) x w_source x w_recency x confidence`. R2's source rank and R6's decay
+    belong HERE, where every competitor is a candidate for the same question — not on the fused
+    value, which is what MS1a's first attempt measured to be wrong: RRF's output spans about 6 % over
+    five ranks, so multiplying it by weights that differ by 20-40 % let a rank-5 fact about another
+    person beat the correct rank-1 fact.
+
+    Equal scores keep the lane's raw order (Python's sort is stable), so a tie never reshuffles what
+    bm25 or cosine already decided.
+    """
+    out = []
+    for i, m in enumerate(members):
+        row = dict(m)
+        row["wscore"] = score(
+            1.0 / (1 + i),
+            m.get("source_kind", ""),
+            age_days(m.get("newest_span_at"), now),
+            m.get("confidence", 1.0),
+            is_stated_profile_fact(m),
+        )
+        out.append(row)
+    out.sort(key=lambda r: r["wscore"], reverse=True)
+    return out
+
+
+def rank(rows: list, now: str) -> list:
+    """Merge the lanes — step (3) of the design's §6.
+
+    Each row carries `relevance` (the fused reciprocal-rank value), `tiebreak` (the best weighted
+    score the row earned in any lane) and `recorded_at`. The ordering is relevance, then tiebreak,
+    then recorded_at newest first. **The relevance is published as `score` and multiplied by
+    nothing** — the weights already did their work inside the lanes, and applying them twice is the
+    defect MS1a measured.
+
+    `now` is unused and kept so the signature is stable for callers.
     """
     out = []
     for r in rows:
         row = dict(r)
-        row["score"] = score(
-            r.get("lane_score", 0.0),
-            r.get("source_kind", ""),
-            age_days(r.get("newest_span_at"), now),
-            r.get("confidence", 1.0),
-            is_stated_profile_fact(r),
-        )
+        row["score"] = float(r.get("relevance", 0.0))
+        row["tiebreak"] = float(r.get("tiebreak", 0.0))
         out.append(row)
-    out.sort(key=lambda r: (r["score"], str(r.get("recorded_at") or "")), reverse=True)
+    out.sort(key=lambda r: (r["score"], r["tiebreak"], str(r.get("recorded_at") or "")),
+             reverse=True)
     return out

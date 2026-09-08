@@ -25,6 +25,7 @@ import datetime as _dt
 import sqlite3
 
 from . import people as _people
+from . import embed as _embed
 from . import retrieve as _retrieve
 from .candidate import validate
 from .confidence import confidence as _confidence, distinct_days
@@ -333,14 +334,15 @@ class MemoryStore:
             self._fts_delete("fact_fts", row_id, self._fact_index_text(row_id))
         elif table == "preference":
             self._fts_delete("pref_fts", row_id, self._pref_index_text(row_id))
+        # MS1a: the vector lane leaves with the full-text one. A stale embedding would
+        # otherwise keep answering by meaning after the belief stopped being current.
+        self.conn.execute("delete from embedding where owner_table=? and owner_id=?",
+                          (table, row_id))
 
     def _close_row(self, table, row_id, valid_to, winner_id):
-        if table == "fact":
-            # Read the indexed text BEFORE the row changes, then drop it from the lane: a
-            # superseded belief must not answer a question.
-            self._fts_delete("fact_fts", row_id, self._fact_index_text(row_id))
-        elif table == "preference":
-            self._fts_delete("pref_fts", row_id, self._pref_index_text(row_id))
+        # One path out of both indexes (MS1a): _drop_from_index checks valid_to is still null,
+        # which it is here because the UPDATE below has not run yet.
+        self._drop_from_index(table, row_id)
         self.conn.execute(
             f"update {table} set valid_to=?, superseded_by=? where id=?",
             (valid_to, winner_id, row_id))
@@ -473,6 +475,8 @@ class MemoryStore:
             for sid in span_ids:
                 r = self.conn.execute("select text from span where id=?", (sid,)).fetchone()
                 self._fts_delete("span_fts", sid, r[0] if r else None)
+                self.conn.execute(
+                    "delete from embedding where owner_table='span' and owner_id=?", (sid,))
                 self.conn.execute("delete from span where id=?", (sid,))
             self.conn.execute("update cluster set n_spans=0, days_heard=0 where id=?", (cluster_id,))
             audit_ids.append(self._audit(
@@ -506,6 +510,72 @@ class MemoryStore:
                                 "why": "closed or superseded with no audit row naming it"})
         return out
 
+    # ------------------------------------------------------- the vector lane
+    def _embed_rendering(self, table, row_id):
+        """The SAME text the full-text index holds, so the two lanes describe one thing."""
+        if table == "fact":
+            return self._fact_index_text(row_id)
+        if table == "preference":
+            return self._pref_index_text(row_id)
+        r = self.conn.execute("select text from span where id=?", (row_id,)).fetchone()
+        return r[0] if r else None
+
+    def embed_pending(self, embedder) -> dict:
+        """Embed every current belief and every span that has no vector for this model yet.
+
+        Deliberately NOT called from `ingest`: the write path stays embedding-free, so the p99
+        write band measures the store and never a GPU. A benchmark or a batch job calls this.
+        """
+        import time as _time
+        t0 = _time.perf_counter()
+        counts = {"fact": 0, "preference": 0, "span": 0}
+        model = embedder.model_id
+        for table in ("fact", "preference", "span"):
+            if table == "span":
+                sql = ("select s.id from span s left join embedding e "
+                       "on e.owner_table=? and e.owner_id=s.id and e.model=? where e.owner_id is null")
+            else:
+                sql = (f"select t.id from {table} t left join embedding e "
+                       "on e.owner_table=? and e.owner_id=t.id and e.model=? "
+                       "where e.owner_id is null and t.valid_to is null")
+            ids = [r[0] for r in self.conn.execute(sql, (table, model)).fetchall()]
+            pending = [(i, self._embed_rendering(table, i)) for i in ids]
+            pending = [(i, t) for i, t in pending if t]
+            for start in range(0, len(pending), 64):
+                chunk = pending[start:start + 64]
+                vecs = embedder.embed([t for _, t in chunk])
+                for (row_id, _), vec in zip(chunk, vecs):
+                    self.conn.execute(
+                        "insert or replace into embedding (owner_table, owner_id, model, dim, vec) "
+                        "values (?,?,?,?,?)",
+                        (table, row_id, model, len(vec), _embed.pack(vec)))
+                    counts[table] += 1
+            self.conn.commit()
+        counts["seconds"] = round(_time.perf_counter() - t0, 3)
+        return counts
+
+    def _vector_lane(self, query_text, embedder, limit=50):
+        """Cosine over every CURRENT embedded row for this model. Never hint-restricted (design
+        §6): a question the rule mis-hinted must still reach its row by meaning."""
+        model = embedder.model_id
+        rows, meta = [], {}
+        for table in ("fact", "preference", "span"):
+            if table == "span":
+                sql = ("select e.owner_id, e.dim, e.vec from embedding e "
+                       "join span s on s.id = e.owner_id where e.owner_table=? and e.model=?")
+            else:
+                sql = (f"select e.owner_id, e.dim, e.vec from embedding e "
+                       f"join {table} t on t.id = e.owner_id "
+                       "where e.owner_table=? and e.model=? and t.valid_to is null")
+            for r in self.conn.execute(sql, (table, model)).fetchall():
+                key = (table, r[0])
+                rows.append((key, _embed.unpack(r[2], r[1])))
+                meta[key] = table
+        if not rows:
+            return []
+        q = embedder.embed_query(query_text)
+        return _embed.topk(q, rows, limit)
+
     # ------------------------------------------------------------- the query
     def _fts_match(self, text) -> str:
         toks = _tokens(text)
@@ -515,82 +585,167 @@ class MemoryStore:
         r = self.conn.execute("select max(said_at) from span").fetchone()
         return r[0] or _now_iso()
 
-    def query(self, text, k=5, now=None, predicate_hint="auto") -> list:
-        """The full-text lane plus the ranker, with the spans always attached.
+    def query(self, text, k=5, now=None, predicate_hint="auto", embedder=None) -> list:
+        """The retrieval lanes, fused, with the spans always attached.
 
-        `lane_score` is 1/(1+position) within each lane, positions taken in bm25 order - a bounded,
-        monotone score. It is an ORDINAL, so a 7 % bm25 difference becomes a 2x gap; harmless while
-        every competitor shares source, recency and confidence, and the design pre-registers a
-        proper fusion for MS1 when the embedding lane joins.
+        Lanes: full-text over facts, preferences and spans (the first two hint-restricted as at
+        MS0.1), and — when an `embedder` is given — a vector lane over the same rows' embeddings.
+        The lanes are combined by RECIPROCAL RANK (`retrieve.fuse`, K = 60): only their ORDER is
+        comparable, since BM25 is negative-better and unbounded while cosine is bounded, and a row
+        both lanes like outranks a row one lane loves.
+
+        **The hint restricts the full-text lane only** (design §6, decided at MS1a): MS0.1 measured
+        two scenario questions hinting to the wrong predicate, and an unrestricted vector lane is
+        what lets such a question still reach its row by meaning.
 
         `now` defaults to the newest span in the store, so a query is deterministic and a benchmark
         can ask what was believed on a given day.
-
-        `predicate_hint` (MS0.1): 'auto' asks retrieve.predicate_hint for the question's predicate,
-        None forces the unrestricted MS0 behaviour, and an explicit predicate id forces that
-        restriction. With a hint the lookup is narrowed to the one table and predicate the question
-        is about - which is what stops a diluted predicate word letting the shorter of two facts
-        about the same person win. SPANS ARE NEVER RESTRICTED: they are raw evidence, not a typed
-        belief, and a question whose predicate we guessed must still be able to reach the words
-        actually spoken.
         """
         match = self._fts_match(text)
-        if not match:
-            return []
         now = now or self._newest_now()
         hint = _retrieve.predicate_hint(text) if predicate_hint == "auto" else predicate_hint
         want_prefs = hint is None or hint == PREFERENCE_PREDICATE
         want_facts = hint is None or hint != PREFERENCE_PREDICATE
+
+        members = {}          # lane -> [member dicts, in the lane's raw order]
+        info = {}             # key -> the row's metadata
+
+        def note(key, table, row_id, source_kind, confidence, recorded_at, text_, newest_span_at):
+            if key not in info:
+                info[key] = {"key": key, "table": table, "row_id": row_id,
+                             "source_kind": source_kind, "confidence": confidence,
+                             "recorded_at": recorded_at, "text": text_,
+                             "newest_span_at": newest_span_at}
+            return info[key]
+
+        if match:
+            if want_facts:
+                sql = ("select f.id, f.object_text, f.source_kind, f.confidence, f.recorded_at, "
+                       "       f.subject_kind, f.subject_id, f.predicate_id "
+                       "from fact_fts j join fact f on f.id = j.rowid "
+                       "where fact_fts match ? and f.valid_to is null")
+                args = [match]
+                if hint is not None:
+                    sql += " and f.predicate_id = ?"
+                    args.append(hint)
+                sql += " order by bm25(fact_fts) limit 50"
+                lane = []
+                for r in self.conn.execute(sql, tuple(args)).fetchall():
+                    key = ("fact", r["id"])
+                    lane.append(note(key, "fact", r["id"], r["source_kind"], r["confidence"],
+                                     r["recorded_at"],
+                                     self._fact_fts_text(r["subject_id"], r["subject_kind"],
+                                                         r["predicate_id"], r["object_text"]),
+                                     self._newest_span_at("fact", r["id"])))
+                members["fts_fact"] = lane
+
+            if want_prefs:
+                lane = []
+                for r in self.conn.execute(
+                        "select p.id, p.person_id, p.polarity, p.topic_norm, p.source_kind, "
+                        "       p.confidence, p.recorded_at "
+                        "from pref_fts j join preference p on p.id = j.rowid "
+                        "where pref_fts match ? and p.valid_to is null "
+                        "order by bm25(pref_fts) limit 50", (match,)).fetchall():
+                    key = ("preference", r["id"])
+                    lane.append(note(key, "preference", r["id"], r["source_kind"], r["confidence"],
+                                     r["recorded_at"],
+                                     self._pref_fts_text(r["person_id"], r["polarity"],
+                                                         r["topic_norm"]),
+                                     self._newest_span_at("preference", r["id"])))
+                members["fts_pref"] = lane
+
+            lane = []
+            for r in self.conn.execute(
+                    "select s.id, s.text, s.said_at from span_fts j join span s on s.id = j.rowid "
+                    "where span_fts match ? order by bm25(span_fts) limit 50", (match,)).fetchall():
+                key = ("span", r["id"])
+                # A span is evidence, not a claim: it ranks as inferred and it decays.
+                lane.append(note(key, "span", r["id"], "inferred", 1.0, r["said_at"], r["text"],
+                                 r["said_at"]))
+            members["fts_span"] = lane
+
+        cos_by_key = {}
+        if embedder is not None:
+            lane = []
+            for key, cos in self._vector_lane(text, embedder):
+                cos_by_key[key] = cos
+                if key not in info:
+                    self._note_from_db(key, note)
+                if key in info:
+                    lane.append(info[key])
+            members["vec"] = lane
+
+        if not members:
+            return []
+
+        # (1) each lane orders its OWN candidates by the weighted score, then (2) the lanes are
+        # fused by reciprocal rank over those orderings - the final relevance, multiplied by nothing.
+        lanes, best_w = {}, {}
+        for lane_name, lane_members in members.items():
+            ordered = _retrieve.lane_order(lane_members, now)
+            lanes[lane_name] = [m["key"] for m in ordered]
+            for m in ordered:
+                mk = m["key"]          # not `k` - that is the caller's result limit
+                if m["wscore"] > best_w.get(mk, float("-inf")):
+                    best_w[mk] = m["wscore"]
+
+        fused = _retrieve.fuse(lanes)
+        lane_ranks = {}
+        for lane_name, keys in lanes.items():
+            for i, key in enumerate(keys, start=1):
+                lane_ranks.setdefault(key, {})[lane_name] = i
+
         rows = []
-
-        if want_facts:
-            sql = ("select f.id, f.object_text, f.source_kind, f.confidence, f.recorded_at, "
-                   "       f.subject_kind, f.subject_id, f.predicate_id "
-                   "from fact_fts j join fact f on f.id = j.rowid "
-                   "where fact_fts match ? and f.valid_to is null")
-            args = [match]
-            if hint is not None:
-                sql += " and f.predicate_id = ?"
-                args.append(hint)
-            sql += " order by bm25(fact_fts) limit 50"
-            for i, r in enumerate(self.conn.execute(sql, tuple(args)).fetchall()):
-                rows.append({"table": "fact", "row_id": r["id"], "lane_score": 1.0 / (1 + i),
-                             "source_kind": r["source_kind"], "confidence": r["confidence"],
-                             "newest_span_at": self._newest_span_at("fact", r["id"]),
-                             "recorded_at": r["recorded_at"],
-                             "text": self._fact_fts_text(r["subject_id"], r["subject_kind"],
-                                                         r["predicate_id"], r["object_text"])})
-
-        if want_prefs:
-            pref_rows = self.conn.execute(
-                "select p.id, p.person_id, p.polarity, p.topic_norm, p.source_kind, p.confidence, "
-                "       p.recorded_at "
-                "from pref_fts j join preference p on p.id = j.rowid "
-                "where pref_fts match ? and p.valid_to is null "
-                "order by bm25(pref_fts) limit 50", (match,)).fetchall()
-            for i, r in enumerate(pref_rows):
-                rows.append({"table": "preference", "row_id": r["id"], "lane_score": 1.0 / (1 + i),
-                             "source_kind": r["source_kind"], "confidence": r["confidence"],
-                             "newest_span_at": self._newest_span_at("preference", r["id"]),
-                             "recorded_at": r["recorded_at"],
-                             "text": self._pref_fts_text(r["person_id"], r["polarity"],
-                                                         r["topic_norm"])})
-
-        span_rows = self.conn.execute(
-            "select s.id, s.text, s.said_at from span_fts j join span s on s.id = j.rowid "
-            "where span_fts match ? order by bm25(span_fts) limit 50", (match,)).fetchall()
-        for i, r in enumerate(span_rows):
-            # A span is evidence, not a claim: it ranks as inferred and it decays, so a stated
-            # fact outranks the raw utterance it was extracted from.
-            rows.append({"table": "span", "row_id": r["id"], "lane_score": 1.0 / (1 + i),
-                         "source_kind": "inferred", "confidence": 1.0,
-                         "newest_span_at": r["said_at"], "recorded_at": r["said_at"],
-                         "text": r["text"]})
+        for key, relevance in fused.items():
+            meta = info.get(key)
+            if meta is None:
+                continue
+            row = dict(meta)
+            row.pop("key", None)
+            row["relevance"] = relevance
+            row["tiebreak"] = best_w.get(key, 0.0)
+            row["lanes"] = lane_ranks.get(key, {})
+            if key in cos_by_key:
+                row["cos"] = cos_by_key[key]
+            rows.append(row)
 
         ranked = _retrieve.rank(rows, now)[:k]
         for r in ranked:
             r["span_ids"], r["spans"] = self._spans_for(r["table"], r["row_id"])
         return ranked
+
+    def _note_from_db(self, key, note):
+        """Fill a row's metadata when the vector lane found it and no full-text lane did.
+
+        Re-checks `valid_to is null` even though `_vector_lane` already joins on it: a closed row
+        reappearing by meaning is exactly the failure the embedding lifecycle exists to prevent,
+        and this is the one path that reaches a row the full-text lanes never saw.
+        """
+        table, row_id = key
+        if table == "fact":
+            r = self.conn.execute(
+                "select object_text, source_kind, confidence, recorded_at, subject_kind, "
+                "subject_id, predicate_id from fact where id=? and valid_to is null",
+                (row_id,)).fetchone()
+            if r:
+                note(key, "fact", row_id, r["source_kind"], r["confidence"], r["recorded_at"],
+                     self._fact_fts_text(r["subject_id"], r["subject_kind"], r["predicate_id"],
+                                         r["object_text"]),
+                     self._newest_span_at("fact", row_id))
+        elif table == "preference":
+            r = self.conn.execute(
+                "select person_id, polarity, topic_norm, source_kind, confidence, recorded_at "
+                "from preference where id=? and valid_to is null", (row_id,)).fetchone()
+            if r:
+                note(key, "preference", row_id, r["source_kind"], r["confidence"],
+                     r["recorded_at"],
+                     self._pref_fts_text(r["person_id"], r["polarity"], r["topic_norm"]),
+                     self._newest_span_at("preference", row_id))
+        else:
+            r = self.conn.execute("select text, said_at from span where id=?", (row_id,)).fetchone()
+            if r:
+                note(key, "span", row_id, "inferred", 1.0, r["said_at"], r["text"], r["said_at"])
 
     def _newest_span_at(self, table, row_id):
         link, col = SPAN_LINK[table]

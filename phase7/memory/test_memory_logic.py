@@ -21,7 +21,7 @@ from jarvis_memory.confidence import (  # noqa: E402
 from jarvis_memory.freshness import key, newer  # noqa: E402
 from jarvis_memory.rules import decide  # noqa: E402
 from jarvis_memory.retrieve import (  # noqa: E402
-    W_SOURCE, HALF_LIFE_DAYS, recency_weight, score, rank,
+    W_SOURCE, HALF_LIFE_DAYS, recency_weight, score, rank, lane_order,
 )
 from jarvis_memory.people import MIN_DAYS, MIN_SPANS_PER_DAY, is_person, purge_plan  # noqa: E402
 
@@ -296,17 +296,25 @@ def rrow(row_id, source_kind, age_days, table="fact", lane_score=1.0, conf=1.0, 
             "recorded_at": recorded_at or ts.isoformat()}
 
 
-ranked = rank([rrow(1, "inferred", 0), rrow(2, "stated_owner", 0)], NOW)
-check("T8h stated outranks inferred at equal lane score",
-      [r["row_id"] for r in ranked] == [2, 1], str([r["row_id"] for r in ranked]))
+# T8h-T8j originally drove `rank` with equal lane_scores and asserted that the source and recency
+# weights decided the order. MS1a moved that behaviour into `lane_order` by design (the weights now
+# order a lane's own candidates; `rank` merges the fused relevance and multiplies by nothing), so
+# these are retargeted to lane_order with the same intent. See T23h/T23i for the new contract.
+_lo = lane_order([rrow(1, "stated_owner", 0), rrow(2, "inferred", 0)], NOW)
+check("T8h inside a lane, a stated row leads an inferred one below it",
+      [r["row_id"] for r in _lo] == [1, 2] and close_to(_lo[0]["wscore"], 1.0, 1e-9)
+      and close_to(_lo[1]["wscore"], 0.3, 1e-9),
+      str([(r["row_id"], round(r["wscore"], 4)) for r in _lo]))
 
-ranked = rank([rrow(1, "inferred", 90), rrow(2, "inferred", 0)], NOW)
-check("T8i a fresher non-stated row outranks an older one",
-      [r["row_id"] for r in ranked] == [2, 1], str([r["row_id"] for r in ranked]))
+_lo = lane_order([rrow(1, "inferred", 180), rrow(2, "inferred", 0)], NOW)
+check("T8i recency can lift a fresher row past one rank of decay",
+      [r["row_id"] for r in _lo] == [2, 1]
+      and close_to(_lo[0]["wscore"], 0.3, 1e-9) and close_to(_lo[1]["wscore"], 0.15, 1e-9),
+      str([(r["row_id"], round(r["wscore"], 4)) for r in _lo]))
 
-ranked = rank([rrow(1, "stated_owner", 400), rrow(2, "inferred", 0)], NOW)
-check("T8j an old stated fact still outranks a fresh inferred one (no decay)",
-      [r["row_id"] for r in ranked] == [1, 2], str([r["row_id"] for r in ranked]))
+_lo = lane_order([rrow(1, "stated_owner", 400)], NOW)
+check("T8j a stated fact does not decay, even at 400 days",
+      close_to(_lo[0]["wscore"], 1.0, 1e-9), str(_lo[0]["wscore"]))
 
 # ================================================================ the store
 # Every store check runs on an in-memory SQLite database. Nothing is written to disk and no
@@ -728,6 +736,196 @@ check("T21e coexisting recall is 1.0 either way",
 check("T21f the hint touches retrieval only, never the write path",
       _off_hh["spouse_surfaced_day"] == _on_hh["spouse_surfaced_day"],
       f"{_off_hh['spouse_surfaced_day']} vs {_on_hh['spouse_surfaced_day']}")
+
+# ================================================== MS1a the embedding lane
+# Everything here runs on a DICTIONARY embedder with 4-dimensional vectors: no torch, no GPU, no
+# model download, so CI's bare python3 runs it. The real Qwen embedder is exercised only by the
+# benchmark runs, which are recorded in the log rather than asserted here.
+
+from jarvis_memory import embed as embed_mod  # noqa: E402
+from jarvis_memory.embed import (  # noqa: E402
+    DictEmbedder, cosine, pack, topk, unpack,
+)
+from jarvis_memory.retrieve import RRF_K, fuse  # noqa: E402
+
+# ---------------------------------------------------------------- T22 vectors
+_v = [0.5, -0.25, 1.0, 0.0]
+_blob = pack(_v)
+check("T22a pack is 4 bytes per float", len(_blob) == 16, str(len(_blob)))
+check("T22b pack/unpack round-trips", all(close_to(a, b, 1e-6) for a, b in zip(unpack(_blob, 4), _v)),
+      str(unpack(_blob, 4)))
+check("T22c cosine of a vector with itself is 1", close_to(cosine([1, 0, 0, 0], [1, 0, 0, 0]), 1.0, 1e-9))
+check("T22d cosine of orthogonal vectors is 0", close_to(cosine([1, 0, 0, 0], [0, 1, 0, 0]), 0.0, 1e-9))
+check("T22e a zero vector cosines to 0, never divides by zero",
+      close_to(cosine([1, 0, 0, 0], [0, 0, 0, 0]), 0.0, 1e-9))
+_tk = topk([1, 0, 0, 0], [("a", [1, 0, 0, 0]), ("b", [0.6, 0.8, 0, 0]), ("c", [0, 1, 0, 0])], 2)
+check("T22f topk returns the two best by cosine, in order",
+      len(_tk) == 2 and _tk[0][0] == "a" and _tk[1][0] == "b"
+      and close_to(_tk[0][1], 1.0, 1e-6) and close_to(_tk[1][1], 0.6, 1e-6), str(_tk))
+try:
+    import numpy as _np  # noqa: F401
+    _rows = [(i, [(i % 7) / 7.0, (i % 5) / 5.0, (i % 3) / 3.0, 1.0]) for i in range(40)]
+    _q = [0.3, 0.5, 0.2, 0.8]
+    _pure = embed_mod._topk_pure(_q, _rows, 10)
+    _fast = topk(_q, _rows, 10)
+    check("T22g the numpy path agrees with the pure path to 1e-6",
+          [o for o, _ in _pure] == [o for o, _ in _fast]
+          and all(close_to(a, b, 1e-6) for (_, a), (_, b) in zip(_pure, _fast)),
+          f"{_pure[:3]} vs {_fast[:3]}")
+except ImportError:
+    print("NOTE T22g skipped - numpy is not importable in this interpreter (expected in CI)")
+
+# ------------------------------------------------------------------- T23 fuse
+check("T23a the RRF constant is the published 60", RRF_K == 60, str(RRF_K))
+_f = fuse({"fts": ["a", "b"], "vec": ["b", "c"]})
+check("T23b a row in two lanes sums its terms",
+      close_to(_f["b"], 1.0 / 61 + 1.0 / 62, 1e-12), str(_f.get("b")))
+check("T23c a row in one lane at rank 1", close_to(_f["a"], 1.0 / 61, 1e-12), str(_f.get("a")))
+check("T23d a row in one lane at rank 2", close_to(_f["c"], 1.0 / 62, 1e-12), str(_f.get("c")))
+check("T23e the two-lane row outranks both single-lane rows",
+      _f["b"] > _f["a"] > _f["c"], str(sorted(_f.items(), key=lambda kv: -kv[1])))
+check("T23f fuse of nothing is nothing", fuse({}) == {})
+check("T23g an empty lane contributes nothing",
+      fuse({"fts": ["a"], "vec": []}) == {"a": 1.0 / 61})
+
+# ------------------------------------- T23h lane_order: the weights act INSIDE a lane
+# The correction after MS1a's first attempt: R2's source rank and R6's decay order a lane's own
+# candidates, where every competitor answers the same question. RRF then merges the ORDERINGS and
+# is multiplied by nothing.
+def _member(key, table, source_kind, newest_span_at, confidence=1.0, recorded_at="2026-03-01T00:00:00"):
+    return {"key": key, "table": table, "source_kind": source_kind, "confidence": confidence,
+            "recorded_at": recorded_at, "newest_span_at": newest_span_at}
+
+
+_NOW23 = "2026-03-01T00:00:00"
+_lane = lane_order([
+    _member("A", "fact", "stated_other", _NOW23),
+    _member("B", "fact", "stated_other", _NOW23),
+    _member("C", "fact", "stated_other", _NOW23),
+    _member("D", "fact", "stated_other", _NOW23),
+    _member("E", "fact", "stated_owner", _NOW23),
+], _NOW23)
+check("T23h1 the rank-1 stated_other keeps the lane's top",
+      _lane[0]["key"] == "A" and close_to(_lane[0]["wscore"], 0.8, 1e-9),
+      str([(r["key"], round(r["wscore"], 4)) for r in _lane]))
+check("T23h2 the rank-5 stated_owner scores 0.2 and does not jump the correct answer",
+      [r["key"] for r in _lane][-1] == "E" and close_to(_lane[-1]["wscore"], 0.2, 1e-9),
+      str([(r["key"], round(r["wscore"], 4)) for r in _lane]))
+_lane2 = lane_order([
+    _member("S", "span", "inferred", _NOW23),
+    _member("F", "fact", "stated_owner", _NOW23),
+], _NOW23)
+check("T23h3 MS0.1's within-lane behaviour is preserved: the rank-1 span still leads a rank-2 fact",
+      [r["key"] for r in _lane2] == ["S", "F"]
+      and close_to(_lane2[0]["wscore"], 0.6, 1e-9) and close_to(_lane2[1]["wscore"], 0.5, 1e-9),
+      str([(r["key"], round(r["wscore"], 4)) for r in _lane2]))
+
+# ------------------------------------------------- T23i rank: relevance first, then the tiebreak
+_r = rank([{"row_id": 1, "table": "span", "relevance": 1.0 / 61, "tiebreak": 0.6,
+            "recorded_at": "2026-03-01T00:00:00"},
+           {"row_id": 2, "table": "fact", "relevance": 1.0 / 61, "tiebreak": 1.0,
+            "recorded_at": "2026-03-01T00:00:00"}], _NOW23)
+check("T23i1 equal relevance breaks by the within-lane weighted score",
+      [x["row_id"] for x in _r] == [2, 1], str([(x["row_id"], x["score"]) for x in _r]))
+check("T23i2 rank publishes the fused relevance as the score, multiplied by nothing",
+      close_to(_r[0]["score"], 1.0 / 61, 1e-12), str(_r[0]["score"]))
+_r = rank([{"row_id": 1, "table": "fact", "relevance": 1.0 / 61, "tiebreak": 1.0,
+            "recorded_at": "2026-03-01T00:00:00"},
+           {"row_id": 2, "table": "fact", "relevance": 1.0 / 61, "tiebreak": 1.0,
+            "recorded_at": "2026-03-05T00:00:00"}], _NOW23)
+check("T23i3 equal relevance and tiebreak break by recorded_at, newest first",
+      [x["row_id"] for x in _r] == [2, 1], str([x["row_id"] for x in _r]))
+_r = rank([{"row_id": 1, "table": "fact", "relevance": 1.0 / 62, "tiebreak": 1.0,
+            "recorded_at": "2026-03-01T00:00:00"},
+           {"row_id": 2, "table": "span", "relevance": 1.0 / 61, "tiebreak": 0.6,
+            "recorded_at": "2026-03-01T00:00:00"}], _NOW23)
+check("T23i4 relevance outranks the tiebreak - the fused order is the answer",
+      [x["row_id"] for x in _r] == [2, 1], str([x["row_id"] for x in _r]))
+
+# ------------------------------------------- T24 the vector lane in the store
+st, c1, c2, owner = fresh()
+_sp = add_day(st, "2026-03-01", c1, ["quiet morning", "nothing much"])
+st.ingest(fact_cand(owner, [_sp[0]], "Sydney", "sydney", "2026-03-01T08:00:00"))
+st.ingest(fact_cand(owner, [_sp[1]], "a nurse", "a nurse", "2026-03-01T08:00:10",
+                    predicate="person.works_as"))
+st.ingest(dict(predicate_id="owner.prefers", subject={"kind": "person", "id": owner},
+               object="spicy food", object_norm="spicy food", source_kind="stated_owner",
+               speaker_cluster=c1, span_ids=[_sp[0]], about_time=None, relation_id=None,
+               polarity="likes", strength=2, ended=False, said_at="2026-03-01T08:00:20"))
+
+_PREF_TEXT = st._pref_fts_text(owner, "likes", "spicy food")
+_LIVES_TEXT = st._fact_fts_text(owner, "person", "person.lives_in", "Sydney")
+_WORKS_TEXT = st._fact_fts_text(owner, "person", "person.works_as", "a nurse")
+_TABLE = {
+    _PREF_TEXT: [1.0, 0.0, 0.0, 0.0],
+    _LIVES_TEXT: [0.0, 1.0, 0.0, 0.0],
+    _WORKS_TEXT: [0.0, 0.0, 1.0, 0.0],
+    "planning dinner for our anniversary": [1.0, 0.0, 0.0, 0.0],
+    "what does sam do for a living": [0.0, 0.0, 1.0, 0.0],
+}
+E = DictEmbedder(_TABLE, 4)
+
+_res = st.embed_pending(E)
+check("T24a embed_pending embeds every current belief and every span",
+      _res["fact"] == 2 and _res["preference"] == 1 and _res["span"] == len(_sp),
+      str(_res))
+_again = st.embed_pending(E)
+check("T24b a second pass embeds nothing new",
+      _again["fact"] == 0 and _again["preference"] == 0 and _again["span"] == 0, str(_again))
+
+_hits = st.query("planning dinner for our anniversary", k=5, now="2026-03-02T00:00:00", embedder=E)
+_top = _hits[0] if _hits else {}
+check("T24c the preference comes first, found only by the vector lane",
+      _top.get("table") == "preference" and _top.get("lanes") == {"vec": 1}
+      and _top.get("cos") is not None and close_to(_top["cos"], 1.0, 1e-6),
+      f"{_top.get('table')} lanes={_top.get('lanes')} cos={_top.get('cos')}")
+check("T24d without the embedder that question finds nothing",
+      st.query("planning dinner for our anniversary", k=5, now="2026-03-02T00:00:00",
+               embedder=None) == [],
+      str(st.query("planning dinner for our anniversary", k=5, now="2026-03-02T00:00:00")))
+
+# T24e - the hint restricts the full-text lane, never the vector lane
+check("T24e0 the question really does hint lives_in",
+      predicate_hint("what does sam do for a living") == "person.lives_in",
+      str(predicate_hint("what does sam do for a living")))
+_hits = st.query("what does sam do for a living", k=5, now="2026-03-02T00:00:00", embedder=E)
+_works = [h for h in _hits if h["table"] == "fact"
+          and _fact_row_t(st, h["row_id"])["predicate_id"] == "person.works_as"]
+check("T24e the works_as row still arrives, by meaning, past a hint that excluded it",
+      len(_works) == 1 and "vec" in _works[0]["lanes"],
+      str([(h["table"], h.get("lanes")) for h in _hits]))
+
+# ------------------------------------------------------------- T25 lifecycle
+_sp2 = add_day(st, "2026-03-09", c1, ["we moved"])
+_r2 = st.ingest(fact_cand(owner, _sp2, "Brisbane", "brisbane", "2026-03-09T08:00:00"))
+check("T25a the superseding fact closed the old one", _r2["outcome"] == "supersede", str(_r2))
+_closed_id = _r2["closed"][0]
+check("T25b the closed row's embedding is gone",
+      st.conn.execute("select count(*) from embedding where owner_table='fact' and owner_id=?",
+                      (_closed_id,)).fetchone()[0] == 0)
+_hits = st.query("what does sam do for a living", k=5, now="2026-03-10T00:00:00", embedder=E)
+check("T25c the closed row is absent from the results",
+      not any(h["table"] == "fact" and h["row_id"] == _closed_id for h in _hits),
+      str([(h["table"], h["row_id"]) for h in _hits]))
+check("T25d no audit violations", st.audit_violations() == [], str(st.audit_violations()))
+_before = st.conn.execute("select count(*) from embedding").fetchone()[0]
+st.purge_cluster(c1)
+check("T25e the purge removed the embeddings with the rows",
+      st.conn.execute("select count(*) from embedding").fetchone()[0] < _before
+      and st.conn.execute("select count(*) from embedding where owner_table='span'"
+                          ).fetchone()[0] == 0,
+      f"before {_before} after {st.conn.execute('select count(*) from embedding').fetchone()[0]}")
+check("T25f no audit violations after the purge", st.audit_violations() == [],
+      str(st.audit_violations()))
+
+# --------------------------------- T25g the no-embedder path keeps MS0.1's order
+st, c1, c2, owner = fresh()
+_sp = add_day(st, "2026-03-01", c1, ["sam lives in sydney indeed"])
+st.ingest(fact_cand(owner, _sp, "Sydney", "sydney", "2026-03-01T08:00:00"))
+_hits = st.query("where does sam live", k=5, now="2026-03-02T00:00:00", embedder=None)
+_order = [(h["table"], h["row_id"]) for h in _hits]
+check("T25g with no embedder the fact still outranks the span it came from",
+      len(_order) >= 2 and _order[0][0] == "fact" and _order[1][0] == "span", str(_order))
 
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
 sys.exit(1 if FAILS else 0)
