@@ -1,6 +1,6 @@
 # Phase 7 Goal 8 — Ambient Voice Wearable (household voice learning) — Plan
 
-**Status:** ACTIVE — M0a landed 2026-09-06 (`feat(phase7): goal 8 M0a - the owner-voice tooling on the Main PC (record, enroll, verify, transcribe, evaluate) with a public-speaker self-test; goal doc PHASE_7_GOAL_8_VOICE.md; audio formats ignored by git`). M0b prep landed 2026-09-06 (the owner enrolled from read plus natural speech; a same-day sanity EER, NOT the band — §6); the board row for the owner's voice reads `MEASURED BASELINE` until M0b's later-day band passes. M0b band measured 2026-09-08 — MISS, §6.
+**Status:** ACTIVE — M0a landed 2026-09-06 (`feat(phase7): goal 8 M0a - the owner-voice tooling on the Main PC (record, enroll, verify, transcribe, evaluate) with a public-speaker self-test; goal doc PHASE_7_GOAL_8_VOICE.md; audio formats ignored by git`). M0b prep landed 2026-09-06 (the owner enrolled from read plus natural speech; a same-day sanity EER, NOT the band — §6); the board row for the owner's voice reads `MEASURED BASELINE` until M0b's later-day band passes. M0b band measured 2026-09-08 — MISS, §6. Second take 2026-09-08 — PASS under the admission rule M0b-R1, §6.
 **Prerequisite:** goal 8 canon `phase4/docs/ROADMAP.md:122` (done-when `:130-132`); the scope the owner set, `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md` §8; the board `phase7/docs/PHASE_7_PLAN.md` §0 (ten 7.8 rows).
 **Sources:** those three files at `49ac1c7`; `phase6/docs/PHASE_6_GOAL_6-1_MONITORS.md` (the shape this doc mirrors); the M0a self-test run of 2026-09-06 (`%USERPROFILE%\.jarvis\voice\selftest_2026-09-06.json`, quoted in §6); the venv freeze (`%USERPROFILE%\.jarvis\voice\freeze.txt`).
 
@@ -61,7 +61,7 @@ Sources: `%USERPROFILE%\.jarvis\voice\freeze.txt`; the M0a run (§6); `phase7/vo
 | Milestone | What | Done-when (numbers where one exists) | Board row |
 |---|---|---|---|
 | **M0a** (this commit) | The tooling + the public-speaker self-test | EER ≤ 5 % on ≥ 20 positives and ≥ 40 negatives from ≥ 20 speakers; ASR on the GPU at RTF < 1.0; raw-audio deletion proven; the stdlib test green in CI — **all met, §6** | a new "M0a" row above the owner's-voice row |
-| **M0b** | The owner's enrollment + held-out measurement (the operator records; a later prompt runs `evaluate`) | EER ≤ 3 % on the owner's held-out clips against the public negatives (plus, if he chooses, consented clips of his wife as the hardest negative); threshold chosen at M0b's own EER point; every held-out owner clip ≥ 3 s | the first 7.8 row flips only on this band — MISSED 2026-09-08, §6 |
+| **M0b** | The owner's enrollment + held-out measurement (the operator records; a later prompt runs `evaluate`) | EER ≤ 3 % on the owner's held-out clips against the public negatives (plus, if he chooses, consented clips of his wife as the hardest negative); threshold chosen at M0b's own EER point; every held-out owner clip ≥ 3 s | the first 7.8 row flips only on this band — MISSED 2026-09-08, §6; second take PASS 2026-09-08 under M0b-R1 |
 | **M1** | Transcribe-everything + speaker clustering of non-owner speech + the one-action purge per cluster | clusters measured against the corpus's known speakers before any household audio; the purge is one command per cluster | the second 7.8 row |
 | **M2** | The memory store — AFTER the strategist's research lands (the board's research row) — and the guess | the guess named with a confidence, over days of recordings, with only the owner enrolled | the research row, then the store-and-guess row |
 | **M3** | The console profile view (designed in Claude Design, real source only) | the UI–feature-parity rule met: every rendered field has a live source | the profile-view row |
@@ -268,6 +268,125 @@ later-day take adds pieces under a new `--prefix` (`split` refuses to overwrite 
 
 Sources: `%USERPROFILE%\.jarvis\voice\m0b_eval_2026-09-08.txt`; `heldout\long\owner_natural_03.wav` (19,200,044 B); `enroll\owner.json`; `transcripts\owner_heldout_001..008.json`.
 
+### M0b, second take — 2026-09-08 — the admission rule pre-registered, the band re-measured — PASS
+
+**The rule, pre-registered before the take was split (M0b-R1, 2026-09-08 ~19:10):** a held-out piece counts for the band
+only if the transcriber returns at least one word for it; pieces without words are kept under `heldout\no_words\` and
+reported beside the band. The reason is the first take's F4, measured not inferred: its three pieces below the stored
+threshold — 004 (−0.0786), 005 (−0.0385), 006 (0.1026) — were exactly the three with no transcribed words (0, 0 and 11
+characters), while the five with speech scored 0.3565–0.6590, all above the threshold and clear of every public negative.
+The energy gate admits sound; the band measures verification on speech. The operator confirmed every admitted piece by
+ear before the number (his words below). The first take's MISS stands.
+
+The take: 600 s on the headset (device 1), 2026-09-08 18:52, moved out of `enroll\` before anything else ran; split with
+the runbook's command under the prefix `owner_heldout2`:
+
+```
+piece 001: runs=10 10.1s (from 1.1s)
+piece 002: runs=11 10.2s (from 66.2s)
+piece 003: runs=8 10.4s (from 155.5s)
+piece 004: runs=8 10.1s (from 226.4s)
+piece 005: runs=5 17.4s (from 303.1s)
+piece 006: runs=10 11.9s (from 344.1s)
+piece 007: runs=9 10.3s (from 390.5s)
+piece 008: runs=5 11.4s (from 433.9s)
+piece 009: runs=5 12.3s (from 479.8s)
+piece 010: runs=5 10.3s (from 505.6s)
+piece 011: runs=6 11.1s (from 525.8s)
+piece 012: runs=4 10.5s (from 559.7s)
+piece 013: runs=4 11.5s (from 577.0s)
+summary: total 600.0s speech 147.3s in 90 runs; pieces 13 kept 147.3s; remainder dropped 0.0s
+```
+
+147.3 s of speech in 13 pieces, against the first take's 85.4 s in 8. Transcripts (`--keep`, faster-whisper large-v3;
+every line reported `deleted=False`) and admission:
+
+| piece | s | chars | first words | admitted |
+|---|---|---|---|---|
+| 001 | 10.1 | 44 | the viper holy fuck but they're so fast yeah | yes |
+| 002 | 10.2 | 58 | I don't know, I kept like leaving a joint and it's cooked. | yes |
+| 003 | 10.4 | 70 | uh what button is fucking emma oh my god like i just can't f… | yes |
+| 004 | 10.1 | 93 | why are you why are we so slow like you can't run them at al… | yes |
+| 005 | 17.4 | 120 | We should definitely, I'm going to go around and look for li… | yes |
+| 006 | 11.8 | 44 | I'm just searching just for like attachments | yes |
+| 007 | 10.3 | 93 | anything up here no hello mother yeah you saw what i done oh… | yes |
+| 008 | 11.4 | 76 | Oh, faster reloading. I'm grabbing a pill. I'm at the next s… | yes |
+| 009 | 12.3 | 160 | m27 oh now that might be i can't do that while holding this … | yes |
+| 010 | 10.3 | 142 | Do what? Oh, you upgrade your pistol. Oh, it actually gives … | yes |
+| 011 | 11.1 | 125 | I'm gonna go in and search first. Oh, I got a skin on my gun… | yes |
+| 012 | 10.5 | 102 | one time wonder one time hit wonder yeah one hit time wonder… | yes |
+| 013 | 11.4 | 108 | That's what it says. Oh, the pee-pee bison. The pee-pee biso… | yes |
+
+**All 13 carried words, so M0b-R1 admitted every one and `heldout\no_words\` was never created.**
+
+The operator's confirmation (verbatim): "All the transcribed words are mine. My wife is faintly audible in the
+background in some pieces (I'm not sure which), never as the main voice and nothing she said was transcribed. Keep all
+13 as positives and record that." Moves: **none** — neither branch applied, so `heldout_neg\` stays empty and
+`heldout\mixed\` was not created. **That answer is a stated limit, not a clean-room claim: the positives may carry a
+faint second household voice in the background. It is recorded as his judgement, in his words, and it is what the band
+was measured on.**
+
+`evaluate --pos-dir heldout --neg-json selftest_2026-09-06.json` (`m0b2_eval_2026-09-08.txt`):
+
+```
+{
+ "n_pos": 13,
+ "n_neg": 78,
+ "neg_speakers": 39,
+ "eer": 0.0,
+ "threshold": 0.358503175300161,
+ "far_at_threshold": 0.0,
+ "frr_at_threshold": 0.0,
+ "accuracy_at_threshold": 1.0,
+ "pos_mean": 0.5775710941230787,
+ "neg_mean": 0.06493026456725112,
+ "pos_min": 0.48103148770254534,
+ "neg_max": 0.2359748628977767
+}
+  POS owner_heldout2_001.wav: 0.6246 (10.1s)
+  POS owner_heldout2_002.wav: 0.5959 (10.2s)
+  POS owner_heldout2_003.wav: 0.5663 (10.4s)
+  POS owner_heldout2_004.wav: 0.6552 (10.1s)
+  POS owner_heldout2_005.wav: 0.6467 (17.4s)
+  POS owner_heldout2_006.wav: 0.4830 (11.8s)
+  POS owner_heldout2_007.wav: 0.4810 (10.3s)
+  POS owner_heldout2_008.wav: 0.5119 (11.4s)
+  POS owner_heldout2_009.wav: 0.6451 (12.3s)
+  POS owner_heldout2_010.wav: 0.6573 (10.3s)
+  POS owner_heldout2_011.wav: 0.6314 (11.1s)
+  POS owner_heldout2_012.wav: 0.5064 (10.5s)
+  POS owner_heldout2_013.wav: 0.5035 (11.4s)
+NEG: 78 clips from 39 speakers, scores -0.0872 … 0.2360
+```
+
+| band | expected | measured |
+|---|---|---|
+| EER on the admitted later-day pieces vs the public negatives | ≤ 3 % | **0.00 %** (threshold 0.3585; FAR 0.00 %, FRR 0.00 %; positives min 0.4810 vs negatives max 0.2360 — a 0.2450 gap, every positive above every negative) |
+| every admitted piece ≥ 3 s | yes | 13 pieces, 10.1–17.4 s |
+| the threshold chosen at this measurement's own EER point | stored on PASS | stored `0.358503175300161` (was 0.3461); the re-run reproduced every score exactly, and `owner.npy` is md5-unchanged — the same six clips give the same centroid, only the threshold moved |
+
+Beside the band, reported: **0** pieces without words (so nothing was set aside); **0** of the 13 below the previously
+stored 0.3461 (the lowest is 0.4810); no household-negative evaluation — `heldout_neg\` is empty by the operator's
+answer. The first take under M0b-R1 (`m0b_first_take_rule_2026-09-08.txt`, computed with the deployed
+`jarvis_voice.evaluate.eer`): **the rule as written admits SIX of its eight pieces, not five** — piece 006 transcribes
+as "What? What?", 11 characters, which is not empty — and on those six the first take scores **EER 16.67 %**, still a
+miss. On the five pieces with more than a fragment (001, 002, 003, 007, 008) it scores 0.00 % at threshold 0.29625.
+Both are reported; neither is a band, and **the first take's recorded MISS at EER 25.00 % stands.** The rule does not
+rescue it, which is the honest reading and the one that matters: M0b-R1 was pre-registered on new data, not fitted to
+a past failure.
+
+**Stated limits.** Thirteen positives, so FRR moves in steps of 1/13 = 7.69 %; a 0.00 % EER means only that no
+positive fell below any negative on this set, not that the rate is zero. One room, one microphone, one day, one
+speaker style (a gaming session, conversational and profane). The rule counts words, not speech quality, and would
+admit singing (the first take's piece 003 was a sung line at 0.3565). The household negative set is **empty** — the
+harder comparison, the owner against his wife, still has not been made. The operator reports her faintly audible in the
+background of some admitted pieces.
+
+Sources: `%USERPROFILE%\.jarvis\voice\m0b2_eval_2026-09-08.txt` and `m0b2_eval_2026-09-08_rerun.txt`;
+`m0b_first_take_rule_2026-09-08.txt`; `heldout\long\owner_natural_04.wav` (19,200,044 B);
+`transcripts\owner_heldout2_001..013.json`; `enroll\owner.json`; the first take kept at
+`heldout\first_take_2026-09-08\`.
+
 ### The M0b runbook — the owner's enrollment (a later prompt; the operator records)
 
 What "PASS" means: **EER ≤ 3 %** on the owner's held-out clips against the public negatives, with the threshold chosen at M0b's own EER point, and every held-out owner clip ≥ 3 s. The board's first 7.8 row (the owner's voice) flips to DONE only on that band, in that prompt's commit B.
@@ -276,7 +395,7 @@ What "PASS" means: **EER ≤ 3 %** on the owner's held-out clips against the pub
    `python -m jarvis_voice record --seconds 60 --device 1 --out %USERPROFILE%\.jarvis\voice\enroll\owner_enroll_01.wav` (repeat `_02`, `_03`, …).
 2. **Held-out, a LATER day** — either ≥ 10 × 10 s clips into `heldout\`
    (`python -m jarvis_voice record --seconds 10 --device 1 --out %USERPROFILE%\.jarvis\voice\heldout\owner_heldout_01.wav`, repeated), or ONE long natural recording (≥ 10 min, e.g. his side of a call) split into pieces with
-   `python -m jarvis_voice split <wav> --target 10 --min-keep 3 --out-dir %USERPROFILE%\.jarvis\voice\heldout --prefix owner_heldout --move-source-to %USERPROFILE%\.jarvis\voice\heldout\long`. — **DONE 2026-09-08** (the long-recording path: one 600 s take, 8 pieces, 82.8 s).
+   `python -m jarvis_voice split <wav> --target 10 --min-keep 3 --out-dir %USERPROFILE%\.jarvis\voice\heldout --prefix owner_heldout --move-source-to %USERPROFILE%\.jarvis\voice\heldout\long`. — **DONE 2026-09-08** (the long-recording path: one 600 s take, 8 pieces, 82.8 s). Second take 2026-09-08 under M0b-R1, prefix `owner_heldout2`.
 3. **Optional hardest negative** — a few consented clips of his wife into a `heldout_neg\` folder of the operator's choosing. — none recorded; his listening found none of her voice in the 8 pieces (2026-09-08).
 4. **The later prompt** runs `python -m jarvis_voice enroll --threshold <t>` (the threshold from M0b's own EER sweep, computed by `evaluate` first with a provisional value) and `python -m jarvis_voice evaluate --pos-dir heldout --neg-dir <public negatives + the optional wife clips>`, records EER / threshold / FAR / FRR / counts, and flips the row only on PASS. — **DONE 2026-09-08**, the section above.
 5. Nothing under `enroll\` or `heldout\` ever enters the repo (`.gitignore`); the transcripts of any owner recording stay under `transcripts\`.
