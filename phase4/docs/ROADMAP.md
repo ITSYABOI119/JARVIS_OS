@@ -108,7 +108,7 @@ This document is the simple forward roadmap. Each phase has specific goals and a
 
 **Goal:** JARVIS can run safely on its own for extended periods, retrieve memories associatively, and improve — within seL4 capability bounds.
 
-**Status:** ACTIVE 2026-09-05 — plan + live status board: `phase7/docs/PHASE_7_PLAN.md` (§0 is where Phase 7 is up to; a row reads DONE only with a commit hash). First arc: the operator's choice between 7.1 (paraphrase recall 53 % → ≥80 %) and the voice-ingest pipeline; goal 8 — the ambient voice wearable, household voice learning — joined the canon 2026-09-05 by the operator's decision and was shaped by his answers of 2026-09-06 (the idea doc's §8; goals 1–7 unchanged; its stages are board rows in the plan, V3 decided last). Goal 7.2's run is operator-scheduled.
+**Status:** ACTIVE 2026-09-05 — plan + live status board: `phase7/docs/PHASE_7_PLAN.md` (§0 is where Phase 7 is up to; a row reads DONE only with a commit hash). First arc DECIDED 2026-09-06: goal 8's memory research + the owner's voice, in parallel (the choice as offered: 7.1 paraphrase recall 53 % → ≥80 % or the voice-ingest pipeline); goal 8 — the ambient voice wearable, household voice learning — joined the canon 2026-09-05 by the operator's decision and was shaped by his answers of 2026-09-06 (the idea doc's §8; goals 1–7 unchanged; its stages are board rows in the plan, V3 decided last). Goal 7.2's run is operator-scheduled.
 
 ### Goals
 
