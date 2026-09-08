@@ -1,6 +1,6 @@
 # Phase 7 Goal 8 — Ambient Voice Wearable (household voice learning) — Plan
 
-**Status:** ACTIVE — M0a landed 2026-09-06 (`feat(phase7): goal 8 M0a - the owner-voice tooling on the Main PC (record, enroll, verify, transcribe, evaluate) with a public-speaker self-test; goal doc PHASE_7_GOAL_8_VOICE.md; audio formats ignored by git`). M0b prep landed 2026-09-06 (the owner enrolled from read plus natural speech; a same-day sanity EER, NOT the band — §6); the board row for the owner's voice reads `MEASURED BASELINE` until M0b's later-day band passes.
+**Status:** ACTIVE — M0a landed 2026-09-06 (`feat(phase7): goal 8 M0a - the owner-voice tooling on the Main PC (record, enroll, verify, transcribe, evaluate) with a public-speaker self-test; goal doc PHASE_7_GOAL_8_VOICE.md; audio formats ignored by git`). M0b prep landed 2026-09-06 (the owner enrolled from read plus natural speech; a same-day sanity EER, NOT the band — §6); the board row for the owner's voice reads `MEASURED BASELINE` until M0b's later-day band passes. M0b band measured 2026-09-08 — MISS, §6.
 **Prerequisite:** goal 8 canon `phase4/docs/ROADMAP.md:122` (done-when `:130-132`); the scope the owner set, `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md` §8; the board `phase7/docs/PHASE_7_PLAN.md` §0 (ten 7.8 rows).
 **Sources:** those three files at `49ac1c7`; `phase6/docs/PHASE_6_GOAL_6-1_MONITORS.md` (the shape this doc mirrors); the M0a self-test run of 2026-09-06 (`%USERPROFILE%\.jarvis\voice\selftest_2026-09-06.json`, quoted in §6); the venv freeze (`%USERPROFILE%\.jarvis\voice\freeze.txt`).
 
@@ -61,7 +61,7 @@ Sources: `%USERPROFILE%\.jarvis\voice\freeze.txt`; the M0a run (§6); `phase7/vo
 | Milestone | What | Done-when (numbers where one exists) | Board row |
 |---|---|---|---|
 | **M0a** (this commit) | The tooling + the public-speaker self-test | EER ≤ 5 % on ≥ 20 positives and ≥ 40 negatives from ≥ 20 speakers; ASR on the GPU at RTF < 1.0; raw-audio deletion proven; the stdlib test green in CI — **all met, §6** | a new "M0a" row above the owner's-voice row |
-| **M0b** | The owner's enrollment + held-out measurement (the operator records; a later prompt runs `evaluate`) | EER ≤ 3 % on the owner's held-out clips against the public negatives (plus, if he chooses, consented clips of his wife as the hardest negative); threshold chosen at M0b's own EER point; every held-out owner clip ≥ 3 s | the first 7.8 row flips only on this band |
+| **M0b** | The owner's enrollment + held-out measurement (the operator records; a later prompt runs `evaluate`) | EER ≤ 3 % on the owner's held-out clips against the public negatives (plus, if he chooses, consented clips of his wife as the hardest negative); threshold chosen at M0b's own EER point; every held-out owner clip ≥ 3 s | the first 7.8 row flips only on this band — MISSED 2026-09-08, §6 |
 | **M1** | Transcribe-everything + speaker clustering of non-owner speech + the one-action purge per cluster | clusters measured against the corpus's known speakers before any household audio; the purge is one command per cluster | the second 7.8 row |
 | **M2** | The memory store — AFTER the strategist's research lands (the board's research row) — and the guess | the guess named with a confidence, over days of recordings, with only the owner enrolled | the research row, then the store-and-guess row |
 | **M3** | The console profile view (designed in Claude Design, real source only) | the UI–feature-parity rule met: every rendered field has a live source | the profile-view row |
@@ -202,6 +202,72 @@ Smoke at the stored threshold: `owner_sameday_001.wav` → score 0.6950, owner *
 
 Sources: the M0b-prep run of 2026-09-06 (`REPORT-VOICE-M0B-PREP-V2.md`); `enroll\owner.json`; `selftest_2026-09-06.json` (`sets.negatives`).
 
+### M0b — 2026-09-08 — the later-day band — MISS
+
+The operator recorded one 600 s natural take on the headset (device 1) on 2026-09-08, two days after the enrollment,
+with his wife in the room — `record --seconds 600 --device 1 --out …\enroll\owner_natural_03.wav` — moved it out of
+`enroll\` before anything else ran (a bare `enroll` globs that folder), then split it with the runbook's command
+(`--target 10 --min-keep 3`, absolute `--out-dir` and `--move-source-to` — they are CWD-relative):
+
+```
+piece 001: runs=6 10.2s (from 2.8s)
+piece 002: runs=7 10.1s (from 25.7s)
+piece 003: runs=7 10.4s (from 68.8s)
+piece 004: runs=9 10.3s (from 98.6s)
+piece 005: runs=8 10.7s (from 187.3s)
+piece 006: runs=12 10.1s (from 229.0s)
+piece 007: runs=4 10.8s (from 306.1s)
+piece 008: runs=5 10.2s (from 324.9s)
+summary: total 600.0s speech 85.4s in 62 runs; pieces 8 kept 82.8s; remainder dropped 2.6s
+```
+
+He listened to all 8 pieces: his voice only, none of hers — so `heldout_neg\` stays empty and the negatives are the
+78 public LibriSpeech clips from 39 speakers of `selftest_2026-09-06.json`. The pieces were transcribed with `--keep`
+the same day (Whisper large-v3; two pieces yielded no words; the transcripts stay under `transcripts\`, the audio
+was kept).
+
+`evaluate --pos-dir heldout --neg-json selftest_2026-09-06.json` (2026-09-08, `m0b_eval_2026-09-08.txt`):
+
+```
+{
+ "n_pos": 8,
+ "n_neg": 78,
+ "neg_speakers": 39,
+ "eer": 0.25,
+ "threshold": 0.10038628450437456,
+ "far_at_threshold": 0.24358974358974358,
+ "frr_at_threshold": 0.25,
+ "accuracy_at_threshold": 0.7558139534883721,
+ "pos_mean": 0.3390570995533304,
+ "neg_mean": 0.06493026456725112,
+ "pos_min": -0.07863157343364274,
+ "neg_max": 0.2359748628977767
+}
+  POS owner_heldout_001.wav: 0.6100 (10.2s)
+  POS owner_heldout_002.wav: 0.5339 (10.1s)
+  POS owner_heldout_003.wav: 0.3565 (10.3s)
+  POS owner_heldout_004.wav: -0.0786 (10.3s)
+  POS owner_heldout_005.wav: -0.0385 (10.7s)
+  POS owner_heldout_006.wav: 0.1026 (10.1s)
+  POS owner_heldout_007.wav: 0.6590 (10.8s)
+  POS owner_heldout_008.wav: 0.5676 (10.2s)
+NEG: 78 clips, scores -0.0872 … 0.2360
+```
+
+| band | expected | measured |
+|---|---|---|
+| EER on the later-day held-out set vs the public negatives | ≤ 3 % | **25.00 %** (threshold 0.1004; FAR 24.36 %, FRR 25.00 %; positives min −0.0786 vs negatives max 0.2360 — an overlap of 0.3146, not a gap) |
+| every held-out owner clip ≥ 3 s | yes | 8 clips, 10.1–10.8 s |
+| the threshold chosen at M0b's own EER point | stored in `enroll\owner.json` | not stored, 0.3461 kept |
+
+At the previously stored same-day threshold 0.3461, 3 of the 8 pieces score below it (reported, not a band).
+
+**Stated limits.** Eight positives: FRR moves in steps of 12.5 %, so this band is met only by clean separation. One
+recording, one room, two days after enrollment; the same-day 0.00 % of 2026-09-06 stays the baseline. A further
+later-day take adds pieces under a new `--prefix` (`split` refuses to overwrite `owner_heldout_001.wav`).
+
+Sources: `%USERPROFILE%\.jarvis\voice\m0b_eval_2026-09-08.txt`; `heldout\long\owner_natural_03.wav` (19,200,044 B); `enroll\owner.json`; `transcripts\owner_heldout_001..008.json`.
+
 ### The M0b runbook — the owner's enrollment (a later prompt; the operator records)
 
 What "PASS" means: **EER ≤ 3 %** on the owner's held-out clips against the public negatives, with the threshold chosen at M0b's own EER point, and every held-out owner clip ≥ 3 s. The board's first 7.8 row (the owner's voice) flips to DONE only on that band, in that prompt's commit B.
@@ -210,9 +276,9 @@ What "PASS" means: **EER ≤ 3 %** on the owner's held-out clips against the pub
    `python -m jarvis_voice record --seconds 60 --device 1 --out %USERPROFILE%\.jarvis\voice\enroll\owner_enroll_01.wav` (repeat `_02`, `_03`, …).
 2. **Held-out, a LATER day** — either ≥ 10 × 10 s clips into `heldout\`
    (`python -m jarvis_voice record --seconds 10 --device 1 --out %USERPROFILE%\.jarvis\voice\heldout\owner_heldout_01.wav`, repeated), or ONE long natural recording (≥ 10 min, e.g. his side of a call) split into pieces with
-   `python -m jarvis_voice split <wav> --target 10 --min-keep 3 --out-dir %USERPROFILE%\.jarvis\voice\heldout --prefix owner_heldout --move-source-to %USERPROFILE%\.jarvis\voice\heldout\long`.
-3. **Optional hardest negative** — a few consented clips of his wife into a `heldout_neg\` folder of the operator's choosing.
-4. **The later prompt** runs `python -m jarvis_voice enroll --threshold <t>` (the threshold from M0b's own EER sweep, computed by `evaluate` first with a provisional value) and `python -m jarvis_voice evaluate --pos-dir heldout --neg-dir <public negatives + the optional wife clips>`, records EER / threshold / FAR / FRR / counts, and flips the row only on PASS.
+   `python -m jarvis_voice split <wav> --target 10 --min-keep 3 --out-dir %USERPROFILE%\.jarvis\voice\heldout --prefix owner_heldout --move-source-to %USERPROFILE%\.jarvis\voice\heldout\long`. — **DONE 2026-09-08** (the long-recording path: one 600 s take, 8 pieces, 82.8 s).
+3. **Optional hardest negative** — a few consented clips of his wife into a `heldout_neg\` folder of the operator's choosing. — none recorded; his listening found none of her voice in the 8 pieces (2026-09-08).
+4. **The later prompt** runs `python -m jarvis_voice enroll --threshold <t>` (the threshold from M0b's own EER sweep, computed by `evaluate` first with a provisional value) and `python -m jarvis_voice evaluate --pos-dir heldout --neg-dir <public negatives + the optional wife clips>`, records EER / threshold / FAR / FRR / counts, and flips the row only on PASS. — **DONE 2026-09-08**, the section above.
 5. Nothing under `enroll\` or `heldout\` ever enters the repo (`.gitignore`); the transcripts of any owner recording stay under `transcripts\`.
 
 Sources: the run above; `%USERPROFILE%\.jarvis\voice\selftest_2026-09-06.json`; `%USERPROFILE%\.jarvis\voice\transcripts\selftest_422_422-122949-0005.json`; `%USERPROFILE%\.jarvis\voice\freeze.txt`; `phase7/voice/test_voice_logic.py`.
