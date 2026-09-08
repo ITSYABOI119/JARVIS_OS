@@ -104,6 +104,35 @@ QUERY_VOCAB = {
 }
 
 
+STOPWORDS = frozenset("""
+a an the and or but if then than that this these those
+i me my mine we us our ours you your yours he him his she her hers it its they them their theirs
+what which who whom whose where when why how
+is are was were be been being am do does did doing have has had having
+of to in on at by for with from as into onto about over under again further there here
+so no not only own same too very can will just should would could may might must shall also once
+all any both each few more most other some such up down out off
+yes yeah yep nope ok okay oh um uh well right
+""".split())
+"""English function words, dropped from the FULL-TEXT query only (design §6, MS1a.2).
+
+The measured reason is MS1a §3.9: the rows that outranked the planted preference in the transfer
+set shared only function words or stems with the scenario — `we should decide` on "should",
+`sounds good to me` on "sound", `we planned the week together` on "plan" — which made generic
+chatter a TWO-lane row and let it crowd the planted preference out of the top five. Dropping the
+function words removes that half of the overlap; the stem half is content and stays, which is what
+the `--keep-stopwords` arm measures.
+
+STATIC and human-reviewed, the K-b instinct: a list the code SELECTS from, never derives, and never
+a knob turned to move a benchmark number. It is disjoint from every `QUERY_VOCAB` set by assertion
+(T29a), so removing a function word can never remove a word the predicate hint steers on, and every
+entry survives `tokens()` unchanged (T29b).
+
+Applied to `_fts_match` alone: `predicate_hint` matches its own vocabulary, and the vector lane
+never sees this list — a query of only function words still reaches its row by meaning.
+"""
+
+
 def is_known(predicate_id: str) -> bool:
     """True iff the predicate is in the registry. Never raises."""
     return predicate_id in PREDICATES

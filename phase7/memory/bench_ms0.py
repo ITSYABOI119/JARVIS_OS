@@ -35,6 +35,10 @@ def main(argv=None) -> int:
                    help="none keeps the full-text lanes only; qwen adds the vector lane on the GPU")
     p.add_argument("--query-instruction", action="store_true",
                    help="the REPORTED arm: prefix the query with the instruction, never adopted")
+    p.add_argument("--keep-stopwords", dest="drop_stopwords", action="store_false",
+                   help="the ARM for design rule 3: keep function words in the full-text query "
+                        "(the MS0.1 behaviour). The default drops them; this is what the A / "
+                        "A-prime comparison measures rule 3 against.")
     a = p.parse_args(argv)
 
     seeds = list(range(a.seed, a.seed + a.households))
@@ -46,11 +50,12 @@ def main(argv=None) -> int:
               f"loaded in {embedder.load_s} s on {embedder.device} "
               f"(sentence-transformers {embedder.version})")
     res = harness.run(seeds, a.days, a.latency_facts, a.out, a.predicate_hint, embedder,
-                      a.embedder)
+                      a.embedder, a.drop_stopwords)
 
     print(f"households : {len(seeds)}  seeds {seeds[0]}..{seeds[-1]}  days {a.days}  "
           f"predicate_hint {'ON' if a.predicate_hint else 'OFF (negative control)'}  "
-          f"embedder {a.embedder}{' +instruct' if a.query_instruction else ''}")
+          f"embedder {a.embedder}{' +instruct' if a.query_instruction else ''}  "
+          f"stopwords {'dropped' if a.drop_stopwords else 'KEPT (rule-3 arm)'}")
     print("aggregate  :")
     for k in sorted(res["aggregate"]):
         print(f"    {k:32s} {res['aggregate'][k]}")

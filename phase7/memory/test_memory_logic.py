@@ -722,10 +722,18 @@ from jarvis_memory.bench import harness as _harness  # noqa: E402
 
 _off_hh = _harness.run_household(2, 14, predicate_hint=False)
 _on_hh = _harness.run_household(2, 14, predicate_hint=True)
-check("T21a hint OFF reproduces MS0's seed-2 update accuracy (0.875)",
-      close_to(_off_hh["update_acc"], 0.875), str(_off_hh["update_acc"]))
-check("T21b hint OFF reproduces MS0's seed-2 growth drop (37.5)",
-      close_to(_off_hh["growth_drop_points"], 37.5), str(_off_hh["growth_drop_points"]))
+# RE-PINNED at MS1a.2 (rule 3 KEPT after the A / A-prime measurement: transfer 0.3583 vs 0.2833,
+# delta 0.0750 > 0.05, update 1.0 either way). MS0 measured 0.875 / 37.5 here; dropping function
+# words costs one of the eight update questions in this HINT-OFF control, and the mechanism was
+# traced to a single word: `what job does juno work as` needs "as", because the store renders the
+# predicate as "... works AS a pharmacist" while the competing habit renders "... cycles to work".
+# Both contain "work"; only the answer contains "as". With the hint ON (T21c/T21d, and the deployed
+# path) the lookup is already restricted to person.works_as, the competitor never enters the lane,
+# and both numbers stay perfect - which is why the cost is confined to this control.
+check("T21a hint OFF reproduces the MS1a.2 seed-2 update accuracy (0.75; MS0's 0.875 needed the function word 'as')",
+      close_to(_off_hh["update_acc"], 0.75), str(_off_hh["update_acc"]))
+check("T21b hint OFF reproduces the MS1a.2 seed-2 growth drop (25.0; 37.5 at MS0)",
+      close_to(_off_hh["growth_drop_points"], 25.0), str(_off_hh["growth_drop_points"]))
 check("T21c hint ON lifts seed-2 update accuracy to 1.0",
       close_to(_on_hh["update_acc"], 1.0), str(_on_hh["update_acc"]))
 check("T21d hint ON removes the growth drop entirely",
@@ -746,7 +754,8 @@ from jarvis_memory import embed as embed_mod  # noqa: E402
 from jarvis_memory.embed import (  # noqa: E402
     DictEmbedder, cosine, pack, topk, unpack,
 )
-from jarvis_memory.retrieve import RRF_K, fuse  # noqa: E402
+from jarvis_memory.retrieve import RRF_K, W_CLAIM, fuse, query_terms  # noqa: E402
+from jarvis_memory.registry import QUERY_VOCAB as _QV, STOPWORDS  # noqa: E402
 
 # ---------------------------------------------------------------- T22 vectors
 _v = [0.5, -0.25, 1.0, 0.0]
@@ -842,6 +851,203 @@ _r = rank([{"row_id": 1, "table": "fact", "relevance": 1.0 / 62, "tiebreak": 1.0
 check("T23i4 relevance outranks the tiebreak - the fused order is the answer",
       [x["row_id"] for x in _r] == [2, 1], str([x["row_id"] for x in _r]))
 
+# ----------------- T23j MS1a.2: the claim-status weight sits on the ROW, not the lane
+# MS1a measured the cross-lane loss: R2's source rank acts only WITHIN a lane, and a span and the
+# fact extracted from it are never in the same one, so reciprocal rank let the utterance win on one
+# vector rank. MS1a.1 proposed typed lanes and was WITHDRAWN unmeasured - partitioning restarts the
+# ranks, so a row with no similarity earns a full rank-1 term. MS1a.2 keeps ONE vector lane and
+# weighs each ROW by its claim status: a belief 1.0, a span W_SOURCE["inferred"] = 0.6. R2's own
+# constant one level up, never a new knob. Every weight below is READ FROM W_CLAIM - a literal 0.6
+# would keep passing if the shipped constant changed, which is exactly the tooth wanted.
+check("T23j0 a belief weighs 1.0 and a span weighs R2's inferred rank",
+      W_CLAIM == {"fact": 1.0, "preference": 1.0, "span": W_SOURCE["inferred"]}
+      and close_to(W_CLAIM["span"], 0.6, 1e-12), str(W_CLAIM))
+
+# The real MS1a section-3.8 trace: `i work as a teacher` was fts_span 1 + vec 2, and the fact
+# `jo person works as a teacher` fts_fact 1 + vec 3, so a third row (X) held vec rank 1.
+_LANES_38 = {"fts_span": ["S"], "fts_fact": ["F"], "vec": ["X", "S", "F"]}
+_W38 = {"S": W_CLAIM["span"], "F": W_CLAIM["fact"], "X": W_CLAIM["fact"]}
+_fj = fuse(_LANES_38, _W38)
+check("T23j1 weighted by claim status, the fact outranks the span extracted from it",
+      close_to(_fj["S"], 0.6 * (1.0 / 61 + 1.0 / 62), 1e-9)
+      and close_to(_fj["F"], 1.0 / 61 + 1.0 / 63, 1e-9)
+      and _fj["F"] > _fj["S"],
+      f"S={_fj['S']!r} F={_fj['F']!r}")
+_fj2 = fuse(_LANES_38)
+check("T23j2 unweighted, the MS1a defect: the span beat its own fact",
+      close_to(_fj2["S"], 1.0 / 61 + 1.0 / 62, 1e-9)
+      and close_to(_fj2["F"], 1.0 / 61 + 1.0 / 63, 1e-9)
+      and _fj2["S"] > _fj2["F"],
+      f"S={_fj2['S']!r} F={_fj2['F']!r}")
+
+_fj3 = fuse({"fts_span": ["S"], "vec": ["F", "S"]},
+            {"S": W_CLAIM["span"], "F": W_CLAIM["fact"]})
+check("T23j3 the stated residual - evidence in both lanes still outranks a belief in one",
+      close_to(_fj3["S"], 0.6 / 61 + 0.6 / 62, 1e-9)
+      and close_to(_fj3["F"], 1.0 / 61, 1e-9) and _fj3["S"] > _fj3["F"],
+      f"S={_fj3['S']!r} F={_fj3['F']!r}")
+
+_lanes_j = {"fts_fact": ["a", "b"], "vec": ["b", "c"]}
+check("T23j4 no weights, None and {} are the same call - the default is 1.0",
+      all(close_to(fuse(_lanes_j)[k], fuse(_lanes_j, None)[k], 1e-12)
+          and close_to(fuse(_lanes_j)[k], fuse(_lanes_j, {})[k], 1e-12)
+          for k in fuse(_lanes_j)),
+      str(fuse(_lanes_j)))
+_fj5 = fuse({"vec": ["F", "S"]}, {"S": W_CLAIM["span"]})
+check("T23j5 a row with no weight given is a belief - 1.0, never silently 0",
+      close_to(_fj5["F"], 1.0 / 61, 1e-12) and close_to(_fj5["S"], 0.6 / 62, 1e-12),
+      f"F={_fj5['F']!r} S={_fj5['S']!r}")
+
+# --------------------------------- T29 function words out of the FULL-TEXT query
+_QV_UNION = set().union(*_QV.values())
+check("T29a STOPWORDS is disjoint from every QUERY_VOCAB set",
+      not (STOPWORDS & _QV_UNION), str(sorted(STOPWORDS & _QV_UNION)))
+check("T29b every stopword survives the tokeniser unchanged",
+      all(tokens(w) == [w] for w in STOPWORDS),
+      str([w for w in sorted(STOPWORDS) if tokens(w) != [w]]))
+
+# ----------------------- T23k / T29c-e the same rules at the store
+# T23k is the MS1a section-3.8 shape end to end: a span that IS an evidence span of the fact
+# extracted from it, both matched by one question, the span embedding CLOSEST to the query and a
+# DECOY fact embedded closer than the answer fact so the answer sits at vec rank 3. Before MS1a.2
+# the span won; now the claim weight puts the fact first AND the collapse removes the span entirely.
+_kst, _kc1, _kc2, _kowner = fresh()
+_ksp = add_day(_kst, "2026-03-01", _kc1, ["i work as a teacher"])
+_ksp += add_day(_kst, "2026-03-02", _kc1, ["still teaching this year",
+                                           "the weather today is lovely work"])
+_kst.ingest(fact_cand(_kowner, _ksp[:2], "a teacher", "a teacher", "2026-03-02T08:00:00",
+                      predicate="person.works_as"))
+_kst.ingest(fact_cand(_kowner, [_ksp[0]], "Sydney", "sydney", "2026-03-01T08:00:30"))
+_KQ = "what job does sam work as"
+check("T29c the full-text query keeps content words and drops function words",
+      query_terms(_KQ, True) == ["job", "sam", "work"]
+      and _kst._fts_match(_KQ) == '"job" OR "sam" OR "work"',
+      f"{query_terms(_KQ, True)} / {_kst._fts_match(_KQ)!r}")
+check("T29d a query of only function words leaves no term for the full-text lane",
+      query_terms("is that the same", True) == [], str(query_terms("is that the same", True)))
+# RETARGET NOTE (T8h precedent): PROMPT-MEMORY-MS1A2.md section 3.2 dictated this case as
+# `_fts_match("is that the one") == ""`, which the dictated STOPWORDS list cannot produce - "one"
+# is not in it ("only", "own" and "once" are). Rule 5 freezes the list, so the list stands and the
+# expectation is what gives. The dictated input is kept below, asserting what the frozen list really
+# does; "is that the same" above is the all-function-word case the check was written to prove.
+check("T29d2 the dictated input keeps its one content word under the frozen list",
+      query_terms("is that the one", True) == ["one"],
+      str(query_terms("is that the one", True)))
+check("T29f with the switch off every token survives - the arm is the MS0.1 behaviour",
+      query_terms(_KQ, False) == tokens(_KQ)
+      and query_terms(_KQ, False) == ["what", "job", "does", "sam", "work", "as"],
+      str(query_terms(_KQ, False)))
+
+_KSPAN_TEXT = "i work as a teacher"
+_KFACT_TEXT = _kst._fact_fts_text(_kowner, "person", "person.works_as", "a teacher")
+_KDECOY_TEXT = _kst._fact_fts_text(_kowner, "person", "person.lives_in", "Sydney")
+_KCHATTER = "the weather today is lovely work"
+_KE = DictEmbedder({
+    _KQ: [1.0, 0.0, 0.0, 0.0],
+    _KSPAN_TEXT: [1.0, 0.03, 0.0, 0.0],      # closest of all
+    _KDECOY_TEXT: [1.0, 0.10, 0.0, 0.0],     # the decoy, above the answer
+    _KFACT_TEXT: [1.0, 0.30, 0.0, 0.0],      # the answer fact, vec rank 3
+    _KCHATTER: [1.0, 0.50, 0.0, 0.0],        # a span no belief stands on
+}, 4)
+_kst.embed_pending(_KE)
+_khits = _kst.query(_KQ, k=5, now="2026-03-03T00:00:00", embedder=_KE)
+_kfact = next((h for h in _khits if h["table"] == "fact"
+               and _fact_row_t(_kst, h["row_id"])["predicate_id"] == "person.works_as"), None)
+check("T23k1 the fact is first, and the span it was extracted from is collapsed into it",
+      _khits and _khits[0] is _kfact
+      and not any(h["table"] == "span" and h["row_id"] == _ksp[0] for h in _khits)
+      and _ksp[0] in (_kfact or {}).get("span_ids", []),
+      str([(h["table"], h["row_id"], h["lanes"], round(h["relevance"], 6)) for h in _khits]))
+_khits_none = _kst.query(_KQ, k=5, now="2026-03-03T00:00:00", embedder=None)
+check("T23k2 the no-embedder control: the fact first, the span still collapsed",
+      _khits_none and _khits_none[0]["table"] == "fact"
+      and not any(h["table"] == "span" and h["row_id"] == _ksp[0] for h in _khits_none),
+      str([(h["table"], h["row_id"], h["lanes"]) for h in _khits_none]))
+_kchat = next((h for h in _khits if h["table"] == "span" and h["row_id"] == _ksp[2]), None)
+# The DISCOUNT is asserted as a strict inequality as well as an equality. The equality alone reads
+# the weight out of W_CLAIM on BOTH sides, so it survives a mutated constant unchanged - it pins the
+# arithmetic but has no teeth against the value. `< the unweighted sum` is the tooth: it fails the
+# moment a span stops being discounted at all.
+_kchat_unweighted = sum(1.0 / (RRF_K + r) for r in (_kchat or {"lanes": {}})["lanes"].values())
+check("T23k3 a span no belief stands on survives, after the beliefs, weighed as evidence",
+      _kchat is not None
+      and _khits.index(_kchat) > 0 and _khits[0]["table"] != "span"
+      and set(_kchat["lanes"]) == {"fts_span", "vec"}
+      and close_to(_kchat["relevance"], W_CLAIM["span"] * _kchat_unweighted, 1e-9)
+      and _kchat["relevance"] < _kchat_unweighted - 1e-9,
+      str(_kchat and (_kchat["lanes"], _kchat["relevance"], _kchat_unweighted)))
+
+# T29e - a scenario whose ONLY overlap with a span is a function word must not make that span a
+# full-text hit. `we should decide` shares only "should" with the scenario below.
+def _mk_store_keep_stopwords():
+    """The T29e fixture again, with rule 3 switched OFF - the arm, as the bench runs it."""
+    st_ = MemoryStore(":memory:", drop_stopwords=False)
+    c_ = st_.add_cluster()
+    st_.add_cluster()
+    st_.bind_owner(c_, "sam")
+    rec_ = st_.add_recording("sha-keep", "2026-03-01T08:00:00", 3600.0, "headset")
+    st_.add_span(rec_, 0.0, 5.0, c_, "we should decide", 0.9)
+    return st_
+
+
+_est, _ec1, _ec2, _eowner = fresh()
+_esp = add_day(_est, "2026-03-01", _ec1, ["we should decide"])
+_EQ = "what should i order at the restaurant tonight"
+check("T29e a function-word-only overlap is not a full-text hit",
+      query_terms(_EQ, True) == ["order", "restaurant", "tonight"]
+      and _est.query(_EQ, k=5, now="2026-03-02T00:00:00", embedder=None) == [],
+      f"{query_terms(_EQ, True)} -> {_est.query(_EQ, k=5, now='2026-03-02T00:00:00')}")
+# The same store with the switch OFF DOES find it - which is what makes the check above a
+# measurement of rule 3 rather than of the corpus.
+_est_keep = _mk_store_keep_stopwords()
+check("T29e2 with function words kept, the same scenario reaches the chatter span",
+      len(_est_keep.query(_EQ, k=5, now="2026-03-02T00:00:00", embedder=None)) == 1,
+      str(_est_keep.query(_EQ, k=5, now="2026-03-02T00:00:00", embedder=None)))
+
+# ------------------- T28 the transfer diagnostics: which of the fusion or the embedder loses it
+# `_gold_pref_rank` asks whether the embedder can pick the planted preference out of the household's
+# OTHER preferences; `_gold_vec_rank` asks how much else the query pulls in ahead of it. Rank 1 and
+# still missed means the FUSION lost it; rank > 1 means the EMBEDDER never had it. Both REPORTED,
+# never banded, so these tests pin the arithmetic and the None-with-no-embedder contract only.
+_dst, _dc1, _dc2, _downer = fresh()
+_dsp = add_day(_dst, "2026-03-01", _dc1, ["quiet morning here"])
+for _topic in ("spicy food", "long drives"):
+    _dst.ingest(dict(predicate_id="owner.prefers", subject={"kind": "person", "id": _downer},
+                     object=_topic, object_norm=_topic, source_kind="stated_owner",
+                     speaker_cluster=_dc1, span_ids=[_dsp[0]], about_time=None, relation_id=None,
+                     polarity="likes", strength=2, ended=False, said_at="2026-03-01T08:00:20"))
+_dst.ingest(fact_cand(_downer, [_dsp[0]], "Sydney", "sydney", "2026-03-01T08:00:30"))
+_DQ = "planning dinner for our anniversary"
+_D_SPICY = _dst._pref_fts_text(_downer, "likes", "spicy food")
+_D_DRIVES = _dst._pref_fts_text(_downer, "likes", "long drives")
+_D_FACT = _dst._fact_fts_text(_downer, "person", "person.lives_in", "Sydney")
+_DE = DictEmbedder({
+    _DQ: [1.0, 0.0, 0.0, 0.0],
+    "quiet morning here": [1.0, 0.05, 0.0, 0.0],   # a span, closest of all
+    _D_FACT: [1.0, 0.10, 0.0, 0.0],                # a fact, next
+    _D_SPICY: [1.0, 0.20, 0.0, 0.0],               # the gold preference, 3rd overall but 1st pref
+    _D_DRIVES: [1.0, 0.40, 0.0, 0.0],              # the other preference
+}, 4)
+_dst.embed_pending(_DE)
+check("T28a the gold preference is rank 1 among the household's preferences",
+      _harness._gold_pref_rank(_dst, _DQ, "spicy food", _DE) == 1,
+      str(_harness._gold_pref_rank(_dst, _DQ, "spicy food", _DE)))
+check("T28b the other preference is rank 2",
+      _harness._gold_pref_rank(_dst, _DQ, "long drives", _DE) == 2,
+      str(_harness._gold_pref_rank(_dst, _DQ, "long drives", _DE)))
+check("T28c with no embedder the rank is None, never a fabricated 0",
+      _harness._gold_pref_rank(_dst, _DQ, "spicy food", None) is None
+      and _harness._gold_vec_rank(_dst, _DQ, "spicy food", None) is None)
+check("T28d the whole-lane rank counts the span and the fact ahead of the preference",
+      _harness._gold_vec_rank(_dst, _DQ, "spicy food", _DE) == 3
+      and _harness._gold_vec_rank(_dst, _DQ, "spicy food", _DE)
+      > _harness._gold_pref_rank(_dst, _DQ, "spicy food", _DE),
+      f"vec={_harness._gold_vec_rank(_dst, _DQ, 'spicy food', _DE)} "
+      f"pref={_harness._gold_pref_rank(_dst, _DQ, 'spicy food', _DE)}")
+check("T28e a topic no preference holds has no rank",
+      _harness._gold_pref_rank(_dst, _DQ, "loud music", _DE) is None
+      and _harness._gold_vec_rank(_dst, _DQ, "loud music", _DE) is None)
+
 # ------------------------------------------- T24 the vector lane in the store
 st, c1, c2, owner = fresh()
 _sp = add_day(st, "2026-03-01", c1, ["quiet morning", "nothing much"])
@@ -924,8 +1130,15 @@ _sp = add_day(st, "2026-03-01", c1, ["sam lives in sydney indeed"])
 st.ingest(fact_cand(owner, _sp, "Sydney", "sydney", "2026-03-01T08:00:00"))
 _hits = st.query("where does sam live", k=5, now="2026-03-02T00:00:00", embedder=None)
 _order = [(h["table"], h["row_id"]) for h in _hits]
-check("T25g with no embedder the fact still outranks the span it came from",
-      len(_order) >= 2 and _order[0][0] == "fact" and _order[1][0] == "span", str(_order))
+# RETARGET (MS1a.2, R1): the previous assertion pinned MS0.1's TWO-ROW order - the fact first, the
+# span it came from second. Rule 4 (evidence collapse) abolishes that premise by design: a span that
+# is an evidence span of a belief in the fused set is not a second result, the belief carries it.
+# What is asserted now is what MS1a.2 promises - the fact stands alone AND the span is still there,
+# attached, with its verbatim text, so the design's "always the span" is kept by attachment.
+check("T25g with no embedder the fact stands alone and carries the span it came from",
+      _order == [("fact", _hits[0]["row_id"])] and list(_hits[0]["span_ids"]) == list(_sp)
+      and any("sam lives in sydney indeed" in s["text"] for s in _hits[0]["spans"]),
+      str(_order) + " " + str(_hits[0].get("span_ids") if _hits else None))
 
 # ============================ T26 the vocabulary move, T27 the paraphrase set
 # MS0.1's report found `routine`/`routines` under person.habit while `household` sat under

@@ -68,7 +68,11 @@ class MemoryStore:
     """The household store. `path` None uses JARVIS_MEMORY_HOME (else %USERPROFILE%\\.jarvis\\
     memory\\household.sqlite); ':memory:' is accepted for tests and the benchmark."""
 
-    def __init__(self, path=None):
+    def __init__(self, path=None, drop_stopwords=True):
+        # `drop_stopwords` carries design rule 3 (MS1a.2) per STORE, never as a module switch: the
+        # A / A-prime comparison runs both settings side by side in one process, so a global would
+        # make the two arms share state and the comparison meaningless.
+        self.drop_stopwords = bool(drop_stopwords)
         self.path = ":memory:" if path == ":memory:" else str(path or default_db())
         self.conn = sqlite3.connect(self.path)
         self.conn.row_factory = sqlite3.Row
@@ -578,7 +582,15 @@ class MemoryStore:
 
     # ------------------------------------------------------------- the query
     def _fts_match(self, text) -> str:
-        toks = _tokens(text)
+        """The FTS5 MATCH for a question (design §6, MS1a.2 rule 3, per-store switch).
+
+        `self.drop_stopwords` decides whether the registry's function words reach the index; the
+        decision belongs to `retrieve.query_terms`, so the two arms of the A / A-prime measurement
+        differ in one flag rather than in two code paths. Either way `predicate_hint` still matches
+        its own vocabulary (disjoint from STOPWORDS by assertion) and the vector lane never sees
+        this, so a query left empty here still reaches its row by meaning.
+        """
+        toks = _retrieve.query_terms(text, self.drop_stopwords)
         return " OR ".join(f'"{t}"' for t in toks) if toks else ""
 
     def _newest_now(self) -> str:
@@ -690,7 +702,12 @@ class MemoryStore:
                 if m["wscore"] > best_w.get(mk, float("-inf")):
                     best_w[mk] = m["wscore"]
 
-        fused = _retrieve.fuse(lanes)
+        # (2) MS1a.2: the lanes merge by reciprocal rank with each ROW weighed by its claim status
+        # - beliefs 1.0, spans the inferred source rank - because R2 orders only WITHIN a lane and a
+        # fact and the span it came from are never in the same one. A key W_CLAIM does not name
+        # weighs 1.0 (see `fuse`), so an unclassified table sinks nothing.
+        row_weights = {key: _retrieve.W_CLAIM.get(key[0], 1.0) for key in info}
+        fused = _retrieve.fuse(lanes, row_weights)
         lane_ranks = {}
         for lane_name, keys in lanes.items():
             for i, key in enumerate(keys, start=1):
@@ -710,9 +727,29 @@ class MemoryStore:
                 row["cos"] = cos_by_key[key]
             rows.append(row)
 
+        # MS1a.2 EVIDENCE COLLAPSE: a span that is an evidence span of a belief already in the
+        # fused set is not a second result - the belief carries it in `spans`. The utterance and the
+        # fact extracted from it must never compete (design §6; the measured reason is MS1a §3.8).
+        # Done BEFORE the top-k cut, so the answer set fills from the survivors rather than spending
+        # a slot on a row that is already attached to the row above it. A span no belief stands on
+        # is untouched and stays a result.
+        spans_cache = {}
+        evidence_span_ids = set()
+        for r in rows:
+            if r["table"] in ("fact", "preference"):
+                got = self._spans_for(r["table"], r["row_id"])
+                spans_cache[(r["table"], r["row_id"])] = got
+                evidence_span_ids.update(got[0])
+        if evidence_span_ids:
+            rows = [r for r in rows
+                    if not (r["table"] == "span" and r["row_id"] in evidence_span_ids)]
+
         ranked = _retrieve.rank(rows, now)[:k]
         for r in ranked:
-            r["span_ids"], r["spans"] = self._spans_for(r["table"], r["row_id"])
+            got = spans_cache.get((r["table"], r["row_id"]))
+            if got is None:
+                got = self._spans_for(r["table"], r["row_id"])
+            r["span_ids"], r["spans"] = got
         return ranked
 
     def _note_from_db(self, key, note):

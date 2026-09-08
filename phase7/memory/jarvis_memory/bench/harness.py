@@ -114,6 +114,42 @@ def _score_coexist(st, items, ids, now, hint="auto", embedder=None):
     return (statistics.fmean(recalls) if recalls else 0.0), leaks
 
 
+def _gold_pref_rank(st, query, topic, embedder):
+    """1-based cosine rank of the planted preference among the household's CURRENT preferences.
+
+    The diagnostic beside the transfer band (design §6, MS1a.2): rank 1 and still missed means the
+    FUSION is what loses it; rank > 1 means the EMBEDDER never had it. Uses the store's own vector
+    lane, so it measures what retrieval sees rather than a second embedding path, and the limit is
+    large enough that no preference is cut off. None with no embedder.
+    """
+    if embedder is None:
+        return None
+    keys = [k for k, _ in st._vector_lane(query, embedder, limit=100000) if k[0] == "preference"]
+    for i, key in enumerate(keys, start=1):
+        r = st.conn.execute("select topic_norm from preference where id=?", (key[1],)).fetchone()
+        if r and r[0] == topic:
+            return i
+    return None
+
+
+def _gold_vec_rank(st, query, topic, embedder):
+    """The same preference's 1-based rank in the WHOLE vector lane, spans and facts included.
+
+    `_gold_pref_rank` says whether the embedder can pick the right preference out of the other
+    preferences; this says how much else the query pulls in ahead of it, which is what the
+    crowding-out story of MS1a §3.9 is really about. None with no embedder.
+    """
+    if embedder is None:
+        return None
+    for i, (key, _cos) in enumerate(st._vector_lane(query, embedder, limit=100000), start=1):
+        if key[0] != "preference":
+            continue
+        r = st.conn.execute("select topic_norm from preference where id=?", (key[1],)).fetchone()
+        if r and r[0] == topic:
+            return i
+    return None
+
+
 def _score_transfer(st, items, owner_id, now, hint="auto", embedder=None):
     """Is the planted preference in the top five for a scenario worded without its own words?
 
@@ -123,9 +159,13 @@ def _score_transfer(st, items, owner_id, now, hint="auto", embedder=None):
     """
     ok = 0
     by_topic = {}
+    ranks = []
     for it in items:
         topic = it["gold_topic_norm"]
         by_topic.setdefault(topic, 0)
+        ranks.append({"query": it["query"], "topic": topic,
+                      "pref_rank": _gold_pref_rank(st, it["query"], topic, embedder),
+                      "vec_rank": _gold_vec_rank(st, it["query"], topic, embedder)})
         hits = st.query(it["query"], k=5, now=now, predicate_hint=hint, embedder=embedder)
         for h in hits:
             if h["table"] != "preference":
@@ -136,7 +176,7 @@ def _score_transfer(st, items, owner_id, now, hint="auto", embedder=None):
                 ok += 1
                 by_topic[topic] += 1
                 break
-    return (ok / len(items) if items else 0.0), by_topic
+    return (ok / len(items) if items else 0.0), by_topic, ranks
 
 
 def _score_relations(st, items, ids):
@@ -150,7 +190,7 @@ def _score_relations(st, items, ids):
     return hit / len(surfaced), len(surfaced)
 
 
-def run_household(seed, days, predicate_hint=True, embedder=None):
+def run_household(seed, days, predicate_hint=True, embedder=None, drop_stopwords=True):
     """`predicate_hint=False` is the NEGATIVE CONTROL: the MS0 lane, unrestricted.
 
     `embedder` adds the vector lane. It is applied by `embed_pending` AFTER ingest, never during:
@@ -158,7 +198,7 @@ def run_household(seed, days, predicate_hint=True, embedder=None):
     """
     hint = "auto" if predicate_hint else None
     hh = _corpus.generate_household(seed, days)
-    st = MemoryStore(":memory:")
+    st = MemoryStore(":memory:", drop_stopwords=drop_stopwords)
     clusters = {c: st.add_cluster() for c in hh["clusters"]}
     owner_name = hh["persons"][0]["name"]
     partner_name = hh["persons"][1]["name"]
@@ -213,8 +253,8 @@ def run_household(seed, days, predicate_hint=True, embedder=None):
     update_acc = _score_update(st, hh["sets"]["update"], ids, now, hint, embedder)
     update_para = _score_update(st, hh["sets"]["update_paraphrase"], ids, now, hint, embedder)
     coexist_recall, ended_leaks = _score_coexist(st, hh["sets"]["coexist"], ids, now, hint, embedder)
-    transfer, by_topic = _score_transfer(st, hh["sets"]["transfer"], ids["owner"], now, hint,
-                                         embedder)
+    transfer, by_topic, gold_ranks = _score_transfer(st, hh["sets"]["transfer"], ids["owner"],
+                                                     now, hint, embedder)
     rel_prec, n_surfaced = _score_relations(st, hh["sets"]["relations"], ids)
     spouse_conf = _spouse_confidence(st, ids.get("owner"), ids.get("partner"))
 
@@ -258,6 +298,20 @@ def run_household(seed, days, predicate_hint=True, embedder=None):
         "update_acc": round(update_acc, 4),
         "update_acc_paraphrase": round(update_para, 4),
         "transfer_by_topic": by_topic,
+        # REPORTED, never a band: how the planted preference ranked, so a transfer miss can be
+        # attributed to the fusion (rank 1, still missed) or to the embedder (rank > 1).
+        "transfer_gold_ranks": gold_ranks,
+        "transfer_gold_pref_rank1": round(
+            (sum(1 for r in gold_ranks if r["pref_rank"] == 1) / len(gold_ranks))
+            if gold_ranks else 0.0, 4),
+        "transfer_gold_pref_rank_mean": (
+            round(statistics.fmean([r["pref_rank"] for r in gold_ranks
+                                    if r["pref_rank"] is not None]), 4)
+            if any(r["pref_rank"] is not None for r in gold_ranks) else None),
+        "transfer_gold_vec_rank_mean": (
+            round(statistics.fmean([r["vec_rank"] for r in gold_ranks
+                                    if r["vec_rank"] is not None]), 4)
+            if any(r["vec_rank"] is not None for r in gold_ranks) else None),
         "embed_seconds": embed_stats["seconds"],
         "n_embedded": embed_stats["fact"] + embed_stats["preference"] + embed_stats["span"],
         "coexist_recall": round(coexist_recall, 4),
@@ -311,13 +365,22 @@ def measure_latency(n_facts, n_subjects=2000):
 
 
 def run(seeds, days, latency_facts, out_path=None, predicate_hint=True, embedder=None,
-        embedder_name="none") -> dict:
-    households = [run_household(s, days, predicate_hint, embedder) for s in seeds]
+        embedder_name="none", drop_stopwords=True) -> dict:
+    households = [run_household(s, days, predicate_hint, embedder, drop_stopwords)
+                  for s in seeds]
     agg = {}
     for field in ("update_acc", "coexist_recall", "transfer_recall5", "relation_precision",
                   "growth_update_acc", "growth_drop_points", "update_acc_paraphrase",
                   "growth_update_acc_paraphrase", "growth_drop_paraphrase_points"):
         agg[field] = round(statistics.fmean(h[field] for h in households), 4)
+    # REPORTED, never banded, and None-safe: with no embedder every rank is None, so the mean is
+    # None rather than a fabricated 0 - the rank-1 FRACTION is 0.0 there by its own definition.
+    for field in ("transfer_gold_pref_rank1",):
+        agg[field] = round(statistics.fmean(h[field] for h in households), 4)
+    for field in ("transfer_gold_pref_rank_mean", "transfer_gold_vec_rank_mean"):
+        vals = [h[field] for h in households if h[field] is not None]
+        agg[field] = round(statistics.fmean(vals), 4) if vals else None
+
     surfaced_days = [h["spouse_surfaced_day"] for h in households
                      if h["spouse_surfaced_day"] is not None]
     agg["spouse_surfaced_day_mean"] = (round(statistics.fmean(surfaced_days), 4)
@@ -343,6 +406,7 @@ def run(seeds, days, latency_facts, out_path=None, predicate_hint=True, embedder
             topics[t] = topics.get(t, 0) + n
     out = {
         "predicate_hint": bool(predicate_hint),
+        "stopwords": "dropped" if drop_stopwords else "kept",
         "embedder": embedder_name,
         "embedder_version": getattr(embedder, "version", None),
         "embedder_load_s": getattr(embedder, "load_s", None),
@@ -355,6 +419,8 @@ def run(seeds, days, latency_facts, out_path=None, predicate_hint=True, embedder
         "bands": bands,
         "reported": {
             "transfer_recall5": agg["transfer_recall5"],
+            "transfer_gold_pref_rank1": agg["transfer_gold_pref_rank1"],
+            "transfer_gold_vec_rank_mean": agg["transfer_gold_vec_rank_mean"],
             "relation_precision": agg["relation_precision"],
             "spouse_surfaced_day_mean": agg["spouse_surfaced_day_mean"],
         },
