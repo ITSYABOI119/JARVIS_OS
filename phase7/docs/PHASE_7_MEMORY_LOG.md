@@ -903,3 +903,219 @@ preference low in the mixed lane so the summed form never got the chance to win;
 shape (`fts_fact` 1 + `vec` 3 against `vec` 2 + `vec_pref` 1) with the lane ranks asserted, and it fails under the
 summed mutant. Two mutants bite, control green first: `fuse` summing the vector lanes kills T32a, T32c, T24c, T30c
 and T30d; the subject gate disabled kills T33a.
+
+## MS1b — 2026-09-09 — the extractor bake-off: the contract measured first (L0), then narrowed; Gemma 4 E2B against Llama 3.1 8B
+
+**Verdict, by the pre-registered rule, applied in code (`bench_ms1b.py --verdict`): NONE. Ceiling F1 0.4073
+(Llama 3.1 8B). Neither extractor reached the 0.60 floor, and Gemma did not reach the 0.99 validity band
+either. The MS1 row therefore reads MEASURED, not DONE — the embedding half of MS1 was met at MS1a.4
+(`c8f3d22`) and stands; this half records its ceiling.**
+
+### Venue
+
+llama.cpp on the RTX 2070 (8,192 MiB), one server at a time, started and stopped by the harness. The
+strategist's note records the build as `b8721-7-g5e9c63546`; **the server itself reports
+`b8728-5e9c63546`** on every run in this entry — same git sha `5e9c63546`, a later build number. The
+measured string is the one recorded here.
+
+| model | file | bytes | sha256 |
+|---|---|---|---|
+| Llama 3.1 8B Instruct Q4_K_M (bartowski) | `models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf` | 4,920,739,232 | `7b064f5842bf9532c91456deda288a1b672397a54fa729aa665952863033557c` |
+| Gemma 4 E2B it Q4_K_M | `models/gemma-4-E2B-it-Q4_K_M.gguf` | 3,106,736,256 | `9378bc471710229ef165709b62e34bfb62231420ddaf6d729e727305b5b8672d` |
+
+Corpus: 10 synthetic households, 14 days, seed 1, 1,670 spans, 370 oracle candidates. Temperature 0,
+seed 1, JSON constrained by a schema generated from the registry.
+
+### The 2048-token budget, and why it is the same for both
+
+Ruled before either run and recorded in the design: Gemma 4 E2B spends hundreds of tokens of its thinking
+channel before any JSON — the `JARVIS_THINKING` finding again — and at 512 it returned `finish=length`
+with empty content on every candidate-bearing span, which would have scored the budget rather than the
+extractor. Llama finishes an empty answer in 6 tokens and needs none of the headroom. A per-model budget
+would have been tuning one of them. The measurement bears the asymmetry out: for the same 1,670 calls
+Gemma emitted **604,827** output tokens against Llama's **21,954**, a factor of 27.
+
+### L0 — the WIDE contract, kept as `ms1b_llama_8b_contract0.json`, REPORTED and never re-run
+
+```
+contract wide   schema 732ef50e01fc   max_tokens 2048
+validity 0.9371 (1565/1670)   F1 0.1209   P 0.1875  R 0.0892   lenient 0.1429
+n_pred 176  n_gold 370  n_match 33   relation recall 0.0000
+492.9 s   tokens in 1,064,269  out 22,209
+invalid reasons: {'stated': 105}
+```
+
+L0 measured the CONTRACT, not the model, in three classes:
+
+1. **All 105 invalid calls were speaker mismatches** — a `stated_*` candidate whose `speaker_cluster`
+   disagreed with the span's. The caller knew that value exactly and made the model restate it.
+2. **Every `person.works_as` miss was an article**: the model answered `object_norm = "a plumber"` where
+   the oracle holds `"plumber"` — because this repository's own prompt taught it to, with a worked
+   example that spelled the normal form as `"a nurse"`.
+3. **Every relation miss was a shape mismatch**: free text where the oracle keys an edge by its relation id.
+
+None of those is a judgement about an utterance. So the contract was narrowed to what only a reader can
+judge, and both models were re-run. L0 was renamed, not regenerated; it is the measurement of the wide
+contract and never a band. It was already running at `max_tokens` 2048, so the budget is not a confound
+between L0 and L — the contract is the only difference.
+
+### The narrowed contract — who decides what
+
+| field | decided by | how |
+|---|---|---|
+| `predicate_id` | **the model** | enum generated from the registry |
+| `about` | **the model** | `"speaker"`, or a lower-cased name |
+| `object` | **the model** | the value AS SAID — the code normalises it |
+| `stated` | **the model** | said outright, or implied |
+| `relation_id`, `polarity`, `strength`, `ended`, `about_time` | **the model** | enums + null |
+| `span_ids` | code | `[span.sid]` |
+| `speaker_cluster` | code | `span.cluster` |
+| `subject` | code | household predicate → the household; `owner.prefers` → the owner; `about == "speaker"` → the speaker's cluster; else the name |
+| `source_kind` | code | stated by the owner's cluster → `stated_owner`; stated by another → `stated_other`; not stated → `inferred` |
+| `object_norm` | code | ONE normaliser (`registry.normalise_object`), or the `relation_id` for an edge |
+
+Schema sha256 `6f8eac439f27961d76152b12d17ab02d10acf91879b9bcefbd23cab2c3e01397`; `required` is exactly
+`["predicate_id", "about", "object", "stated"]`, and `subject` / `object_norm` / `source_kind` /
+`speaker_cluster` / `span_ids` do not appear in the schema at all. `Store.ingest` overwrites
+`object_norm` through the same normaliser before any rule runs, so no caller's value is trusted. Checked
+first, because the gate says stop if it is not true: every one of the corpus's **370** oracle candidates
+already carries exactly that normal form (T36c), so the overwrite moves no gold value and no MS0/MS1a
+number changes — confirmed independently by the MS0 band step, which still passes.
+
+### The two runs, at the narrow contract
+
+| | Llama 3.1 8B | Gemma 4 E2B |
+|---|---|---|
+| validity | **0.9946** (1661/1670) | 0.9820 (1640/1670) |
+| F1 (strict) | **0.4073** | 0.3419 |
+| precision / recall | 0.4240 / 0.3919 | 0.3614 / 0.3243 |
+| lenient F1 | 0.4129 | 0.3419 |
+| relation recall, STATED | **0.9667** (29 of 30) | 0.0000 (0 of 30) |
+| relation recall, INFERRED | 0.0000 (0 of 80) | 0.0000 (0 of 80) |
+| preference precision / recall (household mean) | 1.0000 / 0.2000 | 0.9857 / **0.7333** |
+| preference polarity agreement | 0.1000 | 0.3783 |
+| invalid reasons | `relation_id` 9 | `polarity` 12, `relation_id` 18 |
+| throughput | 1,670 calls in **489.9 s** | 1,670 calls in **7,951.7 s** |
+| tokens in / out | 1,117,709 / 21,954 | 1,141,391 / 604,827 |
+
+Narrowing the contract moved Llama from validity 0.9371 to 0.9946, F1 0.1209 to 0.4073, and stated-relation
+recall from 0 to 29 of 30. The inferred half of the relation recall is 0 for both and is expected to be:
+those gold edges are pronoun hints the people layer accrues over days, and MS1b has no people layer. The
+two halves are reported separately for that reason and are never averaged into one number.
+
+### Per predicate, all ten households
+
+| predicate | gold | L pred | L match | L F1 | G pred | G match | G F1 |
+|---|---|---|---|---|---|---|---|
+| `household.routine` | 20 | 56 | 0 | 0.000 | 20 | 0 | 0.000 |
+| `household.topic` | 60 | 40 | 8 | 0.160 | 62 | 60 | **0.984** |
+| `owner.prefers` | 60 | 12 | 12 | 0.333 | 45 | 44 | **0.838** |
+| `person.habit` | 60 | 57 | 47 | **0.803** | 97 | 8 | 0.102 |
+| `person.lives_in` | 30 | 34 | 30 | **0.938** | 24 | 7 | 0.259 |
+| `person.name` | 0 | 16 | 0 | 0.000 | 13 | 0 | 0.000 |
+| `person.relation_to` | 110 | 89 | 29 | 0.291 | 31 | 0 | 0.000 |
+| `person.trait` | 0 | 8 | 0 | 0.000 | 9 | 0 | 0.000 |
+| `person.works_as` | 30 | 30 | 19 | **0.633** | 31 | 1 | 0.033 |
+
+The two models fail in mirror images, and the split is not random. **Gemma scores on exactly the two
+predicates whose subject the code derives without consulting `about`** — `household.topic` (0.984) and
+`owner.prefers` (0.838) — and collapses on every predicate whose subject comes from `about`. Llama is the
+opposite: strong on the person predicates, weak on the household ones.
+
+### The finding: `about` is answered with a pronoun
+
+The dominant residual failure in both runs is that the model writes the pronoun it heard where the prompt
+asked for the literal token `"speaker"`. `derive` then treats `"i"` as a NAME, which resolves to nobody,
+and the candidate cannot match however right the rest of it is. Measured over the person-subject
+predictions:
+
+| | pronoun as `about` | a cluster | a name |
+|---|---|---|---|
+| Llama | 63 | 141 | 42 |
+| Gemma | **172** | 48 | 30 |
+
+Every one of Gemma's first ten false positives is this and nothing else — the predicate and the object are
+correct in all ten:
+
+```
+we live in perth at the moment       -> person.lives_in  person:we = perth
+i work as a carpenter                -> person.works_as  person:i  = carpenter
+i started as a pharmacist this month -> person.works_as  person:i  = pharmacist
+i still reads before bed             -> person.habit     person:i  = reads before bed
+```
+
+**A counterfactual, computed post-hoc on the stored predictions and REPORTED — it is not the band and it
+did not change the verdict:** remapping a first-person pronoun (`i` / `me` / `myself`) to the speaker's own
+cluster, which is a derivation and not a judgement, moves Llama from F1 0.4073 to 0.4382 and **Gemma from
+0.3419 to 0.6068**. Gemma would still not be chosen — its validity is 0.9820, below the 0.99 band, and the
+remap does not touch validity — but the number says plainly where this milestone's ceiling actually sits:
+in a convention the prompt states and the model does not follow, not in the models' ability to read the
+utterance. Changing `derive` and re-running after seeing these numbers would be tuning on the test set, so
+it was not done; the next contract revision is the strategist's call.
+
+Two smaller classes, both real: `household.routine` is used as a catch-all for a personal habit (Llama
+emitted 56 routines and matched none, despite an explicit registry line saying a routine is something the
+household does together), and both models invent `person.name` and `person.trait` candidates for which the
+corpus has no gold at all (Llama 24 such predictions, Gemma 22).
+
+### Failure examples, verbatim (seed 1)
+
+```
+LLAMA 3.1 8B - false positives
+  i work as a plumber              -> person.name       person:i = i
+  i work as a plumber              -> person.works_as   person:i = plumber
+  i work as a carpenter            -> person.name       person:i = i
+  i work as a carpenter            -> person.works_as   person:i = carpenter
+  i still bakes on fridays         -> household.routine household:household = bakes on fridays
+  i walks the dog at seven         -> household.routine household:household = walks the dog at seven
+  she was here all evening again   -> person.habit      person:she = here all evening again
+  she was here all evening again   -> person.relation_to person:she = None
+  we sorted the bills together     -> household.routine household:household = sorted the bills together
+  we sorted the bills together     -> household.topic   household:household = bills
+LLAMA 3.1 8B - false negatives
+  i work as a plumber              -> person.works_as   person:owner   = plumber
+  i work as a carpenter            -> person.works_as   person:partner = carpenter
+  i runs at dawn                   -> person.habit      person:partner = runs at dawn
+  remember the bins go out on tuesday     -> household.routine household:None = bins go out on tuesday
+  remember the groceries arrive thursday  -> household.routine household:None = groceries arrive thursday
+  we were talking about cycling again     -> household.topic household:None = cycling
+  we were talking about pottery again     -> household.topic household:None = pottery
+  we were talking about gardening again   -> household.topic household:None = gardening
+  we were talking about camping again     -> household.topic household:None = camping
+  we were talking about renovations again -> household.topic household:None = renovations
+
+GEMMA 4 E2B - false positives
+  we live in perth at the moment          -> person.lives_in person:we = perth
+  we moved to bendigo last week           -> person.lives_in person:we = bendigo
+  i work as a carpenter                   -> person.works_as person:i = carpenter
+  i started as a pharmacist this month    -> person.works_as person:i = pharmacist
+  i still reads before bed                -> person.habit    person:i = reads before bed
+  i still bakes on fridays                -> person.habit    person:i = bakes on fridays
+  i still swims on sundays                -> person.habit    person:i = swims on sundays
+  i stopped, i no longer reads before bed -> person.habit    person:i = reads before bed
+  i runs at dawn                          -> person.habit    person:i = runs at dawn
+  i walks the dog at seven                -> person.habit    person:i = walks the dog at seven
+```
+
+### The store on extracted candidates
+
+NOT RUN, and deliberately: base §4.3 conditions it on a model being chosen, and none was.
+`ms1b_store_on_extracted.json` does not exist. The oracle-driven run `ms1a4_run.json` remains the store's
+measurement.
+
+### Honest scope
+
+Synthetic seeded utterances that always name people, scored against ORACLE candidates; nothing here was
+measured on real speech, on household audio, or on the owner. The exact-name gate of MS1a.4 still applies —
+aliases are MS2's people layer. The encoder-style third candidate stays deferred with its reason. The
+inferred relation half is a people-layer task and is reported at 0 for both models rather than excused.
+The counterfactual above is arithmetic on stored predictions, not a run.
+
+### Tests
+
+`test_memory_logic.py` 245 → **254 checks** (T36, T36a–g and the retargeted T35a2/a3/a4/d2). Three mutants,
+control green first, each failing by name and restored byte-identical: the normaliser not stripping the
+article kills T36/T36a/T36c/T36d/T35d2 **and** the MS1a.2 store tests T21a/b/c — which is the evidence that
+one normaliser is now load-bearing on the write path, not only in the scorer; `derive` always returning
+`stated_owner` kills T36a/T36b; a hand-typed `required` list carrying a derived field kills T35a4. No new
+CI step: the MS1b scaffolding step landed with `c38a8a8` and covers the narrowed CLI unchanged.
