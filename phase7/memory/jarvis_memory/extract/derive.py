@@ -22,6 +22,27 @@ from ..registry import (
 
 SPEAKER = "speaker"
 
+# CONTRACT 2 (MS1b, the field). A first-person pronoun spoken by cluster N IS cluster N — a
+# derivation from the span, not a judgement about it, and the corpus's own convention ("we live in
+# perth" is recorded as the speaker's fact, `corpus.py:152-153`).
+#
+# Measured, which is why it is here rather than in the prompt: under contract 1 both models answered
+# `about` with the pronoun they heard instead of the literal token the prompt asked for — Gemma on
+# 167 of 250 person-subject predictions (`i` 152, `we` 14, `me` 1), Llama on 36 of 246 (`i` 22,
+# `us` 14) — and `derive` read each as a name that resolves to nobody, so the candidate could not
+# match however right its predicate and object were. The prompt still asks for "speaker"; the
+# derivation now tolerates the habit instead of scoring it.
+#
+# The PLURAL forms are load-bearing and were the difference between two numbers: remapping the
+# stored contract-1 predictions with the full set gives Gemma 227 matches, with `i`/`me`/`myself`
+# alone 213 (T38b pins both ends). A THIRD-person pronoun is deliberately absent — "she" refers to
+# somebody the span does not identify, and resolving that is the people layer's work, not a
+# derivation.
+FIRST_PERSON = frozenset({
+    "i", "me", "my", "mine", "myself",
+    "we", "us", "our", "ours", "ourselves",
+})
+
 
 def _span_field(span, name):
     """Spans arrive as the corpus's dicts; an attribute-style span is accepted too."""
@@ -43,7 +64,7 @@ def _subject(pid, about, cluster, owner_cluster):
         return {"kind": "household", "ref": "household"}
     if pid == PREFERENCE_PREDICATE:
         return {"kind": "person", "ref": str(owner_cluster)}
-    if about == SPEAKER or not about:
+    if about == SPEAKER or about in FIRST_PERSON or not about:
         return {"kind": "person", "ref": str(cluster)}
     return {"kind": "person", "ref": about}
 

@@ -210,6 +210,24 @@ def score_household(preds, golds, names_by_cluster=None, clusters_by_name=None) 
         "precision": precision, "recall": recall, "f1": f1,
         "lenient_precision": lp, "lenient_recall": lr, "lenient_f1": lf1,
         "per_predicate": per,
+        # REPORTED beside the band, never in it (MS1b contract 2).
+        # `f1_scorable` answers a different question from `f1`: what does a PER-SPAN extractor get
+        # over the gold it can actually reach? The 80 inferred edges in this corpus are pronoun
+        # hints the people layer accrues over days; no single-span call can produce them, so they
+        # sit in the recall denominator of `f1` as a permanent, structural deduction. Precision is
+        # deliberately UNCHANGED - a prediction is still right or wrong against the whole oracle.
+        # The band remains `f1`; this is the honest companion, not a softer scoring.
+        "scorable_gold": len(golds) - len(rel_inf_gold),
+        "f1_scorable": _f1(precision,
+                           (len(strict) / (len(golds) - len(rel_inf_gold)))
+                           if (len(golds) - len(rel_inf_gold)) else 0.0),
+        # Predictions on predicates this household's oracle has NO gold for at all (person.name,
+        # person.trait in this corpus). They can only ever be false positives, so counting them
+        # separately says how much of a model's precision loss is "invented a predicate the corpus
+        # never uses" rather than "got this fact wrong".
+        "zero_gold_predictions": sum(
+            1 for c in preds
+            if not any(g.get("predicate_id") == c.get("predicate_id") for g in golds)),
         "relation_recall": (rel_hit / len(rel_gold)) if rel_gold else 0.0,
         "relation_gold": len(rel_gold), "relation_matched": rel_hit,
         "relation_stated_recall": ((rel_stated_hit / len(rel_stated_gold))

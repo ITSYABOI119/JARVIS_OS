@@ -22,14 +22,14 @@ SERVER_EXE = "llama-server.exe"
 
 
 def build_request(span_text, speaker_cluster, day, names, span_id, schema,
-                  max_tokens=512, temperature=0.0, seed=1) -> dict:
+                  max_tokens=512, temperature=0.0, seed=1, thinking_switch=False) -> dict:
     """The chat-completions body. Pure, so the schema wiring is testable without a server.
 
     `response_format: json_schema` is what makes the enums binding rather than advisory: the server
     constrains generation to the grammar the schema compiles to, so an off-registry predicate id
     cannot be produced at all. temperature 0 and a fixed seed make a run reproducible.
     """
-    return {
+    body = {
         "messages": [
             {"role": "system", "content": system_prompt()},
             {"role": "user", "content": user_prompt(span_text, speaker_cluster, day, names,
@@ -44,6 +44,14 @@ def build_request(span_text, speaker_cluster, day, names, span_id, schema,
         "max_tokens": max_tokens,
         "stream": False,
     }
+    # Fairness across the field (MS1b contract 2): a family whose chat template offers a thinking
+    # switch runs with it OFF, so every model is measured on the same budget doing the same job.
+    # Qwen3 / Qwen3.5 have the switch; Gemma 4's channel has none (the project's JARVIS_THINKING
+    # finding) and keeps the 2048 headroom instead. Absent entirely when not requested, so a server
+    # that does not know the field never sees it.
+    if thinking_switch:
+        body["chat_template_kwargs"] = {"enable_thinking": False}
+    return body
 
 
 def parse_response(raw_json):
@@ -65,19 +73,36 @@ def parse_response(raw_json):
 
 
 def extract_span(base_url, span_id, text, cluster, day, names, schema,
-                 max_tokens=512, temperature=0.0) -> dict:
+                 max_tokens=512, temperature=0.0, thinking_switch=False) -> dict:
     """One call. Returns the parsed object, the raw text, token counts and wall ms; never raises."""
     body = build_request(text, cluster, day, names, span_id, schema,
-                         max_tokens=max_tokens, temperature=temperature)
+                         max_tokens=max_tokens, temperature=temperature,
+                         thinking_switch=thinking_switch)
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(base_url.rstrip("/") + "/v1/chat/completions", data=data,
                                  headers={"Content-Type": "application/json"})
     t0 = time.time()
+    status = None
     try:
         with urllib.request.urlopen(req, timeout=180) as fh:
+            status = fh.status
             raw = fh.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:                      # noqa: BLE001 - counted, not raised
+        # The status is CARRIED rather than folded into the message: a 400 means the server refused
+        # the request itself - under json_schema that means the schema did not compile to a grammar,
+        # which invalidates an entire run rather than costing one call, and the smoke gate must be
+        # able to tell it apart from a timeout or a parse failure.
+        body = ""
+        try:
+            body = exc.read().decode("utf-8", "replace")[:400]
+        except Exception:
+            pass
+        return {"candidates": None, "raw": "HTTP %s: %s" % (exc.code, body), "status": exc.code,
+                "finish_reason": None,
+                "ms": round((time.time() - t0) * 1000, 1), "tokens_in": 0, "tokens_out": 0}
     except Exception as exc:                                   # noqa: BLE001 - counted, not raised
-        return {"candidates": None, "raw": "REQUEST FAILED: %r" % (exc,),
+        return {"candidates": None, "raw": "REQUEST FAILED: %r" % (exc,), "status": None,
+                "finish_reason": None,
                 "ms": round((time.time() - t0) * 1000, 1), "tokens_in": 0, "tokens_out": 0}
     ms = round((time.time() - t0) * 1000, 1)
     obj, txt = parse_response(raw)
@@ -86,9 +111,16 @@ def extract_span(base_url, span_id, text, cluster, day, names, schema,
         usage = json.loads(raw).get("usage") or {}
     except Exception:
         pass
+    finish = None
+    try:
+        finish = (json.loads(raw)["choices"][0] or {}).get("finish_reason")
+    except Exception:
+        pass
     return {
         "candidates": (obj or {}).get("candidates") if obj is not None else None,
         "raw": txt,
+        "status": status,
+        "finish_reason": finish,
         "ms": ms,
         "tokens_in": usage.get("prompt_tokens", 0),
         "tokens_out": usage.get("completion_tokens", 0),

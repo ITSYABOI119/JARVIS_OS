@@ -1405,25 +1405,65 @@ from jarvis_memory.extract.score import (  # noqa: E402
     lenient_match, match, resolve_subject, score_household, validity,
 )
 
+# CONTRACT 2: the candidate is a `oneOf` of four predicate-family branches. Each branch makes its
+# family's own fields REQUIRED and NON-NULLABLE, which is what makes contract 1's entire invalid
+# class - a null relation_id on an edge, a null polarity on a preference, 39 calls across two
+# models - unproducible under constrained decoding rather than rejected after the fact.
 _SCH = candidate_schema()
-_ITEM = _SCH["properties"]["candidates"]["items"]
-check("T35a the predicate enum IS the registry's, never a hand-typed copy",
-      _ITEM["properties"]["predicate_id"]["enum"] == sorted(PREDICATES),
-      str(_ITEM["properties"]["predicate_id"]["enum"]))
-check("T35a2 the relation and polarity enums are the registry's too",
-      _ITEM["properties"]["relation_id"]["enum"] == sorted(_RELS) + [None]
-      and _ITEM["properties"]["polarity"]["enum"] == list(_POLS) + [None],
-      str(_ITEM["properties"]["relation_id"]["enum"]))
-check("T35a3 additionalProperties is false at every object level",
-      _SCH["additionalProperties"] is False and _ITEM["additionalProperties"] is False)
-# The narrowed contract, asserted as an EXACT set both ways: the model must be asked for everything
-# it alone can judge, and must not be asked for anything the code derives. Either half failing is a
-# contract that measures something other than the extractor - which is what L0 measured.
-check("T35a4 the required set is exactly the DECISION set, and no derived field is in the schema",
-      sorted(_ITEM["required"]) == sorted(["predicate_id", "about", "object", "stated"])
-      and not ({"subject", "object_norm", "source_kind", "speaker_cluster", "span_ids"}
-               & set(_ITEM["properties"])),
-      str((_ITEM["required"], sorted(_ITEM["properties"]))))
+_BRANCHES = _SCH["properties"]["candidates"]["items"]["oneOf"]
+_BY_PID = {}
+for _b in _BRANCHES:
+    for _pid in _b["properties"]["predicate_id"]["enum"]:
+        _BY_PID.setdefault(_pid, []).append(_b)
+_EDGE_B = _BY_PID["person.relation_to"][0]
+_PREF_B = _BY_PID["owner.prefers"][0]
+
+check("T35a the four branch enums PARTITION the registry - every predicate in exactly one",
+      sorted(_BY_PID) == sorted(PREDICATES)
+      and all(len(v) == 1 for v in _BY_PID.values()) and len(_BRANCHES) == 4,
+      str({k: len(v) for k, v in _BY_PID.items() if len(v) != 1} or sorted(_BY_PID)))
+# The mutant this catches is M2: making relation_id nullable again re-opens the exact failure the
+# branches exist to close, and it would still look like a valid schema.
+check("T35a2 relation_id and polarity are NON-nullable inside their own branches",
+      _EDGE_B["properties"]["relation_id"]["enum"] == sorted(_RELS)
+      and None not in _EDGE_B["properties"]["relation_id"]["enum"]
+      and _EDGE_B["properties"]["relation_id"]["type"] == "string"
+      and _PREF_B["properties"]["polarity"]["enum"] == list(_POLS)
+      and None not in _PREF_B["properties"]["polarity"]["enum"]
+      and _PREF_B["properties"]["polarity"]["type"] == "string",
+      str((_EDGE_B["properties"]["relation_id"], _PREF_B["properties"]["polarity"])))
+check("T35a3 additionalProperties is false at both outer levels and in every branch",
+      _SCH["additionalProperties"] is False
+      and all(b["additionalProperties"] is False for b in _BRANCHES)
+      and all(b["type"] == "object" for b in _BRANCHES)
+      and _SCH["properties"]["candidates"]["type"] == "array")
+# The contract asserted as an EXACT set, branch by branch: the model must be asked for everything it
+# alone can judge and for nothing the code derives. Either half failing is a contract that measures
+# something other than the extractor - which is what L0 measured.
+_WANT_REQ = {
+    "person.relation_to": ["predicate_id", "about", "relation_id", "object", "stated"],
+    "owner.prefers": ["predicate_id", "polarity", "object", "stated"],
+    "household.topic": ["predicate_id", "object", "stated"],
+    "household.routine": ["predicate_id", "object", "stated"],
+    "person.habit": ["predicate_id", "about", "object", "stated"],
+    "person.lives_in": ["predicate_id", "about", "object", "stated"],
+    "person.name": ["predicate_id", "about", "object", "stated"],
+    "person.trait": ["predicate_id", "about", "object", "stated"],
+    "person.works_as": ["predicate_id", "about", "object", "stated"],
+}
+_DERIVED = {"subject", "object_norm", "source_kind", "speaker_cluster", "span_ids"}
+check("T35a4 each branch's required set is exactly its row, and no branch carries a derived field",
+      all(_BY_PID[pid][0]["required"] == want for pid, want in _WANT_REQ.items())
+      and not any(_DERIVED & set(b["properties"]) for b in _BRANCHES)
+      # `about` belongs to the EDGE and PERSON families only: a household fact has no person
+      # subject and a preference is the owner's whoever said it, so asking for `about` there would
+      # be asking the model to decide something the code already knows.
+      and {pid for pid, bs in _BY_PID.items() if "about" in bs[0]["properties"]}
+      == {"person.relation_to", "person.habit", "person.lives_in", "person.name", "person.trait",
+          "person.works_as"}
+      and all(b["required"][0] == "predicate_id" for b in _BRANCHES),
+      str({pid: _BY_PID[pid][0]["required"] for pid in _WANT_REQ
+           if _BY_PID[pid][0]["required"] != _WANT_REQ[pid]}))
 
 _SYS = system_prompt()
 check("T35b the system prompt names every predicate and every relation exactly once",
@@ -1630,6 +1670,184 @@ check("T36g a household subject resolves the same whether it is written None or 
                  "object": "friday pizza", "object_norm": "friday pizza", "span_ids": [5]},
                 _NBC, _CBN),
       str(resolve_subject(None, "household", _NBC, _CBN)))
+
+# ================================================== T37/T38 MS1b contract 2: the field
+# Contract 1 measured the contract twice over: `about` came back as the pronoun heard (Gemma on 167
+# of 250 person-subject predictions, Llama on 36 of 246) and every one of the 39 invalid calls was a
+# null relation_id or polarity. Contract 2 derives the first person in code and splits the schema
+# into four family branches, and the FIELD - every instruction model that fits the 2070 at 4-bit -
+# runs under it. These tests pin the derivation, the field table, the queue's resumability, the
+# thinking switch, the verdict's file selection and the two reported-beside metrics.
+import os as _os  # noqa: E402
+import tempfile as _tempfile  # noqa: E402
+import shutil as _shutil  # noqa: E402
+
+import bench_ms1b as _bench  # noqa: E402
+from jarvis_memory.extract.derive import FIRST_PERSON as _FP  # noqa: E402
+
+_FIELD_KEYS = ["llama-1b", "llama-3b", "phi3-mini", "qwen3-4b", "qwen35-4b", "phi4-mini",
+               "nuextract", "llama-8b", "qwen3-8b", "qwen35-9b", "gemma-e2b", "gemma-e4b"]
+check("T37a the field table holds every key, each with a models/ path and the right thinking switch",
+      sorted(_bench.MODELS) == sorted(_FIELD_KEYS)
+      and all(_bench.model_path(k).startswith(("models/", "phase3/models/"))
+              for k in _FIELD_KEYS)
+      and {k for k in _FIELD_KEYS if _bench.thinking_switch(k)}
+      == {"qwen3-4b", "qwen35-4b", "qwen3-8b", "qwen35-9b"},
+      str(sorted(set(_bench.MODELS) ^ set(_FIELD_KEYS))
+          or {k for k in _FIELD_KEYS if _bench.thinking_switch(k)}))
+
+
+def _stub_run(path, key, contract, sha, f1=0.5, validity=0.995):
+    with open(path, "w", encoding="utf-8") as fh:
+        _json.dump({"model_key": key, "contract": contract, "schema_sha256": sha,
+                    "aggregate": {"f1": f1, "validity": validity, "lenient_f1": f1,
+                                  "f1_scorable": f1, "zero_gold_predictions": 0,
+                                  "seconds": 1.0}}, fh)
+
+
+_TMPQ = _tempfile.mkdtemp()
+try:
+    _sha_now = schema_sha256()
+    # (1) already done at THIS contract and hash -> skipped, not re-run
+    _stub_run(_os.path.join(_TMPQ, "ms1b_llama-1b.json"), "llama-1b", "contract2", _sha_now)
+    _done1, _skip1, _stop1 = _bench.run_queue(["llama-1b"], [1], 14, None, 8099, 4096, 99, 2048,
+                                              results_dir=_TMPQ)
+    # (2) present under ANOTHER contract -> the queue STOPS rather than overwrite a kept run
+    _stub_run(_os.path.join(_TMPQ, "ms1b_llama-3b.json"), "llama-3b", "narrow", "deadbeef")
+    _done2, _skip2, _stop2 = _bench.run_queue(["llama-3b"], [1], 14, None, 8099, 4096, 99, 2048,
+                                              results_dir=_TMPQ)
+    # (3) absent -> it proceeds past the skip logic (and here stops at the missing model file,
+    #     which is the only way to prove "it would have run" without starting a server)
+    _bench.MODELS["zz-fake"] = {"path": "models/zz-does-not-exist.gguf", "thinking_switch": False}
+    _done3, _skip3, _stop3 = _bench.run_queue(["zz-fake"], [1], 14, None, 8099, 4096, 99, 2048,
+                                              results_dir=_TMPQ)
+    del _bench.MODELS["zz-fake"]
+    check("T37b the queue is resumable: done is skipped, another contract STOPS it, absent runs",
+          _done1 == ["llama-1b"] and _stop1 is None
+          and _stop2 == "llama-3b" and _done2 == []
+          and _done3 == [] and _stop3 is None and len(_skip3) == 1
+          and "absent" in _skip3[0][1],
+          str((_done1, _stop1, _done2, _stop2, _skip3)))
+
+    # T38c: the verdict never mixes contracts, and never reads its own outputs.
+    _TMPV = _tempfile.mkdtemp()
+    _stub_run(_os.path.join(_TMPV, "ms1b_x.json"), "x", "contract2", _sha_now, f1=0.42)
+    _stub_run(_os.path.join(_TMPV, "ms1b_x_contract0.json"), "x", "wide", "old", f1=0.12)
+    _stub_run(_os.path.join(_TMPV, "ms1b_x_contract1.json"), "x", "narrow", "old", f1=0.40)
+    with open(_os.path.join(_TMPV, "ms1b_field_verdict.json"), "w", encoding="utf-8") as fh:
+        _json.dump({"chosen": None, "rows": []}, fh)          # no model_key: not a run
+    # Guarded so a regression FAILS BY NAME instead of crashing the suite: if the selection stops
+    # excluding the kept `_contract1` run, this call raises on the mislabel and a traceback would
+    # tell a reader far less than a named failing check does.
+    try:
+        _sel = _bench.load_field(_TMPV)
+    except Exception as exc:                                   # noqa: BLE001
+        _sel = [("RAISED: %s" % exc, {}, "")]
+    _stub_run(_os.path.join(_TMPV, "ms1b_y.json"), "y", "narrow", _sha_now, f1=0.99)
+    try:
+        _bench.load_field(_TMPV)
+        _refused = ""
+    except ValueError as exc:
+        _refused = str(exc)
+    check("T38c the verdict reads only contract-2 runs, ignores its own output, refuses a mislabel",
+          [k for k, _a, _p in _sel] == ["x"] and len(_sel) == 1
+          and "ms1b_y.json" in _refused and "narrow" in _refused,
+          str(([k for k, _a, _p in _sel], _refused[:120])))
+    _shutil.rmtree(_TMPV, ignore_errors=True)
+finally:
+    _shutil.rmtree(_TMPQ, ignore_errors=True)
+
+_REQ_SW = build_request("i work as a nurse", 2, 5, {1: "alex"}, 77, _SCH, thinking_switch=True)
+_REQ_NO = build_request("i work as a nurse", 2, 5, {1: "alex"}, 77, _SCH)
+check("T37c the thinking switch is sent only where the family has one, and is absent otherwise",
+      _REQ_SW["chat_template_kwargs"] == {"enable_thinking": False}
+      and "chat_template_kwargs" not in _REQ_NO
+      and _bench.thinking_switch("qwen3-4b") and not _bench.thinking_switch("llama-8b"),
+      str(_REQ_SW.get("chat_template_kwargs")))
+
+_V5 = [("a", {"validity": 0.995, "f1": 0.71}), ("b", {"validity": 0.995, "f1": 0.64}),
+       ("c", {"validity": 0.989, "f1": 0.80}), ("d", {"validity": 0.995, "f1": 0.30}),
+       ("e", {"validity": 0.995, "f1": 0.55})]
+_VD = _bench.verdict(_V5)
+_VN = _bench.verdict([("p", {"validity": 0.995, "f1": 0.59}),
+                      ("q", {"validity": 0.995, "f1": 0.40})])
+check("T37d the rule: the highest F1 among the VALID, the 0.80 at 98.9 % validity excluded; "
+      "all under the floor -> NONE with the ceiling named",
+      _VD["chosen"] == "a" and _VN["chosen"] is None
+      and "0.5900" in _VN["reason"] and "p" in _VN["reason"],
+      str((_VD["chosen"], _VN["reason"])))
+
+_D38 = {w: _derive({"predicate_id": "person.works_as", "about": w, "object": "a nurse",
+                    "stated": True}, _span(5, 2)) for w in sorted(_FP)}
+_D38["speaker"] = _derive({"predicate_id": "person.works_as", "about": "speaker",
+                           "object": "a nurse", "stated": True}, _span(5, 2))
+_D38_EDGE = _derive({"predicate_id": "person.relation_to", "about": "we", "object": "sam",
+                     "stated": True, "relation_id": "spouse"}, _span(5, 2))
+_D38_SHE = _derive({"predicate_id": "person.works_as", "about": "she", "object": "a nurse",
+                    "stated": True}, _span(5, 2))
+_D38_SAM = _derive({"predicate_id": "person.works_as", "about": "sam", "object": "a nurse",
+                    "stated": True}, _span(5, 2))
+check("T38a every first-person word derives to the SPEAKER's cluster; a third person stays put",
+      len(_FP) == 10
+      and all(d["subject"] == {"kind": "person", "ref": "2"} for d in _D38.values())
+      and _D38_EDGE["subject"] == {"kind": "person", "ref": "2"}
+      and _D38_SHE["subject"] == {"kind": "person", "ref": "she"}
+      and _D38_SAM["subject"] == {"kind": "person", "ref": "sam"},
+      str(sorted(w for w, d in _D38.items() if d["subject"]["ref"] != "2")))
+
+
+def _remap_matches(path):
+    """The strategist's post-hoc remap, recomputed here with the REAL scorer.
+
+    This is the one number that says the derivation is worth its code: it re-scores the STORED
+    contract-1 predictions with only the first-person subjects rewritten to the speaker's cluster.
+    It is an EXPECTATION for the re-runs, never a result - contract 2 also changed the schema, so
+    the actual runs need not land here.
+    """
+    with open(path, encoding="utf-8") as fh:
+        d = _json.load(fh)
+    total = 0
+    for h in d["households"]:
+        hh = _corpus.generate_household(h["seed"], d["days"])
+        names, cbn = _bench._household_context(hh)
+        preds = []
+        for x in h["predictions"]:
+            x = dict(x)
+            subj = dict(x.get("subject") or {})
+            if subj.get("kind") == "person" and str(subj.get("ref", "")).lower() in _FP:
+                subj["ref"] = str(x.get("speaker_cluster"))
+                x["subject"] = subj
+            preds.append(x)
+        total += score_household(preds, hh["candidates"], names, cbn)["n_match"]
+    return total
+
+
+_RES = Path(__file__).resolve().parent / "bench" / "results"
+_L1 = _RES / "ms1b_llama_8b_contract1.json"
+_G1 = _RES / "ms1b_gemma_e2b_contract1.json"
+if _L1.exists() and _G1.exists():
+    check("T38b the remap reproduces the strategist's expectation on the stored contract-1 runs",
+          _remap_matches(_L1) == 156 and _remap_matches(_G1) == 227,
+          str((_remap_matches(_L1), _remap_matches(_G1))))
+else:
+    check("T38b the remap reproduces the strategist's expectation on the stored contract-1 runs",
+          False, "the renamed contract-1 JSONs are missing: %s %s" % (_L1, _G1))
+
+_G38 = ([_c("person.relation_to", "owner", "person", "spouse", [1], relation_id="spouse",
+            source_kind="inferred", object="partner") for _ in range(8)]
+        + [_c("person.habit", "owner", "person", "habit%d" % i, [2]) for i in range(29)])
+_P38 = ([_c("person.habit", "owner", "person", "habit%d" % i, [2]) for i in range(5)]
+        + [_c("person.name", "owner", "person", "n%d" % i, [3]) for i in range(5)])
+_S38 = score_household(_P38, _G38, _NBC, _CBN)
+_P_, _R_ = 0.5, 5 / 29
+check("T38d f1_scorable removes only the inferred edges from the RECALL denominator, and the "
+      "zero-gold predictions are counted apart",
+      _S38["n_gold"] == 37 and _S38["n_pred"] == 10 and _S38["n_match"] == 5
+      and _S38["scorable_gold"] == 29 and _S38["zero_gold_predictions"] == 5
+      and close_to(_S38["f1_scorable"], 2 * _P_ * _R_ / (_P_ + _R_), 1e-9)
+      and close_to(_S38["precision"], 0.5, 1e-9),
+      str((_S38["n_gold"], _S38["n_match"], _S38["scorable_gold"], _S38["f1_scorable"],
+           _S38["zero_gold_predictions"])))
 
 _dry = _subprocess.run(
     [sys.executable, str(Path(__file__).resolve().parent / "bench_ms1b.py"),

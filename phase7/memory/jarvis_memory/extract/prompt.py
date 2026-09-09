@@ -38,6 +38,7 @@ ABOUT:
   about is the NAME, lower-cased, when it is about someone named ("sam is a teacher" -> "sam").
   For a relation, about is the person the relation belongs TO and object is the OTHER person -
   a name if one is given, otherwise the word used for them, e.g. "she".
+  A first-person pronoun ("i", "we") is read as the speaker.
 
 STATED:
   stated is true only when the utterance says it OUTRIGHT.

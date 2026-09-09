@@ -27,16 +27,45 @@ from jarvis_memory.extract.derive import derive             # noqa: E402
 from jarvis_memory.extract.schema import candidate_schema, schema_sha256   # noqa: E402
 from jarvis_memory.extract.score import score_household, validity          # noqa: E402
 
-# The contract the model was held to, recorded in every run's JSON beside the schema hash. "wide"
-# was the first shape (the model restating subject, speaker, source kind, object_norm and span ids);
-# "narrow" is the decision set. Two runs are comparable only if this and the schema hash agree —
-# run L0 is a "wide" run kept as the measurement of the contract, never as the band.
-CONTRACT = "narrow"
+# The contract the model was held to, recorded in every run's JSON beside the schema hash. Two runs
+# are comparable only if BOTH agree. The three so far:
+#   "wide"      L0 only - the model restated subject, speaker, source kind, object_norm and span ids
+#   "narrow"    contract 1 - the decision set, one flat candidate object
+#   "contract2" this one - the same decision set as a oneOf of four predicate-family branches, plus
+#               the first-person `about` derivation in `derive`
+# The earlier runs are KEPT under `_contract0` / `_contract1` suffixes and are never overwritten;
+# `--verdict` refuses to mix contracts.
+CONTRACT = "contract2"
 
+# The FIELD (MS1b contract 2): every instruction model on hand that fits the RTX 2070 at 4-bit, plus
+# the strongest fetchable ones and a purpose-built extractor. Same contract, same 2048-token budget,
+# same temperature 0 / seed 1, same prompts, same rule — a model is added before its run, never
+# after a number is seen. `thinking_switch` is true only where the chat template offers one (Qwen3 /
+# Qwen3.5): those run with thinking OFF so every model is measured doing the same job. Gemma 4's
+# channel has no switch (the project's JARVIS_THINKING finding) and keeps the headroom instead.
+# ORDER here is the queue's fastest-first order, so a winner can emerge before the slow tail.
 MODELS = {
-    "gemma-e2b": "models/gemma-4-E2B-it-Q4_K_M.gguf",
-    "llama-8b": "models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+    "llama-1b":   {"path": "phase3/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf", "thinking_switch": False},
+    "llama-3b":   {"path": "models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",        "thinking_switch": False},
+    "phi3-mini":  {"path": "models/Phi-3-mini-4k-instruct-q4.gguf",           "thinking_switch": False},
+    "qwen3-4b":   {"path": "models/Qwen3-4B-Q4_K_M.gguf",                     "thinking_switch": True},
+    "qwen35-4b":  {"path": "models/Qwen3.5-4B-Q4_K_M.gguf",                   "thinking_switch": True},
+    "phi4-mini":  {"path": "models/Phi-4-mini-instruct-Q4_K_M.gguf",          "thinking_switch": False},
+    "nuextract":  {"path": "models/NuExtract3-Q4_K_M.gguf",                   "thinking_switch": False},
+    "llama-8b":   {"path": "models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",   "thinking_switch": False},
+    "qwen3-8b":   {"path": "models/Qwen3-8B-Q4_K_M.gguf",                     "thinking_switch": True},
+    "qwen35-9b":  {"path": "models/Qwen3.5-9B-Q4_K_M.gguf",                   "thinking_switch": True},
+    "gemma-e2b":  {"path": "models/gemma-4-E2B-it-Q4_K_M.gguf",               "thinking_switch": False},
+    "gemma-e4b":  {"path": "models/google_gemma-4-E4B-it-Q4_K_M.gguf",        "thinking_switch": False},
 }
+
+
+def model_path(key):
+    return MODELS[key]["path"]
+
+
+def thinking_switch(key):
+    return bool(MODELS[key]["thinking_switch"])
 
 
 def _sha256(path, budget=None):
@@ -71,11 +100,12 @@ def _household_context(hh):
 
 
 def run_model(model_key, seeds, days, out_path, port, ctx, ngl, max_tokens):
-    model_path = MODELS[model_key]
+    mpath = model_path(model_key)
+    think = thinking_switch(model_key)
     schema = candidate_schema()
     households, all_results = [], []
     t_start = time.time()
-    with _client.LlamaServer(model_path, port=port, ctx=ctx, ngl=ngl) as srv:
+    with _client.LlamaServer(mpath, port=port, ctx=ctx, ngl=ngl) as srv:
         print("server up: %s  (%s)" % (srv.base_url, srv.version))
         for seed in seeds:
             hh = corpus.generate_household(seed, days)
@@ -86,7 +116,8 @@ def run_model(model_key, seeds, days, out_path, port, ctx, ngl, max_tokens):
             t0 = time.time()
             for s in hh["spans"]:
                 r = _client.extract_span(srv.base_url, s["sid"], s["text"], s["cluster"],
-                                         s["day"], names, schema, max_tokens=max_tokens)
+                                         s["day"], names, schema, max_tokens=max_tokens,
+                                         thinking_switch=think)
                 raw = r.get("candidates")
                 if raw is not None:
                     # DERIVE before anything scores it. Validity is measured on the candidate that
@@ -159,6 +190,14 @@ def run_model(model_key, seeds, days, out_path, port, ctx, ngl, max_tokens):
         "preference_polarity_agreement": round(
             sum(h["preference_polarity_agreement"] for h in households) / len(households), 4),
         "n_pred": tot_pred, "n_gold": tot_gold, "n_match": tot_match,
+        # REPORTED beside the band, never in it: F1 over the gold a per-span extractor can reach
+        # (the inferred edges removed from the recall denominator only), and the predictions on
+        # predicates with no gold anywhere in this corpus.
+        "scorable_gold": sum(h["scorable_gold"] for h in households),
+        "f1_scorable": round(
+            (lambda P, R: (2 * P * R / (P + R)) if (P + R) else 0.0)(
+                p, tot_match / max(1, sum(h["scorable_gold"] for h in households))), 4),
+        "zero_gold_predictions": sum(h["zero_gold_predictions"] for h in households),
         "valid_calls": tot_valid, "total_calls": tot_calls,
         "tokens_in": sum(h["tokens_in"] for h in households),
         "tokens_out": sum(h["tokens_out"] for h in households),
@@ -171,9 +210,10 @@ def run_model(model_key, seeds, days, out_path, port, ctx, ngl, max_tokens):
 
     out = {
         "model_key": model_key,
-        "model_path": model_path,
-        "model_bytes": os.path.getsize(model_path),
-        "model_sha256": _sha256(model_path),
+        "model_path": mpath,
+        "model_bytes": os.path.getsize(mpath),
+        "model_sha256": _sha256(mpath),
+        "thinking_switch_applied": think,
         "llama_version": version,
         "schema_sha256": schema_sha256(),
         "contract": CONTRACT,
@@ -215,6 +255,139 @@ def verdict(runs) -> dict:
             "rows": rows}
 
 
+RESULTS_DIR = str(Path(__file__).resolve().parent / "bench" / "results")
+
+
+def load_field(results_dir=None, contract=None):
+    """Every CONTRACT-2 run in the results dir, as [(key, aggregate, path)].
+
+    Three exclusions, each for its own reason:
+      * `*_contract0.json` / `*_contract1.json` — superseded runs, KEPT on purpose and never mixed
+        into a verdict with the contract they were superseded by;
+      * files with no `model_key` — `ms1b_field_verdict.json` and `ms1b_store_on_extracted.json` are
+        outputs of this milestone, not model runs, and a verdict that tried to read its own previous
+        output would be circular;
+      * a real run whose `contract` label is anything else RAISES with its filename. Silently
+        skipping it would let a stale run vanish from a field it belongs in; averaging it in would
+        compare models measured under different rules. Loud is the only safe option.
+    """
+    results_dir = results_dir or RESULTS_DIR
+    contract = contract or CONTRACT
+    out = []
+    for path in sorted(Path(results_dir).glob("ms1b_*.json")):
+        name = path.name
+        if name.endswith("_contract0.json") or name.endswith("_contract1.json"):
+            continue
+        with open(path, encoding="utf-8") as fh:
+            d = json.load(fh)
+        if "model_key" not in d:
+            continue
+        if d.get("contract") != contract:
+            raise ValueError("%s is labelled %r, not %r - a verdict never mixes contracts"
+                             % (name, d.get("contract"), contract))
+        out.append((d["model_key"], d.get("aggregate", {}), str(path)))
+    return out
+
+
+def _queue_log(log_path, line):
+    print(line, flush=True)
+    if log_path:
+        with open(log_path, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+
+
+def run_queue(keys, seeds, days, log_path, port, ctx, ngl, max_tokens, results_dir=None):
+    """Run the field sequentially, ONE server at a time, resumable.
+
+    Idempotent by design because the queue runs for many hours and a session may end under it: a key
+    already finished at THIS contract and schema hash is skipped, a key whose JSON was written under
+    a different contract STOPS the queue rather than being silently overwritten, and a model file
+    that is not on disk is skipped with the reason logged and no JSON created.
+    """
+    results_dir = results_dir or RESULTS_DIR
+    schema_hash = schema_sha256()
+    done, skipped = [], []
+    for key in keys:
+        out_path = os.path.join(results_dir, "ms1b_%s.json" % key)
+        if os.path.exists(out_path):
+            with open(out_path, encoding="utf-8") as fh:
+                prev = json.load(fh)
+            if prev.get("contract") == CONTRACT and prev.get("schema_sha256") == schema_hash:
+                _queue_log(log_path, "%s SKIP already done (F1 %.4f)"
+                           % (key, prev.get("aggregate", {}).get("f1", 0.0)))
+                done.append(key)
+                continue
+            _queue_log(log_path, "%s STOP existing JSON is contract=%r schema=%s - refusing to "
+                                 "overwrite; rename it by hand if it is superseded"
+                       % (key, prev.get("contract"), str(prev.get("schema_sha256"))[:12]))
+            return done, skipped, key
+        if key not in MODELS:
+            _queue_log(log_path, "%s SKIP unknown key" % key)
+            skipped.append((key, "unknown key"))
+            continue
+        mpath = model_path(key)
+        if not os.path.exists(mpath):
+            _queue_log(log_path, "%s SKIP model file absent: %s" % (key, mpath))
+            skipped.append((key, "model file absent: %s" % mpath))
+            continue
+        _queue_log(log_path, "%s START %s think=%s"
+                   % (key, time.strftime("%Y-%m-%d %H:%M:%S"), thinking_switch(key)))
+        t0 = time.time()
+        try:
+            res = run_model(key, seeds, days, out_path, port, ctx, ngl, max_tokens)
+        except Exception as exc:                                   # noqa: BLE001
+            _queue_log(log_path, "%s ERROR %s" % (key, exc))
+            skipped.append((key, "error: %s" % exc))
+            continue
+        ag = res["aggregate"]
+        _queue_log(log_path, "%s END %s validity %.4f F1 %.4f scorableF1 %.4f %.1f s think=%s"
+                   % (key, time.strftime("%Y-%m-%d %H:%M:%S"), ag["validity"], ag["f1"],
+                      ag.get("f1_scorable", 0.0), time.time() - t0, thinking_switch(key)))
+        done.append(key)
+    return done, skipped, None
+
+
+def run_smoke(key, days, port, ctx, ngl, max_tokens):
+    """Two real calls against one model: does the contract-2 schema compile and answer?
+
+    A 400 means llama.cpp could not turn the schema into a grammar, which is the one failure that
+    would silently invalidate an entire overnight queue - so it is checked on the cheapest model
+    before the field runs, and it is a STOP, never a fallback to the flat schema.
+    """
+    schema = candidate_schema()
+    hh = corpus.generate_household(1, days)
+    names, _ = _household_context(hh)
+    picks = []
+    for prefix, cluster in (("i work as", None), ("my husband", 2)):
+        for s in hh["spans"]:
+            if s["text"].startswith(prefix) and (cluster is None or s["cluster"] == cluster):
+                picks.append(s)
+                break
+    if len(picks) < 2:
+        print("smoke: could not find both probe spans (%d found)" % len(picks))
+        return 1
+    ok = True
+    with _client.LlamaServer(model_path(key), port=port, ctx=ctx, ngl=ngl) as srv:
+        print("server up: %s  (%s)" % (srv.base_url, srv.version))
+        for s in picks:
+            r = _client.extract_span(srv.base_url, s["sid"], s["text"], s["cluster"], s["day"],
+                                     names, schema, max_tokens=max_tokens,
+                                     thinking_switch=thinking_switch(key))
+            cands = r.get("candidates")
+            print("--- span %d cluster %d: %r" % (s["sid"], s["cluster"], s["text"]))
+            print("    http=%s finish=%s" % (r.get("status", "?"), r.get("finish_reason", "?")))
+            print("    raw=%s" % json.dumps(cands)[:400] if cands is not None
+                  else "    raw=UNPARSED %s" % str(r.get("raw"))[:300])
+            if cands is None:
+                ok = False
+                continue
+            for c in cands:
+                d = derive(c, s, owner_cluster=1, names=names)
+                print("    derived subject=%s source=%s object_norm=%r predicate=%s"
+                      % (d["subject"], d["source_kind"], d["object_norm"], d["predicate_id"]))
+    return 0 if ok else 1
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", choices=sorted(MODELS), default="gemma-e2b")
@@ -233,26 +406,59 @@ def main(argv=None):
     # extractor. Llama 3.1 8B finishes an empty answer in 6 tokens and needs none of the headroom.
     # The SAME value is used for both models: a per-model budget would be tuning one of them.
     ap.add_argument("--max-tokens", type=int, default=2048)
-    ap.add_argument("--verdict", nargs="*", default=None, metavar="RUN_JSON",
-                    help="apply the pre-registered rule to finished runs and exit")
+    ap.add_argument("--verdict", action="store_true",
+                    help="apply the pre-registered rule over every contract-2 run and exit")
+    ap.add_argument("--queue", default=None, metavar="k1,k2,...",
+                    help="run these model keys sequentially, one server at a time, resumable")
+    ap.add_argument("--smoke", default=None, metavar="KEY",
+                    help="two real calls against one model; exit 0 iff both parsed")
+    ap.add_argument("--log", default=None, help="append one line per queued model here")
+    ap.add_argument("--results-dir", default=None)
     a = ap.parse_args(argv)
 
-    if a.verdict is not None:
-        runs = []
-        for p in a.verdict:
-            with open(p, encoding="utf-8") as fh:
-                d = json.load(fh)
-            runs.append((d.get("model_key", p), d.get("aggregate", {})))
-            print("%-10s contract=%-6s validity %.4f  F1 %.4f  (schema %s)"
-                  % (d.get("model_key", p), d.get("contract", "?"),
-                     d["aggregate"]["validity"], d["aggregate"]["f1"],
-                     str(d.get("schema_sha256"))[:12]))
-        v = verdict(runs)
-        print("VERDICT: %s" % ("CHOSEN: %s" % v["chosen"] if v["chosen"] else "NONE"))
+    seeds_all = list(range(a.seed, a.seed + a.households))
+
+    if a.verdict:
+        field = load_field(a.results_dir)
+        print("%-11s %-9s %-9s %-9s %-9s %-7s %-9s" % ("key", "validity", "F1", "lenientF1",
+                                                       "scorable", "zeroGP", "seconds"))
+        for key, ag, _path in sorted(field, key=lambda r: -r[1].get("f1", 0.0)):
+            print("%-11s %-9.4f %-9.4f %-9.4f %-9.4f %-7d %-9.1f"
+                  % (key, ag.get("validity", 0.0), ag.get("f1", 0.0), ag.get("lenient_f1", 0.0),
+                     ag.get("f1_scorable", 0.0), ag.get("zero_gold_predictions", 0),
+                     ag.get("seconds", 0.0)))
+        v = verdict([(k, ag) for k, ag, _ in field])
+        line = ("CHOSEN: %s" % v["chosen"]) if v["chosen"] else "NONE"
+        print("VERDICT: %s" % line)
         print("reason : %s" % v["reason"])
+        out = {"contract": CONTRACT, "schema_sha256": schema_sha256(),
+               "validity_band": VALIDITY_BAND, "f1_floor": F1_FLOOR,
+               "n_models": len(field), "chosen": v["chosen"], "reason": v["reason"],
+               "rows": [{"key": k, "validity": ag.get("validity"), "f1": ag.get("f1"),
+                         "lenient_f1": ag.get("lenient_f1"),
+                         "f1_scorable": ag.get("f1_scorable"),
+                         "zero_gold_predictions": ag.get("zero_gold_predictions"),
+                         "seconds": ag.get("seconds")}
+                        for k, ag, _ in sorted(field, key=lambda r: -r[1].get("f1", 0.0))]}
+        vpath = os.path.join(a.results_dir or RESULTS_DIR, "ms1b_field_verdict.json")
+        with open(vpath, "w", encoding="utf-8") as fh:
+            json.dump(out, fh, indent=2, sort_keys=True)
+            fh.write("\n")
+        print("written    : %s" % vpath)
         return 0
 
-    seeds = list(range(a.seed, a.seed + a.households))
+    if a.smoke:
+        return run_smoke(a.smoke, a.days, a.port, a.ctx, a.ngl, a.max_tokens)
+
+    if a.queue:
+        keys = [k.strip() for k in a.queue.split(",") if k.strip()]
+        done, skipped, stopped = run_queue(keys, seeds_all, a.days, a.log, a.port, a.ctx, a.ngl,
+                                           a.max_tokens, a.results_dir)
+        _queue_log(a.log, "QUEUE done=%d skipped=%d%s"
+                   % (len(done), len(skipped), (" STOPPED at %s" % stopped) if stopped else ""))
+        return 1 if stopped else 0
+
+    seeds = seeds_all
     schema = candidate_schema()
     if a.dry_run:
         hh = corpus.generate_household(seeds[0], a.days)
