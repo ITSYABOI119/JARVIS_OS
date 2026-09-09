@@ -1119,3 +1119,230 @@ article kills T36/T36a/T36c/T36d/T35d2 **and** the MS1a.2 store tests T21a/b/c �
 one normaliser is now load-bearing on the write path, not only in the scorer; `derive` always returning
 `stated_owner` kills T36a/T36b; a hand-typed `required` list carrying a derived field kills T35a4. No new
 CI step: the MS1b scaffolding step landed with `c38a8a8` and covers the narrowed CLI unchanged.
+
+### The field — contract 2 — 2026-09-10
+
+**Verdict, by the pre-registered rule applied in code (`bench_ms1b.py --verdict`) over the WHOLE
+field: CHOSEN — `gemma-e4b` (Gemma 4 E4B it Q4_K_M), validity 1.0000, strict F1 0.7426.** Three of
+the eleven models measured cleared the 0.60 floor at ≥ 99 % validity: gemma-e4b 0.7426, gemma-e2b
+0.7201, qwen3-8b 0.6196. MS1's other half was met at MS1a.4 (`c8f3d22`), so the MS1 row flips DONE.
+
+The operator's instruction that set the field, verbatim (2026-09-09): *"idc about my gpu hours thats
+fine, i just want the best state of the art remember, this is a jarvis project."*
+
+### Why contract 2, and what it was expected to do
+
+Contract 1 (`6946874`) chose nothing — Llama 3.1 8B F1 0.4073, Gemma 4 E2B 0.3419 — and its report
+found the residual was the CONTRACT again, in two classes the strategist then verified from the
+stored predictions with the real scorer:
+
+1. **`about` came back as the pronoun heard.** Gemma put 167 of 250 person-subject predictions on a
+   first-person pronoun (`i` 152, `we` 14, `me` 1), Llama 36 of 246 (`i` 22, `us` 14), and `derive`
+   read each as a name that resolves to nobody. A first-person pronoun spoken by cluster N IS
+   cluster N — a derivation from the span, not a judgement about it, and the corpus's own convention.
+2. **Every one of the 39 invalid calls was a null `relation_id` on an edge or a null `polarity` on a
+   preference** (Llama 9, Gemma 12 + 18) — fields that are optional only because one flat candidate
+   object has to make them optional for the predicates that do not use them.
+
+Contract 2 was pre-registered in the design (`32c5a0e`) BEFORE any contract-2 number existed:
+`FIRST_PERSON` (ten words) derives to the speaker's cluster in `extract/derive.py`, and
+`candidate_schema()` becomes a `oneOf` of four predicate-family branches (`oneOf` because llama.cpp's
+grammar converter supports it and does NOT support `if`/`then`), each making its own family's fields
+REQUIRED and NON-NULLABLE:
+
+| branch | predicate_id enum | extra properties | required |
+|---|---|---|---|
+| EDGE | `person.relation_to` | `about`, `relation_id` (enum, non-nullable) | predicate_id, about, relation_id, object, stated |
+| PREFERENCE | `owner.prefers` | `polarity` (enum, non-nullable), `strength` | predicate_id, polarity, object, stated |
+| HOUSEHOLD | `household.routine`, `household.topic` | — | predicate_id, object, stated |
+| PERSON | the other five | `about` | predicate_id, about, object, stated |
+
+`predicate_id` is FIRST in every branch's property order, so the model commits to a family on its
+first key and constrained decoding holds it there. Schema sha256
+`846ad08857eb37f8175f0aa24fbbfdfe2c7edf89c5565b2521209a91792dbc49` (contract 1's was `6f8eac439f27…`,
+L0's `732ef50e01fc…`).
+
+**The remap EXPECTATION, reproduced in the suite (T38b) and never a result:** rewriting only the
+first-person subjects of the STORED contract-1 predictions gives Llama 156 matches (from 145) and
+Gemma 227 (from 120). The re-runs were not obliged to land there, because contract 2 also changed
+the schema — and they did not (below).
+
+**What the branches actually did, and it is the cleanest result of this milestone: contract 1's
+entire invalid class is GONE.** Across all eleven contract-2 runs there is not one null-`relation_id`
+or null-`polarity` invalid call. The only invalid calls anywhere are 33 unparsed on `llama-1b` and 7
+on `llama-8b`, both a different failure (below). Nine of the eleven models scored validity 1.0000.
+
+### The venue
+
+llama.cpp **`version: 8728 (5e9c63546)`** — the measured string from `llama-server --version` on this
+PC, not the note's `b8721-7-g5e9c63546`. CUDA on the RTX 2070 (8,192 MiB), one server at a time,
+started and stopped by the harness. Corpus: 10 synthetic households, 14 days, seeds 1–10, 1,670
+spans, 370 oracle candidates. `temperature 0`, `seed 1`, `max_tokens` 2048 for every model,
+`--jinja` for every server. Thinking OFF via `chat_template_kwargs {"enable_thinking": false}`
+wherever the template offers the switch (the four Qwen keys); Gemma 4's channel has no switch and
+keeps the headroom.
+
+| key | model | bytes | sha256 | think switch |
+|---|---|---|---|---|
+| `gemma-e4b` | Gemma 4 E4B it Q4_K_M | 5,405,163,520 | `6dfbdb0fff82025ef88a6ff912f91d141f722b5d95f14d61b10f0e08839185c8` | n/a |
+| `gemma-e2b` | Gemma 4 E2B it Q4_K_M | 3,106,736,256 | `9378bc471710229ef165709b62e34bfb62231420ddaf6d729e727305b5b8672d` | n/a |
+| `qwen3-8b` | Qwen3 8B Q4_K_M (fetched) | 5,027,783,488 | `d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785` | applied |
+| `qwen35-9b` | Qwen3.5 9B Q4_K_M | 5,680,522,464 | `03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8` | applied |
+| `qwen35-4b` | Qwen3.5 4B Q4_K_M | 2,740,937,888 | `00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4` | applied |
+| `qwen3-4b` | Qwen3 4B Q4_K_M | 2,497,280,256 | `7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5` | applied |
+| `llama-8b` | Llama 3.1 8B Instruct Q4_K_M | 4,920,739,232 | `7b064f5842bf9532c91456deda288a1b672397a54fa729aa665952863033557c` | n/a |
+| `phi3-mini` | Phi-3 mini 4k instruct Q4 | 2,393,231,072 | `8a83c7fb9049a9b2e92266fa7ad04933bb53aa1e85136b7b30f1b8000ff2edef` | n/a |
+| `phi4-mini` | Phi-4-mini Instruct Q4_K_M (fetched) | 2,491,874,272 | `88c00229914083cd112853aab84ed51b87bdf6b9ce42f532d8c85c7c63b1730a` | n/a |
+| `llama-3b` | Llama 3.2 3B Instruct Q4_K_M | 2,019,377,696 | `6c1a2b41161032677be168d354123594c0e6e67d2b9227c84f296ad037c728ff` | n/a |
+| `llama-1b` | Llama 3.2 1B Instruct Q4_K_M | 807,694,464 | `6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83` | n/a — the FLOOR reference |
+
+**Fetched** (`huggingface_hub`, outside git, never staged): `qwen3-8b` from `Qwen/Qwen3-8B-GGUF`;
+`phi4-mini` from **`unsloth/Phi-4-mini-instruct-GGUF`** — the prompt's two named sources
+(`microsoft/*-gguf`, `bartowski/*Phi-4-mini*`) do not exist, verified by a Hub search whose
+`microsoft/*` hits are all Phi-**3**-mini, so the remaining reputable community GGUF was taken and
+recorded rather than dropping a model on a naming technicality; `nuextract` from
+`numind/NuExtract3-GGUF` (the newest `numind/*` repo carrying a GGUF, Q4_K_M 2.78 GB).
+
+**SKIPPED, with the measured reason: `nuextract`.** `llama-server` never became healthy within
+300 s, and running it by hand gives the cause — `llama_model_load: error loading model: missing
+tensor 'blk.32.ssm_conv1d.weight'`, i.e. NuExtract3 is a hybrid SSM architecture this llama.cpp
+build cannot load from that GGUF. Not a contract failure and not a model result: the purpose-built
+extractor could not be run at all here, and no JSON was written for it. **Nothing else was skipped.**
+
+### The field, all eleven runs
+
+| key | validity | F1 | lenient | scorable | rel. STATED | rel. INFERRED | zero-gold preds | invalid | s | tok out |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **gemma-e4b** | **1.0000** | **0.7426** | 0.7595 | 0.8368 | 0.9333 | 0.0000 | 10 | — | 8,575 | 459,258 |
+| gemma-e2b | 1.0000 | 0.7201 | 0.7201 | 0.8114 | 0.8667 | 0.0000 | 15 | — | 6,979 | 591,585 |
+| qwen3-8b | 1.0000 | 0.6196 | 0.7059 | 0.6920 | **1.0000** | 0.0750 | 10 | — | **541** | 22,989 |
+| qwen35-9b | 1.0000 | 0.5801 | 0.5987 | 0.6489 | 0.9333 | 0.0375 | 43 | — | 1,298 | 22,252 |
+| qwen35-4b | 1.0000 | 0.5729 | 0.5796 | 0.6615 | 0.9333 | 0.0000 | 0 | — | 878 | 20,848 |
+| qwen3-4b | 1.0000 | 0.3098 | 0.3442 | 0.3327 | 0.0667 | 0.0000 | 124 | — | 506 | 33,461 |
+| llama-8b | 0.9958 | 0.2944 | 0.3115 | 0.3186 | 0.7333 | 0.0000 | 77 | unparsed 7 | 875 | 46,873 |
+| phi3-mini | 1.0000 | 0.0798 | 0.1077 | 0.0830 | 0.0000 | 0.0250 | 44 | — | 1,331 | 112,070 |
+| phi4-mini | 1.0000 | 0.0233 | 0.0233 | 0.0287 | 0.0000 | 0.0000 | 0 | — | 226 | 14,900 |
+| llama-3b | 1.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0 | — | 151 | 10,020 |
+| llama-1b | 0.9802 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0 | unparsed 33 | 832 | 100,083 |
+
+`scorable` is F1 over the 290 gold a per-span extractor can reach (the 80 inferred edges removed
+from the RECALL denominator only; precision unchanged) — REPORTED beside the band, never in it, as
+is the zero-gold count (predictions on `person.name` / `person.trait`, which this corpus has no gold
+for at all). The two relation recalls are reported split and never averaged: the STATED half is an
+extraction task, the INFERRED half is the people layer's accrual over days and MS1b has no people
+layer.
+
+**Contract 1 → contract 2, the two models that ran under both:**
+
+| | contract 1 | contract 2 |
+|---|---|---|
+| Gemma 4 E2B | validity 0.9820, F1 0.3419 | validity **1.0000**, F1 **0.7201** |
+| Llama 3.1 8B | validity 0.9946, F1 0.4073 | validity 0.9958, F1 **0.2944** |
+
+Gemma more than doubled and crossed the floor; **Llama went DOWN**, against a remap expectation of
+0.4382. The pre-registration anticipated exactly this — the schema changed too, so the expectation
+was never a prediction — and the cause is visible in its runs: 7 unparsed calls where the model
+looped near-identical relation candidates inside the unbounded array until the 2048-token cap, plus
+77 zero-gold predictions. This is recorded as a finding, not repaired: contract 2 was pre-registered
+and every model ran under it.
+
+### Per predicate, the top three, all ten households
+
+| predicate | gold | gemma-e4b F1 | gemma-e2b F1 | qwen3-8b F1 |
+|---|---|---|---|---|
+| `person.works_as` | 30 | **1.000** | **1.000** | **1.000** |
+| `owner.prefers` | 60 | **1.000** | 0.938 | 0.833 |
+| `person.habit` | 60 | 0.992 | 0.727 | 0.724 |
+| `household.topic` | 60 | 0.945 | 0.976 | **1.000** |
+| `person.lives_in` | 30 | 0.800 | 0.909 | 0.667 |
+| `person.relation_to` | 110 | 0.371 | 0.364 | 0.364 |
+| `household.routine` | 20 | 0.167 | 0.108 | 0.000 |
+| `person.name` / `person.trait` | 0 | 0.000 | 0.000 | 0.000 |
+
+The winner is at or near ceiling on five of eight. Its two weaknesses are structural rather than
+careless: `person.relation_to` carries 80 inferred edges no per-span call can produce (it gets 28 of
+the 30 STATED ones), and `household.routine` is confused with `household.topic` in both directions.
+
+### Failure examples, verbatim (seed 1)
+
+```
+gemma-e4b - false positives
+  remember the groceries arrive thursday -> household.topic   household = groceries arrive thursday
+  we were talking about astronomy again  -> household.routine household = talking about astronomy
+  we sorted the bills together           -> household.routine household = sorted the bills together
+  she called me love                     -> person.relation_to person:1 = partner
+  we shared the school run                -> household.routine household = school run
+gemma-e4b - false negatives
+  we moved to bendigo last week          -> person.lives_in    person:owner = bendigo
+  remember the groceries arrive thursday -> household.routine  household = groceries arrive thursday
+  she was here all evening again         -> person.relation_to person:owner = spouse [inferred]
+  we sorted the bills together           -> person.relation_to person:owner = spouse [inferred]
+  she picked the kids up                 -> person.relation_to person:owner = spouse [inferred]
+
+gemma-e2b - false positives
+  remember the bins go out on tuesday    -> household.topic   household = bins go out on tuesday
+  we shared the school run                -> household.routine household = school run
+  we planned the week together           -> household.topic   household = week
+  my husband alex and i decided          -> person.name       person:alex = alex
+  my husband alex and i decided          -> person.name       person:alex = alex
+gemma-e2b - false negatives
+  we moved to bendigo last week          -> person.lives_in   person:owner = bendigo
+  remember the bins go out on tuesday    -> household.routine household = bins go out on tuesday
+  remember the groceries arrive thursday -> household.routine household = groceries arrive thursday
+  she was here all evening again         -> person.relation_to person:owner = spouse [inferred]
+```
+
+Note the shape of the commonest miss: the same span, the same subject, the right value — filed under
+`household.topic` where the oracle says `household.routine`, or the reverse. It is a boundary between
+two adjacent household predicates, not a failure to read the sentence.
+
+### The winner's candidates through the store (REPORTED, nothing banded here)
+
+`bench_ms0.py --households 10 --days 14 --seed 1 --latency-facts 20000 --embedder qwen
+--candidates-from bench/results/ms1b_gemma-e4b.json` → `ms1b_store_on_extracted.json`. The harness
+gained `candidates_from`; the ORACLE path is the default and is unchanged (the MS0 band step still
+passes 5/5 and the suite is green). One model on the GPU at a time: every llama.cpp server was
+stopped before the embedder loaded.
+
+| band / reported | ORACLE (`ms1a4_run.json`) | EXTRACTED (gemma-e4b) |
+|---|---|---|
+| update accuracy | 1.0000 | **0.7500** |
+| coexisting recall | 1.0000 | **0.4167** |
+| transfer recall@5 | 0.9167 | 0.9084 |
+| growth drop (points) | 3.75 | 5.00 |
+| growth update accuracy | 0.9625 | 0.7000 |
+| relation precision | 1.0000 | 0.6167 |
+| spouse surfaced, day mean | 8.0 | 6.0 |
+| audit violations | 0 | **0** |
+| p99 write latency | — | 0.3209 ms over 20,000 ingests |
+
+Read honestly: the store's own machinery is unharmed by a noisier input — audit violations stay at
+zero, the write path stays fast, and semantic transfer barely moves (0.9167 → 0.9084) because the
+embedding lane retrieves whatever was written. What degrades is what the extractor did not get
+right in the first place: update accuracy and coexisting recall fall because facts it missed were
+never available to supersede or accumulate. MS2's ≥ 85 % is pre-registered THERE, not here.
+
+### Honest scope
+
+Synthetic seeded utterances that always name people, scored against ORACLE candidates, seeds 1–10,
+14 days. Nothing here was measured on real speech, on household audio, or on the owner. The
+exact-name gate of MS1a.4 still applies — aliases are MS2's people layer. The inferred relation half
+is reported at 0.00–0.075 for every model rather than excused: it is a people-layer task. The
+purpose-built extractor could not be loaded and is a gap in the field, not a result. `nuextract` and
+the two contract-1 runs excepted, every model in the pre-registered field ran.
+
+### Renames and tests
+
+The two contract-1 runs are KEPT and were renamed rather than overwritten:
+`ms1b_llama_8b.json` → `ms1b_llama_8b_contract1.json`, `ms1b_gemma_e2b.json` →
+`ms1b_gemma_e2b_contract1.json`. Their contents are untouched and still carry `"contract": "narrow"`
+— that label means contract 1. `--verdict` reads only `contract2` runs, ignores its own output, and
+refuses a mislabelled file by name.
+
+`test_memory_logic.py` 254 → **262 checks**. T35a–T35a4 rewritten for the four branches; T37a–T37d
+(the field table, the queue's resumability, the thinking switch, the rule); T38a–T38d (the
+first-person derivation, the remap expectation, the verdict's file selection, `f1_scorable` and the
+zero-gold count). Four mutants, control green first (262/262), each failing BY NAME and restored
+from a byte-copy: `FIRST_PERSON` without the plurals kills T38a and T38b; a nullable `relation_id`
+kills T35a2; a `--verdict` that stops excluding `_contract1` kills T38c; the validity gate removed
+from the rule kills T37d. No new CI step.

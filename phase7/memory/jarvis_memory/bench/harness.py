@@ -27,21 +27,31 @@ from ..store import MemoryStore
 from . import corpus as _corpus
 
 
-def _resolve(ref, ids):
-    """A corpus ref ('owner' / 'partner' / None) to a person id, or None if not yet a person."""
+def _resolve(ref, ids, alias=None):
+    """A ref to a person id, or None if that person does not exist in the store yet.
+
+    The ORACLE says "owner" / "partner" / None and is unchanged by the alias argument: with
+    `alias=None` this is `ids.get(ref)` exactly as before. An EXTRACTED candidate (MS1b's winner run)
+    says what the extractor said - a cluster id as a string, or a name - so the caller supplies the
+    map from those to the same two keys. Returning None keeps the existing semantics: the candidate
+    is held pending until the person exists.
+    """
     if ref is None:
         return None
-    return ids.get(ref)
+    key = str(ref).strip().lower()
+    if alias:
+        key = alias.get(key, key)
+    return ids.get(key)
 
 
-def _prepare(cand, ids, sid_map):
-    """Turn a corpus candidate into the store's shape, or None if its people do not exist yet."""
+def _prepare(cand, ids, sid_map, alias=None):
+    """Turn a candidate into the store's shape, or None if its people do not exist yet."""
     out = dict(cand)
     out.pop("day", None)
     subj = dict(cand["subject"])
     ref = subj.pop("ref", None)
     if subj.get("kind") == "person":
-        pid = _resolve(ref, ids)
+        pid = _resolve(ref, ids, alias)
         if pid is None:
             return None
         subj["id"] = pid
@@ -49,7 +59,7 @@ def _prepare(cand, ids, sid_map):
         subj["id"] = None
     out["subject"] = subj
     if cand["predicate_id"] == "person.relation_to":
-        target = _resolve(cand["object"], ids)
+        target = _resolve(cand["object"], ids, alias)
         if target is None:
             return None
         out["object"] = target
@@ -229,7 +239,39 @@ def _score_relations(st, items, ids):
     return hit / len(surfaced), len(surfaced)
 
 
-def run_household(seed, days, predicate_hint=True, embedder=None, drop_stopwords=True):
+def extracted_candidates(run_json_path, seed, hh):
+    """One household's EXTRACTED candidates, shaped like the corpus's, for the MS1b winner run.
+
+    The extractor's derived candidate already carries everything the store needs except the two
+    fields that come from the span rather than from the utterance - the day it was said and its
+    timestamp - so they are taken from the span the candidate cites. A candidate citing a span this
+    household does not have is dropped rather than guessed at; none has been seen.
+
+    The growth FILLER is deliberately untouched: it is ingested directly by the harness and is not
+    an extraction, so replacing the oracle's candidates leaves the growth set intact and the growth
+    band still measures what it measured before.
+    """
+    with open(run_json_path, encoding="utf-8") as fh:
+        d = json.load(fh)
+    rec = next((h for h in d["households"] if h["seed"] == seed), None)
+    if rec is None:
+        return []
+    by_sid = {sp["sid"]: sp for sp in hh["spans"]}
+    out = []
+    for c in rec.get("predictions", []):
+        sids = c.get("span_ids") or []
+        sp = by_sid.get(sids[0]) if sids else None
+        if sp is None:
+            continue
+        c = dict(c)
+        c["day"] = sp["day"]
+        c["said_at"] = sp["said_at"]
+        out.append(c)
+    return out
+
+
+def run_household(seed, days, predicate_hint=True, embedder=None, drop_stopwords=True,
+                  candidates_from=None):
     """`predicate_hint=False` is the NEGATIVE CONTROL: the MS0 lane, unrestricted.
 
     `embedder` adds the vector lane. It is applied by `embed_pending` AFTER ingest, never during:
@@ -246,8 +288,19 @@ def run_household(seed, days, predicate_hint=True, embedder=None, drop_stopwords
     spans_by_day = {}
     for sp in hh["spans"]:
         spans_by_day.setdefault(sp["day"], []).append(sp)
+    # The ORACLE's candidates are the default and the path every earlier milestone measured.
+    # `candidates_from` swaps in an MS1b run's EXTRACTED candidates instead - the same store, the
+    # same rules, the same bands, driven by what a model actually produced.
+    source = (extracted_candidates(candidates_from, seed, hh) if candidates_from
+              else hh["candidates"])
+    alias = None
+    if candidates_from:
+        # An extractor names a subject the way the utterance did: a cluster id or a name. Both mean
+        # one of the two people the oracle calls "owner" and "partner".
+        alias = {"1": "owner", "2": "partner",
+                 str(owner_name).lower(): "owner", str(partner_name).lower(): "partner"}
     cands_by_day = {}
-    for c in hh["candidates"]:
+    for c in source:
         cands_by_day.setdefault(c["day"], []).append(c)
 
     sid_map, pending = {}, []
@@ -274,7 +327,7 @@ def run_household(seed, days, predicate_hint=True, embedder=None, drop_stopwords
 
         queue, pending = pending + cands_by_day.get(day, []), []
         for c in queue:
-            prepared = _prepare(c, ids, sid_map)
+            prepared = _prepare(c, ids, sid_map, alias)
             if prepared is None:
                 pending.append(c)
                 continue
@@ -413,8 +466,8 @@ def measure_latency(n_facts, n_subjects=2000):
 
 
 def run(seeds, days, latency_facts, out_path=None, predicate_hint=True, embedder=None,
-        embedder_name="none", drop_stopwords=True) -> dict:
-    households = [run_household(s, days, predicate_hint, embedder, drop_stopwords)
+        embedder_name="none", drop_stopwords=True, candidates_from=None) -> dict:
+    households = [run_household(s, days, predicate_hint, embedder, drop_stopwords, candidates_from)
                   for s in seeds]
     agg = {}
     for field in ("update_acc", "coexist_recall", "transfer_recall5", "relation_precision",

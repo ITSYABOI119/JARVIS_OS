@@ -29,6 +29,9 @@ def main(argv=None) -> int:
     p.add_argument("--latency-facts", type=int, default=0)
     p.add_argument("--out", default=None)
     p.add_argument("--assert-bands", action="store_true")
+    # MS1b: drive the whole store benchmark from an extractor RUN's candidates instead of the
+    # oracle's. The oracle remains the default and every earlier number was taken with it.
+    p.add_argument("--candidates-from", default=None, metavar="MS1B_RUN_JSON")
     p.add_argument("--no-predicate-hint", dest="predicate_hint", action="store_false",
                    help="the NEGATIVE CONTROL: run the MS0 lane, unrestricted by the registry hint")
     p.add_argument("--embedder", choices=("none", "qwen"), default="none",
@@ -50,7 +53,7 @@ def main(argv=None) -> int:
               f"loaded in {embedder.load_s} s on {embedder.device} "
               f"(sentence-transformers {embedder.version})")
     res = harness.run(seeds, a.days, a.latency_facts, a.out, a.predicate_hint, embedder,
-                      a.embedder, a.drop_stopwords)
+                      a.embedder, a.drop_stopwords, a.candidates_from)
 
     print(f"households : {len(seeds)}  seeds {seeds[0]}..{seeds[-1]}  days {a.days}  "
           f"predicate_hint {'ON' if a.predicate_hint else 'OFF (negative control)'}  "

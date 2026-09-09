@@ -1,0 +1,25 @@
+llama-1b START 2026-09-09 22:52:32 think=False
+llama-1b END 2026-09-09 23:06:24 validity 0.9802 F1 0.0000 scorableF1 0.0000 832.4 s think=False
+llama-3b START 2026-09-09 23:06:24 think=False
+llama-3b END 2026-09-09 23:08:57 validity 1.0000 F1 0.0000 scorableF1 0.0000 152.6 s think=False
+phi3-mini START 2026-09-09 23:08:57 think=False
+phi3-mini END 2026-09-09 23:31:09 validity 1.0000 F1 0.0798 scorableF1 0.0830 1332.4 s think=False
+qwen3-4b START 2026-09-09 23:31:09 think=True
+qwen3-4b END 2026-09-09 23:39:37 validity 1.0000 F1 0.3098 scorableF1 0.3327 508.1 s think=True
+qwen35-4b START 2026-09-09 23:39:37 think=True
+qwen35-4b END 2026-09-09 23:54:18 validity 1.0000 F1 0.5729 scorableF1 0.6615 880.2 s think=True
+phi4-mini START 2026-09-09 23:54:18 think=False
+phi4-mini END 2026-09-09 23:58:05 validity 1.0000 F1 0.0233 scorableF1 0.0287 227.8 s think=False
+nuextract START 2026-09-09 23:58:05 think=False
+nuextract ERROR llama-server did not become healthy within 300 s
+llama-8b START 2026-09-10 00:03:08 think=False
+llama-8b END 2026-09-10 00:17:46 validity 0.9958 F1 0.2944 scorableF1 0.3186 878.2 s think=False
+qwen3-8b START 2026-09-10 00:17:46 think=True
+qwen3-8b END 2026-09-10 00:26:51 validity 1.0000 F1 0.6196 scorableF1 0.6920 544.7 s think=True
+qwen35-9b START 2026-09-10 00:26:51 think=True
+qwen35-9b END 2026-09-10 00:48:33 validity 1.0000 F1 0.5801 scorableF1 0.6489 1301.8 s think=True
+gemma-e2b START 2026-09-10 00:48:33 think=False
+gemma-e2b END 2026-09-10 02:44:54 validity 1.0000 F1 0.7201 scorableF1 0.8114 6981.4 s think=False
+gemma-e4b START 2026-09-10 02:44:54 think=False
+gemma-e4b END 2026-09-10 05:07:53 validity 1.0000 F1 0.7426 scorableF1 0.8368 8579.2 s think=False
+QUEUE done=11 skipped=1
