@@ -13,7 +13,8 @@ Stdlib only: `json`, `urllib`, `subprocess`. The model runs in a llama.cpp serve
 starts and stops; no Python ML stack is imported, and CI never loads a model.
 """
 from .schema import candidate_schema, schema_sha256          # noqa: F401
+from .derive import derive                                   # noqa: F401
 from .prompt import system_prompt, user_prompt               # noqa: F401
 from .score import (                                          # noqa: F401
-    lenient_match, match, resolve_subject, score_household, validity,
+    lenient_match, match, resolve_person, resolve_subject, score_household, validity,
 )

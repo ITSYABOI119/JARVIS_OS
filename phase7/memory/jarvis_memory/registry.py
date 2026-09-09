@@ -148,3 +148,28 @@ def arity(predicate_id: str) -> str:
 def predicate_words(predicate_id: str) -> str:
     """The predicate rendered for the full-text index: 'person.lives_in' -> 'person lives in'."""
     return predicate_id.replace(".", " ").replace("_", " ")
+
+
+# The ONE object normaliser (MS1b). Every candidate's `object_norm` is computed by this function and
+# by nothing else: the corpus's oracle values already agree with it by construction (T36c, checked
+# over ten households), and `Store.ingest` OVERWRITES whatever a caller supplied before any rule
+# runs (T36d), so an extractor's own idea of a normal form can never reach a stored row.
+#
+# The measured reason it exists: MS1b's first Llama run (L0) scored F1 0.12, and every `works_as`
+# miss was an ARTICLE — the model said "a plumber" where the oracle says "plumber", because the
+# prompt's own worked example taught it to. Asking a model to normalise is asking it to reproduce a
+# convention it cannot see; deriving the convention in code removes the question.
+_ARTICLES = ("a", "an", "the")
+
+
+def normalise_object(text) -> str:
+    """Lower-case, trim, collapse internal whitespace, strip ONE leading article.
+
+    'A Plumber' -> 'plumber'; '  Perth ' -> 'perth'; 'an early bird' -> 'early bird';
+    'reads before bed' -> unchanged. A LONE article is returned as itself: 'the' -> 'the', never
+    the empty string, because an object that normalises to nothing would collide with every other
+    empty object in the value key and merge two unrelated beliefs.
+    """
+    s = " ".join(str(text if text is not None else "").split()).lower()
+    head, _, rest = s.partition(" ")
+    return rest if (head in _ARTICLES and rest) else s

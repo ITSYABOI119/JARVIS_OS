@@ -31,7 +31,7 @@ from .candidate import validate
 from .confidence import confidence as _confidence, distinct_days
 from .paths import default_db
 from .registry import (
-    EDGE_PREDICATE, PREFERENCE_PREDICATE, arity, is_known, predicate_words,
+    EDGE_PREDICATE, PREFERENCE_PREDICATE, arity, is_known, normalise_object, predicate_words,
 )
 from .rules import decide
 from .schema import DDL
@@ -354,6 +354,19 @@ class MemoryStore:
     def ingest(self, cand: dict) -> dict:
         """Validate, route, decide and apply — one transaction, audit rows included."""
         recorded_at = _now_iso()
+        # The ONE normaliser, applied BEFORE any rule and whatever the caller supplied (MS1b).
+        # `object_norm` is the value key R3/R6 compare on and the column a merge is decided by, so
+        # a caller that spelled it differently would not be storing a different string, it would be
+        # storing a SECOND belief that never merges with the first. The extractor is no longer
+        # asked for it at all; the oracle's own values already agree with this function (T36c), so
+        # nothing measured before this line moved. For an edge the key is the relation id, which is
+        # the corpus's convention and what `_cand_value_key` already compares.
+        if cand.get("predicate_id") == EDGE_PREDICATE and cand.get("relation_id"):
+            cand["object_norm"] = cand["relation_id"]
+        else:
+            cand["object_norm"] = normalise_object(cand.get("object")
+                                                   if cand.get("object") is not None
+                                                   else cand.get("object_norm"))
         span_cluster = self._span_clusters(cand.get("span_ids") or [])
         if not is_known(cand.get("predicate_id", "")):
             aid = self._audit("reject", "candidate", rule="registry",

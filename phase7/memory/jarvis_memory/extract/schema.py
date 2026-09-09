@@ -12,43 +12,40 @@ rather than smuggling an unvalidated key into the store's write path.
 import hashlib
 import json
 
-from ..registry import PREDICATES, RELATIONS, SOURCE_RANK
+from ..registry import PREDICATES, RELATIONS
 
 # The four polarity values the preference predicate uses (registry `candidate.validate` requires one
 # for owner.prefers). Kept beside the registry import so the list is visible at the point of use.
 POLARITIES = ("likes", "dislikes", "wants", "avoids")
 
-SUBJECT_KINDS = ("person", "household", "topic")
-
 
 def candidate_schema() -> dict:
-    """The schema for `{"candidates": [<the design's §4.2 object>]}`.
+    """The schema for `{"candidates": [<what only the model can judge>]}` — the DECISION set.
 
-    `subject.ref` is a STRING on purpose: it carries either a cluster id ("2") for a first-person
-    statement or a normalised name ("sam") for a third-person one, and `score.resolve_subject`
-    turns both into the same resolved subject. Keeping it one type means the model never has to
-    choose between two shapes, which is one less way for a call to fail the schema.
+    NARROWED at MS1b after the first Llama run (L0) measured the contract instead of the model: it
+    was asked for `subject.ref`, `source_kind`, `speaker_cluster`, `object_norm` and `span_ids`, and
+    every one of those is DERIVABLE from the span the caller already holds. All 105 of that run's
+    invalid calls were speaker mismatches — a field the model was made to restate and the code knew
+    for certain. So the model now decides only what a reader of the utterance must judge:
+
+        predicate_id   which registry predicate, if any
+        about          "speaker" (the person talking) or a lower-cased name
+        object         the value AS SAID - "a nurse"; the code normalises it
+        stated         said outright, or implied
+        relation_id / polarity / strength / ended / about_time  when the predicate needs them
+
+    `extract.derive` turns that plus the span into the store's §4.2 candidate. `about` is a string
+    for the same reason `subject.ref` was: one type, so the model never chooses between two shapes.
     """
     candidate = {
         "type": "object",
         "additionalProperties": False,
-        "required": ["predicate_id", "subject", "object", "object_norm", "source_kind",
-                     "span_ids"],
+        "required": ["predicate_id", "about", "object", "stated"],
         "properties": {
             "predicate_id": {"type": "string", "enum": sorted(PREDICATES)},
-            "subject": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["kind", "ref"],
-                "properties": {
-                    "kind": {"type": "string", "enum": list(SUBJECT_KINDS)},
-                    "ref": {"type": "string"},
-                },
-            },
+            "about": {"type": "string"},
             "object": {"type": "string"},
-            "object_norm": {"type": "string"},
-            "source_kind": {"type": "string", "enum": sorted(SOURCE_RANK)},
-            "span_ids": {"type": "array", "items": {"type": "integer"}, "minItems": 1},
+            "stated": {"type": "boolean"},
             "relation_id": {"type": ["string", "null"], "enum": sorted(RELATIONS) + [None]},
             "polarity": {"type": ["string", "null"], "enum": list(POLARITIES) + [None]},
             "strength": {"type": ["integer", "null"], "minimum": 1, "maximum": 3},

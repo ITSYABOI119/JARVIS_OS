@@ -1410,14 +1410,20 @@ _ITEM = _SCH["properties"]["candidates"]["items"]
 check("T35a the predicate enum IS the registry's, never a hand-typed copy",
       _ITEM["properties"]["predicate_id"]["enum"] == sorted(PREDICATES),
       str(_ITEM["properties"]["predicate_id"]["enum"]))
-check("T35a2 the relation, source and polarity enums are the registry's too",
+check("T35a2 the relation and polarity enums are the registry's too",
       _ITEM["properties"]["relation_id"]["enum"] == sorted(_RELS) + [None]
-      and _ITEM["properties"]["source_kind"]["enum"] == sorted(_SRC)
       and _ITEM["properties"]["polarity"]["enum"] == list(_POLS) + [None],
-      str(_ITEM["properties"]["source_kind"]["enum"]))
+      str(_ITEM["properties"]["relation_id"]["enum"]))
 check("T35a3 additionalProperties is false at every object level",
-      _SCH["additionalProperties"] is False and _ITEM["additionalProperties"] is False
-      and _ITEM["properties"]["subject"]["additionalProperties"] is False)
+      _SCH["additionalProperties"] is False and _ITEM["additionalProperties"] is False)
+# The narrowed contract, asserted as an EXACT set both ways: the model must be asked for everything
+# it alone can judge, and must not be asked for anything the code derives. Either half failing is a
+# contract that measures something other than the extractor - which is what L0 measured.
+check("T35a4 the required set is exactly the DECISION set, and no derived field is in the schema",
+      sorted(_ITEM["required"]) == sorted(["predicate_id", "about", "object", "stated"])
+      and not ({"subject", "object_norm", "source_kind", "speaker_cluster", "span_ids"}
+               & set(_ITEM["properties"])),
+      str((_ITEM["required"], sorted(_ITEM["properties"]))))
 
 _SYS = system_prompt()
 check("T35b the system prompt names every predicate and every relation exactly once",
@@ -1457,11 +1463,18 @@ check("T35d match: same predicate, resolved subject, object and a shared span",
       match(_c("person.works_as", "1", "person", "a nurse", [3]),
             _c("person.works_as", "owner", "person", "a nurse", [3]), _NBC, _CBN),
       "owner vs cluster 1 must resolve equal")
-check("T35d2 a different object_norm does not match, but lenient_match does",
-      not match(_c("person.works_as", "1", "person", "nurse", [3]),
-                _c("person.works_as", "owner", "person", "a nurse", [3]), _NBC, _CBN)
+# RETARGETED at the narrow contract. The article case is no longer a miss: both sides go through
+# the one normaliser, so "a nurse" and "nurse" ARE the same value - that was L0's largest single
+# failure class and it was the contract's, not the model's. A genuinely different value still
+# misses strictly and is caught only by the lenient variant.
+check("T35d2 the article is normalised away on both sides; a different value still misses",
+      match(_c("person.works_as", "1", "person", "nurse", [3]),
+            _c("person.works_as", "owner", "person", "a nurse", [3]), _NBC, _CBN)
+      and not match(_c("person.works_as", "1", "person", "nurse", [3]),
+                    _c("person.works_as", "owner", "person", "a night nurse", [3]), _NBC, _CBN)
       and lenient_match(_c("person.works_as", "1", "person", "nurse", [3]),
-                        _c("person.works_as", "owner", "person", "a nurse", [3]), _NBC, _CBN))
+                        _c("person.works_as", "owner", "person", "a night nurse", [3]),
+                        _NBC, _CBN))
 check("T35d3 no shared span id is never a match, however right the content",
       not match(_c("person.works_as", "1", "person", "a nurse", [9]),
                 _c("person.works_as", "owner", "person", "a nurse", [3]), _NBC, _CBN))
@@ -1494,6 +1507,129 @@ check("T35f validity: an empty list is VALID, a bad candidate and an unparsed ca
       and validity([{"candidates": [_c("person.teleports", "1", "person", "x", [1])]}],
                    _SPANC)[0] == 0,
       str(validity([{"candidates": [_c("person.teleports", "1", "person", "x", [1])]}], _SPANC)))
+
+# ================================================== T36 MS1b: the NARROWED contract
+# L0 (the first Llama 3.1 8B run, kept as `ms1b_llama_8b_contract0.json`) measured the CONTRACT, not
+# the model: 105 invalid calls, every one a `stated_*` speaker mismatch on a value the caller held;
+# every works_as miss an article the prompt's own example taught; every relation miss a shape
+# mismatch. These tests pin the repair — the model decides, the code derives, and one normaliser
+# owns `object_norm` everywhere including the store's write path.
+from jarvis_memory.registry import normalise_object as _norm  # noqa: E402
+from jarvis_memory.extract.derive import derive as _derive  # noqa: E402
+from jarvis_memory.extract.score import resolve_person as _rperson  # noqa: E402
+from jarvis_memory.bench import corpus as _corpus  # noqa: E402
+
+check("T36 normalise_object: one article stripped, case and space collapsed, a lone article kept",
+      _norm("A Plumber") == "plumber" and _norm("  Perth ") == "perth"
+      and _norm("an early bird") == "early bird" and _norm("the") == "the"
+      and _norm("reads before bed") == "reads before bed" and _norm(None) == "",
+      str([_norm(x) for x in ("A Plumber", "  Perth ", "an early bird", "the")]))
+
+
+def _span(sid, cluster, text="x", day=3):
+    return {"sid": sid, "cluster": cluster, "text": text, "day": day}
+
+
+_d_p2 = _derive({"predicate_id": "person.works_as", "about": "speaker", "object": "a nurse",
+                 "stated": True}, _span(7, 2))
+_d_p1 = _derive({"predicate_id": "person.works_as", "about": "speaker", "object": "A Nurse",
+                 "stated": True}, _span(7, 1))
+_d_inf = _derive({"predicate_id": "person.works_as", "about": "speaker", "object": "a nurse",
+                  "stated": False}, _span(7, 2))
+check("T36a derive: the speaker's own cluster is the subject, and who spoke decides the source kind",
+      _d_p2["source_kind"] == "stated_other" and _d_p2["subject"] == {"kind": "person", "ref": "2"}
+      and _d_p1["source_kind"] == "stated_owner"
+      and _d_p1["subject"] == {"kind": "person", "ref": "1"}
+      and _d_inf["source_kind"] == "inferred"
+      and _d_p2["span_ids"] == [7] and _d_p2["speaker_cluster"] == 2
+      and _d_p1["object_norm"] == "nurse" and _d_p1["object"] == "A Nurse",
+      str((_d_p2["source_kind"], _d_p2["subject"], _d_p1["source_kind"], _d_inf["source_kind"])))
+
+_d_name = _derive({"predicate_id": "person.lives_in", "about": "Tess", "object": "Perth",
+                   "stated": True}, _span(8, 1))
+_d_hh = _derive({"predicate_id": "household.routine", "about": "speaker", "object": "Friday pizza",
+                 "stated": True}, _span(9, 2))
+_d_pref = _derive({"predicate_id": "owner.prefers", "about": "speaker", "object": "Jazz",
+                   "stated": True, "polarity": "likes"}, _span(10, 2))
+_d_rel = _derive({"predicate_id": "person.relation_to", "about": "speaker", "object": "Sam",
+                  "stated": True, "relation_id": "spouse"}, _span(11, 2))
+check("T36b derive: a name stays a name, a household predicate is the household's, a preference is "
+      "the owner's whoever said it, and a relation is keyed by its relation id",
+      _d_name["subject"] == {"kind": "person", "ref": "tess"}
+      and _d_name["object_norm"] == "perth"
+      and _d_hh["subject"] == {"kind": "household", "ref": "household"}
+      and _d_pref["subject"] == {"kind": "person", "ref": "1"}
+      and _d_pref["source_kind"] == "stated_other"
+      and _d_rel["object_norm"] == "spouse" and _d_rel["object"] == "Sam",
+      str((_d_name["subject"], _d_hh["subject"], _d_pref["subject"], _d_rel["object_norm"])))
+
+_bad36c, _n36c = [], 0
+for _seed36 in range(1, 11):
+    _hh36 = _corpus.generate_household(_seed36, 14)
+    for _c36 in _hh36["candidates"]:
+        _n36c += 1
+        _want36 = (_c36.get("relation_id") if _c36["predicate_id"] == "person.relation_to"
+                   else _norm(_c36.get("object")))
+        if _c36.get("object_norm") != _want36:
+            _bad36c.append((_seed36, _c36["predicate_id"], _c36.get("object"),
+                            _c36.get("object_norm"), _want36))
+check("T36c every oracle object_norm over ten households IS the normaliser's output "
+      "(a relation's is its relation id) - so the store's overwrite moves no gold value",
+      _n36c == 370 and not _bad36c, str((_n36c, _bad36c[:3])))
+
+_st36, _c1_36, _c2_36, _own36 = fresh()
+_sp36 = add_day(_st36, "2026-03-01", 1, ["i am a plumber", "i take a morning run",
+                                         "the morning run again"])
+_st36.ingest(fact_cand(_own36, [_sp36[0]], "A Plumber", "A PLUMBER", "2026-03-01T08:00:00",
+                       predicate="person.works_as"))
+_st36.ingest(fact_cand(_own36, [_sp36[1]], "A Morning Run", "WHATEVER", "2026-03-01T08:00:10",
+                       predicate="person.habit"))
+_st36.ingest(fact_cand(_own36, [_sp36[2]], "the morning run", "the morning run",
+                       "2026-03-01T08:00:20", predicate="person.habit"))
+_rows36 = {r["predicate_id"]: r for r in _st36.current("fact") if r["predicate_id"] == "person.works_as"}
+_habits36 = [r for r in _st36.current("fact") if r["predicate_id"] == "person.habit"]
+check("T36d the store OVERWRITES a caller's object_norm with the normaliser's, so two spellings of "
+      "one habit accrue onto one row instead of coexisting as two beliefs",
+      _rows36["person.works_as"]["object_norm"] == "plumber"
+      and len(_habits36) == 1 and _habits36[0]["object_norm"] == "morning run",
+      str((_rows36["person.works_as"]["object_norm"],
+           [r["object_norm"] for r in _habits36])))
+
+check("T36e the system prompt instructs on nothing the code derives, and names the speaker token",
+      not any(x in _SYS for x in ("object_norm", "source_kind", "speaker_cluster", "span_ids",
+                                  "subject.ref", "stated_owner", "stated_other"))
+      and '"speaker"' in _SYS,
+      str([x for x in ("object_norm", "source_kind", "speaker_cluster", "span_ids", "subject.ref",
+                       "stated_owner") if x in _SYS]))
+
+
+def _rel(ref, obj, sids, rid="spouse", src="stated_other"):
+    return {"predicate_id": "person.relation_to", "subject": {"kind": "person", "ref": ref},
+            "object": obj, "object_norm": rid, "relation_id": rid, "source_kind": src,
+            "span_ids": list(sids)}
+
+
+check("T36f a relation whose far end was never identified never matches, and the edge is "
+      "direction-aware",
+      match(_rel("2", "alex", [4]), _rel("partner", "owner", [4]), _NBC, _CBN)
+      and not match(_rel("2", "she", [4]), _rel("partner", "owner", [4]), _NBC, _CBN)
+      and not match(_rel("owner", "partner", [4]), _rel("partner", "owner", [4]), _NBC, _CBN)
+      and not match(_rel("2", "alex", [4], rid="sibling"), _rel("partner", "owner", [4]),
+                    _NBC, _CBN)
+      and _rperson("she", _NBC, _CBN) is None and _rperson("tess", _NBC, _CBN) == 2,
+      str((_rperson("she", _NBC, _CBN), _rperson("owner", _NBC, _CBN))))
+
+check("T36g a household subject resolves the same whether it is written None or 'household' - "
+      "without this every household prediction would be a scoring artefact, not a miss",
+      resolve_subject(None, "household", _NBC, _CBN)
+      == resolve_subject("household", "household", _NBC, _CBN)
+      and match({"predicate_id": "household.routine",
+                 "subject": {"kind": "household", "ref": "household"},
+                 "object": "Friday Pizza", "span_ids": [5]},
+                {"predicate_id": "household.routine", "subject": {"kind": "household", "ref": None},
+                 "object": "friday pizza", "object_norm": "friday pizza", "span_ids": [5]},
+                _NBC, _CBN),
+      str(resolve_subject(None, "household", _NBC, _CBN)))
 
 _dry = _subprocess.run(
     [sys.executable, str(Path(__file__).resolve().parent / "bench_ms1b.py"),
