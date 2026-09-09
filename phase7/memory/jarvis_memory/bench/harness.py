@@ -294,6 +294,10 @@ def run_household(seed, days, predicate_hint=True, embedder=None, drop_stopwords
     coexist_recall, ended_leaks = _score_coexist(st, hh["sets"]["coexist"], ids, now, hint, embedder)
     transfer, by_topic, gold_ranks = _score_transfer(st, hh["sets"]["transfer"], ids["owner"],
                                                      now, hint, embedder)
+    # The MS1a.3 preference lane's measured PRICE, over the same UPDATE questions the band scores:
+    # how often a preference occupies one of a fact question's five results. REPORTED, never banded.
+    pref_price = pref_in_top5_rate(st, [it["query"] for it in hh["sets"]["update"]],
+                                   now, hint, embedder)
     rel_prec, n_surfaced = _score_relations(st, hh["sets"]["relations"], ids)
     spouse_conf = _spouse_confidence(st, ids.get("owner"), ids.get("partner"))
 
@@ -337,6 +341,7 @@ def run_household(seed, days, predicate_hint=True, embedder=None, drop_stopwords
         "update_acc": round(update_acc, 4),
         "update_acc_paraphrase": round(update_para, 4),
         "transfer_by_topic": by_topic,
+        "pref_in_top5_rate": round(pref_price, 4),
         # REPORTED, never a band: how the planted preference ranked, so a transfer miss can be
         # attributed to the fusion (rank 1, still missed) or to the embedder (rank > 1).
         "transfer_gold_ranks": gold_ranks,
@@ -418,7 +423,7 @@ def run(seeds, days, latency_facts, out_path=None, predicate_hint=True, embedder
         agg[field] = round(statistics.fmean(h[field] for h in households), 4)
     # REPORTED, never banded, and None-safe: with no embedder every rank is None, so the mean is
     # None rather than a fabricated 0 - the rank-1 FRACTION is 0.0 there by its own definition.
-    for field in ("transfer_gold_pref_rank1",):
+    for field in ("transfer_gold_pref_rank1", "pref_in_top5_rate"):
         agg[field] = round(statistics.fmean(h[field] for h in households), 4)
     for field in ("transfer_gold_pref_rank_mean", "transfer_gold_vec_rank_mean",
                   "transfer_gold_pref_lane_rank_mean"):
@@ -466,6 +471,7 @@ def run(seeds, days, latency_facts, out_path=None, predicate_hint=True, embedder
             "transfer_gold_pref_rank1": agg["transfer_gold_pref_rank1"],
             "transfer_gold_vec_rank_mean": agg["transfer_gold_vec_rank_mean"],
             "transfer_gold_pref_lane_rank_mean": agg["transfer_gold_pref_lane_rank_mean"],
+            "pref_in_top5_rate": agg["pref_in_top5_rate"],
             "relation_precision": agg["relation_precision"],
             "spouse_surfaced_day_mean": agg["spouse_surfaced_day_mean"],
         },

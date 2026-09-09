@@ -742,3 +742,164 @@ collapse and a span no belief stands on), T25g retargeted to pin the collapse, T
 tokeniser-stable, the filter on and off), T28a–e (the two rank diagnostics, None with no embedder). Three mutants
 bite, control green first: `W_CLAIM["span"] = 1.0` kills T23j0/j1/j3/j5 and T23k3; the collapse disabled kills
 T23k1/k2 and T25g; `query_terms` never dropping kills T21a/b and T29c/d/d2/e.
+
+
+## MS1a.3 + MS1a.4 — 2026-09-09 — the preference lane, the growth trace, one vector vote, the subject gate; the bands re-measured
+
+**All six bands are MET in one run for the first time.** Update 100 %, coexist 100 %, transfer recall@5 **91.67 %**,
+growth drop **3.75 pts**, audit 0, p99 0.2399 ms — `ms1a4_run.json`, exit 0, no `BANDS MISSED:` line. The road here
+was two milestones and one rule that was ruled out by its own pre-registered trace.
+
+### MS1a.3 — the preference lane, and the trace that killed the union rule
+
+MS1a.2 left transfer at 35.83 % and located the miss precisely: the embedder already ranked the planted preference
+first among the household's preferences in 69 % of scenarios, but it sat a mean **78 rows deep** in the mixed vector
+lane. Crowding, not fusion. MS1a.3 gave the preference model **its own vector lane (`vec_pref`) under the
+instruction-prefixed query**, leaving the mixed lane symmetric so two query forms never share one cosine scale
+(`e5094fe` design, `fbd48b8` lane).
+
+**The growth trace, run on the unedited MS1a.2 code before any MS1a.3 edit**, against a pre-registered rule: the
+union rule would apply only if, in at least half of the growth misses, the answer sat outside the mixed lane's 50-row
+cut while the winner was a row the vector lane ALONE found, tying at 1/61 and winning on recency. Measured:
+
+```
+n_miss                                     = 6
+n_outside_cut_and_vector_only_winner_tie   = 0
+VERDICT: UNION RULE DOES NOT APPLY
+```
+
+Not one of the six had that shape. **Every winner carried BOTH lanes and nothing tied** — the tie-break path was
+"relevance (no tie)" in all six, so recency never ran. The real mechanism was different and uniform: a **filler fact
+about a DIFFERENT person**, sitting at `fts_fact` 4–11 *and* `vec` 4–37, collected two reciprocal-rank terms
+(0.026–0.030) and out-summed the correct answer standing at **`fts_fact` rank 1** — top of the lane that actually
+identifies the subject — which took 1/61 = 0.0164. Reciprocal rank rewards agreement over authority. The within-lane
+score knew which row was right (0.8–1.0 against the winners' 0.09–0.25) and is never consulted unless relevance ties.
+
+| seed | question | answer | winner | winner text |
+|---|---|---|---|---|
+| 2 | what does jo do for work | `fts_fact` 1 + `vec` 34 = 0.02703 | `fts_fact` 4 + `vec` 20 = 0.02813 | `opal1 person works as a cooper` |
+| 3 | what does kit do for work | `fts_fact` 1 = 0.01639 | `fts_fact` 4 + `vec` 31 = 0.02661 | `opal1 person works as a cooper` |
+| 8 | what does lena do for work | `fts_fact` 1 = 0.01639 | `fts_fact` 4 + `vec` 37 = 0.02593 | `opal1 person works as a cooper` |
+| 9 | which city does ava live in | `fts_fact` 1 + `vec` 39 = 0.02649 | `fts_fact` 11 + `vec` 14 = 0.02760 | `verity8 person lives in Reykjavik` |
+| 9 | what does ava do for work | `fts_fact` 1 = 0.01639 | `fts_fact` 11 + `vec` 5 = 0.02947 | `verity8 person works as a glassblower` |
+| 9 | what job does ava work as | `fts_fact` 1 = 0.01639 | `fts_fact` 11 + `vec` 4 = 0.02971 | `verity8 person works as a glassblower` |
+
+The union rule would not have closed even the three where the answer *was* outside the cut: seed 8's best case gains
+1/121 = 0.0083, reaching 0.0247 against a 0.0259 winner — still a loss.
+
+**A temp run then measured the preference lane at transfer 92.5 %** (`loud music` 0 → 21 of 30, a topic that had
+never recalled once) **and update 93.75 %, breaking that band.** The cause was arithmetic: a preference found by BOTH
+vector lanes took `vec` 2 + `vec_pref` 1 = 1/62 + 1/61 = **0.032522** against the answer fact's `fts_fact` 1 + `vec` 3
+= **0.032266**. Five of five update misses were won by a preference; in two households four of the five results were
+preferences. MS1a.1's withdrawn defect in a narrower place — a second lane over a subset of rows handing those rows a
+rank-1 term they had not earned against the full field. MS1a.3 was STOPPED there for a ruling, and wrote no log
+section of its own; this one carries its findings.
+
+### MS1a.4 — the two rules
+
+1. **ONE VECTOR VOTE PER ROW.** `vec` and `vec_pref` are two views of one mechanism — the same embedder over the same
+   rows — so a row takes its BEST rank among them, never their sum. Every other lane still sums. The preference lane
+   keeps its job: a preference at `vec_pref` 1 earns 1/61 whether or not the mixed lane found it; it simply cannot be
+   counted twice for being the same row seen twice.
+2. **THE SUBJECT GATE.** When a question names a known person — every token of a person's normalised `display_name`
+   present among the question's tokens, taken BEFORE stopword removal since a name is never a function word — belief
+   candidates about a DIFFERENT known person leave every lane. Spans and household/topic rows carry no person and are
+   never gated: evidence is not a claim about anybody, and gating it would hide the utterance a belief rests on.
+   **Exact tokens only — aliases and nicknames are MS2's people layer, and that limit is stated in the code.**
+
+### Run C — no embedder — equals MS0.1
+
+`--households 10 --days 14 --seed 1 --latency-facts 100000 --embedder none --assert-bands`, exit 0: update 1.0,
+coexist 1.0, growth_update 1.0, drop 0.0, transfer 0.0, relation 1.0, spouse 8.0 and 10/10, audit 0; p99 0.2701 ms.
+All five bands PASS. **Both rules leave the no-embedder path exactly where MS0.1 left it** — the gate removes only
+wrong-person rows, which are never the answer, and with one vector lane nothing can double-count.
+
+### Run A — every band MET
+
+| band | expected | measured | verdict |
+|---|---|---|---|
+| `update_acc` | ≥ 0.95 | **1.0000** | **MET** (0.9375 in MS1a.3's temp run) |
+| `transfer_recall5` | ≥ 0.60 | **0.9167** | **MET** (0.3583 at MS1a.2) |
+| `growth_drop_points` | ≤ 5 | **3.75** | **MET** (7.5 at MS1a.2) |
+| `coexist_recall` | ≥ 0.95 | **1.0000** | MET |
+| audit violations | 0 | **0** | MET |
+| p99 write latency | ≤ 50 ms | **0.2399 ms** | MET |
+| `pref_in_top5_rate` (the lane's price) | reported | **0.05** | reported |
+| `transfer_gold_pref_lane_rank_mean` | reported | **1.3417** | reported |
+| `transfer_gold_pref_rank1` / `_vec_rank_mean` | reported | 0.6917 / 78.4833 | reported |
+
+Per household, read from the JSON, every mean recomputed and checked against the stored aggregate (all seven matched
+to 5e-5):
+
+| seed | update | coexist | growth_upd | drop | transfer | price | pref-lane rank |
+|---|---|---|---|---|---|---|---|
+| 1 | 1.0000 | 1.0000 | 1.0000 | 0.00 | 0.9167 | 0.00 | 1.333 |
+| 2 | 1.0000 | 1.0000 | 1.0000 | 0.00 | 0.9167 | 0.00 | 1.500 |
+| 3 | 1.0000 | 1.0000 | 0.8750 | 12.50 | 0.9167 | 0.50 | 1.750 |
+| 4 | 1.0000 | 1.0000 | 1.0000 | 0.00 | 0.9167 | 0.00 | 1.167 |
+| 5 | 1.0000 | 1.0000 | 1.0000 | 0.00 | 0.9167 | 0.00 | 1.500 |
+| 6 | 1.0000 | 1.0000 | 1.0000 | 0.00 | 0.9167 | 0.00 | 1.250 |
+| 7 | 1.0000 | 1.0000 | 1.0000 | 0.00 | 0.9167 | 0.00 | 1.417 |
+| 8 | 1.0000 | 1.0000 | 1.0000 | 0.00 | 0.9167 | 0.00 | 1.167 |
+| 9 | 1.0000 | 1.0000 | 0.7500 | 25.00 | 0.9167 | 0.00 | 1.333 |
+| 10 | 1.0000 | 1.0000 | 1.0000 | 0.00 | 0.9167 | 0.00 | 1.000 |
+| **mean** | **1.0000** | **1.0000** | **0.9625** | **3.75** | **0.9167** | **0.05** | 1.3417 |
+
+`transfer/topic`: early mornings **30/30**, long drives **30/30**, spicy food **30/30**, `loud music` **20/30**.
+
+**The price is small and measured, not assumed: 0.05.** A preference occupies one of a fact question's five results
+in 5 % of them, and it is concentrated — seed 3 accounts for 0.50 and every other household for 0.00. The MS1a.3
+design claimed the price was "one preference among every question's five results"; measured under one vote it is
+rarer than that, and it never takes the top slot (update is 1.0000).
+
+### Every remaining miss traced
+
+**Update: none.** 1.0000 in all ten households.
+
+**Growth: three, in seeds 3 and 9 — and their character has CHANGED.** The subject gate removed MS1a.3's
+wrong-person fact winners entirely; not one remaining winner is a belief about another person. What wins now is a
+**span**:
+
+| seed | question | answer | winner | winner text |
+|---|---|---|---|---|
+| 3 | what does kit do for work | `fts_fact` 1 = 0.016393, wscore 1.0 | span `fts_span` 10 + `vec` 7 = 0.017527, wscore 0.0786 | `quilla3 works as a thatcher` |
+| 9 | what does ava do for work | `fts_fact` 1 = 0.016393, wscore 0.8 | span `fts_span` 1 + `vec` 2 = 0.019513, wscore 0.5513 | `i work as a teacher` |
+| 9 | what job does ava work as | `fts_fact` 1 = 0.016393, wscore 0.8 | span `fts_span` 1 + `vec` 1 = 0.019672, wscore 0.5513 | `i work as a teacher` |
+
+The gate named the right person in all three (`kit`, `ava`), and the winners carry no person at all — they are
+evidence, which is never gated by design. **This is exactly the residual the design states and `T23j3` pins:**
+evidence found in BOTH lanes (0.6 × (1/61 + 1/62) = 0.019513) still outranks a belief found in ONE (1/61 = 0.016393).
+The claim weight of 0.6 is applied and is not enough at this rank spread. The band is MET at 3.75 with the residual
+live; closing it would mean revisiting the residual itself, which is a ranker decision and not this milestone's.
+
+**Transfer: ten, one per household, every one in `loud music`.** That topic recalls 20 of 30 while the other three
+recall 30 of 30. It is the topic the embedder itself struggles with — measured at MS1a.2 with rank-1-among-preferences
+of only 0.367 against 0.60–1.00 elsewhere — so it is a corpus/model limit rather than a ranking one, and no
+re-ranking recovers a preference the embedder cannot pick out of three others.
+
+### Run B — the instruction arm — REPORTED, never adopted
+
+`--query-instruction` (every table instructed): transfer **0.9167**, update **1.0000**, coexist 1.0, growth drop
+3.75, price 0.00, `pref_rank1` 0.775, `vec_rank_mean` 16.3667. **Its update band, which MS1a.3 measured breaking at
+0.9375, is restored by the one-vote rule** — the double count was the cause there too. It now matches run A on every
+band and differs only in the diagnostics. Reported for continuity; not adopted, because A reaches the same bands
+without instructing the mixed lane.
+
+### Honest scope
+
+Synthetic seeded corpora, ORACLE candidates, in-memory stores, one embedder on one GPU. Nothing here is measured on
+real speech or on the owner. `relation_precision` is 1.0 **by construction** — the oracle plants only true relations.
+The subject gate matches **exact `display_name` tokens**: a nickname, an alias or a pronoun names nobody and leaves
+the gate inactive, which is safe (it never removes a candidate it should keep) but limited, and the people layer that
+fixes it is MS2's. MS1b, the extractor bake-off, replaces the oracle and is what these bands must survive next.
+
+### Tests
+
+`test_memory_logic.py` **231 checks** in the file, **230 on the CI runner** (T22g skips without numpy) — CI green.
+New at MS1a.4: T32a/a2/b/c (one vote, with the summed form pinned as the defect), T33a–g (the subject gate: the named
+set, the wrong-person removal, nobody named, both named, an unknown name, evidence never gated, a person-less row
+never gated), T34 (the preference-lane rank diagnostic), and **T30d rebuilt with teeth** — its MS1a.3 fixture put the
+preference low in the mixed lane so the summed form never got the chance to win; the new one is the exact corpus
+shape (`fts_fact` 1 + `vec` 3 against `vec` 2 + `vec_pref` 1) with the lane ranks asserted, and it fails under the
+summed mutant. Two mutants bite, control green first: `fuse` summing the vector lanes kills T32a, T32c, T24c, T30c
+and T30d; the subject gate disabled kills T33a.
