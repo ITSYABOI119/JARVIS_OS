@@ -114,6 +114,25 @@ def _score_coexist(st, items, ids, now, hint="auto", embedder=None):
     return (statistics.fmean(recalls) if recalls else 0.0), leaks
 
 
+def pref_in_top5_rate(st, queries, now, hint="auto", embedder=None) -> float:
+    """The MEASURED PRICE of the MS1a.3 preference lane: the fraction of FACT questions whose top
+    five contains at least one preference row.
+
+    The lane gives the preference model its own rank restart, so on any question at least one
+    preference is a candidate. That is the cost of the transfer gain and it is reported, never
+    assumed away - and it is a rate, not a claim that the preference outranks the answer (T30d pins
+    that it does not).
+    """
+    if not queries:
+        return 0.0
+    n = 0
+    for q in queries:
+        hits = st.query(q, k=5, now=now, predicate_hint=hint, embedder=embedder)
+        if any(h["table"] == "preference" for h in hits):
+            n += 1
+    return n / len(queries)
+
+
 def _gold_pref_rank(st, query, topic, embedder):
     """1-based cosine rank of the planted preference among the household's CURRENT preferences.
 

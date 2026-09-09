@@ -29,6 +29,17 @@ QUERY_INSTRUCTION = (
 )
 
 
+def query_payload(text: str, instruction: bool) -> str:
+    """What actually gets embedded for a QUERY: the bare text, or the instruction-prefixed form.
+
+    Pure and model-free so the prefixing is testable without a GPU. MS1a.3 uses the instructed form
+    for the PREFERENCE lane only - scenario-to-preference is the asymmetric case the instruction was
+    written for - while the mixed lane stays symmetric, so two query forms are never compared on one
+    cosine scale.
+    """
+    return (QUERY_INSTRUCTION + text) if instruction else text
+
+
 # ------------------------------------------------------------------ the maths
 def pack(vec) -> bytes:
     """float32 little-endian, 4 bytes per component. The store keeps this in `embedding.vec`."""
@@ -117,7 +128,14 @@ class DictEmbedder:
     def embed(self, texts) -> list:
         return [self._table.get(t, [0.0] * self.dim) for t in texts]
 
-    def embed_query(self, text: str) -> list:
+    def embed_query(self, text: str, instruction: bool = False) -> list:
+        """The dict embedder has NO instruction semantics of its own: with `instruction=True` it
+        looks the PREFIXED text up and, when that key is absent, FALLS BACK to the plain text's
+        vector. A test that needs the two forms to differ adds the prefixed key explicitly."""
+        if instruction:
+            key = query_payload(text, True)
+            if key in self._table:
+                return self._table[key]
         return self.embed([text])[0]
 
 
@@ -150,8 +168,11 @@ class QwenEmbedder:
                                   show_progress_bar=False, convert_to_numpy=True)
         return [[float(x) for x in v] for v in vecs]
 
-    def embed_query(self, text: str) -> list:
+    def embed_query(self, text: str, instruction: bool = False) -> list:
         """Symmetric by default — the stored rendering and the question are embedded the same way.
-        The instruction prefix is applied to the QUERY only, and only in the reported arm."""
-        payload = (QUERY_INSTRUCTION + text) if self.instruction else text
-        return self.embed([payload])[0]
+
+        The instruction prefix is applied to the QUERY only. `self.instruction` drives the reported
+        whole-run arm (`--query-instruction`); the `instruction` PARAMETER drives the MS1a.3
+        preference lane, which is instructed even when the run as a whole is symmetric.
+        """
+        return self.embed([query_payload(text, self.instruction or instruction)])[0]

@@ -752,7 +752,7 @@ check("T21f the hint touches retrieval only, never the write path",
 
 from jarvis_memory import embed as embed_mod  # noqa: E402
 from jarvis_memory.embed import (  # noqa: E402
-    DictEmbedder, cosine, pack, topk, unpack,
+    QUERY_INSTRUCTION, DictEmbedder, cosine, pack, query_payload, topk, unpack,
 )
 from jarvis_memory.retrieve import RRF_K, W_CLAIM, fuse, query_terms  # noqa: E402
 from jarvis_memory.registry import QUERY_VOCAB as _QV, STOPWORDS  # noqa: E402
@@ -1004,6 +1004,25 @@ check("T29e2 with function words kept, the same scenario reaches the chatter spa
       len(_est_keep.query(_EQ, k=5, now="2026-03-02T00:00:00", embedder=None)) == 1,
       str(_est_keep.query(_EQ, k=5, now="2026-03-02T00:00:00", embedder=None)))
 
+# --------------- T30 MS1a.3: the preference lane under the instruction-prefixed query
+# MS1a.2 located the transfer miss as CROWDING - the embedder already ranked the planted preference
+# first among preferences in 69 % of scenarios, but it sat a mean 78 rows deep in the mixed lane.
+# Applying the instruction form to EVERY table reached 70 % transfer and cost the update band
+# (93.75 %). MS1a.3 gives the preference model its own lane under that query form and leaves the
+# mixed lane symmetric, so the two forms never share one cosine scale.
+check("T30a query_payload prefixes only when asked",
+      query_payload("planning dinner", True) == QUERY_INSTRUCTION + "planning dinner"
+      and query_payload("planning dinner", False) == "planning dinner",
+      repr(query_payload("planning dinner", True)[:40]))
+_t30 = DictEmbedder({"aa": [1.0, 0.0, 0.0, 0.0],
+                     "bb": [0.0, 1.0, 0.0, 0.0],
+                     QUERY_INSTRUCTION + "bb": [0.0, 0.0, 1.0, 0.0]}, 4)
+check("T30b the dict embedder falls back to the plain vector, or takes the prefixed key when present",
+      _t30.embed_query("aa", instruction=True) == _t30.embed_query("aa")
+      and _t30.embed_query("bb", instruction=True) == [0.0, 0.0, 1.0, 0.0]
+      and _t30.embed_query("bb") == [0.0, 1.0, 0.0, 0.0],
+      str(_t30.embed_query("bb", instruction=True)))
+
 # ------------------- T28 the transfer diagnostics: which of the fusion or the embedder loses it
 # `_gold_pref_rank` asks whether the embedder can pick the planted preference out of the household's
 # OTHER preferences; `_gold_vec_rank` asks how much else the query pulls in ahead of it. Rank 1 and
@@ -1081,10 +1100,20 @@ check("T24b a second pass embeds nothing new",
 
 _hits = st.query("planning dinner for our anniversary", k=5, now="2026-03-02T00:00:00", embedder=E)
 _top = _hits[0] if _hits else {}
-check("T24c the preference comes first, found only by the vector lane",
-      _top.get("table") == "preference" and _top.get("lanes") == {"vec": 1}
-      and _top.get("cos") is not None and close_to(_top["cos"], 1.0, 1e-6),
-      f"{_top.get('table')} lanes={_top.get('lanes')} cos={_top.get('cos')}")
+# RETARGET (MS1a.3, the shape declared before the run): the preference model now has its OWN lane
+# under the instruction-prefixed query, beside the symmetric mixed lane, so a preference this
+# question matches is found by BOTH - `{"vec": 1, "vec_pref": 1}` - and earns two rank-1 terms,
+# 2/61. It is still first, now by a wider margin over the cosine-0 fact's 1/62.
+check("T24c the preference comes first, found by the mixed lane and its own preference lane",
+      _top.get("table") == "preference" and _top.get("lanes") == {"vec": 1, "vec_pref": 1}
+      and _top.get("cos") is not None and close_to(_top["cos"], 1.0, 1e-6)
+      and close_to(_top["relevance"], 2.0 / 61, 1e-9),
+      f"{_top.get('table')} lanes={_top.get('lanes')} cos={_top.get('cos')} "
+      f"rel={_top.get('relevance')}")
+check("T30c the preference's relevance is exactly its two rank-1 terms",
+      close_to(_top["relevance"], 0.03278688524590164, 1e-9)
+      and _top.get("cos_pref") is not None,
+      f"rel={_top.get('relevance')} cos_pref={_top.get('cos_pref')}")
 check("T24d without the embedder that question finds nothing",
       st.query("planning dinner for our anniversary", k=5, now="2026-03-02T00:00:00",
                embedder=None) == [],
@@ -1100,6 +1129,25 @@ _works = [h for h in _hits if h["table"] == "fact"
 check("T24e the works_as row still arrives, by meaning, past a hint that excluded it",
       len(_works) == 1 and "vec" in _works[0]["lanes"],
       str([(h["table"], h.get("lanes")) for h in _hits]))
+
+# T30d - THE PRICE OF THE PREFERENCE LANE, PINNED. The lane gives the preference model its own rank
+# restart, so a preference is a candidate on every question, fact questions included. What must
+# never happen is a preference OUTRANKING the answer: that would make the price unbounded rather
+# than a reported rate. The fact question below is the T24e one; the preference is present and below.
+_pref_hit = next((h for h in _hits if h["table"] == "preference"), None)
+_fact_hit = next((h for h in _hits if h["table"] == "fact"), None)
+check("T30d on a fact question the preference lane shows, and stays below the answer fact",
+      _hits and _hits[0]["table"] == "fact" and _pref_hit is not None
+      and "vec_pref" in _pref_hit["lanes"]
+      and _pref_hit["relevance"] <= _hits[0]["relevance"] + 1e-12,
+      str([(h["table"], h["lanes"], round(h["relevance"], 6)) for h in _hits]))
+check("T30e pref_in_top5_rate measures that price on fact questions",
+      close_to(_harness.pref_in_top5_rate(
+          st, ["what does sam do for a living", "where does sam live"],
+          "2026-03-02T00:00:00", "auto", E), 1.0, 1e-9),
+      str(_harness.pref_in_top5_rate(
+          st, ["what does sam do for a living", "where does sam live"],
+          "2026-03-02T00:00:00", "auto", E)))
 
 # ------------------------------------------------------------- T25 lifecycle
 _sp2 = add_day(st, "2026-03-09", c1, ["we moved"])

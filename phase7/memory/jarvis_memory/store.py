@@ -558,12 +558,19 @@ class MemoryStore:
         counts["seconds"] = round(_time.perf_counter() - t0, 3)
         return counts
 
-    def _vector_lane(self, query_text, embedder, limit=50):
+    def _vector_lane(self, query_text, embedder, limit=50,
+                     tables=("fact", "preference", "span"), instruction=False):
         """Cosine over every CURRENT embedded row for this model. Never hint-restricted (design
-        §6): a question the rule mis-hinted must still reach its row by meaning."""
+        §6): a question the rule mis-hinted must still reach its row by meaning.
+
+        `tables` narrows the scan - MS1a.3 runs a second lane over `("preference",)` alone - and
+        `instruction` selects the query form. The two are used together: the preference lane is the
+        asymmetric case, so it is the only lane embedded with the instruction prefix, and the mixed
+        lane keeps the symmetric form. Two query forms are never mixed inside ONE cosine ordering.
+        """
         model = embedder.model_id
         rows, meta = [], {}
-        for table in ("fact", "preference", "span"):
+        for table in tables:
             if table == "span":
                 sql = ("select e.owner_id, e.dim, e.vec from embedding e "
                        "join span s on s.id = e.owner_id where e.owner_table=? and e.model=?")
@@ -577,7 +584,7 @@ class MemoryStore:
                 meta[key] = table
         if not rows:
             return []
-        q = embedder.embed_query(query_text)
+        q = embedder.embed_query(query_text, instruction=instruction)
         return _embed.topk(q, rows, limit)
 
     # ------------------------------------------------------------- the query
@@ -678,6 +685,7 @@ class MemoryStore:
             members["fts_span"] = lane
 
         cos_by_key = {}
+        cos_pref_by_key = {}
         if embedder is not None:
             lane = []
             for key, cos in self._vector_lane(text, embedder):
@@ -687,6 +695,23 @@ class MemoryStore:
                 if key in info:
                     lane.append(info[key])
             members["vec"] = lane
+
+            # MS1a.3: the PREFERENCE model gets its own lane, ordered by the INSTRUCTION-prefixed
+            # query. Scenario-to-preference is the asymmetric case the instruction form exists for,
+            # and MS1a.2 measured the cost of applying it to every table (the update band, 93.75 %).
+            # The rank restart this lane brings is bounded to one table of a handful of rows, and
+            # its price - a preference among a fact question's five results - is MEASURED
+            # (`pref_in_top5_rate`), never assumed away. Omitted entirely when empty.
+            pref_lane = []
+            for key, cos in self._vector_lane(text, embedder, tables=("preference",),
+                                              instruction=True):
+                cos_pref_by_key[key] = cos
+                if key not in info:
+                    self._note_from_db(key, note)
+                if key in info:
+                    pref_lane.append(info[key])
+            if pref_lane:
+                members["vec_pref"] = pref_lane
 
         if not members:
             return []
@@ -725,6 +750,10 @@ class MemoryStore:
             row["lanes"] = lane_ranks.get(key, {})
             if key in cos_by_key:
                 row["cos"] = cos_by_key[key]
+            if key in cos_pref_by_key:
+                # the preference lane's own cosine, kept apart: it is measured against a DIFFERENT
+                # query form, so it must never be compared with `cos` or substituted for it.
+                row["cos_pref"] = cos_pref_by_key[key]
             rows.append(row)
 
         # MS1a.2 EVIDENCE COLLAPSE: a span that is an evidence span of a belief already in the
