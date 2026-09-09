@@ -151,6 +151,25 @@ def _gold_pref_rank(st, query, topic, embedder):
     return None
 
 
+def _gold_pref_lane_rank(st, query, topic, embedder):
+    """The planted preference's 1-based rank INSIDE the MS1a.3 preference lane (`vec_pref`).
+
+    `_gold_pref_rank` measures the mixed, symmetric lane; this one measures the lane that actually
+    orders preferences at query time - preference rows only, instruction-prefixed query - so the
+    diagnostics can still see the mechanism after MS1a.3 added it (the coder's F7). None with no
+    embedder.
+    """
+    if embedder is None:
+        return None
+    keys = [k for k, _ in st._vector_lane(query, embedder, limit=100000,
+                                          tables=("preference",), instruction=True)]
+    for i, key in enumerate(keys, start=1):
+        r = st.conn.execute("select topic_norm from preference where id=?", (key[1],)).fetchone()
+        if r and r[0] == topic:
+            return i
+    return None
+
+
 def _gold_vec_rank(st, query, topic, embedder):
     """The same preference's 1-based rank in the WHOLE vector lane, spans and facts included.
 
@@ -184,7 +203,8 @@ def _score_transfer(st, items, owner_id, now, hint="auto", embedder=None):
         by_topic.setdefault(topic, 0)
         ranks.append({"query": it["query"], "topic": topic,
                       "pref_rank": _gold_pref_rank(st, it["query"], topic, embedder),
-                      "vec_rank": _gold_vec_rank(st, it["query"], topic, embedder)})
+                      "vec_rank": _gold_vec_rank(st, it["query"], topic, embedder),
+                      "pref_lane_rank": _gold_pref_lane_rank(st, it["query"], topic, embedder)})
         hits = st.query(it["query"], k=5, now=now, predicate_hint=hint, embedder=embedder)
         for h in hits:
             if h["table"] != "preference":
@@ -331,6 +351,10 @@ def run_household(seed, days, predicate_hint=True, embedder=None, drop_stopwords
             round(statistics.fmean([r["vec_rank"] for r in gold_ranks
                                     if r["vec_rank"] is not None]), 4)
             if any(r["vec_rank"] is not None for r in gold_ranks) else None),
+        "transfer_gold_pref_lane_rank_mean": (
+            round(statistics.fmean([r["pref_lane_rank"] for r in gold_ranks
+                                    if r["pref_lane_rank"] is not None]), 4)
+            if any(r["pref_lane_rank"] is not None for r in gold_ranks) else None),
         "embed_seconds": embed_stats["seconds"],
         "n_embedded": embed_stats["fact"] + embed_stats["preference"] + embed_stats["span"],
         "coexist_recall": round(coexist_recall, 4),
@@ -396,7 +420,8 @@ def run(seeds, days, latency_facts, out_path=None, predicate_hint=True, embedder
     # None rather than a fabricated 0 - the rank-1 FRACTION is 0.0 there by its own definition.
     for field in ("transfer_gold_pref_rank1",):
         agg[field] = round(statistics.fmean(h[field] for h in households), 4)
-    for field in ("transfer_gold_pref_rank_mean", "transfer_gold_vec_rank_mean"):
+    for field in ("transfer_gold_pref_rank_mean", "transfer_gold_vec_rank_mean",
+                  "transfer_gold_pref_lane_rank_mean"):
         vals = [h[field] for h in households if h[field] is not None]
         agg[field] = round(statistics.fmean(vals), 4) if vals else None
 
@@ -440,6 +465,7 @@ def run(seeds, days, latency_facts, out_path=None, predicate_hint=True, embedder
             "transfer_recall5": agg["transfer_recall5"],
             "transfer_gold_pref_rank1": agg["transfer_gold_pref_rank1"],
             "transfer_gold_vec_rank_mean": agg["transfer_gold_vec_rank_mean"],
+            "transfer_gold_pref_lane_rank_mean": agg["transfer_gold_pref_lane_rank_mean"],
             "relation_precision": agg["relation_precision"],
             "spouse_surfaced_day_mean": agg["spouse_surfaced_day_mean"],
         },

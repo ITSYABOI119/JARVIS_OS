@@ -1023,6 +1023,92 @@ check("T30b the dict embedder falls back to the plain vector, or takes the prefi
       and _t30.embed_query("bb") == [0.0, 1.0, 0.0, 0.0],
       str(_t30.embed_query("bb", instruction=True)))
 
+# ---------------------- T32 MS1a.4: ONE VECTOR VOTE PER ROW
+# The two vector lanes are two views of one mechanism - the same embedder over the same rows - so a
+# row takes its BEST rank among them, never their sum. MS1a.3 summed them and a preference found by
+# both out-summed the answer fact, costing the update band (100 % -> 93.75 %).
+_F32 = {"fts_fact": ["F"], "vec": ["X", "P", "F"], "vec_pref": ["P"]}
+_W32 = {"F": 1.0, "P": 1.0, "X": 1.0}
+_f32 = fuse(_F32, _W32)
+check("T32a one vote: the preference takes its best vector rank, the fact keeps fts + vec",
+      close_to(_f32["P"], 1.0 / 61, 1e-9)
+      and close_to(_f32["F"], 1.0 / 61 + 1.0 / 63, 1e-9)
+      and _f32["F"] > _f32["P"],
+      f"P={_f32['P']!r} F={_f32['F']!r}")
+_f32s = fuse(_F32, _W32, vector_lanes=())
+check("T32a2 the summed form is the MS1a.3 defect, pinned: the preference wins",
+      close_to(_f32s["P"], 1.0 / 62 + 1.0 / 61, 1e-9)
+      and close_to(_f32s["F"], 1.0 / 61 + 1.0 / 63, 1e-9)
+      and _f32s["P"] > _f32s["F"],
+      f"P={_f32s['P']!r} F={_f32s['F']!r}")
+check("T32b a preference only the preference lane found is still rescued at 1/61",
+      close_to(fuse({"vec": ["Z"], "vec_pref": ["P"]}, {"P": 1.0, "Z": 1.0})["P"], 1.0 / 61, 1e-9),
+      str(fuse({"vec": ["Z"], "vec_pref": ["P"]}, {"P": 1.0, "Z": 1.0})))
+check("T32c rank 1 in both vector lanes is one vote, not two",
+      close_to(fuse({"vec": ["P"], "vec_pref": ["P"]}, {"P": 1.0})["P"], 1.0 / 61, 1e-9),
+      str(fuse({"vec": ["P"], "vec_pref": ["P"]}, {"P": 1.0})))
+
+# ---------------------- T33 MS1a.4: THE SUBJECT GATE
+# MS1a.3's growth trace: all six misses were a filler fact about a DIFFERENT person out-summing the
+# answer. A question naming a known person must not take another person's belief. Exact tokens on
+# `display_name`; aliases are MS2's people layer, and that limit is stated in the code.
+_g, _gc1, _gc2, _gsam = fresh()
+_gerin = _g.conn.execute(
+    "insert into person (kind, display_name, created_at) values ('cluster',?,?)",
+    ("erin", "2026-03-01T00:00:00")).lastrowid
+_g.conn.commit()
+_gsp = add_day(_g, "2026-03-01", _gc1, ["sam works as a nurse", "erin works as a cooper"])
+_g.ingest(fact_cand(_gsam, [_gsp[0]], "a nurse", "a nurse", "2026-03-01T08:00:00",
+                    predicate="person.works_as"))
+_g.ingest(fact_cand(_gerin, [_gsp[1]], "a cooper", "a cooper", "2026-03-01T08:00:10",
+                    predicate="person.works_as", source_kind="inferred"))
+_GQ = "what does sam do for work"
+_G_SAM = _g._fact_fts_text(_gsam, "person", "person.works_as", "a nurse")
+_G_ERIN = _g._fact_fts_text(_gerin, "person", "person.works_as", "a cooper")
+_GE = DictEmbedder({_GQ: [1.0, 0.0, 0.0, 0.0],
+                    _G_ERIN: [1.0, 0.05, 0.0, 0.0],   # erin ranks ABOVE sam by cosine
+                    _G_SAM: [1.0, 0.30, 0.0, 0.0]}, 4)
+_g.embed_pending(_GE)
+check("T33b _named_persons finds the one named person",
+      _g._named_persons(_GQ) == {_gsam}, str(_g._named_persons(_GQ)))
+_ghits = _g.query(_GQ, k=5, now="2026-03-02T00:00:00", embedder=_GE)
+check("T33a the gate removes the other person's fact from every lane, and sam's is first",
+      _ghits and _ghits[0]["table"] == "fact"
+      and _fact_row_t(_g, _ghits[0]["row_id"])["subject_id"] == _gsam
+      and not any(h["table"] == "fact"
+                  and _fact_row_t(_g, h["row_id"])["subject_id"] == _gerin for h in _ghits),
+      str([(h["table"], h["row_id"], h["lanes"]) for h in _ghits]))
+_gq2 = "who works as a cooper"
+check("T33c a question naming nobody leaves both facts in",
+      _g._named_persons(_gq2) == set()
+      and any(_fact_row_t(_g, h["row_id"])["subject_id"] == _gerin
+              for h in _g.query(_gq2, k=5, now="2026-03-02T00:00:00", embedder=_GE)
+              if h["table"] == "fact"),
+      str(_g._named_persons(_gq2)))
+_gq3 = "do sam and erin both work"
+check("T33d a question naming both keeps both",
+      _g._named_persons(_gq3) == {_gsam, _gerin}, str(_g._named_persons(_gq3)))
+check("T33e an unknown name leaves the gate inactive",
+      _g._named_persons("what does zed do for work") == set(),
+      str(_g._named_persons("what does zed do for work")))
+# T33f needs a span NO belief stands on: the two spans above are the facts' evidence and rule 4's
+# collapse removes them, which is correct behaviour and not the gate. This third span is said by
+# erin's cluster and supports nothing, so only the gate could remove it - and must not, because a
+# span carries no person_id: evidence is not a claim about anybody.
+_gsp2 = add_day(_g, "2026-03-02", _gc2, ["the cooperage festival was busy"])
+_gspan_hits = _g.query("what did sam hear about the cooperage festival", k=10,
+                       now="2026-03-03T00:00:00", embedder=None)
+check("T33f evidence is never gated - a span said by another person survives a named question",
+      _g._named_persons("what did sam hear about the cooperage festival") == {_gsam}
+      and any(h["table"] == "span" and h["row_id"] == _gsp2[0] for h in _gspan_hits),
+      str([(h["table"], h["row_id"]) for h in _gspan_hits]))
+check("T33g a household fact carries no person and is never gated",
+      _g._subject_gate({"l": [{"person_id": None, "key": ("fact", 99)}]}, {_gsam})
+      == {"l": [{"person_id": None, "key": ("fact", 99)}]}
+      and _g._subject_gate({"l": [{"person_id": _gerin, "key": ("fact", 98)}]}, {_gsam}) == {},
+      "gate helper")
+
+
 # ------------------- T28 the transfer diagnostics: which of the fusion or the embedder loses it
 # `_gold_pref_rank` asks whether the embedder can pick the planted preference out of the household's
 # OTHER preferences; `_gold_vec_rank` asks how much else the query pulls in ahead of it. Rank 1 and
@@ -1067,6 +1153,16 @@ check("T28e a topic no preference holds has no rank",
       _harness._gold_pref_rank(_dst, _DQ, "loud music", _DE) is None
       and _harness._gold_vec_rank(_dst, _DQ, "loud music", _DE) is None)
 
+# ---------------------- T34 the preference-lane rank diagnostic (MS1a.4)
+# `_gold_pref_rank` measures the mixed lane; this measures the lane that actually orders
+# preferences at query time, so the diagnostics can still see the mechanism MS1a.3 introduced.
+check("T34 _gold_pref_lane_rank ranks inside the preference lane, None with no embedder",
+      _harness._gold_pref_lane_rank(_dst, _DQ, "spicy food", _DE) == 1
+      and _harness._gold_pref_lane_rank(_dst, _DQ, "long drives", _DE) == 2
+      and _harness._gold_pref_lane_rank(_dst, _DQ, "spicy food", None) is None,
+      str([_harness._gold_pref_lane_rank(_dst, _DQ, t, _DE)
+           for t in ("spicy food", "long drives")]))
+
 # ------------------------------------------- T24 the vector lane in the store
 st, c1, c2, owner = fresh()
 _sp = add_day(st, "2026-03-01", c1, ["quiet morning", "nothing much"])
@@ -1100,18 +1196,18 @@ check("T24b a second pass embeds nothing new",
 
 _hits = st.query("planning dinner for our anniversary", k=5, now="2026-03-02T00:00:00", embedder=E)
 _top = _hits[0] if _hits else {}
-# RETARGET (MS1a.3, the shape declared before the run): the preference model now has its OWN lane
-# under the instruction-prefixed query, beside the symmetric mixed lane, so a preference this
-# question matches is found by BOTH - `{"vec": 1, "vec_pref": 1}` - and earns two rank-1 terms,
-# 2/61. It is still first, now by a wider margin over the cosine-0 fact's 1/62.
-check("T24c the preference comes first, found by the mixed lane and its own preference lane",
+# RETARGET (MS1a.4, the shape declared before the run): the preference is STILL found by both
+# vector lanes - `{"vec": 1, "vec_pref": 1}` - but the two are two views of ONE mechanism, so it
+# takes ONE vote, 1/61, not their sum. It is still first: the cosine-0 fact sits at `vec` 2 and
+# earns 1/62. MS1a.3 gave it 2/61 here, and that double count cost the update band on the corpus.
+check("T24c the preference comes first, found by both vector lanes but holding one vote",
       _top.get("table") == "preference" and _top.get("lanes") == {"vec": 1, "vec_pref": 1}
       and _top.get("cos") is not None and close_to(_top["cos"], 1.0, 1e-6)
-      and close_to(_top["relevance"], 2.0 / 61, 1e-9),
+      and close_to(_top["relevance"], 1.0 / 61, 1e-9),
       f"{_top.get('table')} lanes={_top.get('lanes')} cos={_top.get('cos')} "
       f"rel={_top.get('relevance')}")
-check("T30c the preference's relevance is exactly its two rank-1 terms",
-      close_to(_top["relevance"], 0.03278688524590164, 1e-9)
+check("T30c the preference's relevance is ONE vector vote, not two",
+      close_to(_top["relevance"], 0.01639344262295082, 1e-9)
       and _top.get("cos_pref") is not None,
       f"rel={_top.get('relevance')} cos_pref={_top.get('cos_pref')}")
 check("T24d without the embedder that question finds nothing",
@@ -1130,13 +1226,53 @@ check("T24e the works_as row still arrives, by meaning, past a hint that exclude
       len(_works) == 1 and "vec" in _works[0]["lanes"],
       str([(h["table"], h.get("lanes")) for h in _hits]))
 
-# T30d - THE PRICE OF THE PREFERENCE LANE, PINNED. The lane gives the preference model its own rank
-# restart, so a preference is a candidate on every question, fact questions included. What must
-# never happen is a preference OUTRANKING the answer: that would make the price unbounded rather
-# than a reported rate. The fact question below is the T24e one; the preference is present and below.
+# T30d - THE PRICE OF THE PREFERENCE LANE, PINNED, IN THE EXACT DOUBLE-COUNT SHAPE (MS1a.4).
+# The MS1a.3 version of this check passed on a fixture where the preference sat LOW in the mixed
+# lane, so the summed form never got the chance to win and the test had no teeth - the coder's F6.
+# This fixture is built to the shape the corpus actually produced: the answer fact at `fts_fact` 1
+# + `vec` 3, the preference at `vec` 2 + `vec_pref` 1. Summed, the preference takes 1/62 + 1/61 =
+# 0.032522 and beats the fact's 1/61 + 1/63 = 0.032266; with ONE VOTE it takes 1/61 and loses.
+# The lane ranks are asserted, so the fixture cannot drift away from the shape it exists to test.
+_d30, _dc1a, _dc2a, _down = fresh()
+_d30sp = add_day(_d30, "2026-03-01", _dc1a, ["sam said something about work today"])
+_d30.ingest(fact_cand(_down, _d30sp, "a nurse", "a nurse", "2026-03-01T08:00:00",
+                      predicate="person.works_as"))
+_d30.ingest(dict(predicate_id="owner.prefers", subject={"kind": "person", "id": _down},
+                 object="long drives", object_norm="long drives", source_kind="stated_owner",
+                 speaker_cluster=_dc1a, span_ids=[_d30sp[0]], about_time=None, relation_id=None,
+                 polarity="likes", strength=2, ended=False, said_at="2026-03-01T08:00:20"))
+_d30.ingest(fact_cand(_down, [_d30sp[0]], "Sydney", "sydney", "2026-03-01T08:00:30"))
+_D30Q = "what job does sam work as"
+_D30_FACT = _d30._fact_fts_text(_down, "person", "person.works_as", "a nurse")
+_D30_PREF = _d30._pref_fts_text(_down, "likes", "long drives")
+_D30_DECOY = _d30._fact_fts_text(_down, "person", "person.lives_in", "Sydney")
+# cosines: decoy .995 > preference .980 > fact .958  => vec order decoy, pref, fact = 1, 2, 3
+_D30E = DictEmbedder({
+    _D30Q: [1.0, 0.0, 0.0, 0.0],
+    _D30_DECOY: [1.0, 0.10, 0.0, 0.0],
+    _D30_PREF: [1.0, 0.20, 0.0, 0.0],
+    _D30_FACT: [1.0, 0.30, 0.0, 0.0],
+}, 4)
+_d30.embed_pending(_D30E)
+_d30hits = _d30.query(_D30Q, k=5, now="2026-03-02T00:00:00", embedder=_D30E)
+_d30fact = next((h for h in _d30hits if h["table"] == "fact"
+                 and _fact_row_t(_d30, h["row_id"])["predicate_id"] == "person.works_as"), None)
+_d30pref = next((h for h in _d30hits if h["table"] == "preference"), None)
+check("T30d0 the fixture really is the double-count shape",
+      _d30fact is not None and _d30pref is not None
+      and _d30fact["lanes"] == {"fts_fact": 1, "vec": 3}
+      and _d30pref["lanes"] == {"vec": 2, "vec_pref": 1},
+      f"fact={_d30fact and _d30fact['lanes']} pref={_d30pref and _d30pref['lanes']}")
+check("T30d one vote: the answer fact is first and the preference cannot out-sum it",
+      _d30hits and _d30hits[0] is _d30fact
+      and close_to(_d30fact["relevance"], 1.0 / 61 + 1.0 / 63, 1e-9)
+      and close_to(_d30pref["relevance"], 1.0 / 61, 1e-9)
+      and _d30pref["relevance"] < _d30fact["relevance"],
+      str([(h["table"], h["lanes"], round(h["relevance"], 6)) for h in _d30hits]))
+
+# the ORIGINAL T24e-fixture check is kept: the lane still shows on a fact question
 _pref_hit = next((h for h in _hits if h["table"] == "preference"), None)
-_fact_hit = next((h for h in _hits if h["table"] == "fact"), None)
-check("T30d on a fact question the preference lane shows, and stays below the answer fact",
+check("T30d2 on a fact question the preference lane still shows, below the answer",
       _hits and _hits[0]["table"] == "fact" and _pref_hit is not None
       and "vec_pref" in _pref_hit["lanes"]
       and _pref_hit["relevance"] <= _hits[0]["relevance"] + 1e-12,

@@ -600,6 +600,52 @@ class MemoryStore:
         toks = _retrieve.query_terms(text, self.drop_stopwords)
         return " OR ".join(f'"{t}"' for t in toks) if toks else ""
 
+    def _named_persons(self, text) -> set:
+        """The ids of the known persons this question NAMES (design §6, MS1a.4 the subject gate).
+
+        A person is named when EVERY token of its normalised `display_name` appears among the
+        question's tokens. The tokeniser's raw output is used, BEFORE stopword removal - a name is
+        never a function word, and gating on a name the full-text query had already dropped would
+        be a silent no-op. An unnamed or unknown name yields the empty set, and the gate then does
+        nothing at all.
+
+        Exact tokens only: aliases and nicknames belong to MS2's people layer, and this limit is
+        stated rather than approximated. The store never GUESSES a subject - a known entity selects
+        the candidate set, the K-b instinct one level up.
+        """
+        qt = set(_tokens(text))
+        if not qt:
+            return set()
+        out = set()
+        for r in self.conn.execute(
+                "select id, display_name from person where display_name is not null").fetchall():
+            nt = _tokens(r["display_name"])
+            if nt and all(t in qt for t in nt):
+                out.add(r["id"])
+        return out
+
+    @staticmethod
+    def _subject_gate(members, named):
+        """Drop, from every lane, belief rows about a DIFFERENT known person.
+
+        Only rows that CARRY a person (a person-subject fact, a preference) are eligible; spans and
+        household/topic facts have `person_id` None and are never gated - evidence is not a claim
+        about anybody, and gating it would hide the utterance a belief rests on. With `named` empty
+        nothing is dropped. A lane the gate empties is omitted rather than left as an empty lane.
+
+        The measured reason is MS1a.3's growth trace: all six misses were a filler fact about
+        ANOTHER person out-summing the answer, which stood at fts_fact rank 1.
+        """
+        if not named:
+            return members
+        out = {}
+        for lane_name, lane in (members or {}).items():
+            kept = [m for m in lane
+                    if m.get("person_id") is None or m["person_id"] in named]
+            if kept:
+                out[lane_name] = kept
+        return out
+
     def _newest_now(self) -> str:
         r = self.conn.execute("select max(said_at) from span").fetchone()
         return r[0] or _now_iso()
@@ -629,12 +675,16 @@ class MemoryStore:
         members = {}          # lane -> [member dicts, in the lane's raw order]
         info = {}             # key -> the row's metadata
 
-        def note(key, table, row_id, source_kind, confidence, recorded_at, text_, newest_span_at):
+        def note(key, table, row_id, source_kind, confidence, recorded_at, text_, newest_span_at,
+                 person_id=None):
+            # `person_id` is the subject gate's input and is READ FROM THE COLUMNS - a fact's
+            # subject_id when subject_kind is 'person', a preference's person_id, None for a span
+            # and for a household/topic fact. It is never inferred from the rendered text.
             if key not in info:
                 info[key] = {"key": key, "table": table, "row_id": row_id,
                              "source_kind": source_kind, "confidence": confidence,
                              "recorded_at": recorded_at, "text": text_,
-                             "newest_span_at": newest_span_at}
+                             "newest_span_at": newest_span_at, "person_id": person_id}
             return info[key]
 
         if match:
@@ -655,7 +705,9 @@ class MemoryStore:
                                      r["recorded_at"],
                                      self._fact_fts_text(r["subject_id"], r["subject_kind"],
                                                          r["predicate_id"], r["object_text"]),
-                                     self._newest_span_at("fact", r["id"])))
+                                     self._newest_span_at("fact", r["id"]),
+                                     person_id=(r["subject_id"]
+                                                if r["subject_kind"] == "person" else None)))
                 members["fts_fact"] = lane
 
             if want_prefs:
@@ -671,7 +723,8 @@ class MemoryStore:
                                      r["recorded_at"],
                                      self._pref_fts_text(r["person_id"], r["polarity"],
                                                          r["topic_norm"]),
-                                     self._newest_span_at("preference", r["id"])))
+                                     self._newest_span_at("preference", r["id"]),
+                                     person_id=r["person_id"]))
                 members["fts_pref"] = lane
 
             lane = []
@@ -712,6 +765,11 @@ class MemoryStore:
                     pref_lane.append(info[key])
             if pref_lane:
                 members["vec_pref"] = pref_lane
+
+        # MS1a.4 THE SUBJECT GATE, applied after every lane is collected and BEFORE any ordering,
+        # so a gated row never occupies a rank: a question that names a known person must not take
+        # another person's belief. `info` keeps the rows; only lane membership changes.
+        members = self._subject_gate(members, self._named_persons(text))
 
         if not members:
             return []
@@ -798,7 +856,8 @@ class MemoryStore:
                 note(key, "fact", row_id, r["source_kind"], r["confidence"], r["recorded_at"],
                      self._fact_fts_text(r["subject_id"], r["subject_kind"], r["predicate_id"],
                                          r["object_text"]),
-                     self._newest_span_at("fact", row_id))
+                     self._newest_span_at("fact", row_id),
+                     person_id=(r["subject_id"] if r["subject_kind"] == "person" else None))
         elif table == "preference":
             r = self.conn.execute(
                 "select person_id, polarity, topic_norm, source_kind, confidence, recorded_at "
@@ -807,7 +866,8 @@ class MemoryStore:
                 note(key, "preference", row_id, r["source_kind"], r["confidence"],
                      r["recorded_at"],
                      self._pref_fts_text(r["person_id"], r["polarity"], r["topic_norm"]),
-                     self._newest_span_at("preference", row_id))
+                     self._newest_span_at("preference", row_id),
+                     person_id=r["person_id"])
         else:
             r = self.conn.execute("select text, said_at from span where id=?", (row_id,)).fetchone()
             if r:

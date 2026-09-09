@@ -89,7 +89,7 @@ def predicate_hint(text: str):
     return hits[0] if len(hits) == 1 else None
 
 
-def fuse(lanes: dict, row_weights=None) -> dict:
+def fuse(lanes: dict, row_weights=None, vector_lanes=("vec", "vec_pref")) -> dict:
     """Reciprocal-rank fusion over any number of lanes, each row weighed by its claim status.
 
     Each lane is an ORDERED list of keys, best first; a key at 1-based rank r contributes
@@ -97,16 +97,41 @@ def fuse(lanes: dict, row_weights=None) -> dict:
     whole point: agreement between the full-text and vector lanes outranks a strong showing in one.
     A key in no lane is simply absent.
 
+    **ONE VECTOR VOTE PER ROW (MS1a.4).** The lanes named in `vector_lanes` are two views of ONE
+    mechanism — the same embedder over the same rows, differing only in which rows they scan and
+    which query form orders them — so a row takes its BEST rank among them, never their sum. Every
+    other lane still sums. The measured reason is MS1a.3: a preference found by both vector lanes
+    (`vec` 2 + `vec_pref` 1 = 0.032522) out-summed the answer fact standing at `fts_fact` 1 + `vec`
+    3 = 0.032266, and the update band fell from 100 % to 93.75 %. The preference lane still does its
+    job — a preference at `vec_pref` rank 1 earns 1/61 whether or not the mixed lane found it — it
+    simply cannot be counted twice for being the same row seen twice.
+
+    Passing `vector_lanes=()` restores the summed form; the tests pin it there as the defect.
+    On a lane set with no `vec_pref` this is byte-for-byte the MS1a.2 behaviour: one vector lane's
+    best-of-one is that lane's own term.
+
     `row_weights` maps a KEY to its weight (the caller looks each row's table up in W_CLAIM). **A
     key with no weight given weighs 1.0** — a row the caller did not classify is a belief until it
-    says otherwise, never silently 0 — so a plain `fuse(lanes)` is byte-for-byte the MS1a behaviour
-    and a new table cannot be dropped by forgetting to weigh it.
+    says otherwise, never silently 0 — so a plain `fuse(lanes)` keeps working and a new table cannot
+    be dropped by forgetting to weigh it.
     """
     out = {}
+    best_vec = {}
     w = row_weights or {}
-    for keys in (lanes or {}).values():
+    vnames = set(vector_lanes or ())
+    for lane_name, keys in (lanes or {}).items():
+        is_vec = lane_name in vnames
         for i, key in enumerate(keys or (), start=1):
-            out[key] = out.get(key, 0.0) + w.get(key, 1.0) / (RRF_K + i)
+            term = w.get(key, 1.0) / (RRF_K + i)
+            if is_vec:
+                # one vote: keep the best of the vector lanes, do not accumulate
+                if term > best_vec.get(key, 0.0):
+                    best_vec[key] = term
+                out.setdefault(key, 0.0)
+            else:
+                out[key] = out.get(key, 0.0) + term
+    for key, term in best_vec.items():
+        out[key] = out.get(key, 0.0) + term
     return out
 
 
