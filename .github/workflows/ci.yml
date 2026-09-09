@@ -1428,6 +1428,13 @@ jobs:
     - name: "Phase 7: memory store benchmark, MS0 bands (Python, stdlib-only)"
       run: python3 phase7/memory/bench_ms0.py --households 3 --days 14 --seed 1 --latency-facts 20000 --out /tmp/ms0_ci.json --assert-bands
 
+    # MS1b. The bake-off itself needs a GGUF and a GPU and runs on the box, never here; this step
+    # proves the CLI imports, the registry-GENERATED schema builds and a well-formed request comes
+    # out, with no model on the runner and no network. The scorers and prompts are covered by the
+    # suite above (T35a-g).
+    - name: "Phase 7: memory extractor scaffolding (Python, stdlib-only, no model)"
+      run: python3 phase7/memory/bench_ms1b.py --dry-run --households 1
+
     - name: "Phase 6: 6-5/M4b Control reply builder (C)"
       run: gcc -Wall -Werror -O2 -std=c11 -I phase3/src/net -I phase3/src/crypto phase3/src/net/test_control_reply.c phase3/src/net/control_reply.c phase3/src/crypto/hmac_sha256.c phase3/src/crypto/sha256.c -o /tmp/t_reply && /tmp/t_reply
 

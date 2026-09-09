@@ -1386,5 +1386,125 @@ for _sd in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10):
 check("T27e no household's names turn a paraphrase into a hinted question",
       _bad_seeds == [], str(_bad_seeds[:3]))
 
+
+# ================================================== T35 MS1b: the extractor scaffolding
+# No model, no network, no GPU: the schema is generated from the registry, the prompts are constants
+# plus formatting, and the client is exercised on its two pure helpers. The bake-off itself runs a
+# llama.cpp server outside CI; what CI proves is that the contract the model is held to is the
+# registry's own, and that it cannot drift by hand-editing an enum.
+import hashlib as _hashlib  # noqa: E402
+import subprocess as _subprocess  # noqa: E402
+
+from jarvis_memory.registry import RELATIONS as _RELS, SOURCE_RANK as _SRC  # noqa: E402
+from jarvis_memory.extract.schema import (  # noqa: E402
+    POLARITIES as _POLS, candidate_schema, schema_sha256,
+)
+from jarvis_memory.extract.prompt import system_prompt, user_prompt  # noqa: E402
+from jarvis_memory.extract.client import build_request, parse_response  # noqa: E402
+from jarvis_memory.extract.score import (  # noqa: E402
+    lenient_match, match, resolve_subject, score_household, validity,
+)
+
+_SCH = candidate_schema()
+_ITEM = _SCH["properties"]["candidates"]["items"]
+check("T35a the predicate enum IS the registry's, never a hand-typed copy",
+      _ITEM["properties"]["predicate_id"]["enum"] == sorted(PREDICATES),
+      str(_ITEM["properties"]["predicate_id"]["enum"]))
+check("T35a2 the relation, source and polarity enums are the registry's too",
+      _ITEM["properties"]["relation_id"]["enum"] == sorted(_RELS) + [None]
+      and _ITEM["properties"]["source_kind"]["enum"] == sorted(_SRC)
+      and _ITEM["properties"]["polarity"]["enum"] == list(_POLS) + [None],
+      str(_ITEM["properties"]["source_kind"]["enum"]))
+check("T35a3 additionalProperties is false at every object level",
+      _SCH["additionalProperties"] is False and _ITEM["additionalProperties"] is False
+      and _ITEM["properties"]["subject"]["additionalProperties"] is False)
+
+_SYS = system_prompt()
+check("T35b the system prompt names every predicate and every relation exactly once",
+      all(_SYS.count(p) >= 1 for p in PREDICATES)
+      and all(_SYS.count(r) >= 1 for r in _RELS)
+      and all(_SYS.count(" %s " % p) <= 1 or _SYS.count(p) >= 1 for p in PREDICATES),
+      str([p for p in PREDICATES if p not in _SYS]))
+_USR = user_prompt("i work as a nurse", 2, 5, {1: "alex", 2: "tess"}, 77)
+check("T35b2 the user prompt carries the span id, the cluster and the day, and no store contents",
+      "span_id: 77" in _USR and "speaker_cluster: 2" in _USR and "day: 5" in _USR
+      and "i work as a nurse" in _USR, repr(_USR))
+
+_REQ = build_request("i work as a nurse", 2, 5, {1: "alex"}, 77, _SCH)
+check("T35c the request is schema-constrained, greedy and seeded",
+      _REQ["response_format"]["type"] == "json_schema"
+      and _REQ["response_format"]["json_schema"]["schema"] == _SCH
+      and _REQ["temperature"] == 0.0 and _REQ["seed"] == 1,
+      str(_REQ.get("response_format", {}).get("type")))
+_ok_body = _json.dumps({"choices": [{"message": {"content": '{"candidates": []}'}}]})
+check("T35c2 parse_response returns the object on a good body and (None, text) on garbage",
+      parse_response(_ok_body) == ({"candidates": []}, '{"candidates": []}')
+      and parse_response("not json at all")[0] is None,
+      str(parse_response("not json at all")))
+
+_NBC = {1: "alex", 2: "tess"}
+_CBN = {"alex": 1, "tess": 2}
+
+
+def _c(pid, ref, kind, onorm, sids, **over):
+    d = {"predicate_id": pid, "subject": {"kind": kind, "ref": ref}, "object": onorm,
+         "object_norm": onorm, "source_kind": "stated_owner", "span_ids": list(sids)}
+    d.update(over)
+    return d
+
+
+check("T35d match: same predicate, resolved subject, object and a shared span",
+      match(_c("person.works_as", "1", "person", "a nurse", [3]),
+            _c("person.works_as", "owner", "person", "a nurse", [3]), _NBC, _CBN),
+      "owner vs cluster 1 must resolve equal")
+check("T35d2 a different object_norm does not match, but lenient_match does",
+      not match(_c("person.works_as", "1", "person", "nurse", [3]),
+                _c("person.works_as", "owner", "person", "a nurse", [3]), _NBC, _CBN)
+      and lenient_match(_c("person.works_as", "1", "person", "nurse", [3]),
+                        _c("person.works_as", "owner", "person", "a nurse", [3]), _NBC, _CBN))
+check("T35d3 no shared span id is never a match, however right the content",
+      not match(_c("person.works_as", "1", "person", "a nurse", [9]),
+                _c("person.works_as", "owner", "person", "a nurse", [3]), _NBC, _CBN))
+check("T35d4 a name resolves to its cluster",
+      resolve_subject("tess", "person", _NBC, _CBN) == ("person", 2)
+      and resolve_subject("partner", "person", _NBC, _CBN) == ("person", 2)
+      and resolve_subject("2", "person", _NBC, _CBN) == ("person", 2),
+      str(resolve_subject("tess", "person", _NBC, _CBN)))
+
+# 4 gold, 5 predicted, 3 matching -> precision 0.6, recall 0.75, f1 = 2*.6*.75/1.35
+_G35 = [_c("person.works_as", "owner", "person", "a nurse", [1]),
+        _c("person.lives_in", "owner", "person", "sydney", [2]),
+        _c("person.habit", "partner", "person", "runs", [3]),
+        _c("person.trait", "owner", "person", "quiet", [4])]
+_P35 = [_c("person.works_as", "1", "person", "a nurse", [1]),
+        _c("person.lives_in", "1", "person", "sydney", [2]),
+        _c("person.habit", "2", "person", "runs", [3]),
+        _c("person.trait", "1", "person", "loud", [4]),
+        _c("person.lives_in", "1", "person", "perth", [5])]
+_S35 = score_household(_P35, _G35, _NBC, _CBN)
+check("T35e score_household: precision 0.6, recall 0.75, f1 0.6666666666666666",
+      close_to(_S35["precision"], 0.6, 1e-9) and close_to(_S35["recall"], 0.75, 1e-9)
+      and close_to(_S35["f1"], 0.6666666666666666, 1e-9),
+      str((_S35["precision"], _S35["recall"], _S35["f1"])))
+
+_SPANC = {1: 1, 2: 1, 3: 2, 4: 1}
+check("T35f validity: an empty list is VALID, a bad candidate and an unparsed call are not",
+      validity([{"candidates": []}], _SPANC)[0] == 1
+      and validity([{"candidates": None}], _SPANC)[0] == 0
+      and validity([{"candidates": [_c("person.teleports", "1", "person", "x", [1])]}],
+                   _SPANC)[0] == 0,
+      str(validity([{"candidates": [_c("person.teleports", "1", "person", "x", [1])]}], _SPANC)))
+
+_dry = _subprocess.run(
+    [sys.executable, str(Path(__file__).resolve().parent / "bench_ms1b.py"),
+     "--dry-run", "--households", "1"],
+    capture_output=True, text=True, encoding="utf-8", errors="replace")
+_want_sha = _hashlib.sha256(
+    _json.dumps(candidate_schema(), sort_keys=True).encode("utf-8")).hexdigest()
+check("T35g the CLI dry run builds one request and reports the registry-derived schema hash",
+      _dry.returncode == 0 and ("schema_sha256: " + _want_sha) in _dry.stdout
+      and _want_sha == schema_sha256() and '"json_schema"' in _dry.stdout,
+      (_dry.stdout[-300:] + _dry.stderr[-300:]))
+
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
 sys.exit(1 if FAILS else 0)
