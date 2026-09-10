@@ -130,15 +130,28 @@ def extract_span(base_url, span_id, text, cluster, day, names, schema,
 class LlamaServer:
     """Start a llama-server on a free port, wait for /health, and always kill it on exit."""
 
-    def __init__(self, model_path, port=8089, ctx=4096, ngl=99, bin_dir=None):
+    def __init__(self, model_path, port=8089, ctx=4096, ngl=99, bin_dir=None, extra_args=None):
         self.model_path = str(model_path)
         self.port = int(port)
         self.ctx = int(ctx)
         self.ngl = int(ngl)
         self.bin_dir = bin_dir or LLAMA_BIN
+        # Per-model server arguments, declared beside the model in the bake-off's own table and
+        # appended AFTER the shared ones so a model can never quietly change the shared contract
+        # (`--jinja`, the context, the port). Their whole purpose is to make a model RUN - the
+        # Q8_0 arm needs `--n-cpu-ffn` to fit an 8.6 GB file on an 8 GB card - never to make one
+        # score better, so a run records them and the report names them.
+        self.extra_args = list(extra_args or [])
         self.proc = None
         self.version = None
         self.base_url = "http://127.0.0.1:%d" % self.port
+
+    def server_command(self):
+        """The exact argv this server will run. Pure - no process, no file check - so a per-model
+        argument can be pinned by a test without a binary or a 5 GB model on disk."""
+        return [os.path.join(self.bin_dir, SERVER_EXE), "-m", self.model_path,
+                "-ngl", str(self.ngl), "-c", str(self.ctx), "--port", str(self.port),
+                "--jinja"] + self.extra_args
 
     def __enter__(self):
         exe = os.path.join(self.bin_dir, SERVER_EXE)
@@ -146,8 +159,8 @@ class LlamaServer:
             raise RuntimeError("no llama-server at %s (set JARVIS_LLAMA_BIN)" % exe)
         if not os.path.exists(self.model_path):
             raise RuntimeError("no model at %s" % self.model_path)
-        cmd = [exe, "-m", self.model_path, "-ngl", str(self.ngl), "-c", str(self.ctx),
-               "--port", str(self.port), "--jinja"]
+        cmd = self.server_command()
+        self.cmd = cmd
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                      text=True, errors="replace")
         deadline = time.time() + 300

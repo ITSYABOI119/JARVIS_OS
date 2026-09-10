@@ -57,7 +57,69 @@ MODELS = {
     "qwen35-9b":  {"path": "models/Qwen3.5-9B-Q4_K_M.gguf",                   "thinking_switch": True},
     "gemma-e2b":  {"path": "models/gemma-4-E2B-it-Q4_K_M.gguf",               "thinking_switch": False},
     "gemma-e4b":  {"path": "models/google_gemma-4-E4B-it-Q4_K_M.gguf",        "thinking_switch": False},
+
+    # ---- the FIELD ADDENDUM (2026-09-10), pre-registered in the design (§11) before any of its
+    # numbers. These run on llama.cpp v0.4.0 (build b10809) beside the frozen b8728 build, and the
+    # verdict over them is computed WITHIN that build: two builds are never compared as one field.
+    #
+    # `gemma-e4b-v040` is the SAME FILE as `gemma-e4b`, re-run on the new build. It exists as its own
+    # key so its result lands in its own JSON: the pair is the venue delta, and a venue delta needs
+    # two runs, not one run relabelled.
+    #
+    # thinking_switch, read from each model's own chat template rather than assumed:
+    #   granite-3b / granite-8b  `enable_thinking` DEFAULTS TO TRUE in Granite 4.2's template, so
+    #                            leaving this False would have measured Granite with a thinking
+    #                            channel against models without one - the exact unfairness the
+    #                            field's rule exists to prevent.
+    #   nuextract3               has `enable_thinking`, already defaulting to False; set explicitly.
+    #   lfm25-2.6b               its template's `preserve_thinking` keeps PRIOR thinking in history
+    #                            and is not a generation switch, so there is nothing to turn off.
+    #   ministral-8b             the INSTRUCT variant: no switch in the template at all.
+    #   the three gemma arms     Gemma 4's channel has no switch (the JARVIS_THINKING finding).
+    #
+    # NO key declares `extra_args`, and that is a MEASUREMENT rather than an omission. The addendum
+    # anticipated that the 8.03 GB Q8_0 arm would need `--n-cpu-ffn` to fit an 8 GB card; on
+    # v0.4.0 it does not, because `-ngl` now defaults to `auto` ("either an exact number, 'auto',
+    # or 'all'") and the build fits the model itself. Measured at load, baseline 927 MiB:
+    #   Q4_K_M  4241 MiB used, fully resident, 49.19 tok/s on a 40-token probe
+    #   Q6_K    5123 MiB used, fully resident
+    #   Q8_0    6111 MiB used, 2081 MiB free - loads and generates at 5.28 tok/s, so it is NOT
+    #           fully resident; llama.cpp chose the split. Forcing one with `--n-cpu-ffn` would
+    #           move where the boundary falls, not make the arm faster, so nothing is forced.
+    # The consequence is throughput ONLY - the same weights are computed either side of the split -
+    # and throughput is reported beside the verdict, never as the tie-breaker. The mechanism stays
+    # (T42b) because the next model that needs a server argument should not have to invent it.
+    "gemma-e4b-v040": {"path": "models/google_gemma-4-E4B-it-Q4_K_M.gguf",     "thinking_switch": False},
+    "granite-3b":     {"path": "models/granite-4.2-3b-Q4_K_M.gguf",            "thinking_switch": True},
+    "granite-8b":     {"path": "models/granite-4.2-8b-Q4_K_M.gguf",            "thinking_switch": True},
+    "lfm25-2.6b":     {"path": "models/LFM2.5-2.6B-Q4_K_M.gguf",               "thinking_switch": False},
+    "ministral-8b":   {"path": "models/Ministral-3-8B-Instruct-2512-Q4_K_M.gguf", "thinking_switch": False},
+    "gemma-e4b-q6k":  {"path": "models/google_gemma-4-E4B-it-Q6_K.gguf",       "thinking_switch": False},
+    "gemma-e4b-q8":   {"path": "models/google_gemma-4-E4B-it-Q8_0.gguf",       "thinking_switch": False},
+    "nuextract3":     {"path": "models/NuExtract3-Q4_K_M.gguf",                "thinking_switch": True},
 }
+
+# The contract-2 schema, as the eleven-model field measured it. Asserted before a queue starts so a
+# tree carrying a LATER contract (MS2's contract 3) cannot silently produce runs that would be
+# compared against contract-2 numbers. The hash is the schema's, not the file's.
+CONTRACT2_SCHEMA_SHA256 = "846ad08857eb37f8175f0aa24fbbfdfe2c7edf89c5565b2521209a91792dbc49"
+
+
+def contract2_schema_ok(schema_hash) -> bool:
+    """Is this the schema the field ran under? Pure, so the refusal is testable without a server."""
+    return schema_hash == CONTRACT2_SCHEMA_SHA256
+
+
+def build_matches(version, required) -> bool:
+    """Is `required` a substring of the build string a server reported? Pure.
+
+    Substring, not equality, because the string a server reports carries its commit
+    (`b10809-5266f24da`) and the thing being asserted is the BUILD. An empty or absent requirement
+    matches anything - the frozen field ran before any of this existed and must still read.
+    """
+    if not required:
+        return True
+    return required in (version or "")
 
 
 def model_path(key):
@@ -66,6 +128,11 @@ def model_path(key):
 
 def thinking_switch(key):
     return bool(MODELS[key]["thinking_switch"])
+
+
+def model_extra_args(key):
+    """The per-model server arguments, or []. Declared in MODELS beside the model they belong to."""
+    return list(MODELS[key].get("extra_args") or [])
 
 
 def _sha256(path, budget=None):
@@ -99,14 +166,23 @@ def _household_context(hh):
     return names_by_cluster, clusters_by_name
 
 
-def run_model(model_key, seeds, days, out_path, port, ctx, ngl, max_tokens):
+def run_model(model_key, seeds, days, out_path, port, ctx, ngl, max_tokens, require_build=None):
     mpath = model_path(model_key)
     think = thinking_switch(model_key)
     schema = candidate_schema()
     households, all_results = [], []
     t_start = time.time()
-    with _client.LlamaServer(mpath, port=port, ctx=ctx, ngl=ngl) as srv:
+    with _client.LlamaServer(mpath, port=port, ctx=ctx, ngl=ngl,
+                             extra_args=model_extra_args(model_key)) as srv:
         print("server up: %s  (%s)" % (srv.base_url, srv.version))
+        # The venue check, made in the first seconds of an arm rather than after its hours: an
+        # addendum run that started against the frozen build because JARVIS_LLAMA_BIN was not set
+        # would produce a perfectly valid-looking number belonging to the wrong field.
+        if not build_matches(srv.version, require_build):
+            raise RuntimeError(
+                "server reports build %r, which does not contain %r - refusing to run %s here; "
+                "set JARVIS_LLAMA_BIN to the intended llama.cpp bin directory"
+                % (srv.version, require_build, model_key))
         for seed in seeds:
             hh = corpus.generate_household(seed, days)
             names, clusters_by_name = _household_context(hh)
@@ -258,8 +334,13 @@ def verdict(runs) -> dict:
 RESULTS_DIR = str(Path(__file__).resolve().parent / "bench" / "results")
 
 
-def load_field(results_dir=None, contract=None):
+def load_field(results_dir=None, contract=None, build=None):
     """Every CONTRACT-2 run in the results dir, as [(key, aggregate, path)].
+
+    `build`, when given, keeps only runs whose recorded `llama_version` contains it. Numbers are
+    comparable only within a build (the design's §10): the eleven-model field ran on a 2026-04-09
+    checkout (`b8728-...`) and the addendum on v0.4.0 (`b10809-...`), and a verdict computed over
+    both would be a table of two different venues read as one.
 
     Three exclusions, each for its own reason:
       * `*_contract0.json` / `*_contract1.json` — superseded runs, KEPT on purpose and never mixed
@@ -285,6 +366,8 @@ def load_field(results_dir=None, contract=None):
         if d.get("contract") != contract:
             raise ValueError("%s is labelled %r, not %r - a verdict never mixes contracts"
                              % (name, d.get("contract"), contract))
+        if not build_matches(d.get("llama_version"), build):
+            continue
         out.append((d["model_key"], d.get("aggregate", {}), str(path)))
     return out
 
@@ -296,7 +379,8 @@ def _queue_log(log_path, line):
             fh.write(line + "\n")
 
 
-def run_queue(keys, seeds, days, log_path, port, ctx, ngl, max_tokens, results_dir=None):
+def run_queue(keys, seeds, days, log_path, port, ctx, ngl, max_tokens, results_dir=None,
+              require_build=None, schema_hash=None):
     """Run the field sequentially, ONE server at a time, resumable.
 
     Idempotent by design because the queue runs for many hours and a session may end under it: a key
@@ -305,7 +389,15 @@ def run_queue(keys, seeds, days, log_path, port, ctx, ngl, max_tokens, results_d
     that is not on disk is skipped with the reason logged and no JSON created.
     """
     results_dir = results_dir or RESULTS_DIR
-    schema_hash = schema_sha256()
+    schema_hash = schema_sha256() if schema_hash is None else schema_hash
+    # BEFORE anything else, including the resume scan: a tree carrying a later contract's schema
+    # would produce runs that look like field members and are not comparable to one.
+    if not contract2_schema_ok(schema_hash):
+        raise SystemExit(
+            "the tree's candidate schema hashes to %s, not the contract-2 schema %s the field ran "
+            "under - refusing to queue. If a later contract is in the tree (MS2's contract 3), this "
+            "run must wait for it to be pinned back, or its numbers would be compared across "
+            "contracts." % (schema_hash, CONTRACT2_SCHEMA_SHA256))
     done, skipped = [], []
     for key in keys:
         out_path = os.path.join(results_dir, "ms1b_%s.json" % key)
@@ -330,11 +422,13 @@ def run_queue(keys, seeds, days, log_path, port, ctx, ngl, max_tokens, results_d
             _queue_log(log_path, "%s SKIP model file absent: %s" % (key, mpath))
             skipped.append((key, "model file absent: %s" % mpath))
             continue
-        _queue_log(log_path, "%s START %s think=%s"
-                   % (key, time.strftime("%Y-%m-%d %H:%M:%S"), thinking_switch(key)))
+        _queue_log(log_path, "%s START %s think=%s args=%s"
+                   % (key, time.strftime("%Y-%m-%d %H:%M:%S"), thinking_switch(key),
+                      " ".join(model_extra_args(key)) or "-"))
         t0 = time.time()
         try:
-            res = run_model(key, seeds, days, out_path, port, ctx, ngl, max_tokens)
+            res = run_model(key, seeds, days, out_path, port, ctx, ngl, max_tokens,
+                            require_build=require_build)
         except Exception as exc:                                   # noqa: BLE001
             _queue_log(log_path, "%s ERROR %s" % (key, exc))
             skipped.append((key, "error: %s" % exc))
@@ -367,7 +461,8 @@ def run_smoke(key, days, port, ctx, ngl, max_tokens):
         print("smoke: could not find both probe spans (%d found)" % len(picks))
         return 1
     ok = True
-    with _client.LlamaServer(model_path(key), port=port, ctx=ctx, ngl=ngl) as srv:
+    with _client.LlamaServer(model_path(key), port=port, ctx=ctx, ngl=ngl,
+                             extra_args=model_extra_args(key)) as srv:
         print("server up: %s  (%s)" % (srv.base_url, srv.version))
         for s in picks:
             r = _client.extract_span(srv.base_url, s["sid"], s["text"], s["cluster"], s["day"],
@@ -408,6 +503,10 @@ def main(argv=None):
     ap.add_argument("--max-tokens", type=int, default=2048)
     ap.add_argument("--verdict", action="store_true",
                     help="apply the pre-registered rule over every contract-2 run and exit")
+    ap.add_argument("--build", default=None, metavar="SUBSTRING",
+                    help="with --verdict: only runs whose llama_version contains this, and the "
+                         "verdict is written to ms1b_field_verdict_<substring>.json. With --queue: "
+                         "every arm asserts its server reports a matching build before it runs.")
     ap.add_argument("--queue", default=None, metavar="k1,k2,...",
                     help="run these model keys sequentially, one server at a time, resumable")
     ap.add_argument("--smoke", default=None, metavar="KEY",
@@ -419,7 +518,9 @@ def main(argv=None):
     seeds_all = list(range(a.seed, a.seed + a.households))
 
     if a.verdict:
-        field = load_field(a.results_dir)
+        field = load_field(a.results_dir, build=a.build)
+        if a.build:
+            print("build filter: %r  (%d runs)" % (a.build, len(field)))
         print("%-11s %-9s %-9s %-9s %-9s %-7s %-9s" % ("key", "validity", "F1", "lenientF1",
                                                        "scorable", "zeroGP", "seconds"))
         for key, ag, _path in sorted(field, key=lambda r: -r[1].get("f1", 0.0)):
@@ -431,7 +532,7 @@ def main(argv=None):
         line = ("CHOSEN: %s" % v["chosen"]) if v["chosen"] else "NONE"
         print("VERDICT: %s" % line)
         print("reason : %s" % v["reason"])
-        out = {"contract": CONTRACT, "schema_sha256": schema_sha256(),
+        out = {"contract": CONTRACT, "schema_sha256": schema_sha256(), "build": a.build,
                "validity_band": VALIDITY_BAND, "f1_floor": F1_FLOOR,
                "n_models": len(field), "chosen": v["chosen"], "reason": v["reason"],
                "rows": [{"key": k, "validity": ag.get("validity"), "f1": ag.get("f1"),
@@ -440,7 +541,8 @@ def main(argv=None):
                          "zero_gold_predictions": ag.get("zero_gold_predictions"),
                          "seconds": ag.get("seconds")}
                         for k, ag, _ in sorted(field, key=lambda r: -r[1].get("f1", 0.0))]}
-        vpath = os.path.join(a.results_dir or RESULTS_DIR, "ms1b_field_verdict.json")
+        vname = "ms1b_field_verdict%s.json" % (("_" + a.build) if a.build else "")
+        vpath = os.path.join(a.results_dir or RESULTS_DIR, vname)
         with open(vpath, "w", encoding="utf-8") as fh:
             json.dump(out, fh, indent=2, sort_keys=True)
             fh.write("\n")
@@ -453,7 +555,7 @@ def main(argv=None):
     if a.queue:
         keys = [k.strip() for k in a.queue.split(",") if k.strip()]
         done, skipped, stopped = run_queue(keys, seeds_all, a.days, a.log, a.port, a.ctx, a.ngl,
-                                           a.max_tokens, a.results_dir)
+                                           a.max_tokens, a.results_dir, require_build=a.build)
         _queue_log(a.log, "QUEUE done=%d skipped=%d%s"
                    % (len(done), len(skipped), (" STOPPED at %s" % stopped) if stopped else ""))
         return 1 if stopped else 0

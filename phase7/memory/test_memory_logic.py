@@ -1687,13 +1687,24 @@ from jarvis_memory.extract.derive import FIRST_PERSON as _FP  # noqa: E402
 
 _FIELD_KEYS = ["llama-1b", "llama-3b", "phi3-mini", "qwen3-4b", "qwen35-4b", "phi4-mini",
                "nuextract", "llama-8b", "qwen3-8b", "qwen35-9b", "gemma-e2b", "gemma-e4b"]
-check("T37a the field table holds every key, each with a models/ path and the right thinking switch",
-      sorted(_bench.MODELS) == sorted(_FIELD_KEYS)
+# The 2026-09-10 addendum's arms, which run on a DIFFERENT llama.cpp build (T42). Listed once, here,
+# so T37a can say the table is exactly the frozen field plus these and T42a can pin their own
+# properties without a second copy of the list to drift from this one.
+_ADDENDUM_KEYS = ["gemma-e4b-v040", "granite-3b", "granite-8b", "lfm25-2.6b", "ministral-8b",
+                  "gemma-e4b-q6k", "gemma-e4b-q8", "nuextract3"]
+_FROZEN_PATHS = {k: _bench.model_path(k) for k in _FIELD_KEYS}
+check("T37a the field table holds every frozen-field key with its path and thinking switch, and "
+      "the table is exactly those twelve plus the addendum's eight",
+      sorted(_bench.MODELS) == sorted(_FIELD_KEYS + _ADDENDUM_KEYS)
+      and set(_FIELD_KEYS).isdisjoint(_ADDENDUM_KEYS)
       and all(_bench.model_path(k).startswith(("models/", "phase3/models/"))
               for k in _FIELD_KEYS)
       and {k for k in _FIELD_KEYS if _bench.thinking_switch(k)}
-      == {"qwen3-4b", "qwen35-4b", "qwen3-8b", "qwen35-9b"},
-      str(sorted(set(_bench.MODELS) ^ set(_FIELD_KEYS))
+      == {"qwen3-4b", "qwen35-4b", "qwen3-8b", "qwen35-9b"}
+      # the frozen field's own paths are untouched by the addendum: its numbers describe these files
+      and _FROZEN_PATHS["gemma-e4b"] == "models/google_gemma-4-E4B-it-Q4_K_M.gguf"
+      and _FROZEN_PATHS["gemma-e2b"] == "models/gemma-4-E2B-it-Q4_K_M.gguf",
+      str(sorted(set(_bench.MODELS) ^ set(_FIELD_KEYS + _ADDENDUM_KEYS))
           or {k for k in _FIELD_KEYS if _bench.thinking_switch(k)}))
 
 
@@ -1956,6 +1967,121 @@ check("T40 merge_cluster relabels every span, folds the counts and the accumulat
       and "11.00 s" in (_aud40[5] or "")
       and _refused40 and _self40,
       str((_m40, tuple(_row40), _aud40, _refused40, _self40)))
+
+
+# ================================== T42 - MS1b's field addendum: keys, per-model args, the venue
+# The eleven-model field ran on a llama.cpp checkout dated 2026-04-09 (`b8728-...`); the addendum
+# runs on v0.4.0 (`b10809-...`). Numbers are comparable only WITHIN a build, so the verdict has to
+# be able to say which venue a run belongs to - and the queue has to refuse to start under a schema
+# the field never ran.
+import importlib.util as _ilu42  # noqa: E402
+import json as _j42  # noqa: E402
+import tempfile as _tf42  # noqa: E402
+from jarvis_memory.extract.schema import schema_sha256 as _ssha42  # noqa: E402
+
+_spec42 = _ilu42.spec_from_file_location(
+    "bench_ms1b", str(Path(__file__).resolve().parent / "bench_ms1b.py"))
+_bench42 = _ilu42.module_from_spec(_spec42)
+_spec42.loader.exec_module(_bench42)
+from jarvis_memory.extract.client import LlamaServer as _LS42  # noqa: E402
+
+_ADDENDUM = _ADDENDUM_KEYS                      # one list, defined at T37a
+
+check("T42a the eight addendum keys exist with models/ paths, the incumbent re-run points at the "
+      "same file as the frozen-build key, and every Granite arm has its thinking switch OFF",
+      all(k in _bench42.MODELS for k in _ADDENDUM)
+      and all(_bench42.model_path(k).startswith("models/") for k in _ADDENDUM)
+      and all(_bench42.model_path(k).endswith(".gguf") for k in _ADDENDUM)
+      # the venue delta needs the SAME FILE measured twice, not a different quant
+      and _bench42.model_path("gemma-e4b-v040") == _bench42.model_path("gemma-e4b")
+      # Granite 4.2's template defaults enable_thinking to TRUE, so the switch must be declared
+      and _bench42.thinking_switch("granite-3b") and _bench42.thinking_switch("granite-8b")
+      and _bench42.thinking_switch("nuextract3")
+      and not _bench42.thinking_switch("ministral-8b")
+      and not _bench42.thinking_switch("lfm25-2.6b")
+      and not any(_bench42.thinking_switch(k) for k in
+                  ("gemma-e4b-v040", "gemma-e4b-q6k", "gemma-e4b-q8"))
+      # the addendum adds keys and removes none
+      and len(_bench42.MODELS) == 12 + len(_ADDENDUM),
+      str(([k for k in _ADDENDUM if k not in _bench42.MODELS], len(_bench42.MODELS))))
+
+# A per-model server argument is appended AFTER the shared ones, so a model can add to the server's
+# command line and never change the shared contract. NO key declares one today and that is a
+# measurement, not an omission: the Q8_0 arm was expected to need `--n-cpu-ffn` on an 8 GB card and
+# does not, because v0.4.0's `-ngl` defaults to `auto` and fits the model itself (6111 MiB used,
+# 2081 free, generating at 5.28 tok/s). So the mechanism is pinned directly here, and the table's
+# emptiness is pinned too - a future arm that needs an argument must add it deliberately.
+_cmd_args = _LS42("m.gguf", bin_dir="B", extra_args=["--n-cpu-ffn", "12"]).server_command()
+_cmd_plain = _LS42("m.gguf", bin_dir="B",
+                   extra_args=_bench42.model_extra_args("gemma-e4b-q8")).server_command()
+check("T42b a per-model server argument is appended after the shared ones and reaches only the "
+      "server that declares it; no key in the table declares one today",
+      _cmd_args[-2:] == ["--n-cpu-ffn", "12"]
+      and _cmd_args[:len(_cmd_plain)] == _cmd_plain          # the shared prefix is untouched
+      and "--n-cpu-ffn" not in _cmd_plain and "--jinja" in _cmd_plain
+      and all(_bench42.model_extra_args(k) == [] for k in _bench42.MODELS)
+      # the list a server holds is its OWN copy: mutating it cannot reach back into MODELS
+      and (_cmd_args.append("--poison") or _bench42.model_extra_args("gemma-e4b-q8") == []),
+      str((_cmd_args[-3:], _cmd_plain[-3:],
+           {k: _bench42.model_extra_args(k) for k in _bench42.MODELS
+            if _bench42.model_extra_args(k)})))
+
+# T42c the build filter, on five stubs: three of one venue, two of another
+with _tf42.TemporaryDirectory() as _td42:
+    _td42 = Path(_td42)
+    _V_OLD, _V_NEW = "b8728-5e9c63546", "b10809-5266f24da"
+    _stubs = [("alpha", _V_OLD, 0.10), ("beta", _V_OLD, 0.20), ("gamma", _V_OLD, 0.30),
+              ("delta", _V_NEW, 0.70), ("epsilon", _V_NEW, 0.80)]
+    for key, ver, f1 in _stubs:
+        (_td42 / ("ms1b_%s.json" % key)).write_text(_j42.dumps({
+            "model_key": key, "contract": _bench42.CONTRACT,
+            "schema_sha256": _bench42.CONTRACT2_SCHEMA_SHA256, "llama_version": ver,
+            "aggregate": {"validity": 1.0, "f1": f1}}), encoding="utf-8")
+
+    _all42 = sorted(k for k, _a, _p in _bench42.load_field(_td42))
+    _old42 = sorted(k for k, _a, _p in _bench42.load_field(_td42, build="b8728"))
+    _new42 = sorted(k for k, _a, _p in _bench42.load_field(_td42, build="b10809"))
+    _none42 = _bench42.load_field(_td42, build="b99999")
+    _v_new = _bench42.verdict([(k, a) for k, a, _ in _bench42.load_field(_td42, build="b10809")])
+    _v_old = _bench42.verdict([(k, a) for k, a, _ in _bench42.load_field(_td42, build="b8728")])
+
+    check("T42c --build selects runs by their recorded llama_version and never mixes two venues; "
+          "the verdict over one build cannot be won by a run from the other",
+          _all42 == ["alpha", "beta", "delta", "epsilon", "gamma"]
+          and _old42 == ["alpha", "beta", "gamma"] and _new42 == ["delta", "epsilon"]
+          and set(_old42).isdisjoint(_new42) and _none42 == []
+          # the winner of each venue is that venue's own best, not the field's
+          and _v_new["chosen"] == "epsilon" and _v_old["chosen"] is None
+          # and the pure predicate underneath, both directions
+          and _bench42.build_matches(_V_NEW, "b10809")
+          and not _bench42.build_matches(_V_OLD, "b10809")
+          and _bench42.build_matches(_V_OLD, None) and _bench42.build_matches(None, None)
+          and not _bench42.build_matches(None, "b10809"),
+          str((_all42, _old42, _new42, _v_new["chosen"], _v_old["chosen"])))
+
+    # T42d the queue refuses to start under a schema the field never ran
+    _refused42 = _ran42 = False
+    try:
+        _bench42.run_queue([], [1], 14, None, 8089, 4096, 99, 2048,
+                           results_dir=str(_td42), schema_hash="deadbeef")
+    except SystemExit as _e42:
+        _refused42 = _bench42.CONTRACT2_SCHEMA_SHA256 in str(_e42)
+    try:
+        _bench42.run_queue([], [1], 14, None, 8089, 4096, 99, 2048, results_dir=str(_td42),
+                           schema_hash=_bench42.CONTRACT2_SCHEMA_SHA256)
+        _ran42 = True
+    except SystemExit:
+        _ran42 = False
+
+    check("T42d the queue refuses to run under any schema but the contract-2 one the field ran, "
+          "and the live tree still hashes to it",
+          _refused42 and _ran42
+          and _bench42.contract2_schema_ok(_bench42.CONTRACT2_SCHEMA_SHA256)
+          and not _bench42.contract2_schema_ok("deadbeef")
+          # the assertion is not vacuous: the tree in front of us really is contract 2
+          and _bench42.contract2_schema_ok(_ssha42())
+          and _bench42.CONTRACT == "contract2",
+          str((_refused42, _ran42, _ssha42()[:16])))
 
 
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
