@@ -530,8 +530,8 @@ with tempfile.TemporaryDirectory() as _td11:
 # pipeline applied it to 1-3 s spans, which is why the owner failed his own check. These two rules
 # decide what the measurement means, so both are pinned here with no GPU and no corpus.
 from jarvis_voice.duration import (  # noqa: E402
-    DURATION_GRID, MAX_FAR, MAX_FRR, choose_min_embed_s, latest_duration_bench,
-    speech_windows, speech_windows_stream,
+    DURATION_GRID, MAX_FAR, MAX_FRR, MIN_N, choose_min_embed_s, latest_duration_bench,
+    reread_duration_bench, row_has_sample_floor, speech_windows, speech_windows_stream,
 )
 
 # three runs of 2, 3 and 4 s at 0.05 s per frame -> 40, 60 and 80 frames
@@ -547,7 +547,13 @@ check("T12a speech_windows packs runs in order to at least D and DROPS a short t
 
 
 def _row(d, frr, far):
-    return {"d_s": d, "frr_at_stored": frr, "far_at_stored": far}
+    """A table row for the BAND half of the rule.
+
+    `n_pos`/`n_neg` are set AT the sample floor (M1a.4) so every row here is eligible and the check
+    stays about the bands alone; the floor's own behaviour is T14a's.
+    """
+    return {"d_s": d, "n_pos": MIN_N, "n_neg": MIN_N,
+            "frr_at_stored": frr, "far_at_stored": far}
 
 
 # Hand-built tables. The qualifying rows are computed here from the same bands the module exposes,
@@ -873,6 +879,71 @@ with tempfile.TemporaryDirectory() as _td13c:
           and _got13 == 12.0 and isinstance(_got13, float)
           and _refused13 and _w13d.exists(),          # refused BEFORE anything touched the audio
           str((_r_empty, _r_atoms, _r_null, _got13, _refused13, _w13d.exists())))
+
+# ============================== T14a — M1a.4: the reading rule's sample floor, and the retraction
+# Without a floor the rule returned 12.0 s from a row holding TWO positive windows, and it preferred
+# that row precisely BECAUSE it was the sparsest: at n_pos = 14 the finest non-zero FRR expressible
+# is 1/14 = 0.0714, already outside the 5 % band, so only an exact zero can pass and the fewest
+# windows is the likeliest place to find one. Every expectation below is computed from the bands and
+# the counts rather than typed, so it cannot drift from the rule it checks.
+
+# M1a.3's measured table, its six rows as data (goal doc §6 / REPORT-VOICE-M1C-PREP-2.md §2).
+def _drow(d, n_pos, n_neg, frr, far):
+    return {"d_s": d, "n_pos": n_pos, "n_neg": n_neg,
+            "frr_at_stored": frr, "far_at_stored": far}
+
+
+_M1A3 = [_drow(1.0, 143, 702, 0.7413, 0.0), _drow(2.0, 69, 333, 0.4783, 0.0),
+         _drow(3.0, 42, 209, 0.3571, 0.0), _drow(5.0, 27, 104, 0.2222, 0.0),
+         _drow(8.0, 14, 54, 0.1429, 0.0), _drow(12.0, 2, 22, 0.0, 0.0)]
+_bands_ok = [r for r in _M1A3 if r["frr_at_stored"] <= MAX_FRR and r["far_at_stored"] <= MAX_FAR]
+_floor_ok = [r for r in _M1A3 if row_has_sample_floor(r)]
+_sparse = _drow(0.5, 2, 22, 0.0, 0.0)                    # a zero on nothing
+_solid = _drow(4.0, 25, 25, 0.04, 0.0)                   # a rate with a denominator
+
+with tempfile.TemporaryDirectory() as _td14:
+    _td14 = Path(_td14)
+    import json as _json14  # noqa: E402
+    _bench14 = {"window_rule": "stream", "min_embed_s": 12.0, "stored_threshold": 0.358503,
+                "table": _M1A3}
+    _bp14 = _td14 / "duration_bench_2026-09-10.json"
+    _bp14.write_text(_json14.dumps(_bench14, indent=1), encoding="utf-8")
+    _table_before = _json14.dumps(_M1A3, sort_keys=True)
+    _rr1 = reread_duration_bench(_td14)
+    _after1 = _json14.loads(_bp14.read_text(encoding="utf-8"))
+    _rr2 = reread_duration_bench(_td14)                   # idempotent
+    _after2 = _json14.loads(_bp14.read_text(encoding="utf-8"))
+
+    check("T14a the reading rule ignores a row under the sample floor, which retracts the 12.0 s "
+          "that came from two windows; the re-read rewrites the verdict and never the table",
+          # the floor itself
+          MIN_N == 20
+          # 20 is the smallest n at which ONE rejection is still inside the band; 19 is not
+          and 1.0 / MIN_N <= MAX_FRR and 1.0 / (MIN_N - 1) > MAX_FRR
+          and row_has_sample_floor(_solid) and not row_has_sample_floor(_sparse)
+          and choose_min_embed_s([_sparse]) is None      # a zero on two windows never qualifies
+          and choose_min_embed_s([_solid]) == _solid["d_s"]
+          and choose_min_embed_s([_sparse, _solid]) == _solid["d_s"]
+          # the measured table: the ONLY row meeting the bands is the one the floor excludes
+          and [r["d_s"] for r in _bands_ok] == [12.0]
+          and all(not row_has_sample_floor(r) for r in _bands_ok)
+          and [r["d_s"] for r in _floor_ok] == [1.0, 2.0, 3.0, 5.0]
+          and all(r["frr_at_stored"] > MAX_FRR for r in _floor_ok)
+          and choose_min_embed_s(_M1A3) is None
+          # and the retraction is caused by the floor and nothing else: at min_n=1 the OLD rule
+          # reproduces 12.0 exactly
+          and choose_min_embed_s(_M1A3, min_n=1) == min(r["d_s"] for r in _bands_ok) == 12.0
+          # the re-read: verdict rewritten, value preserved as retracted, TABLE byte-identical
+          and _rr1["before"] == 12.0 and _rr1["after"] is None and _rr1["retracted"] == 12.0
+          and _after1["min_embed_s"] is None and _after1["retracted"] == 12.0
+          and _after1["reading_rule"] == {"max_frr": MAX_FRR, "max_far": MAX_FAR, "min_n": MIN_N}
+          and _json14.dumps(_after1["table"], sort_keys=True) == _table_before
+          and _rr1["rows_under_floor"] == [8.0, 12.0]
+          # re-running changes nothing further
+          and _rr2["after"] is None and _after2 == _after1,
+          str((choose_min_embed_s(_M1A3), choose_min_embed_s(_M1A3, min_n=1),
+               [r["d_s"] for r in _bands_ok], [r["d_s"] for r in _floor_ok],
+               _rr1["retracted"], _rr1["rows_under_floor"])))
 
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
 sys.exit(1 if FAILS else 0)

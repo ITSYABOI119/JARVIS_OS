@@ -1012,6 +1012,79 @@ python -m jarvis_voice duration-bench first; the minimum embedding duration is m
 guessed` and returned in under a second, before either model was loaded.
 
 
+### M1a.4 — 2026-09-10 — the reading rule's sample floor; 12.0 s retracted
+
+**`MIN_EMBED_S` = 12.0 s is RETRACTED. With a floor of twenty windows on each side, NO duration on
+the grid meets the bands at the stored threshold — and that is the measurement, not a failure of
+it.** M1a.3 reported the value and refused to build on it; this entry withdraws it in the file that
+published it.
+
+**Why a floor, computed rather than asserted.** A rate needs a denominator to be a rate. The finest
+non-zero FRR a row can express is `1/n_pos`: at D = 8 that is `1/14 = 0.0714`, already outside the
+5 % band, so such a row can only pass at **exactly zero** — and the D with the fewest windows is
+mechanically the likeliest place to find one. The rule without a floor therefore did not merely
+tolerate the sparsest row, it **preferred** it. `MIN_N = 20` is the smallest n at which a single
+rejection (`1/20 = 0.05`) still sits inside `MAX_FRR`, so it is the smallest floor at which the band
+means what it says rather than "no failures were observed"; T14a computes both halves of that
+(`1/20 ≤ 0.05` and `1/19 > 0.05`) rather than taking 20 on trust. The floor applies to `n_pos` AND
+`n_neg`, because FRR needs positives and FAR needs negatives and a row solid on one side is not a
+measurement of the pair.
+
+**The measured table, re-read.** The rows are untouched — a measurement does not change when the
+rule for reading it does.
+
+| D (s) | n_pos | n_neg | FRR @ 0.3585 | FAR @ 0.3585 | floor (n ≥ 20 both) | bands | read? |
+|---|---|---|---|---|---|---|---|
+| 1 | 143 | 702 | 0.7413 | 0.0000 | ✅ | ✗ | no |
+| 2 | 69 | 333 | 0.4783 | 0.0000 | ✅ | ✗ | no |
+| 3 | 42 | 209 | 0.3571 | 0.0000 | ✅ | ✗ | no |
+| 5 | 27 | 104 | 0.2222 | 0.0000 | ✅ | ✗ | no |
+| 8 | 14 | 54 | 0.1429 | 0.0000 | ✗ | ✗ | never eligible |
+| 12 | **2** | 22 | 0.0000 | 0.0000 | ✗ | ✅ | **excluded — this is the retraction** |
+
+**The only row that meets the bands is the only row the floor excludes.** That single sentence is
+the whole finding, and T14a pins it both ways: at `min_n = 1` the rule reproduces **12.0 exactly**,
+so the retraction is caused by the floor and by nothing else that changed.
+
+**The re-read, run for real** (`python -m jarvis_voice duration-bench --reread`, no model loaded):
+
+```
+file        : C:\Users\jluca\.jarvis\voice\duration_bench_2026-09-10.json
+reading rule: FRR <= 0.05, FAR <= 0.01, n_pos and n_neg >= 20
+rows under the sample floor (reported, never read): [8.0, 12.0]
+min_embed_s : 12.0 -> None
+retracted   : 12.0 s - recorded in the file, not deleted
+```
+
+`min_embed_s` is now `null`, `reading_rule: {"max_frr": 0.05, "max_far": 0.01, "min_n": 20}` sits
+beside it, and `retracted: 12.0` preserves the withdrawn value — a number that was published and
+then withdrawn is more useful in the record than one that quietly stopped existing. **The table was
+verified byte-identical across the rewrite** (sha256 of the canonicalised `table`, `d1814211431db6df`
+before and after), the only new keys are `reading_rule` and `retracted`, and the function refuses to
+write at all if the table has moved. Re-running is idempotent.
+
+#### What this leaves standing, and what it does not
+
+**Standing, and it is the milestone's result:** the owner's EER against 78 public negatives on a
+single speech-packed window is 0.30 / 0.23 / 0.14 / 0.07 / 0.07 / 0.00 at 1 / 2 / 3 / 5 / 8 / 12 s,
+FRR at the stored threshold falls 0.74 → 0.00, and FAR is 0.0000 at every length with `neg_max`
+never above 0.2817. **The threshold is a ~ten-second property**, and a single window under about
+five seconds cannot be attributed by its embedding at any threshold.
+
+**Not standing:** any single-window minimum. There is no D on this grid at which one window clears
+the bands with a denominator behind it, so the pipeline cannot ask "is this span the owner?" of a
+short span at all. That is what forces the two-level rule of M1b.4 — a long turn at ingest, or a
+cluster's centroid over accumulated speech afterwards.
+
+Tests: `test_voice_logic.py` 72 → **73 checks** (T14a — the floor, the smallest-n justification, the
+measured table reading to `None`, the `min_n = 1` reproduction of 12.0, and the re-read's round trip
+including the untouched table and its idempotence). T12b's hand-built rows gained `n_pos`/`n_neg` at
+the floor so that check stays about the BANDS alone; its assertions are otherwise unchanged. One
+mutant, the control green first, failing BY NAME and restored from a byte-copy verified by md5: the
+sample floor removed → T14a (and T14a alone — T12b stays green, which is what makes the two checks
+separable).
+
+
 ---
 
 ## 7. Done-when (canon, `phase4/docs/ROADMAP.md:130-132`, verbatim)

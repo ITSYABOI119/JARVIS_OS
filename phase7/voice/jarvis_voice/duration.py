@@ -35,6 +35,15 @@ DURATION_GRID = (1.0, 2.0, 3.0, 5.0, 8.0, 12.0)
 MAX_FRR = 0.05          # the owner rejected at most 1 time in 20 …
 MAX_FAR = 0.01          # … and a stranger accepted at most 1 time in 100
 
+# The sample floor, added at M1a.4 after the rule without one returned 12.0 s from a row of TWO
+# positive windows. A rate needs a denominator to be a rate: at n_pos = 14 the finest non-zero FRR a
+# row can express is 1/14 = 0.0714, already outside MAX_FRR, so such a row can only pass at exactly
+# zero — and the D with the fewest windows is mechanically the likeliest to manage it. Twenty is the
+# smallest n at which a single rejection (1/20 = 0.05) still sits inside the band, so it is the
+# smallest floor at which the band means what it says rather than "no failures were observed".
+# A row under the floor is REPORTED in the table and never read by the rule.
+MIN_N = 20
+
 # The `split` mask settings the M0b pieces were cut with, reused so the windows are the same kind of
 # speech the threshold was measured on.
 FRAME_S = 0.05
@@ -104,21 +113,54 @@ def speech_windows_stream(mask_runs: Sequence[Tuple[int, int]], frame_s: float,
     return windows
 
 
-def choose_min_embed_s(table: Sequence[dict]) -> Optional[float]:
+def row_has_sample_floor(row: dict, min_n: int = MIN_N) -> bool:
+    """Does this row have enough windows on BOTH sides for its rates to be read?
+
+    Both sides, not either: FRR needs positives and FAR needs negatives, and a row that meets the
+    bands on one side while the other is a handful of windows is not a measurement of the pair.
+    """
+    return (row.get("n_pos") or 0) >= min_n and (row.get("n_neg") or 0) >= min_n
+
+
+def choose_min_embed_s(table: Sequence[dict], min_n: int = MIN_N) -> Optional[float]:
     """The SMALLEST D whose FRR and FAR at the stored threshold are both inside the bands.
 
-    `table` is the per-D rows of the bench (`d_s`, `frr_at_stored`, `far_at_stored`). Smallest, not
-    best: every extra second of required speech is a span the pipeline cannot attribute, so the rule
-    takes the shortest length that still works rather than the safest one. Returns None when no D on
-    the grid qualifies — which is a STOP, not a default, because it would mean the stored threshold
-    itself is the question.
+    `table` is the per-D rows of the bench (`d_s`, `n_pos`, `n_neg`, `frr_at_stored`,
+    `far_at_stored`). Smallest, not best: every extra second of required speech is a span the
+    pipeline cannot attribute, so the rule takes the shortest length that still works rather than
+    the safest one. Returns None when no D on the grid qualifies — which is a STOP, not a default,
+    because it would mean the stored threshold itself is the question.
+
+    **A row under the sample floor is not eligible, whatever its rates.** M1a.3's table returned
+    12.0 s from a row holding two positive windows: FRR 0/2 is a true zero and no evidence, and
+    the rule as written preferred it precisely because it was the sparsest row on the grid. The
+    floor is applied BEFORE the bands so a zero on nothing can never win.
     """
     ok = [r for r in table
-          if r.get("frr_at_stored") is not None and r.get("far_at_stored") is not None
+          if row_has_sample_floor(r, min_n)
+          and r.get("frr_at_stored") is not None and r.get("far_at_stored") is not None
           and r["frr_at_stored"] <= MAX_FRR and r["far_at_stored"] <= MAX_FAR]
     if not ok:
         return None
     return min(r["d_s"] for r in ok)
+
+
+def latest_duration_bench_path(voice_home_dir=None) -> Path:
+    """The newest date-named bench FILE, or a refusal.
+
+    Date-shaped, not `duration_bench_*.json`: a superseded run is kept beside the live one under a
+    suffixed name (`..._atoms.json`), and a suffixed name must not be able to sort last and be read
+    as the answer. Split out from `latest_duration_bench` at M1a.4 so the re-read can rewrite the
+    very file the reader would have read, rather than a file it found by its own second glob.
+    """
+    from .paths import voice_home
+    home = Path(voice_home_dir) if voice_home_dir else voice_home()
+    files = sorted(home.glob("duration_bench_????-??-??.json"))
+    if not files:
+        raise SystemExit(
+            "no duration_bench_<date>.json under %s - run `python -m jarvis_voice duration-bench` "
+            "first; the minimum embedding duration is measured, never guessed" % home)
+    return files[-1]
 
 
 def latest_duration_bench(voice_home_dir=None) -> dict:
@@ -129,17 +171,8 @@ def latest_duration_bench(voice_home_dir=None) -> dict:
     fits every span length) was wrong.
     """
     import json as _json
-    from .paths import voice_home
-    home = Path(voice_home_dir) if voice_home_dir else voice_home()
-    # Date-shaped, not `duration_bench_*.json`: a superseded run is kept beside the live one under a
-    # suffixed name (`..._atoms.json`), and a suffixed name must not be able to sort last and be
-    # read as the answer. The refusal below is the second lock, on the file's own declared rule.
-    files = sorted(home.glob("duration_bench_????-??-??.json"))
-    if not files:
-        raise SystemExit(
-            "no duration_bench_<date>.json under %s - run `python -m jarvis_voice duration-bench` "
-            "first; the minimum embedding duration is measured, never guessed" % home)
-    payload = _json.loads(files[-1].read_text(encoding="utf-8"))
+    path = latest_duration_bench_path(voice_home_dir)
+    payload = _json.loads(path.read_text(encoding="utf-8"))
     rule = payload.get("window_rule")
     if rule != "stream":
         raise SystemExit(
@@ -147,8 +180,40 @@ def latest_duration_bench(voice_home_dir=None) -> dict:
             "embedding duration from it. The atom-rule bench treated a speech run as an "
             "indivisible window, which made every held-out piece one window and the table flat; "
             "re-run `python -m jarvis_voice duration-bench` to measure on stream cuts."
-            % (files[-1], rule))
+            % (path, rule))
     return payload
+
+
+def reread_duration_bench(voice_home_dir=None, min_n: int = MIN_N) -> dict:
+    """Re-apply the CURRENT reading rule to the newest stream-rule bench and rewrite its verdict.
+
+    The TABLE is never touched — it is the measurement, and a measurement does not change when the
+    rule for reading it does. Only `min_embed_s` is recomputed, `reading_rule` is written beside it
+    so the file says which rule produced it, and a value that changes is preserved as `retracted`
+    rather than deleted: a number that was published and withdrawn is more useful in the record than
+    a number that quietly stopped existing.
+
+    Returns the summary the CLI prints. Re-running it is idempotent: a second pass recomputes the
+    same verdict and, because the value no longer changes, leaves `retracted` as it stands.
+    """
+    import json as _json
+    path = latest_duration_bench_path(voice_home_dir)
+    payload = latest_duration_bench(voice_home_dir)
+    before = payload.get("min_embed_s")
+    table_before = _json.dumps(payload.get("table"), sort_keys=True)
+    after = choose_min_embed_s(payload.get("table") or [], min_n)
+    payload["min_embed_s"] = after
+    payload["reading_rule"] = {"max_frr": MAX_FRR, "max_far": MAX_FAR, "min_n": min_n}
+    if before != after and before is not None:
+        payload["retracted"] = before
+    if _json.dumps(payload.get("table"), sort_keys=True) != table_before:
+        raise SystemExit("the re-read must not touch the table - refusing to write")
+    path.write_text(_json.dumps(payload, indent=1), encoding="utf-8")
+    return {"path": str(path), "before": before, "after": after,
+            "retracted": payload.get("retracted"),
+            "reading_rule": payload["reading_rule"],
+            "rows_under_floor": [r["d_s"] for r in (payload.get("table") or [])
+                                 if not row_has_sample_floor(r, min_n)]}
 
 
 def required_min_embed_s(voice_home_dir=None) -> float:

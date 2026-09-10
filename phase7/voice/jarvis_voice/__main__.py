@@ -153,6 +153,8 @@ def cmd_duration_bench(a):
     """Measure the owner's threshold at every span duration on the grid, on held-out data."""
     import datetime as _dt
     from .duration import run_duration_bench
+    if a.reread:
+        return _duration_bench_reread()
     out = Path(a.out) if a.out else voice_home() / f"duration_bench_{_dt.date.today():%Y-%m-%d}.json"
     r = run_duration_bench(out_path=out)
     print(f"stored threshold : {r['stored_threshold']:.15f}")
@@ -175,6 +177,25 @@ def cmd_duration_bench(a):
     else:
         print(f"MIN_EMBED_S : {r['min_embed_s']} s (the smallest qualifying duration)")
     print(f"written    : {out}")
+    return 0
+
+
+def _duration_bench_reread():
+    """Re-apply the current reading rule to the newest bench. The GPU is never touched."""
+    from .duration import reread_duration_bench
+    r = reread_duration_bench()
+    print(f"file        : {r['path']}")
+    print(f"reading rule: FRR <= {r['reading_rule']['max_frr']}, FAR <= "
+          f"{r['reading_rule']['max_far']}, n_pos and n_neg >= {r['reading_rule']['min_n']}")
+    print(f"rows under the sample floor (reported, never read): {r['rows_under_floor']}")
+    print(f"min_embed_s : {r['before']} -> {r['after']}")
+    if r["retracted"] is not None:
+        print(f"retracted   : {r['retracted']} s - recorded in the file, not deleted")
+    if r["after"] is None:
+        print("NO minimum exists on this grid at the stored threshold once the sample floor is "
+              "applied. That is the measurement, not a failure of it: the pipeline must decide "
+              "attribution some other way.")
+    print("the table itself is untouched")
     return 0
 
 
@@ -323,6 +344,9 @@ def build_parser():
     ig.add_argument("--device", default="headset"); ig.set_defaults(fn=cmd_ingest)
     cl = sub.add_parser("clusters"); cl.add_argument("--db"); cl.set_defaults(fn=cmd_clusters)
     db = sub.add_parser("duration-bench"); db.add_argument("--out")
+    db.add_argument("--reread", action="store_true",
+                    help="re-apply the current reading rule to the newest bench JSON and rewrite "
+                         "its verdict; the table is never touched and no model is loaded")
     db.set_defaults(fn=cmd_duration_bench)
     cb = sub.add_parser("cluster-bench"); cb.add_argument("--out")
     cb.add_argument("--seed", type=int, default=1); cb.set_defaults(fn=cmd_cluster_bench)
