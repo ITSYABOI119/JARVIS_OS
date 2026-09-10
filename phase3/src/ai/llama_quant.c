@@ -94,6 +94,17 @@ static int resolve_qtensor(qtensor_t *qt, const gguf_ctx_t *ctx,
         return -1;
     }
 
+    /* Bound the extent against the mapping before taking its address. gguf_open_memory() already
+     * refused a file whose tensors overrun, so on the deployed path this is the second of two
+     * checks — kept because this function is what actually produces the pointer, and a context
+     * built by any other route (or a future caller) must not be able to slip past. A violation
+     * returns -1 into qmodel_load's existing failure path, which on the box is the model-bad
+     * fail-closed latch. */
+    if (!gguf_tensor_in_bounds(ctx, t)) {
+        fprintf(stderr, "qmodel_load: tensor '%s' extends past the mapped model\n", name);
+        return -1;
+    }
+
     qt->data       = (const uint8_t *)gguf_base + ctx->data_offset + t->offset;
     qt->type       = t->type;
     qt->n_elements = t->n_elements;

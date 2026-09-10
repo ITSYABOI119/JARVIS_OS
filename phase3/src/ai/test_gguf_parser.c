@@ -43,7 +43,19 @@ static size_t put_gguf_string(uint8_t *buf, const char *s)
 }
 
 /* Build a minimal GGUF v3 file with 2 KV pairs and 2 tensors, return size */
+/* T16/T18 need the same minimal file with two knobs: the `general.alignment` value and the second
+ * tensor's offset. The original signature is kept as a wrapper on (64, 128) so the fifteen tests
+ * above are byte-for-byte the file they always were. */
+static size_t build_test_gguf_cfg(uint8_t *buf, size_t buf_size,
+                                  uint32_t align_val, uint64_t offset2_val);
+
 static size_t build_test_gguf(uint8_t *buf, size_t buf_size)
+{
+    return build_test_gguf_cfg(buf, buf_size, 64, 128);
+}
+
+static size_t build_test_gguf_cfg(uint8_t *buf, size_t buf_size,
+                                  uint32_t align_val, uint64_t offset2_val)
 {
     uint8_t *p = buf;
     memset(buf, 0, buf_size);
@@ -69,7 +81,6 @@ static size_t build_test_gguf(uint8_t *buf, size_t buf_size)
     p += put_gguf_string(p, "general.alignment");
     uint32_t type_u32 = GGUF_TYPE_UINT32;
     memcpy(p, &type_u32, 4); p += 4;
-    uint32_t align_val = 64;
     memcpy(p, &align_val, 4); p += 4;
 
     /* KV 3: "test.float_val" = float32 3.14 */
@@ -100,12 +111,18 @@ static size_t build_test_gguf(uint8_t *buf, size_t buf_size)
     memcpy(p, &dim2a, 8); p += 8;
     uint32_t type_q4 = GGML_TYPE_Q4_0;
     memcpy(p, &type_q4, 4); p += 4;
-    uint64_t offset2 = 128;  /* After first tensor's 128 bytes */
-    memcpy(p, &offset2, 8); p += 8;
+    memcpy(p, &offset2_val, 8); p += 8;
 
     /* Align to 64 bytes for tensor data (alignment KV says 64) */
     size_t header_end = (size_t)(p - buf);
-    size_t data_start = (header_end + 63) & ~(size_t)63;
+    /* The KV carries `align_val` verbatim - that is what T16 tests - but the LAYOUT uses a sane
+     * value, because an alignment of 2 MiB would push the data past any test buffer and the parser
+     * rejects such a file at the KV read, long before data_offset is computed. */
+    size_t al = (align_val && (align_val & (align_val - 1)) == 0 && align_val <= 4096)
+                ? (size_t)align_val : 64;
+    size_t data_start = (header_end + al - 1) & ~(al - 1);
+    if (data_start + 128 + 36 > buf_size)
+        return 0;
 
     /* Write some fake tensor data */
     /* Tensor 1: 128 bytes of 0x41 */
@@ -623,6 +640,138 @@ static void test_excessive_tensors(void)
 
 /* ---- Main ---- */
 
+/* ---- T16: general.alignment is validated at open ----
+ * data_offset is computed as (pos + align - 1) & ~(align - 1), which only means "round up" for a
+ * power of two. Zero makes the mask 0 and puts every tensor at the file header; a non-power-of-two
+ * makes it a garbage bit pattern. Neither is detectable afterwards, so both must fail the OPEN.
+ */
+static void test_alignment_validation(void)
+{
+    TEST("general.alignment: 0, non-power-of-two and oversized are rejected at open");
+
+    /* The rule itself, asserted directly. A non-power-of-two also happens to be caught downstream
+     * by the tensor-bounds sweep (its garbage mask moves data_offset), so an open-level check alone
+     * would still pass with this rule deleted - and did, until this was added. */
+    ASSERT(gguf_alignment_valid(32) == 1, "32 is valid");
+    ASSERT(gguf_alignment_valid(64) == 1, "64 is valid");
+    ASSERT(gguf_alignment_valid(GGUF_MAX_ALIGN) == 1, "the ceiling itself is valid");
+    ASSERT(gguf_alignment_valid(0) == 0, "0 is not valid");
+    ASSERT(gguf_alignment_valid(48) == 0, "48 is not a power of two");
+    ASSERT(gguf_alignment_valid(3) == 0, "3 is not a power of two");
+    ASSERT(gguf_alignment_valid(GGUF_MAX_ALIGN * 2) == 0, "over the ceiling is not valid");
+
+    uint8_t data[8192];
+    const uint32_t bad[] = { 0u, 48u, (1u << 21) };     /* zero, not a power of two, over 1 MiB */
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        size_t sz = build_test_gguf_cfg(data, sizeof(data), bad[i], 128);
+        ASSERT(sz > 0, "builder produced nothing for a bad-alignment case");
+        gguf_ctx_t ctx;
+        int rc = gguf_open_memory(&ctx, data, sz);
+        ASSERT(rc == GGUF_ERR_FORMAT, "a bad general.alignment must fail with GGUF_ERR_FORMAT");
+    }
+
+    const uint32_t good[] = { 32u, 64u };
+    for (size_t i = 0; i < sizeof(good) / sizeof(good[0]); i++) {
+        size_t sz = build_test_gguf_cfg(data, sizeof(data), good[i], 128);
+        ASSERT(sz > 0, "builder produced nothing for a good-alignment case");
+        gguf_ctx_t ctx;
+        int rc = gguf_open_memory(&ctx, data, sz);
+        ASSERT(rc == GGUF_OK, "a power-of-two alignment must open");
+        ASSERT(ctx.alignment == good[i], "ctx->alignment must carry the file's value");
+        ASSERT((ctx.data_offset % good[i]) == 0, "data_offset must be aligned to it");
+        gguf_close(&ctx);
+    }
+    PASS();
+}
+
+/* ---- T17: gguf_tensor_in_bounds truth table ----
+ * The arithmetic is by subtraction from data_size precisely so a huge offset cannot wrap into
+ * looking small; the UINT64_MAX case is what proves it.
+ */
+static void test_tensor_in_bounds(void)
+{
+    TEST("gguf_tensor_in_bounds: inside, exactly at the end, one over, no wrap, unknown size");
+
+    gguf_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.data_size   = 1000;
+    ctx.data_offset = 100;                    /* 900 bytes of room */
+
+    gguf_tensor_info_t t;
+    memset(&t, 0, sizeof(t));
+
+    t.offset = 0;   t.n_bytes = 100;
+    ASSERT(gguf_tensor_in_bounds(&ctx, &t) == 1, "a tensor well inside must be in bounds");
+
+    t.offset = 400; t.n_bytes = 500;          /* 400 + 500 == 900, exactly the end */
+    ASSERT(gguf_tensor_in_bounds(&ctx, &t) == 1, "a tensor ending exactly at the end is in bounds");
+
+    t.offset = 400; t.n_bytes = 501;          /* one byte over */
+    ASSERT(gguf_tensor_in_bounds(&ctx, &t) == 0, "one byte past the end must be out of bounds");
+
+    t.offset = 900; t.n_bytes = 0;
+    ASSERT(gguf_tensor_in_bounds(&ctx, &t) == 1, "an empty tensor at the end is in bounds");
+
+    t.offset = 901; t.n_bytes = 0;
+    ASSERT(gguf_tensor_in_bounds(&ctx, &t) == 0, "an offset past the room is out of bounds");
+
+    /* The wrap cases: offset + n_bytes overflows 64 bits and would compare small if added. */
+    t.offset = UINT64_MAX - 1; t.n_bytes = 8;
+    ASSERT(gguf_tensor_in_bounds(&ctx, &t) == 0, "a near-UINT64_MAX offset must not wrap in");
+    t.offset = 0; t.n_bytes = UINT64_MAX;
+    ASSERT(gguf_tensor_in_bounds(&ctx, &t) == 0, "a near-UINT64_MAX size must not wrap in");
+
+    /* data_offset beyond the mapping is itself a violation, not a negative room. */
+    ctx.data_offset = 2000;
+    t.offset = 0; t.n_bytes = 0;
+    ASSERT(gguf_tensor_in_bounds(&ctx, &t) == 0, "data_offset past data_size is out of bounds");
+
+    /* Unknown size (the FILE path) accepts: it bounds itself on read instead. */
+    ctx.data_size = 0; ctx.data_offset = 100;
+    t.offset = UINT64_MAX; t.n_bytes = UINT64_MAX;
+    ASSERT(gguf_tensor_in_bounds(&ctx, &t) == 1, "data_size 0 means unknown and must accept");
+
+    ASSERT(gguf_tensor_in_bounds(NULL, &t) == 0, "a NULL ctx is not in bounds");
+    ASSERT(gguf_tensor_in_bounds(&ctx, NULL) == 0, "a NULL tensor is not in bounds");
+    PASS();
+}
+
+/* ---- T18: a tensor claiming an extent past the buffer fails the open ---- */
+static void test_tensor_extent_bounds(void)
+{
+    TEST("a tensor extending past the mapping fails gguf_open_memory; inside opens with data_size");
+
+    uint8_t data[8192];
+
+    /* The same minimal file, with the second tensor's offset pushed far past the buffer. */
+    size_t sz = build_test_gguf_cfg(data, sizeof(data), 64, (uint64_t)1 << 30);
+    ASSERT(sz > 0, "builder produced nothing");
+    gguf_ctx_t ctx;
+    int rc = gguf_open_memory(&ctx, data, sz);
+    ASSERT(rc == GGUF_ERR_FORMAT, "an out-of-bounds tensor must fail the open");
+
+    /* And the same file with the offset back inside opens, recording the mapping's size. */
+    sz = build_test_gguf_cfg(data, sizeof(data), 64, 128);
+    ASSERT(sz > 0, "builder produced nothing");
+    rc = gguf_open_memory(&ctx, data, sz);
+    ASSERT(rc == GGUF_OK, "the in-bounds file must open");
+    ASSERT(ctx.data_size == (uint64_t)sz, "gguf_open_memory must record the mapping size");
+    for (uint64_t i = 0; i < ctx.n_tensors; i++)
+        ASSERT(gguf_tensor_in_bounds(&ctx, &ctx.tensors[i]) == 1, "every tensor must be in bounds");
+    gguf_close(&ctx);
+
+    /* The FILE path leaves data_size 0 (unknown) — it bounds itself on read. */
+    sz = build_test_gguf_cfg(data, sizeof(data), 64, 128);
+    const char *path = write_temp_gguf(data, sz);
+    ASSERT(path != NULL, "temp file");
+    rc = gguf_open(&ctx, path);
+    ASSERT(rc == GGUF_OK, "the file path must still open");
+    ASSERT(ctx.data_size == 0, "gguf_open leaves data_size unknown");
+    gguf_close(&ctx);
+    remove(path);
+    PASS();
+}
+
 int main(void)
 {
     printf("=== JARVIS GGUF Parser Tests ===\n\n");
@@ -642,6 +791,9 @@ int main(void)
     test_overflow_detection();
     test_excessive_kv();
     test_excessive_tensors();
+    test_alignment_validation();
+    test_tensor_in_bounds();
+    test_tensor_extent_bounds();
 
     printf("\n=== Results: %d/%d PASS ===\n", tests_passed, tests_run);
 

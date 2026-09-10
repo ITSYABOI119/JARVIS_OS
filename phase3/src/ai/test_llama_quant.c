@@ -395,6 +395,41 @@ static void test_qmodel_load_rejects_ffn_gate(void) {
     else { char m[64]; snprintf(m, sizeof m, "Q2_K ffn_gate should fail load (rc=%d)", rc); FAIL(m); }
 }
 
+/* Test 17 (the prompt's T13): the LOADER's bound. The parser now refuses an out-of-bounds tensor at
+ * open (test_gguf_parser T18), so the only way to reach resolve_qtensor with a bad extent is to
+ * open a valid blob and then move a tensor - which is exactly the shape a future caller building a
+ * context by another route would present. A violation must fail the load, not produce a pointer. */
+static int h2_try_load_offset(uint8_t *buf, size_t len, const char *name, uint64_t new_offset) {
+    gguf_ctx_t ctx;
+    if (gguf_open_memory(&ctx, buf, len) != GGUF_OK) return -99;
+    gguf_tensor_info_t *ti = (gguf_tensor_info_t *)gguf_find_tensor(&ctx, name);
+    if (!ti) { gguf_close(&ctx); return -98; }
+    ti->offset = new_offset;
+    qmodel_t qm;
+    int rc = qmodel_load(&qm, &ctx, buf);
+    if (rc == 0) qmodel_free(&qm);
+    gguf_close(&ctx);
+    return rc;
+}
+
+static void test_qmodel_load_rejects_out_of_bounds_tensor(void) {
+    TEST("qmodel_load rejects a tensor whose extent leaves the mapping (resolve_qtensor bound)");
+    uint8_t buf[8192];
+    size_t len = h2_build_gguf(buf);
+
+    int rc_far  = h2_try_load_offset(buf, len, "token_embd.weight", (uint64_t)1 << 40);
+    int rc_edge = h2_try_load_offset(buf, len, "token_embd.weight", (uint64_t)len);
+    int rc_ok   = h2_try_load(buf, len, NULL, 0);
+
+    if (rc_far < 0 && rc_far != -99 && rc_far != -98 &&
+        rc_edge < 0 && rc_edge != -99 && rc_edge != -98 && rc_ok == 0) { PASS(); }
+    else {
+        char m[96];
+        snprintf(m, sizeof m, "far=%d edge=%d in-bounds=%d (want <0, <0, 0)", rc_far, rc_edge, rc_ok);
+        FAIL(m);
+    }
+}
+
 int main(void)
 {
     printf("=== JARVIS Quantized Model (llama_quant) Test Suite ===\n\n");
@@ -415,6 +450,7 @@ int main(void)
     test_qmodel_load_f32_positive();
     test_qmodel_load_rejects_token_embd();
     test_qmodel_load_rejects_ffn_gate();
+    test_qmodel_load_rejects_out_of_bounds_tensor();
 
     printf("\n=== Results: %d/%d PASS, %d FAIL ===\n",
            tests_pass, tests_pass + tests_fail, tests_fail);

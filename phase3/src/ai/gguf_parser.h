@@ -22,6 +22,11 @@
 #define GGUF_VERSION_3      3
 #define GGUF_DEFAULT_ALIGN  32
 
+/* The largest `general.alignment` the parser will accept. A sanity ceiling, not a spec limit:
+ * real files use the default 32, and an alignment near 2^32 would push data_offset past any
+ * plausible mapping. Must be a power of two, as the validation demands of the value it bounds. */
+#define GGUF_MAX_ALIGN      (1u << 20)   /* 1 MiB */
+
 #define GGUF_MAX_NAME_LEN      256
 #define GGUF_MAX_KV_KEY_LEN    256
 #define GGUF_MAX_DIMS          4
@@ -156,6 +161,15 @@ typedef struct {
     /* Offset where tensor data begins in the file */
     uint64_t data_offset;
 
+    /* Size of the mapping this context was opened over, or 0 when unknown.
+     *
+     * gguf_open_memory() sets it to the buffer length; gguf_open() leaves it 0, because the FILE
+     * path already fails safe (gguf_read_tensor_data -> read_exact refuses a short read). The
+     * ZERO-COPY path has no such backstop: the deployed loader points a tensor straight into the
+     * mapping, so the only thing standing between a claimed extent and a read past the mapping is
+     * this size and gguf_tensor_in_bounds() below. */
+    uint64_t data_size;
+
     /* Parsed metadata */
     gguf_kv_t          *kv;       /* Array of n_kv entries (malloc'd) */
     gguf_tensor_info_t *tensors;  /* Array of n_tensors entries (malloc'd) */
@@ -180,6 +194,24 @@ int gguf_open(gguf_ctx_t *ctx, const char *path);
  * Returns GGUF_OK on success, negative error code on failure.
  */
 int gguf_open_memory(gguf_ctx_t *ctx, const void *data, size_t len);
+
+/**
+ * Whether a tensor's whole extent lies inside the mapping this context was opened over.
+ *
+ * True when ctx->data_size is 0 (the size is unknown — the FILE path, which bounds itself on read).
+ * Otherwise both `data_offset + offset` and `+ n_bytes` must land inside `data_size`, and the
+ * arithmetic is done by SUBTRACTION from data_size so a 64-bit offset cannot wrap into looking
+ * small. Pure: no I/O, no allocation, safe to call on a partially built context.
+ */
+int gguf_tensor_in_bounds(const gguf_ctx_t *ctx, const gguf_tensor_info_t *t);
+
+/**
+ * Whether a `general.alignment` value is one the parser will accept: a power of two, non-zero, and
+ * no larger than GGUF_MAX_ALIGN. Pure, and exposed so the rule is testable on its own rather than
+ * only through its effect on data_offset - a non-power-of-two happens to be caught downstream by
+ * the tensor-bounds sweep as well, which would let a regression here hide behind that.
+ */
+int gguf_alignment_valid(uint32_t alignment);
 
 /**
  * Close a GGUF context and free resources.

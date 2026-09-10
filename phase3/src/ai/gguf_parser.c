@@ -358,10 +358,21 @@ static int parse_gguf(gguf_ctx_t *ctx)
         err = read_kv_pair(ctx->fp, &ctx->kv[i]);
         if (err) return err;
 
-        /* Check for alignment override */
+        /* Check for alignment override.
+         *
+         * VALIDATED at the read site, because `data_offset` is computed as
+         * `(pos + align - 1) & ~(align - 1)` and that expression only means "round up" for a
+         * power of two. An alignment of 0 makes the mask ~(-1) == 0, so data_offset becomes 0 and
+         * every tensor resolves against the file header; a non-power-of-two makes the mask a
+         * garbage bit pattern and data_offset lands somewhere arbitrary. Neither is a read the
+         * caller can detect afterwards, so a bad value fails the OPEN, before any tensor exists.
+         * The 1 MiB ceiling is a sanity bound: real files use 32. */
         if (ctx->kv[i].type == GGUF_TYPE_UINT32 &&
             strcmp(ctx->kv[i].key, "general.alignment") == 0) {
-            ctx->alignment = ctx->kv[i].value.u32;
+            uint32_t a = ctx->kv[i].value.u32;
+            if (!gguf_alignment_valid(a))
+                return GGUF_ERR_FORMAT;
+            ctx->alignment = a;
         }
     }
 
@@ -408,6 +419,30 @@ int gguf_open(gguf_ctx_t *ctx, const char *path)
     return GGUF_OK;
 }
 
+int gguf_alignment_valid(uint32_t alignment)
+{
+    return alignment != 0 && (alignment & (alignment - 1)) == 0 && alignment <= GGUF_MAX_ALIGN;
+}
+
+int gguf_tensor_in_bounds(const gguf_ctx_t *ctx, const gguf_tensor_info_t *t)
+{
+    if (!ctx || !t)
+        return 0;
+    if (ctx->data_size == 0)
+        return 1;                       /* unknown size: the FILE path bounds itself on read */
+    if (ctx->data_offset > ctx->data_size)
+        return 0;
+    /* Every comparison is a SUBTRACTION from data_size, never an addition to an attacker-chosen
+     * offset: `data_offset + offset + n_bytes` would wrap for a large offset and a wrapped sum
+     * compares small, which is exactly the check passing when it should fail. */
+    uint64_t room = ctx->data_size - ctx->data_offset;
+    if (t->offset > room)
+        return 0;
+    if (t->n_bytes > room - t->offset)
+        return 0;
+    return 1;
+}
+
 int gguf_open_memory(gguf_ctx_t *ctx, const void *data, size_t len)
 {
     memset(ctx, 0, sizeof(*ctx));
@@ -423,6 +458,18 @@ int gguf_open_memory(gguf_ctx_t *ctx, const void *data, size_t len)
     if (err) {
         gguf_close(ctx);
         return err;
+    }
+
+    /* The mapping's size is known on THIS path, so record it and check every tensor before the
+     * caller can resolve one. The deployed loader hands a tensor's address straight to the forward
+     * pass; a claimed extent past the mapping would be read, not rejected, so the whole file is
+     * refused here instead. */
+    ctx->data_size = (uint64_t)len;
+    for (uint64_t i = 0; i < ctx->n_tensors; i++) {
+        if (!gguf_tensor_in_bounds(ctx, &ctx->tensors[i])) {
+            gguf_close(ctx);
+            return GGUF_ERR_FORMAT;
+        }
     }
     return GGUF_OK;
 }
