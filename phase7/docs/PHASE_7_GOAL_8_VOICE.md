@@ -52,6 +52,36 @@ Sources: `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md` §3, §5, §8; `phase4/do
 13. **Two new folders:** `heldout_sameday\` (same-day sanity pieces — never the band) and `heldout_neg\` (consented household negatives, if the owner records any — evaluated separately, never merged).
 14. **Two recordings, two roles:** `owner_natural_01.wav` → enrollment pieces (target 60 s, min-keep 20 s) into `enroll\`; `owner_natural_02.wav` → same-day sanity pieces (target 10 s, min-keep 3 s) into `heldout_sameday\`; both sources parked in `enroll\long\`; the read clips stay whole in the enrollment. The enrollment is built provisionally at threshold 0.5 so `evaluate` can run, then finally at the same-day EER threshold; M0b re-chooses the threshold at its own EER point on a later day.
 
+15. **The memory store is the pipeline's sink, and the transcript is not the record (M1, 2026-09-10).**
+    `ingest` writes the design's §3.1 spine into `%USERPROFILE%\.jarvis\memory\household.sqlite` — one
+    `recording` row per file, one `span` row per Whisper segment, a `cluster` row per voice, one
+    `embedding` row (`owner_table='span'`) per embedded span. The transcript JSON is a by-product for the
+    operator; the store is what survives the audio. **`started_at` precedence is `--started-at` > the
+    `rec_YYYYmmdd_HHMMSS` filename stamp > file mtime − duration, and the SOURCE is recorded beside the
+    value** (`started_at_source`), because a `said_at` derived from an inference must be distinguishable
+    from one the operator stated. **The order is commit → write and fsync the JSON → delete the audio**,
+    and a failure at any earlier point leaves the WAV untouched: everything else can be recomputed from
+    audio and nothing can be recomputed from a deleted file. A part-written recording is compensated away
+    (spans, vectors, recording row) so it lands whole or not at all.
+16. **The online assignment, and τ read from the bench (M1, 2026-09-10).** The owner is checked FIRST,
+    by his M0b threshold against the enrollment centroid, and only then is the nearest cluster within τ
+    considered — the threshold was measured against 78 public negatives and is a far stronger
+    discriminator than an unsupervised distance. τ is **never a literal in the pipeline**: it is read at
+    run time from the newest `cluster_bench_*.json`, so the value in use and the evidence for it are one
+    artifact, and `ingest` refuses to run if no bench exists. A span shorter than 2 s carries no
+    embedding and takes the PREVIOUS span's cluster (`cluster_source = "adjacent"`); a leading short run
+    takes the first assigned cluster; a recording that embedded nothing leaves its spans unassigned
+    rather than inventing a voice. **A segment whose end exceeds the recording is clamped to it** —
+    measured on the first real run, where Whisper returned a segment ending at 47.98 s for a 20.0 s file.
+17. **The purge is the memory store's one action, and the listing never becomes a file (M1, 2026-09-10).**
+    `python -m jarvis_voice clusters` PRINTS one line per cluster (id, owner flag, person, spans, days,
+    first/last heard) plus the three longest spans truncated to 60 characters, so the operator can
+    recognise a voice; it returns data and writes nothing. The purge itself is
+    `py -3 -m jarvis_memory purge <cluster_id>` — one command per cluster, which removes that voice's
+    spans, their speaker vectors and the beliefs resting only on them, and writes the audit rows. **The
+    tooling has no "wife" concept and cannot create one:** a non-owner voice is a numbered cluster with a
+    centroid, and personhood is earned from evidence by the store's own rule, never asserted here.
+
 Sources: `%USERPROFILE%\.jarvis\voice\freeze.txt`; the M0a run (§6); `phase7/voice/jarvis_voice/*.py`; `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md` §8.
 
 ---
@@ -81,6 +111,15 @@ Sources: `phase7/docs/PHASE_7_PLAN.md` §0 (the ten 7.8 rows); `phase4/docs/BEYO
 **In the repo:** `phase7/voice/jarvis_voice/` (eleven modules: `__init__`, `__main__`, `paths`, `audio`, `speaker`, `enroll`, `verify`, `transcribe`, `evaluate`, `selftest`, `split`), `phase7/voice/test_voice_logic.py`, this document, the CI step, and the `.gitignore` block (`*.wav *.flac *.mp3 *.m4a *.ogg *.opus *.webm`, `phase7/voice/.venv/`, `phase7/voice/**/*.npy`, `phase7/voice/**/*.pt`) — proven with a throwaway `phase7/voice/x.wav` showing `!!`.
 
 **Never in the repo:** every recording, embedding, transcript, corpus, the venv and the Hugging Face cache — all under `C:\Users\jluca\.jarvis\voice\` (`.jarvis/` is itself ignored at `.gitignore:115`). At M0a the cache holds the ECAPA model and the 2.9 GB `large-v3` snapshot; `public\` holds the 338 MB tarball and its extraction; `public\enroll_S1\` the throwaway enrollment of the pseudo-owner; `transcripts\` one JSON; `raw\` is empty (the copy was deleted). The folders are created on first use: after the M0b prep of 2026-09-06, `enroll\` holds the owner's 3 read clips, 3 natural pieces and `owner.json`/`owner.npy`, `enroll\long\` the two 600 s natural recordings, and `heldout_sameday\` the 14 sanity pieces; `heldout\` (the later-day clips the M0b band is measured on) and `heldout_neg\` (consented household negatives) do not exist yet.
+
+**The memory store (M1, 2026-09-10):** the spine lands in `%USERPROFILE%\.jarvis\memory\household.sqlite`
+(`jarvis_memory.paths.default_db()`) — outside the repo like everything else, and `*.sqlite*` is ignored.
+It holds recordings, spans, clusters, persons, span vectors and the audit trail; it is the only thing that
+outlives the audio.
+
+**The clustering threshold (M1, 2026-09-10):** `%USERPROFILE%\.jarvis\voice\cluster_bench_<date>.json`
+carries τ\*, the whole grid, both scenarios' numbers, the speaker ids, the linkage implementation and the
+library versions. `ingest` reads τ\* from the newest of these at run time.
 
 Sources: `.gitignore`; `phase7/voice/jarvis_voice/paths.py`; the M0a run (§6).
 
@@ -499,6 +538,84 @@ Tests: `test_voice_logic.py` 53 → **58 checks** (T10a–T10e; the prompt's T7a
 taken by the `split` tests, so this block is T10). Three mutants, control green first, each failing
 by name and restored from a byte-copy: `assign` checking clusters before the owner → T10c;
 `choose_tau` tying to the larger τ → T10b; `update_centroid` not re-normalised → T10d.
+
+### M1b — 2026-09-10 — the pipeline, proven on throwaways — the order holds, the clustering MISSES on short spans
+
+`ingest` runs end to end: Whisper → an ECAPA embedding per span ≥ 2 s → the online assignment at τ\* →
+the spine written to `household.sqlite` → the transcript JSON fsync'd → **the audio deleted, and only
+then**. Two throwaways went through it (the owner's own read speech, and a public-corpus stranger);
+both WAVs are gone, both stores committed, and the purge removed a whole voice in one command.
+
+**What PASSED, and it is the half that cannot be undone if wrong:**
+
+| property | evidence |
+|---|---|
+| the audio is deleted only after the commit AND the JSON | both runs `store_committed: true`, `deleted: true`, no WAV left in `raw\` |
+| a failure before the commit leaves the audio | T11c: a store whose `promote_persons` raises → the WAV survives, 0 spans, 0 recordings |
+| a failure writing the JSON leaves the audio | T11c: a writer that raises → the WAV survives |
+| τ comes from the measurement, never a literal | `tau : 0.56 (from cluster_bench)` printed by the run; `ingest` refuses to start with no bench JSON |
+| the purge is ONE action per cluster | `py -3 -m jarvis_memory purge 5 --yes` → spans 10 → 9, span embeddings 4 → 3, audit 0 → 1 (`op=purge`, `rule=R7`) |
+| a purged voice's speaker vector goes with it | the embedding count fell with the span; asserted in the memory suite as T39 |
+| the listing never becomes a file | T11e; `clusters` returns data and the CLI prints it |
+
+**Throwaway 1 — the owner** (the first 20 s of `owner_enroll_01.wav`, copied; sha256
+`4ee13a0a3b7ff0fc…`): 20.0 s, wall 14.1 s, RTF 0.706, **9 spans, 3 embedded, owner 0, new 3,
+adjacent 6**. **Throwaway 2 — a stranger** (LibriSpeech speaker 1272, 20 s concatenated; sha256
+`e3829a7410ebeb18…`): 1 span, 1 embedded, 1 new cluster. Store after both: 2 recordings, 10 spans,
+5 clusters, 1 person (the owner); after purging the stranger, 9 spans and 3 span vectors.
+
+#### MISS — the owner's own audio did not reach his own threshold, and the cause is span length
+
+§3.5 expected every embedded span of the owner throwaway to come back `cluster_source = "owner"` and
+no other cluster to appear. **Neither held.** The three embedded spans scored **0.1113, 0.3232 and
+0.2598** against the owner centroid, all below his M0b threshold of **0.358503**, so each opened a
+new cluster. The stranger, on 20 unbroken seconds, scored **0.1992** — *higher than the owner's
+5.66 s span*.
+
+The measurement is the explanation. In an earlier run of the **same file** Whisper produced three
+9-second segments and the first two scored **0.4423 and 0.4374 — comfortably the owner**. The
+threshold was measured at M0b on pieces of natural speech several seconds long and up; ECAPA on a
+1–3 s fragment simply does not reach it. §0 predicted the direction ("ECAPA on conversational
+fragments is weaker than on read speech, so the corpus numbers are an upper bound") and this is
+stronger than predicted: on the owner's own clean read audio, the identification fails when the
+segmentation is fine-grained.
+
+**Nothing was tuned in response.** The threshold is M0b's measured value and τ\* is M1a's; changing
+either after seeing this would be fitting them to a throwaway. It is recorded as the finding it is,
+and it is the first thing M1c's real recording will test.
+
+#### A reproducibility finding: the same audio segmented two different ways
+
+The two runs above used a **byte-identical** input (`input_sha256` equal, verified) and the same
+model, `beam_size=5`, `vad_filter=False` — and produced **3 segments** the first time and **9** the
+second. Everything downstream follows the segmentation: how many spans exist, which get embedded,
+what they score, how many clusters appear. A game was using the GPU throughout, so float16 CTranslate2
+kernel selection under varying free VRAM is the likely cause, but the cause is not established here.
+
+It matters more than a normal flake would, because **the audio is deleted after ingest**: a
+segmentation that cannot be reproduced makes the spine a one-shot record. Re-running is not a
+recovery path. Carried as an open item, not repaired.
+
+#### A defect found by the first real run, and fixed
+
+Whisper returned a final segment ending at **47.98 s for a 20.0 s file** (2 words over a near-silent
+tail). Unclamped, that end time entered the spine as fact — a span the store believes lasted 30 s
+inside a 20 s recording, with `said_at` derived from it, and no audio left to contradict it.
+`ingest` now clamps a segment's end to the recording's own duration; T11d pins it with a segment that
+deliberately overruns.
+
+#### Tests
+
+`test_voice_logic.py` 58 → **63 checks** (T11a–T11e; the prompt's T8a–T8e labels were already taken
+by `pack_runs`). `test_memory_logic.py` 262 → **264** (T39, T39b: a span's speaker vector round-trips
+byte-exact and the purge takes it; a cluster centroid persists in the same encoding). Two mutants,
+control green first, each failing by name and restored from a byte-copy: deleting the audio before
+the commit → T11c; adjacency taking the NEXT span's cluster instead of the previous → T11b.
+
+The suite runs with no GPU, no model and no audio decoder — the ASR, the embedder, the store, the
+JSON writer and the WAV reader are all injected — which is what lets CI exercise the deletion order,
+the one rule whose failure cannot be undone.
+
 
 
 ---

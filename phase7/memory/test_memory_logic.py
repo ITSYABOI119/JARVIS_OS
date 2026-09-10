@@ -1860,5 +1860,40 @@ check("T35g the CLI dry run builds one request and reports the registry-derived 
       and _want_sha == schema_sha256() and '"json_schema"' in _dry.stdout,
       (_dry.stdout[-300:] + _dry.stderr[-300:]))
 
+# ================================================== T39 — the voice pipeline's span vectors
+# The speaker embedding is the one thing that OUTLIVES the audio: once the WAV is deleted, a nightly
+# re-fit can only re-cluster retained spans from these vectors. That makes the purge's reach the
+# safety property - a purged speaker must not survive as a vector a re-fit could resurrect - so this
+# asserts the purge's EXISTING behaviour rather than re-implementing it.
+from jarvis_memory.store import SPAN_EMBED_MODEL as _SEM  # noqa: E402
+
+_st39, _c1_39, _c2_39, _own39 = fresh()
+_r39 = _st39.add_recording("sha-39", "2026-03-01T08:00:00", 60.0, "headset")
+_sp_own = _st39.add_span(_r39, 0.0, 4.0, _c1_39, "the owner speaking", -0.20)
+_sp_oth = _st39.add_span(_r39, 4.0, 8.0, _c2_39, "another voice", -0.25)
+_v39 = [((i % 17) - 8) / 8.0 for i in range(192)]          # exact in binary32: eighths
+_v39b = [((i % 11) - 5) / 8.0 for i in range(192)]
+_st39.add_span_embedding(_sp_own, _v39)
+_st39.add_span_embedding(_sp_oth, _v39b)
+_back39 = _st39.span_embedding(_sp_own)
+_purged39 = _st39.purge_cluster(_c2_39)
+check("T39 a span's speaker vector round-trips byte-exact, and the purge takes it with the span",
+      _back39 == _v39 and len(_back39) == 192
+      and _st39.span_embedding(_sp_oth) is None
+      and _st39.span_embedding(_sp_own) == _v39
+      and _st39.conn.execute(
+          "select count(*) from embedding where owner_table='span'").fetchone()[0] == 1
+      and _SEM == "speechbrain/spkrec-ecapa-voxceleb"
+      and isinstance(_purged39, dict),
+      str((len(_back39), _back39[:3], _st39.span_embedding(_sp_oth))))
+
+_cent39 = [0.5] * 192
+_st39.set_cluster_centroid(_c1_39, _cent39)
+_row39 = _st39.conn.execute("select centroid from cluster where id=?", (_c1_39,)).fetchone()[0]
+check("T39b a cluster centroid persists in the embedding encoding and reads back equal",
+      embed_mod.unpack(_row39, 192) == _cent39,
+      str(len(_row39) if _row39 else None))
+
+
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
 sys.exit(1 if FAILS else 0)

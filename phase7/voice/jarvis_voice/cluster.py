@@ -392,3 +392,33 @@ def latest_bench(voice_home_dir=None) -> dict:
             "no cluster_bench_*.json under %s - run `python -m jarvis_voice cluster-bench` first; "
             "the clustering threshold is measured on the public corpus, never guessed" % home)
     return _json.loads(files[-1].read_text(encoding="utf-8"))
+
+
+def fill_adjacent(assignments: Sequence) -> List:
+    """Give every unembedded span a cluster by ADJACENCY, in time order.
+
+    `assignments` is one entry per span in time order: a cluster id, or None for a span too short to
+    embed (< MIN_CLIP_S). A None takes the PREVIOUS span's cluster; a leading None takes the next
+    assigned one. If the recording has no embedded span at all, every entry stays None and the spans
+    are stored unassigned rather than invented into a cluster.
+
+    Previous, not nearest-in-time, and that is a decision rather than an accident: conversation runs
+    in turns, so a short utterance ("yeah", "mm") almost always continues the turn it follows rather
+    than opening the one that comes next. It is a heuristic either way — the honest limit is that a
+    short span carries no evidence of its own, and the goal doc says so.
+    """
+    out = list(assignments)
+    last = None
+    for i, v in enumerate(out):
+        if v is None:
+            out[i] = last
+        else:
+            last = v
+    # a leading run of Nones: the first assigned cluster reaches backwards
+    first = next((v for v in out if v is not None), None)
+    for i, v in enumerate(out):
+        if v is None:
+            out[i] = first
+        else:
+            break
+    return out

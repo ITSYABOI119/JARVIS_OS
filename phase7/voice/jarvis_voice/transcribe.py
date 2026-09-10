@@ -6,6 +6,7 @@ the ASR call (`run_asr`) imports faster-whisper lazily.
 """
 import datetime as _dt
 import json
+import re as _re
 import os
 import time
 from pathlib import Path
@@ -47,6 +48,31 @@ def finalize(input_path, json_path, payload: dict, keep: bool = False,
     return payload
 
 
+STAMP_RE = _re.compile(r"(20\d{2})(\d{2})(\d{2})[_-](\d{2})(\d{2})(\d{2})")
+
+
+def resolve_started_at(path, argument=None, duration_s=None, mtime=None):
+    """When the recording STARTED -> (iso string, source). Pure; the caller supplies mtime.
+
+    Precedence argument > filename stamp > mtime - duration, and the SOURCE is recorded beside the
+    value because the three are not equally trustworthy: the argument is the operator's own
+    statement, the `rec_YYYYmmdd_HHMMSS` stamp is written by `record` at the moment it starts, and
+    mtime - duration is an inference from when the file stopped being written. A span's `said_at`
+    is derived from this, and MS2 will reason about days from it, so a reader must be able to tell
+    which of the three produced it.
+    """
+    if argument:
+        return str(argument), "argument"
+    m = STAMP_RE.search(Path(path).stem)
+    if m:
+        y, mo, d, h, mi, sec = (int(x) for x in m.groups())
+        return _dt.datetime(y, mo, d, h, mi, sec).astimezone().isoformat(timespec="seconds"), "filename"
+    if mtime is None:
+        mtime = os.path.getmtime(path)
+    start = _dt.datetime.fromtimestamp(mtime) - _dt.timedelta(seconds=float(duration_s or 0.0))
+    return start.astimezone().isoformat(timespec="seconds"), "mtime"
+
+
 class ASR:
     """faster-whisper on CUDA (CTranslate2). Loaded once."""
 
@@ -63,7 +89,13 @@ class ASR:
     def run(self, wav_path) -> dict:
         t0 = time.perf_counter()
         segments, info = self.model.transcribe(str(wav_path), beam_size=5, vad_filter=False)
-        segs = [{"start": s.start, "end": s.end, "text": s.text} for s in segments]  # generator -> list
+        # avg_logprob and no_speech_prob are kept because the span row stores an ASR confidence and
+        # the audio will not exist to re-check it: a low-confidence span has to be recognisable as
+        # one from the spine alone, forever.
+        segs = [{"start": s.start, "end": s.end, "text": s.text,
+                 "avg_logprob": getattr(s, "avg_logprob", None),
+                 "no_speech_prob": getattr(s, "no_speech_prob", None)}
+                for s in segments]  # generator -> list
         wall = time.perf_counter() - t0
         return {"model": self.model_name, "compute_type": self.compute_type, "device": self.device,
                 "faster_whisper_version": self.version, "language": info.language,

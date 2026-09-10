@@ -36,6 +36,11 @@ from .registry import (
 from .rules import decide
 from .schema import DDL
 
+# The speaker-embedding model the voice pipeline uses. Named here because the store is what
+# outlives the audio: a vector row is only comparable to another row from the SAME model, so
+# the model id is written beside every vector rather than assumed by a later reader.
+SPAN_EMBED_MODEL = "speechbrain/spkrec-ecapa-voxceleb"
+
 # The three versioned belief tables and the span table that carries their evidence.
 BELIEF_TABLES = ("fact", "edge", "preference")
 SPAN_LINK = {"fact": ("fact_span", "fact_id"), "edge": ("edge_span", "edge_id"),
@@ -103,6 +108,38 @@ class MemoryStore:
         cur = self.conn.execute("insert into cluster (centroid) values (?)", (centroid,))
         self.conn.commit()
         return cur.lastrowid
+
+    def set_cluster_centroid(self, cluster_id, centroid) -> None:
+        """Persist a cluster's running centroid (float32 LE, the `embedding.vec` encoding).
+
+        The voice pipeline updates a centroid every time a span joins, so the vector on disk is the
+        mean of everything the cluster has heard rather than of its first span alone.
+        """
+        self.conn.execute("update cluster set centroid=? where id=?",
+                          (_embed.pack(centroid) if centroid is not None else None, cluster_id))
+        self.conn.commit()
+
+    def add_span_embedding(self, span_id, vec, model=SPAN_EMBED_MODEL) -> None:
+        """One speaker vector for one span.
+
+        Distinct from `embed_pending`, which embeds TEXT for the retrieval lanes: this is the
+        SPEAKER embedding the voice pipeline already computed to decide the span's cluster, and it
+        is stored so a nightly re-fit can re-cluster the retained spans without the audio — which is
+        the only way a re-fit can exist at all once the audio is deleted. Same table, same
+        `owner_table='span'` rows the purge already deletes, so a purged span's voice vector goes
+        with it and no re-fit can resurrect a purged speaker.
+        """
+        self.conn.execute(
+            "insert or replace into embedding (owner_table, owner_id, model, dim, vec) "
+            "values ('span',?,?,?,?)", (span_id, model, len(vec), _embed.pack(vec)))
+        self.conn.commit()
+
+    def span_embedding(self, span_id, model=SPAN_EMBED_MODEL):
+        """The stored speaker vector for a span, or None."""
+        row = self.conn.execute(
+            "select dim, vec from embedding where owner_table='span' and owner_id=? and model=?",
+            (span_id, model)).fetchone()
+        return None if row is None else _embed.unpack(row[1], row[0])
 
     def add_span(self, recording_id, t_start_s, t_end_s, cluster_id, text, asr_conf,
                  about_time=None, about_time_source=None) -> int:

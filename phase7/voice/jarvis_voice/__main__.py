@@ -1,4 +1,4 @@
-"""CLI: python -m jarvis_voice <record|enroll|verify|transcribe|evaluate|split|selftest|cluster-bench> ...
+"""CLI: python -m jarvis_voice <record|enroll|verify|transcribe|evaluate|split|selftest|cluster-bench|ingest|clusters> ...
 
 split: extract speech from a long 16 kHz recording (energy gate, padded, short gaps merged) and pack
 whole runs into pieces so no word is cut at a boundary; evaluate: --neg-dir (WAV + FLAC) or --neg-json
@@ -149,6 +149,66 @@ def cmd_split(a):
     return 0
 
 
+def cmd_ingest(a):
+    """Transcribe, cluster, write the spine, delete the audio — in that order, per WAV."""
+    # torch FIRST, before CTranslate2 is loaded by ASR(). Measured: without it faster-whisper dies
+    # with "Could not load symbol cudnnGetLibConfig. Error code 127" - CTranslate2 finds cuDNN
+    # through the DLLs torch has already loaded. `transcribe()` has always imported torch ahead of
+    # the engine for the same reason; this path has to do it too.
+    import torch  # noqa: F401
+    from .cluster import latest_bench
+    from .enroll import EnrollmentStore
+    from .speaker import SpeakerEmbedder
+    from .spine import ingest_one, open_store
+    from .transcribe import ASR
+
+    enrollment = EnrollmentStore(name=a.name).load()
+    if a.tau is not None:
+        tau, tau_source = a.tau, "argument"
+    else:
+        bench = latest_bench()
+        tau, tau_source = bench["tau_star"], "cluster_bench"
+    store = open_store(a.db)
+    asr = ASR(model=a.model, compute_type=a.compute_type)
+    emb = SpeakerEmbedder()
+    print(f"tau        : {tau} (from {tau_source}); owner threshold {enrollment['threshold']:.6f}; "
+          f"store {store.path}")
+    for wav in a.inputs:
+        r = ingest_one(wav, store, enrollment, tau, asr, emb, keep=a.keep,
+                       started_at=a.started_at, device=a.device)
+        spans = r["spans"]
+        owner = sum(1 for s in spans if s["cluster_source"] == "owner")
+        joined = sum(1 for s in spans if s["cluster_source"] == "join")
+        new = sum(1 for s in spans if s["cluster_source"] == "new")
+        adjacent = sum(1 for s in spans if s["cluster_source"] == "adjacent")
+        # never the span text - only counts
+        print(f"{Path(wav).name}: {r.get('duration_s', 0):.1f}s wall {r.get('wall_s', 0):.1f}s "
+              f"RTF {r.get('rtf') or 0:.3f} | spans {len(spans)} embedded {r['embedded_spans']} "
+              f"| owner {owner} join {joined} new {new} adjacent {adjacent} "
+              f"| committed {r['store_committed']} deleted {r['deleted']}")
+    return 0
+
+
+def cmd_clusters(a):
+    """The purge decision surface: one line per cluster, printed, never written."""
+    from .spine import cluster_rows, longest_span_texts, open_store
+    store = open_store(a.db)
+    rows = cluster_rows(store)
+    if not rows:
+        print("no clusters yet")
+        return 0
+    print(f"store {store.path}")
+    for r in rows:
+        tag = "OWNER" if r["owner"] else "     "
+        print(f"cluster {r['id']:>3} {tag} person {str(r['person_id'] or '-'):>4} "
+              f"spans {r['n_spans']:>5} days {r['days_heard']:>3} "
+              f"first {str(r['first_heard'])[:19]} last {str(r['last_heard'])[:19]}")
+        for t in longest_span_texts(store, r["id"]):
+            print(f"        | {t}")
+    print("purge one cluster with:  py -3 -m jarvis_memory purge <cluster_id>   (from phase7/memory)")
+    return 0
+
+
 def cmd_cluster_bench(a):
     """Measure the speaker-clustering threshold on the PUBLIC corpus, before any household audio.
 
@@ -209,6 +269,12 @@ def build_parser():
     sp.add_argument("--prefix", required=True); sp.add_argument("--frame-dbfs", type=float, default=-45.0)
     sp.add_argument("--pad-ms", type=float, default=200.0); sp.add_argument("--min-gap-ms", type=float, default=500.0)
     sp.add_argument("--move-source-to"); sp.set_defaults(fn=cmd_split)
+    ig = sub.add_parser("ingest"); ig.add_argument("inputs", nargs="+")
+    ig.add_argument("--keep", action="store_true"); ig.add_argument("--started-at")
+    ig.add_argument("--db"); ig.add_argument("--tau", type=float); ig.add_argument("--name", default="owner")
+    ig.add_argument("--model", default="large-v3"); ig.add_argument("--compute-type", default="float16")
+    ig.add_argument("--device", default="headset"); ig.set_defaults(fn=cmd_ingest)
+    cl = sub.add_parser("clusters"); cl.add_argument("--db"); cl.set_defaults(fn=cmd_clusters)
     cb = sub.add_parser("cluster-bench"); cb.add_argument("--out")
     cb.add_argument("--seed", type=int, default=1); cb.set_defaults(fn=cmd_cluster_bench)
     s = sub.add_parser("selftest"); s.set_defaults(fn=cmd_selftest)
