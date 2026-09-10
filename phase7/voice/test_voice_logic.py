@@ -340,7 +340,8 @@ class _FakeASR:
     def __init__(self, segs, duration=30.0):
         self.segs, self.duration = segs, duration
 
-    def run(self, path):
+    def run(self, path, options=None):
+        self.options = options
         return {"model": "fake", "duration_s": self.duration, "wall_s": 0.1, "rtf": 0.003,
                 "language": "en", "segments": list(self.segs),
                 "text": "".join(s["text"] for s in self.segs)}
@@ -627,6 +628,124 @@ check("T12d the minimum is read only from a bench declaring the stream rule; a s
       _empty_ok and _refused and _accepted["min_embed_s"] == 3.0
       and _still["min_embed_s"] == 3.0,
       str((_empty_ok, _refused, _accepted.get("min_embed_s"), _still.get("min_embed_s"))))
+
+# ================================ T13a/T13b — M1b.2: deterministic ASR and the double-run guard
+# M1b transcribed a byte-identical input twice under identical settings and got 3 segments once and
+# 9 the other time. Everything downstream follows the segmentation and the audio is deleted at the
+# end, so an unreproducible segmentation makes the spine a one-shot record. Two answers: pin the
+# decoder, and check on every run whether the pin held while the audio still exists.
+from jarvis_voice.transcribe import (  # noqa: E402
+    ASR, ASR_GUARD_TOL_S, M0A_ASR_OPTIONS, PIPELINE_ASR_OPTIONS, segmentations_agree,
+)
+
+
+class _CapturingInfo:
+    language, language_probability, duration = "en", 0.99, 10.0
+
+
+class _CapturingModel:
+    """Stands in for faster-whisper's WhisperModel: records the kwargs, returns no segments."""
+    def __init__(self):
+        self.kwargs = None
+
+    def transcribe(self, audio, **kw):
+        self.kwargs = dict(kw)
+        return iter(()), _CapturingInfo()
+
+
+# ASR.__init__ would import faster-whisper and load a 3 GB model, so the object is built without it
+# — the method under test is `run`, and what it must be pinned on is the kwargs it forwards.
+_asr13 = ASR.__new__(ASR)
+_asr13.model_name, _asr13.compute_type, _asr13.device = "fake", "float16", "cuda"
+_asr13.version, _asr13.vad_parameters = "1.2.1", {"threshold": 0.5}
+_asr13.model = _CapturingModel()
+
+_r_pipe = _asr13.run("x.wav", PIPELINE_ASR_OPTIONS)
+_kw_pipe = _asr13.model.kwargs
+_r_m0a = _asr13.run("x.wav")
+_kw_m0a = _asr13.model.kwargs
+check("T13a the pipeline decodes with the pinned deterministic settings and records them; the M0a "
+      "command's settings are unchanged",
+      _kw_pipe == PIPELINE_ASR_OPTIONS
+      and PIPELINE_ASR_OPTIONS == {"temperature": 0.0, "beam_size": 5, "vad_filter": True,
+                                   "condition_on_previous_text": False}
+      and _kw_m0a == M0A_ASR_OPTIONS == {"beam_size": 5, "vad_filter": False}
+      and _r_pipe["asr_options"] == PIPELINE_ASR_OPTIONS
+      and _r_pipe["vad_parameters"] == {"threshold": 0.5}
+      and _r_m0a["asr_options"] == M0A_ASR_OPTIONS
+      # the caller's dict is never mutated by the run, so a second run cannot inherit a change
+      and PIPELINE_ASR_OPTIONS is not _r_pipe["asr_options"],
+      str((_kw_pipe, _kw_m0a)))
+
+
+class _TwoPassASR:
+    """A different segmentation per call, so the guard's disagreement branch is reachable."""
+    def __init__(self, first, second, duration=30.0):
+        self.passes, self.duration, self.calls, self.options = [first, second], duration, 0, []
+
+    def run(self, path, options=None):
+        self.options.append(options)
+        segs = self.passes[min(self.calls, len(self.passes) - 1)]
+        self.calls += 1
+        return {"model": "fake", "duration_s": self.duration, "wall_s": 0.1, "rtf": 0.003,
+                "language": "en", "segments": list(segs),
+                "text": "".join(x["text"] for x in segs)}
+
+
+_P1 = [_seg(0.0, 5.0), _seg(5.0, 10.0, "second span here")]
+_P_SHIFTED = [_seg(0.0, 5.0), _seg(5.0 + 5 * ASR_GUARD_TOL_S, 10.0, "second span here")]
+_P_NUDGED = [_seg(0.0, 5.0), _seg(5.0 + ASR_GUARD_TOL_S / 2, 10.0, "second span here")]
+_P_RETEXT = [_seg(0.0, 5.0), _seg(5.0, 10.0, "a different second span")]
+_P_SPLIT = [_seg(0.0, 5.0)]
+
+with tempfile.TemporaryDirectory() as _td13:
+    _td13 = Path(_td13)
+
+    _w_bad = _wav(_td13 / "mismatch.wav")
+    _store_bad = MemoryStore(":memory:")
+    _asr_bad = _TwoPassASR(_P1, _P_SHIFTED)
+    _r_bad = ingest_one(_w_bad, _store_bad, _ENR, 0.5, _asr_bad, _FakeEmbedder(),
+                        out_dir=_td13 / "bad", load_wav=_fake_load_wav)
+    _spans_bad = _store_bad.conn.execute("select count(*) from span").fetchone()[0]
+    _recs_bad = _store_bad.conn.execute("select count(*) from recording").fetchone()[0]
+
+    _w_ok = _wav(_td13 / "agree.wav")
+    _store_ok = MemoryStore(":memory:")
+    _r_ok = ingest_one(_w_ok, _store_ok, _ENR, 0.5, _TwoPassASR(_P1, _P1), _FakeEmbedder(),
+                       out_dir=_td13 / "ok", load_wav=_fake_load_wav)
+
+    _w_keep = _wav(_td13 / "keep.wav")
+    _r_keep = ingest_one(_w_keep, MemoryStore(":memory:"), _ENR, 0.5, _TwoPassASR(_P1, _P1),
+                         _FakeEmbedder(), out_dir=_td13 / "keep", keep=True,
+                         load_wav=_fake_load_wav)
+
+    check("T13b two ASR passes that disagree KEEP the audio and write the first pass once; passes "
+          "that agree delete it unless the operator asked",
+          # the pure predicate, both directions and every clause
+          segmentations_agree(_r0 := {"segments": _P1}, {"segments": _P1})[0] is True
+          and segmentations_agree(_r0, {"segments": _P_NUDGED})[0] is True      # inside the tolerance
+          and segmentations_agree(_r0, {"segments": _P_SHIFTED})[0] is False    # outside it
+          and segmentations_agree(_r0, {"segments": _P_RETEXT})[0] is False     # same times, new text
+          and segmentations_agree(_r0, {"segments": _P_SPLIT})[0] is False      # a different count
+          and segmentations_agree({"segments": []}, {"segments": []})[0] is True
+          # the detail is written to the transcript JSON and printed: it must carry no span text
+          and not any(w in str(segmentations_agree(_r0, {"segments": _P_RETEXT})[1])
+                      for w in ("span", "hello", "different"))
+          # the mismatch run: audio kept, and kept for the GUARD's reason, not the operator's
+          and _r_bad["kept_by_guard"] is True and _r_bad["kept_by_request"] is False
+          and _r_bad["deleted"] is False and _w_bad.exists()
+          and _r_bad["asr_guard"]["agreed"] is False
+          and _r_bad["asr_guard"]["max_start_delta_s"] > ASR_GUARD_TOL_S
+          # written ONCE, from the FIRST pass
+          and _spans_bad == len(_P1) and _recs_bad == 1 and _r_bad["store_committed"] is True
+          # both passes ran, both under the pinned settings
+          and _asr_bad.calls == 2 and _asr_bad.options == [PIPELINE_ASR_OPTIONS] * 2
+          # the agreeing run deletes, and --keep still overrides
+          and _r_ok["kept_by_guard"] is False and _r_ok["deleted"] is True and not _w_ok.exists()
+          and _r_keep["deleted"] is False and _r_keep["kept_by_request"] is True
+          and _r_keep["kept_by_guard"] is False and _w_keep.exists(),
+          str((_r_bad["kept_by_guard"], _r_bad["deleted"], _w_bad.exists(), _spans_bad, _recs_bad,
+               _asr_bad.calls, _r_ok["deleted"], _r_keep["deleted"])))
 
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
 sys.exit(1 if FAILS else 0)

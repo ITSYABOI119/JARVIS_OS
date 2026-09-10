@@ -82,6 +82,29 @@ Sources: `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md` §3, §5, §8; `phase4/do
     tooling has no "wife" concept and cannot create one:** a non-owner voice is a numbered cluster with a
     centroid, and personhood is earned from evidence by the store's own rule, never asserted here.
 
+18. **The pipeline's ASR is pinned deterministic, and every run checks the pin (M1b.2, 2026-09-10).**
+    `ingest` decodes with `temperature=0.0`, `beam_size=5`, `vad_filter=True` and
+    `condition_on_previous_text=False`, and the settings plus the VAD parameters in force are written
+    into the transcript JSON. The M0a `transcribe` command keeps its own recorded settings
+    (`beam_size=5`, `vad_filter=False`) — its RTF and its transcripts were measured with them, and
+    changing them would silently re-base a recorded result — so the caller names the settings and
+    `ASR.run` never chooses them. **Every ingest decodes TWICE and compares:** the passes agree only
+    if the segment count matches, every start and end is within 10 ms and every text is identical;
+    on a disagreement **the audio is KEPT** (`kept_by_guard: true`, recorded separately from
+    `kept_by_request` so a reader can tell which reason held the file), the store gets the FIRST pass
+    — not a merge, which is a third segmentation neither pass produced — and the run is reported. The
+    guard exists because M1 transcribed a byte-identical input twice under identical settings and got
+    3 segments once and 9 the other time: every span, embedding and cluster follows the
+    segmentation, and the audio is deleted at the end, so an unreproducible segmentation would make
+    the spine a one-shot record with no way back. Pinning is the fix; the second pass is how a run
+    finds out whether the fix held on THIS audio, while the audio still exists to try again.
+19. **A store holding only throwaways may be reset; one holding a real recording never is (M1b.2,
+    2026-09-10).** A reset is `household.sqlite`, `-wal` and `-shm` deleted, and it is permitted only
+    after the store's contents have been READ and recorded — the row counts and every recording's
+    sha256 — and found to be exactly the throwaways the milestone created. Once the store holds one
+    span of household speech there is no reset: the audio is already gone, so the spine is the only
+    copy, and the owner's purge (one action per cluster, decision 17) is the only removal.
+
 Sources: `%USERPROFILE%\.jarvis\voice\freeze.txt`; the M0a run (§6); `phase7/voice/jarvis_voice/*.py`; `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md` §8.
 
 ---
@@ -787,6 +810,82 @@ window kept instead of dropped → T12c; the `window_rule` refusal removed → T
 `duration_bench_2026-09-10_atoms.json` matches `duration_bench_*.json` and sorts AFTER the date-named
 file, so a rename alone would have made the superseded run the one the pipeline read. The glob is
 narrowed to `duration_bench_????-??-??.json` to make the claim true, and T12d pins both halves.
+
+
+### M1b.2 — 2026-09-10 — deterministic ASR and the double-run guard; the throwaways re-run
+
+**Both re-runs agreed to the millisecond, and the pinning also reversed M1b's clustering MISS — on
+this audio, and by a mechanism worth naming rather than celebrating.** The audio was rebuilt
+byte-identical (both sha256s equal to the ones the store recorded at M1b, verified before the run),
+so this is the same input measured twice under two decoder configurations.
+
+| property | M1b | M1b.2 |
+|---|---|---|
+| decoder | `beam_size=5`, `vad_filter=False` | `temperature=0.0`, `beam_size=5`, `vad_filter=True`, `condition_on_previous_text=False` |
+| owner throwaway | 9 spans, 3 embedded | **1 span (12.48 s), 1 embedded** |
+| owner's score(s) | 0.1113 / 0.3232 / 0.2598 — all **below** 0.358503 | **0.5862 — above it** |
+| owner's cluster | 3 new clusters, `owner` 0 | **`cluster_source: owner`** |
+| stranger throwaway | 1 span, 1 new cluster, 0.1992 | 1 span (19.82 s), 1 new cluster, **0.2012** |
+| reproducibility | 3 segments once, 9 the other time on byte-identical input | **passes agree: `[1, 1]` segments, max start delta 0.0 s, max end delta 0.0 s, text identical — both files** |
+| RTF (first pass) | 0.706 | 0.097 / 0.100 (two passes 3.38 s / 3.89 s total for 20 s each) |
+
+**Why the miss reversed, stated as mechanism and not as a fix:** `vad_filter=True` drops the
+near-silent stretches before the decoder sees them, so the owner's read speech came back as ONE
+12.48-second segment instead of nine fragments of one to three seconds. M1a.3 measured exactly what
+that is worth — the owner's FRR against his own threshold is 0.36 at three seconds and 0.00 at
+twelve — so a longer span scoring 0.5862 is the duration curve, not a better embedder. **Nothing was
+tuned to make this happen: the threshold is M0b's, τ\* is M1a's, and the four decoder settings were
+chosen for determinism before this run existed.** It is one file of clean read speech; conversational
+audio with real pauses will segment differently, and M1c's real recording is what tests that.
+
+**The guard, and what it can and cannot say.** Both files: `agreed: true`, `n_segments [1, 1]`,
+`max_start_delta_s 0.0`, `max_end_delta_s 0.0`, `text_identical: true`, `kept_by_guard: false`,
+`deleted: true`. That is two identical decodes of each file **in one session, back to back, on an
+otherwise idle GPU**. M1b's divergence happened with a game running, so the conditions that produced
+it were not reproduced here and are not claimed to be excluded — what the guard promises is not that
+divergence cannot happen but that when it does the audio survives it. The cost is one extra decode
+per file, measured: 1.94 s + 1.45 s and 2.01 s + 1.89 s.
+
+**The VAD parameters are recorded, not re-declared.** `vad_filter=True` with no `vad_parameters`
+uses faster-whisper's Silero defaults, so `ASR.__init__` reads them back from `VadOptions()` and
+writes them into every transcript: `threshold 0.5, neg_threshold null, min_speech_duration_ms 0,
+max_speech_duration_s "inf", min_silence_duration_ms 2000, speech_pad_ms 400` (the infinity is
+stored as a string because JSON has none and a transcript must round-trip through strict JSON). A
+library upgrade that moved a default would show as a changed record rather than as an unexplained
+change in segmentation.
+
+**M1b's 47.98-second segment did not recur** — VAD removed the near-silent tail that produced it. The
+end clamp stays regardless (T11d): it guards the spine against a class of ASR output, not against one
+decoder setting.
+
+#### The reset, with the store read before it was deleted
+
+The throwaway store was verified to hold exactly the two throwaways before anything was removed:
+**2 recordings** (`4ee13a0a3b7ff0fc…`, `e3829a7410ebeb18…`, 20.0 s each), **9 spans, 5 clusters,
+1 person, 3 span embeddings, 1 audit row** (`op=purge`, `rule=R7`, cluster 5 — M1b's own purge
+proof). Deleted: `household.sqlite` (184,320 B); no `-wal` or `-shm` existed. After the re-run the
+store held **2 recordings, 2 spans, 2 clusters** (the owner's and one new voice), **1 person,
+2 embeddings, 0 audit rows**; both transcript JSONs were then deleted and the store reset again, so
+the milestone leaves nothing behind.
+
+**One observation, reported and not fixed:** the `recording` row carries a `deleted_audio_at` column
+and `ingest` never sets it — both rows read NULL although both WAVs were deleted, and the transcript
+JSON that does record the deletion is itself deleted afterwards. The spine is meant to be what
+survives the audio, so a column that would say when the audio stopped existing is worth either
+filling or removing; it is left alone here because this prompt's scope is the safety half and the
+field's semantics belong to the store's own design.
+
+Tests: `test_voice_logic.py` 68 → **70 checks** (T13a the pipeline's four pinned kwargs and the M0a
+command's two, pinned through a fake model that captures what `run` forwards; T13b the guard's truth
+table both ways — a boundary inside the tolerance agrees, one outside it does not, identical times
+with different text do not, a different count does not — plus `ingest_one` keeping the audio on a
+disagreement, writing the FIRST pass exactly once, running both passes under the pinned settings,
+and still deleting on agreement unless `--keep`). The detail the guard records is asserted to carry
+no span text: it is written into the transcript JSON and printed to a terminal, and a mismatch report
+is not a licence to quote what was said. Two mutants, the control green first, each failing BY NAME
+and each restored from a byte-copy verified by md5: the comparison always returning agreement →
+T13b; `finalize` ignoring `kept_by_guard` and deleting the audio anyway → T13b (`deleted: true`,
+the WAV gone — the irreversible failure this guard exists to prevent).
 
 
 ---

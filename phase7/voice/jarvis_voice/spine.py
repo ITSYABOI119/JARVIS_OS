@@ -163,7 +163,8 @@ def ingest_one(path, store, enrollment, tau, asr, embedder, keep=False, started_
     from .audio import load_wav as _real_load_wav, sha256_file
     load_wav = load_wav or _real_load_wav
     from .cluster import assign, fill_adjacent, update_centroid
-    from .transcribe import finalize, resolve_started_at, write_json_fsync
+    from .transcribe import (PIPELINE_ASR_OPTIONS, finalize, resolve_started_at,
+                             segmentations_agree, write_json_fsync)
     from .verify import MIN_CLIP_S, score as _score
 
     path = Path(path)
@@ -175,8 +176,27 @@ def ingest_one(path, store, enrollment, tau, asr, embedder, keep=False, started_
     # 1. the sha256 FIRST: it is the only thing that outlives the audio and identifies it.
     sha = sha256_file(path)
 
-    # 3. transcription (2. is resolved after it, because mtime - duration needs the duration)
-    asr_result = asr.run(path)
+    # 3. transcription, TWICE (2. is resolved after it, because mtime - duration needs the duration)
+    #
+    # The double run costs a second decode and buys the one thing the pipeline cannot otherwise
+    # have. M1b transcribed a byte-identical input twice under identical settings and got 3 segments
+    # once and 9 the other time; every span, every embedding, every cluster follows the
+    # segmentation, and the audio is deleted at step 7, so an unreproducible segmentation makes the
+    # spine a one-shot record with no way back. Pinning the decoder (PIPELINE_ASR_OPTIONS) is the
+    # fix; running it twice is how we find out whether the fix held THIS TIME, on THIS audio, while
+    # the audio still exists. On a disagreement the WAV is kept and the run is reported.
+    #
+    # The STORE gets the FIRST pass. Not a merge and not the second: with two segmentations in
+    # hand there is no principled way to pick, and a merged one is a third thing neither pass
+    # produced. First-pass-plus-kept-audio is a state the operator can act on.
+    asr_result = asr.run(path, PIPELINE_ASR_OPTIONS)
+    asr_second = asr.run(path, PIPELINE_ASR_OPTIONS)
+    asr_agreed, asr_guard = segmentations_agree(asr_result, asr_second)
+    asr_guard["agreed"] = asr_agreed
+    asr_guard["wall_s_pass1"] = asr_result.get("wall_s")
+    asr_guard["wall_s_pass2"] = asr_second.get("wall_s")
+    asr_guard["wall_s_total"] = round(float(asr_result.get("wall_s") or 0.0)
+                                      + float(asr_second.get("wall_s") or 0.0), 3)
     duration = asr_result.get("duration_s") or 0.0
     started, started_source = resolve_started_at(path, started_at, duration)
 
@@ -281,8 +301,12 @@ def ingest_one(path, store, enrollment, tau, asr, embedder, keep=False, started_
         "pipeline_wall_s": round(_time.perf_counter() - t0, 2),
         **{k: v for k, v in asr_result.items() if k != "segments"},
     }
+    # after the spread, so a future ASR field can never quietly overwrite the guard's verdict.
+    # `wall_s` and `rtf` above are the FIRST pass alone; the pair is in asr_guard.
+    payload["asr_guard"] = asr_guard
     json_path = (out_dir or _transcripts_dir()) / (path.stem + ".json")
-    return finalize(path, json_path, payload, keep=keep, writer=writer)
+    return finalize(path, json_path, payload, keep=keep, writer=writer,
+                    kept_by_guard=not asr_agreed)
 
 
 def _transcripts_dir():

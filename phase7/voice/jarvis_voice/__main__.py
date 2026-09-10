@@ -211,10 +211,16 @@ def cmd_ingest(a):
         new = sum(1 for s in spans if s["cluster_source"] == "new")
         adjacent = sum(1 for s in spans if s["cluster_source"] == "adjacent")
         # never the span text - only counts
+        g = r.get("asr_guard") or {}
         print(f"{Path(wav).name}: {r.get('duration_s', 0):.1f}s wall {r.get('wall_s', 0):.1f}s "
               f"RTF {r.get('rtf') or 0:.3f} | spans {len(spans)} embedded {r['embedded_spans']} "
               f"| owner {owner} join {joined} new {new} adjacent {adjacent} "
               f"| committed {r['store_committed']} deleted {r['deleted']}")
+        # the guard's verdict on its own line: it decides whether the audio still exists.
+        print(f"    asr guard: agreed {g.get('agreed')} segments {g.get('n_segments')} "
+              f"max start delta {g.get('max_start_delta_s')}s max end delta "
+              f"{g.get('max_end_delta_s')}s text identical {g.get('text_identical')} "
+              f"| two passes {g.get('wall_s_total')}s | kept_by_guard {r.get('kept_by_guard')}")
     return 0
 
 
