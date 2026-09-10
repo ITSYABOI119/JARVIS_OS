@@ -483,7 +483,11 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
                              (int)(sizeof(prompt_ids) / sizeof(prompt_ids[0])),
                              G3_QUERY_FLOOR_TOKS, G3_SUFFIX_TOKS);
             if (budget > 0) {
-                n_pre = tokenizer_encode(tok, pre_buf, prompt_ids + n_prompt, budget);
+                /* _n with the length sctx_get_preamble already returned: a stored answer can
+                 * contain a NUL, and strlen would have cut the injected preamble mid-fact and
+                 * logged nothing. */
+                n_pre = tokenizer_encode_n(tok, pre_buf, (int)pre_len,
+                                           prompt_ids + n_prompt, budget);
                 if (n_pre > 0) n_prompt += n_pre;
             }
         }
@@ -673,7 +677,9 @@ static void handle_query(shmem_ring_t *response_ring, seL4_CPtr resp_notif,
 #endif
 
     /* Encode user text */
-    n_prompt += tokenizer_encode(tok, query_buf, prompt_ids + n_prompt,
+    /* _n with the length the IPC carried: the query arrives length-prefixed, so its own length is
+     * the truth and strlen would only ever agree by luck. */
+    n_prompt += tokenizer_encode_n(tok, query_buf, (int)qlen, prompt_ids + n_prompt,
                                   (int)(sizeof(prompt_ids) / sizeof(prompt_ids[0])) - n_prompt
                                   - PB_TEMPLATE_SUFFIX_TOKS);
 

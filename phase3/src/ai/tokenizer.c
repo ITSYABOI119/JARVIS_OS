@@ -109,8 +109,20 @@ int tokenizer_find(const tokenizer_t *t, const char *token_str)
 int tokenizer_encode(const tokenizer_t *t, const char *text,
                      int *out_ids, int max_tokens)
 {
-    int text_len = (int)strlen(text);
-    if (text_len == 0 || max_tokens <= 0) return 0;
+    /* The NUL-terminated convenience form, kept for the twenty-five callers that hold a C string.
+     * The LIVE PB callers do not use it: they hold a length and pass it, because a NUL inside a
+     * stored answer would otherwise truncate the injected preamble mid-fact and log nothing. */
+    return tokenizer_encode_n(t, text, (int)strlen(text), out_ids, max_tokens);
+}
+
+int tokenizer_encode_n(const tokenizer_t *t, const char *text, int text_len,
+                       int *out_ids, int max_tokens)
+{
+    /* Encodes exactly `text_len` bytes. The only NUL-terminated call on this path was the strlen
+     * that is now the wrapper's; everything below already carried the length (memcpy, and loops
+     * bounded by text_len), so an interior NUL is data here and always was - it simply could not
+     * be reached before. */
+    if (text_len <= 0 || max_tokens <= 0) return 0;
 
     /* Space-marker pre-processing: substitute literal spaces with the vocab's
      * word-boundary marker so that BPE merges can build " word" tokens.

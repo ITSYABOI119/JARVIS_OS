@@ -182,6 +182,64 @@ TEST(test_encode_truncated)
     PASS("encode 'hello world' max_tokens=2 -> [14, 4] (truncated)");
 }
 
+/* ---- T-N1..T-N4: tokenizer_encode_n carries the length; an interior NUL is DATA ----
+ * The one break in the project's copy-by-length discipline was this function's strlen. The two live
+ * PB callers hold a length (the retrieval preamble's, and the control-IN query's from the IPC) and
+ * used to drop it, so a NUL inside a stored answer would have truncated the injected preamble
+ * mid-fact and logged nothing. */
+TEST(test_encode_n_prefix)
+{
+    int a[16], b[16];
+    int na = tokenizer_encode_n(&tok, "hello world", 5, a, 16);
+    int nb = tokenizer_encode(&tok, "hello", b, 16);
+    ASSERT(na == nb && na > 0, "_n(text,5) must equal encode(\"hello\")");
+    for (int i = 0; i < na; i++)
+        ASSERT(a[i] == b[i], "_n(text,5) ids must equal encode(\"hello\") ids");
+    PASS("T-N1 _n encodes exactly text_len bytes");
+}
+
+TEST(test_encode_n_wrapper_equivalence)
+{
+    static const char *cases[] = { "hello", "hello world", "he" };
+    for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
+        int a[32], b[32];
+        int na = tokenizer_encode(&tok, cases[c], a, 32);
+        int nb = tokenizer_encode_n(&tok, cases[c], (int)strlen(cases[c]), b, 32);
+        ASSERT(na == nb, "the wrapper must equal _n(text, strlen(text))");
+        for (int i = 0; i < na; i++)
+            ASSERT(a[i] == b[i], "the wrapper's ids must equal _n's");
+    }
+    PASS("T-N2 tokenizer_encode == _n(text, strlen(text))");
+}
+
+TEST(test_encode_n_interior_nul)
+{
+    /* the bytes a, b, NUL, c, d with text_len 5: the NUL is a byte to encode, not a terminator. */
+    static const char buf[6] = { 'a', 'b', 0, 'c', 'd', 0 };
+    int full[32], head[32];
+    int nf = tokenizer_encode_n(&tok, buf, 5, full, 32);
+    int nh = tokenizer_encode_n(&tok, buf, 2, head, 32);
+    ASSERT(nf > nh, "encoding 5 bytes must yield MORE tokens than stopping at the NUL");
+    ASSERT(nh > 0, "the leading 'ab' must encode");
+    for (int i = 0; i < nh; i++)
+        ASSERT(full[i] == head[i], "the leading 'ab' ids must be unchanged by what follows");
+    /* And the wrapper, which strlens, sees only the first two bytes - the truncation this exists
+     * to remove, demonstrated rather than asserted away. */
+    int wrapped[32];
+    int nw = tokenizer_encode(&tok, buf, wrapped, 32);
+    ASSERT(nw == nh, "the strlen wrapper stops at the interior NUL, by design");
+    PASS("T-N3 an interior NUL is data under _n and a terminator under the wrapper");
+}
+
+TEST(test_encode_n_zero_len)
+{
+    int ids[8];
+    ASSERT(tokenizer_encode_n(&tok, "hello", 0, ids, 8) == 0, "text_len 0 must return 0");
+    ASSERT(tokenizer_encode_n(&tok, "hello", -1, ids, 8) == 0, "a negative text_len must return 0");
+    ASSERT(tokenizer_encode_n(&tok, "hello", 5, ids, 0) == 0, "max_tokens 0 must return 0");
+    PASS("T-N4 zero and negative lengths return 0");
+}
+
 int main(void)
 {
     printf("=== BPE Tokenizer Tests ===\n");
@@ -199,6 +257,10 @@ int main(void)
     test_decode_empty();
     test_find();
     test_encode_truncated();
+    test_encode_n_prefix();
+    test_encode_n_wrapper_equivalence();
+    test_encode_n_interior_nul();
+    test_encode_n_zero_len();
 
     teardown();
 

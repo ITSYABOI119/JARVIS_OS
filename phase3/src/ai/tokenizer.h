@@ -26,6 +26,12 @@ int  tokenizer_init(tokenizer_t *t, const char **tokens, const float *scores,
                     int vocab_size, int bos_id, int eos_id);
 int  tokenizer_encode(const tokenizer_t *t, const char *text,
                       int *out_ids, int max_tokens);
+/* Encode exactly `text_len` bytes. An interior NUL is DATA, not a terminator - which is why the two
+ * live PB callers (the retrieval preamble and the control-IN query) use this form with the lengths
+ * they already hold, rather than letting strlen cut a stored answer short. `tokenizer_encode` is
+ * the strlen wrapper over it. */
+int  tokenizer_encode_n(const tokenizer_t *t, const char *text, int text_len,
+                        int *out_ids, int max_tokens);
 int  tokenizer_decode(const tokenizer_t *t, const int *token_ids, int n_tokens,
                       char *out_text, int max_len);
 int  tokenizer_find(const tokenizer_t *t, const char *token_str);
