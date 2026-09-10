@@ -1,4 +1,4 @@
-"""CLI: python -m jarvis_voice <record|enroll|verify|transcribe|evaluate|split|selftest> ...
+"""CLI: python -m jarvis_voice <record|enroll|verify|transcribe|evaluate|split|selftest|cluster-bench> ...
 
 split: extract speech from a long 16 kHz recording (energy gate, padded, short gaps merged) and pack
 whole runs into pieces so no word is cut at a boundary; evaluate: --neg-dir (WAV + FLAC) or --neg-json
@@ -149,6 +149,43 @@ def cmd_split(a):
     return 0
 
 
+def cmd_cluster_bench(a):
+    """Measure the speaker-clustering threshold on the PUBLIC corpus, before any household audio.
+
+    Scenario A fixes tau on ten known speakers; scenario B replays the household's SHAPE (one owner,
+    a frequent second voice, a visitor, three strangers) through the same online rule the pipeline
+    uses. The JSON it writes is what the pipeline reads tau back from - the value in use and the
+    evidence for it are one artifact.
+    """
+    import datetime as _dt
+    from .cluster import run_bench
+    out = Path(a.out) if a.out else voice_home() / f"cluster_bench_{_dt.date.today():%Y-%m-%d}.json"
+    r = run_bench(out_path=out, seed=a.seed)
+    sa, sb = r["scenario_a"], r["scenario_b"]
+    print(f"corpus     : {r['corpus_root']}")
+    print(f"linkage    : {r['linkage_impl']}  ECAPA {r['ecapa_model']} on {r['ecapa_device']} "
+          f"(load {r['ecapa_load_s']}s, {r['embeddings_computed']} embeddings)")
+    print(f"scenario A : {len(sa['speakers'])} speakers x {sa['per_speaker']} = {sa['n']} clips "
+          f"(S1 {sa['excluded_s1']} excluded), embed {sa['embed_s']}s")
+    for g in sa["grid"]:
+        star = " <- tau*" if g["tau"] == r["tau_star"] else ""
+        print(f"   tau {g['tau']:.2f}  purity {g['purity']:.4f}  completeness "
+              f"{g['completeness']:.4f}  product {g['purity'] * g['completeness']:.4f}  "
+              f"clusters {g['clusters']}{star}")
+    print(f"tau*       : {r['tau_star']}  purity {sa['at_tau_star']['purity']:.4f}  "
+          f"completeness {sa['at_tau_star']['completeness']:.4f}  "
+          f"clusters {sa['at_tau_star']['clusters']}  band "
+          f"{'MET' if sa['band_met'] else 'MISSED'} ({sa['band']})")
+    print(f"scenario B : owner {sb['owner_speaker']} threshold {sb['owner_threshold']:.4f}; "
+          f"{sb['n']} spans, seed {sb['seed']}")
+    print(f"   owner recall {sb['owner_recall']:.4f} over {sb['owner_spans']} owner spans; "
+          f"owner FAR {sb['owner_far']:.4f} over {sb['non_owner_spans']} non-owner spans")
+    print(f"   non-owner clusters {sb['non_owner_clusters']}  purity "
+          f"{sb['non_owner_purity']:.4f}  completeness {sb['non_owner_completeness']:.4f}")
+    print(f"written    : {out}")
+    return 0
+
+
 def cmd_selftest(a):
     from .selftest import main
     return main()
@@ -172,6 +209,8 @@ def build_parser():
     sp.add_argument("--prefix", required=True); sp.add_argument("--frame-dbfs", type=float, default=-45.0)
     sp.add_argument("--pad-ms", type=float, default=200.0); sp.add_argument("--min-gap-ms", type=float, default=500.0)
     sp.add_argument("--move-source-to"); sp.set_defaults(fn=cmd_split)
+    cb = sub.add_parser("cluster-bench"); cb.add_argument("--out")
+    cb.add_argument("--seed", type=int, default=1); cb.set_defaults(fn=cmd_cluster_bench)
     s = sub.add_parser("selftest"); s.set_defaults(fn=cmd_selftest)
     return p
 

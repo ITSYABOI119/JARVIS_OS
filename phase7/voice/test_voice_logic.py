@@ -187,5 +187,123 @@ with tempfile.TemporaryDirectory() as td:
     check("T9 top-level list -> 2 paths", len(paths_from_json(td / "b.json")) == 2)
     check("T9 other -> [] without exception", paths_from_json(td / "c.json") == [])
 
+# ================================================== T10 — M1a: the clustering decision surface
+# NOTE ON LABELS: the prompt for this milestone dictates T7a-T7d for these checks, but T7a-T7f are
+# already taken by the split tests above and T8a-T8f by pack_runs. Duplicated labels would make a
+# failure ambiguous ("FAIL T7c" matching two different checks), so this block is T10a-T10e and the
+# pipeline block is T11a-T11e; the mapping to the prompt's labels is recorded in the report.
+import math as _math  # noqa: E402
+from collections import Counter as _Counter  # noqa: E402
+
+from jarvis_voice.cluster import (  # noqa: E402
+    TAU_GRID, agglomerative_average, assign, choose_tau, completeness, cosine_distance,
+    linkage_backend, purity, update_centroid,
+)
+
+
+def _purity_expected(t, p):
+    """The definition written a SECOND way, so the check is not the implementation compared with
+    itself: group by predicted label, take each group's most common count."""
+    g = {}
+    for a_, b_ in zip(t, p):
+        g.setdefault(b_, []).append(a_)
+    return sum(_Counter(v).most_common(1)[0][1] for v in g.values()) / len(t)
+
+
+def _completeness_expected(t, p):
+    g = {}
+    for a_, b_ in zip(t, p):
+        g.setdefault(a_, []).append(b_)
+    return sum(_Counter(v).most_common(1)[0][1] for v in g.values()) / len(t)
+
+
+_T = ["A"] * 4 + ["B"] * 4 + ["C"] * 4
+_P_MISPLACED = [1, 1, 1, 2] + [2, 2, 2, 2] + [3, 3, 3, 3]   # one A lands in B's cluster
+_P_ONE = [1] * 12
+_P_ALONE = list(range(12))
+check("T10a purity and completeness match the definition computed independently, on three labellings",
+      close(purity(_T, _P_MISPLACED), _purity_expected(_T, _P_MISPLACED), 1e-12)
+      and close(completeness(_T, _P_MISPLACED), _completeness_expected(_T, _P_MISPLACED), 1e-12)
+      and close(purity(_T, _P_ONE), _purity_expected(_T, _P_ONE), 1e-12)
+      and close(completeness(_T, _P_ONE), _completeness_expected(_T, _P_ONE), 1e-12)
+      and close(purity(_T, _P_ALONE), _purity_expected(_T, _P_ALONE), 1e-12)
+      and close(completeness(_T, _P_ALONE), _completeness_expected(_T, _P_ALONE), 1e-12)
+      # The three anchors the prompt names, and the two failure modes the PRODUCT exists to catch:
+      # one cluster maximises completeness, every-item-alone maximises purity.
+      and close(purity(_T, _P_MISPLACED), 11 / 12, 1e-12)
+      and close(completeness(_T, _P_MISPLACED), 11 / 12, 1e-12)
+      and close(purity(_T, _P_ONE), 4 / 12, 1e-12)
+      and close(completeness(_T, _P_ONE), 1.0, 1e-12)
+      and close(purity(_T, _P_ALONE), 1.0, 1e-12)
+      # 3/12, not 4/12: three speakers, each speaker's largest cluster holding exactly one item.
+      # The prompt's illustrative 4/12 for this case is an arithmetic slip; the definition in its
+      # own section 0 gives 3/12, and the other two cases match it exactly.
+      and close(completeness(_T, _P_ALONE), 3 / 12, 1e-12),
+      str((purity(_T, _P_MISPLACED), completeness(_T, _P_MISPLACED),
+           purity(_T, _P_ONE), completeness(_T, _P_ONE),
+           purity(_T, _P_ALONE), completeness(_T, _P_ALONE))))
+
+check("T10b choose_tau takes the max purity x completeness, ties to the SMALLER tau",
+      choose_tau([(0.20, 0.9, 0.5), (0.30, 0.95, 0.92), (0.40, 0.8, 0.8)]) == 0.30
+      and choose_tau([(0.24, 0.9, 0.8), (0.36, 0.8, 0.9)]) == 0.24
+      and choose_tau([(0.50, 0.7, 0.7), (0.22, 0.7, 0.7)]) == 0.22
+      and len(TAU_GRID) == 21 and TAU_GRID[0] == 0.20 and TAU_GRID[-1] == 0.60,
+      str((choose_tau([(0.24, 0.9, 0.8), (0.36, 0.8, 0.9)]), TAU_GRID[:3], TAU_GRID[-1])))
+
+_OWN = [1.0, 0.0, 0.0, 0.0]
+_NEAR_OWNER = [0.6, 0.8, 0.0, 0.0]           # cos 0.6 against the owner centroid, exactly
+_C1 = {"centroid": [0.0, 1.0, 0.0, 0.0], "n": 3}
+_C2 = {"centroid": [0.0, 0.0, 1.0, 0.0], "n": 2}
+_FAR = [0.0, 0.0, 0.0, 1.0]
+_TIE = [0.0, 0.7071067811865476, 0.7071067811865476, 0.0]   # equidistant from _C1 and _C2
+check("T10c assign: the owner is checked FIRST and his boundary is inclusive; then nearest within "
+      "tau; then a new cluster; ties to the lowest index",
+      # exactly AT the threshold -> owner, even though the sole cluster is a perfect distance-0
+      # match for the same vector. This is the ordering M1 depends on.
+      assign(_NEAR_OWNER, _OWN, 0.6, [{"centroid": _NEAR_OWNER, "n": 1}], 0.5) == (-1, "owner")
+      and assign(_C1["centroid"], _OWN, 0.9, [_C1, _C2], 0.5) == (0, "join")
+      and assign(_C2["centroid"], _OWN, 0.9, [_C1, _C2], 0.5) == (1, "join")
+      and assign(_FAR, _OWN, 0.9, [_C1, _C2], 0.5) == (-1, "new")
+      and assign(_TIE, _OWN, 0.9, [_C1, _C2], 0.5) == (0, "join")
+      and assign(_FAR, _OWN, 0.9, [], 0.5) == (-1, "new"),
+      str((assign(_NEAR_OWNER, _OWN, 0.6, [{"centroid": _NEAR_OWNER, "n": 1}], 0.5),
+           assign(_TIE, _OWN, 0.9, [_C1, _C2], 0.5))))
+
+_V1, _V2, _V3 = [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]
+
+
+def _step_expected(c, n, e):
+    """One step of the definition, written independently: the mean over n+1, then normalised."""
+    m = [(ci * n + ei) / (n + 1) for ci, ei in zip(c, e)]
+    q = _math.sqrt(sum(x * x for x in m))
+    return [x / q for x in m]
+
+
+_after2 = update_centroid(_V1, 1, _V2)
+_after3 = update_centroid(_after2, 2, _V3)
+_exp2 = _step_expected(_V1, 1, _V2)
+_exp3 = _step_expected(_after2, 2, _V3)
+# NOTE the accumulated result is NOT the normalised mean of the three RAW vectors: re-normalising
+# at every step discards each intermediate magnitude, so the running centroid weights recent spans
+# slightly more. That is the dictated behaviour ("the running mean ... re-normalised"), and it is
+# checked step by step against the definition rather than against the raw mean, which it does not
+# equal ([0.632, 0.632, 0.447] here, against the raw mean's [0.577, 0.577, 0.577]).
+check("T10d update_centroid is the normalised running mean over n+1, step by step",
+      all(close(a, b, 1e-12) for a, b in zip(_after2, _exp2))
+      and all(close(a, b, 1e-12) for a, b in zip(_after3, _exp3))
+      and close(sum(x * x for x in _after2), 1.0, 1e-12)
+      and close(sum(x * x for x in _after3), 1.0, 1e-12)
+      and close(cosine_distance(_V1, _V1), 0.0, 1e-12)
+      and close(cosine_distance(_V1, _V2), 1.0, 1e-12),
+      str((_after3, _exp3)))
+
+_LAB = agglomerative_average([[1.0, 0.0, 0.0], [0.99, 0.14, 0.0],
+                              [0.0, 0.0, 1.0], [0.0, 0.14, 0.99]], 0.30)
+check("T10e agglomerative_average merges within tau and separates beyond it",
+      len(set(_LAB)) == 2 and _LAB[0] == _LAB[1] and _LAB[2] == _LAB[3] and _LAB[0] != _LAB[2]
+      and linkage_backend() in ("scipy.cluster.hierarchy", "numpy-average-linkage"),
+      str((_LAB, linkage_backend())))
+
+
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
 sys.exit(1 if FAILS else 0)

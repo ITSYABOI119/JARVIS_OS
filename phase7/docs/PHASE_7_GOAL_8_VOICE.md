@@ -402,6 +402,105 @@ What "PASS" means: **EER ≤ 3 %** on the owner's held-out clips against the pub
 
 Sources: the run above; `%USERPROFILE%\.jarvis\voice\selftest_2026-09-06.json`; `%USERPROFILE%\.jarvis\voice\transcripts\selftest_422_422-122949-0005.json`; `%USERPROFILE%\.jarvis\voice\freeze.txt`; `phase7/voice/test_voice_logic.py`.
 
+### M1a — 2026-09-10 — the clustering threshold on the public corpus — BAND MET
+
+**τ\* = 0.56** (average-linkage cosine distance), chosen by the pre-registered rule on LibriSpeech
+dev-clean **before any household audio was clustered**. At τ\*: **purity 1.0000, completeness
+0.9967**, 11 clusters over 300 clips. The band — purity ≥ 0.95 AND completeness ≥ 0.90 — is **MET**.
+
+Measured before the numbers existed and unchanged since: the grid (0.20…0.60 step 0.02, 21 values),
+the metrics, the argmax-of-the-product rule, the tie direction, and both scenarios' composition.
+
+**Venue:** LibriSpeech dev-clean at `%USERPROFILE%\.jarvis\voice\public\LibriSpeech\dev-clean`;
+ECAPA `speechbrain/spkrec-ecapa-voxceleb` (192-d) on `cuda:0`, speechbrain 1.1.1, load 0.61 s;
+linkage `scipy.cluster.hierarchy` (scipy 1.16.3 — the numpy fallback exists and did not run, and
+which one ran is recorded in the JSON); 338 embeddings computed in total, 17.9 s wall for the whole
+bench. Output: `%USERPROFILE%\.jarvis\voice\cluster_bench_2026-09-10.json`.
+
+#### Scenario A — the threshold (balanced, offline agglomerative)
+
+The ten dev-clean speakers with the most utterances ≥ 2 s, **excluding 422** (S1, the self-test's
+pseudo-owner, which scenario B then uses as the owner — measuring the threshold on the same speaker
+would fit it to the thing it is meant to judge): `3752, 6313, 1462, 2277, 3081, 2428, 5694, 777,
+5895, 6241`. The first 30 utterances of each in file order → 300 clips, embedded in 9.6 s.
+
+| τ | purity | completeness | product | clusters |
+|---|---|---|---|---|
+| 0.20 | 1.0000 | 0.3167 | 0.3167 | 190 |
+| 0.22 | 1.0000 | 0.3600 | 0.3600 | 166 |
+| 0.24 | 1.0000 | 0.4300 | 0.4300 | 143 |
+| 0.26 | 1.0000 | 0.5300 | 0.5300 | 123 |
+| 0.28 | 1.0000 | 0.5933 | 0.5933 | 107 |
+| 0.30 | 1.0000 | 0.6467 | 0.6467 | 92 |
+| 0.32 | 1.0000 | 0.6900 | 0.6900 | 76 |
+| 0.34 | 1.0000 | 0.7767 | 0.7767 | 56 |
+| 0.36 | 1.0000 | 0.8067 | 0.8067 | 46 |
+| 0.38 | 1.0000 | 0.8600 | 0.8600 | 36 |
+| 0.40 | 1.0000 | 0.9233 | 0.9233 | 30 |
+| 0.42 | 1.0000 | 0.9433 | 0.9433 | 26 |
+| 0.44 | 1.0000 | 0.9633 | 0.9633 | 21 |
+| 0.46 | 1.0000 | 0.9667 | 0.9667 | 20 |
+| 0.48 | 1.0000 | 0.9733 | 0.9733 | 18 |
+| 0.50 | 1.0000 | 0.9800 | 0.9800 | 16 |
+| 0.52 | 1.0000 | 0.9833 | 0.9833 | 14 |
+| 0.54 | 1.0000 | 0.9933 | 0.9933 | 12 |
+| **0.56** | **1.0000** | **0.9967** | **0.9967** | **11 ← τ\*** |
+| 0.58 | 1.0000 | 0.9967 | 0.9967 | 11 |
+| 0.60 | 1.0000 | 0.9967 | 0.9967 | 11 |
+
+**Purity is 1.0000 at every τ on the grid** — not one cluster ever mixed two speakers, even at 0.60.
+The grid therefore measures only how far a speaker is SPLIT, and completeness rises monotonically
+with τ. Two things follow, and both are worth saying rather than leaving implied:
+
+1. **The tie rule fired and it decided τ\*.** 0.56, 0.58 and 0.60 all score 0.9967; the
+   pre-registered direction (ties to the SMALLER τ) picked 0.56. The direction was chosen before
+   any number for a reason that holds here: a smaller τ splits rather than merges, a split cluster
+   costs the operator a second purge action, and a merged one has already put two people's speech
+   under a single purge. The tie fails toward the recoverable error.
+2. **τ\* sits at the top of the measured grid's plateau, not inside it.** Purity never degraded, so
+   the grid never showed the merge failure the upper bound exists to catch. On conversational
+   household speech it will: this is read speech, one speaker per file, clean channel.
+
+**Cluster count 11 against an expected 10.** Completeness 0.9967 = 299/300, so exactly ONE utterance
+of one speaker sits alone in an eleventh cluster. That is the split direction, and it is the
+harmless one.
+
+#### Scenario B — the household SHAPE, online, at τ\*
+
+S1 (422) as the owner through the self-test's own enrollment (`public\enroll_S1\S1.json`, 5 clips,
+threshold **0.5178911126741584**) with its 28 `sets.positives` as the owner's spans; the largest of
+scenario A's speakers as a frequent second voice (3752, 40 utterances), the next as a visitor (6313,
+6), and three more as strangers (1462, 2277, 3081 — 2 each). 80 spans in a seed-1 shuffle, fed one
+at a time to the SAME `assign` rule the pipeline uses, 1.8 s.
+
+| what | value | expectation |
+|---|---|---|
+| owner recall | **1.0000** (28/28) | ≥ 0.95, from M0a's EER 0.00 % |
+| owner FAR | **0.0000** (0/52) | 0 |
+| non-owner clusters | 6 | 5 |
+| non-owner purity | **1.0000** | ≥ 0.95 |
+| non-owner completeness | 0.9808 | — |
+
+Every owner span was claimed by the owner branch and **no other speaker's span ever was**, which is
+the property the whole design rests on: the owner is identified by a threshold measured against 78
+public negatives, never by proximity to a drifting cluster. Completeness 0.9808 = 51/52 — again one
+utterance alone, giving the sixth cluster against an expected five. Same split, same direction,
+harmless.
+
+#### Limits — these numbers are an upper bound
+
+Stated before the run and unchanged by it. Whisper's segments are **not turn-aligned**: a real span
+can contain two speakers, which is a failure mode this corpus cannot exhibit at all because every
+file holds one speaker reading. ECAPA on conversational fragments is weaker than on read speech.
+Spans under 2 s carry no embedding and inherit a cluster by adjacency. The visitor/stranger split is
+the corpus's shape, not the household's. **Real-data numbers are reported and set no band** (M1c).
+
+Tests: `test_voice_logic.py` 53 → **58 checks** (T10a–T10e; the prompt's T7a–T7d labels were already
+taken by the `split` tests, so this block is T10). Three mutants, control green first, each failing
+by name and restored from a byte-copy: `assign` checking clusters before the owner → T10c;
+`choose_tau` tying to the larger τ → T10b; `update_centroid` not re-normalised → T10d.
+
+
 ---
 
 ## 7. Done-when (canon, `phase4/docs/ROADMAP.md:130-132`, verbatim)
