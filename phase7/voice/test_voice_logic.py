@@ -352,6 +352,17 @@ def _fake_load_wav(path):
     return [0.0] * 16000, 16000
 
 
+def _fake_load_wav_long(path):
+    """The same stub, 40 seconds long.
+
+    Length is LOAD-BEARING wherever a test asserts that a turn was NOT embedded: with a one-second
+    stub every segment past the first second slices to nothing and is skipped for want of samples,
+    so an assertion meant to pin the minimum-duration rule would pass with the rule deleted. Found
+    by the mutant that removed the rule and did not bite.
+    """
+    return [0.0] * (16000 * 40), 16000
+
+
 class _FakeEmbedder:
     """Returns a unit vector in one of two far-apart directions, chosen by the segment's text."""
     def __init__(self, owner_dir=0):
@@ -429,7 +440,7 @@ with tempfile.TemporaryDirectory() as _td11:
     _raised = False
     try:
         ingest_one(_w1, _CommitRaises(_store1), _ENR, 0.5, _asr, _FakeEmbedder(),
-                   out_dir=_td11 / "t1", load_wav=_fake_load_wav)
+                   out_dir=_td11 / "t1", load_wav=_fake_load_wav, min_embed_s=2.0)
     except Exception:
         _raised = True
     _spans_after_fail = _store1.conn.execute("select count(*) from span").fetchone()[0]
@@ -443,7 +454,7 @@ with tempfile.TemporaryDirectory() as _td11:
     _raised2 = False
     try:
         ingest_one(_w2, _store2, _ENR, 0.5, _asr, _FakeEmbedder(), out_dir=_td11 / "t2",
-                   writer=_writer_raises, load_wav=_fake_load_wav)
+                   writer=_writer_raises, load_wav=_fake_load_wav, min_embed_s=2.0)
     except Exception:
         _raised2 = True
 
@@ -454,7 +465,7 @@ with tempfile.TemporaryDirectory() as _td11:
     # would say far less than a named failing check does.
     try:
         _ok3 = ingest_one(_w3, _store3, _ENR, 0.5, _asr, _FakeEmbedder(), out_dir=_td11 / "t3",
-                          load_wav=_fake_load_wav)
+                          load_wav=_fake_load_wav, min_embed_s=2.0)
     except Exception as _exc3:
         _ok3 = {"deleted": "RAISED: %s" % _exc3, "store_committed": False, "spans": [],
                 "clusters_after": {}, "started_at_source": None, "tau": None,
@@ -475,17 +486,27 @@ with tempfile.TemporaryDirectory() as _td11:
     for _s in _spans3:
         if _s["cluster_id"] is not None:
             _counts3[str(_s["cluster_id"])] = _counts3.get(str(_s["cluster_id"]), 0) + 1
-    check("T11d every span carries the eight keys and clusters_after matches the assignments",
+    # Since M1b.3 these three segments are ONE turn — they are back to back, so no gap opens a new
+    # one — and the turn is what carries an embedding. Before M1b.3 the 0.5 s span was skipped and
+    # took its neighbour's cluster; now it is inside the turn that was scored, which is the point.
+    _turns3 = _ok3["turns"]
+    check("T11d every span carries the nine keys, belongs to a turn, and clusters_after matches the "
+          "assignments",
           all(set(s) == set(SPAN_KEYS) for s in _spans3)
           and len(_spans3) == 3
           and _ok3["clusters_after"] == _counts3
           and _ok3["started_at_source"] in ("argument", "filename", "mtime")
           and _ok3["tau"] == 0.5 and _ok3["recording_id"] is not None
-          and _ok3["embedded_spans"] == 2                       # the 0.5 s span is not embedded
-          and [s["cluster_source"] for s in _spans3][1] == "adjacent"
+          and _ok3["min_embed_s"] == 2.0
+          # one turn over all three segments; ONE embedding, not one per span
+          and len(_turns3) == 1 and _turns3[0]["n_segments"] == 3
+          and _turns3[0]["speech_s"] == 30.0 and _turns3[0]["embedded"] is True
+          and _ok3["embedded_turns"] == 1 and _ok3["embedded_spans"] == 1
+          and all(s["turn_id"] == 1 for s in _spans3)
+          and {s["cluster_source"] for s in _spans3} == {_turns3[0]["cluster_source"]}
           # the over-long segment is clamped to the recording, never stored beyond it
           and _spans3[2]["t_end_s"] == 30.0 and all(s["t_end_s"] <= 30.0 for s in _spans3),
-          str((sorted(_spans3[0]), _ok3["clusters_after"], _counts3,
+          str((sorted(_spans3[0]), _ok3["clusters_after"], _counts3, _turns3,
                [s["cluster_source"] for s in _spans3])))
 
     # ---- T11e the listing truncates and never writes
@@ -705,19 +726,19 @@ with tempfile.TemporaryDirectory() as _td13:
     _store_bad = MemoryStore(":memory:")
     _asr_bad = _TwoPassASR(_P1, _P_SHIFTED)
     _r_bad = ingest_one(_w_bad, _store_bad, _ENR, 0.5, _asr_bad, _FakeEmbedder(),
-                        out_dir=_td13 / "bad", load_wav=_fake_load_wav)
+                        out_dir=_td13 / "bad", load_wav=_fake_load_wav, min_embed_s=2.0)
     _spans_bad = _store_bad.conn.execute("select count(*) from span").fetchone()[0]
     _recs_bad = _store_bad.conn.execute("select count(*) from recording").fetchone()[0]
 
     _w_ok = _wav(_td13 / "agree.wav")
     _store_ok = MemoryStore(":memory:")
     _r_ok = ingest_one(_w_ok, _store_ok, _ENR, 0.5, _TwoPassASR(_P1, _P1), _FakeEmbedder(),
-                       out_dir=_td13 / "ok", load_wav=_fake_load_wav)
+                       out_dir=_td13 / "ok", load_wav=_fake_load_wav, min_embed_s=2.0)
 
     _w_keep = _wav(_td13 / "keep.wav")
     _r_keep = ingest_one(_w_keep, MemoryStore(":memory:"), _ENR, 0.5, _TwoPassASR(_P1, _P1),
                          _FakeEmbedder(), out_dir=_td13 / "keep", keep=True,
-                         load_wav=_fake_load_wav)
+                         load_wav=_fake_load_wav, min_embed_s=2.0)
 
     check("T13b two ASR passes that disagree KEEP the audio and write the first pass once; passes "
           "that agree delete it unless the operator asked",
@@ -746,6 +767,112 @@ with tempfile.TemporaryDirectory() as _td13:
           and _r_keep["kept_by_guard"] is False and _w_keep.exists(),
           str((_r_bad["kept_by_guard"], _r_bad["deleted"], _w_bad.exists(), _spans_bad, _recs_bad,
                _asr_bad.calls, _r_ok["deleted"], _r_keep["deleted"])))
+
+# ================================ T13c/T13d — M1b.3: the turn is the embedding unit
+# M1a.3 measured the owner's false-reject rate against his OWN threshold at 0.74 on one-second
+# windows and 0.00 at twelve, so a per-segment embedding asks the threshold a question it cannot
+# answer — which is how M1b opened three new clusters for the owner's own voice. A turn is
+# consecutive segments with no real silence between them, and only a turn holding at least the
+# MEASURED minimum of speech is embedded.
+from jarvis_voice.cluster import (  # noqa: E402
+    TURN_MAX_GAP_S, TURN_MAX_SPEECH_S, build_turns,
+)
+from jarvis_voice.duration import required_min_embed_s  # noqa: E402
+
+
+def _b(*pairs):
+    return [(float(a), float(b)) for a, b in pairs]
+
+
+# every expectation below is derived from the bounds, not typed
+_CAP_SEGS = _b(*[(i * 3.1, i * 3.1 + 3.0) for i in range(5)])       # five 3 s segments, 0.1 s apart
+_cap_turns = build_turns(_CAP_SEGS)
+_cap_first = _cap_turns[0]
+_cap_speech = sum(b - a for a, b in (_CAP_SEGS[i] for i in _cap_first))
+# the cap closes the turn on the segment that REACHES it: the first n whose total is >= the cap
+_cap_expect = next(n for n in range(1, len(_CAP_SEGS) + 1)
+                   if sum(b - a for a, b in _CAP_SEGS[:n]) >= TURN_MAX_SPEECH_S)
+
+_EXACT = _b((0.0, 2.0), (2.0 + TURN_MAX_GAP_S, 4.0 + TURN_MAX_GAP_S))          # gap == the limit
+_OVER = _b((0.0, 2.0), (2.0 + TURN_MAX_GAP_S + 0.01, 4.0))                     # gap just over it
+_LONE = _b((0.0, TURN_MAX_SPEECH_S + 5.0))                                     # one over-long segment
+
+with tempfile.TemporaryDirectory() as _td13c:
+    _td13c = Path(_td13c)
+
+    # a 12 s turn (two segments 0.2 s apart) then a 1 s turn after 7.8 s of silence
+    _TSEGS = [_seg(0.0, 6.0), _seg(6.2, 12.2, "still the same person"), _seg(20.0, 21.0, "yeah")]
+    _w13c = _wav(_td13c / "turns.wav")
+    _store13c = MemoryStore(":memory:")
+    _r13c = ingest_one(_w13c, _store13c, _ENR, 0.5, _FakeASR(_TSEGS, duration=30.0),
+                       _FakeEmbedder(), out_dir=_td13c / "out", load_wav=_fake_load_wav_long,
+                       min_embed_s=3.0)
+    _t13c, _s13c = _r13c["turns"], _r13c["spans"]
+    _emb13c = _store13c.conn.execute("select count(*) from embedding").fetchone()[0]
+
+    check("T13c turns merge across short gaps, close at the cap, never cross a long gap, and only a "
+          "turn holding the measured minimum is embedded - its segments inherit the answer",
+          # the pure rule
+          build_turns(_EXACT) == [[0, 1]]                  # a gap EQUAL to the limit still merges
+          and build_turns(_OVER) == [[0], [1]]             # just over it does not
+          and len(_cap_first) == _cap_expect == 4 and _cap_speech >= TURN_MAX_SPEECH_S
+          and _cap_turns == [[0, 1, 2, 3], [4]]
+          # the cap bounds MERGING, not a segment: one long segment is a turn on its own
+          and build_turns(_LONE) == [[0]]
+          and build_turns([]) == []
+          # through the pipeline: two turns, of 12.0 s and 1.0 s
+          and [t["n_segments"] for t in _t13c] == [2, 1]
+          and [t["speech_s"] for t in _t13c] == [12.0, 1.0]
+          and _t13c[0]["embedded"] is True and _t13c[1]["embedded"] is False
+          and _r13c["embedded_turns"] == 1 and _emb13c == 1        # ONE vector, not one per span
+          and _t13c[1]["score_owner"] is None                      # never scored, never claimed
+          # the segments inherit their turn, and the short turn takes the previous turn's cluster
+          and [s["turn_id"] for s in _s13c] == [1, 1, 2]
+          and [s["cluster_source"] for s in _s13c] == ["owner", "owner", "adjacent"]
+          and _t13c[1]["cluster_id"] == _t13c[0]["cluster_id"]
+          and _r13c["min_embed_s"] == 3.0,
+          str(([t["speech_s"] for t in _t13c], [s["cluster_source"] for s in _s13c],
+               _cap_turns, _emb13c)))
+
+    # ---- T13d the minimum has exactly one source, and the pipeline refuses without it
+    import json as _json13  # noqa: E402
+    _home13 = _td13c / "home"
+    _home13.mkdir()
+    _r_empty = _r_atoms = _r_null = None
+    try:
+        required_min_embed_s(_home13)
+    except SystemExit as _e:
+        _r_empty = "duration_bench" in str(_e)
+    (_home13 / "duration_bench_2026-01-01.json").write_text(
+        _json13.dumps({"min_embed_s": 1.0}), encoding="utf-8")
+    try:
+        required_min_embed_s(_home13)
+    except SystemExit as _e:
+        _r_atoms = "window_rule" in str(_e)
+    (_home13 / "duration_bench_2026-01-02.json").write_text(
+        _json13.dumps({"window_rule": "stream", "min_embed_s": None}), encoding="utf-8")
+    try:
+        required_min_embed_s(_home13)
+    except SystemExit as _e:
+        _r_null = "STOP" in str(_e)
+    (_home13 / "duration_bench_2026-01-03.json").write_text(
+        _json13.dumps({"window_rule": "stream", "min_embed_s": 12.0}), encoding="utf-8")
+    _got13 = required_min_embed_s(_home13)
+
+    _w13d = _wav(_td13c / "nomin.wav")
+    _refused13 = False
+    try:
+        ingest_one(_w13d, MemoryStore(":memory:"), _ENR, 0.5, _FakeASR(_TSEGS, duration=30.0),
+                   _FakeEmbedder(), out_dir=_td13c / "nomin", load_wav=_fake_load_wav)
+    except ValueError as _e:
+        _refused13 = "min_embed_s" in str(_e)
+
+    check("T13d the minimum comes only from a stream-rule bench that produced one, and the pipeline "
+          "refuses to run without it",
+          _r_empty is True and _r_atoms is True and _r_null is True
+          and _got13 == 12.0 and isinstance(_got13, float)
+          and _refused13 and _w13d.exists(),          # refused BEFORE anything touched the audio
+          str((_r_empty, _r_atoms, _r_null, _got13, _refused13, _w13d.exists())))
 
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
 sys.exit(1 if FAILS else 0)

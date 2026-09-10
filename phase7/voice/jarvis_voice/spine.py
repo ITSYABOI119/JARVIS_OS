@@ -121,8 +121,31 @@ def longest_span_texts(store, cluster_id, count=3, chars=60) -> list:
 
 # ----------------------------------------------------------------- the pipeline
 
-SPAN_KEYS = ("span_id", "cluster_id", "cluster_source", "score_owner",
+SPAN_KEYS = ("span_id", "turn_id", "cluster_id", "cluster_source", "score_owner",
              "t_start_s", "t_end_s", "text", "asr_conf")
+
+TURN_KEYS = ("turn_id", "n_segments", "speech_s", "t_start_s", "t_end_s",
+             "embedded", "score_owner", "cluster_id", "cluster_source")
+
+
+def _concat_samples(pieces):
+    """Join a turn's sample spans into one buffer.
+
+    Works for a numpy array and for the test suite's plain list, because `+` means CONCATENATE for
+    one and ELEMENTWISE ADDITION for the other - a difference that would produce a perfectly
+    plausible wrong vector rather than an error.
+    """
+    if not pieces:
+        return []
+    if len(pieces) == 1:
+        return pieces[0]
+    if hasattr(pieces[0], "dtype"):
+        import numpy as _np
+        return _np.concatenate(pieces)
+    out = []
+    for piece in pieces:
+        out.extend(piece)
+    return out
 
 
 def rollback_recording(store, recording_id) -> None:
@@ -144,7 +167,7 @@ def rollback_recording(store, recording_id) -> None:
 
 
 def ingest_one(path, store, enrollment, tau, asr, embedder, keep=False, started_at=None,
-               out_dir=None, writer=None, min_clip_s=None, device="unknown", now=None,
+               out_dir=None, writer=None, min_embed_s=None, device="unknown", now=None,
                load_wav=None) -> dict:
     """One WAV -> the spine, a transcript JSON, and (unless keep) no audio.
 
@@ -157,18 +180,26 @@ def ingest_one(path, store, enrollment, tau, asr, embedder, keep=False, started_
     `asr`, `embedder`, `store`, `writer` and `load_wav` are injected so the whole order is
     exercisable with no GPU, no model and no audio decoder — which is what the deletion-order test
     does, and why that test can run in CI where numpy and soundfile are not installed.
+
+    `min_embed_s` is REQUIRED and has no default: it comes from `duration.required_min_embed_s`,
+    which reads it out of the measurement that produced it. A default here would be a literal
+    nobody could trace to a bench, which is the mistake tau* and this number both exist to avoid.
     """
+    if min_embed_s is None:
+        raise ValueError(
+            "ingest_one needs min_embed_s - read it from duration.required_min_embed_s(), never a "
+            "literal; the minimum embedding duration is a measurement, not a setting")
     import time as _time
 
     from .audio import load_wav as _real_load_wav, sha256_file
     load_wav = load_wav or _real_load_wav
-    from .cluster import assign, fill_adjacent, update_centroid
+    from .cluster import assign, build_turns, fill_adjacent, update_centroid
     from .transcribe import (PIPELINE_ASR_OPTIONS, finalize, resolve_started_at,
                              segmentations_agree, write_json_fsync)
-    from .verify import MIN_CLIP_S, score as _score
+    from .verify import score as _score
 
     path = Path(path)
-    min_clip_s = MIN_CLIP_S if min_clip_s is None else min_clip_s
+    min_embed_s = float(min_embed_s)
     writer = writer or write_json_fsync
     out_dir = Path(out_dir) if out_dir else None
     t0 = _time.perf_counter()
@@ -207,8 +238,8 @@ def ingest_one(path, store, enrollment, tau, asr, embedder, keep=False, started_
     owner_cid = owner_cluster(store, enrollment)
     clusters = load_clusters(store)
 
-    # 4. one embedding per span >= min_clip_s, then the ONLINE assignment
-    per_span, embedded = [], 0
+    # 4. the segments, clamped; then TURNS; then one embedding per turn >= min_embed_s
+    per_span = []
     for seg in segments:
         s_start, s_end = float(seg["start"]), float(seg["end"])
         # CLAMP to the recording's own duration. Measured on the first real run: Whisper returned a
@@ -219,30 +250,58 @@ def ingest_one(path, store, enrollment, tau, asr, embedder, keep=False, started_
         if duration:
             s_end = min(s_end, float(duration))
             s_start = min(s_start, s_end)
-        dur = s_end - s_start
         row = {"t_start_s": s_start, "t_end_s": s_end, "text": (seg.get("text") or "").strip(),
                "asr_conf": seg.get("avg_logprob"), "no_speech_prob": seg.get("no_speech_prob"),
-               "cluster_id": None, "cluster_source": None, "score_owner": None, "vec": None}
-        if dur >= min_clip_s:
-            if wav is None:
-                wav, sr = load_wav(path)
-            a = int(round(s_start * sr))
-            b = min(int(round(s_end * sr)), len(wav))
-            vec = embedder.embed(wav[a:b], sr)
-            row["vec"] = vec
-            row["score_owner"] = _score(owner_centroid, vec)
-            idx, kind = assign(vec, owner_centroid, owner_threshold, clusters, tau)
-            if kind == "owner":
-                row["cluster_id"], row["cluster_source"] = owner_cid, "owner"
-            elif kind == "join":
-                c = clusters[idx]
-                c["centroid"] = update_centroid(c["centroid"], c["n"], vec)
-                c["n"] += 1
-                row["cluster_id"], row["cluster_source"] = c["id"], "join"
-            else:
-                row["cluster_id"], row["cluster_source"] = None, "new"
-            embedded += 1
+               "turn_id": None, "cluster_id": None, "cluster_source": None, "score_owner": None,
+               "vec": None}
         per_span.append(row)
+
+    # THE EMBEDDING UNIT IS THE TURN, not the span. M1a.3 measured the owner's false-reject rate
+    # against his own threshold at 0.74 on one-second windows and 0.00 at twelve, so asking the
+    # threshold about a one-to-three-second Whisper segment asks a question it cannot answer - which
+    # is exactly how M1b came to open three new clusters for the owner's own voice. A turn is
+    # consecutive segments with no real silence between them, and its samples are those segments
+    # concatenated, so what gets embedded is speech of a measured length rather than a nominal one.
+    turns = []
+    for ti, idxs in enumerate(build_turns([(r["t_start_s"], r["t_end_s"]) for r in per_span])):
+        speech = sum(per_span[i]["t_end_s"] - per_span[i]["t_start_s"] for i in idxs)
+        turns.append({"turn_id": ti + 1, "segments": list(idxs), "n_segments": len(idxs),
+                      "speech_s": round(speech, 3),
+                      "t_start_s": per_span[idxs[0]]["t_start_s"],
+                      "t_end_s": per_span[idxs[-1]]["t_end_s"],
+                      "embedded": False, "score_owner": None,
+                      "cluster_id": None, "cluster_source": None, "vec": None})
+
+    embedded = 0
+    for t in turns:
+        if t["speech_s"] < min_embed_s:
+            continue
+        if wav is None:
+            wav, sr = load_wav(path)
+        pieces = []
+        for i in t["segments"]:
+            a = int(round(per_span[i]["t_start_s"] * sr))
+            b = min(int(round(per_span[i]["t_end_s"] * sr)), len(wav))
+            if b > a:
+                pieces.append(wav[a:b])
+        samples = _concat_samples(pieces)
+        if len(samples) == 0:
+            continue
+        vec = embedder.embed(samples, sr)
+        t["vec"] = vec
+        t["embedded"] = True
+        t["score_owner"] = _score(owner_centroid, vec)
+        idx, kind = assign(vec, owner_centroid, owner_threshold, clusters, tau)
+        if kind == "owner":
+            t["cluster_id"], t["cluster_source"] = owner_cid, "owner"
+        elif kind == "join":
+            c = clusters[idx]
+            c["centroid"] = update_centroid(c["centroid"], c["n"], vec)
+            c["n"] += 1
+            t["cluster_id"], t["cluster_source"] = c["id"], "join"
+        else:
+            t["cluster_id"], t["cluster_source"] = None, "new"
+        embedded += 1
 
     # 5. the store: the recording, then the spans in time order, then the vectors.
     rec_id = None
@@ -250,27 +309,41 @@ def ingest_one(path, store, enrollment, tau, asr, embedder, keep=False, started_
     try:
         rec_id = store.add_recording(sha, started, duration, device)
         # a "new" cluster is created only now, so a failure during ASR never leaves an empty one
-        for row in per_span:
-            if row["cluster_source"] == "new":
+        for t in turns:
+            if t["cluster_source"] == "new":
                 cid = store.add_cluster()
-                store.set_cluster_centroid(cid, row["vec"])
-                row["cluster_id"] = cid
-                clusters.append({"id": cid, "centroid": list(row["vec"]), "n": 1})
-        filled = fill_adjacent([r["cluster_id"] for r in per_span])
-        for row, cid in zip(per_span, filled):
-            if row["cluster_id"] is None and cid is not None:
-                row["cluster_id"], row["cluster_source"] = cid, "adjacent"
+                store.set_cluster_centroid(cid, t["vec"])
+                t["cluster_id"] = cid
+                clusters.append({"id": cid, "centroid": list(t["vec"]), "n": 1})
+        # adjacency runs over TURNS: a turn under the minimum carries no evidence of its own and
+        # takes the previous turn's answer, which is the same heuristic the span rule used and the
+        # same honest limit - a turn too short to embed is attributed, never identified.
+        filled = fill_adjacent([t["cluster_id"] for t in turns])
+        for t, cid in zip(turns, filled):
+            if t["cluster_id"] is None and cid is not None:
+                t["cluster_id"], t["cluster_source"] = cid, "adjacent"
             else:
-                row["cluster_id"] = cid
+                t["cluster_id"] = cid
+        for t in turns:
+            for i in t["segments"]:
+                per_span[i]["turn_id"] = t["turn_id"]
+                per_span[i]["cluster_id"] = t["cluster_id"]
+                per_span[i]["cluster_source"] = t["cluster_source"]
+                per_span[i]["score_owner"] = t["score_owner"]
         for row in per_span:
             row["span_id"] = store.add_span(rec_id, row["t_start_s"], row["t_end_s"],
                                             row["cluster_id"], row["text"], row["asr_conf"])
-        for row in per_span:
-            if row["vec"] is not None:
-                add_span_embedding(store, row["span_id"], row["vec"])
-        for row in per_span:
-            if row["cluster_source"] == "join" and row["cluster_id"] is not None:
-                c = next((c for c in clusters if c["id"] == row["cluster_id"]), None)
+        # The store keys an embedding to a SPAN, and a turn is not a row of its own, so a turn's
+        # vector is written against its FIRST span. Not against every span of the turn: that would
+        # duplicate one measurement into several and make any later count of speaker vectors - or
+        # any centroid built from them - silently wrong. A `turn` table is the store's decision to
+        # take, not this pipeline's.
+        for t in turns:
+            if t["vec"] is not None and t["segments"]:
+                add_span_embedding(store, per_span[t["segments"][0]]["span_id"], t["vec"])
+        for t in turns:
+            if t["cluster_source"] == "join" and t["cluster_id"] is not None:
+                c = next((c for c in clusters if c["id"] == t["cluster_id"]), None)
                 if c is not None:
                     store.set_cluster_centroid(c["id"], c["centroid"])
         store.promote_persons()
@@ -295,8 +368,11 @@ def ingest_one(path, store, enrollment, tau, asr, embedder, keep=False, started_
         "recording_id": rec_id, "store_path": getattr(store, "path", None),
         "store_committed": committed,
         "tau": tau, "owner_threshold": owner_threshold, "owner_cluster_id": owner_cid,
+        "min_embed_s": min_embed_s,
         "spans": [{k: row[k] for k in SPAN_KEYS} for row in per_span],
+        "turns": [{k: t[k] for k in TURN_KEYS} for t in turns],
         "clusters_after": {str(k): v for k, v in sorted(counts.items())},
+        "embedded_turns": embedded,
         "embedded_spans": embedded,
         "pipeline_wall_s": round(_time.perf_counter() - t0, 2),
         **{k: v for k, v in asr_result.items() if k != "segments"},

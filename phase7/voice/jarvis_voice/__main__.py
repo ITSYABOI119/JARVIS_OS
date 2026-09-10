@@ -184,6 +184,10 @@ def cmd_ingest(a):
     # with "Could not load symbol cudnnGetLibConfig. Error code 127" - CTranslate2 finds cuDNN
     # through the DLLs torch has already loaded. `transcribe()` has always imported torch ahead of
     # the engine for the same reason; this path has to do it too.
+    # The two measured numbers FIRST, before anything heavy loads: a run that cannot know its
+    # minimum embedding duration must refuse before it spends a minute loading two models.
+    from .duration import required_min_embed_s
+    min_embed_s = required_min_embed_s()
     import torch  # noqa: F401
     from .cluster import latest_bench
     from .enroll import EnrollmentStore
@@ -201,10 +205,10 @@ def cmd_ingest(a):
     asr = ASR(model=a.model, compute_type=a.compute_type)
     emb = SpeakerEmbedder()
     print(f"tau        : {tau} (from {tau_source}); owner threshold {enrollment['threshold']:.6f}; "
-          f"store {store.path}")
+          f"min_embed_s {min_embed_s} s (from duration_bench); store {store.path}")
     for wav in a.inputs:
         r = ingest_one(wav, store, enrollment, tau, asr, emb, keep=a.keep,
-                       started_at=a.started_at, device=a.device)
+                       started_at=a.started_at, device=a.device, min_embed_s=min_embed_s)
         spans = r["spans"]
         owner = sum(1 for s in spans if s["cluster_source"] == "owner")
         joined = sum(1 for s in spans if s["cluster_source"] == "join")
@@ -213,9 +217,17 @@ def cmd_ingest(a):
         # never the span text - only counts
         g = r.get("asr_guard") or {}
         print(f"{Path(wav).name}: {r.get('duration_s', 0):.1f}s wall {r.get('wall_s', 0):.1f}s "
-              f"RTF {r.get('rtf') or 0:.3f} | spans {len(spans)} embedded {r['embedded_spans']} "
+              f"RTF {r.get('rtf') or 0:.3f} | spans {len(spans)} turns {len(r.get('turns') or [])} "
+              f"embedded {r['embedded_turns']} "
               f"| owner {owner} join {joined} new {new} adjacent {adjacent} "
               f"| committed {r['store_committed']} deleted {r['deleted']}")
+        # one line per turn: the unit that was actually embedded and scored
+        for t in r.get("turns") or []:
+            print(f"    turn {t['turn_id']:>3}: segments {t['n_segments']:>3} "
+                  f"speech {t['speech_s']:>6.2f}s {t['t_start_s']:>7.2f}-{t['t_end_s']:<7.2f} "
+                  f"embedded {str(t['embedded']):>5} score "
+                  f"{('%.4f' % t['score_owner']) if t['score_owner'] is not None else '   -  '} "
+                  f"-> cluster {t['cluster_id']} ({t['cluster_source']})")
         # the guard's verdict on its own line: it decides whether the audio still exists.
         print(f"    asr guard: agreed {g.get('agreed')} segments {g.get('n_segments')} "
               f"max start delta {g.get('max_start_delta_s')}s max end delta "

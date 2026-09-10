@@ -394,13 +394,59 @@ def latest_bench(voice_home_dir=None) -> dict:
     return _json.loads(files[-1].read_text(encoding="utf-8"))
 
 
+# The turn rule, pre-registered at M1b.3. Consecutive segments closer than TURN_MAX_GAP_S belong to
+# one stretch of talking; a turn closes once it holds TURN_MAX_SPEECH_S of speech so one long
+# monologue does not become a single unbounded embedding.
+TURN_MAX_GAP_S = 0.5
+TURN_MAX_SPEECH_S = 10.0
+
+
+def build_turns(bounds: Sequence[Tuple[float, float]],
+                max_gap_s: float = TURN_MAX_GAP_S,
+                max_speech_s: float = TURN_MAX_SPEECH_S) -> List[List[int]]:
+    """Group consecutive segments into TURNS. `bounds` is (start, end) per segment, in time order.
+
+    Returns a list of turns, each a list of segment INDICES. A segment opens a new turn when the
+    silence before it exceeds `max_gap_s`, or when the turn it would join already holds
+    `max_speech_s` of speech. A turn's speech is the SUM of its segments' durations, not its
+    wall span, because the samples that get embedded are the segments concatenated - the silence
+    between them is removed, exactly as the duration bench's windows are speech-packed.
+
+    **The cap bounds MERGING, not a segment.** A turn closes once it REACHES `max_speech_s`, so the
+    segment that crosses the cap is inside it and a turn is at least that long at close; and a
+    single segment longer than the cap is a turn on its own, because the spine's spans stay the
+    Whisper segments and nothing here may split one. So a turn can exceed `max_speech_s`, and that
+    is the reason a minimum embedding duration above the cap is still reachable.
+
+    Why turns at all: M1a.3 measured the owner's own false-reject rate against his own threshold at
+    0.74 on one-second windows and 0.00 at twelve, so a per-segment embedding asks the threshold a
+    question it cannot answer. A turn is the longest unit that is still one person talking.
+    """
+    turns: List[List[int]] = []
+    cur: List[int] = []
+    acc = 0.0
+    prev_end = None
+    for i, (a, b) in enumerate(bounds):
+        gap = None if prev_end is None else float(a) - float(prev_end)
+        if cur and (gap is not None and gap > max_gap_s or acc >= max_speech_s):
+            turns.append(cur)
+            cur, acc = [], 0.0
+        cur.append(i)
+        acc += max(0.0, float(b) - float(a))
+        prev_end = b
+    if cur:
+        turns.append(cur)
+    return turns
+
+
 def fill_adjacent(assignments: Sequence) -> List:
     """Give every unembedded span a cluster by ADJACENCY, in time order.
 
-    `assignments` is one entry per span in time order: a cluster id, or None for a span too short to
-    embed (< MIN_CLIP_S). A None takes the PREVIOUS span's cluster; a leading None takes the next
-    assigned one. If the recording has no embedded span at all, every entry stays None and the spans
-    are stored unassigned rather than invented into a cluster.
+    `assignments` is one entry per unit in time order: a cluster id, or None for a unit that was not
+    embedded. A None takes the PREVIOUS unit's cluster; a leading None takes the next assigned one.
+    If the recording embedded nothing at all, every entry stays None and the spans are stored
+    unassigned rather than invented into a cluster. Since M1b.3 the unit is the TURN, and each
+    turn's segments inherit its answer; before that it was the span.
 
     Previous, not nearest-in-time, and that is a decision rather than an accident: conversation runs
     in turns, so a short utterance ("yeah", "mm") almost always continues the turn it follows rather

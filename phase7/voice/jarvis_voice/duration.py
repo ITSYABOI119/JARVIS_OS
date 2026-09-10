@@ -151,6 +151,26 @@ def latest_duration_bench(voice_home_dir=None) -> dict:
     return payload
 
 
+def required_min_embed_s(voice_home_dir=None) -> float:
+    """The pipeline's minimum embedding duration, or a refusal. The ONLY way the pipeline learns it.
+
+    Three refusals, all SystemExit and all before the pipeline touches a model: no date-named bench
+    at all, a bench that does not declare the stream rule, and a bench whose reading rule found no
+    qualifying duration. The last is the important one - `min_embed_s: null` means no D on the grid
+    met both bands, which is a STOP about the threshold itself, and defaulting past it would put a
+    number into the pipeline that no measurement produced.
+    """
+    payload = latest_duration_bench(voice_home_dir)
+    value = payload.get("min_embed_s")
+    if value is None:
+        raise SystemExit(
+            "the duration bench read min_embed_s = null: no duration on the grid met FRR <= %g and "
+            "FAR <= %g at the stored threshold, which is a STOP about the threshold, not a value to "
+            "default past. The pipeline will not embed until a bench produces one."
+            % (MAX_FRR, MAX_FAR))
+    return float(value)
+
+
 # ------------------------------------------------------------------ the bench
 
 def _windows_of(path, d_s, embedder):

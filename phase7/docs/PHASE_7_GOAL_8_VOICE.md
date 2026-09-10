@@ -105,6 +105,27 @@ Sources: `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md` §3, §5, §8; `phase4/do
     span of household speech there is no reset: the audio is already gone, so the spine is the only
     copy, and the owner's purge (one action per cluster, decision 17) is the only removal.
 
+20. **The TURN is the embedding unit, and its minimum length is a measurement (M1b.3, 2026-09-10).**
+    Consecutive Whisper segments merge into one turn while the silence between them is at most
+    **0.5 s** and the turn holds less than **10 s** of speech; a turn's samples are its segments
+    concatenated, and its speech is their durations summed rather than its wall span. **The cap
+    bounds MERGING, not a segment** — a turn closes once it reaches 10 s, so a single segment longer
+    than that is a turn on its own, because the spine's spans stay the Whisper segments and nothing
+    may split one. **Only a turn holding at least `MIN_EMBED_S` of speech is embedded, scored
+    against the owner's threshold and assigned**; every segment inherits its turn's answer and
+    carries its `turn_id`, and a turn under the minimum takes the PREVIOUS turn's cluster
+    (`cluster_source: adjacent`) — attributed, never identified. `MIN_EMBED_S` is **never a literal
+    in the pipeline**: `duration.required_min_embed_s` reads it from the newest date-named bench
+    that declares the stream window rule and produced a value, and refuses in three distinct ways
+    (no bench, a bench under the superseded atom rule, a bench whose reading rule found no
+    qualifying duration) before any model is loaded. The unit changed because M1a.3 measured the
+    owner's false-reject rate against his OWN threshold at 0.74 on one-second windows and 0.00 at
+    twelve: a per-segment embedding asks the threshold a question it cannot answer, which is exactly
+    how M1b opened three new clusters for the owner's own voice. **A turn's vector is written
+    against its FIRST span**, because the store keys an embedding to a span and duplicating one
+    measurement across a turn's spans would make any later count of speaker vectors wrong; whether
+    the store grows a `turn` row is its own design's decision.
+
 Sources: `%USERPROFILE%\.jarvis\voice\freeze.txt`; the M0a run (§6); `phase7/voice/jarvis_voice/*.py`; `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md` §8.
 
 ---
@@ -788,15 +809,25 @@ achieve. **This is reported, not repaired:** adding an `n_pos` floor to `choose_
 seeing the table would be fitting the rule to its own output, which is what M1a.2 refused to do and
 is the strategist's ruling, not the coder's.
 
-#### The consequence for M1b.3, which is why this milestone did not continue into turns
+#### The consequence for M1b.3 — **and a claim of this entry's own, corrected in place**
 
 `PROMPT-VOICE-M1C-PREP-2.md` §4 pre-registers turns that **close at 10 s of speech** and embeds
-**only turns ≥ `MIN_EMBED_S`**. With `MIN_EMBED_S` = 12.0 s those two numbers are mutually exclusive:
-no turn can ever reach the minimum, so the pipeline would provably embed nothing and assign every
-span by adjacency to a cluster that was never created. Both numbers were pre-registered — the cap
-before the measurement existed, the minimum by the measurement — so moving either one is the
-strategist's call. **M1b.3 — turns as the embedding unit — is therefore not implemented. The safety
-half of the pipeline does not depend on the number and lands separately as M1b.2.**
+**only turns ≥ `MIN_EMBED_S`**. This entry first read those two numbers as mutually exclusive at
+`MIN_EMBED_S` = 12.0 s and concluded that no turn could ever qualify, so M1b.3 was not implementable.
+**That was wrong.** The cap closes a turn once it REACHES 10 s of accumulated speech; it never
+truncates a single segment, because the spine's spans stay the Whisper segments and nothing may
+split one. So a turn can exceed 10 s, and M1b.3's own run proved it on the first file: the owner
+throwaway's single 12.48-second segment formed a 12.48-second turn that cleared the 12-second
+minimum and scored 0.5862. The wrong sentence is corrected rather than deleted, because the reason
+it was written is worth keeping — the interaction between a pre-registered cap and a measured
+minimum is real, and it was reasoned about instead of being run.
+
+**What survives the correction is the practical shape, and it is the honest limit of the number
+above:** at `MIN_EMBED_S` = 12.0 s only long uninterrupted stretches are attributable. A turn
+assembled from ordinary conversational segments will often close near 10 s and fall under the
+minimum, and every such turn inherits its neighbour's cluster by adjacency rather than being
+identified. Whether 12.0 s is the right operating point — given that it is read from a row with two
+positive windows — remains the strategist's ruling.
 
 Tests: `test_voice_logic.py` 66 → **68 checks** (T12c the stream cut — window count, per-window frame
 span and the straddling window all derived from the fixture's run lengths rather than typed; T12d the
@@ -886,6 +917,99 @@ is not a licence to quote what was said. Two mutants, the control green first, e
 and each restored from a byte-copy verified by md5: the comparison always returning agreement →
 T13b; `finalize` ignoring `kept_by_guard` and deleting the audio anyway → T13b (`deleted: true`,
 the WAV gone — the irreversible failure this guard exists to prevent).
+
+
+### M1b.3 — 2026-09-10 — turns as the embedding unit; the throwaways re-run
+
+**The band is met: the owner throwaway's one qualifying turn scored 0.5862 against his 0.358503
+threshold and came back `owner`; the stranger's never did.** The embedding unit is now the TURN —
+consecutive Whisper segments with no real silence between them — and only a turn holding at least
+`MIN_EMBED_S` of speech is embedded and assigned. **The spine's spans stay the Whisper segments;**
+each carries `turn_id` and inherits its turn's cluster.
+
+| | owner throwaway | stranger throwaway |
+|---|---|---|
+| input | `4ee13a0a3b7ff0fc…`, 20.0 s | `e3829a7410ebeb18…`, 20.0 s |
+| turns | 1 (1 segment, **12.48 s** of speech, 4.18–16.66 s) | 1 (1 segment, **19.82 s**, 0.18–20.00 s) |
+| `speech_s` ≥ `MIN_EMBED_S` 12.0 | yes → embedded | yes → embedded |
+| owner score | **0.5862** (threshold 0.358503) | **0.2012** |
+| assignment | `cluster_source: owner`, cluster 1 | `cluster_source: new`, cluster 2 |
+| two ASR passes | agreed, `[1, 1]`, deltas 0.0 s, text identical | agreed, `[1, 1]`, deltas 0.0 s, text identical |
+| audio | deleted after the commit and the JSON | deleted after the commit and the JSON |
+
+Store after both: 2 recordings, 2 spans, 2 clusters, 1 person, **2 span embeddings** (one per
+embedded turn, not one per span), 0 audit rows. Both transcript JSONs were then deleted and the
+store reset, so the milestone leaves nothing behind. Both WAVs were rebuilt sha256-identical to
+M1b's before the run, so this is the same audio M1b and M1b.2 measured.
+
+**The segmentation reproduced across SESSIONS, not only within one.** M1b.2's run of the same file
+and this one — separate processes, separate model loads — both produced the single 12.48-second
+segment at 4.18–16.66 s and the same owner score to four decimals. That is a stronger statement than
+the in-run guard can make, and it is the first evidence that the pinned decoder is stable across
+loads rather than merely twice in a row.
+
+#### The rule, and the one place it is easy to misread
+
+A turn opens when the silence before a segment exceeds **0.5 s**, or when the turn it would join
+already holds **10 s** of speech. A turn's speech is the SUM of its segments' durations, not its wall
+span, because what is embedded is those segments concatenated — the same speech-packing the duration
+bench measures. **The 10-second cap bounds MERGING, not a segment:** a turn closes once it REACHES
+10 s, so the segment that crosses the cap is inside it, and a single segment longer than 10 s is a
+turn on its own, because the spine's spans stay the Whisper segments and nothing may split one.
+
+A turn under the minimum is never embedded, never scored, and takes the PREVIOUS turn's cluster
+(`cluster_source: adjacent`) — the same heuristic and the same honest limit the span rule had: such a
+turn is attributed, never identified. A recording that embedded nothing leaves its spans unassigned
+rather than inventing a voice.
+
+**A turn's vector is written against its FIRST span.** The store keys an `embedding` row to a span
+and a turn is not a row of its own; writing the same vector against every span of the turn would
+duplicate one measurement into several and make any later count of speaker vectors — or any centroid
+built from them — silently wrong. Whether the store should grow a `turn` row is its design's
+decision, not this pipeline's, and it is flagged rather than taken here.
+
+#### A correction to M1a.3, made where it was written
+
+M1a.3's entry above said the 10-second cap and a 12-second minimum were "mutually exclusive" and
+that no turn could ever qualify. **That was wrong, and this milestone's own run disproves it:** the
+cap closes a turn at 10 s of ACCUMULATED speech, so it never truncates a single segment, and the
+owner throwaway's 12.48-second segment formed a 12.48-second turn that cleared the 12-second minimum
+on the first try. The paragraph has been corrected in place rather than deleted. What survives the
+correction is the practical shape, which is real and is the honest limit of this milestone: at
+`MIN_EMBED_S` = 12.0 s only long uninterrupted stretches are attributable, and short conversational
+turns will inherit by adjacency rather than be identified.
+
+#### What this does not show
+
+Two files of clean speech, one voice each, one turn each. Nothing here exercises a turn built from
+several segments, a speaker change inside a recording, or the adjacency path on real audio — those
+are covered by tests with synthetic segments and by nothing else. **The 12.0 s minimum itself rests
+on a bench row with two positive windows** (M1a.3), so the number the pipeline now enforces is the
+rule's faithful output and thin evidence at the same time; M1c's real recording is what tests both.
+
+Tests: `test_voice_logic.py` 70 → **72 checks** (T13c the turn rule end to end — a gap equal to the
+0.5 s limit still merges and one just over it does not, the cap closes on the segment that reaches
+it, a single over-long segment is a turn on its own, and through the pipeline a 12.0 s turn is
+embedded while a 1.0 s turn is not, scores nothing, and takes the previous turn's cluster while its
+segments inherit; T13d the minimum comes only from a stream-rule bench that produced one — no bench,
+an atom-rule bench and a `min_embed_s: null` bench are three distinct refusals — and `ingest_one`
+refuses outright without one, leaving the audio in place). T11d was rewritten rather than kept: its
+three back-to-back segments are now ONE turn with ONE embedding, which is the change. Two mutants,
+the control green first, each failing BY NAME and restored from a byte-copy verified by md5: the gap
+comparison made exclusive so a 0.5 s gap splits a turn → T13c; the minimum-duration check removed →
+T13c.
+
+**A mutant found a vacuous assertion, which is the reason to run them.** The minimum-duration mutant
+did NOT bite at first: the suite's stub WAV reader returned one second of samples, so the short turn
+sliced to nothing and was skipped for want of audio rather than by the rule under test — the
+assertion would have passed with the rule deleted. A 40-second stub was added for that test and the
+mutant then failed by name. The one-second stub is kept where its length is not load-bearing, with
+the reason written beside both.
+
+**The CLI refusal was exercised for real, not only in the suite:** `ingest` pointed at a
+`JARVIS_VOICE_HOME` with no bench printed `no duration_bench_<date>.json under … - run
+python -m jarvis_voice duration-bench first; the minimum embedding duration is measured, never
+guessed` and returned in under a second, before either model was loaded.
 
 
 ---
