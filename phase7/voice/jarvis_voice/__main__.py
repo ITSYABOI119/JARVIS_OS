@@ -1,4 +1,4 @@
-"""CLI: python -m jarvis_voice <record|enroll|verify|transcribe|evaluate|split|selftest|cluster-bench|ingest|clusters> ...
+"""CLI: python -m jarvis_voice <record|enroll|verify|transcribe|evaluate|split|selftest|cluster-bench|ingest|clusters|duration-bench> ...
 
 split: extract speech from a long 16 kHz recording (energy gate, padded, short gaps merged) and pack
 whole runs into pieces so no word is cut at a boundary; evaluate: --neg-dir (WAV + FLAC) or --neg-json
@@ -149,6 +149,35 @@ def cmd_split(a):
     return 0
 
 
+def cmd_duration_bench(a):
+    """Measure the owner's threshold at every span duration on the grid, on held-out data."""
+    import datetime as _dt
+    from .duration import run_duration_bench
+    out = Path(a.out) if a.out else voice_home() / f"duration_bench_{_dt.date.today():%Y-%m-%d}.json"
+    r = run_duration_bench(out_path=out)
+    print(f"stored threshold : {r['stored_threshold']:.15f}")
+    print(f"positives {r['positives_files']} files ; negatives {r['negatives_files']} files ; "
+          f"ECAPA {r['ecapa_model']} on {r['ecapa_device']} (load {r['ecapa_load_s']}s)")
+    print(f"{'D s':>5} {'n_pos':>6} {'n_neg':>6} {'EER':>8} {'EER thr':>9} "
+          f"{'FAR@thr':>8} {'FRR@thr':>8} {'pos_min':>8} {'neg_max':>8}  band")
+    for row in r["table"]:
+        if row["eer"] is None:
+            print(f"{row['d_s']:>5.0f} {row['n_pos']:>6} {row['n_neg']:>6}   (no windows)")
+            continue
+        ok = row["frr_at_stored"] <= 0.05 and row["far_at_stored"] <= 0.01
+        print(f"{row['d_s']:>5.0f} {row['n_pos']:>6} {row['n_neg']:>6} {row['eer']:>8.4f} "
+              f"{row['eer_threshold']:>9.4f} {row['far_at_stored']:>8.4f} "
+              f"{row['frr_at_stored']:>8.4f} {row['pos_min']:>8.4f} {row['neg_max']:>8.4f}  "
+              f"{'PASS' if ok else 'fail'}")
+    if r["min_embed_s"] is None:
+        print("MIN_EMBED_S : NONE - no duration on the grid meets FRR <= 5 % and FAR <= 1 % at the "
+              "stored threshold. This is a STOP: the threshold itself is the question.")
+    else:
+        print(f"MIN_EMBED_S : {r['min_embed_s']} s (the smallest qualifying duration)")
+    print(f"written    : {out}")
+    return 0
+
+
 def cmd_ingest(a):
     """Transcribe, cluster, write the spine, delete the audio — in that order, per WAV."""
     # torch FIRST, before CTranslate2 is loaded by ASR(). Measured: without it faster-whisper dies
@@ -275,6 +304,8 @@ def build_parser():
     ig.add_argument("--model", default="large-v3"); ig.add_argument("--compute-type", default="float16")
     ig.add_argument("--device", default="headset"); ig.set_defaults(fn=cmd_ingest)
     cl = sub.add_parser("clusters"); cl.add_argument("--db"); cl.set_defaults(fn=cmd_clusters)
+    db = sub.add_parser("duration-bench"); db.add_argument("--out")
+    db.set_defaults(fn=cmd_duration_bench)
     cb = sub.add_parser("cluster-bench"); cb.add_argument("--out")
     cb.add_argument("--seed", type=int, default=1); cb.set_defaults(fn=cmd_cluster_bench)
     s = sub.add_parser("selftest"); s.set_defaults(fn=cmd_selftest)

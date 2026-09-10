@@ -616,6 +616,82 @@ The suite runs with no GPU, no model and no audio decoder — the ASR, the embed
 JSON writer and the WAV reader are all injected — which is what lets CI exercise the deletion order,
 the one rule whose failure cannot be undone.
 
+### M1a.2 — 2026-09-10 — the owner's threshold by span duration — STOP: the windows never varied
+
+**The reading rule returned `MIN_EMBED_S` = 1.0 s, and that value must not be used.** The measurement
+ran exactly as pre-registered and its output is an artefact of the window rule meeting this data:
+every duration on the grid measured the SAME ~10-second windows, so the grid varied nothing. Adopting
+1.0 s would tell the pipeline that one-second spans clear the owner's threshold, which is the precise
+opposite of the M1 finding that motivated this milestone. **The table is reported; the value is not
+adopted; the window rule is the strategist's to rule on.**
+
+**Venue:** the owner's 13 M0b-admitted held-out pieces (`heldout\owner_heldout2_001..013.wav`)
+against the self-test's 78 public negatives, speech-packed with the `split` mask (−45 dBFS, 200 ms
+pad, 500 ms gap), ECAPA `speechbrain/spkrec-ecapa-voxceleb` on `cuda:0` (load 0.31 s), scored against
+`enroll\owner.json`'s centroid. The stored threshold **0.358503175300161 was measured against and
+never moved**; nothing under `enroll\` was touched. Output:
+`%USERPROFILE%\.jarvis\voice\duration_bench_2026-09-10.json`.
+
+| D (s) | n_pos | n_neg | EER | EER threshold | FAR @ 0.3585 | FRR @ 0.3585 | pos_min | neg_max | band |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | 13 | 79 | 0.0000 | 0.3642 | 0.0000 | 0.0000 | 0.4810 | 0.2475 | PASS |
+| 2 | 13 | 79 | 0.0000 | 0.3642 | 0.0000 | 0.0000 | 0.4810 | 0.2475 | PASS |
+| 3 | 13 | 73 | 0.0000 | 0.3642 | 0.0000 | 0.0000 | 0.4810 | 0.2475 | PASS |
+| 5 | 13 | 56 | 0.0000 | 0.3454 | 0.0000 | 0.0000 | 0.4810 | 0.2098 | PASS |
+| 8 | 13 | 44 | 0.0000 | 0.3454 | 0.0000 | 0.0000 | 0.4810 | 0.2098 | PASS |
+| 12 | 2 | 20 | 0.0000 | 0.4097 | 0.0000 | 0.0000 | 0.6451 | 0.1744 | PASS |
+
+#### Why the table cannot be read as a duration curve
+
+`n_pos` is 13 for every D up to 8 — one window per FILE, not per duration — and `pos_min`, `neg_max`
+and the EER threshold are identical across D = 1, 2 and 3. That is the signature of a measurement
+whose independent variable never moved. The cause is in the data, and it was measured rather than
+assumed:
+
+```
+file                       runs  speech_s   run durations
+owner_heldout2_001.wav        1      10.1   [10.1]
+owner_heldout2_005.wav        1      17.4   [17.4]
+owner_heldout2_009.wav        1      12.3   [12.3]
+…  all thirteen: exactly ONE run, 10.1–17.4 s
+windows per D for file 001:  {1: 1, 2: 1, 3: 1, 5: 1, 8: 1, 12: 0}
+```
+
+Each held-out piece is a single continuous speech run — the 500 ms gap merge joins the whole piece —
+and `speech_windows` treats a run as an ATOM, so the first run alone already satisfies every D ≤ its
+length. A "1-second window" was therefore a 10-second window. The falling `n_neg` (79 → 73 → 56 → 44
+→ 20) and the collapse of `n_pos` to 2 at D = 12 are whole FILES dropping out as D exceeds their
+speech length, not windows getting shorter.
+
+**The atom rule is the pre-registered one, and its own test says so.** T12a fixes, before any number,
+that three runs of 2, 3 and 4 s at D = 2 give **three** windows `[[0], [1], [2]]`. Cutting the
+concatenated speech stream at exactly D instead would give **four** (9 s ÷ 2 s, tail dropped). The
+implementation reproduces T12a exactly; it is the rule that degenerates when a file is one run, and
+changing the rule now — after seeing the numbers it produced — would be fitting the measurement to
+its own result. So it was not changed.
+
+#### What is still true, and what is still unknown
+
+The table does establish one thing worth keeping: **on ~10-second speech-packed windows the stored
+threshold separates the owner from 78 public negatives perfectly** — `pos_min` 0.4810 against
+`neg_max` 0.2475, a margin of 0.23, EER 0.0000. That is M0b's result reproduced on a different
+windowing, and it says the threshold is sound for the length it was measured at.
+
+What remains unmeasured is the thing this milestone needed: **how the score falls as the window
+shortens.** M1's evidence stands unexplained by this table — 0.4423 and 0.4374 on nine-second Whisper
+segments, and 0.1113 / 0.3232 / 0.2598 on segments of 5.66 / 3.00 / 2.00 s from the same voice.
+
+Two candidate repairs, neither taken here because both change a pre-registered rule and the choice is
+the strategist's: (a) cut the concatenated speech stream at exactly D, splitting runs, which makes
+the grid real but contradicts T12a's D = 2 expectation; (b) keep the atom rule and cut each held-out
+piece into shorter FILES first, as `split` already does for enrollment, so the runs themselves are of
+the length under test.
+
+Tests: `test_voice_logic.py` 64 → **66 checks** (T12a the window rule, T12b the reading rule). One
+mutant, control green first, failing by name and restored from a byte-copy: the rule taking the
+LARGEST qualifying duration → T12b.
+
+
 
 
 ---

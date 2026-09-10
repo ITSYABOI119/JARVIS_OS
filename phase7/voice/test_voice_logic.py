@@ -503,5 +503,47 @@ with tempfile.TemporaryDirectory() as _td11:
     os.environ.pop("JARVIS_VOICE_HOME", None)
 
 
+# ================================================== T12 — M1a.2: the duration measurement's rules
+# The threshold is a property of a voice AT A DURATION: M0b measured it on ~10 s pieces and the M1
+# pipeline applied it to 1-3 s spans, which is why the owner failed his own check. These two rules
+# decide what the measurement means, so both are pinned here with no GPU and no corpus.
+from jarvis_voice.duration import (  # noqa: E402
+    DURATION_GRID, MAX_FAR, MAX_FRR, choose_min_embed_s, speech_windows,
+)
+
+# three runs of 2, 3 and 4 s at 0.05 s per frame -> 40, 60 and 80 frames
+_RUNS = [(0, 40), (40, 100), (100, 180)]
+check("T12a speech_windows packs runs in order to at least D and DROPS a short tail",
+      speech_windows(_RUNS, 0.05, 5.0) == [[0, 1]]                 # 2+3 = 5 s; the 4 s tail dropped
+      and speech_windows(_RUNS, 0.05, 2.0) == [[0], [1], [2]]      # each run reaches 2 s alone
+      and speech_windows(_RUNS, 0.05, 12.0) == []                  # 9 s total never reaches 12
+      and speech_windows([], 0.05, 3.0) == []
+      and speech_windows(_RUNS, 0.05, 9.0) == [[0, 1, 2]],         # exactly the whole file
+      str((speech_windows(_RUNS, 0.05, 5.0), speech_windows(_RUNS, 0.05, 2.0),
+           speech_windows(_RUNS, 0.05, 12.0))))
+
+
+def _row(d, frr, far):
+    return {"d_s": d, "frr_at_stored": frr, "far_at_stored": far}
+
+
+# Hand-built tables. The qualifying rows are computed here from the same bands the module exposes,
+# so the expectation is not a typed constant that could drift from the rule it checks.
+_TBL = [_row(1.0, 0.40, 0.05), _row(2.0, 0.12, 0.02), _row(3.0, 0.04, 0.005),
+        _row(5.0, 0.00, 0.000), _row(8.0, 0.00, 0.000), _row(12.0, 0.00, 0.000)]
+_QUALIFY = [r["d_s"] for r in _TBL if r["frr_at_stored"] <= MAX_FRR and r["far_at_stored"] <= MAX_FAR]
+_TBL_NONE = [_row(1.0, 0.40, 0.05), _row(2.0, 0.30, 0.03), _row(3.0, 0.20, 0.02)]
+# FRR inside the band but FAR outside it must NOT qualify - both bands, not either.
+_TBL_FAR_ONLY = [_row(1.0, 0.01, 0.50), _row(2.0, 0.01, 0.02), _row(3.0, 0.01, 0.004)]
+check("T12b the reading rule takes the SMALLEST duration meeting BOTH bands, else None",
+      choose_min_embed_s(_TBL) == min(_QUALIFY) and choose_min_embed_s(_TBL) == 3.0
+      and choose_min_embed_s(_TBL_NONE) is None
+      and choose_min_embed_s(_TBL_FAR_ONLY) == 3.0
+      and choose_min_embed_s([]) is None
+      and (MAX_FRR, MAX_FAR) == (0.05, 0.01)
+      and DURATION_GRID == (1.0, 2.0, 3.0, 5.0, 8.0, 12.0),
+      str((choose_min_embed_s(_TBL), _QUALIFY, choose_min_embed_s(_TBL_FAR_ONLY))))
+
+
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
 sys.exit(1 if FAILS else 0)
