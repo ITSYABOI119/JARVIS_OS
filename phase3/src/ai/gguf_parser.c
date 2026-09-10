@@ -465,10 +465,20 @@ int gguf_open_memory(gguf_ctx_t *ctx, const void *data, size_t len)
      * pass; a claimed extent past the mapping would be read, not rejected, so the whole file is
      * refused here instead. */
     ctx->data_size = (uint64_t)len;
-    for (uint64_t i = 0; i < ctx->n_tensors; i++) {
-        if (!gguf_tensor_in_bounds(ctx, &ctx->tensors[i])) {
-            gguf_close(ctx);
-            return GGUF_ERR_FORMAT;
+
+    /* Only sweep when the buffer actually CARRIES a tensor-data region. A buffer that ends at or
+     * before data_offset holds metadata alone - which is a real and long-standing use of this
+     * entry point (test_gemma4_config parses a config whose token_embd.weight declares 1536 x
+     * 262144 F32, ~1.6 GB of extent it never addresses, to read the dims). Refusing those would
+     * reject a caller that reads no tensor byte. Nothing is weakened by the skip: data_offset >
+     * data_size makes gguf_tensor_in_bounds() false for every tensor, so such a context can never
+     * produce a pointer through resolve_qtensor, which checks unconditionally. */
+    if (ctx->data_size > ctx->data_offset) {
+        for (uint64_t i = 0; i < ctx->n_tensors; i++) {
+            if (!gguf_tensor_in_bounds(ctx, &ctx->tensors[i])) {
+                gguf_close(ctx);
+                return GGUF_ERR_FORMAT;
+            }
         }
     }
     return GGUF_OK;
