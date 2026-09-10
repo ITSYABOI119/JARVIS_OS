@@ -125,7 +125,7 @@ SPAN_KEYS = ("span_id", "turn_id", "cluster_id", "cluster_source", "score_owner"
              "t_start_s", "t_end_s", "text", "asr_conf")
 
 TURN_KEYS = ("turn_id", "n_segments", "speech_s", "t_start_s", "t_end_s",
-             "embedded", "score_owner", "cluster_id", "cluster_source")
+             "embedded", "owner_eligible", "score_owner", "cluster_id", "cluster_source")
 
 
 def _concat_samples(pieces):
@@ -167,8 +167,8 @@ def rollback_recording(store, recording_id) -> None:
 
 
 def ingest_one(path, store, enrollment, tau, asr, embedder, keep=False, started_at=None,
-               out_dir=None, writer=None, min_embed_s=None, device="unknown", now=None,
-               load_wav=None) -> dict:
+               out_dir=None, writer=None, embed_min_s=None, owner_turn_min_s=None,
+               device="unknown", now=None, load_wav=None) -> dict:
     """One WAV -> the spine, a transcript JSON, and (unless keep) no audio.
 
     The ORDER is the owner's rule made mechanical, and it is the reason this is one function rather
@@ -181,25 +181,25 @@ def ingest_one(path, store, enrollment, tau, asr, embedder, keep=False, started_
     exercisable with no GPU, no model and no audio decoder — which is what the deletion-order test
     does, and why that test can run in CI where numpy and soundfile are not installed.
 
-    `min_embed_s` is REQUIRED and has no default: it comes from `duration.required_min_embed_s`,
-    which reads it out of the measurement that produced it. A default here would be a literal
-    nobody could trace to a bench, which is the mistake tau* and this number both exist to avoid.
+    The two durations default to the module constants and each names its provenance there
+    (`cluster.EMBED_MIN_S`, imported from `verify.MIN_CLIP_S`; `cluster.OWNER_TURN_MIN_S`, the
+    length of the M0b pieces the threshold was measured on). NEITHER is read from the duration
+    bench: M1a.4 retracted the single-window minimum that was, because the rule that produced it
+    had no sample floor and read a zero off two windows.
     """
-    if min_embed_s is None:
-        raise ValueError(
-            "ingest_one needs min_embed_s - read it from duration.required_min_embed_s(), never a "
-            "literal; the minimum embedding duration is a measurement, not a setting")
     import time as _time
 
     from .audio import load_wav as _real_load_wav, sha256_file
     load_wav = load_wav or _real_load_wav
-    from .cluster import assign, build_turns, fill_adjacent, update_centroid
+    from .cluster import (EMBED_MIN_S, OWNER_TURN_MIN_S, assign, build_turns, fill_adjacent,
+                          update_centroid)
     from .transcribe import (PIPELINE_ASR_OPTIONS, finalize, resolve_started_at,
                              segmentations_agree, write_json_fsync)
     from .verify import score as _score
 
     path = Path(path)
-    min_embed_s = float(min_embed_s)
+    embed_min_s = EMBED_MIN_S if embed_min_s is None else float(embed_min_s)
+    owner_turn_min_s = OWNER_TURN_MIN_S if owner_turn_min_s is None else float(owner_turn_min_s)
     writer = writer or write_json_fsync
     out_dir = Path(out_dir) if out_dir else None
     t0 = _time.perf_counter()
@@ -269,12 +269,18 @@ def ingest_one(path, store, enrollment, tau, asr, embedder, keep=False, started_
                       "speech_s": round(speech, 3),
                       "t_start_s": per_span[idxs[0]]["t_start_s"],
                       "t_end_s": per_span[idxs[-1]]["t_end_s"],
-                      "embedded": False, "score_owner": None,
+                      "embedded": False, "owner_eligible": False, "score_owner": None,
                       "cluster_id": None, "cluster_source": None, "vec": None})
 
+    # THE OWNER DECISION IS MADE AT TWO LEVELS, and this is the first of them (M1b.4). A turn is
+    # embedded whenever it holds EMBED_MIN_S of speech, but the owner's threshold is only ASKED of a
+    # turn holding OWNER_TURN_MIN_S - the length of the M0b pieces it was measured on. A shorter
+    # turn is clustered at tau like any other voice and its score is recorded but never acted on,
+    # because M1a.3 measured a 74 % false-reject rate on one-second windows: such a score is not
+    # evidence in either direction. The second level runs after ingest, over a cluster's centroid.
     embedded = 0
     for t in turns:
-        if t["speech_s"] < min_embed_s:
+        if t["speech_s"] < embed_min_s:
             continue
         if wav is None:
             wav, sr = load_wav(path)
@@ -291,7 +297,9 @@ def ingest_one(path, store, enrollment, tau, asr, embedder, keep=False, started_
         t["vec"] = vec
         t["embedded"] = True
         t["score_owner"] = _score(owner_centroid, vec)
-        idx, kind = assign(vec, owner_centroid, owner_threshold, clusters, tau)
+        t["owner_eligible"] = t["speech_s"] >= owner_turn_min_s
+        idx, kind = assign(vec, owner_centroid, owner_threshold, clusters, tau,
+                           owner_eligible=t["owner_eligible"])
         if kind == "owner":
             t["cluster_id"], t["cluster_source"] = owner_cid, "owner"
         elif kind == "join":
@@ -341,6 +349,12 @@ def ingest_one(path, store, enrollment, tau, asr, embedder, keep=False, started_
         for t in turns:
             if t["vec"] is not None and t["segments"]:
                 add_span_embedding(store, per_span[t["segments"][0]]["span_id"], t["vec"])
+        # Evidence accrues onto the cluster, and ONLY from turns that were actually embedded: a
+        # turn attributed by adjacency carries none, and must not make a cluster look better
+        # measured than it is. This total is what the owner-merge rule reads afterwards.
+        for t in turns:
+            if t["embedded"] and t["cluster_id"] is not None:
+                store.add_cluster_speech(t["cluster_id"], t["speech_s"])
         for t in turns:
             if t["cluster_source"] == "join" and t["cluster_id"] is not None:
                 c = next((c for c in clusters if c["id"] == t["cluster_id"]), None)
@@ -368,7 +382,7 @@ def ingest_one(path, store, enrollment, tau, asr, embedder, keep=False, started_
         "recording_id": rec_id, "store_path": getattr(store, "path", None),
         "store_committed": committed,
         "tau": tau, "owner_threshold": owner_threshold, "owner_cluster_id": owner_cid,
-        "min_embed_s": min_embed_s,
+        "embed_min_s": embed_min_s, "owner_turn_min_s": owner_turn_min_s,
         "spans": [{k: row[k] for k in SPAN_KEYS} for row in per_span],
         "turns": [{k: t[k] for k in TURN_KEYS} for t in turns],
         "clusters_after": {str(k): v for k, v in sorted(counts.items())},
@@ -381,8 +395,69 @@ def ingest_one(path, store, enrollment, tau, asr, embedder, keep=False, started_
     # `wall_s` and `rtf` above are the FIRST pass alone; the pair is in asr_guard.
     payload["asr_guard"] = asr_guard
     json_path = (out_dir or _transcripts_dir()) / (path.stem + ".json")
-    return finalize(path, json_path, payload, keep=keep, writer=writer,
-                    kept_by_guard=not asr_agreed)
+    result = finalize(path, json_path, payload, keep=keep, writer=writer,
+                      kept_by_guard=not asr_agreed)
+    # 8. and only NOW does the spine record that the audio stopped existing. After `finalize`, never
+    # before: a `deleted_audio_at` on a file that still exists is worse than none, because the audio
+    # is the only thing that could ever contradict it and it would still be there. If the deletion
+    # raises, this line is never reached and the row stays NULL.
+    if result.get("deleted"):
+        result["deleted_audio_at"] = store.set_recording_audio_deleted(rec_id)
+    return result
+
+
+def owner_merge(store, enrollment, min_speech_s=None) -> dict:
+    """The SECOND level of the owner decision: a cluster whose centroid, over enough accumulated
+    speech, clears the owner's enrolled threshold IS the owner, and is folded into his cluster.
+
+    Why a centroid and not a span: M1a.3 measured the threshold as a ~ten-second property of a
+    voice, and a conversation is mostly shorter turns than that. A cluster accumulates speech across
+    turns and days, and its centroid is a mean of embeddings - the same shape as the enrollment
+    centroid the threshold was measured against - so the comparison is like with like at a length no
+    single conversational turn reaches.
+
+    Only clusters with at least `min_speech_s` of EMBEDDED speech are compared; a cluster below it is
+    reported, never scored, because a centroid over three seconds of speech is the same kind of
+    non-evidence a three-second span is. The owner's own cluster is excluded by id, so it is never
+    compared with itself. A merge relabels every span and writes an audit row - nothing is deleted.
+
+    Returns the decision surface; the CLI prints it. Whether this holds on real conversational
+    speech is M1c's to report - here it is a rule with a measured footing, not a proven one.
+    """
+    from jarvis_memory import embed as _embed
+    from .cluster import OWNER_CLUSTER_MIN_S
+    from .verify import score as _score
+
+    min_speech_s = OWNER_CLUSTER_MIN_S if min_speech_s is None else float(min_speech_s)
+    owner_cid = find_owner_cluster(store)
+    threshold = float(enrollment["threshold"])
+    out = {"owner_cluster": owner_cid, "threshold": threshold, "min_speech_s": min_speech_s,
+           "compared": [], "merged": [], "skipped": []}
+    if owner_cid is None:
+        return out
+    centroid = enrollment["centroid"]
+    rows = store.conn.execute(
+        "select id, centroid, embedded_speech_s from cluster where id != ? order by id",
+        (owner_cid,)).fetchall()
+    for row in rows:
+        cid, blob, speech = row[0], row[1], float(row[2] or 0.0)
+        if blob is None:
+            out["skipped"].append({"cluster": cid, "speech_s": speech, "why": "no centroid"})
+            continue
+        if speech < min_speech_s:
+            out["skipped"].append({"cluster": cid, "speech_s": speech,
+                                   "why": "under the accumulated-speech minimum"})
+            continue
+        s = _score(centroid, _embed.unpack(blob, len(centroid)))
+        out["compared"].append({"cluster": cid, "speech_s": speech, "score": s})
+        if s >= threshold:
+            note = ("cluster %d centroid scored %.4f over %.2f s of embedded speech "
+                    "(owner threshold %.6f)" % (cid, s, speech, threshold))
+            res = store.merge_cluster(cid, owner_cid, note)
+            out["merged"].append({"cluster": cid, "speech_s": speech, "score": s,
+                                  "spans_moved": res["spans_moved"], "audit_id": res["audit_id"],
+                                  "person_left": res["person_left"]})
+    return out
 
 
 def _transcripts_dir():

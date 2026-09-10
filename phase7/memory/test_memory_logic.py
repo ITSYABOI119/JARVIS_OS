@@ -1895,5 +1895,68 @@ check("T39b a cluster centroid persists in the embedding encoding and reads back
       str(len(_row39) if _row39 else None))
 
 
+# ================================================== T40 - merging a cluster into a known one
+# M1b.4: a voice cluster whose centroid, over enough accumulated speech, clears the owner's enrolled
+# threshold turns out to BE the owner. Folding it in is a RELABEL - no span, no text and no speaker
+# vector is lost - and the loss it does represent (a cluster id that stops existing) is an audit row.
+_st40, _c1_40, _c2_40, _own40 = fresh()
+_r40a = _st40.add_recording("sha-40a", "2026-04-01T08:00:00", 60.0, "headset")
+_r40b = _st40.add_recording("sha-40b", "2026-04-02T08:00:00", 60.0, "headset")
+_sp40 = [_st40.add_span(_r40a, 0.0, 4.0, _c1_40, "the owner on day one", -0.20),
+         _st40.add_span(_r40a, 4.0, 9.0, _c2_40, "the other voice on day one", -0.21),
+         _st40.add_span(_r40b, 0.0, 6.0, _c2_40, "the other voice on day two", -0.22)]
+_st40.add_span_embedding(_sp40[1], [0.25] * 192)
+_st40.add_cluster_speech(_c1_40, 4.0)
+_st40.add_cluster_speech(_c2_40, 11.0)
+_speech_before = {c: _st40.conn.execute(
+    "select embedded_speech_s from cluster where id=?", (c,)).fetchone()[0]
+    for c in (_c1_40, _c2_40)}
+_audit_before = _st40.conn.execute("select count(*) from audit").fetchone()[0]
+_emb_before = _st40.conn.execute(
+    "select count(*) from embedding where owner_table='span'").fetchone()[0]
+
+_m40 = _st40.merge_cluster(_c2_40, _c1_40, "centroid scored 0.4012 over 11.00 s")
+
+_row40 = _st40.conn.execute(
+    "select n_spans, days_heard, first_heard, embedded_speech_s from cluster where id=?",
+    (_c1_40,)).fetchone()
+_gone40 = _st40.conn.execute("select 1 from cluster where id=?", (_c2_40,)).fetchone()
+_aud40 = _st40.conn.execute(
+    "select op, target_table, loser_id, winner_id, rule, note from audit "
+    "order by id desc limit 1").fetchone()
+_refused40 = _self40 = False
+try:
+    _st40.merge_cluster(9999, _c1_40, "no such cluster")
+except ValueError:
+    _refused40 = True
+try:
+    _st40.merge_cluster(_c1_40, _c1_40, "into itself")
+except ValueError:
+    _self40 = True
+
+check("T40 merge_cluster relabels every span, folds the counts and the accumulated speech, removes "
+      "the cluster row and writes ONE audit row; an unknown or self merge is refused",
+      _m40["spans_moved"] == 2 and _m40["src"] == _c2_40 and _m40["dst"] == _c1_40
+      # every span now points at the winner and NOTHING was deleted
+      and _st40.conn.execute("select count(*) from span where cluster_id=?",
+                             (_c1_40,)).fetchone()[0] == len(_sp40)
+      and _st40.conn.execute("select count(*) from span").fetchone()[0] == len(_sp40)
+      and _gone40 is None
+      # counts folded: n_spans recomputed, days_heard is DISTINCT days (2, not 1 + 2)
+      and _row40[0] == len(_sp40) and _row40[1] == 2 and _row40[2] == "2026-04-01T08:00:00"
+      and _row40[3] == _speech_before[_c1_40] + _speech_before[_c2_40] == 15.0
+      # the speaker vector is span-keyed, so the merge does not touch it
+      and _st40.conn.execute(
+          "select count(*) from embedding where owner_table='span'").fetchone()[0] == _emb_before
+      and _st40.span_embedding(_sp40[1]) == [0.25] * 192
+      # exactly one audit row, naming loser and winner
+      and _st40.conn.execute("select count(*) from audit").fetchone()[0] == _audit_before + 1
+      and (_aud40[0], _aud40[1], _aud40[2], _aud40[3], _aud40[4])
+          == ("merge", "cluster", _c2_40, _c1_40, "people")
+      and "11.00 s" in (_aud40[5] or "")
+      and _refused40 and _self40,
+      str((_m40, tuple(_row40), _aud40, _refused40, _self40)))
+
+
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
 sys.exit(1 if FAILS else 0)

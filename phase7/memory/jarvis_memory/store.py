@@ -90,7 +90,23 @@ class MemoryStore:
             self.conn.execute("PRAGMA journal_mode=WAL")
             self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.executescript(DDL)
+        self._add_missing_columns()
         self.conn.commit()
+
+    # Forward-only, idempotent column adds. `CREATE TABLE IF NOT EXISTS` cannot widen a table that
+    # already exists, so a store written before a column existed would otherwise fail on the first
+    # read of it - and the household store is the one file in this project that must survive its
+    # own schema changing, because the audio it describes is already gone.
+    _ADDED_COLUMNS = (("cluster", "embedded_speech_s", "REAL NOT NULL DEFAULT 0"),)
+
+    def _add_missing_columns(self) -> list:
+        added = []
+        for table, column, decl in self._ADDED_COLUMNS:
+            have = {r[1] for r in self.conn.execute("pragma table_info(%s)" % table).fetchall()}
+            if column not in have:
+                self.conn.execute("alter table %s add column %s %s" % (table, column, decl))
+                added.append("%s.%s" % (table, column))
+        return added
 
     # ------------------------------------------------------------------ close
     def close(self):
@@ -108,6 +124,81 @@ class MemoryStore:
         cur = self.conn.execute("insert into cluster (centroid) values (?)", (centroid,))
         self.conn.commit()
         return cur.lastrowid
+
+    def add_cluster_speech(self, cluster_id, seconds) -> float:
+        """Accrue seconds of EMBEDDED speech onto a cluster; returns the new total.
+
+        Only speech that actually went into an embedding counts. A span attributed by adjacency
+        carries no evidence of its own - that is the whole reason it is called adjacency - so it
+        must not make a cluster look better measured than it is. The total is what the owner-merge
+        rule reads to decide whether a centroid is on the ~10-second footing the M0b threshold was
+        measured at.
+        """
+        self.conn.execute(
+            "update cluster set embedded_speech_s = embedded_speech_s + ? where id=?",
+            (float(seconds), cluster_id))
+        self.conn.commit()
+        row = self.conn.execute(
+            "select embedded_speech_s from cluster where id=?", (cluster_id,)).fetchone()
+        return 0.0 if row is None else float(row[0])
+
+    def merge_cluster(self, src, dst, note=None) -> dict:
+        """Fold cluster `src` into `dst`: every span relabelled, the src row removed, one audit row.
+
+        Used when a cluster turns out to BE someone already known - at M1b.4, when its centroid over
+        enough accumulated speech clears the owner's enrolled threshold. It is a RELABEL, not a
+        delete: no span, no text and no speaker vector is lost, and `embedding` rows need no work at
+        all because they are keyed to the span rather than to the cluster.
+
+        `days_heard` is RECOMPUTED from the surviving spans rather than added, because two clusters
+        heard on the same day are one day and not two.
+
+        A merged cluster that had already earned personhood leaves its `person` row in place and the
+        audit note names it. Deleting a person is not this function's decision: facts and edges may
+        reference it, and reconciling people is the MS2 layer's job. The dangling row is visible in
+        the audit trail rather than silently removed.
+        """
+        for cid in (src, dst):
+            if self.conn.execute("select 1 from cluster where id=?", (cid,)).fetchone() is None:
+                raise ValueError("no cluster %r" % (cid,))
+        if src == dst:
+            raise ValueError("cannot merge cluster %r into itself" % (src,))
+        row = self.conn.execute(
+            "select n_spans, first_heard, person_id, embedded_speech_s from cluster where id=?",
+            (src,)).fetchone()
+        moved = self.conn.execute(
+            "select count(*) from span where cluster_id=?", (src,)).fetchone()[0]
+        self.conn.execute("update span set cluster_id=? where cluster_id=?", (dst, src))
+        self.conn.execute(
+            "update cluster set n_spans = (select count(*) from span where cluster_id=?), "
+            "  days_heard = (select count(distinct substr(said_at,1,10)) from span "
+            "                where cluster_id=?), "
+            "  first_heard = (select min(said_at) from span where cluster_id=?), "
+            "  embedded_speech_s = embedded_speech_s + ? where id=?",
+            (dst, dst, dst, float(row[3] or 0.0), dst))
+        self.conn.execute("delete from cluster where id=?", (src,))
+        full = note or ""
+        if row[2] is not None:
+            full = (full + " ; " if full else "") + (
+                "the merged cluster carried person %d, left in place for the people layer" % row[2])
+        audit_id = self._audit("merge", "cluster", loser_id=src, winner_id=dst,
+                               rule="people", note=full or None)
+        self.conn.commit()
+        return {"src": src, "dst": dst, "spans_moved": int(moved), "audit_id": audit_id,
+                "person_left": row[2]}
+
+    def set_recording_audio_deleted(self, recording_id, when=None) -> str:
+        """Record WHEN a recording's audio stopped existing. Called only after the delete succeeded.
+
+        The spine is what survives the audio, so the row that describes a recording should be able
+        to say that the recording is gone. Written after the deletion and never before: a timestamp
+        on a file that still exists is worse than no timestamp, because nothing downstream could
+        ever notice it was wrong.
+        """
+        ts = when or _now_iso()
+        self.conn.execute("update recording set deleted_audio_at=? where id=?", (ts, recording_id))
+        self.conn.commit()
+        return ts
 
     def set_cluster_centroid(self, cluster_id, centroid) -> None:
         """Persist a cluster's running centroid (float32 LE, the `embedding.vec` encoding).

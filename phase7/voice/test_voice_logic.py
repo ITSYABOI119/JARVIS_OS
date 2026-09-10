@@ -440,7 +440,7 @@ with tempfile.TemporaryDirectory() as _td11:
     _raised = False
     try:
         ingest_one(_w1, _CommitRaises(_store1), _ENR, 0.5, _asr, _FakeEmbedder(),
-                   out_dir=_td11 / "t1", load_wav=_fake_load_wav, min_embed_s=2.0)
+                   out_dir=_td11 / "t1", load_wav=_fake_load_wav, embed_min_s=2.0)
     except Exception:
         _raised = True
     _spans_after_fail = _store1.conn.execute("select count(*) from span").fetchone()[0]
@@ -454,7 +454,7 @@ with tempfile.TemporaryDirectory() as _td11:
     _raised2 = False
     try:
         ingest_one(_w2, _store2, _ENR, 0.5, _asr, _FakeEmbedder(), out_dir=_td11 / "t2",
-                   writer=_writer_raises, load_wav=_fake_load_wav, min_embed_s=2.0)
+                   writer=_writer_raises, load_wav=_fake_load_wav, embed_min_s=2.0)
     except Exception:
         _raised2 = True
 
@@ -465,7 +465,7 @@ with tempfile.TemporaryDirectory() as _td11:
     # would say far less than a named failing check does.
     try:
         _ok3 = ingest_one(_w3, _store3, _ENR, 0.5, _asr, _FakeEmbedder(), out_dir=_td11 / "t3",
-                          load_wav=_fake_load_wav, min_embed_s=2.0)
+                          load_wav=_fake_load_wav, embed_min_s=2.0)
     except Exception as _exc3:
         _ok3 = {"deleted": "RAISED: %s" % _exc3, "store_committed": False, "spans": [],
                 "clusters_after": {}, "started_at_source": None, "tau": None,
@@ -497,7 +497,7 @@ with tempfile.TemporaryDirectory() as _td11:
           and _ok3["clusters_after"] == _counts3
           and _ok3["started_at_source"] in ("argument", "filename", "mtime")
           and _ok3["tau"] == 0.5 and _ok3["recording_id"] is not None
-          and _ok3["min_embed_s"] == 2.0
+          and _ok3["embed_min_s"] == 2.0
           # one turn over all three segments; ONE embedding, not one per span
           and len(_turns3) == 1 and _turns3[0]["n_segments"] == 3
           and _turns3[0]["speech_s"] == 30.0 and _turns3[0]["embedded"] is True
@@ -732,19 +732,19 @@ with tempfile.TemporaryDirectory() as _td13:
     _store_bad = MemoryStore(":memory:")
     _asr_bad = _TwoPassASR(_P1, _P_SHIFTED)
     _r_bad = ingest_one(_w_bad, _store_bad, _ENR, 0.5, _asr_bad, _FakeEmbedder(),
-                        out_dir=_td13 / "bad", load_wav=_fake_load_wav, min_embed_s=2.0)
+                        out_dir=_td13 / "bad", load_wav=_fake_load_wav, embed_min_s=2.0)
     _spans_bad = _store_bad.conn.execute("select count(*) from span").fetchone()[0]
     _recs_bad = _store_bad.conn.execute("select count(*) from recording").fetchone()[0]
 
     _w_ok = _wav(_td13 / "agree.wav")
     _store_ok = MemoryStore(":memory:")
     _r_ok = ingest_one(_w_ok, _store_ok, _ENR, 0.5, _TwoPassASR(_P1, _P1), _FakeEmbedder(),
-                       out_dir=_td13 / "ok", load_wav=_fake_load_wav, min_embed_s=2.0)
+                       out_dir=_td13 / "ok", load_wav=_fake_load_wav, embed_min_s=2.0)
 
     _w_keep = _wav(_td13 / "keep.wav")
     _r_keep = ingest_one(_w_keep, MemoryStore(":memory:"), _ENR, 0.5, _TwoPassASR(_P1, _P1),
                          _FakeEmbedder(), out_dir=_td13 / "keep", keep=True,
-                         load_wav=_fake_load_wav, min_embed_s=2.0)
+                         load_wav=_fake_load_wav, embed_min_s=2.0)
 
     check("T13b two ASR passes that disagree KEEP the audio and write the first pass once; passes "
           "that agree delete it unless the operator asked",
@@ -780,10 +780,12 @@ with tempfile.TemporaryDirectory() as _td13:
 # answer — which is how M1b opened three new clusters for the owner's own voice. A turn is
 # consecutive segments with no real silence between them, and only a turn holding at least the
 # MEASURED minimum of speech is embedded.
+from jarvis_voice import duration as _duration_mod  # noqa: E402
 from jarvis_voice.cluster import (  # noqa: E402
-    TURN_MAX_GAP_S, TURN_MAX_SPEECH_S, build_turns,
+    EMBED_MIN_S, OWNER_CLUSTER_MIN_S, OWNER_TURN_MIN_S, TURN_MAX_GAP_S, TURN_MAX_SPEECH_S,
+    build_turns,
 )
-from jarvis_voice.duration import required_min_embed_s  # noqa: E402
+from jarvis_voice.spine import find_owner_cluster, owner_merge  # noqa: E402
 
 
 def _b(*pairs):
@@ -812,7 +814,7 @@ with tempfile.TemporaryDirectory() as _td13c:
     _store13c = MemoryStore(":memory:")
     _r13c = ingest_one(_w13c, _store13c, _ENR, 0.5, _FakeASR(_TSEGS, duration=30.0),
                        _FakeEmbedder(), out_dir=_td13c / "out", load_wav=_fake_load_wav_long,
-                       min_embed_s=3.0)
+                       embed_min_s=3.0)
     _t13c, _s13c = _r13c["turns"], _r13c["spans"]
     _emb13c = _store13c.conn.execute("select count(*) from embedding").fetchone()[0]
 
@@ -836,49 +838,41 @@ with tempfile.TemporaryDirectory() as _td13c:
           and [s["turn_id"] for s in _s13c] == [1, 1, 2]
           and [s["cluster_source"] for s in _s13c] == ["owner", "owner", "adjacent"]
           and _t13c[1]["cluster_id"] == _t13c[0]["cluster_id"]
-          and _r13c["min_embed_s"] == 3.0,
+          and _r13c["embed_min_s"] == 3.0,
           str(([t["speech_s"] for t in _t13c], [s["cluster_source"] for s in _s13c],
                _cap_turns, _emb13c)))
 
-    # ---- T13d the minimum has exactly one source, and the pipeline refuses without it
-    import json as _json13  # noqa: E402
+    # ---- T13d the pipeline's durations are CONSTANTS with provenance, read from no bench
+    # Until M1a.4 this pinned that `ingest` refuses without a measured minimum. That minimum was
+    # retracted (a zero read off two windows), so what has to be pinned now is the opposite: the
+    # durations come from named constants, none of them is derived from the duration table, and a
+    # run works with no bench in sight.
     _home13 = _td13c / "home"
     _home13.mkdir()
-    _r_empty = _r_atoms = _r_null = None
+    _w13d = _wav(_td13c / "nobench.wav", seconds=40.0)
+    os.environ["JARVIS_VOICE_HOME"] = str(_home13)
     try:
-        required_min_embed_s(_home13)
-    except SystemExit as _e:
-        _r_empty = "duration_bench" in str(_e)
-    (_home13 / "duration_bench_2026-01-01.json").write_text(
-        _json13.dumps({"min_embed_s": 1.0}), encoding="utf-8")
-    try:
-        required_min_embed_s(_home13)
-    except SystemExit as _e:
-        _r_atoms = "window_rule" in str(_e)
-    (_home13 / "duration_bench_2026-01-02.json").write_text(
-        _json13.dumps({"window_rule": "stream", "min_embed_s": None}), encoding="utf-8")
-    try:
-        required_min_embed_s(_home13)
-    except SystemExit as _e:
-        _r_null = "STOP" in str(_e)
-    (_home13 / "duration_bench_2026-01-03.json").write_text(
-        _json13.dumps({"window_rule": "stream", "min_embed_s": 12.0}), encoding="utf-8")
-    _got13 = required_min_embed_s(_home13)
+        _r13d = ingest_one(_w13d, MemoryStore(":memory:"), _ENR, 0.5,
+                           _FakeASR(_TSEGS, duration=30.0), _FakeEmbedder(),
+                           out_dir=_td13c / "nobench", load_wav=_fake_load_wav_long)
+    finally:
+        os.environ.pop("JARVIS_VOICE_HOME", None)
 
-    _w13d = _wav(_td13c / "nomin.wav")
-    _refused13 = False
-    try:
-        ingest_one(_w13d, MemoryStore(":memory:"), _ENR, 0.5, _FakeASR(_TSEGS, duration=30.0),
-                   _FakeEmbedder(), out_dir=_td13c / "nomin", load_wav=_fake_load_wav)
-    except ValueError as _e:
-        _refused13 = "min_embed_s" in str(_e)
+    check("T13d the embedding and owner durations are constants with provenance - imported from "
+          "verify, or the M0b piece length - and no bench is read for them",
+          # EMBED_MIN_S is the SAME OBJECT as verify.MIN_CLIP_S, not a copy that could drift
+          EMBED_MIN_S is MIN_CLIP_S and EMBED_MIN_S == 2.0
+          and OWNER_TURN_MIN_S == OWNER_CLUSTER_MIN_S == 10.0
+          # the retracted reader is gone from the module entirely
+          and not hasattr(_duration_mod, "required_min_embed_s")
+          # and a run with an EMPTY voice home still ingests: nothing reads a bench for a duration
+          and _r13d["embed_min_s"] == EMBED_MIN_S
+          and _r13d["owner_turn_min_s"] == OWNER_TURN_MIN_S
+          and _r13d["store_committed"] is True
+          and not list(_home13.glob("duration_bench_*.json")),
+          str((EMBED_MIN_S, OWNER_TURN_MIN_S, OWNER_CLUSTER_MIN_S,
+               hasattr(_duration_mod, "required_min_embed_s"), _r13d["embed_min_s"])))
 
-    check("T13d the minimum comes only from a stream-rule bench that produced one, and the pipeline "
-          "refuses to run without it",
-          _r_empty is True and _r_atoms is True and _r_null is True
-          and _got13 == 12.0 and isinstance(_got13, float)
-          and _refused13 and _w13d.exists(),          # refused BEFORE anything touched the audio
-          str((_r_empty, _r_atoms, _r_null, _got13, _refused13, _w13d.exists())))
 
 # ============================== T14a — M1a.4: the reading rule's sample floor, and the retraction
 # Without a floor the rule returned 12.0 s from a row holding TWO positive windows, and it preferred
@@ -944,6 +938,201 @@ with tempfile.TemporaryDirectory() as _td14:
           str((choose_min_embed_s(_M1A3), choose_min_embed_s(_M1A3, min_n=1),
                [r["d_s"] for r in _bands_ok], [r["d_s"] for r in _floor_ok],
                _rr1["retracted"], _rr1["rows_under_floor"])))
+
+# ================== T14b/T14c/T14d — M1b.4: the owner decision at two levels
+# M1a.3 measured the stored threshold as a ~ten-second property: 74 % of the owner's own
+# one-second windows fall under it. So the threshold is asked of a turn only at the length it was
+# measured at, and a voice that never speaks that long can still become the owner's — later, from a
+# CLUSTER centroid over accumulated speech, which is the same shape as the enrollment centroid.
+import math as _math14  # noqa: E402
+
+
+def _at_cos(c):
+    """A unit vector whose cosine against [1, 0, 0, …] is exactly `c`."""
+    return [float(c), _math14.sqrt(max(0.0, 1.0 - float(c) * float(c)))] + [0.0] * 190
+
+
+_OWNER_DIR = [1.0] + [0.0] * 191
+_ENR14 = {"centroid": _OWNER_DIR, "threshold": 0.3585}
+
+
+class _ScoredEmbedder:
+    """Returns vectors at pre-set cosines to the owner centroid, one per call, in order."""
+    def __init__(self, scores):
+        self.scores, self.calls = list(scores), 0
+
+    def embed(self, wav, sr):
+        c = self.scores[min(self.calls, len(self.scores) - 1)]
+        self.calls += 1
+        return _at_cos(c)
+
+
+with tempfile.TemporaryDirectory() as _td14:
+    _td14 = Path(_td14)
+
+    # ---- T14b the ingest rule: length decides WHETHER the threshold is asked, not the score
+    # 9.9 s scoring 0.50 (ABOVE the threshold) and 10.0 s scoring 0.36 (barely above it). The short
+    # turn scores higher and is still not claimed, which is the whole rule in one fixture.
+    _SEGS14 = [_seg(0.0, 9.9), _seg(20.0, 30.0, "a longer stretch of the same voice"),
+               _seg(40.0, 41.9, "yeah")]
+    _w14b = _wav(_td14 / "levels.wav", seconds=60.0)
+    _st14b = MemoryStore(":memory:")
+    _emb14b = _ScoredEmbedder([0.50, 0.36])
+    _r14b = ingest_one(_w14b, _st14b, _ENR14, 0.5, _FakeASR(_SEGS14, duration=60.0), _emb14b,
+                       out_dir=_td14 / "b", load_wav=_fake_load_wav_long)
+    _t14b = _r14b["turns"]
+    _own14b = find_owner_cluster(_st14b)
+    _speech14b = {r[0]: r[1] for r in _st14b.conn.execute(
+        "select id, embedded_speech_s from cluster")}
+
+    check("T14b the owner's threshold is asked ONLY of a turn at the length it was measured at: a "
+          "shorter turn scoring higher is clustered, its score recorded and never acted on",
+          [round(t["speech_s"], 2) for t in _t14b] == [9.9, 10.0, 1.9]
+          # the short turn: embedded, scored ABOVE the threshold, and NOT the owner's
+          and _t14b[0]["embedded"] is True and _t14b[0]["owner_eligible"] is False
+          and abs(_t14b[0]["score_owner"] - 0.50) < 1e-6
+          and _t14b[0]["score_owner"] >= _ENR14["threshold"]
+          and _t14b[0]["cluster_source"] == "new" and _t14b[0]["cluster_id"] != _own14b
+          # the long turn: eligible, barely over, and claimed
+          and _t14b[1]["embedded"] is True and _t14b[1]["owner_eligible"] is True
+          and abs(_t14b[1]["score_owner"] - 0.36) < 1e-6
+          and _t14b[1]["cluster_source"] == "owner" and _t14b[1]["cluster_id"] == _own14b
+          # the short turn scored HIGHER than the one that won, which is the point
+          and _t14b[0]["score_owner"] > _t14b[1]["score_owner"]
+          # under EMBED_MIN_S: no embedding, no score, adjacency to the previous turn
+          and _t14b[2]["embedded"] is False and _t14b[2]["score_owner"] is None
+          and _t14b[2]["cluster_source"] == "adjacent"
+          and _t14b[2]["cluster_id"] == _t14b[1]["cluster_id"]
+          and _emb14b.calls == 2 and _r14b["embedded_turns"] == 2
+          # accumulated speech comes ONLY from embedded turns: the 1.9 s turn adds nothing
+          and _speech14b[_t14b[0]["cluster_id"]] == _t14b[0]["speech_s"]
+          and _speech14b[_own14b] == _t14b[1]["speech_s"],
+          str(([t["speech_s"] for t in _t14b], [t["owner_eligible"] for t in _t14b],
+               [t["cluster_source"] for t in _t14b], _speech14b)))
+
+    # ---- T14c the second level: a cluster centroid over enough accumulated speech
+    _st14c = MemoryStore(":memory:")
+    _own14c = _st14c.add_cluster()
+    _st14c.set_cluster_centroid(_own14c, _OWNER_DIR)
+    _st14c.bind_owner(_own14c, "owner")
+    _st14c.add_cluster_speech(_own14c, 30.0)          # the owner's own cluster: never compared
+    _rec14c = _st14c.add_recording("sha-14c", "2026-05-01T08:00:00", 120.0, "headset")
+
+    def _mk14c(cos, speech, n_spans):
+        cid = _st14c.add_cluster()
+        _st14c.set_cluster_centroid(cid, _at_cos(cos))
+        _st14c.add_cluster_speech(cid, speech)
+        for i in range(n_spans):
+            _st14c.add_span(_rec14c, i * 5.0, i * 5.0 + 4.0, cid, "a span", -0.2)
+        return cid
+
+    _c_merge = _mk14c(0.40, 11.0, 3)                  # over the minimum, over the threshold
+    _c_short = _mk14c(0.99, 9.0, 2)                   # would merge easily - but 9 s is not enough
+    _c_low = _mk14c(0.30, 11.0, 1)                    # enough speech, under the threshold
+    _spans_before14c = _st14c.conn.execute("select count(*) from span").fetchone()[0]
+    _audit_before14c = _st14c.conn.execute("select count(*) from audit").fetchone()[0]
+
+    _m14c = owner_merge(_st14c, _ENR14)
+    _merged_ids = [x["cluster"] for x in _m14c["merged"]]
+    _compared_ids = [x["cluster"] for x in _m14c["compared"]]
+    _skipped_ids = [x["cluster"] for x in _m14c["skipped"]]
+
+    check("T14c a cluster whose centroid over enough accumulated speech clears the threshold is "
+          "merged with an audit row; too little speech is never compared, and the owner never "
+          "against himself",
+          _merged_ids == [_c_merge] and sorted(_compared_ids) == sorted([_c_merge, _c_low])
+          and _skipped_ids == [_c_short]
+          and _m14c["skipped"][0]["speech_s"] == 9.0
+          # the owner's own cluster is excluded by id even though it would score 1.0
+          and _own14c not in _compared_ids + _skipped_ids + _merged_ids
+          and _m14c["owner_cluster"] == _own14c
+          # a merge RELABELS: no span is lost and the loser's row is gone
+          and _st14c.conn.execute("select count(*) from span").fetchone()[0] == _spans_before14c
+          and _st14c.conn.execute("select count(*) from span where cluster_id=?",
+                                  (_own14c,)).fetchone()[0] == 3
+          and _st14c.conn.execute("select 1 from cluster where id=?", (_c_merge,)).fetchone() is None
+          # the ones that did not merge are untouched
+          and _st14c.conn.execute("select 1 from cluster where id=?",
+                                  (_c_short,)).fetchone() is not None
+          and _st14c.conn.execute("select 1 from cluster where id=?",
+                                  (_c_low,)).fetchone() is not None
+          # exactly one audit row, and the accumulated speech folded in
+          and _st14c.conn.execute("select count(*) from audit").fetchone()[0] == _audit_before14c + 1
+          and _st14c.conn.execute("select embedded_speech_s from cluster where id=?",
+                                  (_own14c,)).fetchone()[0] == 41.0,
+          str((_merged_ids, _compared_ids, _skipped_ids, _m14c["threshold"])))
+
+    # ---- T14d deleted_audio_at is written iff the audio was actually deleted, and only after
+    class _OrderStore:
+        """Records whether the WAV still existed when the spine claimed it was gone."""
+        def __init__(self, real, wav):
+            self._real, self._wav = real, wav
+            self.path, self.conn = real.path, real.conn
+            self.existed_at_set = None
+
+        def __getattr__(self, k):
+            return getattr(self._real, k)
+
+        def set_recording_audio_deleted(self, recording_id, when=None):
+            self.existed_at_set = self._wav.exists()
+            return self._real.set_recording_audio_deleted(recording_id, when)
+
+    def _deleted_at(store):
+        return store.conn.execute(
+            "select deleted_audio_at from recording order by id desc limit 1").fetchone()[0]
+
+    _P14 = [_seg(0.0, 6.0), _seg(6.2, 12.2, "the same voice continuing")]
+    _w14ok = _wav(_td14 / "gone.wav", seconds=40.0)
+    _st14ok = _OrderStore(MemoryStore(":memory:"), _w14ok)
+    _r14ok = ingest_one(_w14ok, _st14ok, _ENR, 0.5, _TwoPassASR(_P14, _P14), _FakeEmbedder(),
+                        out_dir=_td14 / "d1", load_wav=_fake_load_wav_long)
+
+    _w14keep = _wav(_td14 / "kept.wav", seconds=40.0)
+    _st14keep = MemoryStore(":memory:")
+    ingest_one(_w14keep, _st14keep, _ENR, 0.5, _TwoPassASR(_P14, _P14), _FakeEmbedder(),
+               out_dir=_td14 / "d2", keep=True, load_wav=_fake_load_wav_long)
+
+    _P14_SHIFT = [_seg(0.0, 6.0), _seg(6.7, 12.2, "the same voice continuing")]
+    _w14guard = _wav(_td14 / "guard.wav", seconds=40.0)
+    _st14guard = MemoryStore(":memory:")
+    _r14guard = ingest_one(_w14guard, _st14guard, _ENR, 0.5, _TwoPassASR(_P14, _P14_SHIFT),
+                           _FakeEmbedder(), out_dir=_td14 / "d3", load_wav=_fake_load_wav_long)
+
+    # the deletion RAISES: the writer removes the WAV, so finalize's own os.remove fails
+    _w14raise = _wav(_td14 / "raises.wav", seconds=40.0)
+    _st14raise = MemoryStore(":memory:")
+
+    def _writer_eats_the_wav(path, payload):
+        from jarvis_voice.transcribe import write_json_fsync as _wjf
+        _wjf(path, payload)
+        if _w14raise.exists():
+            os.remove(_w14raise)
+
+    _raised14 = False
+    try:
+        ingest_one(_w14raise, _st14raise, _ENR, 0.5, _TwoPassASR(_P14, _P14), _FakeEmbedder(),
+                   out_dir=_td14 / "d4", writer=_writer_eats_the_wav,
+                   load_wav=_fake_load_wav_long)
+    except OSError:
+        _raised14 = True
+
+    check("T14d the recording records WHEN its audio stopped existing - written only after the "
+          "delete succeeded, and never when the audio was kept or the delete raised",
+          _r14ok["deleted"] is True and _deleted_at(_st14ok) is not None
+          and _r14ok.get("deleted_audio_at") == _deleted_at(_st14ok)
+          # the file was ALREADY gone when the spine recorded that it was gone
+          and _st14ok.existed_at_set is False
+          # kept by the operator: nothing recorded
+          and _deleted_at(_st14keep) is None
+          # kept by the guard: nothing recorded
+          and _r14guard["kept_by_guard"] is True and _r14guard["deleted"] is False
+          and _deleted_at(_st14guard) is None
+          # the delete raised: the recording row landed, the timestamp did not
+          and _raised14 and _deleted_at(_st14raise) is None
+          and _st14raise.conn.execute("select count(*) from recording").fetchone()[0] == 1,
+          str((_deleted_at(_st14ok), _st14ok.existed_at_set, _deleted_at(_st14keep),
+               _deleted_at(_st14guard), _raised14, _deleted_at(_st14raise))))
+
 
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
 sys.exit(1 if FAILS else 0)

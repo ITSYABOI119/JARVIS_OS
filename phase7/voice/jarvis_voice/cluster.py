@@ -18,7 +18,23 @@ import math
 from pathlib import Path
 from typing import List, Sequence, Tuple
 
-from .verify import score as _cos
+from .verify import MIN_CLIP_S as EMBED_MIN_S, score as _cos
+
+# ------------------------------------------------- the two-level owner decision (M1b.4)
+# Each of these names where it comes from, because the rule they encode replaced a number that WAS
+# read from a measurement and had to be retracted (M1a.4: the reading rule without a sample floor
+# returned 12.0 s from a row of two windows). None of them is derived from the duration table.
+#
+#   EMBED_MIN_S          2.0 s, IMPORTED from verify.MIN_CLIP_S rather than retyped - the existing
+#                        refusal length for a verification clip, unchanged since M0a.
+#   OWNER_TURN_MIN_S     10.0 s, the length of the M0b held-out pieces the stored threshold was
+#                        measured on. The threshold is a property of a voice AT A DURATION, so it is
+#                        only asked of a turn that is on the footing it was measured at.
+#   OWNER_CLUSTER_MIN_S  10.0 s, the same footing for a CENTROID. The enrollment centroid is itself
+#                        a mean of clip embeddings, so a cluster centroid over enough speech is
+#                        compared like with like.
+OWNER_TURN_MIN_S = 10.0
+OWNER_CLUSTER_MIN_S = 10.0
 
 # The grid is pre-registered: 0.20 .. 0.60 in steps of 0.02, 21 values. Written as integers and
 # divided so the values are exact decimals rather than accumulated float error, because tau is
@@ -89,7 +105,7 @@ def choose_tau(grid_scores: Sequence[Tuple[float, float, float]]) -> float:
 
 
 def assign(emb: Sequence[float], owner_centroid: Sequence[float], owner_threshold: float,
-           clusters: Sequence[dict], tau: float) -> Tuple[int, str]:
+            clusters: Sequence[dict], tau: float, owner_eligible: bool = True) -> Tuple[int, str]:
     """The ONLINE rule, pure. -> (cluster_index, kind).
 
     kind is one of:
@@ -105,8 +121,16 @@ def assign(emb: Sequence[float], owner_centroid: Sequence[float], owner_threshol
 
     Ties on distance go to the LOWEST index, so the assignment is deterministic and a re-run over
     the same spans in the same order reproduces the same clusters.
+
+    `owner_eligible` (M1b.4) is the caller's statement that this embedding is on the footing the
+    threshold was measured at - at ingest, a turn holding at least OWNER_TURN_MIN_S of speech. When
+    it is false the owner check is SKIPPED and the embedding is clustered like any other, even if it
+    would have scored above the threshold: M1a.3 measured a 74 % false-reject rate on one-second
+    windows, so a short window's score is not evidence in either direction and acting on the half of
+    it that happens to look right would be reading the noise selectively. Such a voice can still
+    become the owner's, later and on better evidence, through the cluster-centroid rule.
     """
-    if _cos(owner_centroid, emb) >= owner_threshold:
+    if owner_eligible and _cos(owner_centroid, emb) >= owner_threshold:
         return -1, "owner"
     best_i, best_d = -1, None
     for i, c in enumerate(clusters):

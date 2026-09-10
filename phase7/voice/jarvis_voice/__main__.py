@@ -1,4 +1,4 @@
-"""CLI: python -m jarvis_voice <record|enroll|verify|transcribe|evaluate|split|selftest|cluster-bench|ingest|clusters|duration-bench> ...
+"""CLI: python -m jarvis_voice <record|enroll|verify|transcribe|evaluate|split|selftest|cluster-bench|ingest|clusters|owner-merge|duration-bench> ...
 
 split: extract speech from a long 16 kHz recording (energy gate, padded, short gaps merged) and pack
 whole runs into pieces so no word is cut at a boundary; evaluate: --neg-dir (WAV + FLAC) or --neg-json
@@ -205,15 +205,11 @@ def cmd_ingest(a):
     # with "Could not load symbol cudnnGetLibConfig. Error code 127" - CTranslate2 finds cuDNN
     # through the DLLs torch has already loaded. `transcribe()` has always imported torch ahead of
     # the engine for the same reason; this path has to do it too.
-    # The two measured numbers FIRST, before anything heavy loads: a run that cannot know its
-    # minimum embedding duration must refuse before it spends a minute loading two models.
-    from .duration import required_min_embed_s
-    min_embed_s = required_min_embed_s()
     import torch  # noqa: F401
-    from .cluster import latest_bench
+    from .cluster import EMBED_MIN_S, OWNER_CLUSTER_MIN_S, OWNER_TURN_MIN_S, latest_bench
     from .enroll import EnrollmentStore
     from .speaker import SpeakerEmbedder
-    from .spine import ingest_one, open_store
+    from .spine import ingest_one, open_store, owner_merge
     from .transcribe import ASR
 
     enrollment = EnrollmentStore(name=a.name).load()
@@ -226,10 +222,15 @@ def cmd_ingest(a):
     asr = ASR(model=a.model, compute_type=a.compute_type)
     emb = SpeakerEmbedder()
     print(f"tau        : {tau} (from {tau_source}); owner threshold {enrollment['threshold']:.6f}; "
-          f"min_embed_s {min_embed_s} s (from duration_bench); store {store.path}")
+          f"store {store.path}")
+    # The three durations, printed so a run says on its face what rule it applied. None is read
+    # from the duration bench - M1a.4 retracted the number that was.
+    print(f"durations  : embed >= {EMBED_MIN_S} s (verify.MIN_CLIP_S); owner asked of a turn "
+          f">= {OWNER_TURN_MIN_S} s; owner-merge of a cluster >= {OWNER_CLUSTER_MIN_S} s "
+          f"(the M0b piece length)")
     for wav in a.inputs:
         r = ingest_one(wav, store, enrollment, tau, asr, emb, keep=a.keep,
-                       started_at=a.started_at, device=a.device, min_embed_s=min_embed_s)
+                       started_at=a.started_at, device=a.device)
         spans = r["spans"]
         owner = sum(1 for s in spans if s["cluster_source"] == "owner")
         joined = sum(1 for s in spans if s["cluster_source"] == "join")
@@ -253,7 +254,42 @@ def cmd_ingest(a):
         print(f"    asr guard: agreed {g.get('agreed')} segments {g.get('n_segments')} "
               f"max start delta {g.get('max_start_delta_s')}s max end delta "
               f"{g.get('max_end_delta_s')}s text identical {g.get('text_identical')} "
-              f"| two passes {g.get('wall_s_total')}s | kept_by_guard {r.get('kept_by_guard')}")
+              f"| two passes {g.get('wall_s_total')}s | kept_by_guard {r.get('kept_by_guard')} "
+              f"| deleted_audio_at {r.get('deleted_audio_at')}")
+    # The second level of the owner decision, over every cluster this store now holds.
+    _print_owner_merge(owner_merge(store, enrollment))
+    return 0
+
+
+def _print_owner_merge(m):
+    """The owner-merge decision surface. Counts and scores only - never a span's text."""
+    if m["owner_cluster"] is None:
+        print("owner-merge: no owner cluster in this store - nothing to compare against")
+        return
+    print(f"owner-merge: threshold {m['threshold']:.6f}; a cluster is compared once it holds "
+          f"{m['min_speech_s']} s of embedded speech")
+    for c in m["skipped"]:
+        print(f"    cluster {c['cluster']:>3}: {c['speech_s']:>6.2f}s NOT compared ({c['why']})")
+    for c in m["compared"]:
+        merged = any(x["cluster"] == c["cluster"] for x in m["merged"])
+        print(f"    cluster {c['cluster']:>3}: {c['speech_s']:>6.2f}s score {c['score']:.4f} -> "
+              f"{'MERGED into the owner' if merged else 'left as its own voice'}")
+    for c in m["merged"]:
+        print(f"    merged cluster {c['cluster']}: {c['spans_moved']} spans relabelled, "
+              f"audit row {c['audit_id']}"
+              + (f", person {c['person_left']} left for the people layer"
+                 if c["person_left"] is not None else ""))
+    if not m["compared"] and not m["skipped"]:
+        print("    no non-owner clusters")
+
+
+def cmd_owner_merge(a):
+    """Run the second level of the owner decision on its own, over an existing store."""
+    from .enroll import EnrollmentStore
+    from .spine import open_store, owner_merge
+    store = open_store(a.db)
+    print(f"store      : {store.path}")
+    _print_owner_merge(owner_merge(store, EnrollmentStore(name=a.name).load()))
     return 0
 
 
@@ -343,6 +379,8 @@ def build_parser():
     ig.add_argument("--model", default="large-v3"); ig.add_argument("--compute-type", default="float16")
     ig.add_argument("--device", default="headset"); ig.set_defaults(fn=cmd_ingest)
     cl = sub.add_parser("clusters"); cl.add_argument("--db"); cl.set_defaults(fn=cmd_clusters)
+    om = sub.add_parser("owner-merge"); om.add_argument("--db")
+    om.add_argument("--name", default="owner"); om.set_defaults(fn=cmd_owner_merge)
     db = sub.add_parser("duration-bench"); db.add_argument("--out")
     db.add_argument("--reread", action="store_true",
                     help="re-apply the current reading rule to the newest bench JSON and rewrite "

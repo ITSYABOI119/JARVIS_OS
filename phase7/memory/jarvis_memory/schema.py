@@ -32,12 +32,17 @@ CREATE TABLE IF NOT EXISTS recording (
 );
 
 CREATE TABLE IF NOT EXISTS cluster (
-    id           INTEGER PRIMARY KEY,
-    centroid     BLOB,                        -- 192-d ECAPA, written at MS2
-    n_spans      INTEGER NOT NULL DEFAULT 0,
-    first_heard  TEXT,
-    days_heard   INTEGER NOT NULL DEFAULT 0,
-    person_id    INTEGER REFERENCES person(id)   -- set once, when the cluster earns personhood
+    id                INTEGER PRIMARY KEY,
+    centroid          BLOB,                   -- 192-d ECAPA, written at MS2
+    n_spans           INTEGER NOT NULL DEFAULT 0,
+    first_heard       TEXT,
+    days_heard        INTEGER NOT NULL DEFAULT 0,
+    person_id         INTEGER REFERENCES person(id),  -- set once, when the cluster earns personhood
+    -- Seconds of speech the cluster's centroid was actually computed from (M1b.4). Accumulated
+    -- only from EMBEDDED turns, so a span attributed by adjacency adds none: the number is the
+    -- cluster's evidence, and the owner-merge rule reads it to decide whether the centroid is on
+    -- the footing the M0b threshold was measured at.
+    embedded_speech_s REAL NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS span (

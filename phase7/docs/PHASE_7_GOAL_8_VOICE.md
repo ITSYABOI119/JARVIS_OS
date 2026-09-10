@@ -126,6 +126,39 @@ Sources: `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md` §3, §5, §8; `phase4/do
     measurement across a turn's spans would make any later count of speaker vectors wrong; whether
     the store grows a `turn` row is its own design's decision.
 
+21. **The owner decision is made at TWO levels, and each only where the threshold has a measured
+    footing (M1b.4, 2026-09-10).** At ingest, a turn holding at least **`OWNER_TURN_MIN_S` = 10.0 s**
+    of speech is checked against the M0b threshold; every other turn of at least
+    **`EMBED_MIN_S` = 2.0 s** is embedded and clustered at τ\*, its owner score recorded and **never
+    acted on**. After ingest, a non-owner cluster whose centroid over at least
+    **`OWNER_CLUSTER_MIN_S` = 10.0 s** of accumulated EMBEDDED speech clears the same threshold is
+    MERGED into the owner's cluster — every span relabelled, the cluster row removed, one `audit`
+    row (`op = merge`, `rule = people`). Each constant names its provenance in `cluster.py`:
+    `EMBED_MIN_S` is IMPORTED from `verify.MIN_CLIP_S` rather than retyped; the two ten-second
+    values are the length of the M0b held-out pieces the threshold was measured on, and a cluster
+    centroid is a mean of embeddings like the enrollment centroid itself, so the comparison is like
+    with like. **None is read from the duration table** — M1a.4 retracted the single-window minimum
+    that was. A short turn scoring ABOVE the threshold is still not claimed: M1a.3 measured a 74 %
+    false-reject rate on the owner's own one-second windows, so such a score is not evidence in
+    either direction, and accumulated speech accrues only from turns that were actually embedded.
+    Whether the cluster rule holds on real conversational speech is M1c's to report.
+22. **The spine records WHEN its audio stopped existing (M1b.4, 2026-09-10).** `deleted_audio_at` is
+    written on the `recording` row after the delete succeeded and never before — a timestamp on a
+    file that still exists is worse than none, because the audio is the only thing that could
+    contradict it and it would still be there. A recording kept by the operator or held back by the
+    double-run guard leaves it NULL, and a run whose deletion raises leaves it NULL. It lives in the
+    STORE and not in the transcript JSON: `finalize` writes that JSON before the deletion, and the
+    JSON is deleted afterwards anyway — the spine is what survives the audio.
+23. **Two conventions recorded rather than changed (M1b.4, 2026-09-10).** A turn's speaker vector is
+    written against its **first span**, because the store keys an `embedding` row to a span and a
+    turn is not a row of its own; writing it against every span of the turn would duplicate one
+    measurement into several and make any later count of speaker vectors, or any centroid built from
+    them, silently wrong. **A `turn` row in the store is DEFERRED** — it is the store design's
+    decision, not the pipeline's. And a merged cluster that had already earned personhood leaves its
+    `person` row in place with the audit note naming it: facts and edges may reference a person, so
+    reconciling people belongs to the MS2 layer and the dangling row is visible in the audit trail
+    rather than silently removed.
+
 Sources: `%USERPROFILE%\.jarvis\voice\freeze.txt`; the M0a run (§6); `phase7/voice/jarvis_voice/*.py`; `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md` §8.
 
 ---
@@ -1083,6 +1116,124 @@ the floor so that check stays about the BANDS alone; its assertions are otherwis
 mutant, the control green first, failing BY NAME and restored from a byte-copy verified by md5: the
 sample floor removed → T14a (and T14a alone — T12b stays green, which is what makes the two checks
 separable).
+
+
+### M1b.4 — 2026-09-10 — the two-level owner decision; the throwaways re-run
+
+**The owner decision is no longer one question asked of one span. It is asked at two levels, and
+each is asked only where the stored threshold has a measured footing.** At ingest, a turn holding at
+least **10 s of speech** — the length of the M0b pieces the threshold was measured on — is checked
+against the threshold; every other turn of at least **2 s** is embedded and clustered at τ\*, its
+owner score recorded and never acted on. After ingest, a non-owner cluster whose centroid over at
+least **10 s of accumulated embedded speech** clears the same threshold is **merged** into the
+owner's cluster: every span relabelled, the cluster row removed, one `audit` row.
+
+**Why a cluster centroid is the second level and not a second span.** M1a.3 measured the threshold
+as a ~ten-second property of a voice, and conversation is mostly shorter turns than that. A cluster
+accumulates speech across turns and days and its centroid is a MEAN of embeddings — the same shape
+as the enrollment centroid the threshold was measured against — so the comparison is like with like
+at a length no single conversational turn reaches. **Whether that holds on real conversational
+speech is M1c's to report; here it is a rule with a measured footing, not a proven one.**
+
+Every constant names where it comes from, because the number they replace was read from a
+measurement and had to be retracted (M1a.4):
+
+| constant | value | provenance |
+|---|---|---|
+| `EMBED_MIN_S` | 2.0 s | **imported** from `verify.MIN_CLIP_S`, not retyped — the existing refusal length, unchanged since M0a |
+| `OWNER_TURN_MIN_S` | 10.0 s | the length of the M0b held-out pieces the stored threshold was measured on |
+| `OWNER_CLUSTER_MIN_S` | 10.0 s | the same footing, for a centroid |
+
+**None is derived from the duration table**, and `ingest` reads no bench for a duration at all —
+T13d proves it by running a full ingest with `JARVIS_VOICE_HOME` pointed at an empty directory.
+
+#### The throwaways, re-run
+
+Both WAVs were rebuilt **sha256-identical** to the ones M1b recorded, verified before the run.
+
+| | owner | stranger |
+|---|---|---|
+| turn | 1 segment, **12.48 s**, 4.18–16.66 s | 1 segment, **19.82 s**, 0.18–20.00 s |
+| `owner_eligible` (≥ 10 s) | yes | yes |
+| score against the owner centroid | **0.5862** | **0.2012** |
+| at ingest | **`cluster_source: owner`**, cluster 1 | `new`, cluster 2 |
+| owner-merge | — (already his) | compared at 19.82 s, **0.2012 < 0.358503 → left as its own voice** |
+| guard | agreed, `[1, 1]`, deltas 0.0 s, text identical | same |
+| `deleted_audio_at` | `2026-09-10T19:42:02` | `2026-09-10T19:42:06` |
+
+Store after both: 2 recordings (both with `deleted_audio_at` set), 2 spans, 2 clusters,
+`embedded_speech_s` **12.48** and **19.82**, 1 person, 2 span embeddings, **0 audit rows** — nothing
+was merged, which is the expected outcome and not a null result: the stranger's cluster WAS compared
+(it holds enough speech) and was left, so the rule ran and declined. Transcripts deleted, store
+reset.
+
+**Nothing was tuned.** The threshold is M0b's `0.358503175300161`, τ\* is M1a's `0.56`, and the three
+durations were fixed in §0 of the prompt before this run existed.
+
+#### What the rule is deliberately unable to do
+
+A turn under `OWNER_TURN_MIN_S` is **not** claimed for the owner even when it scores above the
+threshold. T14b pins exactly that with a fixture where the short turn scores **higher** than the long
+one that wins: 9.9 s at 0.50 is clustered, 10.0 s at 0.36 is the owner's. That is not a rounding
+choice — M1a.3 measured a **74 % false-reject rate** on the owner's own one-second windows, so a
+short window's score is not evidence in either direction, and acting on the half of it that happens
+to look right would be reading noise selectively. Such a voice can still become the owner's, later,
+from the cluster centroid.
+
+Accumulated speech accrues **only from embedded turns**. A turn attributed by adjacency carries no
+evidence of its own — that is what adjacency means — so it must not make a cluster look better
+measured than it is.
+
+#### Two conventions recorded rather than changed
+
+**A turn's vector is written against its FIRST span.** The store keys an `embedding` row to a span
+and a turn is not a row of its own; writing the vector against every span of the turn would
+duplicate one measurement into several and make any later count of speaker vectors — or any centroid
+built from them — silently wrong. A `turn` row is the store's design decision, deferred.
+
+**A merged cluster that had earned personhood leaves its `person` row in place**, and the audit note
+names it. Deleting a person is not the merge's call: facts and edges may reference it, and
+reconciling people is the MS2 layer's job. The dangling row is visible in the audit trail rather
+than silently removed. (It cannot arise yet in practice — personhood needs three distinct days.)
+
+**`deleted_audio_at` is written to the STORE, not to the transcript JSON.** `finalize` writes the
+JSON before it deletes the audio, so the timestamp cannot be in it; and the JSON is deleted after
+the run anyway. The spine is what survives the audio, which is exactly why the column belongs there.
+
+#### Tests
+
+`test_voice_logic.py` 73 → **76 checks**; `test_memory_logic.py` 264 → **265**.
+
+* **T14b** — the ingest rule, with the short turn scoring higher than the long one that wins;
+  adjacency for a turn under `EMBED_MIN_S`; accumulated speech coming only from embedded turns.
+* **T14c** — `owner_merge` over four clusters: one merged (11 s at 0.40), one **never compared**
+  (9 s at 0.99 — it would merge trivially if the minimum were dropped), one left (11 s at 0.30), and
+  the owner's own cluster excluded by id although it would score 1.0 against itself.
+* **T14d** — `deleted_audio_at` written iff the audio was deleted, and only after: an ordering
+  wrapper records whether the WAV still existed at the moment the spine claimed it was gone (it did
+  not), and a run whose deletion RAISES leaves the row NULL.
+* **T40** (memory suite) — `merge_cluster` relabels every span, folds `n_spans`, `first_heard`,
+  `embedded_speech_s` and a **distinct-days** recount, removes the loser's row, leaves the
+  span-keyed speaker vectors untouched, writes exactly one audit row, and refuses an unknown or
+  self merge.
+* **T13d** was rewritten rather than deleted: it used to pin that `ingest` refuses without a measured
+  minimum, and that minimum no longer exists.
+
+Four mutants, the control green first, each failing BY NAME and each restored from a byte-copy
+verified by md5: the owner check run on every turn → T14b; the accumulated-speech minimum removed →
+T14c; `deleted_audio_at` written before the deletion → T14d.
+
+**The fourth mutant had to be re-run to be honest, and the reason is worth keeping.** Written as an
+ADDED call before `finalize`, it left the correct call in place too — so the ordering probe recorded
+the second call (after the delete) and read as if nothing were wrong, while the check failed on other
+clauses. Re-run as a MOVE rather than an addition, the probe reads `existed_at_set: True` and the
+ordering clause is the one that fails. A mutant that bites for the wrong reason proves the check less
+than it appears to.
+
+**The store gained a column and a forward-only migration.** `cluster.embedded_speech_s` is added by
+`_add_missing_columns` when absent, because `CREATE TABLE IF NOT EXISTS` cannot widen a table that
+already exists and the household store is the one file in this project that must survive its own
+schema changing — the audio it describes is already gone.
 
 
 ---
