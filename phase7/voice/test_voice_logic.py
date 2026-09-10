@@ -508,7 +508,8 @@ with tempfile.TemporaryDirectory() as _td11:
 # pipeline applied it to 1-3 s spans, which is why the owner failed his own check. These two rules
 # decide what the measurement means, so both are pinned here with no GPU and no corpus.
 from jarvis_voice.duration import (  # noqa: E402
-    DURATION_GRID, MAX_FAR, MAX_FRR, choose_min_embed_s, speech_windows,
+    DURATION_GRID, MAX_FAR, MAX_FRR, choose_min_embed_s, latest_duration_bench,
+    speech_windows, speech_windows_stream,
 )
 
 # three runs of 2, 3 and 4 s at 0.05 s per frame -> 40, 60 and 80 frames
@@ -544,6 +545,88 @@ check("T12b the reading rule takes the SMALLEST duration meeting BOTH bands, els
       and DURATION_GRID == (1.0, 2.0, 3.0, 5.0, 8.0, 12.0),
       str((choose_min_embed_s(_TBL), _QUALIFY, choose_min_embed_s(_TBL_FAR_ONLY))))
 
+
+# ============================================ T12c/T12d — M1a.3: the bench's own rule is a STREAM cut
+# T12a's atom rule stays where it belongs (packing enrollment pieces). The bench needed a different
+# one: every one of the owner's held-out pieces is ONE continuous run, so the atom rule made the
+# table flat by construction and the reading rule returned the grid's floor from thirteen identical
+# measurements. The expectations below are DERIVED from _RUNS rather than typed, so a change to the
+# fixture cannot leave a stale constant passing.
+_FS = 0.05
+_LENS = [b - a for a, b in _RUNS]                     # 40, 60, 80 frames = 2, 3, 4 s
+_TOTAL = sum(_LENS)                                   # 180 frames = 9 s of speech
+_BASE = _RUNS[0][0]
+
+
+def _spans(wins):
+    """Each window as (first frame, last frame, frame total) across its slices."""
+    return [(w[0][1], w[-1][2], sum(e - a for (_i, a, e) in w)) for w in wins]
+
+
+def _expected_spans(d_s):
+    """The windows _RUNS must yield at D, computed from the run lengths.
+
+    These runs are contiguous in the frame timeline, so the concatenated speech stream and the
+    absolute frame index coincide and the expectation is one piece of arithmetic: floor(total/need)
+    windows of exactly `need` frames each, laid end to end from the first run's start.
+    """
+    need = int(round(d_s / _FS))
+    n = _TOTAL // need if need > 0 else 0
+    return [(_BASE + k * need, _BASE + (k + 1) * need, need) for k in range(n)]
+
+
+_w2 = speech_windows_stream(_RUNS, _FS, 2.0)
+_need2 = int(round(2.0 / _FS))
+# Which window straddles the run-1/run-2 boundary is arithmetic too, not an eyeballed index.
+_boundary = _RUNS[1][1] - _BASE                       # 100 frames of speech before run 2 starts
+_straddle_k = _boundary // _need2                     # == 2 here, because 100 % 40 != 0
+check("T12c the stream cut takes exactly D seconds of speech, splitting runs and dropping the tail",
+      _spans(_w2) == _expected_spans(2.0) and len(_w2) == _TOTAL // _need2 == 4
+      and _boundary % _need2 != 0
+      and sorted({i for (i, _a, _e) in _w2[_straddle_k]}) == [1, 2]
+      and all(len({i for (i, _a, _e) in w}) == 1 for k, w in enumerate(_w2) if k != _straddle_k)
+      and _spans(speech_windows_stream(_RUNS, _FS, 5.0)) == _expected_spans(5.0)
+      and len(speech_windows_stream(_RUNS, _FS, 5.0)) == 1
+      and _spans(speech_windows_stream(_RUNS, _FS, 9.0)) == _expected_spans(9.0)
+      and len(speech_windows_stream(_RUNS, _FS, 9.0)) == 1
+      and speech_windows_stream(_RUNS, _FS, 12.0) == [] == _expected_spans(12.0)
+      and speech_windows_stream([], _FS, 3.0) == []
+      # and the atom rule is untouched by any of it
+      and speech_windows(_RUNS, _FS, 5.0) == [[0, 1]],
+      str((_spans(_w2), _expected_spans(2.0), _straddle_k)))
+
+# T12d — the pipeline reads a minimum only from a bench that declares the stream rule, and a
+# superseded run parked under a suffixed name is invisible to the date-shaped glob.
+_td12 = Path(tempfile.mkdtemp(prefix="jv_t12d_"))
+import json as _json12  # noqa: E402
+
+_empty_ok = False
+try:
+    latest_duration_bench(_td12)
+except SystemExit as _e:
+    _empty_ok = "duration_bench" in str(_e)
+
+(_td12 / "duration_bench_2026-01-01.json").write_text(
+    _json12.dumps({"min_embed_s": 1.0}), encoding="utf-8")          # the atom-rule shape: no rule
+_refused = False
+try:
+    latest_duration_bench(_td12)
+except SystemExit as _e:
+    _refused = "window_rule" in str(_e)
+
+(_td12 / "duration_bench_2026-01-02.json").write_text(
+    _json12.dumps({"window_rule": "stream", "min_embed_s": 3.0}), encoding="utf-8")
+_accepted = latest_duration_bench(_td12)
+
+# A suffixed name sorts AFTER every date-named file; it must not be the one that is read.
+(_td12 / "duration_bench_2026-01-03_atoms.json").write_text(
+    _json12.dumps({"window_rule": "stream", "min_embed_s": 99.0}), encoding="utf-8")
+_still = latest_duration_bench(_td12)
+
+check("T12d the minimum is read only from a bench declaring the stream rule; a suffixed file is not read",
+      _empty_ok and _refused and _accepted["min_embed_s"] == 3.0
+      and _still["min_embed_s"] == 3.0,
+      str((_empty_ok, _refused, _accepted.get("min_embed_s"), _still.get("min_embed_s"))))
 
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
 sys.exit(1 if FAILS else 0)

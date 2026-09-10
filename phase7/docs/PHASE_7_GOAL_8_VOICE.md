@@ -694,6 +694,101 @@ LARGEST qualifying duration → T12b.
 
 
 
+### M1a.3 — 2026-09-10 — the window rule re-registered as a stream cut; the threshold by duration
+
+**`MIN_EMBED_S` = 12.0 s by the pre-registered rule — and the number needs its denominator read
+beside it: the qualifying row holds TWO positive windows.** The table now varies with D, which is
+what M1a.2 stopped for, so the re-registration did its job; what it produced is a duration curve
+whose top end is measured on almost nothing. Both facts are recorded here, and neither band, rule nor
+threshold was moved to make the result nicer.
+
+**The rule, re-registered before the re-run** (`PROMPT-VOICE-M1C-PREP-2.md` §0, the coder's option
+(a)): `speech_windows_stream` cuts the CONCATENATED speech stream at exactly D seconds, so a run may
+be split across two windows and a window may straddle a removed pause. The atom rule
+(`speech_windows`) is untouched and stays where it belongs — packing enrollment pieces in `split`,
+where cutting a run would cut a word out of the owner's voice — and its test T12a is untouched.
+**The limit, stated rather than hidden: a stream cut can fall inside a word, which can only lower a
+score, so a minimum read from this table is conservative in the safe direction.**
+
+**Venue:** identical to M1a.2 — the owner's 13 M0b-admitted held-out pieces
+(`heldout\owner_heldout2_001..013.wav`) against the self-test's 78 public negatives, the same
+`split` mask (−45 dBFS, 200 ms pad, 500 ms gap), ECAPA `speechbrain/spkrec-ecapa-voxceleb` on
+`cuda:0` (load 0.42 s), scored against `enroll\owner.json`'s centroid, same grid, same reading rule.
+The stored threshold **0.358503175300161 was measured against and never moved**; nothing under
+`enroll\` was touched; τ\* 0.56 was not read or written. 31.6 s wall. Output:
+`%USERPROFILE%\.jarvis\voice\duration_bench_2026-09-10.json` (`window_rule: "stream"`). The atom-rule
+run is kept beside it as `duration_bench_2026-09-10_atoms.json` — the record of the stop.
+
+| D (s) | n_pos | n_neg | EER | EER threshold | FAR @ 0.3585 | FRR @ 0.3585 | pos_min | pos_max | neg_max | band |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 143 | 702 | 0.3007 | 0.0759 | 0.0000 | 0.7413 | −0.1407 | 0.6090 | 0.2817 | fail |
+| 2 | 69 | 333 | 0.2319 | 0.0980 | 0.0000 | 0.4783 | −0.1056 | 0.6070 | 0.2597 | fail |
+| 3 | 42 | 209 | 0.1429 | 0.1332 | 0.0000 | 0.3571 | −0.0383 | 0.6150 | 0.2348 | fail |
+| 5 | 27 | 104 | 0.0741 | 0.1729 | 0.0000 | 0.2222 | 0.0320 | 0.6367 | 0.2311 | fail |
+| 8 | 14 | 54 | 0.0714 | 0.1806 | 0.0000 | 0.1429 | −0.0001 | 0.6620 | 0.2075 | fail |
+| 12 | 2 | 22 | 0.0000 | 0.3985 | 0.0000 | 0.0000 | 0.6086 | 0.6445 | 0.1883 | **PASS** |
+
+**The table varies, and the per-file counts are what prove it.** `windows_per_file` is now recorded
+per D per file precisely because its absence is what let M1a.2 read as a measurement. For
+`owner_heldout2_001.wav` the counts are **10, 5, 3, 2, 1, 0** across the grid (they were 1, 1, 1, 1,
+1, 0 under the atom rule), and across all thirteen positives the D = 1 row is
+`[10, 10, 10, 10, 17, 11, 10, 11, 12, 10, 11, 10, 11]` — 143 windows, against the pre-registered
+expectation of ≈ 140. `n_pos` falls 143 → 69 → 42 → 27 → 14 → 2 with no repeats, and the extrema move
+in every row.
+
+#### The duration dependence, which is now visible and is the point of the milestone
+
+The owner's own voice against his own threshold, by window length: **FRR 0.7413 at 1 s, 0.4783 at
+2 s, 0.3571 at 3 s, 0.2222 at 5 s, 0.1429 at 8 s, 0.0000 at 12 s.** `pos_min` is **negative** at
+1, 2, 3 and 8 seconds — the owner's own speech scoring below zero cosine against his own centroid —
+while `pos_max` barely moves (0.6090 → 0.6445). So short windows do not shift the distribution; they
+grow a long low tail. That is M1's unexplained evidence explained: the pipeline was applying a
+threshold measured on ten-second pieces to one-to-three-second segments, and three quarters of them
+fall under it at one second.
+
+**FAR is 0.0000 at every D, and `neg_max` never exceeds 0.2817.** No stranger ever crossed 0.3585 at
+any window length, so the FAR band never binds and the entire decision is the FRR band. The stored
+threshold is not letting strangers in at any duration; it is locking the owner out at short ones.
+
+#### Two things the number rests on, stated because the rule does not state them
+
+**(1) `MIN_EMBED_S` = 12.0 is read from a row with `n_pos` = 2.** Only two of the thirteen held-out
+pieces contain 12 s of speech (files 005 and 009), so `FRR = 0/2`. That is a true zero and a very
+thin one; the 0.23-margin separation M1a.2 recorded on ~10 s windows is the stronger statement about
+the threshold's soundness at length, and this row is not evidence beyond it.
+
+**(2) The reading rule has no minimum sample size, and at these counts that biases it toward the
+sparsest row.** The finest non-zero FRR a row can express is `1/n_pos`: 1/14 = 0.0714 at D = 8 and
+1/27 = 0.0370 at D = 5. So at D = 8 a single rejected window already exceeds the 5 % band and the row
+can only pass at exactly zero — which the D with the fewest windows is mechanically the likeliest to
+achieve. **This is reported, not repaired:** adding an `n_pos` floor to `choose_min_embed_s` after
+seeing the table would be fitting the rule to its own output, which is what M1a.2 refused to do and
+is the strategist's ruling, not the coder's.
+
+#### The consequence for M1b.3, which is why this milestone did not continue into turns
+
+`PROMPT-VOICE-M1C-PREP-2.md` §4 pre-registers turns that **close at 10 s of speech** and embeds
+**only turns ≥ `MIN_EMBED_S`**. With `MIN_EMBED_S` = 12.0 s those two numbers are mutually exclusive:
+no turn can ever reach the minimum, so the pipeline would provably embed nothing and assign every
+span by adjacency to a cluster that was never created. Both numbers were pre-registered — the cap
+before the measurement existed, the minimum by the measurement — so moving either one is the
+strategist's call. **M1b.3 — turns as the embedding unit — is therefore not implemented. The safety
+half of the pipeline does not depend on the number and lands separately as M1b.2.**
+
+Tests: `test_voice_logic.py` 66 → **68 checks** (T12c the stream cut — window count, per-window frame
+span and the straddling window all derived from the fixture's run lengths rather than typed; T12d the
+pipeline reads a minimum only from a bench declaring `window_rule: "stream"`, and a superseded run
+parked under a suffixed name is invisible to the date-shaped glob). Two mutants, the control green
+first, each failing BY NAME and each restored from a byte-copy verified by md5: the trailing partial
+window kept instead of dropped → T12c; the `window_rule` refusal removed → T12d.
+
+**One correction to the prompt's own premise, because it would otherwise have been silently false:**
+§2 says the renamed atom-rule file "no longer matches the glob the pipeline reads". It did —
+`duration_bench_2026-09-10_atoms.json` matches `duration_bench_*.json` and sorts AFTER the date-named
+file, so a rename alone would have made the superseded run the one the pipeline read. The glob is
+narrowed to `duration_bench_????-??-??.json` to make the claim true, and T12d pins both halves.
+
+
 ---
 
 ## 7. Done-when (canon, `phase4/docs/ROADMAP.md:130-132`, verbatim)
