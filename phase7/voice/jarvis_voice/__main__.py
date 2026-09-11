@@ -1,4 +1,4 @@
-"""CLI: python -m jarvis_voice <record|enroll|verify|transcribe|evaluate|split|selftest|cluster-bench|ingest|clusters|owner-merge|speech-shape|duration-bench> ...
+"""CLI: python -m jarvis_voice <record|enroll|verify|transcribe|evaluate|split|selftest|cluster-bench|ingest|clusters|owner-merge|speech-shape|enroll-widen|duration-bench> ...
 
 split: extract speech from a long 16 kHz recording (energy gate, padded, short gaps merged) and pack
 whole runs into pieces so no word is cut at a boundary; evaluate: --neg-dir (WAV + FLAC) or --neg-json
@@ -189,6 +189,134 @@ def cmd_duration_bench(a):
         if not pf.get("flagged"):
             print("    none flagged")
     print(f"written    : {out}")
+    return 0
+
+
+def cmd_enroll_widen(a):
+    """Measure a widened enrollment against the current one on the same held-out windows.
+
+    Never adopts without `--adopt`, and `--adopt` never writes unless the pre-registered rule
+    passes. The candidate sources are named on the command line rather than inferred, so the
+    held-out split is a statement in the run record instead of an assumption in the code.
+    """
+    import datetime as _dt
+    import numpy as np
+    from .duration import (DURATION_GRID, FRAME_S, MIN_N, collect_positive_files, embed_windows,
+                           load_and_mask)
+    from .enroll import EnrollmentStore
+    from .evaluate import eer
+    from .speaker import SpeakerEmbedder
+    from .verify import score as _score
+    from .widen import (MAX_CANDIDATES, MIN_RUN_S, MIN_SCORE, adoption_rule, backup_v1, build_v2,
+                        compare_by_duration, select_candidates)
+
+    store = EnrollmentStore(name=a.name)
+    v1 = store.load()
+    c1, thr1 = v1["centroid"], float(v1["threshold"])
+    sources = collect_positive_files(a.from_dirs, a.from_files)
+    if not sources:
+        raise SystemExit("name the candidate recordings with --from-dirs / --from-files; they must "
+                         "NOT be held-out audio, and the split is recorded in the run JSON")
+    pos_files = collect_positive_files(a.pos_dirs, a.pos_files)
+    if not pos_files:
+        raise SystemExit("name the held-out positives with --pos-dirs / --pos-files")
+    emb = SpeakerEmbedder()
+
+    # ---- 1. every long run of the candidate sources, scored against v1
+    scored, n_runs = [], 0
+    for f in sources:
+        wav, sr, rr = load_and_mask(f)
+        fl = int(sr * FRAME_S)
+        for (sa, sb) in rr:
+            n_runs += 1
+            dur = (sb - sa) * FRAME_S
+            if dur < MIN_RUN_S:
+                continue
+            vec = emb.embed(np.asarray(wav[sa * fl: sb * fl], dtype="float32"), sr)
+            scored.append({"chunk": Path(f).stem, "offset_s": round(sa * FRAME_S, 2),
+                           "duration_s": round(dur, 2), "score": _score(c1, vec), "vec": vec})
+        del wav
+    cands = select_candidates(scored, MIN_RUN_S, MIN_SCORE, MAX_CANDIDATES)
+    print(f"candidate sources : {len(sources)} files, {n_runs} speech runs")
+    print(f"runs >= {MIN_RUN_S} s   : {len(scored)}")
+    for r in scored:
+        print(f"    {r['chunk']} @ {r['offset_s']:>8.1f}s  {r['duration_s']:>6.2f}s  "
+              f"score {r['score']:>7.4f}  {'CANDIDATE' if r['score'] >= MIN_SCORE else 'below %.2f' % MIN_SCORE}")
+    print(f"candidates        : {len(cands)} (>= {MIN_SCORE} against v1, cap {MAX_CANDIDATES})")
+
+    out = {"created": _dt.datetime.now().isoformat(timespec="seconds"),
+           "rule": {"min_run_s": MIN_RUN_S, "min_score": MIN_SCORE, "max_candidates": MAX_CANDIDATES,
+                    "min_n": MIN_N, "grid": list(DURATION_GRID)},
+           "v1": {"threshold": thr1, "created": v1.get("created"), "clips": len(v1.get("clips", []))},
+           "candidate_sources": [str(f) for f in sources],
+           "heldout_positives": [str(f) for f in pos_files],
+           "runs_total": n_runs,
+           "runs_ge_min": [{k: r[k] for k in ("chunk", "offset_s", "duration_s", "score")}
+                           for r in scored],
+           "n_candidates": len(cands)}
+
+    if not cands:
+        ok, reason = adoption_rule(None, [], 0)
+        out.update({"adopted": False, "reason": reason})
+        print(f"VERDICT           : NOT ADOPTED - {reason}")
+    else:
+        c2 = build_v2(v1["clip_vectors"], [r["vec"] for r in cands])
+        st_files = sorted(voice_home().glob("selftest_*.json"))
+        negatives = json.loads(st_files[-1].read_text(encoding="utf-8"))["sets"]["negatives"]
+        # ---- 2. the M0b footing: whole pieces, both enrollments, the same files
+        fp1, fp2 = [], []
+        for f in pos_files:
+            wav, sr, _rr = load_and_mask(f)
+            v = emb.embed(np.asarray(wav, dtype="float32"), sr)
+            fp1.append(_score(c1, v)); fp2.append(_score(c2, v)); del wav
+        fn1, fn2 = [], []
+        for f in negatives:
+            wav, sr, _rr = load_and_mask(f)
+            v = emb.embed(np.asarray(wav, dtype="float32"), sr)
+            fn1.append(_score(c1, v)); fn2.append(_score(c2, v)); del wav
+        e1_foot, _t1 = eer(fp1, fn1)
+        e2_foot, thr2 = eer(fp2, fn2)
+        # ---- 3. the same windows, both enrollments
+        pv1, pv2, nv1, nv2 = ({d: [] for d in DURATION_GRID} for _ in range(4))
+        for side, files in (("pos", pos_files), ("neg", negatives)):
+            for f in files:
+                wav, sr, rr = load_and_mask(f)
+                for d in DURATION_GRID:
+                    for v in embed_windows(wav, sr, rr, d, emb):
+                        (pv1 if side == "pos" else nv1)[d].append(_score(c1, v))
+                        (pv2 if side == "pos" else nv2)[d].append(_score(c2, v))
+                del wav
+        rows = compare_by_duration(pv1, pv2, nv1, nv2, thr1, thr2, MIN_N)
+        qual = [r for r in rows if r["qualifies"]]
+        ok, reason = adoption_rule(e2_foot, qual, len(cands))
+        out.update({"footing": {"eer_v1": e1_foot, "eer_v2": e2_foot, "threshold_v2": thr2,
+                                "n_pos": len(fp1), "n_neg": len(fn1)},
+                    "per_duration": rows, "adopted": False, "reason": reason})
+        print(f"footing (whole pieces): EER v1 {e1_foot:.4f} -> v2 {e2_foot:.4f} ; v2 threshold {thr2:.6f}")
+        print(f"{'D s':>5} {'n_pos':>6} {'n_neg':>6} {'EER v1':>8} {'EER v2':>8} {'FAR v1':>8} "
+              f"{'FAR v2':>8}  floor")
+        for r in rows:
+            print(f"{r['d_s']:>5.0f} {r['n_pos']:>6} {r['n_neg']:>6} {r['eer_v1']:>8.4f} "
+                  f"{r['eer_v2']:>8.4f} {r['far_v1']:>8.4f} {r['far_v2']:>8.4f}  "
+                  f"{'yes' if r['qualifies'] else 'no'}")
+        print(f"VERDICT           : {'ADOPT' if ok else 'NOT ADOPTED'} - {reason}")
+        if ok and a.adopt:
+            js, npy = backup_v1(store)
+            print(f"v1 backed up      : {js}")
+            clips = list(v1.get("clips", [])) + [
+                {"path": "%s@%.1fs" % (r["chunk"], r["offset_s"]), "sha256": None,
+                 "duration_s": r["duration_s"]} for r in cands]
+            store.save(c2, clips, list(v1["clip_vectors"]) + [list(r["vec"]) for r in cands],
+                       thr2, v1.get("model", "speechbrain/spkrec-ecapa-voxceleb"),
+                       extra={"v": 2, "v1_backup": str(js), "widened_from": [str(f) for f in sources]})
+            out["adopted"] = True
+            print(f"ADOPTED           : {store.json_path}")
+        elif a.adopt:
+            print("--adopt given but the rule did not pass: nothing was written")
+
+    op = Path(a.out) if a.out else voice_home() / f"enroll_widen_{_dt.date.today():%Y-%m-%d}.json"
+    op.write_text(json.dumps(out, indent=1, default=float), encoding="utf-8")
+    print(f"written           : {op}")
     return 0
 
 
@@ -429,6 +557,17 @@ def build_parser():
     cl = sub.add_parser("clusters"); cl.add_argument("--db"); cl.set_defaults(fn=cmd_clusters)
     om = sub.add_parser("owner-merge"); om.add_argument("--db")
     om.add_argument("--name", default="owner"); om.set_defaults(fn=cmd_owner_merge)
+    ew = sub.add_parser("enroll-widen")
+    ew.add_argument("--from-dirs", nargs="+", default=None,
+                    help="directories of candidate recordings (NEVER held-out audio)")
+    ew.add_argument("--from-files", nargs="+", default=None, help="globs naming candidate wavs")
+    ew.add_argument("--pos-dirs", nargs="+", default=None, help="held-out positive directories")
+    ew.add_argument("--pos-files", nargs="+", default=None, help="globs naming held-out positives")
+    ew.add_argument("--name", default="owner"); ew.add_argument("--out")
+    ew.add_argument("--dry-run", action="store_true", help="measure and report; never write v2")
+    ew.add_argument("--adopt", action="store_true",
+                    help="write v2 ONLY if the pre-registered rule passes, after backing up v1")
+    ew.set_defaults(fn=cmd_enroll_widen)
     ss = sub.add_parser("speech-shape"); ss.add_argument("wavs", nargs="+")
     ss.set_defaults(fn=cmd_speech_shape)
     db = sub.add_parser("duration-bench"); db.add_argument("--out")

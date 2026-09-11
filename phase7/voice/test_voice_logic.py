@@ -1238,5 +1238,121 @@ check("T15c a file whose mean sits more than the margin below the OTHERS' MEAN i
       str((flag_outlier_files(_MEANS_A), flag_outlier_files(_MEANS_B))))
 
 
+# ================================ T16 - M1d.3: widening the enrollment, and refusing to
+# The v1 voiceprint is six clips recorded to order. Whether more of the owner's voice helps is a
+# measurement, and the rule that decides it is fixed before its numbers: confident long runs only,
+# chronological rather than best-first, and adoption only if v2 beats v1 on data neither was built
+# from, at every window length with enough windows to say so.
+import inspect as _insp16  # noqa: E402
+
+from jarvis_voice import __main__ as _main_mod  # noqa: E402
+from jarvis_voice.enroll import EnrollmentStore as _ES16, build_centroid as _bc16  # noqa: E402
+
+
+def _raises16(fn, exc=Exception):
+    """Did calling `fn` raise `exc`? A refusal is a behaviour and deserves an assertion."""
+    try:
+        fn()
+    except exc:
+        return True
+    except Exception:                                          # noqa: BLE001
+        return False
+    return False
+
+from jarvis_voice.widen import (  # noqa: E402
+    MAX_CANDIDATES, MIN_RUN_S, MIN_SCORE, adoption_rule, backup_paths, backup_v1, build_v2,
+    select_candidates,
+)
+
+_A16, _B16, _C16 = [3.0, 4.0, 0.0], [0.0, 0.0, 2.0], [1.0, 0.0, 0.0]
+check("T16a build_v2 is the normalised mean over v1's vectors AND the candidates', one vote each, "
+      "and refuses to call v1 a widening when there are no candidates",
+      build_v2([_A16, _B16], [_C16]) == _bc16([_A16, _B16, _C16])
+      # order of the two groups does not change the centroid - it is a mean, not a sequence
+      and build_v2([_B16, _A16], [_C16]) == _bc16([_A16, _B16, _C16])
+      # unit length, and each input counted once
+      and abs(sum(x * x for x in build_v2([_A16, _B16], [_C16])) - 1.0) < 1e-12
+      and build_v2([_A16], [_A16]) == _bc16([_A16, _A16]) == _bc16([_A16])
+      and (MIN_RUN_S, MIN_SCORE, MAX_CANDIDATES) == (10.0, 0.50, 30)
+      and _raises16(lambda: build_v2([_A16], [])),
+      str(build_v2([_A16, _B16], [_C16])))
+
+
+def _run16(chunk, off, dur, sc):
+    return {"chunk": chunk, "offset_s": off, "duration_s": dur, "score": sc}
+
+
+# two chunks out of order, a short run, a run under the score floor, and a high-scoring LATE run
+# that the cap must drop in favour of earlier ones
+_RUNS16 = [_run16("b", 5.0, 12.0, 0.61), _run16("a", 30.0, 11.0, 0.55),
+           _run16("a", 10.0, 9.9, 0.99), _run16("a", 20.0, 12.0, 0.49),
+           _run16("a", 5.0, 10.0, 0.50), _run16("b", 1.0, 10.0, 0.95)]
+_sel16 = select_candidates(_RUNS16)
+_cap16 = select_candidates(_RUNS16, max_n=2)
+check("T16b select_candidates keeps confident long runs only, in the order they were SPOKEN, and "
+      "the cap takes the earliest survivors rather than the best-scoring",
+      [(r["chunk"], r["offset_s"]) for r in _sel16]
+          == [("a", 5.0), ("a", 30.0), ("b", 1.0), ("b", 5.0)]
+      # 9.9 s is under the length floor; 0.49 is under the score floor; the boundary values are IN
+      and all(r["duration_s"] >= MIN_RUN_S and r["score"] >= MIN_SCORE for r in _sel16)
+      and ("a", 10.0) not in [(r["chunk"], r["offset_s"]) for r in _sel16]
+      and ("a", 20.0) not in [(r["chunk"], r["offset_s"]) for r in _sel16]
+      and ("a", 5.0) in [(r["chunk"], r["offset_s"]) for r in _sel16]        # score exactly 0.50
+      # the cap is chronological, so the 0.95 and 0.99 runs do NOT displace the earliest
+      and [(r["chunk"], r["offset_s"]) for r in _cap16] == [("a", 5.0), ("a", 30.0)]
+      and select_candidates([]) == [] and select_candidates(_RUNS16, max_n=0) == [],
+      str([(r["chunk"], r["offset_s"], r["score"]) for r in _sel16]))
+
+
+def _row16(d, e1, e2, f1, f2):
+    return {"d_s": d, "n_pos": 50, "n_neg": 50, "eer_v1": e1, "eer_v2": e2,
+            "far_v1": f1, "far_v2": f2, "qualifies": True}
+
+
+_BETTER = [_row16(1, 0.30, 0.20, 0.00, 0.00), _row16(2, 0.20, 0.15, 0.01, 0.01)]
+_ONE_WORSE = [_row16(1, 0.30, 0.20, 0.00, 0.00), _row16(2, 0.20, 0.25, 0.00, 0.00)]
+_FAR_WORSE = [_row16(1, 0.30, 0.20, 0.00, 0.00), _row16(2, 0.20, 0.15, 0.00, 0.02)]
+_EQUAL = [_row16(1, 0.30, 0.30, 0.00, 0.00), _row16(2, 0.20, 0.20, 0.00, 0.00)]
+check("T16c adoption needs ALL THREE conditions - the footing band, EER no worse at every "
+      "qualifying length, and FAR no worse at every one - and no candidates is never an adoption",
+      adoption_rule(0.0, _BETTER, 3)[0] is True
+      and adoption_rule(0.0, _EQUAL, 3)[0] is True                    # equal everywhere qualifies
+      and adoption_rule(0.0, _ONE_WORSE, 3)[0] is False               # (ii): one length worse
+      and "condition (ii)" in adoption_rule(0.0, _ONE_WORSE, 3)[1]
+      and adoption_rule(0.0, _FAR_WORSE, 3)[0] is False               # (iii): FAR worse
+      and "condition (iii)" in adoption_rule(0.0, _FAR_WORSE, 3)[1]
+      and adoption_rule(0.01, _BETTER, 3)[0] is False                 # (i): footing band missed
+      and "condition (i)" in adoption_rule(0.01, _BETTER, 3)[1]
+      and adoption_rule(None, _BETTER, 3)[0] is False
+      # no candidates: refused before any condition is even read
+      and adoption_rule(0.0, _BETTER, 0)[0] is False
+      and "no candidates" in adoption_rule(0.0, _BETTER, 0)[1]
+      # nothing to compare on is not an adoption either
+      and adoption_rule(0.0, [], 3)[0] is False,
+      str((adoption_rule(0.0, _ONE_WORSE, 3), adoption_rule(0.0, _FAR_WORSE, 3))))
+
+with tempfile.TemporaryDirectory() as _td16:
+    _td16 = Path(_td16)
+    _st16 = _ES16(directory=_td16, name="owner")
+    _st16.save([1.0, 0.0, 0.0], [{"path": "x.wav", "sha256": "s", "duration_s": 60.0}],
+               [[1.0, 0.0, 0.0]], 0.3585, "m", extra={"created_by": "T16d"})
+    _js16, _npy16 = backup_paths(_st16)
+    _b1 = backup_v1(_st16)
+    _refused16 = _raises16(lambda: backup_v1(_st16), SystemExit)
+    _src16 = _insp16.getsource(_main_mod.cmd_enroll_widen)
+    check("T16d the v1 backup is named by v1's own creation date and REFUSES to overwrite itself; "
+          "the adopt path writes only behind the rule",
+          _b1[0].exists() and _b1[0] == _js16
+          and _js16.name.startswith("owner.v1.") and _js16.name.endswith(".json")
+          and _refused16
+          # two-sided on the guard, so neither clause goes vacuous under a rename
+          and "if ok and a.adopt:" in _src16
+          and _src16.count("store.save(") == 1
+          and _src16.index("if ok and a.adopt:") < _src16.index("store.save(")
+          and "backup_v1(store)" in _src16
+          and _src16.index("backup_v1(store)") < _src16.index("store.save("),
+          str((_b1[0].name, _refused16, "if ok and a.adopt:" in _src16)))
+
+
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
 sys.exit(1 if FAILS else 0)

@@ -159,6 +159,25 @@ Sources: `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md` §3, §5, §8; `phase4/do
     reconciling people belongs to the MS2 layer and the dangling row is visible in the audit trail
     rather than silently removed.
 
+24. **The enrollment is widened only by measurement, and only by data it was not measured on
+    (M1d.3, 2026-09-11).** CANDIDATES are speech runs of at least **10 s** from recordings that are
+    NOT held out, scoring at least **0.50** against the CURRENT centroid — confident, not merely
+    admitted, because a candidate at the threshold is as likely to drag the centroid as to sharpen
+    it and there is no second voiceprint to check it against. They are taken **chronologically, not
+    best-first** (taking the highest-scoring runs would select exactly the speech that already looks
+    like the centroid, which is the one way to widen an enrollment while learning nothing) and
+    capped at **30**, so one long evening cannot outweigh six deliberately recorded clips. v2 is the
+    centroid over v1's clip vectors PLUS the candidates', one vote each — v1's quiet, read speech is
+    added to, never discarded. **v2 replaces v1 only if ALL THREE hold:** (i) v2 still meets the M0b
+    band on whole pieces with EER 0.0000; (ii) v2's EER is no worse at EVERY window length with
+    `n_pos` and `n_neg` ≥ `MIN_N`; (iii) v2's FAR is no worse at every such length — an enrollment
+    widened until it accepted strangers would improve every owner metric on the way there. **No
+    candidates is never an adoption:** calling v1 "v2" would record a widening that did not happen.
+    Adoption copies the current pair to `enroll\owner.v1.<v1's own created date>.json` / `.npy`
+    first and REFUSES over an existing backup — a backup that the thing it protects against can
+    overwrite is not a backup. `enroll-widen --dry-run` measures and writes
+    `enroll_widen_<date>.json`; only `--adopt` may write, and only behind the rule.
+
 Sources: `%USERPROFILE%\.jarvis\voice\freeze.txt`; the M0a run (§6); `phase7/voice/jarvis_voice/*.py`; `phase4/docs/BEYOND_PHASE7_VOICE_WEARABLE.md` §8.
 
 ---
@@ -1372,6 +1391,61 @@ by name. The pre-registered case is kept exactly as written.
 The bench also now decodes and masks each file **once** rather than once per grid point — a property
 of the recording, not of the window length — which is what makes a 44-file positive set affordable
 (39.5 s wall for the whole run).
+
+### M1d.3 — 2026-09-11 — enrollment v2 versus v1 — NOT ADOPTED: the take yields no candidates
+
+**The candidate pool is ZERO, so there is no v2 to measure and the question "does more of his voice
+fix short words" is not answered by this take.** The enrollment is untouched: threshold
+`0.358503175300161`, six clips, `created 2026-09-08T19:51:28`, and no backup was written because
+nothing was adopted.
+
+| the rule asked for | the take supplied |
+|---|---|
+| speech runs ≥ 10 s from chunks 1–12 | **1**, out of 301 speech runs |
+| up to 30 of them, ≥ 5 minutes more speech | 10.75 s — a factor of ~28 short |
+| each scoring ≥ 0.50 against v1 | that one run scores **−0.1003** |
+| → candidates | **0** |
+
+The single long run is `rec_20260910_214558` at offset 466.1 s, 10.75 s. Its score of −0.1003 is not
+merely under the 0.50 confidence filter: it is under the stored threshold 0.3585 and it is
+**negative**, so whatever that run holds, v1 does not recognise it as the owner. Read beside M1d.1 —
+the three non-silent chunks are the owner playing a game, and the transcripts of the M0b take from
+the same setting show a second person present — the most likely reading is that the one continuous
+ten-second stretch in six hours is not him. It is reported, not diagnosed: nothing was listened to
+and no audio was touched.
+
+**Why this is a stop and not a miss.** A miss would be v2 measured and found no better. Here the
+pre-registered rule cannot be executed at all: it selects from a population of one, and that one
+fails the filter. Lowering `MIN_RUN_S` below 10 s or `MIN_SCORE` below 0.50 to manufacture
+candidates would be moving a pre-registered parameter after seeing that it excluded everything —
+exactly what M1a.4's retraction exists to prevent. **The parameters are arguments, not literals**
+(`select_candidates(runs, min_s, min_score, max_n)`), so a differently-framed widening is a
+different command with a different rule, and that framing is the strategist's to write.
+
+**What it would take.** The 2–10 s band holds 236.7 s of the owner's speech across 301 runs
+(M1d.1), so a widening rule that admits shorter runs has material to work with — at the cost of
+asking a threshold that M1a.3 measured as a ~ten-second property about windows shorter than that,
+which is the same circularity the two-level rule was built to avoid. The clean alternative is more
+recording: chunks 1–12 contain 437 s of speech, and 21 of the 24 chunks captured nothing at all, so
+a working microphone for one evening would supply the thirty runs the rule was written for.
+
+The machinery landed and is measured by its tests rather than by this run: `widen.py` carries
+`select_candidates`, `build_v2`, `adoption_rule`, `compare_by_duration` and the backup, all pure or
+file-level, and `enroll-widen` runs them. When there is audio to widen from, the rule is already
+pinned and pre-registered.
+
+Tests: `test_voice_logic.py` 79 → **83 checks**. T16a `build_v2` as the normalised mean over both
+groups with order irrelevant, and its refusal to call v1 a widening when the candidate list is
+empty; T16b `select_candidates` keeping confident long runs in the order they were SPOKEN, with the
+cap taking the earliest survivors rather than the best-scoring (the fixture's highest scorers, 0.95
+and 0.99, are deliberately late and deliberately excluded); T16c the three conditions, each failing
+on its own with its own reason, plus the no-candidates guard; T16d the backup named by v1's own
+creation date, its refusal over an existing backup, and — two-sided so neither clause can go vacuous
+under a rename — that the single `store.save` call sits behind `if ok and a.adopt:` and after
+`backup_v1`. Two mutants, the control green first, each failing BY NAME and each restored from a
+byte-copy verified by md5: the rule ignoring condition (iii) → T16c; `--adopt` writing when the rule
+failed → T16d.
+
 
 ---
 
