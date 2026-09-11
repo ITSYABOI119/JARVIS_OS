@@ -2073,6 +2073,26 @@ with _tf42.TemporaryDirectory() as _td42:
     except SystemExit:
         _ran42 = False
 
+    # T42e the server's own output goes to a FILE, never to a pipe
+    # A pipe has a fixed OS buffer and nothing drains it during a run, so once it fills the child
+    # BLOCKS in write() and stops serving while /health keeps answering ok. MEASURED on llama.cpp
+    # v0.4.0: 812 bytes of log per request, so a 4 KB pipe fills after ~3 requests. It cost a
+    # 16-hour stall on an arm that takes four minutes.
+    import inspect as _insp42  # noqa: E402
+    _src42 = _insp42.getsource(_LS42.__enter__)
+    _slog42 = _td42 / "srv.log"
+    _slog42.write_text("." * 60 + "TAIL-MARKER", encoding="utf-8")
+    check("T42e the llama-server's stdout goes to a file the harness can read, never to an "
+          "undrained pipe that would block the server once it fills",
+          # two-sided, so neither clause can go vacuous under a rename
+          "stdout=self._log_fh" in _src42 and "subprocess.PIPE" not in _src42
+          and _LS42("m.gguf", bin_dir="B", log_path=_slog42).server_log_tail(16)
+              .endswith("TAIL-MARKER")
+          and _LS42("m.gguf", bin_dir="B").server_log_tail() == "(no server log)"
+          and "(server log unreadable" in _LS42("m.gguf", bin_dir="B",
+                                                log_path=_td42 / "nope.log").server_log_tail(),
+          str(("stdout=self._log_fh" in _src42, "subprocess.PIPE" in _src42)))
+
     check("T42d the queue refuses to run under any schema but the contract-2 one the field ran, "
           "and the live tree still hashes to it",
           _refused42 and _ran42

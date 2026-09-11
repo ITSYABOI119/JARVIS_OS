@@ -8,6 +8,7 @@ here would turn a measurement into a crash and lose the very number the mileston
 """
 import json
 import os
+import tempfile
 import subprocess
 import time
 import urllib.error
@@ -130,7 +131,8 @@ def extract_span(base_url, span_id, text, cluster, day, names, schema,
 class LlamaServer:
     """Start a llama-server on a free port, wait for /health, and always kill it on exit."""
 
-    def __init__(self, model_path, port=8089, ctx=4096, ngl=99, bin_dir=None, extra_args=None):
+    def __init__(self, model_path, port=8089, ctx=4096, ngl=99, bin_dir=None, extra_args=None,
+                 log_path=None):
         self.model_path = str(model_path)
         self.port = int(port)
         self.ctx = int(ctx)
@@ -145,6 +147,37 @@ class LlamaServer:
         self.proc = None
         self.version = None
         self.base_url = "http://127.0.0.1:%d" % self.port
+        # WHERE THE SERVER'S OWN OUTPUT GOES, and it must be a FILE rather than a pipe. See
+        # `server_log_tail` for the measurement that forced this.
+        self.log_path = str(log_path) if log_path else None
+        self._log_fh = None
+
+    def server_log_tail(self, limit=4000):
+        """The last `limit` bytes the server wrote, or a note saying why there are none.
+
+        The server's stdout+stderr go to a FILE, never to `subprocess.PIPE`, and that is a
+        correctness requirement rather than a convenience. An undrained pipe has a fixed OS buffer;
+        once it fills, the child BLOCKS in write() and stops serving, while /health - answered off
+        another path - keeps returning ok. MEASURED on llama.cpp v0.4.0 (build b10809): the server
+        writes **812 bytes of log per request**, so a 4 KB pipe fills after ~3 requests, an 8 KB
+        pipe after ~8 and a 64 KB pipe after ~79. The frozen b8728 build is far quieter, which is
+        why the eleven-model field never hit it.
+
+        What that cost, before it was found: a `granite-3b` arm ran for 16 hours 10 minutes having
+        accumulated 68 seconds of server CPU, every call after the pipe filled timing out at 180 s,
+        and it would have written a plausible-looking near-zero score for a model that answers each
+        call in 0.15 s when its output has somewhere to go.
+        """
+        if not self.log_path:
+            return "(no server log)"
+        try:
+            with open(self.log_path, "rb") as fh:
+                fh.seek(0, 2)
+                size = fh.tell()
+                fh.seek(max(0, size - int(limit)))
+                return fh.read().decode("utf-8", "replace")
+        except OSError as exc:
+            return "(server log unreadable: %s)" % exc
 
     def server_command(self):
         """The exact argv this server will run. Pure - no process, no file check - so a per-model
@@ -161,13 +194,17 @@ class LlamaServer:
             raise RuntimeError("no model at %s" % self.model_path)
         cmd = self.server_command()
         self.cmd = cmd
-        self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        if self.log_path is None:
+            fd, self.log_path = tempfile.mkstemp(prefix="llama_server_%d_" % self.port,
+                                                 suffix=".log")
+            os.close(fd)
+        self._log_fh = open(self.log_path, "w", encoding="utf-8", errors="replace")
+        self.proc = subprocess.Popen(cmd, stdout=self._log_fh, stderr=subprocess.STDOUT,
                                      text=True, errors="replace")
         deadline = time.time() + 300
         while time.time() < deadline:
             if self.proc.poll() is not None:
-                out = self.proc.stdout.read() if self.proc.stdout else ""
-                raise RuntimeError("llama-server exited early:\n%s" % out[-4000:])
+                raise RuntimeError("llama-server exited early:\n%s" % self.server_log_tail())
             try:
                 with urllib.request.urlopen(self.base_url + "/health", timeout=2) as fh:
                     if fh.status == 200:
@@ -175,8 +212,9 @@ class LlamaServer:
             except Exception:
                 time.sleep(1.0)
         else:
+            tail = self.server_log_tail()
             self.__exit__(None, None, None)
-            raise RuntimeError("llama-server did not become healthy within 300 s")
+            raise RuntimeError("llama-server did not become healthy within 300 s:\n%s" % tail)
         try:
             with urllib.request.urlopen(self.base_url + "/props", timeout=5) as fh:
                 props = json.loads(fh.read().decode("utf-8"))
@@ -192,4 +230,10 @@ class LlamaServer:
                 self.proc.wait(timeout=20)
             except Exception:
                 self.proc.kill()
+        if self._log_fh is not None:
+            try:
+                self._log_fh.close()
+            except Exception:                                  # noqa: BLE001
+                pass
+            self._log_fh = None
         return False
