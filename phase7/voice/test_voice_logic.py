@@ -1134,5 +1134,109 @@ with tempfile.TemporaryDirectory() as _td14:
                _deleted_at(_st14guard), _raised14, _deleted_at(_st14raise))))
 
 
+# ============================ T15 - M1d.1/M1d.2: the shape of real speech, and the wider bench
+# The rules so far rest on 147 seconds of the owner's voice. Six hours of it sit unused, so the
+# bench has to be able to name a positive set instead of assuming one, and the report has to say
+# what shape that speech has: the three run-length buckets are the two-level owner rule's own
+# boundaries read back onto real life.
+from jarvis_voice.duration import (  # noqa: E402
+    FILE_FLAG_MARGIN, SHAPE_LONG_S, SHAPE_SHORT_S, collect_positive_files, flag_outlier_files,
+    speech_shape,
+)
+
+# runs of 12, 5, 1.5 and 0.8 s at 0.05 s per frame, written as frame counts
+_SHAPE_RUNS = [(0, 240), (240, 340), (340, 370), (370, 386)]
+_SHAPE_LENS = [12.0, 5.0, 1.5, 0.8]
+_SHAPE_TOTAL = sum(_SHAPE_LENS)                                   # 19.3 s
+_sh15 = speech_shape(_SHAPE_RUNS, 0.05)
+check("T15a speech_shape buckets speech SECONDS by run length at the owner rule's own boundaries",
+      abs(_sh15["speech_s"] - _SHAPE_TOTAL) < 1e-9 and _sh15["runs"] == len(_SHAPE_RUNS)
+      and abs(_sh15["longest_run_s"] - max(_SHAPE_LENS)) < 1e-9
+      # every share computed here from the run lengths, never typed
+      and abs(_sh15["share_ge_10"] - sum(x for x in _SHAPE_LENS if x >= SHAPE_LONG_S)
+              / _SHAPE_TOTAL) < 1e-9
+      and abs(_sh15["share_2_10"] - sum(x for x in _SHAPE_LENS
+                                        if SHAPE_SHORT_S <= x < SHAPE_LONG_S) / _SHAPE_TOTAL) < 1e-9
+      and abs(_sh15["share_lt_2"] - sum(x for x in _SHAPE_LENS if x < SHAPE_SHORT_S)
+              / _SHAPE_TOTAL) < 1e-9
+      and abs(_sh15["share_ge_10"] + _sh15["share_2_10"] + _sh15["share_lt_2"] - 1.0) < 1e-9
+      and (SHAPE_LONG_S, SHAPE_SHORT_S) == (10.0, 2.0)
+      # a recording with no speech at all divides by nothing rather than raising
+      and speech_shape([], 0.05)["speech_s"] == 0.0
+      and speech_shape([], 0.05)["share_ge_10"] == 0.0,
+      str(_sh15))
+
+with tempfile.TemporaryDirectory() as _td15:
+    _td15 = Path(_td15)
+    _d1, _d2 = _td15 / "a", _td15 / "b"
+    _d1.mkdir(); _d2.mkdir()
+    for _d, _names in ((_d1, ("two.wav", "one.wav")), (_d2, ("three.wav",))):
+        for _n in _names:
+            _wav(_d / _n, seconds=0.2)
+    (_d1 / "notes.txt").write_text("not audio", encoding="utf-8")
+    _sel15 = collect_positive_files([_d1, _d2], None)
+    _glob15 = collect_positive_files(None, [str(_d1 / "*.wav")])
+    _both15 = collect_positive_files([_d2], [str(_d1 / "*.wav")])
+    _dup15 = False
+    try:
+        collect_positive_files([_d1], [str(_d1 / "one.wav")])
+    except SystemExit as _e15:
+        _dup15 = "twice" in str(_e15)
+    _default15 = collect_positive_files(None, None, default=[_d2 / "three.wav"])
+
+    # sorted by PATH, so the order is deterministic across directories rather than by bare name;
+    # the expectation is built from the fixture rather than typed.
+    _want15 = sorted([_d1 / "one.wav", _d1 / "two.wav", _d2 / "three.wav"])
+    check("T15b the positive set is the union of --pos-dirs and --pos-files, sorted by path, "
+          "non-wav ignored, and a file named twice is REFUSED rather than counted twice",
+          _sel15 == _want15
+          and _glob15 == sorted([_d1 / "one.wav", _d1 / "two.wav"])
+          and _both15 == _want15
+          and all(f.suffix == ".wav" for f in _sel15)
+          and len(_sel15) == 3                       # notes.txt is not a positive
+          and _dup15
+          # with neither flag the caller's default set is used unchanged
+          and [f.name for f in _default15] == ["three.wav"],
+          str(([f.name for f in _sel15], [f.name for f in _glob15], _dup15)))
+
+# T15c the outlier flag. The first table is the pre-registered one; the second exists because the
+# first cannot tell the rule apart from its mutant - comparing against the others' MAX flags the
+# same single file there, so a mutant would pass. In the second, the mean rule flags one file and
+# the max rule would flag two.
+_MEANS_A = {"chunk_a": 0.55, "chunk_b": 0.52, "chunk_c": 0.30}
+_MEANS_B = {"chunk_a": 0.60, "chunk_b": 0.30, "chunk_c": 0.32}
+
+
+def _others_mean(d, k):
+    o = [v for kk, v in d.items() if kk != k]
+    return sum(o) / len(o)
+
+
+def _others_max(d, k):
+    return max(v for kk, v in d.items() if kk != k)
+
+
+check("T15c a file whose mean sits more than the margin below the OTHERS' MEAN is flagged, and "
+      "the comparison is the mean rather than the maximum",
+      flag_outlier_files(_MEANS_A) == ["chunk_c"]
+      # computed from the table, not typed
+      and flag_outlier_files(_MEANS_A)
+          == sorted(k for k in _MEANS_A if _MEANS_A[k] < _others_mean(_MEANS_A, k) - FILE_FLAG_MARGIN)
+      and flag_outlier_files(_MEANS_B) == ["chunk_b"]
+      and flag_outlier_files(_MEANS_B)
+          == sorted(k for k in _MEANS_B if _MEANS_B[k] < _others_mean(_MEANS_B, k) - FILE_FLAG_MARGIN)
+      # the discriminator: against the others' MAX the second table would flag two, not one
+      and sorted(k for k in _MEANS_B
+                 if _MEANS_B[k] < _others_max(_MEANS_B, k) - FILE_FLAG_MARGIN) == ["chunk_b",
+                                                                                   "chunk_c"]
+      and FILE_FLAG_MARGIN == 0.15
+      # fewer than three files cannot have an "others" mean worth comparing to
+      and flag_outlier_files({"a": 0.9, "b": 0.1}) == []
+      and flag_outlier_files({}) == []
+      # a file with no windows at this length carries None and is neither flagged nor a divisor
+      and flag_outlier_files({"a": 0.55, "b": 0.52, "c": 0.30, "d": None}) == ["c"],
+      str((flag_outlier_files(_MEANS_A), flag_outlier_files(_MEANS_B))))
+
+
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
 sys.exit(1 if FAILS else 0)

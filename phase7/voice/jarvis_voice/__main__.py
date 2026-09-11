@@ -1,4 +1,4 @@
-"""CLI: python -m jarvis_voice <record|enroll|verify|transcribe|evaluate|split|selftest|cluster-bench|ingest|clusters|owner-merge|duration-bench> ...
+"""CLI: python -m jarvis_voice <record|enroll|verify|transcribe|evaluate|split|selftest|cluster-bench|ingest|clusters|owner-merge|speech-shape|duration-bench> ...
 
 split: extract speech from a long 16 kHz recording (energy gate, padded, short gaps merged) and pack
 whole runs into pieces so no word is cut at a boundary; evaluate: --neg-dir (WAV + FLAC) or --neg-json
@@ -156,9 +156,11 @@ def cmd_duration_bench(a):
     if a.reread:
         return _duration_bench_reread()
     out = Path(a.out) if a.out else voice_home() / f"duration_bench_{_dt.date.today():%Y-%m-%d}.json"
-    r = run_duration_bench(out_path=out)
+    r = run_duration_bench(out_path=out, pos_dirs=a.pos_dirs, pos_files=a.pos_files,
+                           positives_source=a.positives_source)
     print(f"stored threshold : {r['stored_threshold']:.15f}")
-    print(f"positives {r['positives_files']} files ; negatives {r['negatives_files']} files ; "
+    print(f"positives {r['positives_files']} files ({r['positives_source']}) ; "
+          f"negatives {r['negatives_files']} files ; "
           f"ECAPA {r['ecapa_model']} on {r['ecapa_device']} (load {r['ecapa_load_s']}s)")
     print(f"{'D s':>5} {'n_pos':>6} {'n_neg':>6} {'EER':>8} {'EER thr':>9} "
           f"{'FAR@thr':>8} {'FRR@thr':>8} {'pos_min':>8} {'neg_max':>8}  band")
@@ -176,7 +178,53 @@ def cmd_duration_bench(a):
               "stored threshold. This is a STOP: the threshold itself is the question.")
     else:
         print(f"MIN_EMBED_S : {r['min_embed_s']} s (the smallest qualifying duration)")
+    pf = r.get("per_file_mean_score") or {}
+    if pf.get("means"):
+        print(f"per-file mean score over {pf['d_s']:.0f}-s windows "
+              f"(flagged = more than {pf['margin']} below the others' mean):")
+        for k in sorted(pf["means"]):
+            v = pf["means"][k]
+            mark = "  FLAGGED" if k in (pf.get("flagged") or []) else ""
+            print(f"    {k:<28} {('%.4f' % v) if v is not None else '   -  '}{mark}")
+        if not pf.get("flagged"):
+            print("    none flagged")
     print(f"written    : {out}")
+    return 0
+
+
+def cmd_speech_shape(a):
+    """The run-length shape of each recording's speech. Counts and seconds only - never text."""
+    from .duration import (FRAME_DBFS, FRAME_S, MIN_GAP_MS, PAD_MS, SHAPE_LONG_S, SHAPE_SHORT_S,
+                           load_and_mask, speech_shape)
+    print(f"mask: {FRAME_DBFS} dBFS, {PAD_MS:.0f} ms pad, {MIN_GAP_MS:.0f} ms gap, "
+          f"{FRAME_S} s frames ; buckets >= {SHAPE_LONG_S:.0f} s / {SHAPE_SHORT_S:.0f}-"
+          f"{SHAPE_LONG_S:.0f} s / < {SHAPE_SHORT_S:.0f} s")
+    print(f"{'file':<30} {'total s':>9} {'speech s':>9} {'speech%':>8} {'runs':>6} "
+          f"{'longest':>8} {'>=10s':>7} {'2-10s':>7} {'<2s':>7}")
+    tot_wall = tot_speech = 0.0
+    tot = {"seconds_ge_10": 0.0, "seconds_2_10": 0.0, "seconds_lt_2": 0.0, "runs": 0}
+    for w in a.wavs:
+        wav, sr, rr = load_and_mask(w)
+        sh = speech_shape(rr, FRAME_S)
+        wall = len(wav) / float(sr)
+        tot_wall += wall
+        tot_speech += sh["speech_s"]
+        for k in ("seconds_ge_10", "seconds_2_10", "seconds_lt_2"):
+            tot[k] += sh[k]
+        tot["runs"] += sh["runs"]
+        print(f"{Path(w).stem:<30} {wall:>9.1f} {sh['speech_s']:>9.1f} "
+              f"{100.0 * sh['speech_s'] / wall if wall else 0.0:>7.1f}% {sh['runs']:>6} "
+              f"{sh['longest_run_s']:>8.1f} {sh['share_ge_10']:>6.1%} {sh['share_2_10']:>6.1%} "
+              f"{sh['share_lt_2']:>6.1%}")
+        del wav
+    if tot_speech:
+        print(f"{'TOTAL':<30} {tot_wall:>9.1f} {tot_speech:>9.1f} "
+              f"{100.0 * tot_speech / tot_wall if tot_wall else 0.0:>7.1f}% {tot['runs']:>6} "
+              f"{'':>8} {tot['seconds_ge_10'] / tot_speech:>6.1%} "
+              f"{tot['seconds_2_10'] / tot_speech:>6.1%} "
+              f"{tot['seconds_lt_2'] / tot_speech:>6.1%}")
+        print(f"seconds: >= 10 s {tot['seconds_ge_10']:.1f} ; 2-10 s {tot['seconds_2_10']:.1f} ; "
+              f"< 2 s {tot['seconds_lt_2']:.1f}")
     return 0
 
 
@@ -381,7 +429,16 @@ def build_parser():
     cl = sub.add_parser("clusters"); cl.add_argument("--db"); cl.set_defaults(fn=cmd_clusters)
     om = sub.add_parser("owner-merge"); om.add_argument("--db")
     om.add_argument("--name", default="owner"); om.set_defaults(fn=cmd_owner_merge)
+    ss = sub.add_parser("speech-shape"); ss.add_argument("wavs", nargs="+")
+    ss.set_defaults(fn=cmd_speech_shape)
     db = sub.add_parser("duration-bench"); db.add_argument("--out")
+    db.add_argument("--pos-dirs", nargs="+", default=None,
+                    help="directories whose *.wav are the positives (default: the 13 M0b pieces)")
+    db.add_argument("--pos-files", nargs="+", default=None,
+                    help="globs naming positive wavs, unioned with --pos-dirs; a file named twice "
+                         "is REFUSED")
+    db.add_argument("--positives-source", default=None,
+                    help="a label for the positive set, recorded in the JSON")
     db.add_argument("--reread", action="store_true",
                     help="re-apply the current reading rule to the newest bench JSON and rewrite "
                          "its verdict; the table is never touched and no model is loaded")

@@ -1236,6 +1236,143 @@ already exists and the household store is the one file in this project that must
 schema changing — the audio it describes is already gone.
 
 
+### M1d.1 — 2026-09-11 — the shape of the six-hour take: 2.0 % speech, and twenty of twenty-four chunks empty
+
+**The six hours are not six hours of speech. They are 437.5 seconds of it — 2.0 % — and all of it
+sits inside a single 45-minute window.** Twenty of the twenty-four 900-second chunks contain no
+speech at all, and the reason is not the energy gate: it is that the microphone captured nothing.
+
+| | wall | speech | speech % | runs | longest run |
+|---|---|---|---|---|---|
+| 24 chunks, total | 21,600.0 s | **437.5 s** | **2.0 %** | 301 | 10.8 s |
+| `rec_20260910_211557` | 900.0 | 162.2 | 18.0 % | 132 | 8.3 |
+| `rec_20260910_213057` | 900.0 | 203.1 | 22.6 % | 121 | 8.1 |
+| `rec_20260910_214558` | 900.0 | 71.8 | 8.0 % | 47 | **10.8** |
+| `rec_20260910_201554` | 900.0 | 0.5 | 0.1 % | 1 | 0.5 |
+| the other twenty chunks | 18,000.0 | **0.0** | 0.0 % | 0 | — |
+
+**Measured rather than inferred, because "no speech" and "speech under the gate" are different
+findings.** Per-chunk levels, 50 ms frames:
+
+| chunks | peak dBFS | RMS dBFS | p99 frame dBFS | frames above −45 dBFS |
+|---|---|---|---|---|
+| the twenty empty ones | **−90.3** | **−96.7** | −96.3 | **0** |
+| `211557` / `213057` / `214558` | −4.6 / −5.3 / −5.9 | −35.7 / −33.7 / −43.7 | −20.8 / −19.1 / −32.9 | 1,649 / 2,273 / 522 |
+| `201554` | −23.5 | −83.9 | −96.3 | 1 |
+
+A peak of −90.3 dBFS is about one least-significant bit of 16-bit audio: those twenty files are
+**digital near-silence**, not quiet speech. The mask parameters are irrelevant to them — no gate at
+any threshold recovers signal that was never recorded. `201554` holds a single loud transient over
+an otherwise silent floor (peak −23.5 dBFS, RMS −83.9): a click, not a word.
+
+**The run-length shape of the speech that does exist**, in the two-level owner rule's own
+boundaries: **≥ 10 s 2.5 %** (10.8 s, a single run, all of it in `214558`), **2–10 s 54.1 %**
+(236.7 s), **< 2 s 43.5 %** (190.1 s).
+
+That last line is the milestone's real answer to the operator's question, and it is worth reading
+slowly. On six hours of a real evening, **the level at which the owner's threshold can be asked at
+all — a turn of ten seconds or more — accounts for 2.5 % of his recorded speech, one run.** Over
+half sits in the 2–10 s band that is embedded and clustered but never judged alone, and 43.5 % is
+under two seconds, carrying no evidence of its own. The two-level rule is not conservative by
+preference; on this recording it is conservative by arithmetic.
+
+#### What this does to the prompt's own premises — reported, not worked around
+
+**Chunks 13–24, the entire held-out half of the take, contain 0.0 seconds of speech.** They are
+twelve of the twenty silent files. So the M1d data split survives as written — they were named as
+positives and they were measured — but their contribution to every row of M1d.2 is zero windows,
+and the "duration curve on six hours instead of 147 seconds" comes from the pieces, not the chunks.
+
+**Chunks 1–12 hold 437.0 s of speech, of which 10.8 s is in runs of 10 s or more — one run.**
+M1d.3's enrollment-v2 rule asks for up to thirty runs of ≥ 10 s scoring ≥ 0.50, for at least five
+more minutes of speech. The data can supply at most **one** candidate before the score filter is
+even applied, against a target of thirty, and 10.8 s against ≥ 300 s. **M1d.3 is therefore not
+runnable as pre-registered and was not run** — see §6's M1d.3 entry.
+
+`speech-shape` is a new CLI (`python -m jarvis_voice speech-shape <wav …>`) and prints counts and
+seconds only: no audio is kept, no transcript is read, no text is printed.
+
+### M1d.2 — 2026-09-11 — the duration curve on the full held-out set
+
+Positives: the pre-registered HELD-OUT-POS — chunks 13–24 (12 files, **0 windows each**, see
+M1d.1), the 13 M0b-admitted pieces, the 14 same-day pieces, and the 5 first-take pieces with
+transcribed words. **44 positive files, of which 32 contribute windows.** Negatives: the self-test's
+78 public files, unchanged. v1 centroid, stored threshold **0.358503175300161** measured against and
+never moved; the stream cut, the grid, the bands and `MIN_N` = 20 all unchanged from M1a.3/M1a.4.
+Output `%USERPROFILE%\.jarvis\voice\duration_bench_2026-09-11.json`.
+
+| D (s) | n_pos | n_neg | EER | EER threshold | FAR @ 0.3585 | FRR @ 0.3585 | pos_min | neg_max | floor n ≥ 20 | band |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | **364** | 702 | 0.2390 | 0.0887 | 0.0000 | 0.6538 | −0.1407 | 0.2817 | ✅ | fail |
+| 2 | **178** | 333 | 0.1629 | 0.1259 | 0.0000 | 0.3933 | −0.1056 | 0.2597 | ✅ | fail |
+| 3 | **111** | 209 | 0.1081 | 0.1507 | 0.0000 | 0.2883 | −0.0383 | 0.2348 | ✅ | fail |
+| 5 | **68** | 104 | 0.0588 | 0.1747 | 0.0000 | 0.1618 | 0.0320 | 0.2311 | ✅ | fail |
+| 8 | **35** | 54 | 0.0571 | 0.1822 | 0.0000 | 0.0857 | −0.0001 | 0.2075 | ✅ *(new)* | fail |
+| 12 | 10 | 22 | 0.0000 | 0.2965 | 0.0000 | 0.0000 | 0.4046 | 0.1883 | ✗ | excluded |
+
+**`MIN_EMBED_S` = NONE.** The sample floor is now met at **five of six lengths** — D = 8 gained it
+(n_pos 14 → 35) — and at every one of those five the FRR at the stored threshold is outside the 5 %
+band. D = 12 still has 10 positive windows and is still excluded. **M1a.4's retraction therefore
+stands on 2.5× the positive data it was made on, and it is no longer a statement about a thin
+table: no single-window minimum exists at this threshold anywhere on the grid.**
+
+**Every EER improved**, which is what more data was supposed to buy:
+
+| D (s) | 1 | 2 | 3 | 5 | 8 | 12 |
+|---|---|---|---|---|---|---|
+| M1a.3, 13 pieces (n_pos) | 0.3007 (143) | 0.2319 (69) | 0.1429 (42) | 0.0741 (27) | 0.0714 (14) | 0.0000 (2) |
+| M1d.2, 44 files (n_pos) | **0.2390** (364) | **0.1629** (178) | **0.1081** (111) | **0.0588** (68) | **0.0571** (35) | 0.0000 (10) |
+
+FAR is **0.0000 at every length** and `neg_max` never exceeds 0.2817: no public negative crosses the
+stored threshold at any window length. The threshold is not letting strangers in; it is rejecting
+the owner's own short windows, at 0.65 of them at one second.
+
+**The per-length EER thresholds are the banded-threshold candidate**, recorded here and applied
+nowhere: 0.0887 / 0.1259 / 0.1507 / 0.1747 / 0.1822 / 0.2965 at 1 / 2 / 3 / 5 / 8 / 12 s. They rise
+monotonically with length, which is the duration dependence stated as a threshold rather than as an
+error rate.
+
+#### Three files flagged — and the follow-up says the flag's name is wrong
+
+The rule (pre-registered): a file whose mean score over 8-second windows sits more than 0.15 below
+the mean of the others' means is flagged, never dropped. Three fired: **`owner_heldout2_006`
+(−0.0001)**, **`owner_sameday_011` (0.0734)**, **`owner_heldout_003` (0.3657)**, against siblings
+running 0.43–0.81.
+
+Measured afterwards, whole piece versus windows:
+
+| piece | speech | whole-piece score | its 8-s window | its 3-s windows |
+|---|---|---|---|---|
+| `owner_heldout2_006` | 11.8 s, 1 run | **0.4830** | −0.0001 | 0.0580 / 0.0320 / 0.2187 |
+| `owner_sameday_011` | 12.6 s, 1 run | **0.4563** | 0.0734 | 0.1273 / 0.0155 / 0.1172 / 0.6567 |
+| `owner_heldout2_001` (control) | 10.1 s, 1 run | 0.6246 | 0.6294 | 0.4660 / 0.5583 / 0.2792 |
+
+**Both flagged pieces are comfortably the owner as whole pieces and score ~0 on their first eight
+seconds.** The stream cut takes the leading 8 s and drops the tail, so what the flag detected is a
+piece whose OPENING is unrepresentative — not a piece that is somebody else. The control shows the
+two agreeing when the piece is uniform. `owner_heldout_003` is the first take's sung line, already
+recorded at 0.3565 in the M0b entry, so its flag reproduces a known measurement.
+
+**The flag rule was not changed after seeing this** — it fired exactly as pre-registered and the
+reading of it is corrected instead: its honest name is "a file whose leading window is
+unrepresentative", and only a whole-piece score can speak to identity.
+
+Tests: `test_voice_logic.py` 76 → **79 checks** (T15a `speech_shape`'s buckets, every share computed
+from the run lengths; T15b the positive set as the union of `--pos-dirs` and `--pos-files`, sorted
+by path, non-wav ignored, a file named twice REFUSED rather than counted twice; T15c the outlier
+flag against the others' MEAN). One mutant, the control green first, failing BY NAME and restored
+from a byte-copy verified by md5: the flag compared against the others' MAXIMUM → T15c.
+
+**A note on that mutant, because it changed the test.** The pre-registered T15c fixture
+(0.55 / 0.52 / 0.30) cannot tell the mean rule from the max rule — both flag the third file and
+nothing else, so the mutant would have passed. A second table (0.60 / 0.30 / 0.32) was added
+alongside it, where the mean rule flags one file and the max rule flags two; the mutant then failed
+by name. The pre-registered case is kept exactly as written.
+
+The bench also now decodes and masks each file **once** rather than once per grid point — a property
+of the recording, not of the window length — which is what makes a 44-file positive set affordable
+(39.5 s wall for the whole run).
+
 ---
 
 ## 7. Done-when (canon, `phase4/docs/ROADMAP.md:130-132`, verbatim)

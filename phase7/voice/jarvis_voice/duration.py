@@ -122,6 +122,85 @@ def row_has_sample_floor(row: dict, min_n: int = MIN_N) -> bool:
     return (row.get("n_pos") or 0) >= min_n and (row.get("n_neg") or 0) >= min_n
 
 
+# The run-length buckets M1d.1 reports. They are the two-level owner rule's own boundaries read
+# back onto real speech: a run of 10 s or more is a turn the owner's threshold can be ASKED about,
+# 2-10 s is embedded and clustered but never judged alone, and under 2 s is attributed by adjacency
+# and carries no evidence at all. So the three shares answer, in one measurement, how much of six
+# hours of real life each level of the rule can reach.
+SHAPE_LONG_S = 10.0
+SHAPE_SHORT_S = 2.0
+
+
+def speech_shape(mask_runs, frame_s: float) -> dict:
+    """The run-length shape of one recording's speech. Pure, stdlib only.
+
+    Shares are of SPEECH SECONDS, not of runs: twenty half-second runs and one ten-second run are
+    the same count and very different amounts of attributable speech.
+    """
+    lens = [max(0.0, (b - a) * float(frame_s)) for a, b in mask_runs]
+    total = sum(lens)
+    ge10 = sum(x for x in lens if x >= SHAPE_LONG_S)
+    lt2 = sum(x for x in lens if x < SHAPE_SHORT_S)
+    mid = total - ge10 - lt2
+    share = (lambda x: (x / total) if total else 0.0)
+    return {"speech_s": round(total, 3), "runs": len(lens),
+            "longest_run_s": round(max(lens), 3) if lens else 0.0,
+            "share_ge_10": share(ge10), "share_2_10": share(mid), "share_lt_2": share(lt2),
+            "seconds_ge_10": round(ge10, 3), "seconds_2_10": round(mid, 3),
+            "seconds_lt_2": round(lt2, 3)}
+
+
+def collect_positive_files(dirs=None, globs=None, default=None):
+    """The positive WAVs a run was told to use, sorted, with duplicates REFUSED.
+
+    Refused rather than de-duplicated: a file named twice would carry twice its weight in every
+    rate the bench computes, and the caller meant something by naming it twice. `default` is used
+    only when neither dirs nor globs is given, so the thirteen M0b pieces stay the default set.
+    """
+    import glob as _glob
+    if not dirs and not globs:
+        return sorted(Path(p) for p in (default or []))
+    seen, out = {}, []
+    for d in (dirs or []):
+        for f in sorted(Path(d).glob("*.wav")):
+            out.append(f)
+    for g in (globs or []):
+        for f in sorted(Path(x) for x in _glob.glob(str(g))):
+            out.append(f)
+    for f in out:
+        key = str(Path(f).resolve()).lower()
+        if key in seen:
+            raise SystemExit(
+                "%s is named twice by --pos-dirs/--pos-files - refusing, because a file counted "
+                "twice carries twice its weight in every rate this bench computes" % f)
+        seen[key] = True
+    return sorted(out)
+
+
+# How far below the others a file's mean may sit before it is FLAGGED (never dropped). M1d.2 scores
+# twelve 15-minute chunks recorded unattended; if one of them is mostly someone else, its mean sits
+# well below its siblings and that must be visible rather than averaged in silently.
+FILE_FLAG_MARGIN = 0.15
+
+
+def flag_outlier_files(means: dict, margin: float = FILE_FLAG_MARGIN) -> list:
+    """Files whose mean score sits more than `margin` below the mean of the OTHER files' means.
+
+    The comparison is against the MEAN of the others, not their maximum: one unusually strong file
+    would otherwise drag every merely-average file over the line, which is the opposite of what a
+    flag for "possibly not the owner" is for. Sorted, so the report is stable.
+    """
+    keys = [k for k, v in means.items() if v is not None]
+    if len(keys) < 3:
+        return []
+    out = []
+    for k in keys:
+        others = [means[o] for o in keys if o != k]
+        if means[k] < (sum(others) / len(others)) - float(margin):
+            out.append(k)
+    return sorted(out)
+
+
 def choose_min_embed_s(table: Sequence[dict], min_n: int = MIN_N) -> Optional[float]:
     """The SMALLEST D whose FRR and FAR at the stored threshold are both inside the bands.
 
@@ -218,8 +297,14 @@ def reread_duration_bench(voice_home_dir=None, min_n: int = MIN_N) -> dict:
 
 # ------------------------------------------------------------------ the bench
 
-def _windows_of(path, d_s, embedder):
-    """Every stream-cut window of one file, embedded. Returns a list of vectors."""
+def load_and_mask(path):
+    """(wav, sr, runs) for one file under the bench's fixed mask. Decoded and masked ONCE.
+
+    Separated from the embedding at M1d.2 because the positive set grew from 147 seconds to six
+    hours: decoding and masking every file once per D on the grid would read the same three hours
+    of audio six times over for no new information. The mask is a property of the recording; only
+    the window length varies.
+    """
     import numpy as np
     from .audio import load_wav
     from .split import frame_rms_dbfs, runs, speech_mask
@@ -229,10 +314,15 @@ def _windows_of(path, d_s, embedder):
     dbfs = frame_rms_dbfs(wav, sr, FRAME_S)
     mask = speech_mask(dbfs, FRAME_DBFS, int(round(PAD_MS / 1000.0 / FRAME_S)),
                        int(round(MIN_GAP_MS / 1000.0 / FRAME_S)))
-    rr = runs(mask)
+    return wav, sr, runs(mask)
+
+
+def embed_windows(wav, sr, mask_runs, d_s, embedder):
+    """Every stream-cut window of `d_s` seconds from an already-masked file, embedded."""
+    import numpy as np
     out = []
     fl = int(sr * FRAME_S)
-    for win in speech_windows_stream(rr, FRAME_S, d_s):
+    for win in speech_windows_stream(mask_runs, FRAME_S, d_s):
         pieces = [wav[fs * fl: fe * fl] for (_i, fs, fe) in win]
         samples = np.concatenate(pieces) if pieces else np.zeros(0, dtype="float32")
         if len(samples) == 0:
@@ -241,7 +331,19 @@ def _windows_of(path, d_s, embedder):
     return out
 
 
-def run_duration_bench(out_path=None) -> dict:
+def _windows_of(path, d_s, embedder):
+    """Every stream-cut window of one file, embedded. The one-shot form of the two above."""
+    wav, sr, rr = load_and_mask(path)
+    return embed_windows(wav, sr, rr, d_s, embedder)
+
+
+# The grid row whose per-file means are compared. Eight seconds is the longest length at which
+# every M0b piece still yields a window, so every positive file has a mean to compare.
+FLAG_D_S = 8.0
+
+
+def run_duration_bench(out_path=None, pos_dirs=None, pos_files=None,
+                       positives_source=None) -> dict:
     """The owner's threshold measured at every duration on the grid. Held-out data only."""
     import datetime as _dt
     import json as _json
@@ -257,35 +359,53 @@ def run_duration_bench(out_path=None) -> dict:
     enr = EnrollmentStore().load()
     centroid, stored = enr["centroid"], float(enr["threshold"])
 
-    heldout = sorted(p for p in ensure("heldout").glob("owner_heldout2_*.wav"))
+    heldout = collect_positive_files(
+        pos_dirs, pos_files,
+        default=sorted(p for p in ensure("heldout").glob("owner_heldout2_*.wav")))
     if not heldout:
-        raise SystemExit("no owner_heldout2_*.wav under heldout\\ - M0b's admitted pieces are the "
-                         "positives for this measurement")
+        raise SystemExit("no positive files - the default is M0b's admitted pieces under "
+                         "heldout\\; name others with --pos-dirs / --pos-files")
+    for f in heldout:
+        if not Path(f).exists():
+            raise SystemExit("no such positive file: %s" % f)
     st_files = sorted(voice_home().glob("selftest_*.json"))
     if not st_files:
         raise SystemExit("no selftest_*.json - its sets.negatives are the public negatives")
     negatives = _json.loads(st_files[-1].read_text(encoding="utf-8"))["sets"]["negatives"]
 
     emb = SpeakerEmbedder()
+    # Per-file counts, kept because their absence is what let the first bench read as a
+    # measurement: thirteen positives yielding thirteen windows at five different D values is
+    # only visible one level down from n_pos.
+    acc = {d: {"pos": [], "neg": [], "wpf_pos": {}, "wpf_neg": {}, "seconds": 0.0}
+           for d in DURATION_GRID}
+    per_file_scores = {}                       # at FLAG_D_S, for the outlier flag
+    shapes = {}
+    for side, files in (("pos", heldout), ("neg", negatives)):
+        for p in files:
+            t0 = time.perf_counter()
+            wav, sr, rr = load_and_mask(p)
+            if side == "pos":
+                shapes[Path(p).stem] = speech_shape(rr, FRAME_S)
+            for d in DURATION_GRID:
+                t1 = time.perf_counter()
+                vecs = embed_windows(wav, sr, rr, d, emb)
+                sc = [_score(centroid, v) for v in vecs]
+                acc[d][side].extend(sc)
+                acc[d]["wpf_" + side][Path(p).stem] = len(vecs)
+                acc[d]["seconds"] += time.perf_counter() - t1
+                if side == "pos" and d == FLAG_D_S:
+                    per_file_scores[Path(p).stem] = (sum(sc) / len(sc)) if sc else None
+            del wav
+            _ = t0
+
     table = []
     for d in DURATION_GRID:
-        t0 = time.perf_counter()
-        # Per-file counts, kept because their absence is what let the first bench read as a
-        # measurement: thirteen positives yielding thirteen windows at five different D values is
-        # only visible one level down from n_pos.
-        pos, wpf_pos = [], {}
-        for p in heldout:
-            vecs = _windows_of(p, d, emb)
-            wpf_pos[Path(p).stem] = len(vecs)
-            pos.extend(_score(centroid, v) for v in vecs)
-        neg, wpf_neg = [], {}
-        for p in negatives:
-            vecs = _windows_of(p, d, emb)
-            wpf_neg[Path(p).stem] = len(vecs)
-            neg.extend(_score(centroid, v) for v in vecs)
+        pos, neg = acc[d]["pos"], acc[d]["neg"]
+        wpf_pos, wpf_neg = acc[d]["wpf_pos"], acc[d]["wpf_neg"]
         row = {"d_s": d, "n_pos": len(pos), "n_neg": len(neg),
                "windows_per_file": {"positives": wpf_pos, "negatives": wpf_neg},
-               "seconds": round(time.perf_counter() - t0, 1)}
+               "seconds": round(acc[d]["seconds"], 1)}
         if pos and neg:
             e, e_thr = eer(pos, neg)
             far, frr = far_frr_at(stored, pos, neg)
@@ -315,6 +435,12 @@ def run_duration_bench(out_path=None) -> dict:
                              "can only lower a score, so the minimum read from this table is "
                              "conservative in the safe direction."),
         "positives_files": len(heldout), "negatives_files": len(negatives),
+        "positives_source": positives_source or "M0b's 13 admitted pieces (the default)",
+        "positives_list": [str(Path(f)) for f in heldout],
+        "per_file_mean_score": {"d_s": FLAG_D_S, "margin": FILE_FLAG_MARGIN,
+                                "means": per_file_scores,
+                                "flagged": flag_outlier_files(per_file_scores)},
+        "positives_speech_shape": shapes,
         "ecapa_model": emb.model_id, "ecapa_device": emb.device,
         "ecapa_load_s": round(emb.load_s, 2), "speechbrain_version": emb.version,
         "table": table,
