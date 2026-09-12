@@ -203,14 +203,25 @@ MODELS = {
                                "switch": "enable_thinking", "think": "on", "expect_think": "on",
                                "model_id": "qwen3-8b-q4km",
                                "render_expect": {"absent": ["<think>", "<|think|>"]}},
+    # QWEN3.5 OPENS THE BLOCK, QWEN3 OMITS IT - measured at the renderer 2026-09-13, before either
+    # arm ran, and read from the models' OWN templates rather than assumed from the Qwen3 one:
+    #   Qwen3-8B    (template 57f1fd00f0013a2b): `{%- if enable_thinking is defined and
+    #               enable_thinking is false %}` emits `<think>\n\n</think>\n\n`, and ON emits
+    #               NOTHING - so its ON spec is `absent`, and its render passed that spec.
+    #   Qwen3.5-4B and 9B (both 7f0e529032c25183, byte-identical to each other): `{%- if
+    #               enable_thinking is defined and enable_thinking is true %}` emits `<think>\n` -
+    #               the opposite convention. The `absent` spec declared for them was WRONG and its
+    #               render said so, 167 of 167, which is what the pre-flight exists to do.
+    # The spec below is set FROM THE TEMPLATE, before these arms run and before any number of theirs
+    # exists - not a threshold moved after a result.
     "qwen35-4b-v040-think":   {"path": "models/Qwen3.5-4B-Q4_K_M.gguf", "thinking_switch": False,
                                "switch": "enable_thinking", "think": "on", "expect_think": "on",
                                "model_id": "qwen35-4b-q4km",
-                               "render_expect": {"absent": ["<think>", "<|think|>"]}},
+                               "render_expect": {"tail_endswith": "<think>\n"}},
     "qwen35-9b-v040-think":   {"path": "models/Qwen3.5-9B-Q4_K_M.gguf", "thinking_switch": False,
                                "switch": "enable_thinking", "think": "on", "expect_think": "on",
                                "model_id": "qwen35-9b-q4km",
-                               "render_expect": {"absent": ["<think>", "<|think|>"]}},
+                               "render_expect": {"tail_endswith": "<think>\n"}},
     "gemma-e2b-v040-nothink": {"path": "models/gemma-4-E2B-it-Q4_K_M.gguf", "thinking_switch": False,
                                "switch": "enable_thinking", "think": "off", "expect_think": "off",
                                "model_id": "gemma-e2b-q4km",
