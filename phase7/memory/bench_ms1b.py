@@ -342,9 +342,14 @@ def load_field(results_dir=None, contract=None, build=None):
     checkout (`b8728-...`) and the addendum on v0.4.0 (`b10809-...`), and a verdict computed over
     both would be a table of two different venues read as one.
 
-    Three exclusions, each for its own reason:
+    Four exclusions, each for its own reason:
       * `*_contract0.json` / `*_contract1.json` — superseded runs, KEPT on purpose and never mixed
         into a verdict with the contract they were superseded by;
+      * `*_run1.json` — the superseded FIRST run of an arm that was re-run, kept beside its
+        replacement instead of being overwritten. The suffix is deliberately loud rather than a
+        hidden folder: a reader of the results directory sees that an arm has two runs and why.
+        (`gemma-e4b-q8`, 2026-09-12: the provenance read taken at the end of run 1 was
+        untrustworthy, so the arm was re-run on the verified file and run 1 was renamed.)
       * files with no `model_key` — `ms1b_field_verdict.json` and `ms1b_store_on_extracted.json` are
         outputs of this milestone, not model runs, and a verdict that tried to read its own previous
         output would be circular;
@@ -357,7 +362,8 @@ def load_field(results_dir=None, contract=None, build=None):
     out = []
     for path in sorted(Path(results_dir).glob("ms1b_*.json")):
         name = path.name
-        if name.endswith("_contract0.json") or name.endswith("_contract1.json"):
+        if (name.endswith("_contract0.json") or name.endswith("_contract1.json")
+                or name.endswith("_run1.json")):
             continue
         with open(path, encoding="utf-8") as fh:
             d = json.load(fh)

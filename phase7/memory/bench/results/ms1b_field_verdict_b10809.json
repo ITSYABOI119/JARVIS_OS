@@ -1,0 +1,84 @@
+{
+  "build": "b10809",
+  "chosen": "gemma-e4b-v040",
+  "contract": "contract2",
+  "f1_floor": 0.6,
+  "n_models": 8,
+  "reason": "validity 1.0000 >= 0.99 and F1 0.7695 >= 0.60, the highest",
+  "rows": [
+    {
+      "f1": 0.7695,
+      "f1_scorable": 0.8697,
+      "key": "gemma-e4b-v040",
+      "lenient_f1": 0.7781,
+      "seconds": 6017.8,
+      "validity": 1.0,
+      "zero_gold_predictions": 3
+    },
+    {
+      "f1": 0.7428,
+      "f1_scorable": 0.8399,
+      "key": "gemma-e4b-q8",
+      "lenient_f1": 0.7601,
+      "seconds": 8506.5,
+      "validity": 1.0,
+      "zero_gold_predictions": 1
+    },
+    {
+      "f1": 0.6943,
+      "f1_scorable": 0.7839,
+      "key": "gemma-e4b-q6k",
+      "lenient_f1": 0.7114,
+      "seconds": 7564.8,
+      "validity": 1.0,
+      "zero_gold_predictions": 0
+    },
+    {
+      "f1": 0.6467,
+      "f1_scorable": 0.7256,
+      "key": "nuextract3",
+      "lenient_f1": 0.6929,
+      "seconds": 817.3,
+      "validity": 1.0,
+      "zero_gold_predictions": 0
+    },
+    {
+      "f1": 0.5425,
+      "f1_scorable": 0.6082,
+      "key": "ministral-8b",
+      "lenient_f1": 0.583,
+      "seconds": 729.0,
+      "validity": 1.0,
+      "zero_gold_predictions": 30
+    },
+    {
+      "f1": 0.4223,
+      "f1_scorable": 0.4883,
+      "key": "lfm25-2.6b",
+      "lenient_f1": 0.4291,
+      "seconds": 9979.4,
+      "validity": 0.9359,
+      "zero_gold_predictions": 0
+    },
+    {
+      "f1": 0.2976,
+      "f1_scorable": 0.3538,
+      "key": "granite-8b",
+      "lenient_f1": 0.3175,
+      "seconds": 457.1,
+      "validity": 1.0,
+      "zero_gold_predictions": 0
+    },
+    {
+      "f1": 0.0,
+      "f1_scorable": 0.0,
+      "key": "granite-3b",
+      "lenient_f1": 0.0,
+      "seconds": 217.1,
+      "validity": 1.0,
+      "zero_gold_predictions": 0
+    }
+  ],
+  "schema_sha256": "846ad08857eb37f8175f0aa24fbbfdfe2c7edf89c5565b2521209a91792dbc49",
+  "validity_band": 0.99
+}

@@ -1,0 +1,23 @@
+granite-3b START 2026-09-10 22:17:32 think=True args=-
+granite-3b START 2026-09-11 14:38:44 think=True args=-
+granite-3b END 2026-09-11 14:42:23 validity 1.0000 F1 0.0000 scorableF1 0.0000 218.7 s think=True
+lfm25-2.6b START 2026-09-11 14:42:23 think=False args=-
+granite-3b SKIP already done (F1 0.0000)
+lfm25-2.6b START 2026-09-11 23:57:10 think=False args=-
+lfm25-2.6b END 2026-09-12 02:43:30 validity 0.9359 F1 0.4223 scorableF1 0.4883 9980.8 s think=False
+nuextract3 START 2026-09-12 02:43:30 think=True args=-
+nuextract3 END 2026-09-12 02:57:10 validity 1.0000 F1 0.6467 scorableF1 0.7256 819.3 s think=True
+granite-8b START 2026-09-12 02:57:10 think=True args=-
+granite-8b END 2026-09-12 03:04:50 validity 1.0000 F1 0.2976 scorableF1 0.3538 460.8 s think=True
+ministral-8b START 2026-09-12 03:04:50 think=False args=-
+ministral-8b END 2026-09-12 03:17:03 validity 1.0000 F1 0.5425 scorableF1 0.6082 732.7 s think=False
+gemma-e4b-v040 START 2026-09-12 03:17:03 think=False args=-
+gemma-e4b-v040 END 2026-09-12 04:57:25 validity 1.0000 F1 0.7695 scorableF1 0.8697 6021.8 s think=False
+gemma-e4b-q6k START 2026-09-12 04:57:25 think=False args=-
+gemma-e4b-q6k END 2026-09-12 07:03:35 validity 1.0000 F1 0.6943 scorableF1 0.7839 7569.8 s think=False
+gemma-e4b-q8 START 2026-09-12 07:03:35 think=False args=-
+gemma-e4b-q8 END 2026-09-12 09:20:47 validity 1.0000 F1 0.7428 scorableF1 0.8399 8232.1 s think=False
+QUEUE done=8 skipped=0
+gemma-e4b-q8 START 2026-09-12 15:38:51 think=False args=-
+gemma-e4b-q8 END 2026-09-12 18:00:44 validity 1.0000 F1 0.7428 scorableF1 0.8399 8512.7 s think=False
+QUEUE done=1 skipped=0

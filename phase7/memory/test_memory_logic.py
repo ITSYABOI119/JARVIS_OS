@@ -2059,6 +2059,26 @@ with _tf42.TemporaryDirectory() as _td42:
           and not _bench42.build_matches(None, "b10809"),
           str((_all42, _old42, _new42, _v_new["chosen"], _v_old["chosen"])))
 
+    # T42f a re-run's superseded FIRST run is kept under `_run1.json` and never enters a verdict.
+    # The suffix is a loud rule rather than a hidden folder: the file sits beside its replacement in
+    # the results directory. The stub is given the HIGHEST f1 in its build on purpose - if the
+    # exclusion were dropped, the verdict would be won by the superseded run, which is the whole
+    # failure this guards against. (`gemma-e4b-q8`, 2026-09-12: run 1's end-of-arm provenance read
+    # was untrustworthy, so the arm was re-run and run 1 renamed.)
+    (_td42 / "ms1b_delta_run1.json").write_text(_j42.dumps({
+        "model_key": "delta", "contract": _bench42.CONTRACT,
+        "schema_sha256": _bench42.CONTRACT2_SCHEMA_SHA256, "llama_version": _V_NEW,
+        "aggregate": {"validity": 1.0, "f1": 0.95}}), encoding="utf-8")
+    _with_run1 = sorted(k for k, _a, _p in _bench42.load_field(_td42, build="b10809"))
+    _v_run1 = _bench42.verdict([(k, a) for k, a, _ in _bench42.load_field(_td42, build="b10809")])
+    _f1s_run1 = sorted(a.get("f1") for _k, a, _p in _bench42.load_field(_td42, build="b10809"))
+    check("T42f a superseded first run kept as `_run1.json` is excluded from the field, so a verdict "
+          "can never be won by the run its re-run replaced",
+          _with_run1 == ["delta", "epsilon"]            # the stub is not a third entry
+          and 0.95 not in _f1s_run1                     # nor folded into delta's own aggregate
+          and _v_run1["chosen"] == "epsilon",           # the winner is unchanged by its presence
+          str((_with_run1, _f1s_run1, _v_run1["chosen"])))
+
     # T42d the queue refuses to start under a schema the field never ran
     _refused42 = _ran42 = False
     try:

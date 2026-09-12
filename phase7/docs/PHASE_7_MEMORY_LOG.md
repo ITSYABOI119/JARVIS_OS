@@ -1346,3 +1346,345 @@ zero-gold count). Four mutants, control green first (262/262), each failing BY N
 from a byte-copy: `FIRST_PERSON` without the plurals kills T38a and T38b; a nullable `relation_id`
 kills T35a2; a `--verdict` that stops excluding `_contract1` kills T38c; the validity gate removed
 from the rule kills T37d. No new CI step.
+
+### The field addendum — 2026-09-12
+
+**Verdict, by the pre-registered rule applied in code WITHIN llama.cpp build b10809
+(`bench_ms1b.py --verdict --build b10809`, written to `ms1b_field_verdict_b10809.json`): CHOSEN —
+`gemma-e4b-v040`, validity 1.0000, strict F1 0.7695.** That key IS the incumbent — Gemma 4 E4B it
+Q4_K_M, the field's own file, re-run on the new build — so **no addendum arm beat it and the MS1
+winner stands.** Of the seven new arms, one cleared the 0.60 floor at ≥ 99 % validity: NuExtract3 at
+0.6467. The frozen field's verdict (`--verdict --build b8728`, eleven runs, written to
+`ms1b_field_verdict_b8728.json`) is unchanged and was re-derived here: `gemma-e4b` CHOSEN at validity
+1.0000 / F1 0.7426.
+
+### Why an addendum
+
+The eleven-model field (`8c4cd2b`) ran on a llama.cpp checkout dated 2026-04-09, reporting build 8728,
+while v0.4.0 shipped 2026-09-04 with hybrid-SSM work in between — so NuExtract3's "could not load" might
+have been the build's rather than the model's. It also never fetched four dense candidates with
+day-one GGUFs that the briefings had dismissed against the BOX's bandwidth budget, which is the wrong
+denominator for an extractor hosted on the Main PC's GPU. And it ran Q4_K_M only, so whether 0.7426 is
+a quantisation ceiling was untested. The addendum was pre-registered in the design and the plan
+(`f914d85`) before any of its numbers.
+
+### The second venue — llama.cpp v0.4.0 = build b10809
+
+The `v0.4.0` release carries one asset, `nightly-tag.txt`, whose seven bytes read `b10809\n`; the
+binaries are on the `b10809` pre-release (published 2026-09-04T17:55:12Z). Installed at
+`~/llama.cpp-v0.4.0/bin` (55 files) beside the frozen `~/llama.cpp`, which was never touched, and
+selected for the queue's process only through `JARVIS_LLAMA_BIN`.
+
+| asset | bytes | sha256 (computed at install = GitHub's published digest) |
+|---|---|---|
+| `llama-b10809-bin-win-cuda-12.4-x64.zip` | 253,938,543 | `c77bfcd9ed8d91e8721a2d6a290b907fddd4fa5412a47b21c6fa1709116b85f9` |
+| `cudart-llama-bin-win-cuda-12.4-x64.zip` | 391,443,627 | `8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6` |
+
+| binary | reports | sha256 |
+|---|---|---|
+| `~/llama.cpp-v0.4.0/bin/llama-server.exe` | `version: 0.4.0-dev (build 10809, commit 5266f24da)`, Clang 20.1.8; over HTTP `b10809-5266f24da` | `cb29f66008d4d73cce17cab2c2569ab318eb244b0b2ca2a15024b44d90dfcd3f` |
+| `~/llama.cpp/build/bin/Release/llama-server.exe` (frozen) | `version: 8728 (5e9c63546)`, MSVC 19.44; over HTTP `b8728-5e9c63546` | `380303615265d4fabbf40823ecc70cdf085bfde5bade5724a05dc6c89f059c22` |
+
+**The verdict filter is `b10809`, not `v0.4.0`:** no run records the string `v0.4.0`, so the prompt's
+`--build v0.4.0` would have selected nothing and returned NONE. `--n-cpu-ffn` exists on this build but
+no arm declares it: `-ngl` placement is automatic on v0.4.0 and even the Q8_0 file loads and generates
+without it. Measured during the arms (GPU memory is the card's total in use, including the desktop —
+WDDM does not attribute VRAM to a process; the rate is the per-call median from each arm's own server
+log):
+
+| arm | GPU memory in use | median generation per call | arm wall time |
+|---|---|---|---|
+| `gemma-e4b-v040` (Q4_K_M) | 4,223 MiB | 74.4 tok/s | 6,018 s |
+| `gemma-e4b-q6k` (Q6_K) | 5,216 MiB | 61.1 tok/s | 7,565 s |
+| `gemma-e4b-q8` (Q8_0) | 6,209 MiB (run 1) / 6,558 MiB (run 2) | 56.2 tok/s | 8,506 s |
+
+**A pre-run probe of the Q8_0 file read 5.28 tok/s and does NOT hold on the workload** — that number
+came from a single 40-token request; over the arm's own 1,670 calls the median is 56.2 tok/s and the
+longest call took 15.0 s. The Q8_0 arm was expected to take about a day and took 2 h 17 m, and 2 h 22 m on its re-run, which also hashed the 8 GB file twice mid-arm.
+
+### The arms
+
+Every file from the named repo, no substitutions; every recorded sha256 was re-computed on this PC on
+2026-09-12 and equals the hub's published digest. The Q8_0 arm's FIRST run recorded a different value
+and the arm was re-run — see "The Q8_0 file's provenance" below.
+
+| key | model | repo | bytes | sha256 | template sha256 (16) | thinking, as rendered |
+|---|---|---|---|---|---|---|
+| `granite-3b` | Granite 4.2 3B Q4_K_M | `ibm-granite/granite-4.2-3b-GGUF` | 2,244,011,552 | `e0406663965846ae22a403456eb826ccce5f450840491f71952f18a7cb78e7d5` | `9d573773df6d9435` | OFF — `enable_thinking: false` sent; `<think></think>` closed |
+| `lfm25-2.6b` | LFM2.5-2.6B Q4_K_M | `LiquidAI/LFM2.5-2.6B-GGUF` | 1,674,455,040 | `02a8b7e17487d326e46d68ce0ba24211e1b80a14c4cd0597fa73c1cd697f52ed` | `0dcc734022e1a9e8` | **ON, no switch** — the template opens `<think>` unconditionally |
+| `nuextract3` | NuExtract3 Q4_K_M | `numind/NuExtract3-GGUF` | 2,783,445,984 | `7ee3c0ee9e5699a4391624ae758487f583f73b3242aa4e73dc2bb33e508d703e` | `6c0a83aee85a1bdb` | OFF — `enable_thinking: false` sent; think block closed |
+| `granite-8b` | Granite 4.2 8B Q4_K_M | `ibm-granite/granite-4.2-8b-GGUF` | 5,347,917,952 | `16a9369d0805f80b7377d25d87f937a90c05dc04ad79173a52001e42c9aab311` | `9d573773df6d9435` | OFF — as `granite-3b` |
+| `ministral-8b` | Ministral 3 8B Instruct Q4_K_M | `mistralai/Ministral-3-8B-Instruct-2512-GGUF` | 5,198,911,904 | `33e7a72cf5e6e2cfc2f2847075acc013d68bba023e35310cef86b5cf8fdca761` | `4ce79eaed7cdf458` | none — no thinking in the template |
+| `gemma-e4b-v040` | Gemma 4 E4B it Q4_K_M — the field's own file | (on disk since 2026-09-09) | 5,405,163,520 | `6dfbdb0fff82025ef88a6ff912f91d141f722b5d95f14d61b10f0e08839185c8` | `55572b8d3c834204` | **ON** — `<|think|>` injected |
+| `gemma-e4b-q6k` | Gemma 4 E4B it Q6_K | `bartowski/google_gemma-4-E4B-it-GGUF` | 6,329,954,784 | `bea1c94443c91fff61a722d9da5cd3f1cf0196d1e914798ee89d3c00ea365df9` | `603a42db292c2527` | **ON** |
+| `gemma-e4b-q8` | Gemma 4 E4B it Q8_0 | `bartowski/google_gemma-4-E4B-it-GGUF` | 8,031,242,720 | `6a6eba0d36a051b5d924211a889c1436717006e7c5d413830c47caa1d46cb598` (run 2's recorded hash = the published digest; run 1's read was wrong — see below) | `603a42db292c2527` | **ON** |
+
+NuExtract3's sha256 equals the hash the field recorded before the local copy was deleted, which is
+what makes this a retry: the same bytes the April build refused.
+
+### Thinking, measured at the renderer rather than read from the template
+
+Every request of household 1 (167 spans, built by the harness's own `build_request`) was rendered
+through llama.cpp's own chat-template engine — a CPU-only `llama-server` per model
+(`CUDA_VISIBLE_DEVICES=-1`, `--device none`, `-ngl 0`, `--no-warmup`, never the queue's port),
+`POST /apply-template`, nothing generated.
+
+- **Gemma 4 HAS a thinking switch, and every Gemma run is ON.** The template emits `<|think|>` at the
+  start of the system turn when `enable_thinking` is true, and both builds default `--reasoning` to
+  `'auto' (detect from template)`, which supplies it whenever a request carries no kwarg — the Gemma
+  keys send none. Rendering the same file with `chat_template_kwargs {"enable_thinking": false}`
+  removes `<|think|>` from all 167 prompts. So the frozen field's Gemma runs, its winner included,
+  also thought, while its Qwen keys did not; the record's "Gemma 4's channel has no switch" (this log's
+  `### The venue` above, `bench_ms1b.py:45/78`, `client.py:50`) is measured wrong. It is left as
+  written there and flagged here rather than edited, and whether a thinking-OFF Gemma arm should be
+  pre-registered is the strategist's, not this run's.
+- **LFM2.5 thinks with no switch:** its generation prompt is `<|im_start|>assistant\n<think>`, always.
+- **The venue does not move the incumbent's prompt:** b8728 and b10809 render byte-identical prompts
+  from the Q4_K_M file, 167 of 167, and the two runs read an identical 1,171,451 prompt tokens.
+- **The quantisation arms carry a NEWER template.** bartowski changed the Gemma 4 E4B chat template
+  twice after our Q4_K_M file was taken (2026-05-03, 2026-07-26); the repo's current Q4_K_M is
+  `d35a3aa7…` / 5,405,170,144 B, not our `6dfbdb0f…`. Rendered, the Q6_K and Q8_0 prompts differ from
+  the Q4_K_M prompts by exactly one newline after `<|think|>`, in all 167, and Q8_0's prompts are
+  byte-identical to Q6_K's.
+
+### The runs, within build b10809
+
+| key | validity | F1 | lenient | scorable | rel. STATED | rel. INFERRED | zero-gold preds | invalid | s | tok out |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **gemma-e4b-v040** | **1.0000** | **0.7695** | 0.7781 | 0.8697 | 0.9333 | 0.0000 | 3 | — | 6,018 | 424,937 |
+| gemma-e4b-q8 | 1.0000 | 0.7428 | 0.7601 | 0.8399 | 0.6000 | 0.0000 | 1 | — | 8,506 | 449,095 |
+| gemma-e4b-q6k | 1.0000 | 0.6943 | 0.7114 | 0.7839 | 0.3333 | 0.0000 | 0 | — | 7,565 | 439,397 |
+| nuextract3 | 1.0000 | 0.6467 | 0.6929 | 0.7256 | 0.1000 | 0.0000 | 0 | — | 817 | 22,129 |
+| ministral-8b | 1.0000 | 0.5425 | 0.5830 | 0.6082 | 1.0000 | 0.0750 | 30 | — | 729 | 37,405 |
+| lfm25-2.6b | 0.9359 | 0.4223 | 0.4291 | 0.4883 | 0.0000 | 0.0000 | 0 | unparsed 107 | 9,979 | 1,451,222 |
+| granite-8b | 1.0000 | 0.2976 | 0.3175 | 0.3538 | 0.8000 | 0.0000 | 0 | — | 457 | 20,353 |
+| granite-3b | 1.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0 | — | 217 | 16,700 |
+
+Every run records `llama_version b10809-5266f24da`, `contract2` and schema
+`846ad08857eb37f8175f0aa24fbbfdfe2c7edf89c5565b2521209a91792dbc49`; every arm ran 1,670 calls over
+seeds 1–10 at `max_tokens` 2048. `QUEUE done=8 skipped=0`.
+
+**Two arms are worth reading before the table is quoted.** `granite-3b` returned the empty candidate
+list on all 1,670 calls — valid JSON every time (validity 1.0000), exactly 10 generated tokens per
+call, zero predictions. That is the 3B model's own result, not a harness effect: `granite-8b`, with the
+same template and the same switch, extracts (134 predictions, 75 matches). `lfm25-2.6b` is the only arm
+to miss the validity band, and its 107 invalid calls are exactly its 107 calls that hit the 2,048-token
+cap — 104 returned empty content because its forced thinking never closed, 3 returned truncated JSON.
+It also wrote 1,451,222 output tokens, 3.2× the next arm.
+
+### Per predicate, all ten households
+
+F1 = 2m / (p + g) over the summed per-household counts. The method was validated first by reproducing
+the frozen field's published `gemma-e4b` column exactly (1.000 / 1.000 / 0.992 / 0.945 / 0.800 / 0.371
+/ 0.167).
+
+| predicate | gold | v040 | q8 | q6k | nuextract3 | ministral-8b | lfm25-2.6b | granite-8b | granite-3b |
+|---|---|---|---|---|---|---|---|---|---|
+| `person.works_as` | 30 | 1.000 | 0.933 | 0.933 | 1.000 | 0.500 | 0.571 | 0.378 | 0.000 |
+| `owner.prefers` | 60 | 1.000 | 1.000 | 1.000 | 0.915 | 0.500 | 0.421 | 0.261 | 0.000 |
+| `person.habit` | 60 | 0.983 | 0.944 | 0.896 | 0.882 | 0.758 | 0.491 | 0.000 | 0.000 |
+| `household.topic` | 60 | 0.945 | 0.976 | 0.945 | 1.000 | 1.000 | 0.830 | 0.653 | 0.000 |
+| `person.lives_in` | 30 | 0.769 | 0.875 | 0.758 | 1.000 | 0.571 | 0.250 | 0.158 | 0.000 |
+| `person.relation_to` | 110 | 0.371 | 0.237 | 0.133 | 0.037 | 0.444 | 0.000 | 0.304 | 0.000 |
+| `household.routine` | 20 | 0.328 | 0.170 | 0.154 | 0.000 | 0.000 | 0.140 | 0.000 | 0.000 |
+
+### The venue delta
+
+The incumbent's own file (sha256 `6dfbdb0f…` in both runs) through the same 1,670 requests on the two
+builds. The prompts are the same at two independent levels: byte-identical at the renderer (167 of
+167) and identical prompt-token totals in the two runs (1,171,451 each).
+
+| | b8728 (the field) | b10809 |
+|---|---|---|
+| validity | 1.0000 | 1.0000 |
+| **F1** | **0.7426** | **0.7695** |
+| lenient / scorable | 0.7595 / 0.8368 | 0.7781 / 0.8697 |
+| precision / recall | 0.7742 / 0.7135 | 0.8241 / 0.7216 |
+| predictions / matches | 341 / 264 | 324 / 267 |
+| predictions on no-gold predicates | 10 | 3 |
+| relation STATED recall | 0.9333 | 0.9333 |
+| tokens out | 459,258 | 424,937 |
+| seconds | 8,575 | 6,018 |
+
+| seed | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| b8728 | 0.7222 | 0.7324 | 0.7606 | 0.7324 | 0.7606 | 0.7123 | 0.7397 | 0.7429 | 0.7606 | 0.7647 |
+| b10809 | 0.7042 | 0.7647 | 0.8000 | 0.8000 | 0.8000 | 0.7324 | 0.7536 | 0.7941 | 0.7647 | 0.7826 |
+| delta | −0.0180 | +0.0323 | +0.0394 | +0.0676 | +0.0394 | +0.0201 | +0.0139 | +0.0513 | +0.0041 | +0.0179 |
+
+**+0.0269 F1, nine households up and one down.** The gain is precision — 17 fewer predictions, 3 more
+matches, predictions on no-gold predicates 10 → 3 — with recall +0.0081 and the stated-relation recall
+unchanged. Per predicate the move is mostly `household.routine` (0.167 → 0.328), with `person.habit`
+0.992 → 0.983 and `person.lives_in` 0.800 → 0.769 slightly down and `works_as`, `prefers`, `topic`,
+`relation_to` unchanged. The same file writes 7.5 % fewer tokens and the arm runs 30 % faster.
+
+Read honestly: a new engine changes greedy decoding — kernels and the grammar engine — so the same
+model's outputs move, here by +0.027, all of it precision. The pre-registration expected ≈ equal and
+said a large move would be "a finding about the grammar engine, not about the model". **+0.027 is
+larger than the frozen field's own margin between its winner and runner-up (0.7426 − 0.7201 = 0.0225):
+the venue alone moves a score by more than the field's winning margin**, which is exactly why a verdict
+is taken only within one build.
+
+### NuExtract3 — the retry answered
+
+`llama-server` loaded it on b10809 in 6 s and it completed all 1,670 calls: **validity 1.0000, F1
+0.6467, scorable 0.7256, 817 s** — the fastest qualifying arm, 7.4× quicker than the incumbent, and
+the only new model over the 0.60 floor. **The field's `missing tensor 'blk.32.ssm_conv1d.weight'` was
+the BUILD, not the model**, and the file is byte-identical to the one the April build refused. Its
+shape is lopsided: at or above 0.88 on every per-person and household predicate (`works_as` 1.000,
+`lives_in` 1.000, `household.topic` 1.000, `owner.prefers` 0.915, `person.habit` 0.882) and nearly
+blind to relations (`person.relation_to` 0.037, stated-relation recall 0.1000). That single predicate
+carries 110 of the 370 gold and is the whole of its gap to the incumbent.
+
+### The quantisation question — asked, NOT answered
+
+Same model, same build, three quantisations — and a one-newline difference in the chat template
+between the Q4_K_M file and the Q6_K / Q8_0 files. The token totals confirm it at the token level: the
+Q6_K and Q8_0 arms each read 1,173,121 prompt tokens against Q4_K_M's 1,171,451 — exactly 1,670 more,
+one per call.
+
+| | Q4_K_M | Q6_K | Q8_0 |
+|---|---|---|---|
+| validity | 1.0000 | 1.0000 | 1.0000 |
+| **F1** | **0.7695** | **0.6943** | **0.7428** |
+| lenient / scorable | 0.7781 / 0.8697 | 0.7114 / 0.7839 | 0.7601 / 0.8399 |
+| precision / recall | 0.8241 / 0.7216 | 0.7364 / 0.6568 | 0.7981 / 0.6946 |
+| predictions / matches | 324 / 267 | 330 / 243 | 322 / 257 |
+| relation STATED recall | 0.9333 | 0.3333 | 0.6000 |
+| tokens out | 424,937 | 439,397 | 449,095 |
+| seconds | 6,018 | 7,565 | 8,506 |
+
+**Both higher-precision quantisations scored BELOW Q4_K_M**, and Q6_K scored below it in all ten
+households (mean paired delta −0.0750). The loss is concentrated in one predicate:
+`person.relation_to` 0.371 → 0.133 (Q6_K) and → 0.237 (Q8_0), the stated relations falling from 28 of
+30 to 10 and 18. It is not a change in how much the model thinks: paired span by span over household 1,
+Q6_K generated a mean of 268 tokens against Q4_K_M's 274, shorter on 101 spans and longer on 66, and
+both thought on every span. Q6_K and Q8_0 — same template, different quantisation — agree exactly on 3
+of 10 households and disagree elsewhere, so quantisation clearly moves the result too.
+
+Read honestly: this comparison CANNOT separate the quantisation from the template's extra token,
+because the two changed together. The rule does not care — it compares the numbers the arms produced,
+and neither beat the incumbent — but **the question the two arms were added to answer ("is 0.7426 a
+quantisation ceiling?") is not answered by them.** A controlled arm (one file, both templates, through
+the per-model server-argument seam that already exists) would answer it; that is a pre-registration,
+not a run added here.
+
+### The Q8_0 file's provenance — a transient MISREAD, not a corrupt file
+
+The `gemma-e4b-q8` run JSON records `model_sha256
+0b456435106b0c3ae7e8c5e4123f7aaac8332c1474a3cdd51688a451b992992d`, which is **not** that file's hash.
+The harness hashes at the END of an arm, so that read happened at 09:20, minutes after the arm's 8 GB
+model had been mapped. Three further reads at 09:25 — `sha256sum` twice and `certutil`, three separate
+processes — returned the same wrong digest, so it was not one flaky read.
+
+The file is intact. The published Q8_0 GGUF was re-downloaded to a scratch directory, hashes
+`6a6eba0d36a051b5d924211a889c1436717006e7c5d413830c47caa1d46cb598` (the repo's published digest), and
+a byte-for-byte comparison against the local file found **0 differing bytes across all 8,031,242,720**.
+After that comparison — roughly 16 GB of fresh I/O — the local file reads `6a6eba0d…` again from both
+tools. Every other arm file re-hashed unchanged against the record taken at 00:03. Windows logged no
+WHEA, machine-check or bugcheck events in two days; the PC carries 2 × 16 GB of non-ECC DDR4-3200.
+
+The honest reading: the bytes on disk were always the published ones, and reads in that window came
+back wrong — the shape of corrupted pages in the file cache while the arm's mapping was resident.
+**What cannot be established after the fact is whether the same corruption touched the pages the arm
+was decoding from while it ran.** The arm's own behaviour gives no sign of it — validity 1.0000 on all
+1,670 calls, no truncation, no invalid JSON, coherent extractions, and a score that sits between its
+two neighbours — but absence of a sign is not evidence.
+
+**One event, two hypotheses, and this run cannot choose between them.** The Q8_0 arm was the only arm
+whose model did not fit the card outright — the only host-plus-device split placement in the field —
+and this PC's memory is non-ECC. Either could produce a page that reads wrong and later reads right.
+What the machine's own history says, read over the System log's whole retention (2026-06-18 to now,
+nothing scheduled and nothing rebooted): **no WHEA-Logger event at all**, and no memory-diagnostic
+result has ever been written on this machine. A memory test is the operator's to run, not this run's.
+
+**So the arm was re-run on the verified file, pre-registered before its number existed** (the
+strategist's ruling of 2026-09-12), and the re-run's number is the arm's number. Run 1 is KEPT, never
+overwritten: `ms1b_gemma-e4b-q8.json` became `ms1b_gemma-e4b-q8_run1.json`, and `load_field` now
+excludes a `_run1.json` suffix beside `_contract0`/`_contract1` — a loud rule in the results directory
+rather than a hidden folder, pinned by **T42f**, whose stub is given the highest F1 in its build so
+that dropping the exclusion makes the superseded run win the verdict (mutant verified: it fails by
+name, `['delta', 'delta', 'epsilon'] … 'delta'`).
+
+Before the re-run, a **determinism control**: household 1 of `gemma-e4b-v040` through the same b10809
+server, written to the scratchpad so no verdict can ever see it, compared with its recorded run
+prediction for prediction. Identical means any Q8_0 delta between the two runs belongs to run 1;
+different means the harness is not run-to-run deterministic and every delta is read against that.
+
+**The control says the harness IS run-to-run deterministic here.** Household 1 of `gemma-e4b-v040`
+was run again through the same b10809 server, written to the scratchpad. All **34 predictions are
+identical to the recorded run's, in order and as a set**, and every scored field matches at full
+precision: n_pred 34, n_match 25, n_gold 37, precision 0.7352941176470589, recall 0.6756756756756757,
+F1 0.7042253521126761, lenient F1 0.7042253521126761, scorable 0.7936507936507937, validity 1.0000
+over 167 of 167 calls, tokens in 116,993, tokens out 45,733. The only field that moved is wall-clock
+(636.5 s recorded, 650.4 s in the control), which is not part of any score.
+
+**So a difference between Q8_0 run 1 and run 2 — if one appears — belongs to run 1, not to run-to-run
+variation.** That is what makes the re-run below a measurement rather than a second opinion.
+
+**The re-run reproduces run 1 exactly.** `gemma-e4b-q8` ran again 15:38:51 → 18:00:44 in run 1's
+configuration — the same queue command, no extra server arguments, nothing about mmap changed — and the
+hash the harness recorded this time is `6a6eba0d…`, the published digest.
+
+| | run 1 | run 2 |
+|---|---|---|
+| validity | 1.0000 | 1.0000 |
+| F1 / lenient / scorable | 0.7428 / 0.7601 / 0.8399 | 0.7428 / 0.7601 / 0.8399 |
+| precision / recall | 0.7981 / 0.6946 | 0.7981 / 0.6946 |
+| predictions / matches | 322 / 257 | 322 / 257 |
+| relation STATED recall | 0.6000 | 0.6000 |
+| tokens in / out | 1,173,121 / 449,095 | 1,173,121 / 449,095 |
+| recorded `model_sha256` | `0b456435…` | `6a6eba0d…` — the published digest |
+| seconds | 8,226 | 8,506 |
+
+Of the 22 scored aggregate fields, **21 are identical and the only one that moved is wall-clock** —
+this run's own doing, since it hashed the 8 GB file twice mid-arm. All ten households match on F1,
+predictions and matches, and **all 322 predictions are identical in order**. Per-household F1, both
+runs: 0.7536 · 0.7059 · 0.7429 · 0.6761 · 0.8235 · 0.7536 · 0.6667 · 0.7826 · 0.7941 · 0.7324.
+
+Read against the control, which showed this harness reproduces a household prediction for prediction:
+**the misread never reached the decode.** Run 1's outputs are what the model produced from the correct
+bytes. The re-run's number is the arm's number by the ruling — and it is the same number.
+
+**The four hash points did NOT reproduce the misread, and one of them is weaker than intended:**
+
+| point | when | llama-server | sha256 |
+|---|---|---|---|
+| (a) before the server starts | 15:38:45 | down | `6a6eba0d…` the published digest |
+| (b) after household 1, mapping resident | 15:53:31 | **up** | `6a6eba0d…` the published digest |
+| (c) at the end of the arm | 18:00:39 | down | `6a6eba0d…` the published digest |
+| (d) just after the server exits | 18:00:45 | down | `6a6eba0d…` the published digest |
+
+(c) was meant to be taken with the mapping still resident, but the harness prints its last household
+line only as the arm ends and the poll that triggered (c) runs on a 20-second cycle, so the server had
+already exited. **(c) is therefore a second post-exit reading rather than a second resident one, and
+the resident-state sampling is n = 1** — it came back clean. GPU memory at (b) was 6,558 MiB of 8,192
+at 95 % utilisation: the same host-plus-device split placement as run 1's 6,209 MiB, so the condition
+under which run 1 misread was present again and produced nothing.
+
+So the event stands **unreproduced and unexplained**: one occurrence, two live hypotheses — the split
+placement's host-side mapping, or a non-ECC memory fault — with no WHEA event and no memory-diagnostic
+result ever recorded on this machine. A memory test is the operator's next step, not this run's.
+
+### Skips, deviations and the rules that did not fire
+
+- **Nothing was skipped:** `QUEUE done=8 skipped=0`, every arm wrote its JSON, and `granite-3b` was
+  SKIPPED-as-already-done only in the resume sense (it had completed at 14:42 on 2026-09-11).
+- **`--build b10809` was added to the queue command** (the prompt's §5 line does not carry it). It only
+  arms the per-arm assertion that the server reports the intended build before an arm runs; every arm
+  passed it.
+- **The prompt's §6 `--verdict --build v0.4.0` was corrected to `--build b10809`** — the release tag is
+  not a build string and would have selected no runs at all.
+- **The Q8_0 skip rule never fired.** The prompt allows skipping that arm if it "cannot load or times
+  out per call"; measured over its 1,670 calls, zero were within reach of the client's 180-s timeout
+  (longest 15.0 s) and zero hit the token cap.
+- **No store-benchmark run and no design amendment**, both of which §6 conditions on a NEW winner;
+  there is none.
+
+### Honest scope
+
+Synthetic seeded utterances that always name people, scored against ORACLE candidates, seeds 1–10, 14
+days, 1,670 spans per arm — the field's corpus, contract and rule, unchanged. Nothing here was measured
+on real speech, on household audio, or on the owner. Numbers are compared only within a build; the two
+venues' tables sit side by side and are never merged. The addendum adds seven arms and one re-run to
+the field's eleven; it does not re-open the frozen field, whose verdict is unchanged.
