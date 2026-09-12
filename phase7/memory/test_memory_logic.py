@@ -1692,11 +1692,20 @@ _FIELD_KEYS = ["llama-1b", "llama-3b", "phi3-mini", "qwen3-4b", "qwen35-4b", "ph
 # properties without a second copy of the list to drift from this one.
 _ADDENDUM_KEYS = ["gemma-e4b-v040", "granite-3b", "granite-8b", "lfm25-2.6b", "ministral-8b",
                   "gemma-e4b-q6k", "gemma-e4b-q8", "nuextract3"]
+# Addendum 2's arms (2026-09-12), added after the addendum MEASURED that every Gemma run had
+# thought: the same models in the states nobody had measured, plus the controlled Q8_0 pair. Listed
+# once, here, for the same reason the addendum's list is - so no second copy can drift from it.
+_ADDENDUM2_KEYS = ["gemma-e4b-v040-nothink", "nuextract3-think", "qwen3-8b-v040", "qwen35-4b-v040",
+                   "qwen35-9b-v040", "qwen3-8b-v040-think", "qwen35-4b-v040-think",
+                   "qwen35-9b-v040-think", "gemma-e2b-v040-nothink", "gemma-e2b-v040",
+                   "gemma-e4b-q8-q4tpl-nothink", "gemma-e4b-q8-q4tpl"]
 _FROZEN_PATHS = {k: _bench.model_path(k) for k in _FIELD_KEYS}
 check("T37a the field table holds every frozen-field key with its path and thinking switch, and "
-      "the table is exactly those twelve plus the addendum's eight",
-      sorted(_bench.MODELS) == sorted(_FIELD_KEYS + _ADDENDUM_KEYS)
+      "the table is exactly those twelve plus the addendum's eight plus addendum 2's twelve",
+      sorted(_bench.MODELS) == sorted(_FIELD_KEYS + _ADDENDUM_KEYS + _ADDENDUM2_KEYS)
       and set(_FIELD_KEYS).isdisjoint(_ADDENDUM_KEYS)
+      and set(_FIELD_KEYS).isdisjoint(_ADDENDUM2_KEYS)
+      and set(_ADDENDUM_KEYS).isdisjoint(_ADDENDUM2_KEYS)
       and all(_bench.model_path(k).startswith(("models/", "phase3/models/"))
               for k in _FIELD_KEYS)
       and {k for k in _FIELD_KEYS if _bench.thinking_switch(k)}
@@ -1986,6 +1995,7 @@ _spec42.loader.exec_module(_bench42)
 from jarvis_memory.extract.client import LlamaServer as _LS42  # noqa: E402
 
 _ADDENDUM = _ADDENDUM_KEYS                      # one list, defined at T37a
+_ADDENDUM2 = _ADDENDUM2_KEYS                    # likewise
 
 check("T42a the eight addendum keys exist with models/ paths, the incumbent re-run points at the "
       "same file as the frozen-build key, and every Granite arm has its thinking switch OFF",
@@ -2001,8 +2011,8 @@ check("T42a the eight addendum keys exist with models/ paths, the incumbent re-r
       and not _bench42.thinking_switch("lfm25-2.6b")
       and not any(_bench42.thinking_switch(k) for k in
                   ("gemma-e4b-v040", "gemma-e4b-q6k", "gemma-e4b-q8"))
-      # the addendum adds keys and removes none
-      and len(_bench42.MODELS) == 12 + len(_ADDENDUM),
+      # the addendum adds keys and removes none; addendum 2 adds its twelve beside them
+      and len(_bench42.MODELS) == 12 + len(_ADDENDUM) + len(_ADDENDUM2),
       str(([k for k in _ADDENDUM if k not in _bench42.MODELS], len(_bench42.MODELS))))
 
 # A per-model server argument is appended AFTER the shared ones, so a model can add to the server's
@@ -2122,6 +2132,256 @@ with _tf42.TemporaryDirectory() as _td42:
           and _bench42.contract2_schema_ok(_ssha42())
           and _bench42.CONTRACT == "contract2",
           str((_refused42, _ran42, _ssha42()[:16])))
+
+
+# ---------------------------------------------------------------------------------------------
+# T43 - FIELD ADDENDUM 2 (2026-09-12). The addendum measured that every Gemma run in both fields
+# had thought: Gemma 4's template reads `enable_thinking`, llama.cpp's `--reasoning auto` default
+# supplies true when no kwarg is sent, and these keys sent none. The old clause ("thinking OFF
+# wherever a template offers a switch") therefore rested on a false premise - and is incoherent
+# anyway, since LFM2.5 thinks with no switch to turn off. The corrected rule: every run under one
+# contract, budget and venue is a legitimate configuration whose thinking state is part of its
+# identity; a switchable model is measured in BOTH states; the OFF-only reading is reported beside
+# the choice; the operating state is the chosen model's OFF key unless ON beats it by more than a
+# band. These tests pin the table's declarations, the kwarg, the render assertion, the template
+# reader, the OFF-only filter and the operating-key band.
+import struct as _st43  # noqa: E402
+
+from jarvis_memory.extract import client as _c43  # noqa: E402
+from jarvis_memory.extract import gguf_template as _gt43  # noqa: E402
+
+_A2_PATHS = {
+    "gemma-e4b-v040-nothink": "models/google_gemma-4-E4B-it-Q4_K_M.gguf",
+    "nuextract3-think": "models/NuExtract3-Q4_K_M.gguf",
+    "qwen3-8b-v040": "models/Qwen3-8B-Q4_K_M.gguf",
+    "qwen35-4b-v040": "models/Qwen3.5-4B-Q4_K_M.gguf",
+    "qwen35-9b-v040": "models/Qwen3.5-9B-Q4_K_M.gguf",
+    "qwen3-8b-v040-think": "models/Qwen3-8B-Q4_K_M.gguf",
+    "qwen35-4b-v040-think": "models/Qwen3.5-4B-Q4_K_M.gguf",
+    "qwen35-9b-v040-think": "models/Qwen3.5-9B-Q4_K_M.gguf",
+    "gemma-e2b-v040-nothink": "models/gemma-4-E2B-it-Q4_K_M.gguf",
+    "gemma-e2b-v040": "models/gemma-4-E2B-it-Q4_K_M.gguf",
+    "gemma-e4b-q8-q4tpl-nothink": "models/google_gemma-4-E4B-it-Q8_0.gguf",
+    "gemma-e4b-q8-q4tpl": "models/google_gemma-4-E4B-it-Q8_0.gguf",
+}
+# The pre-existing keys, pinned by literal: addendum 2 adds fields to them and must move NOTHING
+# about what they ran. A run's number describes the file and switch it ran with.
+_PRE_A2 = {k: (_bench42.MODELS[k]["path"], _bench42.MODELS[k]["thinking_switch"])
+           for k in _FIELD_KEYS + _ADDENDUM_KEYS}
+_PRE_A2_EXPECTED = {
+    "llama-1b": ("phase3/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf", False),
+    "llama-3b": ("models/Llama-3.2-3B-Instruct-Q4_K_M.gguf", False),
+    "phi3-mini": ("models/Phi-3-mini-4k-instruct-q4.gguf", False),
+    "qwen3-4b": ("models/Qwen3-4B-Q4_K_M.gguf", True),
+    "qwen35-4b": ("models/Qwen3.5-4B-Q4_K_M.gguf", True),
+    "phi4-mini": ("models/Phi-4-mini-instruct-Q4_K_M.gguf", False),
+    "nuextract": ("models/NuExtract3-Q4_K_M.gguf", False),
+    "llama-8b": ("models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf", False),
+    "qwen3-8b": ("models/Qwen3-8B-Q4_K_M.gguf", True),
+    "qwen35-9b": ("models/Qwen3.5-9B-Q4_K_M.gguf", True),
+    "gemma-e2b": ("models/gemma-4-E2B-it-Q4_K_M.gguf", False),
+    "gemma-e4b": ("models/google_gemma-4-E4B-it-Q4_K_M.gguf", False),
+    "gemma-e4b-v040": ("models/google_gemma-4-E4B-it-Q4_K_M.gguf", False),
+    "granite-3b": ("models/granite-4.2-3b-Q4_K_M.gguf", True),
+    "granite-8b": ("models/granite-4.2-8b-Q4_K_M.gguf", True),
+    "lfm25-2.6b": ("models/LFM2.5-2.6B-Q4_K_M.gguf", False),
+    "ministral-8b": ("models/Ministral-3-8B-Instruct-2512-Q4_K_M.gguf", False),
+    "gemma-e4b-q6k": ("models/google_gemma-4-E4B-it-Q6_K.gguf", False),
+    "gemma-e4b-q8": ("models/google_gemma-4-E4B-it-Q8_0.gguf", False),
+    "nuextract3": ("models/NuExtract3-Q4_K_M.gguf", True),
+}
+_A2_DECLARED = [k for k, v in _bench42.MODELS.items() if "think" in v]
+_A2_FIELDS = [k for k, v in _bench42.MODELS.items()
+              if not all(f in v for f in ("model_id", "switch", "expect_think", "render_expect"))]
+check("T43a addendum 2's twelve keys exist with their own paths, every key in the table declares "
+      "model_id / switch / expect_think / render_expect, exactly the twelve declare a think state, "
+      "the two controlled arms name the template they borrow and the digest they must match, and no "
+      "pre-existing key's path or switch moved",
+      all(k in _bench42.MODELS for k in _ADDENDUM2)
+      and all(_bench42.model_path(k) == p for k, p in _A2_PATHS.items())
+      and _A2_FIELDS == []
+      and sorted(_A2_DECLARED) == sorted(_ADDENDUM2)
+      and _bench42.MODELS["gemma-e4b-q8-q4tpl-nothink"]["template_from"] == \
+          "models/google_gemma-4-E4B-it-Q4_K_M.gguf"
+      and _bench42.MODELS["gemma-e4b-q8-q4tpl"]["template_from"] == \
+          "models/google_gemma-4-E4B-it-Q4_K_M.gguf"
+      and _bench42.MODELS["gemma-e4b-q8-q4tpl-nothink"]["render_must_equal"] == \
+          "gemma-e4b-v040-nothink"
+      and _bench42.MODELS["gemma-e4b-q8-q4tpl"]["render_must_equal"] == "gemma-e4b-v040"
+      # the two states of one model share a model_id, which is what pairs them for the band
+      and _bench42.MODELS["gemma-e4b-v040"]["model_id"] == \
+          _bench42.MODELS["gemma-e4b-v040-nothink"]["model_id"]
+      and _PRE_A2 == _PRE_A2_EXPECTED
+      and len(_bench42.MODELS) == 32,
+      str((sorted(set(_A2_DECLARED) ^ set(_ADDENDUM2)), _A2_FIELDS, len(_bench42.MODELS))))
+
+_mk43 = lambda **kw: _c43.build_request("t", 1, 1, {1: "a"}, 0, {}, **kw)
+_legacy_on43 = _mk43(thinking_switch=True).get("chat_template_kwargs")
+_legacy_off43 = "chat_template_kwargs" in _mk43(thinking_switch=False)
+_bad43 = False
+try:
+    _mk43(think="maybe")
+except ValueError:
+    _bad43 = True
+check("T43b the request carries the state a key declares - off sends false, on sends true, on plus "
+      "think_extra sends both - and the legacy pair is unchanged bit for bit",
+      _mk43(think="off")["chat_template_kwargs"] == {"enable_thinking": False}
+      and _mk43(think="on")["chat_template_kwargs"] == {"enable_thinking": True}
+      and _mk43(think="on", think_extra={"mode": "structured"})["chat_template_kwargs"] == \
+          {"enable_thinking": True, "mode": "structured"}
+      and _legacy_on43 == {"enable_thinking": False}
+      and _legacy_off43 is False
+      and _bad43,
+      str((_mk43(think="on")["chat_template_kwargs"], _legacy_on43, _legacy_off43, _bad43)))
+
+_rm43 = _bench42.render_matches
+check("T43c the render spec matches the tails the addendum measured, and a state's prompt fails the "
+      "other state's spec",
+      _rm43("a<|think|>b", {"count": {"<|think|>": 1}})
+      and _rm43("ab", {"count": {"<|think|>": 0}})
+      and not _rm43("a<|think|>b", {"count": {"<|think|>": 0}})
+      and _rm43("q<think></think>", {"tail_endswith": "<think></think>"})
+      and _rm43("q<think>\n\n</think>\n\n", {"tail_endswith": "<think>\n\n</think>\n\n"})
+      and _rm43("q<think>\n", {"tail_endswith": "<think>\n"})
+      and _rm43("q<think>", {"tail_endswith": "<think>"})
+      and _rm43("x[/INST]", {"absent": ["<think>", "<|think|>"]})
+      # a Qwen OFF tail against the Qwen ON spec is exactly the mix-up this guards
+      and not _rm43("q<think>\n\n</think>\n\n", {"absent": ["<think>", "<|think|>"]})
+      # REJECTED ON THE TAIL ALONE - the clause has to be able to say no by itself, or a spec that
+      # ignores `tail_endswith` passes every check above (measured: mutant M1 left them all green)
+      and not _rm43("q<think>trailing", {"tail_endswith": "<think>"})
+      and not _rm43("q<think></think> ", {"tail_endswith": "<think></think>"})
+      and not _rm43("a<|think|>b", {"tail_endswith": "<|think|>"})
+      # a combined spec needs every clause
+      and not _rm43("a<think>", {"tail_endswith": "<think>", "count": {"<|think|>": 1}})
+      and not _rm43("anything", None),
+      "render_matches truth table")
+
+def _mini_gguf43(path, template=None):
+    """The smallest GGUF that exercises the reader: a scalar, a string array, then the template."""
+    kv = []
+    def _s(x):
+        b = x.encode("utf-8")
+        return _st43.pack("<Q", len(b)) + b
+    kv.append(_s("general.alignment") + _st43.pack("<I", 4) + _st43.pack("<I", 32))
+    kv.append(_s("tokenizer.ggml.tokens") + _st43.pack("<I", 9) + _st43.pack("<I", 8)
+              + _st43.pack("<Q", 2) + _s("a") + _s("bb"))
+    if template is not None:
+        kv.append(_s("tokenizer.chat_template") + _st43.pack("<I", 8) + _s(template))
+    blob = b"GGUF" + _st43.pack("<I", 3) + _st43.pack("<Q", 0) + _st43.pack("<Q", len(kv)) \
+        + b"".join(kv)
+    with open(path, "wb") as fh:
+        fh.write(blob)
+    return path
+
+with _tf42.TemporaryDirectory() as _td43:
+    _g_with = _mini_gguf43(_os.path.join(_td43, "with.gguf"), "{{ x }}<|think|>")
+    _g_without = _mini_gguf43(_os.path.join(_td43, "without.gguf"), None)
+    _tpl_text43 = _gt43.read_chat_template(_g_with)
+    _tpl_none43 = _gt43.read_chat_template(_g_without)
+    _w1 = _gt43.write_template_file("hello", dir=_td43)
+    _w2 = _gt43.write_template_file("hello", dir=_td43)
+    check("T43d the chat template is read out of a GGUF header past a scalar and a string array, a "
+          "file without one gives None, and the template's hash and file are content-addressed",
+          _tpl_text43 == "{{ x }}<|think|>"
+          and _tpl_none43 is None
+          and _gt43.template_sha256("hello") == _gt43.template_sha256("hello")
+          and _gt43.template_sha256("hello") != _gt43.template_sha256("hellp")
+          and _w1 == _w2 and _os.path.exists(_w1)
+          and open(_w1, encoding="utf-8").read() == "hello",
+          str((_tpl_text43, _tpl_none43, _os.path.basename(_w1))))
+
+_ctrl43 = _bench42.resolved_extra_args("gemma-e4b-q8-q4tpl", "T.jinja")
+_plain43 = _bench42.resolved_extra_args("qwen3-8b-v040")
+_needs_path43 = False
+try:
+    _bench42.resolved_extra_args("gemma-e4b-q8-q4tpl")
+except ValueError:
+    _needs_path43 = True
+check("T43e the borrowed template is appended as a server argument for the two controlled arms "
+      "only, after the shared arguments, and no key stores one statically",
+      _ctrl43 == ["--chat-template-file", "T.jinja"]
+      and _plain43 == []
+      and all(_bench42.model_extra_args(k) == [] for k in _bench42.MODELS)
+      and _needs_path43,
+      str((_ctrl43, _plain43, _needs_path43)))
+
+with _tf42.TemporaryDirectory() as _td43b:
+    _td43b = Path(_td43b)
+    def _stub43(key, f1, think_rendered=None, version="b10809-5266f24da"):
+        d = {"model_key": key, "contract": _bench42.CONTRACT,
+             "schema_sha256": _bench42.CONTRACT2_SCHEMA_SHA256, "llama_version": version,
+             "aggregate": {"validity": 1.0, "f1": f1}}
+        if think_rendered:
+            d["think_rendered"] = think_rendered
+        (_td43b / ("ms1b_%s.json" % key)).write_text(_j42.dumps(d), encoding="utf-8")
+        return d
+    _s_on = _stub43("gemma-e4b-v040", 0.7695, "on")
+    _s_off = _stub43("gemma-e4b-v040-nothink", 0.7650, "off")
+    _s_lfm = _stub43("lfm25-2.6b", 0.4223, "on")          # thinks, but has no switch to turn off
+    _s_legacy = _stub43("qwen3-8b", 0.6196)               # no think_rendered: judged by the table
+    # THE RENDERER OVERRULES THE TABLE, both ways. Without these two the field could read either
+    # `think_rendered` or the key's `expect_think` and agree every time (measured: mutant M3 left
+    # the check green), and the whole point of recording what rendered is that it can differ.
+    _s_says_off = dict(_s_on, think_rendered="off")       # key declares ON, this run rendered OFF
+    _s_says_on = dict(_s_off, think_rendered="on")        # key declares OFF, this run rendered ON
+    _off_field = [k for k, _a, p in _bench42.load_field(_td43b, build="b10809")
+                  if _bench42.eligible_offonly(_j42.loads(Path(p).read_text(encoding="utf-8")))]
+    _rc43 = _bench42.main(["--verdict", "--build", "b10809", "--offonly",
+                           "--results-dir", str(_td43b)])
+    _wrote43 = (_td43b / "ms1b_field_verdict_b10809_offonly.json")
+    _vj43 = _j42.loads(_wrote43.read_text(encoding="utf-8")) if _wrote43.exists() else {}
+    check("T43f the OFF-only reading keeps a run that did not think BY CHOICE - the OFF twin, and a "
+          "switchless model that cannot be asked to stop - drops the ON run, judges a legacy run by "
+          "its key's declared state, prefers what a run RENDERED over what its key declares, and "
+      "writes its own file",
+          _bench42.eligible_offonly(_s_off) and not _bench42.eligible_offonly(_s_on)
+          and _bench42.eligible_offonly(_s_lfm) and _bench42.eligible_offonly(_s_legacy)
+          # the recorded state wins over the key's declaration, in both directions
+          and _bench42.eligible_offonly(_s_says_off)
+          and not _bench42.eligible_offonly(_s_says_on)
+          and sorted(_off_field) == ["gemma-e4b-v040-nothink", "lfm25-2.6b", "qwen3-8b"]
+          and _rc43 == 0 and _wrote43.exists() and _vj43.get("offonly") is True
+          and _vj43.get("n_models") == 3,
+          str((sorted(_off_field), _vj43.get("n_models"), _vj43.get("chosen"))))
+
+_runs_band43 = [("gemma-e4b-v040", {"f1": 0.7695}), ("gemma-e4b-v040-nothink", {"f1": 0.7650})]
+_runs_beat43 = [("gemma-e4b-v040", {"f1": 0.7695}), ("gemma-e4b-v040-nothink", {"f1": 0.7500})]
+_runs_one43 = [("gemma-e4b-v040", {"f1": 0.7695})]
+_op_band43 = _bench42.operating_key("gemma-e4b-v040", _runs_band43)
+_op_beat43 = _bench42.operating_key("gemma-e4b-v040", _runs_beat43)
+_op_one43 = _bench42.operating_key("gemma-e4b-v040", _runs_one43)
+_op_wide43 = _bench42.operating_key("gemma-e4b-v040", _runs_beat43, band=0.05)
+check("T43g the operating state is the chosen model's OFF key unless ON beats it by MORE than the "
+      "band, the band is a parameter, and one measured state is its own operating state",
+      _op_band43[0] == "gemma-e4b-v040-nothink"
+      and _op_beat43[0] == "gemma-e4b"          # the ON key of that model_id
+      and _op_one43[0] == "gemma-e4b-v040"
+      and _op_wide43[0] == "gemma-e4b-v040-nothink"   # 0.0195 is inside a 0.05 band
+      and "band" in _op_band43[1] and "0.0045" in _op_band43[1],
+      str((_op_band43, _op_beat43[0], _op_one43[0], _op_wide43[0])))
+
+_p167 = ["prompt %d" % i for i in range(167)]
+_d167 = _bench42.render_digest(_p167)
+_p167b = list(_p167)
+_p167b[42] = _p167b[42] + "!"
+_d167b = _bench42.render_digest(_p167b)
+check("T43h a render digest fingerprints every prompt and the set, so a single changed prompt is "
+      "visible as itself and not only in the total",
+      _d167["n"] == 167 and len(_d167["prompt_sha256"]) == 167
+      and len(set(_d167["prompt_sha256"])) == 167
+      and sum(1 for a, b in zip(_d167["prompt_sha256"], _d167b["prompt_sha256"]) if a != b) == 1
+      and _d167["all"] != _d167b["all"]
+      and _bench42.render_digest(_p167)["all"] == _d167["all"],
+      str((_d167["n"], _d167["all"][:12], _d167b["all"][:12])))
+
+check("T43i a render mismatch stops the whole queue - every later arm's meaning is in doubt - while "
+      "any other failure skips one arm",
+      _bench42.queue_action_for(_bench42.RenderMismatch("x")) == "stop"
+      and _bench42.queue_action_for(RuntimeError("x")) == "skip"
+      and _bench42.queue_action_for(ValueError("x")) == "skip"
+      and issubclass(_bench42.RenderMismatch, RuntimeError),
+      "queue_action_for")
 
 
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")

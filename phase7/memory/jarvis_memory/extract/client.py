@@ -23,7 +23,8 @@ SERVER_EXE = "llama-server.exe"
 
 
 def build_request(span_text, speaker_cluster, day, names, span_id, schema,
-                  max_tokens=512, temperature=0.0, seed=1, thinking_switch=False) -> dict:
+                  max_tokens=512, temperature=0.0, seed=1, thinking_switch=False,
+                  think=None, think_extra=None) -> dict:
     """The chat-completions body. Pure, so the schema wiring is testable without a server.
 
     `response_format: json_schema` is what makes the enums binding rather than advisory: the server
@@ -45,12 +46,30 @@ def build_request(span_text, speaker_cluster, day, names, span_id, schema,
         "max_tokens": max_tokens,
         "stream": False,
     }
-    # Fairness across the field (MS1b contract 2): a family whose chat template offers a thinking
-    # switch runs with it OFF, so every model is measured on the same budget doing the same job.
-    # Qwen3 / Qwen3.5 have the switch; Gemma 4's channel has none (the project's JARVIS_THINKING
-    # finding) and keeps the 2048 headroom instead. Absent entirely when not requested, so a server
-    # that does not know the field never sees it.
-    if thinking_switch:
+    # The thinking state is REQUESTED here and ASSERTED at the renderer before an arm runs
+    # (`bench_ms1b`'s render pre-flight). Two paths, and the older one is preserved bit for bit:
+    #
+    #   `think` is None  - the legacy field's behaviour. `thinking_switch` True sends
+    #                      {"enable_thinking": False}; False sends no kwarg at all.
+    #   `think` given    - addendum 2's keys, which declare the state they measure: "off" sends
+    #                      False, "on" sends True, merged with `think_extra` when a key needs more
+    #                      (NuExtract3's template raises unless it also gets a `mode`).
+    #
+    # CORRECTED 2026-09-12: this comment used to say Gemma 4's channel has none. It HAS one -
+    # every Gemma 4 template reads `enable_thinking` - and because these keys sent no kwarg,
+    # llama.cpp's `--reasoning auto` default supplied true and every Gemma run in both fields
+    # thought. Sending nothing is NOT the same as sending false, which is why addendum 2 measures a
+    # switchable model in BOTH states instead of assuming either.
+    if think is not None:
+        if think == "off":
+            body["chat_template_kwargs"] = {"enable_thinking": False}
+        elif think == "on":
+            kwargs = {"enable_thinking": True}
+            kwargs.update(think_extra or {})
+            body["chat_template_kwargs"] = kwargs
+        else:
+            raise ValueError("think must be 'on', 'off' or None, not %r" % (think,))
+    elif thinking_switch:
         body["chat_template_kwargs"] = {"enable_thinking": False}
     return body
 
@@ -74,11 +93,17 @@ def parse_response(raw_json):
 
 
 def extract_span(base_url, span_id, text, cluster, day, names, schema,
-                 max_tokens=512, temperature=0.0, thinking_switch=False) -> dict:
-    """One call. Returns the parsed object, the raw text, token counts and wall ms; never raises."""
+                 max_tokens=512, temperature=0.0, thinking_switch=False,
+                 think=None, think_extra=None) -> dict:
+    """One call. Returns the parsed object, the raw text, token counts and wall ms; never raises.
+
+    Also returns `reasoning_present`: whether the server handed back a non-empty
+    `reasoning_content`. The render check asserts what went IN; this records what came BACK, and a
+    run counts it as `reasoning_calls` - so a thinking state is evidenced at both ends.
+    """
     body = build_request(text, cluster, day, names, span_id, schema,
                          max_tokens=max_tokens, temperature=temperature,
-                         thinking_switch=thinking_switch)
+                         thinking_switch=thinking_switch, think=think, think_extra=think_extra)
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(base_url.rstrip("/") + "/v1/chat/completions", data=data,
                                  headers={"Content-Type": "application/json"})
@@ -99,11 +124,11 @@ def extract_span(base_url, span_id, text, cluster, day, names, schema,
         except Exception:
             pass
         return {"candidates": None, "raw": "HTTP %s: %s" % (exc.code, body), "status": exc.code,
-                "finish_reason": None,
+                "finish_reason": None, "reasoning_present": False,
                 "ms": round((time.time() - t0) * 1000, 1), "tokens_in": 0, "tokens_out": 0}
     except Exception as exc:                                   # noqa: BLE001 - counted, not raised
         return {"candidates": None, "raw": "REQUEST FAILED: %r" % (exc,), "status": None,
-                "finish_reason": None,
+                "finish_reason": None, "reasoning_present": False,
                 "ms": round((time.time() - t0) * 1000, 1), "tokens_in": 0, "tokens_out": 0}
     ms = round((time.time() - t0) * 1000, 1)
     obj, txt = parse_response(raw)
@@ -113,8 +138,11 @@ def extract_span(base_url, span_id, text, cluster, day, names, schema,
     except Exception:
         pass
     finish = None
+    reasoning = ""
     try:
-        finish = (json.loads(raw)["choices"][0] or {}).get("finish_reason")
+        choice = json.loads(raw)["choices"][0] or {}
+        finish = choice.get("finish_reason")
+        reasoning = (choice.get("message") or {}).get("reasoning_content") or ""
     except Exception:
         pass
     return {
@@ -122,6 +150,7 @@ def extract_span(base_url, span_id, text, cluster, day, names, schema,
         "raw": txt,
         "status": status,
         "finish_reason": finish,
+        "reasoning_present": bool(str(reasoning).strip()),
         "ms": ms,
         "tokens_in": usage.get("prompt_tokens", 0),
         "tokens_out": usage.get("completion_tokens", 0),
@@ -132,7 +161,7 @@ class LlamaServer:
     """Start a llama-server on a free port, wait for /health, and always kill it on exit."""
 
     def __init__(self, model_path, port=8089, ctx=4096, ngl=99, bin_dir=None, extra_args=None,
-                 log_path=None):
+                 log_path=None, env=None):
         self.model_path = str(model_path)
         self.port = int(port)
         self.ctx = int(ctx)
@@ -151,6 +180,9 @@ class LlamaServer:
         # `server_log_tail` for the measurement that forced this.
         self.log_path = str(log_path) if log_path else None
         self._log_fh = None
+        # Merged OVER os.environ for THIS server only: the render pre-flight sets
+        # CUDA_VISIBLE_DEVICES=-1 so a CPU-only render can never touch a card an arm is using.
+        self.env = dict(env) if env else None
 
     def server_log_tail(self, limit=4000):
         """The last `limit` bytes the server wrote, or a note saying why there are none.
@@ -199,8 +231,9 @@ class LlamaServer:
                                                  suffix=".log")
             os.close(fd)
         self._log_fh = open(self.log_path, "w", encoding="utf-8", errors="replace")
+        run_env = dict(os.environ, **self.env) if self.env else None
         self.proc = subprocess.Popen(cmd, stdout=self._log_fh, stderr=subprocess.STDOUT,
-                                     text=True, errors="replace")
+                                     text=True, errors="replace", env=run_env)
         deadline = time.time() + 300
         while time.time() < deadline:
             if self.proc.poll() is not None:
