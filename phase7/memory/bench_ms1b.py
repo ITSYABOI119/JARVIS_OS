@@ -226,8 +226,15 @@ MODELS = {
                                "switch": "enable_thinking", "think": "off", "expect_think": "off",
                                "model_id": "gemma-e2b-q4km",
                                "render_expect": {"count": {"<|think|>": 0}}},
+    # ARM 10 SENDS NO KWARG, and that is the addendum's own registration rather than a convenience:
+    # its §0 table says `none` for this arm and for the controlled ON arm below. The frozen
+    # `gemma-e2b`, `gemma-e4b-v040` and the controlled ON arm all ran ON through llama.cpp's
+    # `--reasoning auto` default with no kwarg, so the E2B venue comparison must run the same way or
+    # it would move the venue AND the request shape at once. `think: None` therefore means SEND
+    # NOTHING; the state it RENDERS is still asserted as `on`, which is the point - the default is
+    # measured rather than assumed, exactly as the addendum found it had not been.
     "gemma-e2b-v040":         {"path": "models/gemma-4-E2B-it-Q4_K_M.gguf", "thinking_switch": False,
-                               "switch": "enable_thinking", "think": "on", "expect_think": "on",
+                               "switch": "enable_thinking", "think": None, "expect_think": "on",
                                "model_id": "gemma-e2b-q4km",
                                "render_expect": {"count": {"<|think|>": 1}}},
     "gemma-e4b-q8-q4tpl-nothink": {"path": "models/google_gemma-4-E4B-it-Q8_0.gguf", "thinking_switch": False,
@@ -390,14 +397,60 @@ def queue_action_for(exc) -> str:
     return "stop" if isinstance(exc, RenderMismatch) else "skip"
 
 
+def thinking_consistent(expect_think, reasoning_calls, total_calls) -> bool:
+    """Did the thinking state a run declared actually HAPPEN? Pure.
+
+    The render check asserts what went IN; `reasoning_calls` records what came BACK. A run declared
+    `on` whose server never returned a `reasoning_content`, or one declared `off` that did, ran
+    something other than what its table entry says. That is a FINDING for the report and never a
+    stop: the arm ran as it was configured, so its number stands with the discrepancy recorded
+    beside it rather than being thrown away.
+
+    A state that is neither on nor off has nothing to check, and a run with no calls measured
+    nothing, so both are consistent by construction rather than by accident.
+    """
+    if expect_think not in ("on", "off") or not total_calls:
+        return True
+    return reasoning_calls > 0 if expect_think == "on" else reasoning_calls == 0
+
+
+def check_reference_digest(ref, must, require_build=None):
+    """The controlled comparison's reference must be the right digest, or there is no control. Pure.
+
+    Raises RenderMismatch. Three ways a digest can be PRESENT AND WRONG, each of which would make
+    the quantisation answer meaningless while looking exactly like a pass: it is some other key's
+    digest (a stale file, or a copy taken for a comparison), it records a render that did not match
+    its own spec, or it was rendered on the other build.
+    """
+    if ref.get("key") != must:
+        raise RenderMismatch("the reference digest for %s carries key %r - it is not %s's digest"
+                             % (must, ref.get("key"), must))
+    if not ref.get("render_ok"):
+        raise RenderMismatch("the reference digest for %s records render_ok=%r - a controlled "
+                             "comparison against a render that did not match its own spec proves "
+                             "nothing" % (must, ref.get("render_ok")))
+    if not build_matches(ref.get("build_info"), require_build):
+        raise RenderMismatch("the reference digest for %s was rendered on build %r, which does not "
+                             "contain %r - the two prompt sets come from different venues"
+                             % (must, ref.get("build_info"), require_build))
+
+
 def _props_template_sha(base_url):
-    """The sha256 of the chat template the SERVER says it is using, or None."""
+    """The sha256 of the chat template the SERVER says it is using, or None.
+
+    None when `/props` carries no template, NOT the hash of an empty string: a server that reports
+    nothing and a server that reports an empty template are both "unknown", and hashing `""` would
+    record a real-looking digest that no template ever produced.
+    """
     try:
         with _urlreq.urlopen(base_url.rstrip("/") + "/props", timeout=10) as fh:
             props = json.loads(fh.read().decode("utf-8"))
-        return _tpl.template_sha256(props.get("chat_template") or "")
     except Exception:                                              # noqa: BLE001 - recorded, not fatal
         return None
+    text = props.get("chat_template")
+    if not text:
+        return None
+    return _tpl.template_sha256(text)
 
 
 def render_prompts(base_url, key, seed, days, max_tokens=2048):
@@ -447,7 +500,8 @@ def _household_context(hh):
     return names_by_cluster, clusters_by_name
 
 
-def run_model(model_key, seeds, days, out_path, port, ctx, ngl, max_tokens, require_build=None):
+def run_model(model_key, seeds, days, out_path, port, ctx, ngl, max_tokens, require_build=None,
+              results_dir=None):
     mpath = model_path(model_key)
     think = thinking_switch(model_key)
     think_state = model_think(model_key)
@@ -480,19 +534,27 @@ def run_model(model_key, seeds, days, out_path, port, ctx, ngl, max_tokens, requ
         digest = render_digest(prompts)
         must = MODELS[model_key].get("render_must_equal")
         if must:
-            ref_path = os.path.join(RESULTS_DIR, "render_digest_%s.json" % must)
+            # FOUND WHERE THE QUEUE WRITES, not where this module happens to live: a queue given
+            # `--results-dir` writes its digests there, and reading the default directory instead
+            # would compare against a digest belonging to some other run of some other field.
+            ref_path = os.path.join(results_dir or RESULTS_DIR, "render_digest_%s.json" % must)
             if not os.path.exists(ref_path):
                 raise RenderMismatch("%s must render identically to %s, whose digest %s does not "
                                      "exist - render it first" % (model_key, must, ref_path))
             with open(ref_path, encoding="utf-8") as fh:
                 ref = json.load(fh)
+            check_reference_digest(ref, must, require_build)
             ref_hashes = ref.get("prompt_sha256") or []
             same = sum(1 for a, b in zip(digest["prompt_sha256"], ref_hashes) if a == b)
             if same != digest["n"] or digest["n"] != len(ref_hashes):
                 raise RenderMismatch(
                     "%s renders %d of %d prompts identically to %s - the controlled comparison is "
                     "not controlled" % (model_key, same, digest["n"], must))
-        tpl_sha = tpl_from_sha or _props_template_sha(srv.base_url)
+        # ONE SOURCE for a run's template identity: `chat_template_sha256` is always what the SERVER
+        # says it is using. A key that borrows another file's template records that file's hash
+        # BESIDE it as `template_from_sha256` - two different facts (what was handed to the server,
+        # and what the server reports), never one silently standing in for the other.
+        tpl_sha = _props_template_sha(srv.base_url)
         print("  render ok: %d prompts, state %s, template %s"
               % (digest["n"], MODELS[model_key].get("expect_think"), (tpl_sha or "?")[:16]))
         for seed in seeds:
@@ -613,6 +675,10 @@ def run_model(model_key, seeds, days, out_path, port, ctx, ngl, max_tokens, requ
         "think_extra": think_extra or None,
         "think_rendered": MODELS[model_key].get("expect_think"),
         "chat_template_sha256": tpl_sha,
+        "template_from_sha256": tpl_from_sha,
+        # Did the declared state actually happen at the OUTPUT end? A finding, never a stop.
+        "thinking_consistent": thinking_consistent(MODELS[model_key].get("expect_think"),
+                                                   agg["reasoning_calls"], agg["total_calls"]),
         "render_digest_all": digest["all"],
         "llama_version": version,
         "schema_sha256": schema_sha256(),
@@ -702,6 +768,19 @@ def load_field(results_dir=None, contract=None, build=None):
     return out
 
 
+def builds_in_field(field):
+    """The distinct `llama_version` strings behind a loaded field, sorted.
+
+    `load_field` returns the aggregates, which carry no venue; this reads it back off each run so
+    the CLI can refuse to compute a verdict over two builds read as one field.
+    """
+    seen = set()
+    for _key, _agg, path in field:
+        with open(path, encoding="utf-8") as fh:
+            seen.add(json.load(fh).get("llama_version") or "(unrecorded)")
+    return sorted(seen)
+
+
 def eligible_offonly(run_json, key_table=None) -> bool:
     """Is this run part of the OFF-ONLY READING - the field as the old clause intended it?
 
@@ -725,45 +804,97 @@ def eligible_offonly(run_json, key_table=None) -> bool:
 def operating_key(chosen_key, runs, key_table=None, band=0.01):
     """The configuration MS2 runs: the chosen model's OFF state unless ON is worth more than `band`.
 
-    `runs` is [(key, aggregate)]. Among the runs sharing the chosen key's `model_id`, the OFF-state
-    run wins unless the ON-state run beats it by MORE than the band - which is set below both the
-    measured venue delta (0.0269) and the frozen field's winning margin (0.0225), so a difference
-    inside it is not large enough to buy thinking's cost. With one state present, the chosen key is
-    the operating key and says so.
+    `runs` is [(key, aggregate)], and THE ANSWER IS ALWAYS ONE OF THE KEYS PASSED. That is the whole
+    difference from the first version, which resolved each state's key by scanning `MODELS` for the
+    first entry carrying the chosen `model_id` in that state. For `gemma-e4b-q4km` that entry is
+    `gemma-e4b` - the FROZEN b8728 key, whose JSON is the frozen run - so an addendum-2 verdict
+    computed entirely within b10809 would have named a b8728 run as the state MS2 operates in, and
+    the store run downstream would have consumed the frozen build's candidates with nothing in the
+    pipeline able to notice. The operating key names a configuration that was MEASURED HERE.
+
+    Among the runs sharing the chosen key's `model_id`, the OFF-state run wins unless the ON-state
+    run beats it by MORE than the band - set below both the measured venue delta (0.0269) and the
+    frozen field's winning margin (0.0225), so a difference inside it is not large enough to buy
+    thinking's cost. With one state present, the chosen key is the operating key and says so.
+
+    THE COMPARISON IS MADE IN THE AGGREGATES' OWN PRECISION. They are rounded to 4 dp when a run is
+    written, so comparing the doubles asks a question the numbers cannot answer: `0.7695 - 0.7595`
+    is `0.010000000000000009` in binary floating point, which is "more than 0.01", so a pair sitting
+    EXACTLY on the band would be sent to ON by an artefact of the representation. Ten-thousandths
+    are what was measured, so ten-thousandths are what is compared.
     """
     table = key_table if key_table is not None else MODELS
     chosen_id = (table.get(chosen_key) or {}).get("model_id")
     if not chosen_id:
         return chosen_key, "the chosen key declares no model_id, so it is its own operating state"
-    f1 = {}
+    seen = {}
     for key, agg in runs:
         entry = table.get(key) or {}
         if entry.get("model_id") != chosen_id:
             continue
         state = entry.get("expect_think")
-        if state in ("on", "off"):
-            # newest wins is meaningless here; two runs of one state would be a duplicate, and the
-            # highest F1 of a state is the one that state achieved
-            f1[state] = max(f1.get(state, -1.0), float(agg.get("f1") or 0.0))
-    if "on" in f1 and "off" in f1:
-        if f1["on"] - f1["off"] > band:
-            on_key = _state_key(chosen_id, "on", table)
-            return on_key, ("ON beats OFF by %.4f, more than the %.2f band (%.4f vs %.4f)"
-                            % (f1["on"] - f1["off"], band, f1["on"], f1["off"]))
-        off_key = _state_key(chosen_id, "off", table)
-        return off_key, ("OFF stands: ON beats it by %.4f, within the %.2f band (%.4f vs %.4f)"
-                         % (f1["on"] - f1["off"], band, f1["on"], f1["off"]))
-    only = "on" if "on" in f1 else ("off" if "off" in f1 else None)
+        if state not in ("on", "off"):
+            continue
+        if state in seen:
+            # Two runs of one model in one state is not a tie to break. It means the runs span more
+            # than one build - the same file runs as `gemma-e4b` on b8728 and `gemma-e4b-v040` on
+            # b10809, both ON - or a key is duplicated. Either way the caller has not said which
+            # field it means, so this refuses rather than picking one and looking certain.
+            raise ValueError(
+                "two runs share model_id %r in state %r: %s and %s - runs from more than one "
+                "build, or a duplicate key; pass build-filtered runs"
+                % (chosen_id, state, seen[state][0], key))
+        seen[state] = (key, float(agg.get("f1") or 0.0))
+    if "on" in seen and "off" in seen:
+        on_key, on_f1 = seen["on"]
+        off_key, off_f1 = seen["off"]
+        gap = round(on_f1 * 10000) - round(off_f1 * 10000)
+        band_tt = round(band * 10000)
+        if gap > band_tt:
+            return on_key, ("ON beats OFF by %d ten-thousandths (%.4f), more than the %d-"
+                            "ten-thousandth band (%.4f vs %.4f)"
+                            % (gap, gap / 10000.0, band_tt, on_f1, off_f1))
+        return off_key, ("OFF stands: ON beats it by %d ten-thousandths (%.4f), within the %d-"
+                         "ten-thousandth band (%.4f vs %.4f)"
+                         % (gap, gap / 10000.0, band_tt, on_f1, off_f1))
+    only = "on" if "on" in seen else ("off" if "off" in seen else None)
     return chosen_key, ("only the %s state was measured for %s" % (only, chosen_id) if only
                         else "no state was measured for %s" % chosen_id)
 
 
-def _state_key(model_id, state, table):
-    """The key of `model_id` in `state` - the run's own key, so the report names what ran."""
-    for key, entry in table.items():
-        if entry.get("model_id") == model_id and entry.get("expect_think") == state:
-            return key
-    return None
+def queue_line_fields(key, tpl_sha=None) -> str:
+    """`state=... kwarg=... tpl=...` for a queue log line. Pure.
+
+    What a reader of the log needs is what the arm RAN: the state its prompts render, the kwarg the
+    request carried, and which template did the rendering. The line this replaces printed
+    `think=<bool>`, which is the legacy switch flag - it READS as "thinking was on" and MEANS "the
+    OFF kwarg was sent", the exact inversion that let every Gemma arm think unnoticed.
+
+    Three kwarg spellings, and the third is not the second: `off` and `on` are sent explicitly,
+    while `none` means no kwarg at all - which llama.cpp's `--reasoning auto` default then resolves
+    to thinking ON. A key with no `think` but the legacy switch set does send the OFF kwarg.
+    """
+    m = MODELS.get(key) or {}
+    if m.get("think") is not None:
+        kwarg = m["think"]
+    elif m.get("thinking_switch"):
+        kwarg = "off"
+    else:
+        kwarg = "none"
+    return "state=%s kwarg=%s tpl=%s" % (m.get("expect_think"), kwarg,
+                                         tpl_sha[:16] if tpl_sha else "-")
+
+
+def _log_tpl_sha(key):
+    """The borrowed template's hash for a START line, or None.
+
+    Never raises: a log line must not be the thing that kills an arm, and `run_model` does the real
+    enforcement seconds later where a failure is a finding rather than a formatting accident.
+    """
+    try:
+        return resolve_template(key)[1]
+    except Exception:                                              # noqa: BLE001 - logged, not fatal
+        return None
 
 
 def _queue_log(log_path, line):
@@ -799,6 +930,16 @@ def run_queue(keys, seeds, days, log_path, port, ctx, ngl, max_tokens, results_d
             with open(out_path, encoding="utf-8") as fh:
                 prev = json.load(fh)
             if prev.get("contract") == CONTRACT and prev.get("schema_sha256") == schema_hash:
+                # THE BUILD IS PART OF "already done". A resume that skipped a run from another
+                # venue would leave the frozen build's number standing inside a field the queue was
+                # told to measure on this one - the same defect as comparing two builds as one
+                # field, reached through the resume path instead of the verdict path, and silent.
+                if not build_matches(prev.get("llama_version"), require_build):
+                    _queue_log(log_path, "%s STOP existing JSON is build %r, which does not contain "
+                                         "%r - refusing to overwrite; rename it by hand if it is "
+                                         "superseded"
+                               % (key, prev.get("llama_version"), require_build))
+                    return done, skipped, key
                 _queue_log(log_path, "%s SKIP already done (F1 %.4f)"
                            % (key, prev.get("aggregate", {}).get("f1", 0.0)))
                 done.append(key)
@@ -816,13 +957,13 @@ def run_queue(keys, seeds, days, log_path, port, ctx, ngl, max_tokens, results_d
             _queue_log(log_path, "%s SKIP model file absent: %s" % (key, mpath))
             skipped.append((key, "model file absent: %s" % mpath))
             continue
-        _queue_log(log_path, "%s START %s think=%s args=%s"
-                   % (key, time.strftime("%Y-%m-%d %H:%M:%S"), thinking_switch(key),
-                      " ".join(model_extra_args(key)) or "-"))
+        _queue_log(log_path, "%s START %s %s"
+                   % (key, time.strftime("%Y-%m-%d %H:%M:%S"),
+                      queue_line_fields(key, _log_tpl_sha(key))))
         t0 = time.time()
         try:
             res = run_model(key, seeds, days, out_path, port, ctx, ngl, max_tokens,
-                            require_build=require_build)
+                            require_build=require_build, results_dir=results_dir)
         except Exception as exc:                                   # noqa: BLE001
             if queue_action_for(exc) == "stop":
                 _queue_log(log_path, "%s STOP render mismatch %s" % (key, exc))
@@ -831,9 +972,12 @@ def run_queue(keys, seeds, days, log_path, port, ctx, ngl, max_tokens, results_d
             skipped.append((key, "error: %s" % exc))
             continue
         ag = res["aggregate"]
-        _queue_log(log_path, "%s END %s validity %.4f F1 %.4f scorableF1 %.4f %.1f s think=%s"
+        _queue_log(log_path, "%s END %s validity %.4f F1 %.4f scorableF1 %.4f %.1f s %s "
+                             "reasoning_calls=%d thinking_consistent=%s"
                    % (key, time.strftime("%Y-%m-%d %H:%M:%S"), ag["validity"], ag["f1"],
-                      ag.get("f1_scorable", 0.0), time.time() - t0, thinking_switch(key)))
+                      ag.get("f1_scorable", 0.0), time.time() - t0,
+                      queue_line_fields(key, res.get("chat_template_sha256")),
+                      ag.get("reasoning_calls", 0), res.get("thinking_consistent")))
         done.append(key)
     return done, skipped, None
 
@@ -858,13 +1002,20 @@ def run_smoke(key, days, port, ctx, ngl, max_tokens):
         print("smoke: could not find both probe spans (%d found)" % len(picks))
         return 1
     ok = True
+    # THE SMOKE RUNS THE ARM'S CONFIGURATION, not a nearby one. It exists to catch the failure that
+    # would invalidate an overnight queue, so it has to start the server the arm starts (the
+    # borrowed template included) and send the request the arm sends (the thinking kwarg included):
+    # a smoke that renders a different prompt through a different template proves nothing about the
+    # arm it was run for.
+    tpl_path, _tpl_from_sha = resolve_template(key)
     with _client.LlamaServer(model_path(key), port=port, ctx=ctx, ngl=ngl,
-                             extra_args=model_extra_args(key)) as srv:
+                             extra_args=resolved_extra_args(key, tpl_path)) as srv:
         print("server up: %s  (%s)" % (srv.base_url, srv.version))
         for s in picks:
             r = _client.extract_span(srv.base_url, s["sid"], s["text"], s["cluster"], s["day"],
                                      names, schema, max_tokens=max_tokens,
-                                     thinking_switch=thinking_switch(key))
+                                     thinking_switch=thinking_switch(key),
+                                     think=model_think(key), think_extra=model_think_extra(key))
             cands = r.get("candidates")
             print("--- span %d cluster %d: %r" % (s["sid"], s["cluster"], s["text"]))
             print("    http=%s finish=%s" % (r.get("status", "?"), r.get("finish_reason", "?")))
@@ -943,11 +1094,14 @@ def main(argv=None):
             print("server up: %s  (%s)" % (srv.base_url, srv.version))
             prompts = render_prompts(srv.base_url, key, a.seed, a.days, a.max_tokens)
             build_info = srv.version
-            tpl_sha = tpl_from_sha or _props_template_sha(srv.base_url)
+            # The same two fields a run records: the server's own view, and beside it the hash of
+            # the GGUF a borrowed template came out of. Never one standing in for the other.
+            tpl_sha = _props_template_sha(srv.base_url)
         spec = MODELS[key].get("render_expect")
         bad = [i for i, p in enumerate(prompts) if not render_matches(p, spec)]
         digest = render_digest(prompts)
         out = {"key": key, "build_info": build_info, "chat_template_sha256": tpl_sha,
+               "template_from_sha256": tpl_from_sha,
                "think_requested": model_think(key), "think_extra": model_think_extra(key) or None,
                "expect_think": MODELS[key].get("expect_think"), "render_expect": spec,
                "n_prompts": digest["n"], "prompt_sha256": digest["prompt_sha256"],
@@ -966,6 +1120,18 @@ def main(argv=None):
 
     if a.verdict:
         field = load_field(a.results_dir, build=a.build)
+        # A VERDICT NEVER MIXES BUILDS, and the guard is here rather than in the reader because the
+        # reader is right to load whatever is there - it is the DECISION that must belong to one
+        # venue. Without `--build` a results directory holding both fields would produce a table of
+        # two venues read as one, which is precisely what the build filter was added to prevent.
+        if not a.build:
+            builds = builds_in_field(field)
+            if len(builds) > 1:
+                print("this results directory holds runs from %d builds (%s) and --build was not "
+                      "given - a verdict over two venues read as one field is the thing the build "
+                      "filter exists to prevent; re-run with --build" % (len(builds),
+                                                                         ", ".join(builds)))
+                return 2
         if a.offonly:
             keep = []
             for key, agg, path in field:
@@ -989,7 +1155,15 @@ def main(argv=None):
         print("VERDICT: %s" % line)
         print("reason : %s" % v["reason"])
         op_key, op_reason = (None, "nothing chosen")
-        if v["chosen"]:
+        if a.offonly:
+            # Rule (3) defines the operating state FOR THE CHOICE. The OFF-only reading is reported
+            # beside the choice and never replaces it, so it has no operating state of its own -
+            # writing one here would put a second, competing answer to the question MS2 asks into a
+            # file whose whole purpose is to be read beside the first.
+            op_key = None
+            op_reason = "rule (3) defines the operating state for the choice only"
+            print("OPERATING: (none) - %s" % op_reason)
+        elif v["chosen"]:
             op_key, op_reason = operating_key(v["chosen"], [(k, ag) for k, ag, _ in field])
             print("OPERATING: %s" % op_key)
             print("because  : %s" % op_reason)

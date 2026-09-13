@@ -2193,10 +2193,34 @@ _PRE_A2_EXPECTED = {
 _A2_DECLARED = [k for k, v in _bench42.MODELS.items() if "think" in v]
 _A2_FIELDS = [k for k, v in _bench42.MODELS.items()
               if not all(f in v for f in ("model_id", "switch", "expect_think", "render_expect"))]
+# (think, expect_think, model_id) for each of the twelve, BY LITERAL - so `None` and `"on"` are told
+# apart instead of both reading as "it thinks". The distinction is the whole subject of addendum 2:
+# `None` sends NO kwarg and renders ON through llama.cpp's `--reasoning auto` default, which is the
+# shape every frozen-field Gemma run had, while `"on"` sends an explicit true. Arm 10 exists to
+# compare a venue, so it must send what the frozen run sent; sending true would move two things.
+_A2_DECL_EXPECTED = {
+    "gemma-e4b-v040-nothink":     ("off", "off", "gemma-e4b-q4km"),
+    "nuextract3-think":           ("on",  "on",  "nuextract3-q4km"),
+    "qwen3-8b-v040":              ("off", "off", "qwen3-8b-q4km"),
+    "qwen35-4b-v040":             ("off", "off", "qwen35-4b-q4km"),
+    "qwen35-9b-v040":             ("off", "off", "qwen35-9b-q4km"),
+    "qwen3-8b-v040-think":        ("on",  "on",  "qwen3-8b-q4km"),
+    "qwen35-4b-v040-think":       ("on",  "on",  "qwen35-4b-q4km"),
+    "qwen35-9b-v040-think":       ("on",  "on",  "qwen35-9b-q4km"),
+    "gemma-e2b-v040-nothink":     ("off", "off", "gemma-e2b-q4km"),
+    "gemma-e2b-v040":             (None,  "on",  "gemma-e2b-q4km"),
+    "gemma-e4b-q8-q4tpl-nothink": ("off", "off", "gemma-e4b-q8-q4tpl"),
+    "gemma-e4b-q8-q4tpl":         (None,  "on",  "gemma-e4b-q8-q4tpl"),
+}
+_A2_DECL = {k: (_bench42.MODELS[k].get("think"), _bench42.MODELS[k].get("expect_think"),
+                _bench42.MODELS[k].get("model_id")) for k in _ADDENDUM2}
 check("T43a addendum 2's twelve keys exist with their own paths, every key in the table declares "
       "model_id / switch / expect_think / render_expect, exactly the twelve declare a think state, "
-      "the two controlled arms name the template they borrow and the digest they must match, and no "
-      "pre-existing key's path or switch moved",
+      "each by literal so a sent kwarg and an absent one are distinguishable, the two controlled "
+      "arms name the template they borrow and the digest they must match, and no pre-existing key's "
+      "path or switch moved",
+      _A2_DECL == _A2_DECL_EXPECTED
+      and
       all(k in _bench42.MODELS for k in _ADDENDUM2)
       and all(_bench42.model_path(k) == p for k, p in _A2_PATHS.items())
       and _A2_FIELDS == []
@@ -2213,7 +2237,8 @@ check("T43a addendum 2's twelve keys exist with their own paths, every key in th
           _bench42.MODELS["gemma-e4b-v040-nothink"]["model_id"]
       and _PRE_A2 == _PRE_A2_EXPECTED
       and len(_bench42.MODELS) == 32,
-      str((sorted(set(_A2_DECLARED) ^ set(_ADDENDUM2)), _A2_FIELDS, len(_bench42.MODELS))))
+      str((sorted(set(_A2_DECLARED) ^ set(_ADDENDUM2)), _A2_FIELDS, len(_bench42.MODELS),
+           {k: v for k, v in _A2_DECL.items() if _A2_DECL_EXPECTED.get(k) != v})))
 
 _mk43 = lambda **kw: _c43.build_request("t", 1, 1, {1: "a"}, 0, {}, **kw)
 _legacy_on43 = _mk43(thinking_switch=True).get("chat_template_kwargs")
@@ -2298,9 +2323,19 @@ try:
     _bench42.resolved_extra_args("gemma-e4b-q8-q4tpl")
 except ValueError:
     _needs_path43 = True
+# AFTER is not vacuous only if something is there to be after. No key declares an extra argument
+# today, so with the real table the order clause would pass however it were written; this stands one
+# in front of the template so "appended after the shared arguments" is actually asserted.
+_saved_mea43 = _bench42.model_extra_args
+_bench42.model_extra_args = lambda k: ["--x"] if k == "gemma-e4b-q8-q4tpl" else []
+try:
+    _order43 = _bench42.resolved_extra_args("gemma-e4b-q8-q4tpl", "T.jinja")
+finally:
+    _bench42.model_extra_args = _saved_mea43
 check("T43e the borrowed template is appended as a server argument for the two controlled arms "
-      "only, after the shared arguments, and no key stores one statically",
+      "only, AFTER the shared arguments, and no key stores one statically",
       _ctrl43 == ["--chat-template-file", "T.jinja"]
+      and _order43 == ["--x", "--chat-template-file", "T.jinja"]
       and _plain43 == []
       and all(_bench42.model_extra_args(k) == [] for k in _bench42.MODELS)
       and _needs_path43,
@@ -2342,8 +2377,15 @@ with _tf42.TemporaryDirectory() as _td43b:
           and not _bench42.eligible_offonly(_s_says_on)
           and sorted(_off_field) == ["gemma-e4b-v040-nothink", "lfm25-2.6b", "qwen3-8b"]
           and _rc43 == 0 and _wrote43.exists() and _vj43.get("offonly") is True
-          and _vj43.get("n_models") == 3,
-          str((sorted(_off_field), _vj43.get("n_models"), _vj43.get("chosen"))))
+          and _vj43.get("n_models") == 3
+          # and carries NO operating state: rule (3) defines one for the choice, and a second
+          # answer to the question MS2 asks, sitting in the file read beside the first, is worse
+          # than none at all
+          and _vj43.get("operating_key") is None
+          and _vj43.get("operating_reason") == \
+              "rule (3) defines the operating state for the choice only",
+          str((sorted(_off_field), _vj43.get("n_models"), _vj43.get("chosen"),
+               _vj43.get("operating_key"))))
 
 _runs_band43 = [("gemma-e4b-v040", {"f1": 0.7695}), ("gemma-e4b-v040-nothink", {"f1": 0.7650})]
 _runs_beat43 = [("gemma-e4b-v040", {"f1": 0.7695}), ("gemma-e4b-v040-nothink", {"f1": 0.7500})]
@@ -2355,7 +2397,8 @@ _op_wide43 = _bench42.operating_key("gemma-e4b-v040", _runs_beat43, band=0.05)
 check("T43g the operating state is the chosen model's OFF key unless ON beats it by MORE than the "
       "band, the band is a parameter, and one measured state is its own operating state",
       _op_band43[0] == "gemma-e4b-v040-nothink"
-      and _op_beat43[0] == "gemma-e4b"          # the ON key of that model_id
+      and _op_beat43[0] == "gemma-e4b-v040"     # the ON run that was passed, never a key from
+                                                # another build
       and _op_one43[0] == "gemma-e4b-v040"
       and _op_wide43[0] == "gemma-e4b-v040-nothink"   # 0.0195 is inside a 0.05 band
       and "band" in _op_band43[1] and "0.0045" in _op_band43[1],
@@ -2382,6 +2425,215 @@ check("T43i a render mismatch stops the whole queue - every later arm's meaning 
       and _bench42.queue_action_for(ValueError("x")) == "skip"
       and issubclass(_bench42.RenderMismatch, RuntimeError),
       "queue_action_for")
+
+
+# --- T43j-T43q: the defects a read-only review of the addendum-2 harness found, fixed TEST-FIRST
+# and BEFORE any addendum-2 verdict was computed. Two were reproduced through the real functions
+# before anything was written: `operating_key` returned the FROZEN b8728 key for a field measured
+# entirely on b10809, and an exactly-at-the-band pair went to ON because 0.7695 - 0.7595 is
+# 0.010000000000000009 in doubles. The rest are the same defect class - a check that cannot fail.
+import contextlib as _cl43  # noqa: E402
+import io as _io43  # noqa: E402
+
+_opj_a43 = _bench42.operating_key("gemma-e4b-v040",
+                                  [("gemma-e4b-v040", {"f1": 0.7695}),
+                                   ("gemma-e4b-v040-nothink", {"f1": 0.7500})])
+_opj_b43 = _bench42.operating_key("qwen3-8b-v040",
+                                  [("qwen3-8b-v040", {"f1": 0.70}),
+                                   ("qwen3-8b-v040-think", {"f1": 0.62})])
+_opj_c43 = _bench42.operating_key("nuextract3",
+                                  [("nuextract3", {"f1": 0.6467}),
+                                   ("nuextract3-think", {"f1": 0.4251})])
+_opj_d43 = _bench42.operating_key("gemma-e2b-v040",
+                                  [("gemma-e2b-v040", {"f1": 0.80}),
+                                   ("gemma-e2b-v040-nothink", {"f1": 0.70})])
+_opj_passed43 = (_opj_a43[0] in ("gemma-e4b-v040", "gemma-e4b-v040-nothink")
+                 and _opj_b43[0] in ("qwen3-8b-v040", "qwen3-8b-v040-think")
+                 and _opj_c43[0] in ("nuextract3", "nuextract3-think")
+                 and _opj_d43[0] in ("gemma-e2b-v040", "gemma-e2b-v040-nothink"))
+_opj_dup43 = False
+try:
+    _bench42.operating_key("gemma-e4b-v040", [("gemma-e4b", {"f1": 0.7426}),
+                                              ("gemma-e4b-v040", {"f1": 0.7695})])
+except ValueError:
+    _opj_dup43 = True
+check("T43j the operating key is always one of the runs PASSED and never a key looked up in the "
+      "table: the frozen `gemma-e4b`, `gemma-e2b` and `nuextract` each carry the same model_id and "
+      "state as an addendum-2 run, so a table lookup names a b8728 run as the state MS2 operates "
+      "in; two runs of one model in one state refuse rather than pick",
+      _opj_a43[0] == "gemma-e4b-v040"       # never `gemma-e4b`, the b8728 key of that model_id
+      and _opj_b43[0] == "qwen3-8b-v040"
+      and _opj_c43[0] == "nuextract3"       # never `nuextract`, the frozen key of that model_id
+      and _opj_d43[0] == "gemma-e2b-v040"   # never `gemma-e2b`
+      and _opj_passed43 and _opj_dup43,
+      str((_opj_a43[0], _opj_b43[0], _opj_c43[0], _opj_d43[0], _opj_passed43, _opj_dup43)))
+
+_band_at43 = _bench42.operating_key("gemma-e4b-v040",
+                                    [("gemma-e4b-v040", {"f1": 0.7695}),
+                                     ("gemma-e4b-v040-nothink", {"f1": 0.7595})])
+_band_over43 = _bench42.operating_key("gemma-e4b-v040",
+                                      [("gemma-e4b-v040", {"f1": 0.7696}),
+                                       ("gemma-e4b-v040-nothink", {"f1": 0.7595})])
+_band_meas43 = _bench42.operating_key("gemma-e4b-v040",
+                                      [("gemma-e4b-v040", {"f1": 0.7695}),
+                                       ("gemma-e4b-v040-nothink", {"f1": 0.7585})])
+_raw_would43 = (0.7695 - 0.7595) > 0.01      # True in doubles - the defect, kept visible here
+check("T43k the band is decided in the aggregates' own 4-dp precision, so a gap of EXACTLY the band "
+      "stays OFF where the float compare sent it to ON, and the reason prints the gap in "
+      "ten-thousandths",
+      _band_at43[0] == "gemma-e4b-v040-nothink"
+      and _band_over43[0] == "gemma-e4b-v040"
+      and _band_meas43[0] == "gemma-e4b-v040"    # the measured E4B pair, 110 ten-thousandths
+      and _raw_would43                           # the comparison this replaces really would differ
+      and "100 ten-thousandths" in _band_at43[1]
+      and "110 ten-thousandths" in _band_meas43[1],
+      str((_band_at43, _band_over43[0], _band_meas43[0], _raw_would43)))
+
+with _tf42.TemporaryDirectory() as _td43c:
+    _td43c = Path(_td43c)
+    for _k43, _v43, _f43 in (("delta", "b10809-5266f24da", 0.70),
+                             ("alpha", "b8728-5e9c63546", 0.30)):
+        (_td43c / ("ms1b_%s.json" % _k43)).write_text(_j42.dumps({
+            "model_key": _k43, "contract": _bench42.CONTRACT,
+            "schema_sha256": _bench42.CONTRACT2_SCHEMA_SHA256, "llama_version": _v43,
+            "aggregate": {"validity": 1.0, "f1": _f43}}), encoding="utf-8")
+    with _cl43.redirect_stdout(_io43.StringIO()):
+        _rc_mixed43 = _bench42.main(["--verdict", "--results-dir", str(_td43c)])
+        _rc_mixoff43 = _bench42.main(["--verdict", "--offonly", "--results-dir", str(_td43c)])
+        _rc_filt43 = _bench42.main(["--verdict", "--build", "b10809", "--results-dir", str(_td43c)])
+    _wrote_mixed43 = (_td43c / "ms1b_field_verdict.json").exists()
+    _wrote_filt43 = (_td43c / "ms1b_field_verdict_b10809.json").exists()
+    check("T43l a verdict refuses a results directory spanning two builds unless --build says which "
+          "one it means, with or without --offonly, and writes no file when it refuses",
+          _rc_mixed43 == 2 and _rc_mixoff43 == 2 and not _wrote_mixed43
+          and _rc_filt43 == 0 and _wrote_filt43,
+          str((_rc_mixed43, _rc_mixoff43, _rc_filt43, _wrote_mixed43, _wrote_filt43)))
+
+_smoke_seen43 = {}
+
+
+class _StubSrv43:
+    """Records the server arguments an arm would start with. Starts nothing, reads no model."""
+
+    def __init__(self, *a, **kw):
+        _smoke_seen43["extra_args"] = list(kw.get("extra_args") or [])
+        self.base_url = "http://127.0.0.1:0"
+        self.version = "b10809-stub"
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _stub_extract43(*a, **kw):
+    _smoke_seen43.setdefault("think", []).append(kw.get("think"))
+    return {"candidates": [], "raw": "{}", "status": 200, "finish_reason": "stop"}
+
+
+_saved_ls43 = _bench42._client.LlamaServer
+_saved_ex43 = _bench42._client.extract_span
+_saved_rt43 = _bench42.resolve_template
+try:
+    _bench42._client.LlamaServer = _StubSrv43
+    _bench42._client.extract_span = _stub_extract43
+    # so no GGUF is opened: what is under test is that the smoke USES the resolved template,
+    # not that the template can be read (T43d covers the reader)
+    _bench42.resolve_template = (lambda k: ("T.jinja", "abc")
+                                 if _bench42.MODELS[k].get("template_from") else (None, None))
+    with _cl43.redirect_stdout(_io43.StringIO()):
+        _smoke_seen43 = {}
+        _rc_ctrl43 = _bench42.run_smoke("gemma-e4b-q8-q4tpl-nothink", 14, 8099, 4096, 99, 2048)
+        _ctrl_seen43 = dict(_smoke_seen43)
+        _smoke_seen43 = {}
+        _rc_on43 = _bench42.run_smoke("qwen3-8b-v040-think", 14, 8099, 4096, 99, 2048)
+        _on_seen43 = dict(_smoke_seen43)
+finally:
+    _bench42._client.LlamaServer = _saved_ls43
+    _bench42._client.extract_span = _saved_ex43
+    _bench42.resolve_template = _saved_rt43
+check("T43m the smoke starts the server the ARM starts and sends the request the ARM sends - the "
+      "borrowed template and the thinking kwarg included - so a green smoke is evidence about the "
+      "arm it was run for and not about a neighbouring configuration",
+      _ctrl_seen43.get("extra_args") == ["--chat-template-file", "T.jinja"]
+      and _ctrl_seen43.get("think") == ["off", "off"]
+      and _on_seen43.get("extra_args") == []
+      and _on_seen43.get("think") == ["on", "on"]
+      and _rc_ctrl43 == 0 and _rc_on43 == 0,
+      str((_ctrl_seen43, _on_seen43, _rc_ctrl43, _rc_on43)))
+
+_qf_off43 = _bench42.queue_line_fields("gemma-e4b-v040-nothink")
+_qf_on43 = _bench42.queue_line_fields("nuextract3-think")
+_qf_none43 = _bench42.queue_line_fields("gemma-e2b-v040")
+_qf_legacy43 = _bench42.queue_line_fields("qwen3-8b")
+_qf_ctrl43 = _bench42.queue_line_fields("gemma-e4b-q8-q4tpl", "55572b8d3c834204ffff")
+check("T43n the queue line states what ran - the rendered state, which of the three kwarg spellings "
+      "was sent, and the template that rendered it - where the line it replaces printed the legacy "
+      "switch flag, which READS as thinking-on and MEANS the OFF kwarg was sent",
+      _qf_off43 == "state=off kwarg=off tpl=-"
+      and _qf_on43 == "state=on kwarg=on tpl=-"
+      # no kwarg at all is NOT the same as off: it renders ON through --reasoning auto, which is
+      # the whole finding addendum 2 exists for
+      and _qf_none43 == "state=on kwarg=none tpl=-"
+      and _qf_legacy43 == "state=off kwarg=off tpl=-"
+      and _qf_ctrl43 == "state=on kwarg=none tpl=55572b8d3c834204",
+      str((_qf_off43, _qf_on43, _qf_none43, _qf_legacy43, _qf_ctrl43)))
+
+_tc43 = _bench42.thinking_consistent
+check("T43o a thinking state that did not happen is flagged: ON needs reasoning to come back, OFF "
+      "needs none to, and a state with nothing to check or a run with no calls is consistent by "
+      "construction rather than by accident",
+      _tc43("on", 1670, 1670) and not _tc43("on", 0, 1670)
+      and _tc43("off", 0, 1670) and not _tc43("off", 3, 1670)
+      and _tc43("on", 0, 0) and _tc43(None, 0, 1670) and _tc43(None, 5, 1670),
+      "thinking_consistent truth table")
+
+with _tf42.TemporaryDirectory() as _td43d:
+    _td43d = Path(_td43d)
+
+    def _prev43(key, ver):
+        (_td43d / ("ms1b_%s.json" % key)).write_text(_j42.dumps({
+            "model_key": key, "contract": _bench42.CONTRACT,
+            "schema_sha256": _bench42.CONTRACT2_SCHEMA_SHA256, "llama_version": ver,
+            "aggregate": {"validity": 1.0, "f1": 0.5}}), encoding="utf-8")
+
+    _prev43("qwen3-8b-v040", "b10809-5266f24da")
+    _prev43("qwen35-4b-v040", "b8728-5e9c63546")
+    with _cl43.redirect_stdout(_io43.StringIO()):
+        _d_ok43, _s_ok43, _st_ok43 = _bench42.run_queue(
+            ["qwen3-8b-v040"], [1], 14, None, 8089, 4096, 99, 2048, results_dir=str(_td43d),
+            require_build="b10809", schema_hash=_bench42.CONTRACT2_SCHEMA_SHA256)
+        _d_bad43, _s_bad43, _st_bad43 = _bench42.run_queue(
+            ["qwen35-4b-v040"], [1], 14, None, 8089, 4096, 99, 2048, results_dir=str(_td43d),
+            require_build="b10809", schema_hash=_bench42.CONTRACT2_SCHEMA_SHA256)
+    check("T43p a resume skips a finished run only when it is from the build being measured; a run "
+          "from the other venue STOPS the queue instead of being counted as done and leaving the "
+          "wrong field's number standing",
+          _d_ok43 == ["qwen3-8b-v040"] and _st_ok43 is None
+          and _d_bad43 == [] and _st_bad43 == "qwen35-4b-v040",
+          str((_d_ok43, _st_ok43, _d_bad43, _st_bad43)))
+
+_ref_good43 = {"key": "gemma-e4b-v040-nothink", "render_ok": True,
+               "build_info": "b10809-5266f24da", "prompt_sha256": ["a"]}
+
+
+def _ref_raises43(ref):
+    try:
+        _bench42.check_reference_digest(ref, "gemma-e4b-v040-nothink", "b10809")
+        return False
+    except _bench42.RenderMismatch:
+        return True
+
+
+check("T43q the controlled arm's reference digest is checked before it is compared against: a "
+      "digest can be present and wrong - another key's, a render that failed its own spec, or one "
+      "taken on the other build - and each would leave the comparison looking perfectly controlled",
+      not _ref_raises43(_ref_good43)
+      and _ref_raises43(dict(_ref_good43, key="gemma-e4b-v040"))
+      and _ref_raises43(dict(_ref_good43, render_ok=False))
+      and _ref_raises43(dict(_ref_good43, build_info="b8728-5e9c63546")),
+      "check_reference_digest")
 
 
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
