@@ -17,7 +17,7 @@ Both are module constants plus formatting, so the test can pin them (T35b) witho
 """
 from ..registry import PREDICATES, RELATIONS
 from .derive import SPEAKER
-from .schema import POLARITIES
+from .schema import CONTRACTS, POLARITIES
 
 _RULES = """\
 You extract structured candidates from ONE utterance of a household conversation.
@@ -45,7 +45,7 @@ STATED:
   An address term is stated: calling someone "my husband" or "love" states the relation.
   A hint is NOT stated: "she picked the kids up" only suggests one. Emit a hint as a candidate
   only if you are confident, with stated false.
-
+%(ended)s
 OBJECT:
   object is the value AS SAID, e.g. "a nurse", "Sydney". Do NOT normalise it, do not strip words,
   do not lower-case it. That is done for you.
@@ -61,14 +61,45 @@ _EXTRA_DESC = {
     "household.routine": "something the household regularly does TOGETHER",
 }
 
+# CONTRACT 3 (MS2a, 2026-09-15). Three differences from contract 2, each answering a MEASURED loss
+# of the chosen extractor on the contract-2 corpus, and no fourth:
+#   (a) the STATED block gains the `ended` line - the winner set `ended` on none of the ten
+#       "i stopped, i no longer ..." spans and once in 1,670 calls. It is a judgement about the
+#       utterance, so it is an instruction; it cannot be derived from the span.
+#   (b) `person.lives_in` and `person.works_as` say that a change is a NEW CURRENT VALUE - the
+#       winner missed every "we moved to ... last week" span. The registry already declares
+#       current-value semantics; the prompt never said so.
+#   (c) `household.routine` and `household.topic` are re-drawn on the SCHEDULE boundary - the
+#       winner's largest recoverable loss (routine F1 0.167 against topic 0.945) is that boundary
+#       failing in both directions.
+# The `ended` line is spliced where an EMPTY substitution reproduces contract 2 byte for byte, so
+# the closed field's prompt hash never moves.
+_ENDED_LINE_C3 = ('  ended is true when the speaker says a value no longer holds ("i stopped", '
+                  '"no longer", "not any more", "used to").\n')
+_CHANGE_DESC_C3 = ('a change is a new current value ("we moved to X last week" is the new value X, '
+                   "with about_time when the utterance gives one)")
+_EXTRA_DESC_C3 = {
+    "person.lives_in": _CHANGE_DESC_C3,
+    "person.works_as": _CHANGE_DESC_C3,
+    "household.routine": "a recurring household chore or event on a schedule (a weekday or a time)",
+    "household.topic": "a subject or hobby the household talks about, with no schedule",
+}
 
-def system_prompt() -> str:
-    """Every predicate, relation and polarity the registry knows, listed once each."""
+
+def system_prompt(contract: str = "contract2") -> str:
+    """Every predicate, relation and polarity the registry knows, listed once each.
+
+    `contract2` is the default and returns HEAD's string byte for byte: the MS1 field is closed and
+    its prompt is part of what those numbers were measured under.
+    """
+    if contract not in CONTRACTS:
+        raise ValueError("unknown contract %r - known: %s" % (contract, ", ".join(CONTRACTS)))
+    extra = _EXTRA_DESC_C3 if contract == "contract3" else _EXTRA_DESC
     lines = []
     for pid in sorted(PREDICATES):
         p = PREDICATES[pid]
         subj = "/".join(sorted(p.subject_kinds))
-        desc = "; ".join(x for x in (p.description, _EXTRA_DESC.get(pid)) if x)
+        desc = "; ".join(x for x in (p.description, extra.get(pid)) if x)
         lines.append("  %-22s arity=%-6s subject=%-9s object=%-6s  %s"
                      % (pid, p.arity, subj, p.object_kind, desc))
     return _RULES % {
@@ -76,6 +107,7 @@ def system_prompt() -> str:
         "relations": ", ".join(sorted(RELATIONS)),
         "polarities": ", ".join(POLARITIES),
         "speaker": SPEAKER,
+        "ended": _ENDED_LINE_C3 if contract == "contract3" else "",
     }
 
 

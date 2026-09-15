@@ -22,6 +22,7 @@ import json
 import statistics
 import time
 
+from .. import people as _people
 from ..confidence import SURFACE_THRESHOLD
 from ..store import MemoryStore
 from . import corpus as _corpus
@@ -239,7 +240,39 @@ def _score_relations(st, items, ids):
     return hit / len(surfaced), len(surfaced)
 
 
-def extracted_candidates(run_json_path, seed, hh):
+def _env_block(embedder=None) -> dict:
+    """What produced these numbers, recorded in every output file.
+
+    The GPU name and driver are read on EVERY run because the lane-ON control's disposition (design
+    §8) turns on whether two runs shared an environment; the library versions are read only when an
+    embedder is given, so the stdlib-only path never imports torch and the CI step is unaffected.
+    Any failure is RECORDED as a string and never raised: provenance must not be able to kill a run.
+    """
+    import platform
+    import subprocess
+    env = {"python": platform.python_version()}
+    try:
+        out = subprocess.run(["nvidia-smi", "--query-gpu=name,driver_version",
+                              "--format=csv,noheader"],
+                             capture_output=True, text=True, timeout=30)
+        env["gpu"] = (out.stdout or out.stderr or "").strip().splitlines()[0].strip()
+    except Exception as exc:                                       # noqa: BLE001 - recorded
+        env["gpu"] = "unavailable: %r" % (exc,)
+    if embedder is not None:
+        for name, mod in (("torch", "torch"), ("transformers", "transformers"),
+                          ("sentence_transformers", "sentence_transformers")):
+            try:
+                env[name] = __import__(mod).__version__
+            except Exception as exc:                               # noqa: BLE001 - recorded
+                env[name] = "unavailable: %r" % (exc,)
+        try:
+            env["cuda"] = __import__("torch").version.cuda
+        except Exception as exc:                                   # noqa: BLE001 - recorded
+            env["cuda"] = "unavailable: %r" % (exc,)
+    return env
+
+
+def extracted_candidates(run_json_path, seed, hh, contract="contract2"):
     """One household's EXTRACTED candidates, shaped like the corpus's, for the MS1b winner run.
 
     The extractor's derived candidate already carries everything the store needs except the two
@@ -253,9 +286,24 @@ def extracted_candidates(run_json_path, seed, hh):
     """
     with open(run_json_path, encoding="utf-8") as fh:
         d = json.load(fh)
+    # THE RUN AND THE CORPUS MUST BE THE SAME MEASUREMENT. A contract-2 run's predictions cite
+    # contract-2 span ids; replaying them against a contract-3 corpus (or the reverse) would score a
+    # model on spans it never saw and silently drop the rest. Each of these raises NAMING THE FILE,
+    # because the wrong `--candidates-from` is the easy mistake here and a quiet empty list is the
+    # worst way to find out.
+    if d.get("contract", "contract2") != contract:
+        raise ValueError("%s is contract %r, but the harness is running %r - a run's candidates are "
+                         "only replayable against the corpus they were extracted from"
+                         % (run_json_path, d.get("contract", "contract2"), contract))
+    if d.get("days") is not None and d["days"] != hh["days"]:
+        raise ValueError("%s ran %s days, the harness %s - different corpora"
+                         % (run_json_path, d["days"], hh["days"]))
     rec = next((h for h in d["households"] if h["seed"] == seed), None)
     if rec is None:
-        return []
+        raise ValueError("%s holds no household for seed %s" % (run_json_path, seed))
+    if rec.get("n_spans") is not None and rec["n_spans"] != len(hh["spans"]):
+        raise ValueError("%s seed %s recorded %s spans, the corpus has %s - different corpora"
+                         % (run_json_path, seed, rec["n_spans"], len(hh["spans"])))
     by_sid = {sp["sid"]: sp for sp in hh["spans"]}
     out = []
     for c in rec.get("predictions", []):
@@ -271,14 +319,16 @@ def extracted_candidates(run_json_path, seed, hh):
 
 
 def run_household(seed, days, predicate_hint=True, embedder=None, drop_stopwords=True,
-                  candidates_from=None):
+                  candidates_from=None, contract="contract2"):
     """`predicate_hint=False` is the NEGATIVE CONTROL: the MS0 lane, unrestricted.
 
     `embedder` adds the vector lane. It is applied by `embed_pending` AFTER ingest, never during:
     the write path stays embedding-free so the p99 write band measures the store, not a GPU.
+
+    `contract` selects the corpus and, on the EXTRACTED path only, the contract-3 hearsay rule.
     """
     hint = "auto" if predicate_hint else None
-    hh = _corpus.generate_household(seed, days)
+    hh = _corpus.generate_household(seed, days, contract)
     st = MemoryStore(":memory:", drop_stopwords=drop_stopwords)
     clusters = {c: st.add_cluster() for c in hh["clusters"]}
     owner_name = hh["persons"][0]["name"]
@@ -291,9 +341,16 @@ def run_household(seed, days, predicate_hint=True, embedder=None, drop_stopwords
     # The ORACLE's candidates are the default and the path every earlier milestone measured.
     # `candidates_from` swaps in an MS1b run's EXTRACTED candidates instead - the same store, the
     # same rules, the same bands, driven by what a model actually produced.
-    source = (extracted_candidates(candidates_from, seed, hh) if candidates_from
+    source = (extracted_candidates(candidates_from, seed, hh, contract) if candidates_from
               else hh["candidates"])
     alias = None
+    # The HEARSAY map (contract 3 f): a subject ref to the cluster that ref denotes, in BOTH the
+    # forms an extractor produces - the cluster id as a string (`derive._subject` for a first-person
+    # `about`) and each household member's own lower-cased name. Built here because only the
+    # household knows its names, which is the review finding that put this map in the harness.
+    cluster_of_ref = {"1": 1, "2": 2,
+                      str(owner_name).lower(): 1, str(partner_name).lower(): 2}
+    hearsay_demoted = 0
     if candidates_from:
         # An extractor names a subject the way the utterance did: a cluster id or a name. Both mean
         # one of the two people the oracle calls "owner" and "partner".
@@ -327,6 +384,17 @@ def run_household(seed, days, predicate_hint=True, embedder=None, drop_stopwords
 
         queue, pending = pending + cands_by_day.get(day, []), []
         for c in queue:
+            # THE HEARSAY CHECK RUNS HERE, when the candidate is first offered, and not inside
+            # `extracted_candidates`: a later milestone resolves a pronoun ref to a cluster, and
+            # that resolution has to happen before this decision, not after it. Contract-3
+            # EXTRACTED runs only - the oracle path and every contract-2 store run are untouched,
+            # so every earlier number stays re-runnable.
+            if contract == "contract3" and candidates_from and not _people.stated_allowed(
+                    c, cluster_of_ref):
+                c = dict(c)
+                c["source_kind"] = "inferred"
+                c["stated"] = False
+                hearsay_demoted += 1
             prepared = _prepare(c, ids, sid_map, alias)
             if prepared is None:
                 pending.append(c)
@@ -386,8 +454,9 @@ def run_household(seed, days, predicate_hint=True, embedder=None, drop_stopwords
     violations = len(st.audit_violations())
     n_facts = st.conn.execute("select count(*) from fact").fetchone()[0]
     st.close()
-    return {
+    out_hh = {
         "seed": seed,
+        "n_spans": len(hh["spans"]),
         "n_candidates": len(hh["candidates"]),
         "n_filler": len(hh["sets"]["growth_filler"]),
         "n_facts_after_growth": n_facts,
@@ -428,6 +497,11 @@ def run_household(seed, days, predicate_hint=True, embedder=None, drop_stopwords
         "growth_drop_paraphrase_points": round(100.0 * (update_para - growth_para), 4),
         "audit_violations": violations,
     }
+    # EXTRACTED-path runs only, and 0 under contract 2 by construction. An ORACLE output carries no
+    # such key at all, so no earlier control file gains a field.
+    if candidates_from:
+        out_hh["hearsay_demoted"] = hearsay_demoted
+    return out_hh
 
 
 def measure_latency(n_facts, n_subjects=2000):
@@ -466,8 +540,10 @@ def measure_latency(n_facts, n_subjects=2000):
 
 
 def run(seeds, days, latency_facts, out_path=None, predicate_hint=True, embedder=None,
-        embedder_name="none", drop_stopwords=True, candidates_from=None) -> dict:
-    households = [run_household(s, days, predicate_hint, embedder, drop_stopwords, candidates_from)
+        embedder_name="none", drop_stopwords=True, candidates_from=None,
+        contract="contract2") -> dict:
+    households = [run_household(s, days, predicate_hint, embedder, drop_stopwords, candidates_from,
+                                contract)
                   for s in seeds]
     agg = {}
     for field in ("update_acc", "coexist_recall", "transfer_recall5", "relation_precision",
@@ -532,7 +608,21 @@ def run(seeds, days, latency_facts, out_path=None, predicate_hint=True, embedder
                   "Transfer and relation precision are REPORTED, not banded - the embedding lane "
                   "lands at MS1. Nothing here is measured on real speech or on the owner."),
     }
+    out["contract"] = contract
+    if candidates_from:
+        # WHICH run's candidates these are, and under what contract and schema they were produced -
+        # so a reader of this file never has to guess which extraction it is scoring.
+        out["hearsay_demoted"] = sum(h.get("hearsay_demoted", 0) for h in households)
+        try:
+            with open(candidates_from, encoding="utf-8") as fh:
+                src = json.load(fh)
+            out["candidates_contract"] = src.get("contract")
+            out["candidates_schema_sha256"] = src.get("schema_sha256")
+        except Exception as exc:                                   # noqa: BLE001 - recorded
+            out["candidates_contract"] = "unavailable: %r" % (exc,)
+            out["candidates_schema_sha256"] = None
     if out_path:
+        out["env"] = _env_block(embedder)
         with open(out_path, "w", encoding="utf-8") as fh:
             json.dump(out, fh, indent=2, sort_keys=True)
             fh.write("\n")

@@ -397,6 +397,38 @@ def queue_action_for(exc) -> str:
     return "stop" if isinstance(exc, RenderMismatch) else "skip"
 
 
+def finish_counts(results) -> dict:
+    """`{finish_reason: count}` over one household's calls, a None reason keyed "none". Pure.
+
+    The field measured models losing whole calls to `finish=length` (Llama 3.1 8B 7, Llama 3.2 1B
+    33) and nothing in a run JSON said so - the loss showed up only as a lower F1. Counting the
+    reasons makes a truncated run self-describing, which is what contract 3's `maxItems` is for.
+    """
+    out = {}
+    for r in results or ():
+        key = r.get("finish_reason") or "none"
+        out[str(key)] = out.get(str(key), 0) + 1
+    return out
+
+
+def provenance_fields(before, after, reread=None) -> dict:
+    """Exactly five provenance keys from up to three readings of the model file. Pure.
+
+    TWICE now a page-cache misread has put a WRONG `model_sha256` into a run JSON (2026-09-12 and
+    2026-09-15), both times because the hash was taken as a multi-gigabyte mapping was being torn
+    down, and both times the file on disk was byte-identical to its published digest. Hashing before
+    the server starts AND after it exits makes that self-describing instead of silent: a
+    disagreement is a FINDING recorded in the run, never a stop, because the arm itself ran fine.
+    """
+    return {
+        "model_sha256": before,
+        "model_sha256_after": after,
+        "model_sha256_reread": reread,
+        "model_sha256_agree": after == before,
+        "model_sha256_reread_agree": None if reread is None else reread == before,
+    }
+
+
 def thinking_consistent(expect_think, reasoning_calls, total_calls) -> bool:
     """Did the thinking state a run declared actually HAPPEN? Pure.
 
@@ -414,14 +446,40 @@ def thinking_consistent(expect_think, reasoning_calls, total_calls) -> bool:
     return reasoning_calls > 0 if expect_think == "on" else reasoning_calls == 0
 
 
-def check_reference_digest(ref, must, require_build=None):
+LEGACY_DIGEST = {"contract": "contract2", "schema_sha256": CONTRACT2_SCHEMA_SHA256,
+                 "seed": 1, "days": 14}
+
+
+def check_reference_digest(ref, must, require_build=None, contract=None, schema_hash=None,
+                           seed=None, days=None):
     """The controlled comparison's reference must be the right digest, or there is no control. Pure.
 
-    Raises RenderMismatch. Three ways a digest can be PRESENT AND WRONG, each of which would make
-    the quantisation answer meaningless while looking exactly like a pass: it is some other key's
-    digest (a stale file, or a copy taken for a comparison), it records a render that did not match
-    its own spec, or it was rendered on the other build.
+    Raises RenderMismatch. Ways a digest can be PRESENT AND WRONG, each of which would make the
+    comparison meaningless while looking exactly like a pass: it is some other key's digest (a stale
+    file, or a copy taken for a comparison), it records a render that did not match its own spec, it
+    was rendered on the other build, or - MS2a - it was rendered under a different CONTRACT, schema,
+    seed or day count, which changes the prompts themselves.
+
+    THE LEGACY RULE, and it is what keeps the committed contract-2 digests valid: under
+    `contract3` a digest MISSING any of the four new fields raises, because a contract-3 comparison
+    must be explicit about all of them; under `contract2` (or when no contract is asked for) a
+    missing field is read as the value every pre-MS2a digest was taken at.
     """
+    strict = contract == "contract3"
+    for name, want in (("contract", contract), ("schema_sha256", schema_hash),
+                       ("seed", seed), ("days", days)):
+        if want is None:
+            continue
+        got = ref.get(name)
+        if got is None:
+            if strict:
+                raise RenderMismatch(
+                    "the reference digest for %s records no %s - a contract-3 comparison must "
+                    "state it" % (must, name))
+            got = LEGACY_DIGEST[name]
+        if got != want:
+            raise RenderMismatch("the reference digest for %s records %s %r, not %r"
+                                 % (must, name, got, want))
     if ref.get("key") != must:
         raise RenderMismatch("the reference digest for %s carries key %r - it is not %s's digest"
                              % (must, ref.get("key"), must))
@@ -453,20 +511,21 @@ def _props_template_sha(base_url):
     return _tpl.template_sha256(text)
 
 
-def render_prompts(base_url, key, seed, days, max_tokens=2048):
+def render_prompts(base_url, key, seed, days, max_tokens=2048, contract=CONTRACT):
     """The prompts a server would decode for one household, through its OWN chat template.
 
     POSTs exactly the body `build_request` will send for this key to `/apply-template`, so the
     thing asserted is the thing that will run - never a re-implementation of it.
     """
-    hh = corpus.generate_household(seed, days)
+    hh = corpus.generate_household(seed, days, contract)
     names, _ = _household_context(hh)
-    schema = candidate_schema()
+    schema = candidate_schema(contract)
     out = []
     for sp in hh["spans"]:
         body = _client.build_request(sp["text"], sp["cluster"], sp["day"], names, sp["sid"], schema,
                                      max_tokens=max_tokens, thinking_switch=thinking_switch(key),
-                                     think=model_think(key), think_extra=model_think_extra(key))
+                                     think=model_think(key), think_extra=model_think_extra(key),
+                                     contract=contract)
         req = _urlreq.Request(base_url.rstrip("/") + "/apply-template",
                               data=json.dumps(body).encode("utf-8"),
                               headers={"Content-Type": "application/json"})
@@ -501,12 +560,16 @@ def _household_context(hh):
 
 
 def run_model(model_key, seeds, days, out_path, port, ctx, ngl, max_tokens, require_build=None,
-              results_dir=None):
+              results_dir=None, contract=CONTRACT):
     mpath = model_path(model_key)
     think = thinking_switch(model_key)
     think_state = model_think(model_key)
     think_extra = model_think_extra(model_key)
-    schema = candidate_schema()
+    schema = candidate_schema(contract)
+    # BEFORE the server maps the file. Both misreads that have put a wrong digest in a run JSON
+    # happened on a hash taken as a multi-gigabyte mapping was torn down; this one is taken while
+    # nothing holds the file, and the after-reading below is what makes a disagreement visible.
+    sha_before = _sha256(mpath)
     households, all_results = [], []
     t_start = time.time()
     tpl_path, tpl_from_sha = resolve_template(model_key)
@@ -525,7 +588,7 @@ def run_model(model_key, seeds, days, out_path, port, ctx, ngl, max_tokens, requ
         # asserted against the state the key declares. A mismatch raises RenderMismatch, which stops
         # the queue - it is a finding about the declaration, never a reason to edit the spec.
         spec = MODELS[model_key].get("render_expect")
-        prompts = render_prompts(srv.base_url, model_key, seeds[0], days, max_tokens)
+        prompts = render_prompts(srv.base_url, model_key, seeds[0], days, max_tokens, contract)
         bad = [i for i, p in enumerate(prompts) if not render_matches(p, spec)]
         if bad:
             raise RenderMismatch(
@@ -543,7 +606,8 @@ def run_model(model_key, seeds, days, out_path, port, ctx, ngl, max_tokens, requ
                                      "exist - render it first" % (model_key, must, ref_path))
             with open(ref_path, encoding="utf-8") as fh:
                 ref = json.load(fh)
-            check_reference_digest(ref, must, require_build)
+            check_reference_digest(ref, must, require_build, contract=contract,
+                                   schema_hash=schema_sha256(contract), seed=seeds[0], days=days)
             ref_hashes = ref.get("prompt_sha256") or []
             same = sum(1 for a, b in zip(digest["prompt_sha256"], ref_hashes) if a == b)
             if same != digest["n"] or digest["n"] != len(ref_hashes):
@@ -558,7 +622,7 @@ def run_model(model_key, seeds, days, out_path, port, ctx, ngl, max_tokens, requ
         print("  render ok: %d prompts, state %s, template %s"
               % (digest["n"], MODELS[model_key].get("expect_think"), (tpl_sha or "?")[:16]))
         for seed in seeds:
-            hh = corpus.generate_household(seed, days)
+            hh = corpus.generate_household(seed, days, contract)
             names, clusters_by_name = _household_context(hh)
             span_cluster = {s["sid"]: s["cluster"] for s in hh["spans"]}
             span_text = {s["sid"]: s["text"] for s in hh["spans"]}
@@ -568,7 +632,7 @@ def run_model(model_key, seeds, days, out_path, port, ctx, ngl, max_tokens, requ
                 r = _client.extract_span(srv.base_url, s["sid"], s["text"], s["cluster"],
                                          s["day"], names, schema, max_tokens=max_tokens,
                                          thinking_switch=think, think=think_state,
-                                         think_extra=think_extra)
+                                         think_extra=think_extra, contract=contract)
                 raw = r.get("candidates")
                 if raw is not None:
                     # DERIVE before anything scores it. Validity is measured on the candidate that
@@ -585,6 +649,10 @@ def run_model(model_key, seeds, days, out_path, port, ctx, ngl, max_tokens, requ
             sc.update({
                 "seed": seed,
                 "n_spans": len(hh["spans"]),
+                # What ENDED each call, so a run that lost calls to the token cap says so itself
+                # instead of showing up only as a lower F1 (the field's measured failure).
+                "finish_reasons": finish_counts(results),
+                "finish_length": finish_counts(results).get("length", 0),
                 "valid_calls": valid, "total_calls": total,
                 "validity": round(valid / total, 4) if total else 0.0,
                 "invalid_reasons": reasons,
@@ -653,6 +721,10 @@ def run_model(model_key, seeds, days, out_path, port, ctx, ngl, max_tokens, requ
                 p, tot_match / max(1, sum(h["scorable_gold"] for h in households))), 4),
         "zero_gold_predictions": sum(h["zero_gold_predictions"] for h in households),
         "reasoning_calls": sum(h.get("reasoning_calls", 0) for h in households),
+        "finish_reasons": {k: sum(h.get("finish_reasons", {}).get(k, 0) for h in households)
+                           for k in sorted({k for h in households
+                                            for k in (h.get("finish_reasons") or {})})},
+        "finish_length": sum(h.get("finish_length", 0) for h in households),
         "valid_calls": tot_valid, "total_calls": tot_calls,
         "tokens_in": sum(h["tokens_in"] for h in households),
         "tokens_out": sum(h["tokens_out"] for h in households),
@@ -663,11 +735,21 @@ def run_model(model_key, seeds, days, out_path, port, ctx, ngl, max_tokens, requ
         for k, v in h["invalid_reasons"].items():
             reasons[k] = reasons.get(k, 0) + v
 
+    # AFTER the server has exited. A disagreement with the before-reading is a finding, never a
+    # stop: the arm ran on whatever bytes the server mapped, and a third reading a minute later
+    # says whether the disagreement was the page cache settling.
+    sha_after = _sha256(mpath)
+    sha_reread = None
+    if sha_after != sha_before:
+        print("  model_sha256 DISAGREES before/after (%s vs %s) - re-reading in 60 s"
+              % (sha_before[:12], sha_after[:12]))
+        time.sleep(60)
+        sha_reread = _sha256(mpath)
+
     out = {
         "model_key": model_key,
         "model_path": mpath,
         "model_bytes": os.path.getsize(mpath),
-        "model_sha256": _sha256(mpath),
         "thinking_switch_applied": think,
         # The state this run RAN in, recorded so no later reader has to infer it from a comment:
         # what was requested, what the renderer confirmed, and which template did the rendering.
@@ -681,16 +763,21 @@ def run_model(model_key, seeds, days, out_path, port, ctx, ngl, max_tokens, requ
                                                    agg["reasoning_calls"], agg["total_calls"]),
         "render_digest_all": digest["all"],
         "llama_version": version,
-        "schema_sha256": schema_sha256(),
-        "contract": CONTRACT,
+        "schema_sha256": schema_sha256(contract),
+        "contract": contract,
         "days": days, "seeds": list(seeds), "max_tokens": max_tokens,
         "aggregate": agg,
         "invalid_reasons_total": reasons,
         "households": households,
-        "scope": ("MS1b: synthetic seeded utterances, ORACLE candidates as the gold standard, "
-                  "schema-constrained JSON through llama.cpp. Nothing measured on real speech or "
-                  "on the owner."),
+        "scope": (("MS1b: synthetic seeded utterances, ORACLE candidates as the gold standard, "
+                   "schema-constrained JSON through llama.cpp. Nothing measured on real speech or "
+                   "on the owner.") if contract == CONTRACT else
+                  ("MS2a: the chosen extractor re-run over the CONTRACT-3 corpus (41 gold per "
+                   "household, the person.name and person.trait spans appended), schema-constrained "
+                   "JSON through llama.cpp. NOT comparable to the contract-2 field's F1, which was "
+                   "measured on 37 gold. Nothing measured on real speech or on the owner.")),
     }
+    out.update(provenance_fields(sha_before, sha_after, sha_reread))
     if out_path:
         with open(out_path, "w", encoding="utf-8") as fh:
             json.dump(out, fh, indent=2, sort_keys=True)
@@ -982,15 +1069,15 @@ def run_queue(keys, seeds, days, log_path, port, ctx, ngl, max_tokens, results_d
     return done, skipped, None
 
 
-def run_smoke(key, days, port, ctx, ngl, max_tokens):
+def run_smoke(key, days, port, ctx, ngl, max_tokens, contract=CONTRACT):
     """Two real calls against one model: does the contract-2 schema compile and answer?
 
     A 400 means llama.cpp could not turn the schema into a grammar, which is the one failure that
     would silently invalidate an entire overnight queue - so it is checked on the cheapest model
     before the field runs, and it is a STOP, never a fallback to the flat schema.
     """
-    schema = candidate_schema()
-    hh = corpus.generate_household(1, days)
+    schema = candidate_schema(contract)
+    hh = corpus.generate_household(1, days, contract)
     names, _ = _household_context(hh)
     picks = []
     for prefix, cluster in (("i work as", None), ("my husband", 2)):
@@ -1015,7 +1102,8 @@ def run_smoke(key, days, port, ctx, ngl, max_tokens):
             r = _client.extract_span(srv.base_url, s["sid"], s["text"], s["cluster"], s["day"],
                                      names, schema, max_tokens=max_tokens,
                                      thinking_switch=thinking_switch(key),
-                                     think=model_think(key), think_extra=model_think_extra(key))
+                                     think=model_think(key), think_extra=model_think_extra(key),
+                                     contract=contract)
             cands = r.get("candidates")
             print("--- span %d cluster %d: %r" % (s["sid"], s["cluster"], s["text"]))
             print("    http=%s finish=%s" % (r.get("status", "?"), r.get("finish_reason", "?")))
@@ -1069,7 +1157,19 @@ def main(argv=None):
                          "its digest; no GPU, no generation")
     ap.add_argument("--render-compare", nargs=2, default=None, metavar=("A.json", "B.json"),
                     help="compare two render digests prompt by prompt")
+    # MS2a. CONTRACT stays the FIELD's contract with every meaning it has - the queue, the verdict,
+    # load_field's default and their guards - and this flag selects the contract for a single run,
+    # a render, a smoke or a dry run. The field itself is closed and is never re-scored under
+    # contract 3, which is why --queue and --verdict refuse it outright rather than silently
+    # producing runs that would not be comparable to the eleven.
+    ap.add_argument("--contract", choices=("contract2", "contract3"), default=CONTRACT,
+                    help="contract2 (the closed field, the default) or contract3 (MS2a)")
     a = ap.parse_args(argv)
+
+    if a.contract != CONTRACT and (a.queue or a.verdict):
+        print("the field is contract 2: --queue and --verdict are the closed field's own readings "
+              "and refuse --contract %s; run a single --model under it instead" % a.contract)
+        return 2
 
     seeds_all = list(range(a.seed, a.seed + a.households))
 
@@ -1092,7 +1192,7 @@ def main(argv=None):
         with _client.LlamaServer(model_path(key), port=8099, ctx=a.ctx, ngl=0, extra_args=args,
                                  env={"CUDA_VISIBLE_DEVICES": "-1"}) as srv:
             print("server up: %s  (%s)" % (srv.base_url, srv.version))
-            prompts = render_prompts(srv.base_url, key, a.seed, a.days, a.max_tokens)
+            prompts = render_prompts(srv.base_url, key, a.seed, a.days, a.max_tokens, a.contract)
             build_info = srv.version
             # The same two fields a run records: the server's own view, and beside it the hash of
             # the GGUF a borrowed template came out of. Never one standing in for the other.
@@ -1102,6 +1202,10 @@ def main(argv=None):
         digest = render_digest(prompts)
         out = {"key": key, "build_info": build_info, "chat_template_sha256": tpl_sha,
                "template_from_sha256": tpl_from_sha,
+               # WHAT THESE PROMPTS ARE, so a controlled arm's reference can be checked rather than
+               # assumed: the contract, its schema, and the corpus slice that was rendered.
+               "contract": a.contract, "schema_sha256": schema_sha256(a.contract),
+               "seed": a.seed, "days": a.days,
                "think_requested": model_think(key), "think_extra": model_think_extra(key) or None,
                "expect_think": MODELS[key].get("expect_think"), "render_expect": spec,
                "n_prompts": digest["n"], "prompt_sha256": digest["prompt_sha256"],
@@ -1188,7 +1292,7 @@ def main(argv=None):
         return 0
 
     if a.smoke:
-        return run_smoke(a.smoke, a.days, a.port, a.ctx, a.ngl, a.max_tokens)
+        return run_smoke(a.smoke, a.days, a.port, a.ctx, a.ngl, a.max_tokens, a.contract)
 
     if a.queue:
         keys = [k.strip() for k in a.queue.split(",") if k.strip()]
@@ -1199,20 +1303,21 @@ def main(argv=None):
         return 1 if stopped else 0
 
     seeds = seeds_all
-    schema = candidate_schema()
+    schema = candidate_schema(a.contract)
     if a.dry_run:
-        hh = corpus.generate_household(seeds[0], a.days)
+        hh = corpus.generate_household(seeds[0], a.days, a.contract)
         names, _ = _household_context(hh)
         s = hh["spans"][0]
         body = _client.build_request(s["text"], s["cluster"], s["day"], names, s["sid"], schema,
-                                     max_tokens=a.max_tokens)
-        print("schema_sha256: %s" % schema_sha256())
+                                     max_tokens=a.max_tokens, contract=a.contract)
+        print("schema_sha256: %s" % schema_sha256(a.contract))
         print("spans in household %d: %d ; oracle candidates: %d"
               % (seeds[0], len(hh["spans"]), len(hh["candidates"])))
         print(json.dumps(body, indent=2, sort_keys=True))
         return 0
 
-    res = run_model(a.model, seeds, a.days, a.out, a.port, a.ctx, a.ngl, a.max_tokens)
+    res = run_model(a.model, seeds, a.days, a.out, a.port, a.ctx, a.ngl, a.max_tokens,
+                    require_build=a.build, results_dir=a.results_dir, contract=a.contract)
     ag = res["aggregate"]
     print()
     print("model      : %s (%s)" % (a.model, res["model_path"]))

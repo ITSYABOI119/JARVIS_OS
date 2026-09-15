@@ -14,8 +14,37 @@ surviving spans is KEPT with its surviving evidence and its confidence recompute
 is the whole point — a purge must not silently erase a belief the household still supports.
 """
 
+from .registry import EDGE_PREDICATE
+
 MIN_DAYS = 3
 MIN_SPANS_PER_DAY = 5
+
+
+def stated_allowed(cand, cluster_of_ref) -> bool:
+    """May this candidate keep its STATED source rank? (Contract 3 f; the design's §4.2, §5 item 4.)
+
+    A `person.relation_to` candidate is a SELF-DESCRIPTION only when its subject is the speaker
+    themself - "my husband X and i ...". A claim about two OTHER people, or about the speaker made
+    by someone else, is HEARSAY: true or not, the speaker is not the source for it, so it accrues by
+    day like any inference instead of arriving at confidence 1.0 and surfacing at once. The measured
+    reason: on the corpus's hint spans the chosen extractor produced 2 pronoun edges and 7 name
+    edges with the direction REVERSED and `stated` true, which at 1.0 would have surfaced wrong
+    immediately.
+
+    `cluster_of_ref` maps a subject ref to a cluster id, and must carry BOTH forms a ref can take:
+    the cluster id as a STRING - which is what `derive._subject` writes for a first-person `about` -
+    and each household member's lower-cased name, because the extractor names a speaker by their own
+    name. An unknown ref is NOT the speaker: it cannot be shown to be a self-description, so it is
+    demoted. Pure; the caller decides what to do with the answer.
+    """
+    if not cand or cand.get("predicate_id") != EDGE_PREDICATE:
+        return True
+    if not str(cand.get("source_kind") or "").startswith("stated"):
+        return True
+    ref = (cand.get("subject") or {}).get("ref")
+    if ref is None:
+        return False
+    return (cluster_of_ref or {}).get(str(ref).strip().lower()) == cand.get("speaker_cluster")
 
 
 def is_person(day_counts: dict) -> bool:

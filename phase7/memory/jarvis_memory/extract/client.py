@@ -24,16 +24,20 @@ SERVER_EXE = "llama-server.exe"
 
 def build_request(span_text, speaker_cluster, day, names, span_id, schema,
                   max_tokens=512, temperature=0.0, seed=1, thinking_switch=False,
-                  think=None, think_extra=None) -> dict:
+                  think=None, think_extra=None, contract="contract2") -> dict:
     """The chat-completions body. Pure, so the schema wiring is testable without a server.
 
     `response_format: json_schema` is what makes the enums binding rather than advisory: the server
     constrains generation to the grammar the schema compiles to, so an off-registry predicate id
     cannot be produced at all. temperature 0 and a fixed seed make a run reproducible.
     """
+    # The contract selects the SYSTEM prompt and nothing else here; the schema arrives from the
+    # caller, who built it under the same contract. `contract2` is the default, so a call that does
+    # not mention a contract produces HEAD's body byte for byte - which is what keeps the closed
+    # MS1 field re-runnable.
     body = {
         "messages": [
-            {"role": "system", "content": system_prompt()},
+            {"role": "system", "content": system_prompt(contract)},
             {"role": "user", "content": user_prompt(span_text, speaker_cluster, day, names,
                                                     span_id)},
         ],
@@ -94,7 +98,7 @@ def parse_response(raw_json):
 
 def extract_span(base_url, span_id, text, cluster, day, names, schema,
                  max_tokens=512, temperature=0.0, thinking_switch=False,
-                 think=None, think_extra=None) -> dict:
+                 think=None, think_extra=None, contract="contract2") -> dict:
     """One call. Returns the parsed object, the raw text, token counts and wall ms; never raises.
 
     Also returns `reasoning_present`: whether the server handed back a non-empty
@@ -103,7 +107,8 @@ def extract_span(base_url, span_id, text, cluster, day, names, schema,
     """
     body = build_request(text, cluster, day, names, span_id, schema,
                          max_tokens=max_tokens, temperature=temperature,
-                         thinking_switch=thinking_switch, think=think, think_extra=think_extra)
+                         thinking_switch=thinking_switch, think=think, think_extra=think_extra,
+                         contract=contract)
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(base_url.rstrip("/") + "/v1/chat/completions", data=data,
                                  headers={"Content-Type": "application/json"})

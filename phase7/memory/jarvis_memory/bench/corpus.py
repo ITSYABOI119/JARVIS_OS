@@ -25,6 +25,8 @@ Standard library only.
 """
 import random
 
+from ..registry import normalise_object
+
 # ---------------------------------------------------------------- vocabularies
 NAMES = ["sam", "alex", "jo", "kit", "robin", "morgan", "casey", "riley", "quinn", "harper",
          "elliot", "frankie", "jamie", "logan", "reese", "sage", "toni", "vic", "wren", "zane"]
@@ -104,8 +106,13 @@ def _said_at(day, seconds):
     return base.isoformat(timespec="seconds")
 
 
-def generate_household(seed: int, days: int = 14) -> dict:
-    """A deterministic template household. Same seed, same bytes."""
+def generate_household(seed: int, days: int = 14, contract: str = "contract2") -> dict:
+    """A deterministic template household. Same seed, same bytes.
+
+    `contract3` builds the contract-2 household completely and then APPENDS four spans and their
+    gold (see the block at the end): 171 spans whose first 167 are contract 2's, 41 gold whose first
+    37 are contract 2's, the identical 1,110-row filler and every scored set unchanged.
+    """
     rng = random.Random(seed)
     owner_name = NAMES[seed % len(NAMES)]
     partner_name = PARTNER_NAMES[(seed * 7 + 3) % len(PARTNER_NAMES)]
@@ -310,7 +317,33 @@ def generate_household(seed: int, days: int = 14) -> dict:
                            "said_at": _said_at(day, 601 + (i % 300))})
         i += 1
 
-    return {
+    # --- CONTRACT 3's gold, APPENDED and only under contract 3 ------------------
+    # The closed MS1 field must stay re-runnable byte for byte, so the contract-2 household is built
+    # COMPLETELY first - every span id, the 37 gold, every scored set, and the filler sized from
+    # those 37 at 1,110 rows - and these four rows go on the end. Nothing above this line moves.
+    #
+    # They exist because `person.name` and `person.trait` had no gold anywhere in the corpus, so
+    # every prediction on them was a false positive by construction (the field spent 124, 77 and 44
+    # predictions on them across three models). None of the four span texts carries a lexicon word
+    # of the design's §5, so they move no confidence in any household.
+    if contract == "contract3":
+        for day, cluster, sec, text, pid, subj_ref, obj, src, speaker in (
+            (2, 1, 540, f"thanks, {partner_name}", "person.name", "partner",
+             partner_name, "stated_owner", 1),
+            (9, 1, 541, f"this is {partner_name}", "person.name", "partner",
+             partner_name, "stated_owner", 1),
+            (5, 1, 542, f"{partner_name} is always so patient", "person.trait", "partner",
+             "patient", "inferred", 1),
+            (6, 2, 543, f"{owner_name} is so forgetful", "person.trait", "owner",
+             "forgetful", "inferred", 2),
+        ):
+            if day > days:
+                continue
+            s = utter(day, cluster, text, sec)
+            cands.append(_cand(pid, subj_ref, "person", obj, normalise_object(obj), src,
+                               speaker, [s], day, _said_at(day, sec)))
+
+    out = {
         "seed": seed,
         "days": days,
         "persons": [{"ref": "owner", "name": owner_name, "cluster": 1},
@@ -322,3 +355,8 @@ def generate_household(seed: int, days: int = 14) -> dict:
                  "coexist": coexist, "transfer": transfer,
                  "relations": relations, "growth_filler": filler},
     }
+    # The key is added ONLY under contract 3: a contract-2 household must be the same dict it has
+    # always been, with no new key for a reader or a hash to trip over.
+    if contract == "contract3":
+        out["contract"] = "contract3"
+    return out

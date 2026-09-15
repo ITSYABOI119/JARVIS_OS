@@ -2636,5 +2636,410 @@ check("T43q the controlled arm's reference digest is checked before it is compar
       "check_reference_digest")
 
 
+# --- T44: MS2a-1 - CONTRACT 3 BESIDE CONTRACT 2. The closed MS1 field must stay re-runnable and
+# re-verdictable byte for byte, so contract 2 is the default everywhere and a contract-3 run asks
+# for it. The literals below were MEASURED AT HEAD BEFORE ANY EDIT - that is what makes them a
+# check on this change rather than a restatement of it.
+import jarvis_memory.people as _people44  # noqa: E402
+from jarvis_memory.bench import harness as _h44  # noqa: E402
+from jarvis_memory.bench.corpus import generate_household as _gh44  # noqa: E402
+from jarvis_memory.extract.client import build_request as _br44  # noqa: E402
+from jarvis_memory.extract.prompt import system_prompt as _sp44  # noqa: E402
+from jarvis_memory.extract.schema import (  # noqa: E402
+    CONTRACTS as _CONTRACTS44, candidate_schema as _cs44, schema_sha256 as _ssha44,
+)
+
+_SCHEMA_C2 = "846ad08857eb37f8175f0aa24fbbfdfe2c7edf89c5565b2521209a91792dbc49"
+_PROMPT_C2 = "31d99140f87105ac8c93acd3d9cc0c2a0c95a6322f50d4026253e81b14550d37"
+_BODY_C2 = "987689165c1edc71732b62b04d6eec97419145f669b3c7650c05169c35fd78be"
+_HH_C2 = {1: "2f51271d0656831541e790efe190960130f96ab5837a96c08bc0dfbecba400d1",
+          2: "71e8d774b30464eedbdbd00195d36ef1613d8718be4adee3566028ec78f34145",
+          3: "4cac801a06ad92c66b2445809b5a1acb9717aeb1741441ce5c93e838e0a6af9a"}
+
+
+def _sha44(s):
+    return _hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+
+def _flat44(d, pre=""):
+    out = {}
+    if isinstance(d, dict):
+        for k, v in d.items():
+            out.update(_flat44(v, pre + "/" + str(k)))
+    elif isinstance(d, list):
+        for i, v in enumerate(d):
+            out.update(_flat44(v, pre + "/" + str(i)))
+    else:
+        out[pre] = d
+    return out
+
+
+def _raises44(fn, *a, **kw):
+    try:
+        fn(*a, **kw)
+        return False
+    except ValueError:
+        return True
+
+
+_f2_44, _f3_44 = _flat44(_cs44()), _flat44(_cs44("contract3"))
+_only3_44 = {k: v for k, v in _f3_44.items() if k not in _f2_44}
+check("T44a the contract-2 schema is byte-identical to the closed field's and contract 3 differs "
+      "from it by EXACTLY ONE key, maxItems 4 on the candidates array; an unknown contract raises",
+      _sha44(_j42.dumps(_cs44(), sort_keys=True)) == _SCHEMA_C2
+      and _ssha44() == _SCHEMA_C2
+      and _CONTRACTS44 == ("contract2", "contract3")
+      and _only3_44 == {"/properties/candidates/maxItems": 4}
+      and not [k for k in _f2_44 if k not in _f3_44]
+      and not [k for k in _f2_44 if k in _f3_44 and _f2_44[k] != _f3_44[k]]
+      and _ssha44("contract3") != _SCHEMA_C2
+      and _raises44(_cs44, "contract9") and _raises44(_ssha44, "contract9"),
+      str((_ssha44()[:12], _only3_44)))
+
+_p2_44, _p3_44 = _sp44(), _sp44("contract3")
+_chg44 = "a change is a new current value"
+_predcount44 = [pid for pid in PREDICATES if _p2_44.count(pid) != _p3_44.count(pid)]
+check("T44b the contract-2 system prompt is byte-identical; contract 3 gains the ended line, says "
+      "a change is a new current value inside BOTH the lives_in and works_as lines, replaces the "
+      "two household clarifications, and mentions no predicate id more often than contract 2 does",
+      _sha44(_p2_44) == _PROMPT_C2
+      and "ended is true when the speaker says a value no longer holds" in _p3_44
+      and any(_chg44 in L for L in _p3_44.splitlines() if "person.lives_in" in L)
+      and any(_chg44 in L for L in _p3_44.splitlines() if "person.works_as" in L)
+      and "a recurring household chore or event on a schedule" in _p3_44
+      and "a subject or hobby the household talks about, with no schedule" in _p3_44
+      and "something the household regularly does TOGETHER" not in _p3_44
+      and "a SUBJECT the household talks about, never a fact about one person" not in _p3_44
+      and _predcount44 == []
+      and _raises44(_sp44, "contract9"),
+      str((_sha44(_p2_44)[:12], _predcount44)))
+
+_body2_44 = _j42.dumps(_br44("i work as a teacher", 1, 4, {1: "sam"}, 0, _cs44(),
+                             max_tokens=2048), sort_keys=True)
+_body3_44 = _br44("i work as a teacher", 1, 4, {1: "sam"}, 0, _cs44("contract3"),
+                  max_tokens=2048, contract="contract3")
+check("T44c the default request body is byte-identical to the closed field's, and a contract-3 "
+      "request carries the contract-3 system prompt",
+      _sha44(_body2_44) == _BODY_C2
+      and _body3_44["messages"][0]["content"] == _p3_44
+      and _body3_44["messages"][0]["content"] != _p2_44,
+      str(_sha44(_body2_44)[:12]))
+
+# The design's §5 lexicons, copied here as test literals (MS2a-2 moves them into the registry).
+_HOUSEHOLD_CUES44 = ("lease rent mortgage bills groceries shopping dinner kids school evening "
+                     "weekend week holiday garden bins washing cleaning").split()
+_KIN_CUES44 = ("wife husband married anniversary love darling honey babe sweetheart dear").split()
+_CONTRA_CUES44 = ["staying with us", "visiting", "guest", "lodger", "flatmate", "housemate",
+                  "my sister", "my brother", "my mum", "my dad", "my mother", "my father",
+                  "colleague"]
+_c3ok44, _c3why44 = True, []
+for _s44 in (1, 2, 3):
+    _a44, _b44 = _gh44(_s44), _gh44(_s44, contract="contract3")
+    _pn44 = _a44["persons"][1]["name"]
+    _on44 = _a44["persons"][0]["name"]
+    _want44 = [
+        (2, 1, "thanks, %s" % _pn44, "person.name", "partner", _pn44, "stated_owner", 1),
+        (9, 1, "this is %s" % _pn44, "person.name", "partner", _pn44, "stated_owner", 1),
+        (5, 1, "%s is always so patient" % _pn44, "person.trait", "partner", "patient",
+         "inferred", 1),
+        (6, 2, "%s is so forgetful" % _on44, "person.trait", "owner", "forgetful", "inferred", 2),
+    ]
+    if _sha44(_j42.dumps(_a44, sort_keys=True)) != _HH_C2[_s44]:
+        _c3ok44 = False; _c3why44.append("seed %d contract2 moved" % _s44)
+    if "contract" in _a44 or _b44.get("contract") != "contract3":
+        _c3ok44 = False; _c3why44.append("seed %d contract key" % _s44)
+    if not (len(_b44["spans"]) == 171 and len(_b44["candidates"]) == 41):
+        _c3ok44 = False; _c3why44.append("seed %d sizes" % _s44)
+    if not (_b44["spans"][:167] == _a44["spans"] and _b44["candidates"][:37] == _a44["candidates"]):
+        _c3ok44 = False; _c3why44.append("seed %d prefix moved" % _s44)
+    if not (_b44["sets"] == _a44["sets"] and len(_b44["sets"]["growth_filler"]) == 1110):
+        _c3ok44 = False; _c3why44.append("seed %d sets/filler" % _s44)
+    for _i44, (_d, _cl, _tx, _pid, _sr, _ob, _sk, _spk) in enumerate(_want44):
+        _sp_ = _b44["spans"][167 + _i44]
+        _cd_ = _b44["candidates"][37 + _i44]
+        if not (_sp_["day"] == _d and _sp_["cluster"] == _cl and _sp_["text"] == _tx
+                and _cd_["predicate_id"] == _pid and _cd_["subject"]["ref"] == _sr
+                and _cd_["object"] == _ob and _cd_["object_norm"] == _norm(_ob)
+                and _cd_["source_kind"] == _sk and _cd_["speaker_cluster"] == _spk
+                and _cd_["span_ids"] == [_sp_["sid"]]):
+            _c3ok44 = False; _c3why44.append("seed %d row %d" % (_s44, _i44))
+        _low = _tx.lower()
+        _words = set(_low.replace(",", " ").split())
+        if (_words & set(_HOUSEHOLD_CUES44)) or (_words & set(_KIN_CUES44)) \
+                or any(_c in _low for _c in _CONTRA_CUES44):
+            _c3ok44 = False; _c3why44.append("seed %d row %d carries a lexicon word" % (_s44, _i44))
+check("T44d the contract-2 households are byte-identical for seeds 1-3; contract 3 APPENDS exactly "
+      "four spans and four gold (171 spans, 41 gold), keeps the 1,110-row filler and every scored "
+      "set, matches the registered table row for row, and none of the four spans carries a word of "
+      "the design's three lexicons",
+      _c3ok44, str(_c3why44[:6]))
+
+with _tf42.TemporaryDirectory() as _td44:
+    _hh44 = _gh44(1, 14)
+
+    def _stub44(**over):
+        d = {"contract": "contract2", "days": 14,
+             "households": [{"seed": 1, "n_spans": 167, "predictions": []}]}
+        d.update(over)
+        p = _os.path.join(_td44, "stub_%d.json" % len(_os.listdir(_td44)))
+        Path(p).write_text(_j42.dumps(d), encoding="utf-8")
+        return p
+
+    def _exraises44(path, contract="contract2"):
+        try:
+            _h44.extracted_candidates(path, 1, _hh44, contract)
+            return False
+        except ValueError:
+            return True
+    check("T44e extracted_candidates refuses a run JSON that is not the same measurement as the "
+          "corpus - the wrong contract, the wrong days, a missing seed or a different span count - "
+          "and accepts a matching one",
+          _exraises44(_stub44(contract="contract3"))
+          and _exraises44(_stub44(days=7))
+          and _exraises44(_stub44(households=[{"seed": 9, "n_spans": 167, "predictions": []}]))
+          and _exraises44(_stub44(households=[{"seed": 1, "n_spans": 171, "predictions": []}]))
+          and not _exraises44(_stub44()),
+          "extracted_candidates guards")
+
+_cor44 = {"1": 1, "2": 2, "alex": 1, "tess": 2}
+
+
+def _rel44(ref, spk, src="stated_owner"):
+    return {"predicate_id": "person.relation_to", "subject": {"kind": "person", "ref": ref},
+            "source_kind": src, "speaker_cluster": spk}
+
+
+check("T44f stated_allowed keeps a SELF-DESCRIPTION stated whether the subject is the speaker's "
+      "cluster string or their own name, and demotes hearsay - a claim about two others, a claim "
+      "about the speaker made by someone else, and an unknown ref - while never touching a "
+      "non-relation or an already-inferred candidate",
+      _people44.stated_allowed(_rel44("2", 2, "stated_other"), _cor44)
+      and _people44.stated_allowed(_rel44("tess", 2, "stated_other"), _cor44)
+      and not _people44.stated_allowed(_rel44("tess", 1), _cor44)
+      and not _people44.stated_allowed(_rel44("alex", 2, "stated_other"), _cor44)
+      and not _people44.stated_allowed(_rel44("zzz", 1), _cor44)
+      and _people44.stated_allowed(
+          {"predicate_id": "person.works_as", "subject": {"kind": "person", "ref": "zzz"},
+           "source_kind": "stated_owner", "speaker_cluster": 1}, _cor44)
+      and _people44.stated_allowed(_rel44("tess", 1, "inferred"), _cor44),
+      "stated_allowed truth table")
+
+_legacy44 = {"key": "k", "render_ok": True, "build_info": "b10809-5266f24da"}
+_full44 = dict(_legacy44, contract="contract3", schema_sha256="S", seed=1, days=14)
+
+
+def _crd44(ref, **kw):
+    try:
+        _bench42.check_reference_digest(ref, "k", "b10809", **kw)
+        return False
+    except _bench42.RenderMismatch:
+        return True
+
+
+check("T44g a contract-3 comparison requires the digest to state its contract, schema, seed and "
+      "days and raises on any mismatch or omission, while a legacy contract-2 digest carrying none "
+      "of them still reads as the values every pre-MS2a digest was taken at",
+      not _crd44(_full44, contract="contract3", schema_hash="S", seed=1, days=14)
+      and _crd44(dict(_full44, contract="contract2"), contract="contract3", schema_hash="S",
+                 seed=1, days=14)
+      and _crd44(dict(_full44, schema_sha256="X"), contract="contract3", schema_hash="S",
+                 seed=1, days=14)
+      and _crd44(dict(_full44, seed=2), contract="contract3", schema_hash="S", seed=1, days=14)
+      and _crd44(dict(_full44, days=7), contract="contract3", schema_hash="S", seed=1, days=14)
+      and _crd44(_legacy44, contract="contract3", schema_hash="S", seed=1, days=14)
+      # the committed contract-2 digests must keep working, or every controlled arm breaks
+      and not _crd44(_legacy44, contract="contract2",
+                     schema_hash=_bench42.CONTRACT2_SCHEMA_SHA256, seed=1, days=14)
+      and _crd44(dict(_legacy44, contract="contract3"), contract="contract2",
+                 schema_hash=_bench42.CONTRACT2_SCHEMA_SHA256, seed=1, days=14),
+      "check_reference_digest contract rules")
+
+with _tf42.TemporaryDirectory() as _td44b:
+    with _cl43.redirect_stdout(_io43.StringIO()):
+        _rc_q44 = _bench42.main(["--queue", "gemma-e4b-v040", "--contract", "contract3",
+                                 "--results-dir", _td44b])
+        _rc_v44 = _bench42.main(["--verdict", "--build", "b10809", "--contract", "contract3",
+                                 "--results-dir", _td44b])
+        _n44 = len(_os.listdir(_td44b))
+        _buf44 = _io43.StringIO()
+    with _cl43.redirect_stdout(_buf44):
+        _bench42.main(["--dry-run", "--households", "1", "--contract", "contract3"])
+    _dry3_44 = [L for L in _buf44.getvalue().splitlines() if L.startswith("schema_sha256")][0]
+    _buf44b = _io43.StringIO()
+    with _cl43.redirect_stdout(_buf44b):
+        _bench42.main(["--dry-run", "--households", "1"])
+    _dry2_44 = [L for L in _buf44b.getvalue().splitlines() if L.startswith("schema_sha256")][0]
+    check("T44h the field's own readings refuse contract 3 and write nothing - the queue and the "
+          "verdict are the CLOSED field's, and it is contract 2 - while a dry run honours the "
+          "contract it is given",
+          _rc_q44 == 2 and _rc_v44 == 2 and _n44 == 0
+          and _SCHEMA_C2 in _dry2_44 and _SCHEMA_C2 not in _dry3_44,
+          str((_rc_q44, _rc_v44, _n44)))
+
+
+class _Sentinel44(Exception):
+    pass
+
+
+_seen44 = {}
+
+
+def _rec_run_model44(*a, **kw):
+    _seen44.update(kw)
+    _seen44["model"] = a[0] if a else None
+    raise _Sentinel44()
+
+
+_saved_rm44 = _bench42.run_model
+try:
+    _bench42.run_model = _rec_run_model44
+    with _cl43.redirect_stdout(_io43.StringIO()):
+        try:
+            _bench42.main(["--model", "gemma-e4b-q8-q4tpl", "--contract", "contract3",
+                           "--build", "b10809", "--results-dir", "RD", "--households", "1"])
+        except _Sentinel44:
+            pass
+finally:
+    _bench42.run_model = _saved_rm44
+check("T44i the single-model path passes the build, the results directory and the contract through "
+      "to run_model - without them a contract-3 run would render contract-2 prompts, look for its "
+      "reference in the wrong directory and never assert its venue",
+      _seen44.get("contract") == "contract3" and _seen44.get("require_build") == "b10809"
+      and _seen44.get("results_dir") == "RD" and _seen44.get("model") == "gemma-e4b-q8-q4tpl",
+      str(_seen44))
+
+check("T44j finish_counts totals the reasons a call ended and keys a missing reason as none, so a "
+      "run that lost calls to the token cap says so in its own JSON",
+      _bench42.finish_counts([{"finish_reason": "stop"}, {"finish_reason": "length"},
+                              {"finish_reason": None}, {"finish_reason": "stop"}])
+      == {"stop": 2, "length": 1, "none": 1}
+      and _bench42.finish_counts([]) == {},
+      "finish_counts")
+
+_pf_ok44 = _bench42.provenance_fields("A", "A")
+_pf_no44 = _bench42.provenance_fields("A", "B")
+_pf_re44 = _bench42.provenance_fields("A", "B", "A")
+check("T44k the model file is hashed before and after its server and the five provenance fields "
+      "say so - two page-cache misreads have put a wrong digest in a run JSON, and a disagreement "
+      "is a finding the run records rather than a stop",
+      _pf_ok44 == {"model_sha256": "A", "model_sha256_after": "A", "model_sha256_reread": None,
+                   "model_sha256_agree": True, "model_sha256_reread_agree": None}
+      and _pf_no44["model_sha256_agree"] is False
+      and _pf_no44["model_sha256_reread"] is None
+      and _pf_no44["model_sha256_reread_agree"] is None
+      and _pf_re44["model_sha256_agree"] is False
+      and _pf_re44["model_sha256_reread_agree"] is True
+      and _pf_ok44["model_sha256"] == "A",
+      str(_pf_no44))
+
+_P44 = ["p one", "p two", "p three"]
+_crd_seen44 = []
+_saved44 = {k: getattr(_bench42, k) for k in
+            ("resolve_template", "render_prompts", "render_matches", "_sha256",
+             "check_reference_digest")}
+_saved_ls44, _saved_ex44 = _bench42._client.LlamaServer, _bench42._client.extract_span
+
+
+class _Srv44:
+    def __init__(self, *a, **kw):
+        self.base_url = "http://127.0.0.1:0"
+        self.version = "b10809-5266f24da"
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _ex44(*a, **kw):
+    raise _Sentinel44()
+
+
+def _crd_wrap44(ref, must, require_build=None, **kw):
+    _crd_seen44.append(dict(kw))
+    return _saved44["check_reference_digest"](ref, must, require_build, **kw)
+
+
+with _tf42.TemporaryDirectory() as _td44c:
+    Path(_os.path.join(_td44c, "render_digest_gemma-e4b-v040.json")).write_text(
+        _j42.dumps(dict(_bench42.render_digest(_P44), key="gemma-e4b-v040", render_ok=True,
+                        build_info="b10809-5266f24da")), encoding="utf-8")
+    _res44 = {}
+    try:
+        _bench42._client.LlamaServer = _Srv44
+        _bench42._client.extract_span = _ex44
+        _bench42.resolve_template = (lambda k: ("T.jinja", "abc")
+                                     if _bench42.MODELS[k].get("template_from") else (None, None))
+        _bench42.render_prompts = lambda *a, **kw: list(_P44)
+        _bench42.render_matches = lambda p, s: True
+        _bench42._sha256 = lambda p, budget=None: "SHA"
+        _bench42.check_reference_digest = _crd_wrap44
+        for _c44 in ("contract3", "contract2"):
+            _crd_seen44.clear()
+            with _cl43.redirect_stdout(_io43.StringIO()):
+                try:
+                    _bench42.run_model("gemma-e4b-q8-q4tpl", [1], 14, None, 8089, 4096, 99, 2048,
+                                       require_build="b10809", results_dir=_td44c, contract=_c44)
+                    _res44[_c44] = "no-raise"
+                except _bench42.RenderMismatch:
+                    _res44[_c44] = "RenderMismatch"
+                except _Sentinel44:
+                    _res44[_c44] = "reached-extraction"
+            _res44[_c44 + "-kw"] = dict(_crd_seen44[0]) if _crd_seen44 else {}
+    finally:
+        for _k44, _v44 in _saved44.items():
+            setattr(_bench42, _k44, _v44)
+        _bench42._client.LlamaServer, _bench42._client.extract_span = _saved_ls44, _saved_ex44
+check("T44l a controlled contract-3 arm REFUSES a legacy reference digest that states no contract, "
+      "while the same arm under contract 2 reaches its first extraction call - and both pass the "
+      "contract, schema, seed and days to the reference check",
+      _res44.get("contract3") == "RenderMismatch"
+      and _res44.get("contract2") == "reached-extraction"
+      and sorted(_res44.get("contract3-kw", {})) == ["contract", "days", "schema_hash", "seed"]
+      and _res44["contract3-kw"]["contract"] == "contract3"
+      and _res44["contract3-kw"]["seed"] == 1 and _res44["contract3-kw"]["days"] == 14
+      and _res44["contract2-kw"]["schema_hash"] == _SCHEMA_C2,
+      str({k: v for k, v in _res44.items() if not k.endswith("-kw")}))
+
+_hs44 = {}
+_saved_ingest44 = store_mod.MemoryStore.ingest
+try:
+    def _ingest_rec44(self, cand):
+        if cand.get("predicate_id") == "person.relation_to":
+            _hs44.setdefault("seen", []).append(cand.get("source_kind"))
+        return _saved_ingest44(self, cand)
+
+    store_mod.MemoryStore.ingest = _ingest_rec44
+    with _tf42.TemporaryDirectory() as _td44d:
+        _hh3_44 = _gh44(1, 14, contract="contract3")
+        _partner44 = _hh3_44["persons"][1]["name"]
+        _owner44 = _hh3_44["persons"][0]["name"]
+        # The owner claiming the PARTNER is married to the owner: hearsay, shaped like the
+        # committed run's own seed-1 prediction on span 154 (`she called me love`).
+        _pred44 = {"predicate_id": "person.relation_to",
+                   "subject": {"kind": "person", "ref": _partner44},
+                   "object": _owner44, "object_norm": "spouse", "relation_id": "spouse",
+                   "source_kind": "stated_owner", "speaker_cluster": 1, "span_ids": [154],
+                   "polarity": None, "strength": None, "ended": False, "about_time": None}
+        for _name44, _c44, _n44s in (("A", "contract3", 171), ("B", "contract2", 167)):
+            p = _os.path.join(_td44d, "run_%s.json" % _name44)
+            Path(p).write_text(_j42.dumps(
+                {"contract": _c44, "days": 14,
+                 "households": [{"seed": 1, "n_spans": _n44s, "predictions": [_pred44]}]}),
+                encoding="utf-8")
+            _hs44["seen"] = []
+            _out44 = _h44.run_household(1, 14, candidates_from=p, contract=_c44)
+            _hs44[_name44] = (list(_hs44["seen"]), _out44.get("hearsay_demoted"))
+finally:
+    store_mod.MemoryStore.ingest = _saved_ingest44
+check("T44m hearsay is demoted on a CONTRACT-3 extracted run and only there: the owner stating a "
+      "relation about the partner is ingested inferred with hearsay_demoted 1, while the identical "
+      "candidate on a contract-2 run keeps its stated rank and demotes nothing",
+      _hs44.get("A", ([], None))[0] == ["inferred"] and _hs44["A"][1] == 1
+      and _hs44.get("B", ([], None))[0] == ["stated_owner"] and _hs44["B"][1] == 0,
+      str({k: _hs44.get(k) for k in ("A", "B")}))
+
+
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
 sys.exit(1 if FAILS else 0)

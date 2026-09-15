@@ -18,8 +18,14 @@ from ..registry import EDGE_PREDICATE, PREDICATES, PREFERENCE_PREDICATE, RELATIO
 # for owner.prefers). Kept beside the registry import so the list is visible at the point of use.
 POLARITIES = ("likes", "dislikes", "wants", "avoids")
 
+# The contracts this tree can produce, newest last. CONTRACT 3 COEXISTS with contract 2 rather than
+# replacing it (the design's §4.2 amendment of 2026-09-15): MS1's field is closed and must stay
+# re-runnable and re-verdictable byte for byte, so contract 2 remains the DEFAULT everywhere and a
+# contract-3 run asks for it explicitly. Contract 2's schema hash therefore never moves.
+CONTRACTS = ("contract2", "contract3")
 
-def candidate_schema() -> dict:
+
+def candidate_schema(contract: str = "contract2") -> dict:
     """The schema for `{"candidates": [<what only the model can judge>]}` — the DECISION set.
 
     NARROWED at MS1b after the first Llama run (L0) measured the contract instead of the model: it
@@ -46,6 +52,8 @@ def candidate_schema() -> dict:
     fields stay absent from the families they do not belong to. `oneOf` is used because llama.cpp's
     grammar converter handles `oneOf`/`anyOf` and does NOT support `if`/`then`.
     """
+    if contract not in CONTRACTS:
+        raise ValueError("unknown contract %r - known: %s" % (contract, ", ".join(CONTRACTS)))
     household = sorted(p for p in PREDICATES if "household" in PREDICATES[p].subject_kinds)
     person = sorted(p for p in PREDICATES
                     if p not in household and p not in (EDGE_PREDICATE, PREFERENCE_PREDICATE))
@@ -89,24 +97,25 @@ def candidate_schema() -> dict:
     HOUSEHOLD = branch(household, {}, [])
     PERSON = branch(person, {"about": {"type": "string"}}, ["about"])
 
+    candidates = {"type": "array", "items": {"oneOf": [EDGE, PREFERENCE, HOUSEHOLD, PERSON]}}
+    if contract == "contract3":
+        candidates["maxItems"] = 4
+
     return {
         "type": "object",
         "additionalProperties": False,
         "required": ["candidates"],
-        "properties": {
-            "candidates": {
-                "type": "array",
-                "items": {"oneOf": [EDGE, PREFERENCE, HOUSEHOLD, PERSON]},
-            },
-        },
+        "properties": {"candidates": candidates},
     }
 
 
-def schema_sha256() -> str:
+def schema_sha256(contract: str = "contract2") -> str:
     """A stable fingerprint of the schema, recorded in every run's JSON.
 
     Two runs comparable only if this matches: a changed registry changes the schema, which changes
-    what the model was allowed to say, which makes the F1 numbers a different measurement.
+    what the model was allowed to say, which makes the F1 numbers a different measurement. The
+    contract is a parameter for the same reason — contract 3's hash is a different measurement from
+    contract 2's, and the default keeps the closed field's `846ad088…` exactly where it was.
     """
     return hashlib.sha256(
-        json.dumps(candidate_schema(), sort_keys=True).encode("utf-8")).hexdigest()
+        json.dumps(candidate_schema(contract), sort_keys=True).encode("utf-8")).hexdigest()

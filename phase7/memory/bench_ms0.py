@@ -32,6 +32,10 @@ def main(argv=None) -> int:
     # MS1b: drive the whole store benchmark from an extractor RUN's candidates instead of the
     # oracle's. The oracle remains the default and every earlier number was taken with it.
     p.add_argument("--candidates-from", default=None, metavar="MS1B_RUN_JSON")
+    # MS2a: contract 3 COEXISTS with contract 2, so the closed field's store runs stay reproducible
+    # and a contract-3 run asks for it explicitly. The corpus, and on the extracted path the hearsay
+    # rule, follow from this one flag.
+    p.add_argument("--contract", choices=("contract2", "contract3"), default="contract2")
     p.add_argument("--no-predicate-hint", dest="predicate_hint", action="store_false",
                    help="the NEGATIVE CONTROL: run the MS0 lane, unrestricted by the registry hint")
     p.add_argument("--embedder", choices=("none", "qwen"), default="none",
@@ -53,8 +57,9 @@ def main(argv=None) -> int:
               f"loaded in {embedder.load_s} s on {embedder.device} "
               f"(sentence-transformers {embedder.version})")
     res = harness.run(seeds, a.days, a.latency_facts, a.out, a.predicate_hint, embedder,
-                      a.embedder, a.drop_stopwords, a.candidates_from)
+                      a.embedder, a.drop_stopwords, a.candidates_from, a.contract)
 
+    print(f"contract   : {a.contract}")
     print(f"households : {len(seeds)}  seeds {seeds[0]}..{seeds[-1]}  days {a.days}  "
           f"predicate_hint {'ON' if a.predicate_hint else 'OFF (negative control)'}  "
           f"embedder {a.embedder}{' +instruct' if a.query_instruction else ''}  "
