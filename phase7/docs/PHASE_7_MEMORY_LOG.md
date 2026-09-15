@@ -1945,6 +1945,8 @@ winner's recorded run (update 0.75, coexisting 0.4167, relation precision 0.6167
 audit 0): update and relation precision improve on a better extractor, coexisting is unmoved, and
 transfer collapses because this run has `embedder: none` — the MS0 full-text lane alone.
 
+**[CORRECTED 2026-09-16 in MS2a-1: the run above had the embedding lane OFF because the command dictated to it omitted --embedder qwen - the strategist's defect - so it is not comparable to the MS1 winner's store run, which had the lane ON, and its attribution of the update gain to the extractor is withdrawn. Like for like (embedder qwen, 20,000 latency facts), ms1b_store_on_extracted_gemma-e4b-q8-q4tpl_qwen.json: update 0.925, coexisting 0.4167, relation precision 0.75, transfer 0.9167, growth drop 5.0, audit 0, p99 0.312 ms.]**
+
 #### Two interruptions, and why the queue log shows two STARTs without an END between them
 
 The queue ran detached across three days and was stopped twice, neither time by a defect in the run:
@@ -2006,3 +2008,182 @@ within a build. **A rule was corrected mid-stream**, and that is stated rather t
 premise it rested on was measured false, the correction was pre-registered before any new number
 existed, and the frozen field's `DONE 8c4cd2b` stands as the measurement it was rather than being
 re-based.
+
+## MS2a-1 — 2026-09-16 — contract 3 beside contract 2, the base controls, the chosen extractor under contract 3
+
+**What this milestone is: the setup MS2a-2 measures on.** Contract 3 exists beside contract 2, the
+two ORACLE base controls reproduce MS1a.4 exactly with the embedding lane off and on, the
+addendum-2 store run is re-taken with the lane it was always supposed to have, and the chosen
+extractor is re-run over the extended corpus. **No MS2 band is scored here** — MS1 is closed and
+this is MS2a-2's input, not a re-verdict.
+
+### Two read-only reviews shaped this, and one of their findings was mine to own
+
+The first MS2a prompt could not have run. Reviews `wf_1d619338-cca` and `wf_b6930383-224`, each
+high finding tried by two skeptics, measured why: flipping `CONTRACT` to `contract3` aborts the
+suite inside T37b, because the queue's contract-2 guard raises an uncaught `SystemExit`; the corpus
+change could not keep the growth filler at 30× the gold count; the new spans move what the ORACLE
+control measures; the chosen key's render check would compare a contract-3 prompt against a
+contract-2 digest; the hearsay rule needs the household's names, because an extractor names a
+speaker by their own name.
+
+**And the same reviews found a defect in a number already published.** The command dictated for
+addendum 2's store run omitted `--embedder qwen`, so
+`ms1b_store_on_extracted_gemma-e4b-q8-q4tpl.json` recorded `embedder: none` and transfer 0.0 — while
+the run it was compared against, `ms1b_store_on_extracted.json`, had the lane ON. CLAUDE.md line 215
+printed those numbers beside the choice. The correction is above, in place, beside the sentence it
+corrects.
+
+### Contract 3 COEXISTS with contract 2
+
+The MS1 field is closed. A tree that could no longer reproduce it would make its verdict
+uncheckable, so contract 2 stays the default everywhere and a contract-3 run asks for it by name.
+**The literals were measured at HEAD before any edit**, which is what makes them a check on the
+change rather than a restatement of it:
+
+| what | measured before the edit | after |
+|---|---|---|
+| contract-2 schema | `846ad08857eb37f8…` | unmoved |
+| `system_prompt()` | `31d99140f87105ac…`, 2,601 chars | unmoved |
+| default request body | `987689165c1edc71…` | unmoved |
+| households 1 / 2 / 3 | `2f51271d…` / `71e8d774…` / `4cac801a…` | unmoved |
+
+Contract 3 differs from contract 2 by **exactly one schema key** — `maxItems: 4` on the candidates
+array — plus the prompt's three changes (the `ended` line; a change is a new current value on
+`lives_in` and `works_as`; routine and topic re-drawn on the schedule boundary), and it **appends**
+four spans and their gold: 171 spans whose first 167 are contract 2's, 41 gold whose first 37 are,
+the identical 1,110-row filler, every scored set untouched. The filler is sized from the 37 gold
+before the appends, which is what keeps it at 1,110 and not 1,230.
+
+Also landed: render digests now record their contract, schema, seed and days, and a controlled arm's
+reference must match all four — strictly under contract 3, while a legacy contract-2 digest missing
+them reads as the values every pre-MS2a digest was taken at, so the committed digests keep working.
+The model file is hashed **before** its server starts and again after it exits (two page-cache
+misreads have already put a wrong digest into a run JSON). Finish reasons are counted. And on
+contract-3 EXTRACTED runs only, a stated `person.relation_to` whose subject is not the speaker is
+demoted to `inferred` — hearsay accrues by day instead of arriving at confidence 1.0.
+
+`test_memory_logic.py` 288 → **301 checks** (T44a–T44m), the suite's diff **additions only, all after
+T43q**. Five mutants, control green first and each restored from a byte-copy verified by md5: M1
+contract 3's `maxItems` under contract 2 → the **queue guard**, which stops the suite inside T37b
+reporting `93af3702870ea822…` instead of `846ad08857eb37f8…`; M2 the corpus extension under contract
+2 → T44d **and the pre-existing T17g, T21b, T36c** — wider than predicted, and right, because the
+extension under contract 2 changes the corpus every earlier milestone was measured on; M3 → T44e;
+M4 → T44f and T44m; M5 → T44g.
+
+### The contract-3 renders
+
+Both on `b10809-5266f24da`, CPU-only: `gemma-e4b-v040` and `gemma-e4b-q8-q4tpl`, **171 prompts each,
+identical 171 of 171**, `contract3`, schema `93af3702870ea822…`, seed 1, days 14, the controlled arm
+carrying `template_from_sha256` `55572b8d3c834204…`. No committed contract-2 digest changed.
+
+### The addendum-2 store run, re-taken like for like
+
+Both runs `embedder: qwen` with 20,000 latency facts:
+
+| field | MS1 winner's run | the corrected run | the defective first run |
+|---|---|---|---|
+| update | 0.75 | **0.925** | 0.925 |
+| coexisting | 0.4167 | **0.4167** | 0.4167 |
+| relation precision | 0.6167 | **0.75** | 0.75 |
+| transfer recall@5 | 0.9084 | **0.9167** | **0.0** |
+| growth drop | 5.0 | **5.0** | 0.0 |
+| audit | 0 | **0** | 0 |
+| p99 | 0.3209 ms | **0.312 ms** | not measured |
+
+**Transfer 0.0 → 0.9167 from restoring one flag.** Stated rather than glossed: the MS1 winner's run
+recorded sentence-transformers **5.0.0** and this one records **5.2.0**, so the pair is like-for-like
+on flags and corpus but not on library version.
+
+### The two base ORACLE controls — both EXACT
+
+| control | result |
+|---|---|
+| lane **OFF** vs `ms1a4_control_none.json` | **0 moved fields** over every reference key (timing excluded), identical bands |
+| lane **ON** vs `ms1a4_run.json` | **0 moved fields**, and all sixteen pre-registered values plus `audit_violations` matched one by one |
+
+The lane-ON control reproduced update 1.0, update-paraphrase 0.5125, coexisting 1.0, transfer
+0.9167, growth update 0.9625, growth drop 3.75, growth-update-paraphrase 0.45,
+growth-drop-paraphrase 6.25, `transfer_gold_pref_rank1` 0.6917, `pref_rank_mean` 1.525,
+`pref_lane_rank_mean` 1.3417, `vec_rank_mean` 78.4833, relation precision 1.0, spouse **10/10 on day
+8.0**, preference-in-top-5 0.05, audit 0, all six bands true. **The §0 disposition never fired**, so
+§6 was allowed to run. Both controls add only `contract` and `env`.
+
+### The contract-3 control — REPORTED, and it moved
+
+This is the reference MS2a-2's extracted bands are read beside, and the design predicted it could
+move: the four new spans can change retrieval by construction.
+
+| field | lane-ON base | contract 3 |
+|---|---|---|
+| `update_acc` | 1.0 | **1.0** (unmoved) |
+| `update_acc_paraphrase` | 0.5125 | **0.225** |
+| `growth_update_acc` | 0.9625 | 0.9375 |
+| `growth_update_acc_paraphrase` | 0.45 | 0.2125 |
+| `growth_drop_points` | 3.75 | **6.25** (the `growth_drop<=5` band flips to FAIL) |
+| `growth_drop_paraphrase_points` | 6.25 | 1.25 |
+| `transfer_gold_vec_rank_mean` | 78.4833 | 79.9833 |
+
+Coexisting, transfer, relation precision, spouse 10/10 on day 8.0, preference-in-top-5, audit and
+p99 are all unmoved.
+
+**The cause, measured in memory and written nowhere.** Re-running the moved queries on both corpora
+names two mechanisms, both confined to the **paraphrase** set — the set worded outside the predicate
+hint's vocabulary, so those queries run unrestricted:
+
+1. **The new `person.name` fact outranks `person.lives_in`.** On *"which town is {partner} based in
+   these days"* and *"where is {partner} settled now"*, contract 2 returned the correct
+   `person.lives_in` fact and contract 3 returns `person.name={partner}`. The answer is beaten by a
+   fact about the **same person**, which the subject gate cannot exclude.
+2. **A chatter span wins outright** on the owner's two paraphrase questions — `SPAN: i will sort it
+   out` — where contract 2 returned the right fact.
+
+`update_acc` stays 1.0 because the hinted questions restrict to the right predicate; only the
+unhinted paraphrases move. **And the growth band must be read beside its absolutes**, because a drop
+is a difference of two terms and this project has been caught before by watching only the delta:
+base 1.0 → 0.9625 (drop 3.75) against contract 3's 1.0 → 0.9375 (drop 6.25); while the paraphrase
+drop *falls* 6.25 → 1.25 only because its starting term collapsed.
+
+### The chosen extractor under contract 3
+
+`gemma-e4b-q8-q4tpl`, **validity 1.0000, F1 0.8021** on the 410 gold. **That is NOT comparable to
+contract 2's 0.7907, which was measured on 370 gold** — a different denominator and four extra gold
+per household. The gate held: `model_sha256` `6a6eba0d36a051b5…` and `template_from_sha256`
+`55572b8d3c834204…` both byte-equal to `ms1b_gemma-e4b-q8-q4tpl.json`, `model_sha256_agree` **True**
+with no re-read needed, build `b10809-5266f24da`, 1,710 calls all valid.
+
+| predicate | contract 3 | contract 2 |
+|---|---|---|
+| `household.topic` | 1.0000 | 0.9917 |
+| `owner.prefers` | 1.0000 | 0.9836 |
+| `person.trait` | **1.0000** (20/20) | — no gold |
+| `person.works_as` | 0.9667 | 1.0000 |
+| `person.lives_in` | 0.9524 | 0.9474 |
+| `person.habit` | 0.9500 | 1.0000 |
+| `person.name` | **0.5714** (8/20) | — no gold |
+| `household.routine` | **0.4912** | **0.1667** |
+| `person.relation_to` | **0.3467** | 0.4054 |
+
+**What contract 3 was written to fix, and what it did:**
+
+- **`household.routine` 0.1667 → 0.4912** — the schedule boundary was the largest recoverable loss
+  and it moved most, though it is still the second-weakest predicate.
+- **`ended` on the ten "i stopped, i no longer" spans: 0/10 → 4/10.** Better, not fixed.
+- **"we moved to … last week": 7 → 11 `lives_in` predictions over the ten spans** (11 because one
+  span drew two candidates).
+- **`finish_length` 0**, `finish_reasons {"stop": 1710}` — `maxItems: 4` did its job; not one call
+  hit the token cap.
+- **The new gold: 28 of 40 matched** — `person.trait` 20/20, `person.name` 8/20.
+
+**What it did not fix, stated plainly:** `person.relation_to` **fell** 0.4054 → 0.3467, and
+`person.habit` and `person.works_as` each slipped from 1.0000. The relation predicate is the one
+MS2a-2's people layer exists for, and it is the weakest thing the extractor does.
+
+Throughput: 1,681 of 1,710 calls returned reasoning content, 378,026 output tokens, 7,056.5 s.
+
+### Honest scope
+
+Synthetic seeded template households, ORACLE gold, seeds 1–10, 14 days. Nothing here was measured on
+real speech, on household audio, or on the owner. No MS2 band is scored: the extracted bands are
+MS2a-2's, read beside the contract-3 control above. The contract-2 field is untouched and remains
+reproducible byte for byte.
