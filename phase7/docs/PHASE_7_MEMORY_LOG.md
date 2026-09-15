@@ -1180,7 +1180,7 @@ started and stopped by the harness. Corpus: 10 synthetic households, 14 days, se
 spans, 370 oracle candidates. `temperature 0`, `seed 1`, `max_tokens` 2048 for every model,
 `--jinja` for every server. Thinking OFF via `chat_template_kwargs {"enable_thinking": false}`
 wherever the template offers the switch (the four Qwen keys); Gemma 4's channel has no switch and
-keeps the headroom.
+keeps the headroom. **[CORRECTED 2026-09-12, field addendum 2: FALSE — Gemma 4's template reads `enable_thinking` and both builds' `--reasoning auto` default turned thinking ON for every Gemma run in this field; see `### Thinking, measured at the renderer` and `### The field addendum 2`.]**
 
 | key | model | bytes | sha256 | think switch |
 |---|---|---|---|---|
@@ -1688,3 +1688,321 @@ days, 1,670 spans per arm — the field's corpus, contract and rule, unchanged. 
 on real speech, on household audio, or on the owner. Numbers are compared only within a build; the two
 venues' tables sit side by side and are never merged. The addendum adds seven arms and one re-run to
 the field's eleven; it does not re-open the frozen field, whose verdict is unchanged.
+
+### The field addendum 2 — 2026-09-15 — thinking states measured, the choice rule corrected, the Qwen venue, the controlled template
+
+**Verdict, by the corrected rule applied in code WITHIN llama.cpp build b10809: CHOSEN
+`gemma-e4b-q8-q4tpl` at validity 1.0000 / F1 0.7907** — Gemma 4 E4B Q8_0 weights rendered through
+the Q4_K_M file's own chat template, thinking ON. The OFF-only reading is reported beside it for
+both builds, and the operating state — the configuration MS2 runs — is `gemma-e4b-q8-q4tpl`.
+
+#### Why, and when the rule was corrected
+
+The addendum (`3a98d48`) measured two things that made this run necessary.
+
+**Every Gemma run in both fields had thought.** Every Gemma 4 GGUF's chat template reads
+`enable_thinking` and emits `<|think|>` in the system turn when it is true; both llama.cpp builds
+default `--reasoning auto`, which supplies `enable_thinking=true` whenever a request carries no
+kwarg — and the Gemma keys sent none, because the rule's premise was that Gemma 4's channel has no
+switch. That premise came from the BOX's hand-built prompt template (`JARVIS_THINKING`) and was
+never checked against the Jinja engine that actually rendered these prompts. Measured at the
+renderer, 167 of 167. Meanwhile the Qwen, Granite and NuExtract3 keys ran with thinking OFF.
+
+So the field's "thinking OFF wherever a template offers a switch" clause was applied on a false
+premise — and it is incoherent as a fairness rule in any case: LFM2.5 thinks with no switch to turn
+off, and a switchable model that thinks WELL is handicapped by it. Applied as intended, that clause
+would have made the frozen field's choice Qwen3 8B at 0.6196 rather than Gemma 4 E4B at 0.7426.
+
+**The quantisation arms moved two things at once.** The Q6_K and Q8_0 files carry a newer chat
+template than the Q4_K_M file, so those arms answered nothing about quantisation.
+
+**The correction is dated, and the date is the point: it was made AFTER the Gemma thinking-ON
+numbers were known and BEFORE any OFF number existed.** Pre-registered in the design and the plan at
+`1b2927f`, 2026-09-12; the twelve arms ran 2026-09-13 to 2026-09-15. The rule now reads:
+
+1. **The choice.** Every run under contract 2, the 2048-token budget, temperature 0, seed 1 and ONE
+   venue is a legitimate configuration, and its thinking state is part of its identity. The highest
+   F1 among runs at validity ≥ 99 % is CHOSEN. A switchable model is measured in BOTH states.
+2. **The OFF-only reading.** The same rule over only the runs that did not think by choice,
+   computed and REPORTED beside the choice for both builds.
+3. **The operating state.** The chosen model's OFF key unless its ON key beats it by MORE than 0.01
+   F1, with its cost in output tokens and seconds reported beside it.
+4. **The render check.** A run's thinking state is MEASURED before its arm starts: the arm's own
+   server renders household 1's 167 requests through `/apply-template`, the marker pattern is
+   asserted against the expectation declared for that key from its own template, and a mismatch
+   STOPS the queue. It is a finding, never a spec edit after the fact.
+
+#### The arms — twelve, all on b10809, contract 2, 2048 tokens, temperature 0, seed 1, seeds 1–10
+
+Every state was asserted at the renderer before its arm's first call; all thirteen renders are
+`render_ok` over 167 of 167 prompts, and every run's `thinking_consistent` is True — the state that
+was declared is the state that happened, at both the prompt end and the response end.
+
+| key | file sha256 | kwarg sent | rendered | template | reasoning_calls | validity | F1 | lenient | scorable | zeroGP | tokens out | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `gemma-e4b-q8-q4tpl` | `6a6eba0d` | none | on | `55572b8d3c834204` | 1670 | 1.0000 | **0.7907** | 0.8052 | 0.8947 | 0 | 382,932 | 7,127.3 |
+| `gemma-e4b-q8-q4tpl-nothink` | `6a6eba0d` | off | off | `55572b8d3c834204` | 0 | 1.0000 | 0.7744 | 0.7911 | 0.8715 | 0 | 35,152 | 873.5 |
+| `qwen3-8b-v040-think` | `d98cdcbd` | on | on | `57f1fd00f0013a2b` | 1670 | 0.9958 | 0.7721 | 0.7925 | 0.8736 | 7 | 691,048 | 11,577.0 |
+| `gemma-e4b-v040-nothink` | `6dfbdb0f` | off | off | `55572b8d3c834204` | 0 | 1.0000 | 0.7585 | 0.7749 | 0.8515 | 0 | 38,288 | 829.7 |
+| `gemma-e2b-v040` | `9378bc47` | none | on | `33204f1acb5bd000` | 1670 | 1.0000 | 0.7069 | 0.7069 | 0.7962 | 12 | 595,032 | 4,848.5 |
+| `qwen3-8b-v040` | `d98cdcbd` | off | off | `57f1fd00f0013a2b` | 0 | 1.0000 | 0.6281 | 0.7122 | 0.7019 | 10 | 22,824 | 516.3 |
+| `qwen35-9b-v040` | `03b74727` | off | off | `7f0e529032c25183` | 0 | 1.0000 | 0.5775 | 0.5960 | 0.6459 | 47 | 22,194 | 655.6 |
+| `gemma-e2b-v040-nothink` | `9378bc47` | off | off | `33204f1acb5bd000` | 0 | 1.0000 | 0.5755 | 0.5784 | 0.6504 | 0 | 38,268 | 487.6 |
+| `qwen35-4b-v040` | `00fe7986` | off | off | `7f0e529032c25183` | 0 | 1.0000 | 0.5300 | 0.5433 | 0.6115 | 0 | 17,358 | 437.7 |
+| `nuextract3-think` | `7ee3c0ee` | on | on | `6c0a83aee85a1bdb` | 1670 | 0.9988 | 0.4251 | 0.4475 | 0.4566 | 121 | 791,681 | 10,115.1 |
+| `qwen35-4b-v040-think` | `00fe7986` | on | on | `7f0e529032c25183` | 1670 | 0.5060 | **0.0000** | 0.0000 | 0.0000 | 0 | 2,498,399 | 29,586.7 |
+| `qwen35-9b-v040-think` | `03b74727` | on | on | `7f0e529032c25183` | 1670 | 0.5886 | **0.0000** | 0.0000 | 0.0000 | 0 | 2,330,058 | 42,597.6 |
+
+`gemma-e4b-v040` (ON, 0.7695) is the addendum's own arm and carries into this field unchanged.
+**The three kwarg spellings are distinct and the distinction is the subject of this addendum:** `off`
+sends `{"enable_thinking": false}`, `on` sends `true`, and **`none` sends no kwarg at all** — which
+`--reasoning auto` then resolves to thinking ON. Arms 10 and 12 send nothing on purpose, because the
+frozen field's Gemma runs sent nothing; sending an explicit `true` would have moved the request shape
+as well as the venue. Measured: an explicit `true` renders byte-identically to no kwarg on b10809,
+167 of 167.
+
+**The fetches.** Qwen3-8B from `Qwen/Qwen3-8B-GGUF` (`d98cdcbd…`, 5,027,783,488 B); Qwen3.5-4B
+(`00fe7986…`, 2,740,937,888 B) and Qwen3.5-9B (`03b74727…`, 5,680,522,464 B) copied from the box.
+Every sha256 equals the field's recorded digest. The other six files were already on disk unchanged.
+
+#### The three readings
+
+**THE CHOICE — `--verdict --build b10809`, all 20 runs in the build:**
+
+| key | validity | F1 |
+|---|---|---|
+| **`gemma-e4b-q8-q4tpl`** | **1.0000** | **0.7907** |
+| `gemma-e4b-q8-q4tpl-nothink` | 1.0000 | 0.7744 |
+| `qwen3-8b-v040-think` | 0.9958 | 0.7721 |
+| `gemma-e4b-v040` | 1.0000 | 0.7695 |
+| `gemma-e4b-v040-nothink` | 1.0000 | 0.7585 |
+| `gemma-e4b-q8` | 1.0000 | 0.7428 |
+| `gemma-e2b-v040` | 1.0000 | 0.7069 |
+| `gemma-e4b-q6k` | 1.0000 | 0.6943 |
+| `nuextract3` | 1.0000 | 0.6467 |
+| `qwen3-8b-v040` | 1.0000 | 0.6281 |
+| `qwen35-9b-v040` | 1.0000 | 0.5775 |
+| `gemma-e2b-v040-nothink` | 1.0000 | 0.5755 |
+| `ministral-8b` | 1.0000 | 0.5425 |
+| `qwen35-4b-v040` | 1.0000 | 0.5300 |
+| `nuextract3-think` | 0.9988 | 0.4251 |
+| `lfm25-2.6b` | 0.9359 | 0.4223 |
+| `granite-8b` | 1.0000 | 0.2976 |
+| `granite-3b` | 1.0000 | 0.0000 |
+| `qwen35-4b-v040-think` | 0.5060 | 0.0000 |
+| `qwen35-9b-v040-think` | 0.5886 | 0.0000 |
+
+**THE OFF-ONLY READING, b10809 — 11 of 20 runs did not think by choice: CHOSEN
+`gemma-e4b-q8-q4tpl-nothink` 0.7744**, then `gemma-e4b-v040-nothink` 0.7585, `nuextract3` 0.6467,
+`qwen3-8b-v040` 0.6281, `qwen35-9b-v040` 0.5775, `gemma-e2b-v040-nothink` 0.5755, `ministral-8b`
+0.5425, `qwen35-4b-v040` 0.5300, `lfm25-2.6b` 0.4223, `granite-8b` 0.2976, `granite-3b` 0.0000.
+
+**THE OFF-ONLY READING, b8728 — 9 of 11 runs: CHOSEN `qwen3-8b` 0.6196**, then `qwen35-9b` 0.5801,
+`qwen35-4b` 0.5729, `qwen3-4b` 0.3098, `llama-8b` 0.2944, `phi3-mini` 0.0798, `phi4-mini` 0.0233,
+`llama-1b` 0.0000, `llama-3b` 0.0000. **Recorded, never re-based** — the MS1 row's `DONE 8c4cd2b`
+stands as the measurement it was, and the plain frozen verdict still reproduces `gemma-e4b` 0.7426.
+
+#### The operating state, and what it costs
+
+`gemma-e4b-q8-q4tpl` — the ON key, because **ON beats OFF by 163 ten-thousandths (0.7907 vs
+0.7744), more than the 100-ten-thousandth band.**
+
+| | ON `gemma-e4b-q8-q4tpl` | OFF `gemma-e4b-q8-q4tpl-nothink` |
+|---|---|---|
+| matches / predictions / gold | 272 / 318 / 370 | 278 / 348 / 370 |
+| F1, full precision | 0.79069767 | 0.77437326 |
+| output tokens | 382,932 | 35,152 |
+| seconds | 7,127.3 | 873.5 |
+
+Gap **0.01632442**; per household ON − OFF mean **+0.0163**, standard deviation 0.0175, **ON higher
+in 9 of 10**. The cost of thinking here is **×10.9 output tokens and ×8.2 wall time** for
++0.0163 F1. Read the mechanism, not only the total: thinking makes the extractor **more precise and
+slightly less complete** — 30 fewer predictions and 6 fewer matches, which is a precision gain of
+0.7989 → 0.8553 against a recall loss of 0.7514 → 0.7351.
+
+**The band is compared in the aggregates' own 4-decimal precision, and that is not a detail.** The
+runs are written rounded to 4 dp, so comparing the raw doubles asks a question the numbers cannot
+answer — `0.7695 - 0.7595` is `0.010000000000000009`, which is "more than 0.01", and a pair sitting
+exactly on the pre-registered band would be sent to ON by an artefact of the representation. This
+was found and fixed before any verdict was computed (`c43cbee`). **The deciding pair clears the band
+by 63 ten-thousandths, about 1.1 standard errors of the paired difference** — firmer than the E4B
+Q4 pair, which would have decided ON by only 0.0009 (110 against the band's 100, mean +0.0111, sd
+0.0387, ON higher in 7 of 10). Both are reported; neither is presented as decisive on its own.
+
+#### The quantisation question, answered at ONE variable
+
+The addendum could not answer it because its Q6_K and Q8_0 arms moved quantisation and template
+together. The two controlled arms load Q8_0 weights with the Q4_K_M file's own template, read out of
+that pinned GGUF at run time and passed as `--chat-template-file`:
+
+| state | Q4_K_M | Q8_0 with the Q4 template | delta |
+|---|---|---|---|
+| thinking ON | `gemma-e4b-v040` 0.7695 | `gemma-e4b-q8-q4tpl` **0.7907** | **+0.0212** |
+| thinking OFF | `gemma-e4b-v040-nothink` 0.7585 | `gemma-e4b-q8-q4tpl-nothink` **0.7744** | **+0.0159** |
+
+**Q8_0 beats Q4_K_M in both states, on the same template.** The control is provably not vacuous: each
+controlled arm's 167 prompts hash **identically** to its Q4 reference (167 of 167, both states),
+while the ON and OFF references differ from **each other in all 167** — so the only thing that moved
+is the quantisation.
+
+#### The template, also at one variable — and it is worth MORE than the quantisation
+
+The same Q8_0 file (`model_sha256` `6a6eba0d`, identical in both arms), both thinking ON, differing
+only in which template rendered it:
+
+| template | F1 | prompt tokens per call |
+|---|---|---|
+| the Q8_0 file's own, newer | `gemma-e4b-q8` 0.7428 | 702.468 |
+| the Q4_K_M file's, borrowed | `gemma-e4b-q8-q4tpl` **0.7907** | 701.468 |
+
+**+0.0479 from one newline after `<|think|>`.** The one-token claim is verified here rather than
+cited: 1,173,121 − 1,171,451 = **1,670 prompt tokens over 1,670 calls = exactly 1.0000 per call**.
+The addendum was right to refuse the quantisation question while the two moved together — the
+template is the larger effect of the two.
+
+**CONSEQUENCE FOR MS2, and it is load-bearing: the operating key BORROWS a template.** Its identity
+is not the model file alone. MS2 must pin it by **`template_from_sha256` = `55572b8d3c834204`**
+alongside the Q8_0 weights, or it will run a different configuration than the one chosen here.
+
+#### Thinking, arm by arm, against its OFF twin
+
+| pair | F1 | output tokens | seconds |
+|---|---|---|---|
+| Qwen3 8B | 0.6281 → **0.7721** (+0.1440) | 22,824 → 691,048 | 516 → 11,577 |
+| Gemma E2B | 0.5755 → **0.7069** (+0.1314) | 38,268 → 595,032 | 488 → 4,849 |
+| Gemma E4B Q8 (Q4 tpl) | 0.7744 → **0.7907** (+0.0163) | 35,152 → 382,932 | 874 → 7,127 |
+| Gemma E4B Q4 | 0.7585 → **0.7695** (+0.0110) | 38,288 → 424,937 | 830 → 6,018 |
+| NuExtract3 | 0.6467 → **0.4251** (−0.2216) | 22,129 → 791,681 | 817 → 10,115 |
+| Qwen3.5 4B | 0.5300 → **0.0000** (−0.5300) | 17,358 → 2,498,399 | 438 → 29,587 |
+| Qwen3.5 9B | 0.5775 → **0.0000** (−0.5775) | 22,194 → 2,330,058 | 656 → 42,598 |
+
+**Thinking is not uniformly good, and it is never cheap:** every ON arm costs an order of magnitude
+in output tokens, it helps four models, it halves NuExtract3 — the purpose-built extractor — and it
+destroys both Qwen3.5 keys.
+
+#### The two zeros, with their cause MEASURED
+
+Both Qwen3.5 thinking-ON arms scored 0.0000 at validity far below the band. The cause is not
+inferred from the score; it is read off each arm's own server log, with the extraction validated
+against the run's recorded `tokens_out` before being believed:
+
+| | `qwen35-4b-v040-think` | `qwen35-9b-v040-think` |
+|---|---|---|
+| calls | 1,670 | 1,670 |
+| generated tokens per call, min / median / mean / **max** | 222 / 1,936.5 / 1,496.0 / **2,048** | 688 / 1,106.0 / 1,395.2 / **2,048** |
+| **calls at the 2,048 generation cap** | **825 = 49.40 %** | **687 = 41.14 %** |
+| `invalid_reasons_total` | `{'unparsed': 825}` | `{'unparsed': 687}` |
+| validity | 0.5060 | 0.5886 |
+| `n_pred` | 0 | 0 |
+| sum of generated tokens vs recorded `tokens_out` | 2,498,399 = 2,498,399 | 2,330,058 = 2,330,058 |
+
+**The correspondence is exact in both arms: every call that hit the cap returned nothing parseable,
+and every unparsed call hit the cap.** The model opens a thinking block, never closes it inside
+2,048 tokens, and emits no JSON at all. The `invalid_raw` samples are empty strings.
+
+**And the cap is only half of it.** `n_pred` is **0** in both arms, so even the calls that *did*
+parse produced an empty candidate list. Neither zero is explained by truncation alone.
+
+**A trap avoided, recorded because the obvious marker is the wrong one.** `stop processing:
+n_tokens = N` gives 944 calls (56.5 %) at or over 2,048 for the 4B — but `n_tokens` is the whole
+slot span, prompt included: its maximum is 2,742, above the cap, and its mean 2,179.8 reconciles as
+684.8 prompt + 1,496.0 generated. The generated count comes from the final `eval time = … / N
+tokens` line, and was validated against `tokens_out` before use.
+
+#### The Qwen venue delta, OFF on both builds
+
+| key | b8728 | b10809 | delta |
+|---|---|---|---|
+| Qwen3 8B | 0.6196 | 0.6281 | **+0.0085** |
+| Qwen3.5 4B | 0.5729 | 0.5300 | **−0.0429** |
+| Qwen3.5 9B | 0.5801 | 0.5775 | **−0.0026** |
+
+The venue moves a model in either direction and by more than the operating band in one case, which
+is exactly why numbers are compared only within a build.
+
+#### Per predicate, all ten households
+
+| predicate | operating `…q8-q4tpl` | its OFF twin | `gemma-e4b-v040` | `qwen3-8b-v040-think` | `nuextract3` |
+|---|---|---|---|---|---|
+| `person.works_as` | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 1.0000 |
+| `household.topic` | 0.9917 | 1.0000 | 0.9449 | 1.0000 | 1.0000 |
+| `owner.prefers` | 0.9836 | 1.0000 | 1.0000 | 0.9153 | 0.9147 |
+| `person.habit` | 1.0000 | 0.9449 | 0.9833 | 0.9344 | 0.8819 |
+| `person.lives_in` | 0.9474 | 0.8571 | 0.7692 | 0.8364 | 1.0000 |
+| `person.relation_to` | **0.4054** | 0.4224 | 0.3709 | 0.3922 | **0.0375** |
+| `household.routine` | **0.1667** | 0.1333 | 0.3279 | 0.4444 | 0.0000 |
+
+The shape is the field's, unchanged: at or near ceiling on the person and household predicates, and
+weak exactly where MS1b has no people layer. For the operating key, `person.relation_to` holds 110
+gold against 38 predictions (30 matched) and `household.routine` 20 gold against 40 predictions
+(5 matched) — under-prediction on relations, over-prediction on routines.
+
+#### The store on the operating key's candidates (REPORTED, never banded here)
+
+update **0.925** · coexisting **0.4167** · relation precision **0.75** · transfer recall@5 **0.0** ·
+growth drop **0.0** points · audit **0 violations** · spouse surfaced **0/10**. Against the MS1
+winner's recorded run (update 0.75, coexisting 0.4167, relation precision 0.6167, transfer 0.9084,
+audit 0): update and relation precision improve on a better extractor, coexisting is unmoved, and
+transfer collapses because this run has `embedder: none` — the MS0 full-text lane alone.
+
+#### Two interruptions, and why the queue log shows two STARTs without an END between them
+
+The queue ran detached across three days and was stopped twice, neither time by a defect in the run:
+
+1. **2026-09-13 05:56** — Claude Code's background-task memory guard stopped the queue during
+   `qwen3-8b-v040-think` at 826 of 1,670 calls, because it was a background command of a session that
+   had run out of context. Not Windows: no `Resource-Exhaustion-Detector` event. The queue was
+   relaunched through WMI, parented to `WmiPrvSE.exe`, outside any session's process tree.
+2. **2026-09-14 ~14:40** — the operator stopped it for a game, again during `qwen3-8b-v040-think`
+   (1,247 of 1,670).
+
+A killed arm re-runs whole, so neither partial run produced a JSON. That is why the queue log carries
+**three** `qwen3-8b-v040-think START` lines and only the last has an `END`, at 2026-09-15 02:43:50.
+Ten finished keys `SKIP already done` on each relaunch, each checked against `--build b10809` rather
+than skipped blindly.
+
+#### A provenance field is wrong in one run JSON, and is left as written
+
+`ms1b_qwen3-8b-v040-think.json` records `model_sha256` `91968a41…`, while two other runs of the same
+file record `d98cdcbd…`, the pre-registered digest. Measured, by the test this project's precedent
+demands — re-fetch and compare, never re-read and hope:
+
+- a fresh download from `Qwen/Qwen3-8B-GGUF` and the copy on disk differ in **0 of 5,027,783,488
+  bytes**, the full file, so the comparison is not vacuous; both equal `d98cdcbd…`;
+- four later reads through two independent tools all return `d98cdcbd…`, and the file's mtime never
+  moved.
+
+**The file was correct the whole time; three earlier readings were page-cache misreads, and what
+evicted the bad pages was the 5 GB download itself.** All three Qwen3-8B arms therefore ran
+byte-identical weights, and their venue delta and thinking cost stand. The run JSON is **not
+edited**: it records what was measured, and correcting a provenance field to make it look right is
+the one thing that must never be done. **This is the second time this mechanism has poisoned a
+provenance read here** — the first was `gemma-e4b-q8` run 1 on 2026-09-12, kept as `_run1.json` and
+excluded from every verdict. The harness computes that hash immediately after a 5 GB mapping is torn
+down, which is the defect; hashing before the server starts, or twice with the readings compared,
+would make it self-detecting. That fix is a separate reviewed change and is not made here.
+
+#### Skips, and the rules that did not fire
+
+Q6_K — with Q8_0 controlled it answers no question MS2 asks. Qwen3 4B (0.3098), Llama 3.1 8B
+(0.2944), Phi-3 mini, Phi-4 mini, Llama 3.2 3B and 1B — outside the pre-registered admission margin.
+LFM2.5 and Ministral — no switch, already measured on b10809. Granite 3B and 8B — already OFF at
+0.0000 and 0.2976; a thinking-ON arm 0.3 below the floor cannot become the choice. No render
+mismatch stopped the queue; no arm was skipped; `QUEUE done=12 skipped=0`.
+
+**One spec was set from a template before its arm ran, and that is recorded rather than glossed:**
+the three Qwen thinking-ON keys were first declared with one spec — that no think marker appears —
+which is true of Qwen3 and false of Qwen3.5, whose template emits an OPEN `<think>\n` when
+`enable_thinking is true`. The render pre-flight caught it 167 of 167 before either Qwen3.5 arm ran,
+and the spec was corrected from the model's own template (`30a880f`), before any number of theirs
+existed. A spec read from a template is not a threshold moved after a result.
+
+#### Honest scope
+
+Synthetic seeded utterances that always name people, scored against ORACLE candidates, seeds 1–10,
+14 days, 1,670 spans per arm — the field's corpus, contract, budget and rule, unchanged. Nothing
+here was measured on real speech, on household audio, or on the owner. Numbers are compared only
+within a build. **A rule was corrected mid-stream**, and that is stated rather than smoothed: the
+premise it rested on was measured false, the correction was pre-registered before any new number
+existed, and the frozen field's `DONE 8c4cd2b` stands as the measurement it was rather than being
+re-based.

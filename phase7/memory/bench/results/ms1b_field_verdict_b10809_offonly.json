@@ -1,23 +1,14 @@
 {
   "build": "b10809",
-  "chosen": "gemma-e4b-q8-q4tpl",
+  "chosen": "gemma-e4b-q8-q4tpl-nothink",
   "contract": "contract2",
   "f1_floor": 0.6,
-  "n_models": 20,
-  "offonly": false,
-  "operating_key": "gemma-e4b-q8-q4tpl",
-  "operating_reason": "ON beats OFF by 163 ten-thousandths (0.0163), more than the 100-ten-thousandth band (0.7907 vs 0.7744)",
-  "reason": "validity 1.0000 >= 0.99 and F1 0.7907 >= 0.60, the highest",
+  "n_models": 11,
+  "offonly": true,
+  "operating_key": null,
+  "operating_reason": "rule (3) defines the operating state for the choice only",
+  "reason": "validity 1.0000 >= 0.99 and F1 0.7744 >= 0.60, the highest",
   "rows": [
-    {
-      "f1": 0.7907,
-      "f1_scorable": 0.8947,
-      "key": "gemma-e4b-q8-q4tpl",
-      "lenient_f1": 0.8052,
-      "seconds": 7127.3,
-      "validity": 1.0,
-      "zero_gold_predictions": 0
-    },
     {
       "f1": 0.7744,
       "f1_scorable": 0.8715,
@@ -28,56 +19,11 @@
       "zero_gold_predictions": 0
     },
     {
-      "f1": 0.7721,
-      "f1_scorable": 0.8736,
-      "key": "qwen3-8b-v040-think",
-      "lenient_f1": 0.7925,
-      "seconds": 11577.0,
-      "validity": 0.9958,
-      "zero_gold_predictions": 7
-    },
-    {
-      "f1": 0.7695,
-      "f1_scorable": 0.8697,
-      "key": "gemma-e4b-v040",
-      "lenient_f1": 0.7781,
-      "seconds": 6017.8,
-      "validity": 1.0,
-      "zero_gold_predictions": 3
-    },
-    {
       "f1": 0.7585,
       "f1_scorable": 0.8515,
       "key": "gemma-e4b-v040-nothink",
       "lenient_f1": 0.7749,
       "seconds": 829.7,
-      "validity": 1.0,
-      "zero_gold_predictions": 0
-    },
-    {
-      "f1": 0.7428,
-      "f1_scorable": 0.8399,
-      "key": "gemma-e4b-q8",
-      "lenient_f1": 0.7601,
-      "seconds": 8506.5,
-      "validity": 1.0,
-      "zero_gold_predictions": 1
-    },
-    {
-      "f1": 0.7069,
-      "f1_scorable": 0.7962,
-      "key": "gemma-e2b-v040",
-      "lenient_f1": 0.7069,
-      "seconds": 4848.5,
-      "validity": 1.0,
-      "zero_gold_predictions": 12
-    },
-    {
-      "f1": 0.6943,
-      "f1_scorable": 0.7839,
-      "key": "gemma-e4b-q6k",
-      "lenient_f1": 0.7114,
-      "seconds": 7564.8,
       "validity": 1.0,
       "zero_gold_predictions": 0
     },
@@ -136,15 +82,6 @@
       "zero_gold_predictions": 0
     },
     {
-      "f1": 0.4251,
-      "f1_scorable": 0.4566,
-      "key": "nuextract3-think",
-      "lenient_f1": 0.4475,
-      "seconds": 10115.1,
-      "validity": 0.9988,
-      "zero_gold_predictions": 121
-    },
-    {
       "f1": 0.4223,
       "f1_scorable": 0.4883,
       "key": "lfm25-2.6b",
@@ -169,24 +106,6 @@
       "lenient_f1": 0.0,
       "seconds": 217.1,
       "validity": 1.0,
-      "zero_gold_predictions": 0
-    },
-    {
-      "f1": 0.0,
-      "f1_scorable": 0.0,
-      "key": "qwen35-4b-v040-think",
-      "lenient_f1": 0.0,
-      "seconds": 29586.7,
-      "validity": 0.506,
-      "zero_gold_predictions": 0
-    },
-    {
-      "f1": 0.0,
-      "f1_scorable": 0.0,
-      "key": "qwen35-9b-v040-think",
-      "lenient_f1": 0.0,
-      "seconds": 42597.6,
-      "validity": 0.5886,
       "zero_gold_predictions": 0
     }
   ],

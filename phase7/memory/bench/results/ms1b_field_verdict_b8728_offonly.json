@@ -1,32 +1,14 @@
 {
   "build": "b8728",
-  "chosen": "gemma-e4b",
+  "chosen": "qwen3-8b",
   "contract": "contract2",
   "f1_floor": 0.6,
-  "n_models": 11,
-  "offonly": false,
-  "operating_key": "gemma-e4b",
-  "operating_reason": "only the on state was measured for gemma-e4b-q4km",
-  "reason": "validity 1.0000 >= 0.99 and F1 0.7426 >= 0.60, the highest",
+  "n_models": 9,
+  "offonly": true,
+  "operating_key": null,
+  "operating_reason": "rule (3) defines the operating state for the choice only",
+  "reason": "validity 1.0000 >= 0.99 and F1 0.6196 >= 0.60, the highest",
   "rows": [
-    {
-      "f1": 0.7426,
-      "f1_scorable": 0.8368,
-      "key": "gemma-e4b",
-      "lenient_f1": 0.7595,
-      "seconds": 8575.4,
-      "validity": 1.0,
-      "zero_gold_predictions": 10
-    },
-    {
-      "f1": 0.7201,
-      "f1_scorable": 0.8114,
-      "key": "gemma-e2b",
-      "lenient_f1": 0.7201,
-      "seconds": 6979.2,
-      "validity": 1.0,
-      "zero_gold_predictions": 15
-    },
     {
       "f1": 0.6196,
       "f1_scorable": 0.692,

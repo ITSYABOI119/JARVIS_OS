@@ -1,0 +1,42 @@
+gemma-e4b-v040-nothink START 2026-09-13 00:49:21 think=True args=-
+gemma-e4b-v040-nothink END 2026-09-13 01:03:15 validity 1.0000 F1 0.7585 scorableF1 0.8515 834.2 s think=True
+nuextract3-think START 2026-09-13 01:03:15 think=False args=-
+nuextract3-think END 2026-09-13 03:51:53 validity 0.9988 F1 0.4251 scorableF1 0.4566 10117.4 s think=False
+qwen3-8b-v040 START 2026-09-13 03:51:53 think=True args=-
+qwen3-8b-v040 END 2026-09-13 04:00:33 validity 1.0000 F1 0.6281 scorableF1 0.7019 520.1 s think=True
+qwen35-4b-v040 START 2026-09-13 04:00:33 think=True args=-
+qwen35-4b-v040 END 2026-09-13 04:07:53 validity 1.0000 F1 0.5300 scorableF1 0.6115 439.8 s think=True
+qwen35-9b-v040 START 2026-09-13 04:07:53 think=True args=-
+qwen35-9b-v040 END 2026-09-13 04:18:53 validity 1.0000 F1 0.5775 scorableF1 0.6459 660.0 s think=True
+qwen3-8b-v040-think START 2026-09-13 04:18:53 think=False args=-
+gemma-e4b-v040-nothink SKIP already done (F1 0.7585)
+nuextract3-think SKIP already done (F1 0.4251)
+qwen3-8b-v040 SKIP already done (F1 0.6281)
+qwen35-4b-v040 SKIP already done (F1 0.5300)
+qwen35-9b-v040 SKIP already done (F1 0.5775)
+gemma-e2b-v040-nothink START 2026-09-14 00:08:42 state=off kwarg=off tpl=-
+gemma-e2b-v040-nothink END 2026-09-14 00:16:52 validity 1.0000 F1 0.5755 scorableF1 0.6504 489.8 s state=off kwarg=off tpl=33204f1acb5bd000 reasoning_calls=0 thinking_consistent=True
+gemma-e4b-q8-q4tpl-nothink START 2026-09-14 00:16:52 state=off kwarg=off tpl=55572b8d3c834204
+gemma-e4b-q8-q4tpl-nothink END 2026-09-14 00:31:31 validity 1.0000 F1 0.7744 scorableF1 0.8715 879.1 s state=off kwarg=off tpl=55572b8d3c834204 reasoning_calls=0 thinking_consistent=True
+gemma-e4b-q8-q4tpl START 2026-09-14 00:31:31 state=on kwarg=none tpl=55572b8d3c834204
+gemma-e4b-q8-q4tpl END 2026-09-14 02:30:24 validity 1.0000 F1 0.7907 scorableF1 0.8947 7133.0 s state=on kwarg=none tpl=55572b8d3c834204 reasoning_calls=1670 thinking_consistent=True
+gemma-e2b-v040 START 2026-09-14 02:30:24 state=on kwarg=none tpl=-
+gemma-e2b-v040 END 2026-09-14 03:51:15 validity 1.0000 F1 0.7069 scorableF1 0.7962 4850.6 s state=on kwarg=none tpl=33204f1acb5bd000 reasoning_calls=1670 thinking_consistent=True
+qwen35-4b-v040-think START 2026-09-14 03:51:15 state=on kwarg=on tpl=-
+qwen35-4b-v040-think END 2026-09-14 12:04:24 validity 0.5060 F1 0.0000 scorableF1 0.0000 29588.8 s state=on kwarg=on tpl=7f0e529032c25183 reasoning_calls=1670 thinking_consistent=True
+qwen3-8b-v040-think START 2026-09-14 12:04:24 state=on kwarg=on tpl=-
+gemma-e4b-v040-nothink SKIP already done (F1 0.7585)
+nuextract3-think SKIP already done (F1 0.4251)
+qwen3-8b-v040 SKIP already done (F1 0.6281)
+qwen35-4b-v040 SKIP already done (F1 0.5300)
+qwen35-9b-v040 SKIP already done (F1 0.5775)
+gemma-e2b-v040-nothink SKIP already done (F1 0.5755)
+gemma-e4b-q8-q4tpl-nothink SKIP already done (F1 0.7744)
+gemma-e4b-q8-q4tpl SKIP already done (F1 0.7907)
+gemma-e2b-v040 SKIP already done (F1 0.7069)
+qwen35-4b-v040-think SKIP already done (F1 0.0000)
+qwen3-8b-v040-think START 2026-09-14 23:30:49 state=on kwarg=on tpl=-
+qwen3-8b-v040-think END 2026-09-15 02:43:50 validity 0.9958 F1 0.7721 scorableF1 0.8736 11580.9 s state=on kwarg=on tpl=57f1fd00f0013a2b reasoning_calls=1670 thinking_consistent=True
+qwen35-9b-v040-think START 2026-09-15 02:43:50 state=on kwarg=on tpl=-
+qwen35-9b-v040-think END 2026-09-15 14:33:52 validity 0.5886 F1 0.0000 scorableF1 0.0000 42602.3 s state=on kwarg=on tpl=7f0e529032c25183 reasoning_calls=1670 thinking_consistent=True
+QUEUE done=12 skipped=0
