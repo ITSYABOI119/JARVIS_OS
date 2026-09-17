@@ -31,7 +31,8 @@ from .candidate import validate
 from .confidence import confidence as _confidence, distinct_days
 from .paths import default_db
 from .registry import (
-    EDGE_PREDICATE, PREFERENCE_PREDICATE, arity, is_known, normalise_object, predicate_words,
+    EDGE_PREDICATE, PREFERENCE_PREDICATE, SOURCE_RANK, arity, is_known, normalise_object,
+    predicate_words,
 )
 from .rules import decide
 from .schema import DDL
@@ -40,6 +41,11 @@ from .schema import DDL
 # outlives the audio: a vector row is only comparable to another row from the SAME model, so
 # the model id is written beside every vector rather than assumed by a later reader.
 SPAN_EMBED_MODEL = "speechbrain/spkrec-ecapa-voxceleb"
+
+# The two relations the people layer's evidence rules derive and contradict (MS2a-2). Named once
+# here rather than spelled at each of the four sites that reach for them, so ER-C can never end up
+# linking a different set than ER2 and ER3 wrote.
+_EVIDENCE_RELATIONS = ("partner", "spouse")
 
 # The three versioned belief tables and the span table that carries their evidence.
 BELIEF_TABLES = ("fact", "edge", "preference")
@@ -60,6 +66,17 @@ def _iso(ts) -> str:
 
 def _now_iso() -> str:
     return _dt.datetime.now().replace(microsecond=0).isoformat()
+
+
+def _date_ordinal(date_str) -> int:
+    """An ISO date to a day number the pronoun window can subtract from.
+
+    The resolver's window is "the previous 3 days", which is arithmetic on calendar dates and not
+    on the store's row order: two spans can share a date and a date can hold no spans at all. An
+    ordinal makes `day - 1` mean yesterday across month and year boundaries, which a string slice
+    cannot.
+    """
+    return _dt.date.fromisoformat(str(date_str)[:10]).toordinal()
 
 
 # The tokeniser lives in retrieve.py from MS0.1 and is re-exported here for the callers that had
@@ -529,6 +546,26 @@ class MemoryStore:
                 row_id = merge_target["id"]
                 self._link_spans(table, row_id, cand.get("span_ids"), "support")
                 self._link_spans(table, row_id, cand.get("contradicts"), "contradict")
+                # R2 MERGE BY RANK (MS2a-2; the design's §5, amended (3)). Evidence accrual above
+                # keeps the row and drops the candidate's own source rank on the floor, so a stated
+                # self-description arriving after an inferred row of the same value was silently
+                # kept as inferred - against R2, which says an owner's own statement outranks an
+                # inference. The row takes the HIGHER of the two ranks and the upgrade is audited.
+                #
+                # A row is never DOWNGRADED: an inference arriving after a statement is more
+                # evidence for something already stated, not a reason to trust it less. Run before
+                # recompute_confidence, because R5 reads source_kind - a row upgraded to stated is
+                # 1.0 from that moment, which is what makes the upgrade visible rather than latent.
+                old_rank = SOURCE_RANK.get(merge_target.get("source_kind"), 0)
+                new_rank = SOURCE_RANK.get(cand.get("source_kind"), 0)
+                if new_rank > old_rank:
+                    self.conn.execute(
+                        f"update {table} set source_kind=? where id=?",
+                        (cand.get("source_kind"), row_id))
+                    audit_ids.append(self._audit(
+                        "upgrade", table, loser_id=row_id, winner_id=None, rule="R2",
+                        note="%s -> %s" % (merge_target.get("source_kind"),
+                                           cand.get("source_kind"))))
                 outcome = "coexist"
             else:
                 # decide compares object_norm to tell coexisting values apart, so the candidate
@@ -577,6 +614,136 @@ class MemoryStore:
         self.conn.execute(f"update {table} set confidence=? where id=?", (c, row_id))
         self.conn.commit()
         return c
+
+    # ------------------------------------------- the people layer's evidence rules (MS2a-2)
+    def _people_reject(self, span_id, note) -> int:
+        """ONE `reject` row per span, rule `people`. Returns the audit id, or 0 if one already sits.
+
+        The existence check IS the idempotency. `apply_evidence_rules` re-derives every earlier date
+        on every call, so without it a fourteen-day replay would write the same reject fourteen
+        times and the trail would describe a store that rejected one span fourteen times.
+        """
+        got = self.conn.execute(
+            "select id from audit where op='reject' and target_table='span' and loser_id=? "
+            "and rule='people'", (span_id,)).fetchone()
+        if got is not None:
+            return 0
+        return self._audit("reject", "span", loser_id=span_id, rule="people", note=note)
+
+    def apply_evidence_rules(self, owner_person_id, owner_cluster_id, upto_date) -> dict:
+        """ER1-ER3 and ER-C over the spine, up to and including `upto_date` (an ISO date).
+
+        For every date the store holds spans on: co-presence (ER1), then each OWNER span's evidence.
+        Supporting evidence becomes ONE inferred `person.relation_to` candidate per (date, person,
+        relation) citing every span that FIRED - so the edge accrues by DAY, which is what R5
+        counts. A contradiction is not a candidate at all: a contradiction-only day cites no
+        supporting span and the validator would refuse it, so the firing span is LINKED with role
+        `contradict` to the existing current `partner` and `spouse` edges and their confidence
+        recomputed.
+
+        Spans recorded before a cluster earned personhood still count - the design's amended §3.4
+        gates the person ROW, never the evidence - but an edge exists only between persons, so a
+        cluster that never becomes one (the corpus's two-day visitor) accrues nothing.
+
+        Idempotent: a second call over the same dates adds no `edge_span` link, no audit row, and
+        returns `rejects_written` 0 with the same date counts.
+        """
+        upto = str(upto_date)[:10]
+        rows = self.conn.execute(
+            "select id, cluster_id, text, said_at from span where substr(said_at,1,10) <= ? "
+            "order by said_at, id", (upto,)).fetchall()
+
+        by_date, heard_by_day = {}, {}
+        for r in rows:
+            date = str(r["said_at"])[:10]
+            rec = by_date.setdefault(date, {"counts": {}, "owner": []})
+            cl = r["cluster_id"]
+            rec["counts"][cl] = rec["counts"].get(cl, 0) + 1
+            if cl == owner_cluster_id:
+                rec["owner"].append(r)
+            elif cl is not None:
+                heard_by_day.setdefault(_date_ordinal(date), set()).add(cl)
+
+        # Non-owner PERSONS only, by the cluster they speak as.
+        persons = {}
+        for r in self.conn.execute(
+                "select c.id cid, c.person_id pid from cluster c "
+                "join person p on p.id = c.person_id").fetchall():
+            if r["pid"] != owner_person_id:
+                persons[r["cid"]] = r["pid"]
+
+        support_dates, contra_dates, rejects = {}, {}, 0
+        for date in sorted(by_date):
+            rec = by_date[date]
+            day = _date_ordinal(date)
+            er1 = _people.er1_clusters(rec["counts"], owner_cluster_id)
+            fires, contras = {}, {}
+            for sp in rec["owner"]:
+                ev = _people.span_evidence(sp["text"], day, heard_by_day, er1)
+                if ev["reject"] and self._people_reject(
+                        sp["id"], "a people-layer cue fired with no resolved target"):
+                    rejects += 1
+                target = ev["target"]
+                if target is None:
+                    continue
+                for relation in _EVIDENCE_RELATIONS:
+                    if ev[relation]:
+                        fires.setdefault((target, relation), []).append(sp["id"])
+                if ev["contra"]:
+                    contras.setdefault(target, []).append(sp["id"])
+
+            for (cluster_id, relation), sids in sorted(fires.items()):
+                person_id = persons.get(cluster_id)
+                if person_id is None:
+                    continue                      # evidence about a cluster that is not a person
+                last = self.conn.execute(
+                    "select said_at from span where id=?", (sids[-1],)).fetchone()
+                self.ingest({
+                    "predicate_id": EDGE_PREDICATE,
+                    "subject": {"kind": "person", "id": owner_person_id},
+                    "object": person_id,
+                    "object_norm": relation,
+                    "source_kind": "inferred",
+                    "speaker_cluster": owner_cluster_id,
+                    "span_ids": list(sids),
+                    "about_time": None,
+                    "relation_id": relation,
+                    "polarity": None,
+                    "strength": None,
+                    "ended": False,
+                    "said_at": last[0] if last else None,
+                })
+                key = "%s:%s" % (person_id, relation)
+                support_dates[key] = support_dates.get(key, 0) + 1
+
+            for cluster_id, sids in sorted(contras.items()):
+                person_id = persons.get(cluster_id)
+                if person_id is None:
+                    for sid in sids:
+                        if self._people_reject(
+                                sid, "an ER-C contradiction about a cluster that is not a person"):
+                            rejects += 1
+                    continue
+                contra_dates[str(person_id)] = contra_dates.get(str(person_id), 0) + 1
+                edge_ids = [e["id"] for e in
+                            self.current("edge", from_person=owner_person_id, to_person=person_id)
+                            if e["relation_id"] in _EVIDENCE_RELATIONS]
+                if not edge_ids:
+                    for sid in sids:
+                        if self._people_reject(
+                                sid, "an ER-C contradiction with no current partner or spouse "
+                                     "edge to link"):
+                            rejects += 1
+                    continue
+                with self.conn:
+                    for eid in edge_ids:
+                        self._link_spans("edge", eid, sids, "contradict")
+                for eid in edge_ids:
+                    self.recompute_confidence("edge", eid)
+
+        self.conn.commit()
+        return {"support_dates": support_dates, "contra_dates": contra_dates,
+                "rejects_written": rejects}
 
     # ----------------------------------------------------------------- R7
     def purge_cluster(self, cluster_id) -> dict:

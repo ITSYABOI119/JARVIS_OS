@@ -24,6 +24,7 @@ import time
 
 from .. import people as _people
 from ..confidence import SURFACE_THRESHOLD
+from ..registry import EDGE_PREDICATE as _EDGE_PREDICATE
 from ..store import MemoryStore
 from . import corpus as _corpus
 
@@ -72,11 +73,17 @@ def _prepare(cand, ids, sid_map, alias=None):
     return out
 
 
-def _spouse_confidence(st, owner_id, partner_id):
+def _edge_confidence(st, owner_id, partner_id, relation_id):
+    """The current owner->partner edge's confidence for one relation, or None if there is no row."""
     if owner_id is None or partner_id is None:
         return None
-    rows = st.current("edge", from_person=owner_id, to_person=partner_id, relation_id="spouse")
+    rows = st.current("edge", from_person=owner_id, to_person=partner_id,
+                      relation_id=relation_id)
     return rows[0]["confidence"] if rows else None
+
+
+def _spouse_confidence(st, owner_id, partner_id):
+    return _edge_confidence(st, owner_id, partner_id, "spouse")
 
 
 def _fact_row(st, row_id):
@@ -229,15 +236,72 @@ def _score_transfer(st, items, owner_id, now, hint="auto", embedder=None):
     return (ok / len(items) if items else 0.0), by_topic, ranks
 
 
+def _surfaced_edges(st) -> list:
+    """Every CURRENT edge at or above the surfacing threshold, as plain dicts."""
+    return [dict(r) for r in st.conn.execute(
+        "select from_person, to_person, relation_id, confidence, source_kind from edge "
+        "where valid_to is null and confidence >= ?", (SURFACE_THRESHOLD,)).fetchall()]
+
+
 def _score_relations(st, items, ids):
-    gold = {(_resolve(i["from"], ids), _resolve(i["to"], ids), i["relation_id"]) for i in items}
-    surfaced = st.conn.execute(
-        "select from_person, to_person, relation_id from edge "
-        "where valid_to is null and confidence >= ?", (SURFACE_THRESHOLD,)).fetchall()
-    if not surfaced:
-        return 0.0, 0
-    hit = sum(1 for r in surfaced if (r[0], r[1], r[2]) in gold)
-    return hit / len(surfaced), len(surfaced)
+    """Both relation figures over the same surfaced set, so they can never disagree.
+
+    `relation_precision` is the HISTORICAL per-edge figure and keeps its name and its computation:
+    every surfaced edge judged against the planted triples. With the people layer on the oracle path
+    it moves from 1.0 to 0.6667 BY CONSTRUCTION - the rules add a `partner` edge beside the oracle's
+    `spouse` and each household surfaces three edges where it surfaced two - which is pre-registered
+    in the design, not a control that moved.
+
+    `relation_precision_pairs` is the MS2 band's figure: the finest surfaced edge per ordered pair,
+    so the layer is not penalised for being more specific about one relationship. The two are
+    different questions and the report must never print one as the other.
+    """
+    gold_triples = {(_resolve(i["from"], ids), _resolve(i["to"], ids), i["relation_id"])
+                    for i in items}
+    gold_by_pair = {(_resolve(i["from"], ids), _resolve(i["to"], ids)): i["relation_id"]
+                    for i in items}
+    surfaced = _surfaced_edges(st)
+    sc = _people.score_pairs(surfaced, gold_by_pair)
+    hit = sum(1 for r in surfaced
+              if (r["from_person"], r["to_person"], r["relation_id"]) in gold_triples)
+    return {
+        "relation_precision": (hit / len(surfaced)) if surfaced else 0.0,
+        "relations_surfaced": len(surfaced),
+        "relations_surfaced_pairs": sc["pairs"],
+        "relations_fine": sc["fine"],
+        "relations_coarse": sc["coarse"],
+        "relations_wrong": sc["wrong"],
+        # POOLED at the aggregate; None here when this household surfaced no pair at all, so an
+        # absent measurement is never averaged in as a zero.
+        "relation_precision_pairs": (((sc["fine"] + sc["coarse"]) / sc["pairs"])
+                                     if sc["pairs"] else None),
+    }
+
+
+def ms2_bands(agg, n_households, violations, latency, embedder_name) -> dict:
+    """The design's §8 extracted column plus the cross-cutting bands, as amended in §11.
+
+    Pure, and the ONLY place a band threshold is written: every other module reads a measurement,
+    so a threshold can never be moved by editing the thing that produces the number. A band that is
+    None was not measured (no embedder, no latency run) and is not a failure - the distinction the
+    MS0 harness already draws, kept.
+    """
+    pairs = agg.get("relation_precision_pairs")
+    return {
+        "update_acc>=0.85": agg["update_acc"] >= 0.85,
+        "coexist_recall>=0.85": agg["coexist_recall"] >= 0.85,
+        "transfer_recall5>=0.60": ((agg["transfer_recall5"] >= 0.60)
+                                   if embedder_name != "none" else None),
+        "growth_drop<=5": agg["growth_drop_points"] <= 5.0,
+        "relationship_surfaced>=0.8": (agg["relationship_surfaced_count"]
+                                       >= 0.8 * n_households),
+        # None is a MISS, not an absence: no pair surfaced means the layer produced nothing to be
+        # precise about, and scoring that as "not measured" would hide the failure it is.
+        "relation_precision_pairs>=0.90": (pairs >= 0.90) if pairs is not None else False,
+        "relations_wrong==0": agg["relations_wrong"] == 0,
+        "audit==0": violations == 0,
+        "p99<=50ms": (latency["p99_ms"] <= 50.0) if latency else None,
+    }
 
 
 def _env_block(embedder=None) -> dict:
@@ -318,14 +382,55 @@ def extracted_candidates(run_json_path, seed, hh, contract="contract2"):
     return out
 
 
+def _candidate_pronoun(cand, heard_by_day):
+    """Resolve a third-person pronoun in a candidate's subject ref or relation object (MS2a-2).
+
+    The design's §5, amended (1): an extractor says what the utterance said, so `she` reaches the
+    harness as a subject ref or as a relation's object, and it means whoever was in the room. It is
+    resolved on the date of the span the candidate CITES, by the same rule the spans use.
+
+    Returns (candidate, outcome) where outcome is 'none' (no pronoun to resolve), 'resolved' (a
+    COPY carrying cluster ids as strings) or 'unresolved'. Resolving REWRITES the ref, so a
+    candidate held pending and re-offered on a later day is not resolved a second time against a
+    different day's room - the pronoun is gone after the first pass, which is the mechanism rather
+    than a flag to keep in step.
+    """
+    fields = []
+    ref = (cand.get("subject") or {}).get("ref")
+    if ref is not None and str(ref).strip().lower() in _people.THIRD_PERSON_PRONOUNS:
+        fields.append("subject")
+    if cand.get("predicate_id") == _EDGE_PREDICATE:
+        obj = cand.get("object")
+        if obj is not None and str(obj).strip().lower() in _people.THIRD_PERSON_PRONOUNS:
+            fields.append("object")
+    if not fields:
+        return cand, "none"
+    cluster = _people.resolve_pronoun(cand.get("day"), heard_by_day)
+    if cluster is None:
+        return cand, "unresolved"
+    out = dict(cand)
+    if "subject" in fields:
+        subj = dict(out["subject"])
+        subj["ref"] = str(cluster)
+        out["subject"] = subj
+    if "object" in fields:
+        out["object"] = str(cluster)
+    return out, "resolved"
+
+
 def run_household(seed, days, predicate_hint=True, embedder=None, drop_stopwords=True,
-                  candidates_from=None, contract="contract2"):
+                  candidates_from=None, contract="contract2", people_layer=False):
     """`predicate_hint=False` is the NEGATIVE CONTROL: the MS0 lane, unrestricted.
 
     `embedder` adds the vector lane. It is applied by `embed_pending` AFTER ingest, never during:
     the write path stays embedding-free so the p99 write band measures the store, not a GPU.
 
     `contract` selects the corpus and, on the EXTRACTED path only, the contract-3 hearsay rule.
+
+    `people_layer` runs MS2a-2's evidence rules over the spine and resolves pronouns in extracted
+    candidates. It is a SWITCH rather than a new default so that every store run taken before it -
+    MS0, MS0.1, MS1a.4, MS1b, MS2a-1 - stays re-runnable byte for byte; the new scoring fields and
+    merge by rank are unconditional and were measured to move none of them.
     """
     hint = "auto" if predicate_hint else None
     hh = _corpus.generate_household(seed, days, contract)
@@ -360,8 +465,19 @@ def run_household(seed, days, predicate_hint=True, embedder=None, drop_stopwords
     for c in source:
         cands_by_day.setdefault(c["day"], []).append(c)
 
+    # Which non-owner CORPUS clusters were heard on each corpus day (the owner is cluster 1). Built
+    # once: `resolve_pronoun` reads only the candidate's own day and the three before it, all of
+    # which are days already replayed by the time a candidate for that day is offered, so a map
+    # built up front is identical to one grown day by day.
+    heard_by_corpus_day = {}
+    for sp in hh["spans"]:
+        if sp["cluster"] != 1:
+            heard_by_corpus_day.setdefault(sp["day"], set()).add(sp["cluster"])
+
     sid_map, pending = {}, []
     spouse_day = None
+    relationship_day = None
+    pronouns_resolved = 0
     for day in range(1, days + 1):
         by_cluster = {}
         for sp in spans_by_day.get(day, []):
@@ -384,6 +500,25 @@ def run_household(seed, days, predicate_hint=True, embedder=None, drop_stopwords
 
         queue, pending = pending + cands_by_day.get(day, []), []
         for c in queue:
+            # PRONOUN RESOLUTION RUNS FIRST - before `_prepare` and before the hearsay check -
+            # because both of those read the subject ref, and `she` is not a subject either of them
+            # can decide anything about. This is the milestone the MS2a-1 comment below anticipated.
+            if people_layer and candidates_from:
+                c, outcome = _candidate_pronoun(c, heard_by_corpus_day)
+                if outcome == "resolved":
+                    pronouns_resolved += 1
+                elif outcome == "unresolved":
+                    # Dropped, never held pending: a pronoun that did not resolve on its own day
+                    # will not resolve on a later one (the rule reads the cited span's date), so
+                    # holding it would leave it pending forever and count as a measurement that
+                    # never happened. The loss is audited, which is what makes it a loss and not a
+                    # silent drop.
+                    st._audit("reject", "candidate", rule="people",
+                              note="unresolved pronoun %r on %s citing span(s) %s"
+                                   % ((c.get("subject") or {}).get("ref"), c.get("said_at"),
+                                      c.get("span_ids")))
+                    st.conn.commit()
+                    continue
             # THE HEARSAY CHECK RUNS HERE, when the candidate is first offered, and not inside
             # `extracted_candidates`: a later milestone resolves a pronoun ref to a cluster, and
             # that resolution has to happen before this decision, not after it. Contract-3
@@ -401,9 +536,22 @@ def run_household(seed, days, predicate_hint=True, embedder=None, drop_stopwords
                 continue
             st.ingest(prepared)
 
+        # The evidence rules run AFTER the day's candidates and BEFORE the day's checks, so the
+        # surfacing day a check reads is the day the store would have surfaced it to the owner.
+        if people_layer:
+            st.apply_evidence_rules(ids["owner"], clusters[1],
+                                    _corpus._said_at(day, 0)[:10])
+
         conf = _spouse_confidence(st, ids.get("owner"), ids.get("partner"))
         if spouse_day is None and conf is not None and conf >= SURFACE_THRESHOLD:
             spouse_day = day
+        # THE RELATIONSHIP, as the design's amended band asks for it: `spouse` OR the coarser
+        # `partner`, whichever surfaces first. Tracked beside the spouse day and never instead of
+        # it - the two answer different questions and `spouse` stays separately REPORTED.
+        pconf = _edge_confidence(st, ids.get("owner"), ids.get("partner"), "partner")
+        best = max([x for x in (conf, pconf) if x is not None], default=None)
+        if relationship_day is None and best is not None and best >= SURFACE_THRESHOLD:
+            relationship_day = day
 
     embed_stats = {"fact": 0, "preference": 0, "span": 0, "seconds": 0.0}
     if embedder is not None:
@@ -419,8 +567,16 @@ def run_household(seed, days, predicate_hint=True, embedder=None, drop_stopwords
     # how often a preference occupies one of a fact question's five results. REPORTED, never banded.
     pref_price = pref_in_top5_rate(st, [it["query"] for it in hh["sets"]["update"]],
                                    now, hint, embedder)
-    rel_prec, n_surfaced = _score_relations(st, hh["sets"]["relations"], ids)
+    rel = _score_relations(st, hh["sets"]["relations"], ids)
     spouse_conf = _spouse_confidence(st, ids.get("owner"), ids.get("partner"))
+    partner_conf = _edge_confidence(st, ids.get("owner"), ids.get("partner"), "partner")
+    finest = _people.finest_surfaced(
+        [r for r in _surfaced_edges(st)
+         if r["from_person"] == ids.get("owner") and r["to_person"] == ids.get("partner")])
+    relationship_finest = ({"relation_id": finest["relation_id"],
+                            "source_kind": finest["source_kind"],
+                            "confidence": round(finest["confidence"], 4)}
+                           if finest else None)
 
     # --- growth: 30x unrelated transcript into the SAME store, then re-ask ---
     filler_rec = {}
@@ -453,6 +609,25 @@ def run_household(seed, days, predicate_hint=True, embedder=None, drop_stopwords
 
     violations = len(st.audit_violations())
     n_facts = st.conn.execute("select count(*) from fact").fetchone()[0]
+    # The people layer's own trail, read before the connection closes. Counted from the audit table
+    # rather than tallied in Python as the run goes: the rows ARE the record, so a counter that
+    # disagreed with them would be the thing that is wrong.
+    rejects_by_table = {"span": 0, "candidate": 0}
+    for r in st.conn.execute(
+            "select target_table, count(*) n from audit where op='reject' and rule='people' "
+            "group by target_table").fetchall():
+        rejects_by_table[r["target_table"]] = r["n"]
+    people_rejects = sum(rejects_by_table.values())
+    rank_upgrades = st.conn.execute(
+        "select count(*) from audit where op='upgrade'").fetchone()[0]
+    # REPORTED, never banded: a current edge sitting on a slot that also holds a CLOSED row means
+    # the rules re-derived an edge the store had closed. Zero on every path measured so far; it is
+    # surfaced so that a future corpus where it is not zero says so rather than looking clean.
+    edges_reopened = st.conn.execute(
+        "select count(*) from edge e where e.valid_to is null and exists ("
+        "  select 1 from edge o where o.valid_to is not null"
+        "   and o.from_person = e.from_person and o.to_person = e.to_person"
+        "   and o.relation_id = e.relation_id)").fetchone()[0]
     st.close()
     out_hh = {
         "seed": seed,
@@ -487,10 +662,29 @@ def run_household(seed, days, predicate_hint=True, embedder=None, drop_stopwords
         "coexist_recall": round(coexist_recall, 4),
         "coexist_ended_leaks": ended_leaks,
         "transfer_recall5": round(transfer, 4),
-        "relation_precision": round(rel_prec, 4),
-        "relations_surfaced": n_surfaced,
+        "relation_precision": round(rel["relation_precision"], 4),
+        "relations_surfaced": rel["relations_surfaced"],
+        # MS2a-2. The pair figure is the MS2 band's; `relation_precision` above is the historical
+        # per-edge one and keeps its meaning. Printed side by side on purpose - the log must never
+        # let a reader take one for the other.
+        "relation_precision_pairs": (round(rel["relation_precision_pairs"], 4)
+                                     if rel["relation_precision_pairs"] is not None else None),
+        "relations_surfaced_pairs": rel["relations_surfaced_pairs"],
+        "relations_fine": rel["relations_fine"],
+        "relations_coarse": rel["relations_coarse"],
+        "relations_wrong": rel["relations_wrong"],
         "spouse_surfaced_day": spouse_day,
         "spouse_confidence_last_day": round(spouse_conf, 4) if spouse_conf is not None else None,
+        "partner_confidence_last_day": (round(partner_conf, 4)
+                                        if partner_conf is not None else None),
+        "relationship_surfaced_day": relationship_day,
+        "relationship_finest": relationship_finest,
+        "people_rejects": people_rejects,
+        "people_rejects_by_table": rejects_by_table,
+        "edges_reopened": edges_reopened,
+        "rank_upgrades": rank_upgrades,
+        "pronouns_resolved": pronouns_resolved,
+        "pending_at_end": len(pending),
         "growth_update_acc": round(growth_acc, 4),
         "growth_drop_points": round(100.0 * (update_acc - growth_acc), 4),
         "growth_update_acc_paraphrase": round(growth_para, 4),
@@ -541,9 +735,9 @@ def measure_latency(n_facts, n_subjects=2000):
 
 def run(seeds, days, latency_facts, out_path=None, predicate_hint=True, embedder=None,
         embedder_name="none", drop_stopwords=True, candidates_from=None,
-        contract="contract2") -> dict:
+        contract="contract2", people_layer=False) -> dict:
     households = [run_household(s, days, predicate_hint, embedder, drop_stopwords, candidates_from,
-                                contract)
+                                contract, people_layer)
                   for s in seeds]
     agg = {}
     for field in ("update_acc", "coexist_recall", "transfer_recall5", "relation_precision",
@@ -564,6 +758,28 @@ def run(seeds, days, latency_facts, out_path=None, predicate_hint=True, embedder
     agg["spouse_surfaced_day_mean"] = (round(statistics.fmean(surfaced_days), 4)
                                        if surfaced_days else None)
     agg["spouse_surfaced_households"] = f"{len(surfaced_days)}/{len(households)}"
+
+    # MS2a-2 aggregates. The pair precision is POOLED, not a mean of per-household means: a
+    # household that surfaced one pair and a household that surfaced three are not equal evidence,
+    # and the band is a statement about the surfaced pairs rather than about the households.
+    for field in ("relations_fine", "relations_coarse", "relations_wrong",
+                  "relations_surfaced_pairs", "people_rejects", "edges_reopened",
+                  "rank_upgrades", "pronouns_resolved", "pending_at_end"):
+        agg[field] = sum(h[field] for h in households)
+    agg["relation_precision_pairs"] = (
+        round((agg["relations_fine"] + agg["relations_coarse"])
+              / agg["relations_surfaced_pairs"], 4)
+        if agg["relations_surfaced_pairs"] else None)
+    rel_days = [h["relationship_surfaced_day"] for h in households
+                if h["relationship_surfaced_day"] is not None]
+    agg["relationship_surfaced_day_mean"] = (round(statistics.fmean(rel_days), 4)
+                                             if rel_days else None)
+    agg["relationship_surfaced_households"] = f"{len(rel_days)}/{len(households)}"
+    # The COUNT beside the "k/n" string, because `ms2_bands` has to compare it against a fraction
+    # of the households and parsing a display string to get a number back is how a band starts
+    # depending on a format.
+    agg["relationship_surfaced_count"] = len(rel_days)
+
     latency = measure_latency(latency_facts)
     violations = sum(h["audit_violations"] for h in households)
 
@@ -584,6 +800,7 @@ def run(seeds, days, latency_facts, out_path=None, predicate_hint=True, embedder
             topics[t] = topics.get(t, 0) + n
     out = {
         "predicate_hint": bool(predicate_hint),
+        "people_layer": bool(people_layer),
         "stopwords": "dropped" if drop_stopwords else "kept",
         "embedder": embedder_name,
         "embedder_version": getattr(embedder, "version", None),
@@ -595,6 +812,11 @@ def run(seeds, days, latency_facts, out_path=None, predicate_hint=True, embedder
         "latency": latency,
         "audit_violations": violations,
         "bands": bands,
+        # The MS2 band list, written on every run so a lane-OFF or layer-OFF file can still be read
+        # beside a banded one. The MS0 `bands` block above is UNTOUCHED: MS0's thresholds and MS2's
+        # are different questions asked of the same store, and collapsing them would silently
+        # re-base every earlier milestone's verdict.
+        "ms2_bands": ms2_bands(agg, len(households), violations, latency, embedder_name),
         "reported": {
             "transfer_recall5": agg["transfer_recall5"],
             "transfer_gold_pref_rank1": agg["transfer_gold_pref_rank1"],

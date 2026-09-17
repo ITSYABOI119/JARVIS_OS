@@ -51,6 +51,40 @@ RELATIONS = frozenset({
 # R2's ordering: an owner's own statement outranks another speaker's, which outranks an inference.
 SOURCE_RANK = {"stated_owner": 3, "stated_other": 2, "inferred": 1}
 
+
+# The people layer's frozen lexicons (MS2a-2; the design's §5 MS2 pre-registration, fixed there
+# before any MS2 number and copied here unchanged). Matched on lower-cased WHOLE words, never
+# stemmed and never as substrings - `lovely` is not `love` and `weekday` is not `week` - and a
+# CONTRA entry of several words matches as a whole-word SEQUENCE.
+#
+# These are the K-b instinct again, one level further out: the evidence rules SELECT from a
+# human-reviewed table and can never invent a cue. Adding a word is a reviewed code change with a
+# test, never a knob turned to move a band - which is why they are module constants with no loader,
+# and why the test suite pins them against the design's own lists rather than against themselves.
+HOUSEHOLD_CUES = frozenset({
+    "lease", "rent", "mortgage", "bills", "groceries", "shopping", "dinner", "kids", "school",
+    "evening", "weekend", "week", "holiday", "garden", "bins", "washing", "cleaning",
+})
+KIN_CUES = frozenset({
+    "wife", "husband", "married", "anniversary", "love", "darling", "honey", "babe",
+    "sweetheart", "dear",
+})
+# A TUPLE, and the design's order is preserved: these are phrases as well as words, and the order
+# is part of what the test compares.
+CONTRA_CUES = (
+    "staying with us", "visiting", "guest", "lodger", "flatmate", "housemate",
+    "my sister", "my brother", "my mum", "my dad", "my mother", "my father", "colleague",
+)
+
+THIRD_PERSON_PRONOUNS = frozenset({"she", "he", "her", "him", "they"})
+FIRST_PERSON_PLURAL = frozenset({"we", "us", "our"})
+
+# Which surfaced relation is the FINEST for a pair (design §5, amended 2026-09-15). `spouse` is
+# finer than `partner`; everything else follows in sorted order so the precedence is derived from
+# RELATIONS rather than retyped beside it, and a relation added to the registry cannot fall out of
+# the ordering by omission.
+RELATION_PRECEDENCE = ("spouse", "partner") + tuple(sorted(RELATIONS - {"spouse", "partner"}))
+
 # Predicates whose rows do not live in `fact` (the store routes them; kept here so one table
 # describes the routing as well as the arity).
 EDGE_PREDICATE = "person.relation_to"

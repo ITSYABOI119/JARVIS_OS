@@ -3041,5 +3041,474 @@ check("T44m hearsay is demoted on a CONTRACT-3 extracted run and only there: the
       str({k: _hs44.get(k) for k in ("A", "B")}))
 
 
+# ------------------------------------------------------- T45 (MS2a-2, the people layer)
+# Every expectation below is COMPUTED here - from the generator, from `confidence`, from the
+# registry - and never typed. A number typed into a test is a number that cannot disagree with the
+# thing it is testing.
+import tempfile as _tf45  # noqa: E402
+
+from jarvis_memory import people as _p45  # noqa: E402
+from jarvis_memory import registry as _r45  # noqa: E402
+from jarvis_memory.bench import harness as _h45  # noqa: E402
+from jarvis_memory.bench.corpus import generate_household as _gh45  # noqa: E402
+from jarvis_memory.confidence import confidence as _conf45  # noqa: E402
+
+# --- T45a resolve_pronoun ---------------------------------------------------------------
+_a45 = [
+    ("unique cluster on the day", _p45.resolve_pronoun(5, {5: {2}}), 2),
+    ("two on the day", _p45.resolve_pronoun(5, {5: {2, 3}}), None),
+    ("fallback to the most recent day holding one", _p45.resolve_pronoun(5, {3: {2}}), 2),
+    ("most recent holds two, an older day holds one",
+     _p45.resolve_pronoun(5, {3: {2}, 4: {2, 3}}), None),
+    ("nothing in the window", _p45.resolve_pronoun(5, {1: {2}}), None),
+    ("seed 1 day 11", _p45.resolve_pronoun(11, {9: {2, 3}, 10: {2}, 11: set()}), 2),
+]
+check("T45a a third-person pronoun resolves to the unique non-owner cluster heard on its own day, "
+      "otherwise through the MOST RECENT day of the previous three that holds exactly one - two on "
+      "the deciding day is unresolved and never falls further back, which is what lets seed 1's "
+      "day-11 contradiction land through day 10 while a union over the window would lose it",
+      all(got == want for _, got, want in _a45),
+      str([(n, g, w) for n, g, w in _a45 if g != w]))
+
+# --- T45b span_evidence -----------------------------------------------------------------
+_hh45 = _gh45(1, 14)
+_sp45 = {s["sid"]: s for s in _hh45["spans"]}
+# The hint spans, DERIVED: the corpus's own inferred owner->partner support candidates cite them.
+_sup45 = [c for c in _hh45["candidates"]
+          if c["predicate_id"] == "person.relation_to" and c["source_kind"] == "inferred"
+          and not c.get("contradicts")]
+_hint45 = [_sp45[c["span_ids"][0]]["text"] for c in _sup45]
+_contracand45 = [c for c in _hh45["candidates"] if c.get("contradicts")]
+_contratext45 = _sp45[_contracand45[0]["contradicts"][0]]["text"]
+# The chatter, DERIVED: the first five owner spans of each day are the filler by construction.
+_ownerday45 = {}
+for _s in _hh45["spans"]:
+    if _s["cluster"] == 1:
+        _ownerday45.setdefault(_s["day"], []).append(_s)
+_chat45 = sorted({_ownerday45[d][i]["text"] for d in _ownerday45 for i in range(5)})
+_c3text45 = [s["text"] for s in _gh45(1, 14, contract="contract3")["spans"][167:171]]
+
+
+def _ev45(text, day=8, heard=None, er1=frozenset({2})):
+    return _p45.span_evidence(text, day, {8: {2}} if heard is None else heard, er1)
+
+
+def _fires45(text, **kw):
+    e = _ev45(text, **kw)
+    return tuple(k for k in ("partner", "spouse", "contra", "reject") if e[k])
+
+
+_p_only45 = [t for t in _hint45 if _fires45(t) == ("partner",)]
+_s_only45 = [t for t in _hint45 if _fires45(t) == ("spouse",)]
+_quiet45 = [t for t in (_chat45 + _c3text45) if _fires45(t)]
+# Same-day resolution, like every other string here: the FALLBACK is T45a's subject and the
+# day-11 case is T45f's, and asserting it here as well would couple this check to a rule it is
+# not about.
+_contra45 = _ev45(_contratext45)
+_word45 = _fires45("she is lovely this weekday")
+_amb45 = _p45.span_evidence("she picked the kids up", 8, {8: {2, 3}}, {2})
+_lodge45 = _ev45("the lodger left")
+check("T45b a span's evidence is exactly what its cue and its target say: six of the corpus's "
+      "seven hint spans fire partner alone and the kin one fires spouse alone, the corpus's "
+      "contradiction fires contra alone, chatter and MS2a-1's four contract-3 spans fire nothing, "
+      "cues match as WHOLE words, an unresolvable pronoun takes no target and never falls through "
+      "to the ER1 cluster, and a CONTRA cue with no pronoun has no ER-C target at all",
+      len(_p_only45) == 6 and len(_s_only45) == 1 and len(_chat45) == 8
+      and _fires45(_contratext45) == ("contra",)
+      and _contra45["target"] == 2 and not _quiet45 and not _word45
+      and _amb45["target"] is None and not _amb45["partner"] and _amb45["reject"]
+      and not _lodge45["contra"] and _lodge45["reject"],
+      str({"partner_only": len(_p_only45), "spouse_only": len(_s_only45),
+           "chatter": len(_chat45), "noisy": _quiet45[:3], "whole_word": _word45}))
+
+
+# --- a small store fixture the next checks share ----------------------------------------
+def _fix45(extra=(), dates=("2026-03-01", "2026-03-02", "2026-03-03")):
+    """Owner and partner clusters, five spans each per date so the partner earns personhood."""
+    st = MemoryStore(":memory:")
+    co, cp = st.add_cluster(), st.add_cluster()
+    owner = st.bind_owner(co, "alex")
+    recs, added = {}, []
+    for i, d in enumerate(dates):
+        recs[d] = st.add_recording("sha-%d" % i, d + "T00:00:00", 86400.0, "headset")
+        for j in range(5):
+            st.add_span(recs[d], 100.0 + j, 104.0 + j, co, "morning", 0.95)
+            st.add_span(recs[d], 200.0 + j, 204.0 + j, cp, "later today", 0.95)
+    st.promote_persons()
+    for d, text in extra:
+        added.append(st.add_span(recs[d], 500.0 + len(added) * 10, 504.0, co, text, 0.95))
+    return st, owner, co, cp, st.person_for_cluster(cp), added
+
+
+# --- T45c apply_evidence_rules, one date, two firing spans, idempotent ------------------
+_st45, _ow45, _co45, _cp45, _pp45, _ad45 = _fix45(
+    extra=(("2026-03-03", "we sorted the bills together"),
+           ("2026-03-03", "we did the groceries")))
+_r1_45 = _st45.apply_evidence_rules(_ow45, _co45, "2026-03-03")
+_edges45 = _st45.current("edge", from_person=_ow45, to_person=_pp45)
+_linked45 = sorted(r[0] for r in _st45.conn.execute(
+    "select span_id from edge_span where edge_id=? and role='support'",
+    (_edges45[0]["id"],)).fetchall()) if _edges45 else []
+_cnt45 = lambda: (_st45.conn.execute("select count(*) from edge_span").fetchone()[0],
+                  _st45.conn.execute("select count(*) from audit").fetchone()[0])
+_before45 = _cnt45()
+_r2_45 = _st45.apply_evidence_rules(_ow45, _co45, "2026-03-03")
+_after45 = _cnt45()
+_st45.close()
+check("T45c two owner spans firing ER2 on one date make ONE partner edge citing both, the date is "
+      "counted once for the edge however many spans fired, and a second call over the same dates "
+      "adds no link, no audit row and writes no reject",
+      _r1_45["support_dates"] == {"%d:partner" % _pp45: 1} and len(_edges45) == 1
+      and _edges45[0]["relation_id"] == "partner" and _linked45 == sorted(_ad45)
+      and _r2_45["support_dates"] == _r1_45["support_dates"]
+      and _r2_45["rejects_written"] == 0 and _before45 == _after45,
+      str({"first": _r1_45, "second": _r2_45, "counts": (_before45, _after45),
+           "linked": _linked45, "added": _ad45}))
+
+# --- T45d finest_surfaced ---------------------------------------------------------------
+_others45 = [r for r in _r45.RELATION_PRECEDENCE if r not in ("spouse", "partner")]
+_d45 = [
+    (_p45.finest_surfaced([{"relation_id": "spouse", "confidence": 0.79},
+                           {"relation_id": "partner", "confidence": 0.85}]), "partner"),
+    (_p45.finest_surfaced([{"relation_id": "spouse", "confidence": 0.81},
+                           {"relation_id": "partner", "confidence": 0.85}]), "spouse"),
+    (_p45.finest_surfaced([{"relation_id": "spouse", "confidence": 0.79},
+                           {"relation_id": "partner", "confidence": 0.5}]), None),
+    (_p45.finest_surfaced([{"relation_id": _others45[0], "confidence": 0.95},
+                           {"relation_id": "partner", "confidence": 0.85}]), "partner"),
+    (_p45.finest_surfaced([{"relation_id": _others45[1], "confidence": 0.9},
+                           {"relation_id": _others45[0], "confidence": 0.9}]), _others45[0]),
+]
+check("T45d the finest SURFACED edge is chosen by the frozen precedence and only among rows at or "
+      "above the threshold - a spouse below it loses to a partner above it, and two relations "
+      "outside the pair resolve by sorted order",
+      all((got or {}).get("relation_id") == want for got, want in _d45),
+      str([(g, w) for g, w in _d45 if (g or {}).get("relation_id") != w]))
+
+# --- T45e score_pairs -------------------------------------------------------------------
+def _row45(rel, conf=0.9, frm=1, to=2):
+    return {"from_person": frm, "to_person": to, "relation_id": rel, "confidence": conf}
+
+
+_e45 = [
+    (_p45.score_pairs([_row45("partner")], {(1, 2): "spouse"}), (1, 0, 1, 0)),
+    (_p45.score_pairs([_row45("spouse")], {(1, 2): "partner"}), (1, 0, 0, 1)),
+    (_p45.score_pairs([_row45(_others45[-1])], {(1, 2): "spouse"}), (1, 0, 0, 1)),
+    (_p45.score_pairs([_row45("spouse", to=9)], {(1, 2): "spouse"}), (1, 0, 0, 1)),
+    (_p45.score_pairs([_row45("spouse"), _row45("partner")], {(1, 2): "spouse"}), (1, 1, 0, 0)),
+]
+check("T45e only the FINEST surfaced edge per ordered pair is scored: a coarser TRUE partner for a "
+      "gold spouse is coarse-correct, a spouse over-claimed on a gold partner is wrong, another "
+      "relation is wrong, a surfaced pair with no gold at all is wrong, and a pair surfacing both "
+      "spouse and partner is ONE judgement",
+      all((g["pairs"], g["fine"], g["coarse"], g["wrong"]) == w for g, w in _e45),
+      str([(g, w) for g, w in _e45 if (g["pairs"], g["fine"], g["coarse"], g["wrong"]) != w]))
+
+
+# --- T45f THE STOP GATE -----------------------------------------------------------------
+def _replay45(contract):
+    """Seed 1's SPANS ONLY, day by day, exactly as run_household feeds them - no candidates."""
+    hh = _gh45(1, 14, contract)
+    st = MemoryStore(":memory:")
+    cl = {c: st.add_cluster() for c in hh["clusters"]}
+    owner = st.bind_owner(cl[1], hh["persons"][0]["name"])
+    byday = {}
+    for s in hh["spans"]:
+        byday.setdefault(s["day"], []).append(s)
+    partner, out = None, {}
+    for day in range(1, 15):
+        bycl = {}
+        for s in byday.get(day, []):
+            bycl.setdefault(s["cluster"], []).append(s)
+        for c, sps in sorted(bycl.items()):
+            rec = st.add_recording("sha-%d-%d" % (day, c), sps[0]["said_at"][:10] + "T00:00:00",
+                                   86400.0, "headset")
+            for s in sps:
+                secs = (int(s["said_at"][11:13]) * 3600 + int(s["said_at"][14:16]) * 60
+                        + int(s["said_at"][17:19]))
+                st.add_span(rec, float(secs), float(secs) + 4.0, cl[c], s["text"], 0.95)
+        for pid in st.promote_persons():
+            partner = partner if partner is not None else pid
+        st.apply_evidence_rules(owner, cl[1], _corpus_said45(day))
+        out[day] = {}
+        for rel in ("partner", "spouse"):
+            rows = (st.current("edge", from_person=owner, to_person=partner, relation_id=rel)
+                    if partner is not None else [])
+            out[day][rel] = rows[0]["confidence"] if rows else None
+    rej = st.conn.execute(
+        "select count(*) from audit where op='reject' and rule='people'").fetchone()[0]
+    vis = st.person_for_cluster(cl[3])
+    st.close()
+    return out, rej, vis
+
+
+from jarvis_memory.bench.corpus import _said_at as _sa45  # noqa: E402
+
+
+def _corpus_said45(day):
+    return _sa45(day, 0)[:10]
+
+
+_gate45, _why45 = True, []
+for _contract45 in ("contract2", "contract3"):
+    _tr45, _rej45, _vis45 = _replay45(_contract45)
+    for _day45, _want45 in ((6, (4, 0)), (11, (4, 1)), (12, (5, 1)), (13, (6, 1))):
+        _got45 = _tr45[_day45]["partner"]
+        if _got45 is None or abs(_got45 - _conf45(*_want45)) > 1e-9:
+            _gate45 = False
+            _why45.append("%s partner day %d: %s vs confidence%s"
+                          % (_contract45, _day45, _got45, _want45))
+    if _tr45[7]["spouse"] is not None:
+        _gate45 = False
+        _why45.append("%s spouse present on day 7: %s" % (_contract45, _tr45[7]["spouse"]))
+    for _day45, _want45 in ((8, (1, 0)), (11, (1, 1))):
+        _got45 = _tr45[_day45]["spouse"]
+        if _got45 is None or abs(_got45 - _conf45(*_want45)) > 1e-9:
+            _gate45 = False
+            _why45.append("%s spouse day %d: %s vs confidence%s"
+                          % (_contract45, _day45, _got45, _want45))
+    if _rej45 or _vis45 is not None:
+        _gate45 = False
+        _why45.append("%s rejects=%d visitor_person=%s" % (_contract45, _rej45, _vis45))
+check("T45f THE STOP GATE - on seed 1's spans alone the partner edge reads confidence(4,0) on day "
+      "6, (4,1) on day 11 through the day-10 fallback, (5,1) on day 12 and (6,1) on day 13; the "
+      "spouse edge is absent through day 7, (1,0) on day 8 and (1,1) from day 11 because the "
+      "contradiction applies to it too; the two-day visitor never becomes a person and no edge is "
+      "computed for it; zero rejects - identically on both corpora",
+      _gate45, str(_why45[:6]))
+
+# --- T45g the ER-C reject: a contradiction with no edge to link --------------------------
+_st45g, _ow45g, _co45g, _cp45g, _pp45g, _ad45g = _fix45(
+    extra=(("2026-03-03", "she said she is just staying with us for now"),))
+_rg45 = _st45g.apply_evidence_rules(_ow45g, _co45g, "2026-03-03")
+_rows45g = [tuple(r) for r in _st45g.conn.execute(
+    "select op, target_table, loser_id, rule from audit").fetchall()]
+_edges45g = _st45g.current("edge", from_person=_ow45g)
+_b45g = (_st45g.conn.execute("select count(*) from audit").fetchone()[0],
+         _st45g.conn.execute("select count(*) from edge_span").fetchone()[0])
+_rg2_45 = _st45g.apply_evidence_rules(_ow45g, _co45g, "2026-03-03")
+_a45g = (_st45g.conn.execute("select count(*) from audit").fetchone()[0],
+         _st45g.conn.execute("select count(*) from edge_span").fetchone()[0])
+_st45g.close()
+check("T45g a contradiction arriving before any supporting evidence has no edge to link, so it "
+      "writes ONE audit reject row naming its own span with rule people and creates no edge - and "
+      "a second call over the same date writes nothing at all",
+      _rg45["rejects_written"] == 1 and len(_rows45g) == 1
+      and _rows45g[0] == ("reject", "span", _ad45g[0], "people") and not _edges45g
+      and _rg2_45["rejects_written"] == 0 and _b45g == _a45g,
+      str({"first": _rg45, "rows": _rows45g, "second": _rg2_45,
+           "counts": (_b45g, _a45g), "edges": len(_edges45g)}))
+
+# --- T45h the ORACLE path with the layer -------------------------------------------------
+_o45 = _h45.run_household(1, 14, people_layer=True)
+_want45h = {"spouse_confidence_last_day": round(_conf45(7, 1), 4),
+            "partner_confidence_last_day": round(_conf45(6, 1), 4),
+            "relation_precision": round(2.0 / 3.0, 4), "relations_surfaced": 3,
+            "relation_precision_pairs": 1.0, "relations_fine": 2, "relations_wrong": 0,
+            "spouse_surfaced_day": 8, "relationship_surfaced_day": 8,
+            "people_rejects": 0, "rank_upgrades": 0, "pending_at_end": 0}
+check("T45h with the layer on the ORACLE path the rules add a partner edge beside the oracle's "
+      "spouse edge: three surfaced edges where there were two, so the per-edge precision moves to "
+      "two thirds BY CONSTRUCTION while the finest-per-pair precision stays 1.0 - the spouse is "
+      "still the finest owner-to-partner edge and still first surfaced on day 8, with no reject, "
+      "no upgrade and nothing left pending",
+      all(_o45.get(k) == v for k, v in _want45h.items())
+      and (_o45.get("relationship_finest") or {}).get("relation_id") == "spouse",
+      str({k: (_o45.get(k), v) for k, v in _want45h.items() if _o45.get(k) != v}
+          or _o45.get("relationship_finest")))
+
+# --- T45i ms2_bands ----------------------------------------------------------------------
+def _agg45i(**over):
+    a = {"update_acc": 0.9, "coexist_recall": 0.9, "transfer_recall5": 0.7,
+         "growth_drop_points": 1.0, "relationship_surfaced_count": 10,
+         "relation_precision_pairs": 1.0, "relations_wrong": 0}
+    a.update(over)
+    return a
+
+
+_lat45 = {"p99_ms": 1.0}
+_b45 = _h45.ms2_bands(_agg45i(), 10, 0, _lat45, "qwen")
+_i45 = [
+    ("update pass", _b45["update_acc>=0.85"], True),
+    ("update fail", _h45.ms2_bands(_agg45i(update_acc=0.84), 10, 0, _lat45,
+                                   "qwen")["update_acc>=0.85"], False),
+    ("coexist pass", _b45["coexist_recall>=0.85"], True),
+    ("coexist fail", _h45.ms2_bands(_agg45i(coexist_recall=0.84), 10, 0, _lat45,
+                                    "qwen")["coexist_recall>=0.85"], False),
+    ("transfer pass", _b45["transfer_recall5>=0.60"], True),
+    ("transfer fail", _h45.ms2_bands(_agg45i(transfer_recall5=0.59), 10, 0, _lat45,
+                                     "qwen")["transfer_recall5>=0.60"], False),
+    ("transfer none", _h45.ms2_bands(_agg45i(), 10, 0, _lat45,
+                                     "none")["transfer_recall5>=0.60"], None),
+    ("growth pass", _b45["growth_drop<=5"], True),
+    ("growth fail", _h45.ms2_bands(_agg45i(growth_drop_points=5.1), 10, 0, _lat45,
+                                   "qwen")["growth_drop<=5"], False),
+    ("rel 8 of 10", _h45.ms2_bands(_agg45i(relationship_surfaced_count=8), 10, 0, _lat45,
+                                   "qwen")["relationship_surfaced>=0.8"], True),
+    ("rel 7 of 10", _h45.ms2_bands(_agg45i(relationship_surfaced_count=7), 10, 0, _lat45,
+                                   "qwen")["relationship_surfaced>=0.8"], False),
+    ("rel 3 of 3", _h45.ms2_bands(_agg45i(relationship_surfaced_count=3), 3, 0, _lat45,
+                                  "qwen")["relationship_surfaced>=0.8"], True),
+    ("rel 2 of 3", _h45.ms2_bands(_agg45i(relationship_surfaced_count=2), 3, 0, _lat45,
+                                  "qwen")["relationship_surfaced>=0.8"], False),
+    ("pairs pass", _b45["relation_precision_pairs>=0.90"], True),
+    ("pairs fail", _h45.ms2_bands(_agg45i(relation_precision_pairs=0.89), 10, 0, _lat45,
+                                  "qwen")["relation_precision_pairs>=0.90"], False),
+    ("pairs none is a MISS", _h45.ms2_bands(_agg45i(relation_precision_pairs=None), 10, 0, _lat45,
+                                            "qwen")["relation_precision_pairs>=0.90"], False),
+    ("wrong pass", _b45["relations_wrong==0"], True),
+    ("wrong fail", _h45.ms2_bands(_agg45i(relations_wrong=1), 10, 0, _lat45,
+                                  "qwen")["relations_wrong==0"], False),
+    ("audit pass", _b45["audit==0"], True),
+    ("audit fail", _h45.ms2_bands(_agg45i(), 10, 1, _lat45, "qwen")["audit==0"], False),
+    ("p99 pass", _b45["p99<=50ms"], True),
+    ("p99 fail", _h45.ms2_bands(_agg45i(), 10, 0, {"p99_ms": 50.1}, "qwen")["p99<=50ms"], False),
+    ("p99 none", _h45.ms2_bands(_agg45i(), 10, 0, None, "qwen")["p99<=50ms"], None),
+]
+check("T45i each of the nine MS2 bands answers on both sides of its own threshold; a transfer band "
+      "with no embedder and a latency band with no run are NOT MEASURED rather than failed, while "
+      "a pair precision of None IS a miss - no pair surfaced means nothing was precise",
+      len(_b45) == 9 and all(got is want for _, got, want in _i45),
+      str([(n, g, w) for n, g, w in _i45 if g is not w] or sorted(_b45)))
+
+# --- T45j the lexicons ------------------------------------------------------------------
+check("T45j the three lexicons in the registry are the design's own lists, the pronoun sets are "
+      "the pre-registered literals, and the relation precedence is DERIVED from RELATIONS rather "
+      "than retyped beside it",
+      set(_r45.HOUSEHOLD_CUES) == set(_HOUSEHOLD_CUES44)
+      and set(_r45.KIN_CUES) == set(_KIN_CUES44)
+      and list(_r45.CONTRA_CUES) == list(_CONTRA_CUES44)
+      and set(_r45.THIRD_PERSON_PRONOUNS) == {"she", "he", "her", "him", "they"}
+      and set(_r45.FIRST_PERSON_PLURAL) == {"we", "us", "our"}
+      and _r45.RELATION_PRECEDENCE == ("spouse", "partner")
+      + tuple(sorted(RELATIONS - {"spouse", "partner"})),
+      str({"household": sorted(set(_r45.HOUSEHOLD_CUES) ^ set(_HOUSEHOLD_CUES44)),
+           "kin": sorted(set(_r45.KIN_CUES) ^ set(_KIN_CUES44)),
+           "contra_order": list(_r45.CONTRA_CUES) == list(_CONTRA_CUES44),
+           "precedence": _r45.RELATION_PRECEDENCE}))
+
+
+# --- T45k merge by rank ------------------------------------------------------------------
+def _rank45(order, predicate="person.relation_to"):
+    st = MemoryStore(":memory:")
+    co, cp = st.add_cluster(), st.add_cluster()
+    owner = st.bind_owner(co, "alex")
+    rec = st.add_recording("s", "2026-03-01T00:00:00", 86400.0, "h")
+    so = st.add_span(rec, 10.0, 14.0, co, "she called me love", 0.95)
+    spn = st.add_span(rec, 20.0, 24.0, cp, "my husband alex and i decided", 0.95)
+    pid = st.conn.execute("insert into person (kind, display_name, created_at) "
+                          "values ('cluster','tess','2026-03-01T00:00:00')").lastrowid
+    st.conn.execute("update cluster set person_id=? where id=?", (pid, cp))
+    st.conn.commit()
+    last = None
+    for kind in order:
+        speaker, span = ((cp, spn) if kind == "stated_other" else (co, so))
+        cand = {"predicate_id": predicate,
+                "subject": {"kind": "person", "id": owner if predicate == EDGE_PREDICATE45 else pid},
+                "object": pid if predicate == EDGE_PREDICATE45 else "runs at dawn",
+                "object_norm": "spouse" if predicate == EDGE_PREDICATE45 else "runs at dawn",
+                "source_kind": kind, "speaker_cluster": speaker, "span_ids": [span],
+                "about_time": None,
+                "relation_id": "spouse" if predicate == EDGE_PREDICATE45 else None,
+                "polarity": None, "strength": None, "ended": False,
+                "said_at": "2026-03-01T00:00:10"}
+        last = st.ingest(cand)
+    table = "edge" if predicate == EDGE_PREDICATE45 else "fact"
+    rows = st.current(table, **({"from_person": owner, "to_person": pid, "relation_id": "spouse"}
+                                if table == "edge" else
+                                {"subject_kind": "person", "subject_id": pid,
+                                 "predicate_id": predicate}))
+    ups = [dict(r) for r in st.conn.execute(
+        "select id, target_table, note, rule from audit where op='upgrade'").fetchall()]
+    st.close()
+    return rows, ups, last
+
+
+EDGE_PREDICATE45 = "person.relation_to"
+_k1_45 = _rank45(["inferred", "stated_owner"])
+_k2_45 = _rank45(["stated_owner", "inferred"])
+_k3_45 = _rank45(["inferred", "inferred"])
+_k4_45 = _rank45(["inferred", "stated_other"], predicate="person.habit")
+check("T45k evidence accrual no longer drops the candidate's source rank on the floor: a stated "
+      "self-description merging into an inferred row UPGRADES it, to confidence 1.0, with one "
+      "audit row op upgrade rule R2 naming the old rank and the new, and that audit id is returned "
+      "by the ingest that caused it - while a row is never downgraded and two inferences upgrade "
+      "nothing",
+      len(_k1_45[0]) == 1 and _k1_45[0][0]["source_kind"] == "stated_owner"
+      and _k1_45[0][0]["confidence"] == 1.0 and len(_k1_45[1]) == 1
+      and _k1_45[1][0]["rule"] == "R2" and _k1_45[1][0]["note"] == "inferred -> stated_owner"
+      and _k1_45[1][0]["id"] in _k1_45[2]["audit_ids"]
+      and len(_k2_45[0]) == 1 and _k2_45[0][0]["source_kind"] == "stated_owner"
+      and not _k2_45[1]
+      and len(_k3_45[0]) == 1 and _k3_45[0][0]["source_kind"] == "inferred" and not _k3_45[1]
+      and len(_k4_45[0]) == 1 and _k4_45[0][0]["source_kind"] == "stated_other"
+      and len(_k4_45[1]) == 1 and _k4_45[1][0]["target_table"] == "fact",
+      str({"inferred_then_stated": (_k1_45[0] and _k1_45[0][0]["source_kind"], _k1_45[1]),
+           "reverse": (_k2_45[0] and _k2_45[0][0]["source_kind"], _k2_45[1]),
+           "two_inferred": _k3_45[1], "habit": _k4_45[1]}))
+
+# --- T45l the extracted path, both ways --------------------------------------------------
+_RUN45 = "phase7/memory/bench/results/ms1b_gemma-e4b-q8-q4tpl.json"
+_l_on45 = _h45.run_household(1, 14, candidates_from=_RUN45, people_layer=True)
+_l_off45 = _h45.run_household(1, 14, candidates_from=_RUN45)
+check("T45l the extractor said the owner's partner relation is about `she`, citing the span that "
+      "says so - with the layer that pronoun resolves to the partner's cluster, the candidate "
+      "lands, and because it is a stated self-description it UPGRADES the rules' inferred partner "
+      "edge to stated_owner at 1.0; without the layer the same candidate never resolves and sits "
+      "pending to the end, so the edge does not exist at all",
+      _l_on45["pronouns_resolved"] == 1 and _l_on45["pending_at_end"] == 0
+      and _l_on45["rank_upgrades"] == 1 and _l_on45["partner_confidence_last_day"] == 1.0
+      and _l_off45["pronouns_resolved"] == 0 and _l_off45["pending_at_end"] == 1
+      and _l_off45["rank_upgrades"] == 0
+      and _l_off45["partner_confidence_last_day"] is None,
+      str({"on": {k: _l_on45.get(k) for k in ("pronouns_resolved", "pending_at_end",
+                                              "rank_upgrades", "partner_confidence_last_day")},
+           "off": {k: _l_off45.get(k) for k in ("pronouns_resolved", "pending_at_end",
+                                                "rank_upgrades",
+                                                "partner_confidence_last_day")}}))
+
+# --- T45m an unresolved candidate pronoun is rejected, never held ------------------------
+_day9_45 = next(s for s in _hh45["spans"]
+                if s["day"] == 9 and s["cluster"] == 1 and s["text"].startswith("we moved to"))
+with _tf45.TemporaryDirectory() as _td45:
+    _stub45 = _os.path.join(_td45, "stub.json")
+    Path(_stub45).write_text(_j42.dumps({
+        "contract": "contract2", "days": 14,
+        "households": [{"seed": 1, "n_spans": len(_hh45["spans"]), "predictions": [{
+            "predicate_id": "person.habit",
+            "subject": {"kind": "person", "ref": "he"},
+            "object": "runs at dawn", "object_norm": "runs at dawn",
+            "source_kind": "stated_owner", "speaker_cluster": 1,
+            "span_ids": [_day9_45["sid"]], "relation_id": None, "polarity": None,
+            "strength": None, "ended": False, "about_time": None}]}]}), encoding="utf-8")
+    _m_on45 = _h45.run_household(1, 14, candidates_from=_stub45, people_layer=True)
+    _m_off45 = _h45.run_household(1, 14, candidates_from=_stub45)
+check("T45m a candidate whose pronoun cannot be resolved - `he` on a day the corpus holds both the "
+      "partner and the visitor - is REJECTED with an audit row against the candidate and dropped, "
+      "never held pending forever as a measurement that silently never happened; without the layer "
+      "it is exactly that, still pending at the end",
+      _m_on45["people_rejects"] == 1
+      and _m_on45["people_rejects_by_table"]["candidate"] == 1
+      and _m_on45["pending_at_end"] == 0
+      and _m_off45["people_rejects"] == 0 and _m_off45["pending_at_end"] == 1,
+      str({"on": (_m_on45["people_rejects"], _m_on45["people_rejects_by_table"],
+                  _m_on45["pending_at_end"]),
+           "off": (_m_off45["people_rejects"], _m_off45["pending_at_end"])}))
+
+# --- T45n the switch really is a switch --------------------------------------------------
+_ref45 = _j42.loads(Path("phase7/memory/bench/results/ms1a4_control_none.json").read_text(
+    encoding="utf-8"))
+_byseed45 = {h["seed"]: h for h in _ref45["households"]}
+_n45 = []
+for _s45 in (1, 2, 3):
+    _got45n = _h45.run_household(_s45, 14)
+    _n45.extend((_s45, k, v, _got45n.get(k)) for k, v in _byseed45[_s45].items()
+                if _got45n.get(k) != v)
+check("T45n with the layer OFF the harness reproduces the committed MS1a.4 control household for "
+      "seeds 1-3 on every key that control carries - the evidence rules, the "
+      "candidate resolution and the new relation scoring are additive, so every store run measured "
+      "before this milestone stays re-runnable",
+      not _n45, str(_n45[:6]))
+
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
 sys.exit(1 if FAILS else 0)

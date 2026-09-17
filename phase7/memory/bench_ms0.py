@@ -36,6 +36,13 @@ def main(argv=None) -> int:
     # and a contract-3 run asks for it explicitly. The corpus, and on the extracted path the hearsay
     # rule, follow from this one flag.
     p.add_argument("--contract", choices=("contract2", "contract3"), default="contract2")
+    # MS2a-2: the people layer's evidence rules and candidate-level pronoun resolution run ONLY
+    # behind this switch, so every contract-2 store run taken before it stays re-runnable byte for
+    # byte. Merge by rank and the new scoring fields are unconditional and were measured to move
+    # nothing.
+    p.add_argument("--people-layer", dest="people_layer", action="store_true",
+                   help="run the people layer: pronoun resolution, ER1-ER3 and ER-C over the "
+                        "spine, and the MS2 band block")
     p.add_argument("--no-predicate-hint", dest="predicate_hint", action="store_false",
                    help="the NEGATIVE CONTROL: run the MS0 lane, unrestricted by the registry hint")
     p.add_argument("--embedder", choices=("none", "qwen"), default="none",
@@ -57,9 +64,10 @@ def main(argv=None) -> int:
               f"loaded in {embedder.load_s} s on {embedder.device} "
               f"(sentence-transformers {embedder.version})")
     res = harness.run(seeds, a.days, a.latency_facts, a.out, a.predicate_hint, embedder,
-                      a.embedder, a.drop_stopwords, a.candidates_from, a.contract)
+                      a.embedder, a.drop_stopwords, a.candidates_from, a.contract,
+                      a.people_layer)
 
-    print(f"contract   : {a.contract}")
+    print(f"contract   : {a.contract}  people_layer {'ON' if a.people_layer else 'off'}")
     print(f"households : {len(seeds)}  seeds {seeds[0]}..{seeds[-1]}  days {a.days}  "
           f"predicate_hint {'ON' if a.predicate_hint else 'OFF (negative control)'}  "
           f"embedder {a.embedder}{' +instruct' if a.query_instruction else ''}  "
@@ -82,6 +90,12 @@ def main(argv=None) -> int:
         print(f"    {mark} {k}")
         if v is False:
             failed.append(k)
+    if res.get("ms2_bands"):
+        print("ms2 bands  :")
+        for k in sorted(res["ms2_bands"]):
+            v = res["ms2_bands"][k]
+            mark = "PASS" if v is True else ("n/a " if v is None else "MISS")
+            print(f"    {mark} {k}")
     print("reported   : " + json.dumps(res["reported"], sort_keys=True))
     if res.get("transfer_by_topic_total"):
         print("transfer/topic: " + json.dumps(res["transfer_by_topic_total"], sort_keys=True)
