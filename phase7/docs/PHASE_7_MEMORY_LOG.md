@@ -2187,3 +2187,217 @@ Synthetic seeded template households, ORACLE gold, seeds 1–10, 14 days. Nothin
 real speech, on household audio, or on the owner. No MS2 band is scored: the extracted bands are
 MS2a-2's, read beside the contract-3 control above. The contract-2 field is untouched and remains
 reproducible byte for byte.
+
+---
+
+## MS2a-2 — 2026-09-18 — the people layer and the MS2 bands
+
+Commits `0ab53d1` (the layer, test-first) and this one (the measurement).
+
+### What shaped it
+
+A second read-only review simulated the first draft of this milestone on the real store and found
+five things it left open, each of which is a rule below rather than a note: the extractor's STATED
+edges were being lost into the rules' inferred rows (merge by rank); extracted `she` candidates were
+left pending forever (candidate-level resolution); four of the design's MS2 bands had been dropped
+(the nine-band block); M9 had nothing to bite (`support_dates`); and the reject rows, the aggregation
+and the harness order were unspecified. Every pinned expectation below was computed by the strategist
+over the real generator before this file was written, and re-computed here in the test rather than
+typed.
+
+### The rules as built
+
+A third-person pronoun resolves to the unique non-owner cluster heard on its own day; if nobody was
+heard that day, through the MOST RECENT day of the previous three that holds exactly one; two or more
+on the deciding day is unresolved and does NOT fall further back. **A union over the window would be
+wrong and the corpus says so:** seed 1's day 11 holds nobody, day 10 the partner alone, day 9 both
+the partner and the visitor — the union is ambiguous where the most-recent-day rule resolves, which
+is the difference between the day-11 contradiction landing and being thrown away.
+
+ER1 is co-presence at ≥ 3 spans each. ER2 is a HOUSEHOLD_CUES word with `we`/`us`/`our` or a resolved
+pronoun; ER3 a KIN_CUES word; both give one supporting DATE to `partner` and `spouse` respectively.
+ER-C does not ingest a candidate — a contradiction-only day cites no supporting span and the
+validator refuses it — it LINKS the firing span with role `contradict` to the existing current
+`partner` and `spouse` edges and recomputes them. A cue that fires with no target, and a
+contradiction with no edge to link or a non-person target, each write ONE `audit` row op `reject`
+rule `people` keyed by the span and checked before writing, so a fourteen-day replay writes it once.
+A span carrying a pronoun that does not resolve takes NO target and never falls through to the ER1
+cluster. Lexicons are frozen in `registry.py` and matched as whole words — `lovely` is not `love`,
+`weekday` is not `week` — with CONTRA entries matched as whole-word sequences.
+
+**The switch, and why it is one.** The evidence rules and candidate-level resolution run only under
+`people_layer` (`bench_ms0.py --people-layer`); merge by rank and the new scoring FIELDS are
+unconditional. Design (4): every store run taken before this milestone must stay re-runnable. That is
+measured, not asserted — see the switch-off regression below.
+
+**As built, so the log cannot claim more:** a NAME ref resolves through the harness's alias over the
+household's names; an ER candidate cites the spans that FIRED, a narrowing of the design's wording
+that cannot move a confidence because R5 counts distinct dates. Name-earning from a vocative is
+DEFERRED to MS2b — the harness stamps the partner's `display_name` at promotion on every path, so
+MS2a cannot exercise it.
+
+### The stop gate
+
+Seed 1's spans alone, fed day by day, every expectation computed from `confidence()` in the test and
+never typed. `partner` owner→partner reads `confidence(4,0)` on day 6, `(4,1)` on day 11 through the
+day-10 fallback, `(5,1)` on day 12 and `(6,1)` on day 13. `spouse` is absent through day 7, `(1,0)`
+on day 8 and `(1,1)` = 0.0 from day 11 — the contradiction applies to it too. The two-day visitor
+never becomes a person and no edge is ever computed for it; zero reject rows. **Identical on the
+contract-2 and contract-3 corpora**, which is what the four appended spans carrying no lexicon word
+were for. The edge first appears on day 3, not day 1: the day-1 and day-3 spans both count, but an
+edge cannot exist until the partner earns personhood — the amended §3.4 doing exactly what it says.
+
+### Tests and mutants
+
+T45a–T45n, the suite 301 → **315** local, **314** on the CI runner (T22g announces its numpy skip
+there; both are the suite's own output). Eight mutants from byte-copies, control green first, each
+restore verified byte-identical, each producing EXACTLY its predicted failing set:
+
+| mutant | what it breaks | failed |
+|---|---|---|
+| M6 | `love` out of `KIN_CUES` | T45b T45f T45j |
+| M7 | the fallback resolves over the UNION of the window | T45a T45f T45h T45m |
+| M8 | ER-C replaced by an ingest the validator refuses | T45f T45g T45h |
+| M9 | `support_dates` counted per firing span, not per date | T45c |
+| M10 | a `spouse` over-claimed on a gold `partner` scored coarse | T45e |
+| M11 | merge by rank removed | T45k T45l |
+| M12 | an unresolved candidate pronoun held pending | T45m |
+| M13 | `people_layer` ignored, the layer always on | T44m T45l T45m T45n |
+
+**M9 is invisible to every confidence assertion BY CONSTRUCTION, and the log says so rather than
+leaving a thin-looking mutant unexplained:** R5 counts `distinct_days`, so two spans on one date give
+`confidence(1,0)` = 0.2835 and a per-span count would imply 0.4866 — a value no edge in this store
+reaches from a single date. `support_dates` is the only observable that can bite it, which is why
+T45c exists. **M13's T44m failure is M13's doing, never a defect:** T44m's recorder records every
+ingested `person.relation_to` candidate, so the rules' own inferred candidates lengthen its list and
+its `['inferred']` / `['stated_owner']` equality cannot hold. T21 is unaffected — both of its runs
+carry the layer equally — and it appeared 0 times in M13's failing set.
+
+### The switch-off regression
+
+With `--people-layer` absent the shipped code reproduces both committed runs field for field:
+`ms2a_control_base_none.json` EXACT over 919 leaves, and
+`ms1b_store_on_extracted_gemma-e4b-q8-q4tpl.json` EXACT over 909. Zero diffs either side, timing
+excluded.
+
+### Both controls, and the one relation move that is pre-registered
+
+| control | leaves | sanctioned moves | unsanctioned | bands |
+|---|---|---|---|---|
+| base, lane OFF, layer on | 929 | 22 | **0** | 8 true, transfer None |
+| base, lane ON, layer on | 930 | 22 | **0** | all nine true |
+| contract 3, lane ON, layer on | 930 | 22 | **0** | eight true, growth drop MISS |
+
+The 22 sanctioned moves are exactly the pre-registered ones: aggregate and `reported`
+`relation_precision` 1.0 → 0.6667, and per household `relation_precision` 1.0 → 0.6667 with
+`relations_surfaced` 2 → 3. Nothing else moved on any control. **The lane-ON disposition never fired**
+— no retrieval, growth or preference field moved, so no re-run is owed and
+`ms2a_control_base_rules_rerun.json` does not exist. `transfer_recall5` 0.9167,
+`update_acc_paraphrase` 0.5125, `growth_drop_points` 3.75 and `transfer_gold_vec_rank_mean` 78.4833
+all reproduce MS1a.4 to the digit, on an identical stack (torch 2.5.1+cu121, sentence-transformers
+5.2.0, transformers 4.57.3, CUDA 12.1, driver 610.88).
+
+**THE TWO RELATION FIGURES ARE DIFFERENT QUESTIONS AND MUST NEVER BE READ AS ONE.** The historical
+per-edge `relation_precision` moves 1.0 → **0.6667** on the oracle path BY CONSTRUCTION: the rules add
+a CORRECT `partner` edge beside the oracle's `spouse`, so each household surfaces three edges where it
+surfaced two and the denominator grows. The MS2 band reads `relation_precision_pairs` — the finest
+surfaced edge per ordered pair, pooled — which stays **1.0** with 20 fine of 20 pairs and 0 wrong.
+The layer got MORE specific and the per-edge number went down; that is the figure's shape, not a
+regression.
+
+### The nine bands, on the chosen extractor's contract-3 candidates
+
+`ms2a_run.json`, ten households, 14 days, embedder qwen, layer on; the contract-3 control with the
+layer beside each.
+
+| band | run | verdict | control |
+|---|---|---|---|
+| update_acc ≥ 0.85 | 0.925 | MET | 1.0 |
+| coexist_recall ≥ 0.85 | **0.6667** | **MISSED** | 1.0 |
+| transfer_recall5 ≥ 0.60 | 0.9167 | MET | 0.9167 |
+| growth drop ≤ 5 pts | **6.25** | **MISSED** | 6.25 |
+| relationship surfaced ≥ 8/10 | **10/10** | MET | 10/10 |
+| relation_precision_pairs ≥ 0.90 | **1.0** | MET | 1.0 |
+| relations_wrong == 0 | **0** | MET | 0 |
+| audit == 0 | 0 | MET | 0 |
+| p99 ≤ 50 ms | 0.219 ms | MET | 0.2178 ms |
+
+**Seven of nine MET.** Beside them: `spouse` surfaced **1/10** at day mean 8.0 (the control 10/10) —
+REPORTED as the design requires; relationship day mean 8.5; per-edge `relation_precision` 0.5167;
+fine 11, coarse 9, wrong 0 over 20 pairs; `pronouns_resolved` 8; `rank_upgrades` 8;
+`people_rejects` 0 (`{span: 0, candidate: 0}`); `edges_reopened` 0; `pending_at_end` 7;
+`hearsay_demoted` 5. Per household the finest owner→partner edge is `partner` in nine and `spouse` in
+seed 5, at confidence 1.0 everywhere except seed 8 at 0.8111, first surfaced on day 8 in nine
+households and day 13 in seed 8.
+
+**The fine/coarse split is the honest shape the design predicted.** The partner→owner `spouse` edge
+is stated by her and scores fine in all ten; the owner→partner pair surfaces `spouse` in seed 5 alone
+and the coarser `partner` in the other nine. 11 + 9 = 20, precision 1.0, **0 wrong**. The rules see
+cohabitation; only a kin cue sees marriage; the corpus plants one kin cue in fourteen days — and a
+system that said `spouse` on that would be over-claiming, which is why `partner` for a gold `spouse`
+is coarse-correct and `spouse` for a gold `partner` would be wrong.
+
+### The two misses, traced
+
+**`coexist_recall` 0.6667 — the extractor never marks `ended`, and this is not the layer.** The corpus
+plants `i stopped, i no longer <habit>` on day 10. Exactly **4 of 10** households carry any
+`ended=True` candidate at all, and exactly those 4 have zero leaks; the other 6 leak the ended value
+back and the scorer's hard-zero rule fires on that question. That reproduces MS2a-1's independently
+measured `ended` 4/10 from two directions. **Seed 1 is the specific shape:** the extractor DID cite
+the right span (sid 139), got the predicate `person.habit` and the object `reads before bed` right —
+and marked it **`ended=False`**. It read a statement that something stopped and recorded it as
+current. A second, smaller contributor: `school run` is extracted as a `household.routine` in **all
+ten** households and `washing` in six, both mis-predicated from hint spans, crowding the two gold
+routines. The control on oracle candidates reads 1.0 with 0 leaks, so neither the store nor the layer
+is implicated.
+
+**`growth drop` 6.25 — inherited from the contract-3 corpus, not from this milestone.** The
+contract-3 control with the layer reads the SAME 6.25 and misses the same band, while the contract-2
+base control with the layer reads 3.75; this is MS2a-1's recorded contract-3 move. **The two 6.25s
+are not the same measurement and a drop is a difference of two terms:** the run falls 0.925 → 0.8625,
+the control 1.0 → 0.9375.
+
+### The no-layer arm — what the rules supplied and what the extractor supplied
+
+`ms2a_run_nolayer.json`, REPORTED, never a band.
+
+| figure | layer ON | layer OFF |
+|---|---|---|
+| relationship surfaced | **10/10 (MET)** | **4/10 (MISSED)** |
+| `spouse` surfaced | 1/10 | 0/10 |
+| surfaced pairs | 20 | 14 |
+| fine / coarse / wrong | 11 / 9 / 0 | 10 / 4 / 0 |
+| pair precision | 1.0 | 1.0 |
+| per-edge precision | 0.5167 | 0.8 |
+| pronouns resolved / rank upgrades / pending | 8 / 8 / 7 | 0 / 0 / 14 |
+
+**The relationship band is the rules' doing.** Six households have NO owner→partner edge at all
+without them; the four that do are ones the extractor's own candidates supplied. The per-edge figure
+is BETTER without the layer (0.8) only because the OFF arm surfaces 14 pairs to the ON arm's 20 —
+pair precision is 1.0 and wrong is 0 either way. Both missed bands miss identically with the layer
+off, so neither is the layer's doing.
+
+**The layer has a measured cost, and it is recorded rather than glossed.** `update_acc` falls
+0.95 → 0.925 and `growth_update_acc` 0.8875 → 0.8625; `coexist_recall`, `transfer_recall5`,
+`growth_drop_points` and `update_acc_paraphrase` are unmoved. The whole difference is **seed 3**,
+which went 8/8 → 6/8 on its update questions — the aggregate is a mean of per-household accuracies,
+so −0.25 on one household is −0.025 overall. The mechanism is worth reading twice: the extractor
+turned the day-11 contradiction span `she said she is just staying with us for now` into a
+`person.lives_in` = `with us` candidate about the partner. Without the layer its `she` never resolves
+and it sits pending; WITH the layer it resolves, lands, and — `person.lives_in` being single-valued
+and day 11 newer than the day-4 `i live in <city>` — R3 freshness correctly supersedes the right
+answer with a wrong one. **The same sentence the rules read correctly as a contradiction, the model
+read as an address.** Of the 8 pronoun-bearing candidates in the corpus all 8 resolve: 6 are the
+useful `person.relation_to` from `she called me love`, and 2 are this `lives_in`, in seeds 3 and 9.
+It cost questions in seed 3 only — seed 9's partner-city questions were already being missed for
+other reasons. So: present in 2 of 10 households, biting in 1.
+
+### Honest scope
+
+Synthetic seeded template households, seeds 1–10, 14 days, ORACLE gold for the controls and the
+chosen extractor's contract-3 candidates for the banded run. The rules are DETERMINISTIC: they see
+co-presence and household vocabulary, and one kin cue in fourteen days is not marriage — which is why
+nine households surface the coarser `partner` and the log reports `spouse` separately at 1/10.
+Name-earning from a vocative is deferred to MS2b. Nothing here was measured on real speech, on
+household audio, or on the owner's household; MS2b is the first run that will be, and the row on the
+board does not read DONE until it is.
