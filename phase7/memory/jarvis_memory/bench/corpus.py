@@ -326,7 +326,11 @@ def generate_household(seed: int, days: int = 14, contract: str = "contract2") -
     # every prediction on them was a false positive by construction (the field spent 124, 77 and 44
     # predictions on them across three models). None of the four span texts carries a lexicon word
     # of the design's §5, so they move no confidence in any household.
-    if contract == "contract3":
+    # CONTRACT 4 (2026-09-20) IS CONTRACT 3'S CORPUS, to the byte. Its three corrections live in the
+    # prompt and in `derive`, so the spans, the gold, the scored sets and the filler are identical
+    # and a contract-4 F1 compares DIRECTLY with contract 3's 0.8021 on the same 410 gold. Only the
+    # `contract` key differs, and T46f pins exactly that by hashing a copy with the key removed.
+    if contract in ("contract3", "contract4"):
         for day, cluster, sec, text, pid, subj_ref, obj, src, speaker in (
             (2, 1, 540, f"thanks, {partner_name}", "person.name", "partner",
              partner_name, "stated_owner", 1),
@@ -355,8 +359,8 @@ def generate_household(seed: int, days: int = 14, contract: str = "contract2") -
                  "coexist": coexist, "transfer": transfer,
                  "relations": relations, "growth_filler": filler},
     }
-    # The key is added ONLY under contract 3: a contract-2 household must be the same dict it has
-    # always been, with no new key for a reader or a hash to trip over.
-    if contract == "contract3":
-        out["contract"] = "contract3"
+    # The key is added ONLY under contracts 3 and 4: a contract-2 household must be the same dict it
+    # has always been, with no new key for a reader or a hash to trip over.
+    if contract in ("contract3", "contract4"):
+        out["contract"] = contract
     return out

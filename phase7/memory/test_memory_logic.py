@@ -2688,7 +2688,11 @@ check("T44a the contract-2 schema is byte-identical to the closed field's and co
       "from it by EXACTLY ONE key, maxItems 4 on the candidates array; an unknown contract raises",
       _sha44(_j42.dumps(_cs44(), sort_keys=True)) == _SCHEMA_C2
       and _ssha44() == _SCHEMA_C2
-      and _CONTRACTS44 == ("contract2", "contract3")
+      # MS2a-3 R1, the strategist's ruling: contract 4 exists, so CONTRACTS holds THREE names and
+      # this conjunct is false by design. The ONE authorised edit to an existing check - a
+      # structural fact changing because a third contract now exists, never a threshold moved to
+      # make something pass. Every other conjunct of T44a is byte-identical.
+      and _CONTRACTS44 == ("contract2", "contract3", "contract4")
       and _only3_44 == {"/properties/candidates/maxItems": 4}
       and not [k for k in _f2_44 if k not in _f3_44]
       and not [k for k in _f2_44 if k in _f3_44 and _f2_44[k] != _f3_44[k]]
@@ -3509,6 +3513,323 @@ check("T45n with the layer OFF the harness reproduces the committed MS1a.4 contr
       "candidate resolution and the new relation scoring are additive, so every store run measured "
       "before this milestone stays re-runnable",
       not _n45, str(_n45[:6]))
+
+# ================================================ T46 — MS2a-3, contract 4 and the re-score
+# Contract 4 corrects three defects MEASURED on the contract-3 run and changes the PROMPT and the
+# DERIVATION only: its corpus and gold are contract 3's to the byte, so a contract-4 number compares
+# directly with contract 3's 0.8021 on the same 410 gold. Every literal below was measured before
+# the edits that produced it, and the contract-2 / contract-3 pins are the closed field's own.
+from jarvis_memory.extract.derive import (  # noqa: E402
+    cluster_ref as _cref46, cluster_ref_map as _crmap46, derive as _derive46,
+)
+from jarvis_memory.extract.score import resolve_person as _rp46  # noqa: E402
+
+_SCHEMA_C2_46 = "846ad08857eb37f8175f0aa24fbbfdfe2c7edf89c5565b2521209a91792dbc49"
+_SCHEMA_C3_46 = "93af3702870ea82242a13fe764261d2118c3610f96a72cd0e67ad92ae7a4f4fe"
+_PROMPT_C2_46 = "31d99140f87105ac8c93acd3d9cc0c2a0c95a6322f50d4026253e81b14550d37"
+_PROMPT_C3_46 = "5c0387e519900f031f614ae4f736c7dd338d1526e8d9b84e42b3246d66076ebf"
+_HH_C3_46 = "de02fd0e0f68d358c62d5c2d68c210f3e58c46db082bd4480bfdfac86b1b51f4"
+
+
+def _sha46(s):
+    return _hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+
+def _jsha46(o):
+    return _sha46(_json.dumps(o, sort_keys=True))
+
+
+def _raises46(fn, *a):
+    try:
+        fn(*a)
+        return False
+    except ValueError:
+        return True
+
+
+# --- T46a the schema does not move -----------------------------------------------------
+check("T46a contract 4 changes NO schema - its object and hash are contract 3's, the closed "
+      "field's contract-2 hash is untouched, CONTRACTS holds the three names in order, and an "
+      "unknown contract still raises",
+      _jsha46(candidate_schema("contract4")) == _jsha46(candidate_schema("contract3"))
+      and _jsha46(candidate_schema("contract4")) == _SCHEMA_C3_46
+      and schema_sha256("contract4") == _SCHEMA_C3_46
+      and _jsha46(candidate_schema("contract2")) == _SCHEMA_C2_46
+      and _CONTRACTS44 == ("contract2", "contract3", "contract4")
+      and _raises46(candidate_schema, "contract9")
+      and _raises46(schema_sha256, "contract9"),
+      str((schema_sha256("contract4")[:12], _CONTRACTS44)))
+
+# --- T46b the prompt's three edits -----------------------------------------------------
+def _block46(text, start, *ends):
+    """The text from `start` to whichever of `ends` comes first, or "" when `start` is absent.
+
+    DEFENSIVE ON PURPOSE, and the reason is a measurement: slicing with a bare `str.index` at module
+    level meant that M14 - which deletes the ENDED heading - raised ValueError before T46b was ever
+    evaluated, so the suite died and produced NO failing checks at all. An empty failing set reads
+    exactly like a passing mutant. A red that cannot be attributed proves as little as a green that
+    cannot go red, so a missing marker must FAIL this check rather than kill the run.
+    """
+    if start not in text:
+        return ""
+    i = text.index(start)
+    j = min((text.index(e) for e in ends if e in text), default=len(text))
+    return text[i:j] if j > i else ""
+
+
+_p2_46, _p3_46, _p4_46 = system_prompt(), system_prompt("contract3"), system_prompt("contract4")
+# STATED runs to ENDED when the block exists and to OBJECT when it does not, so conjunct 1 stays
+# meaningful under a mutant that folds the instruction back inside STATED.
+_stated46 = _block46(_p4_46, "STATED:", "ENDED:", "OBJECT:")
+_ended46 = _block46(_p4_46, "ENDED:", "OBJECT:")
+_pid_in_ended46 = [p for p in PREDICATES if p in _ended46]
+_count_mismatch46 = [p for p in PREDICATES if _p4_46.count(p) != _p3_46.count(p)]
+check("T46b contract 4's ended instruction LEAVES the stated block and becomes its own with a "
+      "worked example, the object block keeps the whole value, contracts 2 and 3 are byte-identical "
+      "to the closed field's - and the example names NO predicate id, so every per-predicate count "
+      "still equals contract 3's (a worked example on person.habit would have nudged the very "
+      "predicate the ended defect lives in, making any rise unreadable)",
+      "ended is true" not in _stated46
+      and "ENDED:" in _p4_46 and "stopped" in _ended46
+      and "i stopped, i no longer read before bed" in _ended46
+      and 'Keep the whole value, including its day or time: "washing on saturday", never "washing".'
+      in _p4_46
+      and not _pid_in_ended46 and not _count_mismatch46
+      and _sha46(_p2_46) == _PROMPT_C2_46 and _sha46(_p3_46) == _PROMPT_C3_46,
+      str({"pid_in_ended": _pid_in_ended46, "count_mismatch": _count_mismatch46,
+           "c2": _sha46(_p2_46)[:12], "c3": _sha46(_p3_46)[:12]}))
+
+# --- T46c the span message's people header ----------------------------------------------
+_u4_46 = user_prompt("i work as a nurse", 2, 5, {1: "alex", 2: "tess"}, 77, "contract4")
+_u2_46 = user_prompt("i work as a nurse", 2, 5, {1: "alex", 2: "tess"}, 77)
+_known4_46 = [x for x in _u4_46.splitlines() if x.startswith("known people")][0]
+_known2_46 = [x for x in _u2_46.splitlines() if x.startswith("known people")][0]
+_body2_46 = _jsha46(build_request("i work as a teacher", 1, 4, {1: "sam"}, 0,
+                                  candidate_schema(), max_tokens=2048))
+_body3_46 = _jsha46(build_request("i work as a teacher", 1, 4, {1: "sam"}, 0,
+                                  candidate_schema("contract3"), max_tokens=2048,
+                                  contract="contract3"))
+_body4_46 = build_request("i work as a nurse", 2, 5, {1: "alex", 2: "tess"}, 77,
+                          candidate_schema("contract4"), contract="contract4")
+_u4msg46 = _body4_46["messages"][1]["content"]
+check("T46c under contract 4 the people header is written in the form the SCORER resolves - the "
+      "word cluster dropped from that join alone - while the speaker_cluster line and the span's "
+      "carried context are unchanged, and the contract-2 and contract-3 bodies still hash to what "
+      "the closed field measured",
+      _known4_46 == "known people: 1 = alex, 2 = tess"
+      and _known2_46 == "known people: cluster 1 = alex, cluster 2 = tess"
+      and "cluster " not in _known4_46
+      and "speaker_cluster: 2" in _u4_46 and "speaker_cluster: 2" in _u2_46
+      and "span_id: 77" in _u4_46 and "day: 5" in _u4_46 and "i work as a nurse" in _u4_46
+      and "known people: 1 = alex, 2 = tess" in _u4msg46
+      and "speaker_cluster: 2" in _u4msg46
+      and _body2_46 == _jsha46(build_request("i work as a teacher", 1, 4, {1: "sam"}, 0,
+                                             candidate_schema(), max_tokens=2048,
+                                             contract="contract2"))
+      and _body3_46 == _jsha46(build_request("i work as a teacher", 1, 4, {1: "sam"}, 0,
+                                             candidate_schema("contract3"), max_tokens=2048,
+                                             contract="contract3")),
+      repr(_known4_46))
+
+# --- T46d derive reads cluster N, and only cluster N -------------------------------------
+_span46 = {"sid": 5, "cluster": 2}
+
+
+def _d46(about, obj="x", pid="person.habit", **over):
+    raw = {"predicate_id": pid, "about": about, "object": obj, "stated": False}
+    raw.update(over)
+    return _derive46(raw, _span46)
+
+
+_rel46 = _d46("speaker", "cluster 2", pid="person.relation_to", relation_id="spouse", stated=True)
+_relname46 = _d46("speaker", "tess", pid="person.relation_to", relation_id="spouse", stated=True)
+check("T46d derive normalises a cluster-N reference on a subject ref and on a relation's far end - "
+      "case-insensitively, one space, digits only - and leaves everything else exactly as it was: "
+      "cluster two, a bare cluster, cluster 2b, a two-space variant, a NON-relation object that "
+      "merely starts that way, and the first-person remap beside it",
+      _d46("cluster 2")["subject"]["ref"] == "2"
+      and _d46("Cluster 2")["subject"]["ref"] == "2"
+      and _d46("CLUSTER 10")["subject"]["ref"] == "10"
+      and _d46("cluster two")["subject"]["ref"] == "cluster two"
+      and _d46("cluster")["subject"]["ref"] == "cluster"
+      and _d46("cluster 2b")["subject"]["ref"] == "cluster 2b"
+      and _d46("cluster  2")["subject"]["ref"] == "cluster  2"
+      and _rel46["object"] == "2" and _rel46["object_norm"] == "spouse"
+      and _relname46["object"] == "tess"
+      and _d46("speaker", "cluster 2 things")["object"] == "cluster 2 things"
+      and _d46("we")["subject"]["ref"] == "2" and _d46("i")["subject"]["ref"] == "2"
+      and _d46("speaker")["subject"]["ref"] == "2"
+      and _d46("tess")["subject"]["ref"] == "tess"
+      and _cref46("cluster 2") == "2" and _cref46("cluster two") is None,
+      str([_d46(x)["subject"]["ref"] for x in ("cluster 2", "cluster two", "cluster  2")]))
+
+# --- T46e a derive change cannot move a recorded number ----------------------------------
+# A run JSON stores candidates that are ALREADY derived, so `score_household` re-reads them as-is.
+# This is the proof rather than the argument: every committed run's own recorded per-household f1
+# for seed 1 is reproduced to 1e-9 through today's code.
+# ONE run is excluded, for a MEASURED reason that predates this milestone. The contract-0 L0 run
+# carries no `contract` label at all and its numbers were taken before MS1b changed the SCORER:
+# `score._key` now normalises the value from `object` on BOTH sides instead of reading the caller's
+# `object_norm`, which is exactly what L0's largest failure class was. Measured: its seed-1
+# `n_gold` and `n_pred` are IDENTICAL today (37 / 17) and only `n_match` moves, 2 -> 3, on
+# pred `a plumber` against gold `a plumber` whose recorded object_norm was `plumber`. So its
+# recorded f1 is unreproducible for a reason that has nothing to do with `derive`, and including it
+# would make this check assert that the scorer has never changed - which is not what it is for.
+#
+# The exclusion is SELF-POLICING: exactly one file may be skipped, it must be that file, and the
+# rest of the population must still be compared. A silently widening skip is the failure this
+# guards against.
+_e46, _skip46, _cmp46 = [], [], 0
+for _p46 in sorted(_RES.glob("ms1b_*.json")) + [_RES / "ms2a_gemma-e4b-q8-q4tpl.json"]:
+    if not _p46.exists():
+        continue
+    with open(_p46, encoding="utf-8") as _fh46:
+        _d46j = _json.load(_fh46)
+    _hh46 = next((h for h in (_d46j.get("households") or []) if h.get("seed") == 1), None)
+    if _hh46 is None or _hh46.get("f1") is None:
+        continue
+    if not _d46j.get("contract"):
+        _skip46.append(_p46.name)
+        continue
+    _corp46 = _corpus.generate_household(1, _d46j.get("days") or 14,
+                                         _d46j["contract"] if _d46j["contract"] in _CONTRACTS44
+                                         else "contract2")
+    _n46, _c46 = _bench._household_context(_corp46)
+    _got46 = score_household(list(_hh46.get("predictions") or ()), _corp46["candidates"],
+                             _n46, _c46)["f1"]
+    _cmp46 += 1
+    if not close_to(_got46, _hh46["f1"], 1e-9):
+        _e46.append((_p46.name, _hh46["f1"], _got46))
+check("T46e re-deriving nothing: every committed run that carries a contract label reproduces its "
+      "own recorded seed-1 f1 to 1e-9 through today's code - the proof that a derive change cannot "
+      "move a number that was already derived when it was written. The unlabelled contract-0 run is "
+      "the single exclusion and is named here, because its f1 predates MS1b's scorer change and "
+      "would assert something this check is not for",
+      not _e46 and _skip46 == ["ms1b_llama_8b_contract0.json"] and _cmp46 >= 30,
+      str({"mismatches": _e46[:4], "skipped": _skip46, "compared": _cmp46}))
+
+# --- T46f the corpus does not move -------------------------------------------------------
+_h4_46 = _corpus.generate_household(1, 14, contract="contract4")
+_h3_46 = _corpus.generate_household(1, 14, contract="contract3")
+_h4_nokey46 = {k: v for k, v in _h4_46.items() if k != "contract"}
+_h3_nokey46 = {k: v for k, v in _h3_46.items() if k != "contract"}
+check("T46f contract 4's corpus IS contract 3's - identical but for the contract key, so a "
+      "contract-4 F1 compares directly with contract 3's on the same 171 spans and 41 gold",
+      _jsha46(_h4_nokey46) == _jsha46(_h3_nokey46)
+      and _h4_46["contract"] == "contract4" and _h3_46["contract"] == "contract3"
+      and _jsha46(_h3_46) == _HH_C3_46
+      and len(_h4_46["spans"]) == 171 and len(_h4_46["candidates"]) == 41,
+      str((len(_h4_46["spans"]), len(_h4_46["candidates"]), _jsha46(_h4_nokey46)[:12])))
+
+# --- T46g the resolving map -------------------------------------------------------------
+_map46 = _crmap46({1: "alex", 2: "tess"})
+_cbn46 = {"alex": 1, "tess": 2}
+_ext46 = dict(_cbn46)
+_ext46.update(_map46)
+check("T46g cluster_ref_map EXTENDS a name map with the cluster-N spelling and nothing else: with "
+      "it the scorer resolves cluster 2, without it that reference is unresolvable, names still "
+      "resolve either way, and an unidentified reference like she is still refused - widening the "
+      "map must not soften what a match means",
+      _map46 == {"cluster 1": 1, "cluster 2": 2}
+      and _rp46("cluster 2", None, _cbn46) is None
+      and _rp46("cluster 2", None, _ext46) == 2
+      and _rp46("tess", None, _ext46) == 2 and _rp46("tess", None, _cbn46) == 2
+      and _rp46("she", None, _ext46) is None
+      and all(k in _ext46 for k in _cbn46),
+      str(_map46))
+
+# --- T46h the re-score, on a stub field ---------------------------------------------------
+# The PLAIN score - the same predictions, the same gold, `clusters_by_name` NOT extended - is
+# computed HERE, independently of `rescore_cluster_refs`, so the two claims below are comparisons
+# against what the scorer said before the extension rather than against the re-score itself.
+#
+# MEASURED, which is why this check reads as it does. Its first form compared the clean stub's
+# re-scored f1 with ITSELF, and gave the clean stub `owner` as the far end, which resolves with or
+# without any extension - so a re-score that also credited `she` (M17, and the same widening put at
+# the call site in `rescore_cluster_refs`) failed nothing here. The clean stub now carries
+# UNIDENTIFIED references in both places a person is read - `she` as the subject, `her` as the far
+# end - so a widened map moves its score whichever cluster the widening picks, and "carries none,
+# scores identically" is asserted against the plain score rather than assumed.
+def _plain46(pth):
+    with open(pth, encoding="utf-8") as fh:
+        d = _json.load(fh)
+    nm = np_ = ng = 0
+    for h in d["households"]:
+        corp = _corpus.generate_household(h["seed"], 14, "contract2")
+        names, cbn = _bench._household_context(corp)
+        sc = score_household(list(h["predictions"]), corp["candidates"], names, cbn)
+        nm += sc["n_match"]
+        np_ += sc["n_pred"]
+        ng += sc["n_gold"]
+    p = nm / np_ if np_ else 0.0
+    r = nm / ng if ng else 0.0
+    return (2 * p * r / (p + r)) if (p + r) else 0.0
+
+
+with _tempfile.TemporaryDirectory() as _td46:
+    def _stub46(name, key, f1, forms):
+        hhs = []
+        for _s in (1, 2):
+            corp = _corpus.generate_household(_s, 14, "contract2")
+            gold = [c for c in corp["candidates"]
+                    if c["predicate_id"] == "person.relation_to"
+                    and str(c.get("source_kind", "")).startswith("stated")]
+            preds = []
+            for g in gold:
+                for subj_ref, obj in forms:
+                    p = dict(g)
+                    p["subject"] = dict(g["subject"], ref=subj_ref or g["subject"]["ref"])
+                    p["object"] = obj
+                    preds.append(p)
+            hhs.append({"seed": _s, "predictions": preds})
+        _pth = _os.path.join(_td46, name)
+        with open(_pth, "w", encoding="utf-8") as fh:
+            _json.dump({"model_key": key, "contract": "contract2", "days": 14,
+                        "llama_version": "b10809-5266f24da",
+                        "aggregate": {"f1": f1}, "households": hhs}, fh)
+        return _pth
+
+    _pcar46 = _stub46("ms1b_stub-carrier.json", "stub-carrier", 0.90, [(None, "cluster 1")])
+    _pcln46 = _stub46("ms1b_stub-clean.json", "stub-clean", 0.10,
+                      [("she", "owner"), (None, "her")])
+    _plain_car46, _plain_cln46 = _plain46(_pcar46), _plain46(_pcln46)
+    _res46 = _bench.rescore_cluster_refs(_td46)
+    _car46 = _res46["runs"]["ms1b_stub-carrier.json"]
+    _cln46 = _res46["runs"]["ms1b_stub-clean.json"]
+check("T46h the re-score lifts a run whose predictions carry the cluster-N spelling and leaves one "
+      "that carries none exactly where it was, counts BOTH denominators, and reports order_changed "
+      "false when the two orderings agree",
+      _car46["cluster_refs"]["predictions"] > 0
+      and _car46["cluster_refs"]["relation_object"] == _car46["cluster_refs"]["predictions"]
+      and _car46["cluster_refs"]["subject"] == 0
+      and _car46["rescored"]["f1"] > _plain_car46
+      and _cln46["cluster_refs"]["predictions"] == 0
+      and _cln46["cluster_refs"]["fields"] == 0
+      and close_to(_cln46["rescored"]["f1"], _plain_cln46, 1e-9)
+      and _res46["field_order"]["order_changed"] is False,
+      str({"carrier": _car46["cluster_refs"], "carrier_f1": (_plain_car46, _car46["rescored"]["f1"]),
+           "clean": _cln46["cluster_refs"], "clean_f1": (_plain_cln46, _cln46["rescored"]["f1"]),
+           "order_changed": _res46["field_order"]["order_changed"]}))
+
+# --- T46i the CLI ------------------------------------------------------------------------
+_MS1B46 = str(Path(__file__).resolve().parent / "bench_ms1b.py")
+_dry46 = _subprocess.run(
+    [sys.executable, _MS1B46, "--dry-run", "--households", "1", "--contract", "contract4"],
+    capture_output=True, text=True, encoding="utf-8", errors="replace")
+with _tempfile.TemporaryDirectory() as _qd46:
+    _q46 = _subprocess.run(
+        [sys.executable, _MS1B46, "--queue", "gemma-e4b", "--contract", "contract4",
+         "--results-dir", _qd46],
+        capture_output=True, text=True, encoding="utf-8", errors="replace")
+    _wrote46 = sorted(_os.listdir(_qd46))
+check("T46i the CLI accepts contract 4 for a single run and reports contract 3's schema hash under "
+      "it, while the closed field's own readings still refuse it - the queue exits 2 and writes "
+      "nothing, so a contract-4 number can never enter the field's verdict",
+      _dry46.returncode == 0
+      and ("schema_sha256: " + _SCHEMA_C3_46) in _dry46.stdout
+      and _q46.returncode == 2 and not _wrote46,
+      str((_dry46.returncode, _q46.returncode, _wrote46,
+           _dry46.stdout[:80], _q46.stdout[:80])))
 
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
 sys.exit(1 if FAILS else 0)

@@ -31,15 +31,15 @@ def build_request(span_text, speaker_cluster, day, names, span_id, schema,
     constrains generation to the grammar the schema compiles to, so an off-registry predicate id
     cannot be produced at all. temperature 0 and a fixed seed make a run reproducible.
     """
-    # The contract selects the SYSTEM prompt and nothing else here; the schema arrives from the
-    # caller, who built it under the same contract. `contract2` is the default, so a call that does
-    # not mention a contract produces HEAD's body byte for byte - which is what keeps the closed
-    # MS1 field re-runnable.
+    # The contract selects the SYSTEM prompt and, from contract 4, the SPAN MESSAGE's people header
+    # too; the schema arrives from the caller, who built it under the same contract. `contract2` is
+    # the default, so a call that does not mention a contract produces HEAD's body byte for byte -
+    # which is what keeps the closed MS1 field re-runnable, and contract 3's body with it.
     body = {
         "messages": [
             {"role": "system", "content": system_prompt(contract)},
             {"role": "user", "content": user_prompt(span_text, speaker_cluster, day, names,
-                                                    span_id)},
+                                                    span_id, contract)},
         ],
         "response_format": {
             "type": "json_schema",

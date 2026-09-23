@@ -16,11 +16,50 @@ model selects what only a reader can judge, and nothing that can be looked up.
 `derive` is pure and does not validate — `score.validity` runs `candidate.validate` on the DERIVED
 candidate, which is the shape that would actually reach the store.
 """
+import re
+
 from ..registry import (
     EDGE_PREDICATE, PREDICATES, PREFERENCE_PREDICATE, normalise_object,
 )
 
 SPEAKER = "speaker"
+
+# CONTRACT 4 (MS2a-3, 2026-09-20). `cluster 2` IS cluster 2 - a derivation from the span exactly
+# like the first-person remap below it, and applied under EVERY contract for the same reason.
+#
+# Measured, which is why it is here rather than only in the prompt: the contract-3 run of the chosen
+# extractor produced 7 subject refs and 4 relation objects spelled `cluster N`, against ZERO in the
+# same model's contract-2 run, and `score.resolve_person` cannot resolve that form - it tries int()
+# and then a name lookup, and `cluster 2` fails both. So one edge was counted once as a miss AND
+# once as a false positive, which is the whole of the reported `person.relation_to` fall.
+#
+# EXACTLY one space and digits only: `cluster two`, `cluster` and `cluster 2b` are left alone,
+# because each is a guess rather than a reading and the point of a derivation is that it is not a
+# guess. This moves no committed number - a run JSON stores candidates that are ALREADY derived -
+# and T46e asserts that over every committed run rather than arguing it.
+_CLUSTER_REF = re.compile(r"^cluster (\d+)$", re.IGNORECASE)
+
+
+def cluster_ref(value):
+    """`cluster 2` -> `"2"`; anything else -> None. Pure, case-insensitive, one space, digits only."""
+    m = _CLUSTER_REF.match(str(value if value is not None else "").strip())
+    return m.group(1) if m else None
+
+
+def cluster_ref_map(names_by_cluster) -> dict:
+    """`{1: "alex", 2: "tess"}` -> `{"cluster 1": 1, "cluster 2": 2}` — the SENSITIVITY map only.
+
+    This exists for the MS2a-3 re-score and for nothing else. `score.resolve_person` is deliberately
+    NOT edited: the committed runs were scored with it as it stands, and re-scoring them means
+    handing the scorer a wider `clusters_by_name` for one measurement, never changing what scoring
+    means. The map it returns EXTENDS the caller's name map; it never replaces it, so a name still
+    resolves exactly as it did.
+
+    Only the `cluster <n>` spelling is added. Extending the map for every ref would resolve words
+    the scorer is right to refuse - `she` names somebody without identifying them, and crediting
+    that would be scoring an extraction that never named a person (M17 is that mutant).
+    """
+    return {"cluster %s" % c: c for c in (names_by_cluster or {})}
 
 # CONTRACT 2 (MS1b, the field). A first-person pronoun spoken by cluster N IS cluster N — a
 # derivation from the span, not a judgement about it, and the corpus's own convention ("we live in
@@ -93,9 +132,15 @@ def derive(raw, span, owner_cluster=1, names=None) -> dict:
     sid = _span_field(span, "sid")
     cluster = _span_field(span, "cluster")
     about = str(raw.get("about") or "").strip().lower()
+    # `cluster 2` -> `2`, before `_subject` reads it as a name that resolves to nobody.
+    about = cluster_ref(about) or about
     stated = bool(raw.get("stated"))
     obj = raw.get("object") if raw.get("object") is not None else ""
     rel = raw.get("relation_id")
+    # The same reading on a relation's FAR END, and only there: for every other predicate `object`
+    # is a value, not a person, and rewriting it would corrupt the thing being measured.
+    if pid == EDGE_PREDICATE:
+        obj = cluster_ref(obj) or obj
 
     # A relation's value key is the relation id on BOTH sides - the corpus's own convention and the
     # store's `_cand_value_key` for the edge table. The fallback keeps a malformed relation

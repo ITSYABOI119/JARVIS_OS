@@ -22,7 +22,13 @@ POLARITIES = ("likes", "dislikes", "wants", "avoids")
 # replacing it (the design's §4.2 amendment of 2026-09-15): MS1's field is closed and must stay
 # re-runnable and re-verdictable byte for byte, so contract 2 remains the DEFAULT everywhere and a
 # contract-3 run asks for it explicitly. Contract 2's schema hash therefore never moves.
-CONTRACTS = ("contract2", "contract3")
+#
+# CONTRACT 4 (2026-09-20) coexists with both and changes NO SCHEMA AT ALL: its three corrections are
+# in the prompt and in `derive`, so `candidate_schema("contract4")` is contract 3's object and its
+# hash is contract 3's hash. That is asserted rather than assumed (T46a), because a contract that
+# silently moved the schema would make its numbers a different measurement from contract 3's - and
+# comparing them directly on the same 410 gold is the whole point of contract 4.
+CONTRACTS = ("contract2", "contract3", "contract4")
 
 
 def candidate_schema(contract: str = "contract2") -> dict:
@@ -98,7 +104,8 @@ def candidate_schema(contract: str = "contract2") -> dict:
     PERSON = branch(person, {"about": {"type": "string"}}, ["about"])
 
     candidates = {"type": "array", "items": {"oneOf": [EDGE, PREFERENCE, HOUSEHOLD, PERSON]}}
-    if contract == "contract3":
+    # Contract 4 inherits this unchanged: it corrects the PROMPT, never the grammar.
+    if contract in ("contract3", "contract4"):
         candidates["maxItems"] = 4
 
     return {

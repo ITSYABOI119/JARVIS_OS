@@ -35,7 +35,8 @@ def main(argv=None) -> int:
     # MS2a: contract 3 COEXISTS with contract 2, so the closed field's store runs stay reproducible
     # and a contract-3 run asks for it explicitly. The corpus, and on the extracted path the hearsay
     # rule, follow from this one flag.
-    p.add_argument("--contract", choices=("contract2", "contract3"), default="contract2")
+    p.add_argument("--contract", choices=("contract2", "contract3", "contract4"),
+                   default="contract2")
     # MS2a-2: the people layer's evidence rules and candidate-level pronoun resolution run ONLY
     # behind this switch, so every contract-2 store run taken before it stays re-runnable byte for
     # byte. Merge by rank and the new scoring fields are unconditional and were measured to move

@@ -49,7 +49,7 @@ STATED:
 OBJECT:
   object is the value AS SAID, e.g. "a nurse", "Sydney". Do NOT normalise it, do not strip words,
   do not lower-case it. That is done for you.
-"""
+%(object_extra)s"""
 
 
 # The two predicates L0 showed being used as a catch-all: a fact about a person was filed as
@@ -86,6 +86,39 @@ _EXTRA_DESC_C3 = {
 }
 
 
+# CONTRACT 4 (MS2a-3, 2026-09-20). Three edits to contract 3's text, each answering a defect
+# MEASURED on the committed contract-3 run, and no fourth. The corpus and gold do not move.
+#
+#   (a) `ended` LEAVES the STATED block and becomes its own, with a worked example in the corpus's
+#       own phrasing. The model cited all ten "i stopped, i no longer ..." spans, chose the right
+#       predicate and the right object, and set `ended` true on FOUR: a polarity error on the one
+#       field that closes a row, and it is what costs the coexisting band. Buried as the last line
+#       of a block about whether something was SAID OUTRIGHT, it was being read as part of that
+#       question rather than as its own.
+#
+#       THE EXAMPLE NAMES NO PREDICATE ID, and that is load-bearing rather than stylistic (MS2a-3
+#       R2). A first draft ended it with `-> person.habit, ...`, which is the very predicate the
+#       `ended` defect lives in - so any rise in habit extraction afterwards would have been
+#       unreadable, the fix or the nudge. T46b's per-predicate count equality is the guard that
+#       caught it, and the guard stays while the example changes.
+#   (b) the OBJECT block gains a scheduled-routine example. `washing on saturday` came back as
+#       `washing` in six households - six of the seven coexisting gold values never extracted. The
+#       block already said "do not strip words"; what it lacked was the example.
+#
+# Both are spliced through slots whose EMPTY substitution reproduces contracts 2 and 3 byte for
+# byte, so `846ad088...`, `31d99140...` and `5c0387e5...` never move.
+_ENDED_BLOCK_C4 = """
+ENDED:
+  ended is true when the utterance says a value STOPPED or no longer holds.
+  "i stopped, i no longer read before bed" says a value ended: emit the candidate for what stopped,
+  with ended true.
+  A value the speaker still holds is ended false. Getting this wrong is worse than omitting the
+  candidate: a value recorded as current when the speaker said it stopped never closes.
+"""
+_OBJECT_EXTRA_C4 = ('  Keep the whole value, including its day or time: "washing on saturday", '
+                    'never "washing".\n')
+
+
 def system_prompt(contract: str = "contract2") -> str:
     """Every predicate, relation and polarity the registry knows, listed once each.
 
@@ -94,7 +127,7 @@ def system_prompt(contract: str = "contract2") -> str:
     """
     if contract not in CONTRACTS:
         raise ValueError("unknown contract %r - known: %s" % (contract, ", ".join(CONTRACTS)))
-    extra = _EXTRA_DESC_C3 if contract == "contract3" else _EXTRA_DESC
+    extra = _EXTRA_DESC_C3 if contract in ("contract3", "contract4") else _EXTRA_DESC
     lines = []
     for pid in sorted(PREDICATES):
         p = PREDICATES[pid]
@@ -107,11 +140,13 @@ def system_prompt(contract: str = "contract2") -> str:
         "relations": ", ".join(sorted(RELATIONS)),
         "polarities": ", ".join(POLARITIES),
         "speaker": SPEAKER,
-        "ended": _ENDED_LINE_C3 if contract == "contract3" else "",
+        "ended": (_ENDED_BLOCK_C4 if contract == "contract4"
+                  else _ENDED_LINE_C3 if contract == "contract3" else ""),
+        "object_extra": _OBJECT_EXTRA_C4 if contract == "contract4" else "",
     }
 
 
-def user_prompt(span_text, speaker_cluster, day, names, span_id) -> str:
+def user_prompt(span_text, speaker_cluster, day, names, span_id, contract="contract2") -> str:
     """One span, with the context the contract allows and nothing else.
 
     `names` maps a cluster id to a display name for the household's KNOWN people (the owner and the
@@ -123,6 +158,13 @@ def user_prompt(span_text, speaker_cluster, day, names, span_id) -> str:
     are carried. The removal of the citation rule is why T36e checks the SYSTEM prompt: that is
     where instructions live.
     """
-    known = ", ".join("cluster %s = %s" % (c, n) for c, n in sorted((names or {}).items()))
+    # CONTRACT 4 (c): the header is written in the form the SCORER resolves. Under contracts 2 and 3
+    # this line reads `cluster 1 = alex`, and the contract-3 run copied that spelling into 7 subject
+    # refs and 4 relation objects - a form `score.resolve_person` cannot resolve, so the same edge
+    # counted once as a miss and once as a false positive. Contract 4 drops the word from THIS join
+    # only; the `speaker_cluster:` line and the SUBJECT block are untouched, and `derive` normalises
+    # the old spelling under every contract so a model that says it anyway is still read correctly.
+    fmt = "%s = %s" if contract == "contract4" else "cluster %s = %s"
+    known = ", ".join(fmt % (c, n) for c, n in sorted((names or {}).items()))
     return ("span_id: %s\nday: %s\nspeaker_cluster: %s\nknown people: %s\n\nutterance: %s"
             % (span_id, day, speaker_cluster, known or "(none known)", span_text))

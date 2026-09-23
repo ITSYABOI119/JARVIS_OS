@@ -24,7 +24,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from jarvis_memory.bench import corpus                      # noqa: E402
 from jarvis_memory.extract import client as _client         # noqa: E402
-from jarvis_memory.extract.derive import derive             # noqa: E402
+from jarvis_memory.extract.derive import (                  # noqa: E402
+    cluster_ref as _cluster_ref, cluster_ref_map as _cluster_ref_map, derive,
+)
+from jarvis_memory.registry import EDGE_PREDICATE           # noqa: E402
 from jarvis_memory.extract.schema import candidate_schema, schema_sha256   # noqa: E402
 from jarvis_memory.extract import gguf_template as _tpl                    # noqa: E402
 from jarvis_memory.extract.score import score_household, validity          # noqa: E402
@@ -855,6 +858,125 @@ def load_field(results_dir=None, contract=None, build=None):
     return out
 
 
+def count_cluster_refs(run_json) -> dict:
+    """How the `cluster N` spelling appears in a run, in BOTH denominators (MS2a-3 N1).
+
+    The two counts answer different questions and the strategist's figures and the coder's first
+    measurement were each right about one of them, which is why both are recorded here rather than
+    one being chosen:
+
+      `predictions` - predictions carrying the spelling in EITHER field. This is how many candidates
+                      the re-score can move.
+      `subject` / `relation_object` - the FIELDS carrying it. One prediction can carry both, and a
+                      relation object is the half that makes an edge count once as a miss AND once
+                      as a false positive, so the field counts say where the damage is.
+
+    `ms1b_gemma-e4b-v040-nothink.json` is the case that separates them: 2 predictions, 0 subject
+    refs, 2 relation objects.
+    """
+    subj = rel = preds = 0
+    for h in run_json.get("households") or ():
+        for c in h.get("predictions") or ():
+            s = _cluster_ref((c.get("subject") or {}).get("ref")) is not None
+            r = (c.get("predicate_id") == EDGE_PREDICATE
+                 and _cluster_ref(c.get("object")) is not None)
+            subj += 1 if s else 0
+            rel += 1 if r else 0
+            preds += 1 if (s or r) else 0
+    return {"predictions": preds, "subject": subj, "relation_object": rel,
+            "fields": subj + rel}
+
+
+def rescore_cluster_refs(results_dir=None) -> dict:
+    """THE SENSITIVITY: what the closed field would read if `cluster N` resolved. REPORTED ONLY.
+
+    Nothing here writes to a committed run. Each run's stored predictions are re-scored with the
+    SAME scorer and the SAME gold, changing exactly one input - `clusters_by_name` extended by
+    `cluster_ref_map` - and the recorded and re-scored numbers are written side by side to a new
+    file. The design's §4.2 is explicit that if the field's ORDER moves, that is a finding for the
+    strategist and never a re-verdict.
+    """
+    results_dir = results_dir or RESULTS_DIR
+    paths = sorted(Path(results_dir).glob("ms1b_*.json"))
+    extra = Path(results_dir) / "ms2a_gemma-e4b-q8-q4tpl.json"
+    if extra.exists():
+        paths.append(extra)
+
+    runs = {}
+    for path in paths:
+        with open(path, encoding="utf-8") as fh:
+            d = json.load(fh)
+        if not d.get("households") or "model_key" not in d:
+            continue
+        contract = d.get("contract") or CONTRACT
+        days = d.get("days") or 14
+        rec_f1 = (d.get("aggregate") or {}).get("f1")
+        tot = {"n_pred": 0, "n_gold": 0, "n_match": 0,
+               "rel_gold": 0, "rel_match": 0, "rel_st_gold": 0, "rel_st_match": 0}
+        for h in d["households"]:
+            hh = corpus.generate_household(h["seed"], days, contract)
+            names, cbn = _household_context(hh)
+            cbn = dict(cbn)
+            cbn.update(_cluster_ref_map(names))
+            sc = score_household(list(h.get("predictions") or ()), hh["candidates"], names, cbn)
+            tot["n_pred"] += sc["n_pred"]
+            tot["n_gold"] += sc["n_gold"]
+            tot["n_match"] += sc["n_match"]
+            tot["rel_gold"] += sc["relation_gold"]
+            tot["rel_match"] += sc["relation_matched"]
+            tot["rel_st_gold"] += sc["relation_stated_gold"]
+            tot["rel_st_match"] += sc["relation_stated_matched"]
+        p = tot["n_match"] / tot["n_pred"] if tot["n_pred"] else 0.0
+        r = tot["n_match"] / tot["n_gold"] if tot["n_gold"] else 0.0
+        runs[path.name] = {
+            "model_key": d.get("model_key"),
+            "contract": contract,
+            "llama_version": d.get("llama_version"),
+            "cluster_refs": count_cluster_refs(d),
+            "recorded": {
+                "f1": rec_f1,
+                "precision": (d.get("aggregate") or {}).get("precision"),
+                "recall": (d.get("aggregate") or {}).get("recall"),
+                "relation_recall": (d.get("aggregate") or {}).get("relation_recall"),
+                "relation_stated_recall": (d.get("aggregate") or {}).get("relation_stated_recall"),
+            },
+            "rescored": {
+                "f1": (2 * p * r / (p + r)) if (p + r) else 0.0,
+                "precision": p,
+                "recall": r,
+                "relation_recall": (tot["rel_match"] / tot["rel_gold"]) if tot["rel_gold"] else 0.0,
+                "relation_stated_recall": ((tot["rel_st_match"] / tot["rel_st_gold"])
+                                           if tot["rel_st_gold"] else 0.0),
+            },
+        }
+
+    # THE ORDER QUESTION, over the contract-2 b10809 field alone - the same population `--verdict`
+    # reads. A changed order is the finding; an unchanged one says the sensitivity is real but
+    # inert, which is the honest thing to be able to say either way.
+    field = load_field(results_dir, CONTRACT, "b10809")
+    by_rec, by_res = [], []
+    for key, agg, path in field:
+        name = Path(path).name
+        rec = agg.get("f1", 0.0)
+        res = (runs.get(name, {}).get("rescored") or {}).get("f1", rec)
+        by_rec.append((key, rec))
+        by_res.append((key, res))
+    order_rec = [k for k, _ in sorted(by_rec, key=lambda x: (-x[1], x[0]))]
+    order_res = [k for k, _ in sorted(by_res, key=lambda x: (-x[1], x[0]))]
+    return {
+        "scope": ("REPORTED sensitivity only (MS2a-3 section 4). Every committed run JSON is "
+                  "unmodified and score.py is unedited; one input changed - clusters_by_name "
+                  "extended by cluster_ref_map - for this measurement alone."),
+        "runs": runs,
+        "field_order": {
+            "field": "contract2 / b10809",
+            "by_recorded_f1": order_rec,
+            "by_rescored_f1": order_res,
+            "order_changed": order_rec != order_res,
+        },
+    }
+
+
 def builds_in_field(field):
     """The distinct `llama_version` strings behind a loaded field, sorted.
 
@@ -1155,6 +1277,10 @@ def main(argv=None):
     ap.add_argument("--render", default=None, metavar="KEY",
                     help="render household 1's 167 prompts for KEY on a CPU-only server and write "
                          "its digest; no GPU, no generation")
+    ap.add_argument("--rescore-cluster-refs", dest="rescore_cluster_refs", action="store_true",
+                    help="the MS2a-3 sensitivity: re-score every committed run with cluster-N refs "
+                         "resolved and write rescore_cluster_refs.json. REPORTED only - no "
+                         "committed run is modified and score.py is unedited.")
     ap.add_argument("--render-compare", nargs=2, default=None, metavar=("A.json", "B.json"),
                     help="compare two render digests prompt by prompt")
     # MS2a. CONTRACT stays the FIELD's contract with every meaning it has - the queue, the verdict,
@@ -1162,7 +1288,7 @@ def main(argv=None):
     # a render, a smoke or a dry run. The field itself is closed and is never re-scored under
     # contract 3, which is why --queue and --verdict refuse it outright rather than silently
     # producing runs that would not be comparable to the eleven.
-    ap.add_argument("--contract", choices=("contract2", "contract3"), default=CONTRACT,
+    ap.add_argument("--contract", choices=("contract2", "contract3", "contract4"), default=CONTRACT,
                     help="contract2 (the closed field, the default) or contract3 (MS2a)")
     a = ap.parse_args(argv)
 
@@ -1172,6 +1298,31 @@ def main(argv=None):
         return 2
 
     seeds_all = list(range(a.seed, a.seed + a.households))
+
+    if a.rescore_cluster_refs:
+        res = rescore_cluster_refs(a.results_dir)
+        out_path = Path(a.results_dir or RESULTS_DIR) / "rescore_cluster_refs.json"
+        with open(out_path, "w", encoding="utf-8") as fh:
+            json.dump(res, fh, indent=2, sort_keys=True)
+            fh.write("\n")
+        print("%-46s %6s %6s %6s | %8s %8s | %8s %8s"
+              % ("run", "preds", "subj", "relobj", "F1 rec", "F1 res", "relR rec", "relR res"))
+        for name in sorted(res["runs"]):
+            r = res["runs"][name]
+            cr = r["cluster_refs"]
+            if not cr["predictions"]:
+                continue
+            print("%-46s %6d %6d %6d | %8.4f %8.4f | %8.4f %8.4f"
+                  % (name[:46], cr["predictions"], cr["subject"], cr["relation_object"],
+                     r["recorded"]["f1"] or 0.0, r["rescored"]["f1"],
+                     r["recorded"]["relation_recall"] or 0.0, r["rescored"]["relation_recall"]))
+        fo = res["field_order"]
+        print("\nfield %s" % fo["field"])
+        print("  by recorded F1: %s" % ", ".join(fo["by_recorded_f1"]))
+        print("  by rescored F1: %s" % ", ".join(fo["by_rescored_f1"]))
+        print("  order_changed : %s" % fo["order_changed"])
+        print("written    : %s" % out_path)
+        return 0
 
     if a.render_compare:
         left, right = [json.load(open(p, encoding="utf-8")) for p in a.render_compare]
