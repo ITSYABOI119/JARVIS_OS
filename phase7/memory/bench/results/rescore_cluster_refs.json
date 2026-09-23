@@ -1,0 +1,953 @@
+{
+  "field_order": {
+    "by_recorded_f1": [
+      "gemma-e4b-q8-q4tpl",
+      "gemma-e4b-q8-q4tpl-nothink",
+      "qwen3-8b-v040-think",
+      "gemma-e4b-v040",
+      "gemma-e4b-v040-nothink",
+      "gemma-e4b-q8",
+      "gemma-e2b-v040",
+      "gemma-e4b-q6k",
+      "nuextract3",
+      "qwen3-8b-v040",
+      "qwen35-9b-v040",
+      "gemma-e2b-v040-nothink",
+      "ministral-8b",
+      "qwen35-4b-v040",
+      "nuextract3-think",
+      "lfm25-2.6b",
+      "granite-8b",
+      "granite-3b",
+      "qwen35-4b-v040-think",
+      "qwen35-9b-v040-think"
+    ],
+    "by_rescored_f1": [
+      "gemma-e4b-q8",
+      "gemma-e4b-q8-q4tpl",
+      "gemma-e4b-q6k",
+      "gemma-e4b-v040",
+      "gemma-e4b-q8-q4tpl-nothink",
+      "qwen3-8b-v040-think",
+      "gemma-e4b-v040-nothink",
+      "gemma-e2b-v040",
+      "nuextract3",
+      "qwen3-8b-v040",
+      "qwen35-9b-v040",
+      "gemma-e2b-v040-nothink",
+      "ministral-8b",
+      "qwen35-4b-v040",
+      "nuextract3-think",
+      "lfm25-2.6b",
+      "granite-8b",
+      "granite-3b",
+      "qwen35-4b-v040-think",
+      "qwen35-9b-v040-think"
+    ],
+    "field": "contract2 / b10809",
+    "order_changed": true
+  },
+  "runs": {
+    "ms1b_gemma-e2b-v040-nothink.json": {
+      "cluster_refs": {
+        "fields": 0,
+        "predictions": 0,
+        "relation_object": 0,
+        "subject": 0
+      },
+      "contract": "contract2",
+      "llama_version": "b10809-5266f24da",
+      "model_key": "gemma-e2b-v040-nothink",
+      "recorded": {
+        "f1": 0.5755,
+        "precision": 0.6154,
+        "recall": 0.5405,
+        "relation_recall": 0.0,
+        "relation_stated_recall": 0.0
+      },
+      "rescored": {
+        "f1": 0.5755395683453237,
+        "precision": 0.6153846153846154,
+        "recall": 0.5405405405405406,
+        "relation_recall": 0.0,
+        "relation_stated_recall": 0.0
+      }
+    },
+    "ms1b_gemma-e2b-v040.json": {
+      "cluster_refs": {
+        "fields": 0,
+        "predictions": 0,
+        "relation_object": 0,
+        "subject": 0
+      },
+      "contract": "contract2",
+      "llama_version": "b10809-5266f24da",
+      "model_key": "gemma-e2b-v040",
+      "recorded": {
+        "f1": 0.7069,
+        "precision": 0.7347,
+        "recall": 0.6811,
+        "relation_recall": 0.2,
+        "relation_stated_recall": 0.7333
+      },
+      "rescored": {
+        "f1": 0.7068723702664796,
+        "precision": 0.7346938775510204,
+        "recall": 0.6810810810810811,
+        "relation_recall": 0.2,
+        "relation_stated_recall": 0.7333333333333333
+      }
+    },
+    "ms1b_gemma-e2b.json": {
+      "cluster_refs": {
+        "fields": 0,
+        "predictions": 0,
+        "relation_object": 0,
+        "subject": 0
+      },
+      "contract": "contract2",
+      "llama_version": "b8728-5e9c63546",
+      "model_key": "gemma-e2b",
+      "recorded": {
+        "f1": 0.7201,
+        "precision": 0.7507,
+        "recall": 0.6919,
+        "relation_recall": 0.2364,
+        "relation_stated_recall": 0.8667
+      },
+      "rescored": {
+        "f1": 0.720112517580872,
+        "precision": 0.750733137829912,
+        "recall": 0.6918918918918919,
+        "relation_recall": 0.23636363636363636,
+        "relation_stated_recall": 0.8666666666666667
+      }
+    },
+    "ms1b_gemma-e4b-q6k.json": {
+      "cluster_refs": {
+        "fields": 51,
+        "predictions": 32,
+        "relation_object": 19,
+        "subject": 32
+      },
+      "contract": "contract2",
+      "llama_version": "b10809-5266f24da",
+      "model_key": "gemma-e4b-q6k",
+      "recorded": {
+        "f1": 0.6943,
+        "precision": 0.7364,
+        "recall": 0.6568,
+        "relation_recall": 0.0909,
+        "relation_stated_recall": 0.3333
+      },
+      "rescored": {
+        "f1": 0.7828571428571429,
+        "precision": 0.8303030303030303,
+        "recall": 0.7405405405405405,
+        "relation_recall": 0.2727272727272727,
+        "relation_stated_recall": 1.0
+      }
+    },
+    "ms1b_gemma-e4b-q8-q4tpl-nothink.json": {
+      "cluster_refs": {
+        "fields": 10,
+        "predictions": 10,
+        "relation_object": 0,
+        "subject": 10
+      },
+      "contract": "contract2",
+      "llama_version": "b10809-5266f24da",
+      "model_key": "gemma-e4b-q8-q4tpl-nothink",
+      "recorded": {
+        "f1": 0.7744,
+        "precision": 0.7989,
+        "recall": 0.7514,
+        "relation_recall": 0.3091,
+        "relation_stated_recall": 1.0
+      },
+      "rescored": {
+        "f1": 0.7743732590529248,
+        "precision": 0.7988505747126436,
+        "recall": 0.7513513513513513,
+        "relation_recall": 0.3090909090909091,
+        "relation_stated_recall": 1.0
+      }
+    },
+    "ms1b_gemma-e4b-q8-q4tpl.json": {
+      "cluster_refs": {
+        "fields": 0,
+        "predictions": 0,
+        "relation_object": 0,
+        "subject": 0
+      },
+      "contract": "contract2",
+      "llama_version": "b10809-5266f24da",
+      "model_key": "gemma-e4b-q8-q4tpl",
+      "recorded": {
+        "f1": 0.7907,
+        "precision": 0.8553,
+        "recall": 0.7351,
+        "relation_recall": 0.2727,
+        "relation_stated_recall": 1.0
+      },
+      "rescored": {
+        "f1": 0.7906976744186046,
+        "precision": 0.8553459119496856,
+        "recall": 0.7351351351351352,
+        "relation_recall": 0.2727272727272727,
+        "relation_stated_recall": 1.0
+      }
+    },
+    "ms1b_gemma-e4b-q8.json": {
+      "cluster_refs": {
+        "fields": 29,
+        "predictions": 18,
+        "relation_object": 11,
+        "subject": 18
+      },
+      "contract": "contract2",
+      "llama_version": "b10809-5266f24da",
+      "model_key": "gemma-e4b-q8",
+      "recorded": {
+        "f1": 0.7428,
+        "precision": 0.7981,
+        "recall": 0.6946,
+        "relation_recall": 0.1636,
+        "relation_stated_recall": 0.6
+      },
+      "rescored": {
+        "f1": 0.791907514450867,
+        "precision": 0.8509316770186336,
+        "recall": 0.7405405405405405,
+        "relation_recall": 0.2727272727272727,
+        "relation_stated_recall": 1.0
+      }
+    },
+    "ms1b_gemma-e4b-q8_run1.json": {
+      "cluster_refs": {
+        "fields": 29,
+        "predictions": 18,
+        "relation_object": 11,
+        "subject": 18
+      },
+      "contract": "contract2",
+      "llama_version": "b10809-5266f24da",
+      "model_key": "gemma-e4b-q8",
+      "recorded": {
+        "f1": 0.7428,
+        "precision": 0.7981,
+        "recall": 0.6946,
+        "relation_recall": 0.1636,
+        "relation_stated_recall": 0.6
+      },
+      "rescored": {
+        "f1": 0.791907514450867,
+        "precision": 0.8509316770186336,
+        "recall": 0.7405405405405405,
+        "relation_recall": 0.2727272727272727,
+        "relation_stated_recall": 1.0
+      }
+    },
+    "ms1b_gemma-e4b-v040-nothink.json": {
+      "cluster_refs": {
+        "fields": 2,
+        "predictions": 2,
+        "relation_object": 2,
+        "subject": 0
+      },
+      "contract": "contract2",
+      "llama_version": "b10809-5266f24da",
+      "model_key": "gemma-e4b-v040-nothink",
+      "recorded": {
+        "f1": 0.7585,
+        "precision": 0.7658,
+        "recall": 0.7514,
+        "relation_recall": 0.3091,
+        "relation_stated_recall": 1.0
+      },
+      "rescored": {
+        "f1": 0.7639836289222375,
+        "precision": 0.7713498622589532,
+        "recall": 0.7567567567567568,
+        "relation_recall": 0.32727272727272727,
+        "relation_stated_recall": 1.0
+      }
+    },
+    "ms1b_gemma-e4b-v040.json": {
+      "cluster_refs": {
+        "fields": 6,
+        "predictions": 4,
+        "relation_object": 2,
+        "subject": 4
+      },
+      "contract": "contract2",
+      "llama_version": "b10809-5266f24da",
+      "model_key": "gemma-e4b-v040",
+      "recorded": {
+        "f1": 0.7695,
+        "precision": 0.8241,
+        "recall": 0.7216,
+        "relation_recall": 0.2545,
+        "relation_stated_recall": 0.9333
+      },
+      "rescored": {
+        "f1": 0.7809798270893372,
+        "precision": 0.8364197530864198,
+        "recall": 0.7324324324324324,
+        "relation_recall": 0.2727272727272727,
+        "relation_stated_recall": 1.0
+      }
+    },
+    "ms1b_gemma-e4b.json": {
+      "cluster_refs": {
+        "fields": 4,
+        "predictions": 3,
+        "relation_object": 1,
+        "subject": 3
+      },
+      "contract": "contract2",
+      "llama_version": "b8728-5e9c63546",
+      "model_key": "gemma-e4b",
+      "recorded": {
+        "f1": 0.7426,
+        "precision": 0.7742,
+        "recall": 0.7135,
+        "relation_recall": 0.2545,
+        "relation_stated_recall": 0.9333
+      },
+      "rescored": {
+        "f1": 0.7482419127988749,
+        "precision": 0.7800586510263929,
+        "recall": 0.7189189189189189,
+        "relation_recall": 0.2727272727272727,
+        "relation_stated_recall": 1.0
+      }
+    },
+    "ms1b_gemma_e2b_contract1.json": {
+      "cluster_refs": {
+        "fields": 0,
+        "predictions": 0,
+        "relation_object": 0,
+        "subject": 0
+      },
+      "contract": "narrow",
+      "llama_version": "b8728-5e9c63546",
+      "model_key": "gemma-e2b",
+      "recorded": {
+        "f1": 0.3419,
+        "precision": 0.3614,
+        "recall": 0.3243,
+        "relation_recall": 0.0,
+        "relation_stated_recall": 0.0
+      },
+      "rescored": {
+        "f1": 0.3418803418803419,
+        "precision": 0.3614457831325301,
+        "recall": 0.32432432432432434,
+        "relation_recall": 0.0,
+        "relation_stated_recall": 0.0
+      }
+    },
+    "ms1b_granite-3b.json": {
+      "cluster_refs": {
+        "fields": 0,
+        "predictions": 0,
+        "relation_object": 0,
+        "subject": 0
+      },
+      "contract": "contract2",
+      "llama_version": "b10809-5266f24da",
+      "model_key": "granite-3b",
+      "recorded": {
+        "f1": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "relation_recall": 0.0,
+        "relation_stated_recall": 0.0
+      },
+      "rescored": {
+        "f1": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "relation_recall": 0.0,
+        "relation_stated_recall": 0.0
+      }
+    },
+    "ms1b_granite-8b.json": {
+      "cluster_refs": {
+        "fields": 0,
+        "predictions": 0,
+        "relation_object": 0,
+        "subject": 0
+      },
+      "contract": "contract2",
+      "llama_version": "b10809-5266f24da",
+      "model_key": "granite-8b",
+      "recorded": {
+        "f1": 0.2976,
+        "precision": 0.5597,
+        "recall": 0.2027,
+        "relation_recall": 0.2182,
+        "relation_stated_recall": 0.8
+      },
+      "rescored": {
+        "f1": 0.2976190476190476,
+        "precision": 0.5597014925373134,
+        "recall": 0.20270270270270271,
+        "relation_recall": 0.21818181818181817,
+        "relation_stated_recall": 0.8
+      }
+    },
+    "ms1b_lfm25-2.6b.json": {
+      "cluster_refs": {
+        "fields": 0,
+        "predictions": 0,
+        "relation_object": 0,
+        "subject": 0
+      },
+      "contract": "contract2",
+      "llama_version": "b10809-5266f24da",
+      "model_key": "lfm25-2.6b",
+      "recorded": {
+        "f1": 0.4223,
+        "precision": 0.5631,
+        "recall": 0.3378,
+        "relation_recall": 0.0,
+        "relation_stated_recall": 0.0
+      },
+      "rescored": {
+        "f1": 0.4222972972972973,
+        "precision": 0.5630630630630631,
+        "recall": 0.33783783783783783,
+        "relation_recall": 0.0,
+        "relation_stated_recall": 0.0
+      }
+    },
+    "ms1b_llama-1b.json": {
+      "cluster_refs": {
+        "fields": 0,
+        "predictions": 0,
+        "relation_object": 0,
+        "subject": 0
+      },
+      "contract": "contract2",
+      "llama_version": "b8728-5e9c63546",
+      "model_key": "llama-1b",
+      "recorded": {
+        "f1": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "relation_recall": 0.0,
+        "relation_stated_recall": 0.0
+      },
+      "rescored": {
+        "f1": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "relation_recall": 0.0,
+        "relation_stated_recall": 0.0
+      }
+    },
+    "ms1b_llama-3b.json": {
+      "cluster_refs": {
+        "fields": 0,
+        "predictions": 0,
+        "relation_object": 0,
+        "subject": 0
+      },
+      "contract": "contract2",
+      "llama_version": "b8728-5e9c63546",
+      "model_key": "llama-3b",
+      "recorded": {
+        "f1": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "relation_recall": 0.0,
+        "relation_stated_recall": 0.0
+      },
+      "rescored": {
+        "f1": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "relation_recall": 0.0,
+        "relation_stated_recall": 0.0
+      }
+    },
+    "ms1b_llama-8b.json": {
+      "cluster_refs": {
+        "fields": 0,
+        "predictions": 0,
+        "relation_object": 0,
+        "subject": 0
+      },
+      "contract": "contract2",
+      "llama_version": "b8728-5e9c63546",
+      "model_key": "llama-8b",
+      "recorded": {
+        "f1": 0.2944,
+        "precision": 0.2269,
+        "recall": 0.4189,
+        "relation_recall": 0.2,
+        "relation_stated_recall": 0.7333
+      },
+      "rescored": {
+        "f1": 0.2943969610636277,
+        "precision": 0.22693997071742314,
+        "recall": 0.4189189189189189,
+        "relation_recall": 0.2,
+        "relation_stated_recall": 0.7333333333333333
+      }
+    },
+    "ms1b_llama_8b_contract0.json": {
+      "cluster_refs": {
+        "fields": 0,
+        "predictions": 0,
+        "relation_object": 0,
+        "subject": 0
+      },
+      "contract": "contract2",
+      "llama_version": "b8728-5e9c63546",
+      "model_key": "llama-8b",
+      "recorded": {
+        "f1": 0.1209,
+        "precision": 0.1875,
+        "recall": 0.0892,
+        "relation_recall": 0.0,
+        "relation_stated_recall": null
+      },
+      "rescored": {
+        "f1": 0.14285714285714288,
+        "precision": 0.2215909090909091,
+        "recall": 0.10540540540540541,
+        "relation_recall": 0.0,
+        "relation_stated_recall": 0.0
+      }
+    },
+    "ms1b_llama_8b_contract1.json": {
+      "cluster_refs": {
+        "fields": 0,
+        "predictions": 0,
+        "relation_object": 0,
+        "subject": 0
+      },
+      "contract": "narrow",
+      "llama_version": "b8728-5e9c63546",
+      "model_key": "llama-8b",
+      "recorded": {
+        "f1": 0.4073,
+        "precision": 0.424,
+        "recall": 0.3919,
+        "relation_recall": 0.2636,
+        "relation_stated_recall": 0.9667
+      },
+      "rescored": {
+        "f1": 0.40730337078651685,
+        "precision": 0.4239766081871345,
+        "recall": 0.3918918918918919,
+        "relation_recall": 0.2636363636363636,
+        "relation_stated_recall": 0.9666666666666667
+      }
+    },
+    "ms1b_ministral-8b.json": {
+      "cluster_refs": {
+        "fields": 0,
+        "predictions": 0,
+        "relation_object": 0,
+        "subject": 0
+      },
+      "contract": "contract2",
+      "llama_version": "b10809-5266f24da",
+      "model_key": "ministral-8b",
+      "recorded": {
+        "f1": 0.5425,
+        "precision": 0.5418,
+        "recall": 0.5432,
+        "relation_recall": 0.3273,
+        "relation_stated_recall": 1.0
+      },
+      "rescored": {
+        "f1": 0.5425101214574899,
+        "precision": 0.5417789757412399,
+        "recall": 0.5432432432432432,
+        "relation_recall": 0.32727272727272727,
+        "relation_stated_recall": 1.0
+      }
+    },
+    "ms1b_nuextract3-think.json": {
+      "cluster_refs": {
+        "fields": 0,
+        "predictions": 0,
+        "relation_object": 0,
+        "subject": 0
+      },
+      "contract": "contract2",
+      "llama_version": "b10809-5266f24da",
+      "model_key": "nuextract3-think",
+      "recorded": {
+        "f1": 0.4251,
+        "precision": 0.3119,
+        "recall": 0.6676,
+        "relation_recall": 0.1727,
+        "relation_stated_recall": 0.6
+      },
+      "rescored": {
+        "f1": 0.42512908777969016,
+        "precision": 0.31186868686868685,
+        "recall": 0.6675675675675675,
+        "relation_recall": 0.17272727272727273,
+        "relation_stated_recall": 0.6
+      }
+    },
+    "ms1b_nuextract3.json": {
+      "cluster_refs": {
+        "fields": 0,
+        "predictions": 0,
+        "relation_object": 0,
+        "subject": 0
+      },
+      "contract": "contract2",
+      "llama_version": "b10809-5266f24da",
+      "model_key": "nuextract3",
+      "recorded": {
+        "f1": 0.6467,
+        "precision": 0.6503,
+        "recall": 0.6432,
+        "relation_recall": 0.0273,
+        "relation_stated_recall": 0.1
+      },
+      "rescored": {
+        "f1": 0.6467391304347826,
+        "precision": 0.6502732240437158,
+        "recall": 0.6432432432432432,
+        "relation_recall": 0.02727272727272727,
+        "relation_stated_recall": 0.1
+      }
+    },
+    "ms1b_phi3-mini.json": {
+      "cluster_refs": {
+        "fields": 0,
+        "predictions": 0,
+        "relation_object": 0,
+        "subject": 0
+      },
+      "contract": "contract2",
+      "llama_version": "b8728-5e9c63546",
+      "model_key": "phi3-mini",
+      "recorded": {
+        "f1": 0.0798,
+        "precision": 0.0486,
+        "recall": 0.2243,
+        "relation_recall": 0.0182,
+        "relation_stated_recall": 0.0
+      },
+      "rescored": {
+        "f1": 0.07984607984607985,
+        "precision": 0.04856641310708017,
+        "recall": 0.22432432432432434,
+        "relation_recall": 0.01818181818181818,
+        "relation_stated_recall": 0.0
+      }
+    },
+    "ms1b_phi4-mini.json": {
+      "cluster_refs": {
+        "fields": 0,
+        "predictions": 0,
+        "relation_object": 0,
+        "subject": 0
+      },
+      "contract": "contract2",
+      "llama_version": "b8728-5e9c63546",
+      "model_key": "phi4-mini",
+      "recorded": {
+        "f1": 0.0233,
+        "precision": 0.0847,
+        "recall": 0.0135,
+        "relation_recall": 0.0,
+        "relation_stated_recall": 0.0
+      },
+      "rescored": {
+        "f1": 0.023310023310023312,
+        "precision": 0.0847457627118644,
+        "recall": 0.013513513513513514,
+        "relation_recall": 0.0,
+        "relation_stated_recall": 0.0
+      }
+    },
+    "ms1b_qwen3-4b.json": {
+      "cluster_refs": {
+        "fields": 0,
+        "predictions": 0,
+        "relation_object": 0,
+        "subject": 0
+      },
+      "contract": "contract2",
+      "llama_version": "b8728-5e9c63546",
+      "model_key": "qwen3-4b",
+      "recorded": {
+        "f1": 0.3098,
+        "precision": 0.2273,
+        "recall": 0.4865,
+        "relation_recall": 0.0182,
+        "relation_stated_recall": 0.0667
+      },
+      "rescored": {
+        "f1": 0.30981067125645434,
+        "precision": 0.22727272727272727,
+        "recall": 0.4864864864864865,
+        "relation_recall": 0.01818181818181818,
+        "relation_stated_recall": 0.06666666666666667
+      }
+    },
+    "ms1b_qwen3-8b-v040-think.json": {
+      "cluster_refs": {
+        "fields": 0,
+        "predictions": 0,
+        "relation_object": 0,
+        "subject": 0
+      },
+      "contract": "contract2",
+      "llama_version": "b10809-5266f24da",
+      "model_key": "qwen3-8b-v040-think",
+      "recorded": {
+        "f1": 0.7721,
+        "precision": 0.8339,
+        "recall": 0.7189,
+        "relation_recall": 0.2727,
+        "relation_stated_recall": 1.0
+      },
+      "rescored": {
+        "f1": 0.7721335268505081,
+        "precision": 0.8338557993730408,
+        "recall": 0.7189189189189189,
+        "relation_recall": 0.2727272727272727,
+        "relation_stated_recall": 1.0
+      }
+    },
+    "ms1b_qwen3-8b-v040.json": {
+      "cluster_refs": {
+        "fields": 0,
+        "predictions": 0,
+        "relation_object": 0,
+        "subject": 0
+      },
+      "contract": "contract2",
+      "llama_version": "b10809-5266f24da",
+      "model_key": "qwen3-8b-v040",
+      "recorded": {
+        "f1": 0.6281,
+        "precision": 0.6113,
+        "recall": 0.6459,
+        "relation_recall": 0.3455,
+        "relation_stated_recall": 1.0
+      },
+      "rescored": {
+        "f1": 0.6281208935611039,
+        "precision": 0.6112531969309463,
+        "recall": 0.6459459459459459,
+        "relation_recall": 0.34545454545454546,
+        "relation_stated_recall": 1.0
+      }
+    },
+    "ms1b_qwen3-8b.json": {
+      "cluster_refs": {
+        "fields": 0,
+        "predictions": 0,
+        "relation_object": 0,
+        "subject": 0
+      },
+      "contract": "contract2",
+      "llama_version": "b8728-5e9c63546",
+      "model_key": "qwen3-8b",
+      "recorded": {
+        "f1": 0.6196,
+        "precision": 0.6,
+        "recall": 0.6405,
+        "relation_recall": 0.3273,
+        "relation_stated_recall": 1.0
+      },
+      "rescored": {
+        "f1": 0.6196078431372549,
+        "precision": 0.6,
+        "recall": 0.6405405405405405,
+        "relation_recall": 0.32727272727272727,
+        "relation_stated_recall": 1.0
+      }
+    },
+    "ms1b_qwen35-4b-v040-think.json": {
+      "cluster_refs": {
+        "fields": 0,
+        "predictions": 0,
+        "relation_object": 0,
+        "subject": 0
+      },
+      "contract": "contract2",
+      "llama_version": "b10809-5266f24da",
+      "model_key": "qwen35-4b-v040-think",
+      "recorded": {
+        "f1": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "relation_recall": 0.0,
+        "relation_stated_recall": 0.0
+      },
+      "rescored": {
+        "f1": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "relation_recall": 0.0,
+        "relation_stated_recall": 0.0
+      }
+    },
+    "ms1b_qwen35-4b-v040.json": {
+      "cluster_refs": {
+        "fields": 0,
+        "predictions": 0,
+        "relation_object": 0,
+        "subject": 0
+      },
+      "contract": "contract2",
+      "llama_version": "b10809-5266f24da",
+      "model_key": "qwen35-4b-v040",
+      "recorded": {
+        "f1": 0.53,
+        "precision": 0.6913,
+        "recall": 0.4297,
+        "relation_recall": 0.2545,
+        "relation_stated_recall": 0.9333
+      },
+      "rescored": {
+        "f1": 0.53,
+        "precision": 0.691304347826087,
+        "recall": 0.4297297297297297,
+        "relation_recall": 0.2545454545454545,
+        "relation_stated_recall": 0.9333333333333333
+      }
+    },
+    "ms1b_qwen35-4b.json": {
+      "cluster_refs": {
+        "fields": 0,
+        "predictions": 0,
+        "relation_object": 0,
+        "subject": 0
+      },
+      "contract": "contract2",
+      "llama_version": "b8728-5e9c63546",
+      "model_key": "qwen35-4b",
+      "recorded": {
+        "f1": 0.5729,
+        "precision": 0.7533,
+        "recall": 0.4622,
+        "relation_recall": 0.2545,
+        "relation_stated_recall": 0.9333
+      },
+      "rescored": {
+        "f1": 0.5728643216080401,
+        "precision": 0.7533039647577092,
+        "recall": 0.46216216216216216,
+        "relation_recall": 0.2545454545454545,
+        "relation_stated_recall": 0.9333333333333333
+      }
+    },
+    "ms1b_qwen35-9b-v040-think.json": {
+      "cluster_refs": {
+        "fields": 0,
+        "predictions": 0,
+        "relation_object": 0,
+        "subject": 0
+      },
+      "contract": "contract2",
+      "llama_version": "b10809-5266f24da",
+      "model_key": "qwen35-9b-v040-think",
+      "recorded": {
+        "f1": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "relation_recall": 0.0,
+        "relation_stated_recall": 0.0
+      },
+      "rescored": {
+        "f1": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "relation_recall": 0.0,
+        "relation_stated_recall": 0.0
+      }
+    },
+    "ms1b_qwen35-9b-v040.json": {
+      "cluster_refs": {
+        "fields": 0,
+        "predictions": 0,
+        "relation_object": 0,
+        "subject": 0
+      },
+      "contract": "contract2",
+      "llama_version": "b10809-5266f24da",
+      "model_key": "qwen35-9b-v040",
+      "recorded": {
+        "f1": 0.5775,
+        "precision": 0.5662,
+        "recall": 0.5892,
+        "relation_recall": 0.3364,
+        "relation_stated_recall": 1.0
+      },
+      "rescored": {
+        "f1": 0.5774834437086093,
+        "precision": 0.5662337662337662,
+        "recall": 0.5891891891891892,
+        "relation_recall": 0.33636363636363636,
+        "relation_stated_recall": 1.0
+      }
+    },
+    "ms1b_qwen35-9b.json": {
+      "cluster_refs": {
+        "fields": 0,
+        "predictions": 0,
+        "relation_object": 0,
+        "subject": 0
+      },
+      "contract": "contract2",
+      "llama_version": "b8728-5e9c63546",
+      "model_key": "qwen35-9b",
+      "recorded": {
+        "f1": 0.5801,
+        "precision": 0.5688,
+        "recall": 0.5919,
+        "relation_recall": 0.2818,
+        "relation_stated_recall": 0.9333
+      },
+      "rescored": {
+        "f1": 0.5801324503311257,
+        "precision": 0.5688311688311688,
+        "recall": 0.5918918918918918,
+        "relation_recall": 0.2818181818181818,
+        "relation_stated_recall": 0.9333333333333333
+      }
+    },
+    "ms2a_gemma-e4b-q8-q4tpl.json": {
+      "cluster_refs": {
+        "fields": 11,
+        "predictions": 7,
+        "relation_object": 4,
+        "subject": 7
+      },
+      "contract": "contract3",
+      "llama_version": "b10809-5266f24da",
+      "model_key": "gemma-e4b-q8-q4tpl",
+      "recorded": {
+        "f1": 0.8021,
+        "precision": 0.8736,
+        "recall": 0.7415,
+        "relation_recall": 0.2364,
+        "relation_stated_recall": 0.8667
+      },
+      "rescored": {
+        "f1": 0.8179419525065964,
+        "precision": 0.8908045977011494,
+        "recall": 0.7560975609756098,
+        "relation_recall": 0.2727272727272727,
+        "relation_stated_recall": 1.0
+      }
+    }
+  },
+  "scope": "REPORTED sensitivity only (MS2a-3 section 4). Every committed run JSON is unmodified and score.py is unedited; one input changed - clusters_by_name extended by cluster_ref_map - for this measurement alone."
+}
