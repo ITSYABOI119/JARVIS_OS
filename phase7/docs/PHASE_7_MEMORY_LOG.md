@@ -2525,3 +2525,282 @@ Synthetic seeded template households, seeds 1–10, 14 days, every number from p
 committed. The sensitivity changes what those numbers MEAN, not what was recorded: every run JSON,
 every verdict file and `score.py` are unmodified. Nothing here was measured on real speech or on the
 owner's household.
+
+## MS2a-3 — 2026-09-24 — contract 4: the three measured prompt defects, and the bands re-read
+
+The commits, in order:
+- `ee0387c`: contract 4 and the sensitivity mode.
+- `4041767`: the sensitivity correction (the section above).
+- `08947c3`: the design amendment — contract 4 inherits every contract-3 rule outside the prompt and
+  the derivation.
+- `35a77a2`: the harness follows the amendment, and T46 gets its teeth.
+- This commit: the measurement.
+
+Contract 4 changes the prompt and the derivation, and nothing else. Its corpus and gold are contract
+3's to the byte: T46f compares seeds 1–10, with 410 gold under both. Every contract-4 number below
+therefore compares directly with contract 3's.
+
+### The three defects, measured on the contract-3 run
+
+All three were measured on `ms2a_gemma-e4b-q8-q4tpl.json`, and each was re-measured this session.
+
+| defect | measured | what it cost |
+|---|---|---|
+| the `ended` polarity | the model cited all ten `i stopped, i no longer …` spans, chose the right predicate and object, and set `ended` true on **4** | six stopped habits recorded as current. Flipping exactly those six to `ended` true and re-running the store (a scratch copy; nothing committed) takes coexisting **0.6667 → 0.8333**, still under the 0.85 band |
+| the clipped object | `washing on saturday` came back as `the washing` (normalised to `washing`) in **six** households: seeds 2, 4, 6, 7, 8, 9 | six of the **seven** coexisting gold values contract 3 never extracted. The seventh is `runs at dawn` in seed 8 |
+| the `cluster N` reference spelling | **7** predictions carry it: 7 subject refs and 4 relation objects, against **0** in the same model's contract-2 run | each counted once as a miss and once as a false positive. Re-scored, F1 reads 0.8021 → 0.8179 (the section above) |
+
+"Never extracted" means that no prediction of the value's predicate carries the value. That is the
+reading that reproduces the seven. Under the pre-registered strict match the count is eight, because
+seed 1's `runs at dawn` WAS extracted, but with its subject spelled `cluster 2`.
+
+### What changed, and what did not
+
+- **The prompt changed in three ways.** The `ended` instruction left the STATED block and became its
+  own ENDED block, with a worked example that names no predicate id. The OBJECT block gained the
+  `washing on saturday` line. The span message's people header dropped the word `cluster`, under
+  contract 4 only.
+- **`derive` changed.** It reads `cluster <n>` (one space, digits, any case) as `n`, on a subject ref
+  and on a relation's far end, under every contract.
+- **The schema did not change.** It is contract 3's, `93af3702…`.
+- **The corpus did not change.**
+- **Contracts 2 and 3 are byte-identical** to `4041767` on 33 compared keys: the schemas, the
+  prompts, households for seeds 1–10, and every request body for seeds 1–3.
+
+### Commits 1a and 1b: the harness gap
+
+**Two sites still keyed on contract 3 by equality**, while the corpus and schema sites had been
+widened. The first was the hearsay gate in `harness.run_household`. The second was the strict reading
+of a render reference digest in `check_reference_digest`. Both were widened before any contract-4
+store number existed.
+
+**The new checks were measured red first.** T46j runs T44m's own scenario under both contracts. T46k
+refuses a contract-4 digest that omits its seed. Against the unfixed code both failed, giving
+324/326. After the fix the suite reads 326/326.
+
+**The ORACLE control could not have shown the gap**, because the rule applies to extracted candidates
+only.
+
+**The gap would not have moved a band on today's candidates**, measured here:
+
+- On contract 3's candidates, with the people layer on and no embedder, turning the gate off changes
+  exactly one field: `hearsay_demoted` in seeds 1, 3, 4, 6 and 8 (5 → 0).
+- Every other per-household field is identical, so no aggregate and no evaluated band moves.
+- The transfer band was not read, because that comparison ran without the embedder.
+
+### A finding about MS2a-2, stated plainly
+
+MS2a-2 recorded `hearsay_demoted` **5**. All five were `cluster N` self-descriptions — the harness path
+instrumented, the rule's own inputs recorded:
+
+| seeds | subject | speaker |
+|---|---|---|
+| 1, 3, 4, 6 | `cluster 2` | 2 |
+| 8 | `cluster 1` | 1 |
+
+The rule could not resolve that spelling, and `derive` now normalises it. **The rule met no genuine
+hearsay on that run.** The other 35 of its 40 stated relation predictions name the speaker by the
+speaker's own name. MS2a-2's recorded numbers are unchanged, and, as the A/B above measures, the
+demotion's effect on them was nil.
+
+### T46: seven gaps in the committed state, and one future-file escape
+
+Each row below is a mutation that T46's own specification says a check should catch. Before commit 1b
+(test file `ade68926…`), each one passed silently at 324/324 with an empty failing set. After it
+(`29596002…`), each fails exactly its predicted check. The "before" column was measured this session
+by swapping the old test file in temporarily.
+
+| mutant | the mutation | before 1b | after 1b |
+|---|---|---|---|
+| MX1 | the object line spliced into the ENDED slot | none | T46b |
+| MX2 | contract 3's request body gains `top_k` and `max_tokens + 7` | none | T46c (the body is now pinned to `8a0d2aec…`, measured on `git archive ee41e8e`) |
+| MX3 | `derive` normalises every object, not only a relation's far end | none | T46d |
+| MX4 | `re.IGNORECASE` dropped | none | T46d |
+| MX5 | the verdict lets contract 4 through | none | T46i |
+| MX7 | contract 3's people header also drops `cluster` | none | T46c |
+| MX8 | the contract-4 corpus diverges at seeds 2–10 | none | T46f |
+| MX6b | a future `ms2a3_…` extraction file with a wrong seed-1 F1 | none (outside T46e's population) | T46e (compared 36) |
+
+The other rows run against the committed state:
+
+- M14 → T46b; M15 → T46d; M16 → T46a T46i (one mechanism, two surfaces); M17 → T46g T46h.
+- M18 (the hearsay gate back to equality) → T46j; M19 (`strict` back to equality) → T46k.
+- MX6a, the positive control (a committed ms1b F1 + 0.013) → T46e.
+- NEG, the future file with its correct F1 → 326/326.
+
+Every row is exact. T46e compares **35** runs today and **36** once this commit's run file exists.
+
+### The sensitivity re-score
+
+The re-score's result is in the section above: **`order_changed` is TRUE.** The rulings on it:
+
+- MS2a-3 proceeded on the same arm, because contract 4 is a comparison on one arm with only the
+  prompt changed.
+- The published claims were corrected at `4041767`.
+- The MS1 re-verdict is deferred, because the top two arms are 0.0012 apart and cannot be separated at
+  this project's 0.01 resolution. It stays an **open question**, and the board keeps its hash.
+
+### The render
+
+- **Two digests**, `gemma-e4b-v040` and `gemma-e4b-q8-q4tpl`. Both are `render_ok` on
+  `b10809-5266f24da`, with 171 prompts under `contract4`.
+- **They agree with each other:** identical on 171 of 171 prompts.
+- **They differ from contract 3 everywhere:** 0 of 171 prompts are identical to contract 3's digests,
+  because the system prompt changed.
+- **No earlier digest moved:** all 15 are unchanged.
+- **md5s:** `6c85e8a7…` and `20e771ef…`.
+
+### The chosen extractor under contract 4, beside contract 3
+
+`ms2a3_gemma-e4b-q8-q4tpl.json`. It is the same arm, `gemma-e4b-q8-q4tpl`, on llama.cpp b10809 with
+thinking on. It passes the identity pin: `model_sha256` `6a6eba0d…` and `template_from_sha256`
+`55572b8d…` both equal the contract-3 run's, and `model_sha256_agree` is true.
+
+| figure | contract 3 | contract 4 |
+|---|---|---|
+| validity | 1.0000 (1710/1710) | 1.0000 (1710/1710) |
+| F1 / P / R on 410 gold | 0.8021 / 0.8736 / 0.7415 | **0.8399 / 0.9091 / 0.7805** |
+| lenient F1 | 0.8232 | 0.8399 |
+| predictions / matches | 348 / 304 | 352 / 320 |
+| `ended` true on the ten `i stopped, i no longer` spans (cited) | 4/10 (10) | **10/10** (10) |
+| `ended` true on the ten `i no longer enjoy` spans (REPORTED, no expectation) | 0/10 (10) | 3/10 (10) |
+| `cluster N`: predictions / subject / relation object / fields | 7 / 7 / 4 / 11 | **0 / 0 / 0 / 0** |
+| relation recall / stated / inferred | 0.2364 / 0.8667 / 0.0 | **0.2727 / 0.9667** / 0.0125 |
+| the seven never-extracted coexisting values | 0 of 7 found | **7 of 7 found** |
+| preference polarity agreement (REPORTED) | 0.45 | 0.35 |
+| finish reasons / finish_length | stop 1710 / 0 | stop 1710 / 0 |
+| tokens in / out | 1,373,964 / 378,026 | 1,509,054 / 416,329 |
+| seconds (sum over households; the run's own line reads 7697.5 s) | 7048.9 | 7689.7 |
+
+| predicate | gold | pred c3 → c4 | match c3 → c4 | F1 c3 → c4 |
+|---|---|---|---|---|
+| household.routine | 20 | 37 → 40 | 14 → 20 | 0.4912 → **0.6667** |
+| household.topic | 60 | 60 → 60 | 60 → 60 | 1.0 → 1.0 |
+| owner.prefers | 60 | 60 → 60 | 60 → 60 | 1.0 → 1.0 |
+| person.habit | 60 | 60 → 60 | 57 → 60 | 0.95 → **1.0** |
+| person.lives_in | 30 | 33 → 33 | 30 → 30 | 0.9524 → 0.9524 |
+| person.name | 20 | 8 → 10 | 8 → 10 | 0.5714 → 0.6667 |
+| person.relation_to | 110 | 40 → 39 | 26 → 30 | 0.3467 → **0.4027** |
+| person.trait | 20 | 20 → 20 | 20 → 20 | 1.0 → 1.0 |
+| person.works_as | 30 | 30 → 30 | 29 → 30 | 0.9667 → 1.0 |
+
+The per-household F1 is 0.8312, 0.8533, 0.8205, 0.8312, 0.8421, 0.7949, 0.8533, 0.8533, 0.8421 and
+0.8800. Contract 3 read 0.7733 to 0.8421.
+
+The per-predicate table is summed from `households[].per_predicate`. Before any contract-4 value was
+read, the same code reproduced contract 3's recorded baselines: `ended` 4/10, the second family 0/10,
+`cluster N` 7/7/4/11, `person.relation_to` F1 0.3467, and the seven coexisting values.
+
+**The pre-registered expectations, read against the run:**
+
+- **The `cluster N` refs disappeared.** Relation recall reads **0.2727** with no re-score. Stated
+  relation recall reads **0.9667 against the expected ≈ 1.0000**: 29 of 30, not 30.
+  - The one miss is seed 6's `my husband casey and i decided`. The model wrote the subject as
+    `]}my husband casey` and the far end as `]}casey`. Those are stray JSON-closing characters inside
+    schema-valid strings. It is a model-output defect, not the spelling artefact, and it happened once
+    in 1,710 calls.
+- **`ended` rose from 4/10 to 10/10.**
+- **The seven missing coexisting values are all found**, `washing on saturday` in all six households.
+
+**Preference polarity agreement fell, 0.45 → 0.35.** It is REPORTED, with no band. The whole move is
+one family: `i have gone off spicy food entirely`, whose gold is `dislikes`, came back as `avoids` in
+9 of 10 households under contract 4, against 3 of 10 under contract 3. The other three disagreement
+families are identical under both contracts: `i really do enjoy …` read as `likes` against gold
+`wants` or `avoids`, and `i no longer enjoy …` read as `dislikes` against gold `likes` with `ended`.
+
+### The ORACLE control under contract 4
+
+`ms2a3_control_contract4_rules.json` equals `ms2a_control_contract3_rules.json` on every field except
+`contract` and timing. Fourteen leaf paths differ: `contract`, `embedder_load_s`, ten per-household
+`embed_seconds`, and latency p50/p99. No aggregate, band, household value or reported field moved.
+
+### The nine MS2 bands
+
+`ms2a3_run.json`: ten households, 14 days, embedder qwen, layer on, contract-4 candidates. Beside each
+band is `ms2a_run.json`, the contract-3 reading this one replaces as the current reading.
+
+| band | MS2a-3 | verdict | MS2a-2 (contract 3) | verdict |
+|---|---|---|---|---|
+| update_acc ≥ 0.85 | 0.925 | MET | 0.925 | MET |
+| coexist_recall ≥ 0.85 | **0.9667** | **MET** | 0.6667 | MISSED |
+| transfer_recall5 ≥ 0.60 | 0.9 | MET | 0.9167 | MET |
+| growth drop ≤ 5 pts | **8.75** | **MISSED** | 6.25 | MISSED |
+| relationship surfaced ≥ 8/10 | 10/10 | MET | 10/10 | MET |
+| relation_precision_pairs ≥ 0.90 | 1.0 | MET | 1.0 | MET |
+| relations_wrong == 0 | 0 | MET | 0 | MET |
+| audit == 0 | 0 | MET | 0 | MET |
+| p99 ≤ 50 ms | 0.2133 ms | MET | 0.219 ms | MET |
+
+**Eight of nine are MET; MS2a-2 met seven.**
+
+The fields beside the bands:
+
+- `hearsay_demoted` 3 (contract 3: 5); `pronouns_resolved` 8 (8); `rank_upgrades` 6 (8);
+  `pending_at_end` 2 (7).
+- `people_rejects` 0, with `{candidate: 0, span: 0}`; `edges_reopened` 0.
+- `spouse` surfaced in 1 of 10 households, at day mean 8.0.
+- The relationship surfaced in 10 of 10 households at day mean 9.5 (8.5 under contract 3).
+- Over 20 pairs: 11 fine, 9 coarse and 0 wrong. Per-edge `relation_precision` is 0.5167.
+- Transfer: `loud music` recalled 18 of 30 (contract 3: 20).
+
+**The growth band MISSES at 8.75**, worse than contract 3's 6.25. Like any drop, it is a difference of
+two terms:
+
+- **The run** falls from 0.925 to 0.8375.
+- **The ORACLE control** falls from 1.0 to 0.9375, which is 6.25 points. That drop is the corpus's
+  own. Its lost questions are seed 3's `what does kit do for work`, seed 8's
+  `what does lena do for work`, and three of seed 9's partner questions. For each of them, after the
+  30× filler, the top hit becomes a span instead of the fact: the contract-3 corpus's appended
+  `thanks, <partner>` span, or in seed 3 a filler span.
+- **The run loses two more questions by the same mechanism**: seed 8's `where does lena live` and
+  seed 9's `which city does ava live in`. Before the filler, the extracted fact is the correct top
+  hit. After it, `thanks, lena` / `thanks, ava` outranks the fact.
+
+**So the cause is the store's ranking under growth, against a span the corpus appends.** The extractor
+supplied the right fact. Against contract 3's own run, seed 9's growth reading is unchanged at 0.5, and
+its drop grew only because its plain update accuracy rose from 0.75 to 1.0.
+
+**Coexisting is MET at 0.9667; the residual is one ended-value leak, in seed 1.** The stopped span was
+extracted with `ended` true but `stated` false, so the candidate arrived as `inferred`. Source rank
+(owner-stated > other-stated > inferred) does not let an inferred ending close a stated-owner row, so
+`reads before bed` stays current. That is the store's rule working as designed on the extractor's one
+mis-judged `stated` flag. The other nine stopped spans are `stated_owner`, and each closes its row.
+
+**Update is MET at 0.925, the same aggregate as contract 3, in different households.** Seeds 1, 3 and 6
+miss the partner's city. The mechanism is the one MS2a-2 recorded: `she said she is just staying with
+us for now` is extracted as `person.lives_in` = `with us`, resolves, and supersedes the city by
+freshness. Under contract 3 it cost questions in seed 3 only. Contract 3's other two update misses
+were different: seed 2 answered `electrician` for `pharmacist` (`works_as`), and seed 9 answered
+`bendigo` for `darwin` (`lives_in`). Contract 4 answers both.
+
+**`hearsay_demoted` is 3, not the 0 expected if the extractor produced only self-descriptions.** Each
+demotion was listed by instrumenting the harness path:
+
+| seed | span (speaker) | candidate | reading |
+|---|---|---|---|
+| 1 | `she called me love` (1) | subject `tess`, object `alex`, `partner` | genuine hearsay: the subject is not the speaker, which is T44m's own shape |
+| 3 | `my husband kit and i decided` (2) | subject `kit`, object `speaker`, `spouse` | hearsay by the rule (a resolved subject other than the speaker), but it is the speaker's own relation with the direction reversed |
+| 6 | `my husband casey and i decided` (2) | subject `]}my husband casey` | a spelling the rule could not resolve: the `]}` leak |
+
+**Seeds 1 and 3 surface their owner→partner edge as `inferred` (0.8111), not stated**, because their
+stated edge was demoted. **Seed 7 does the same for a different reason.** The extractor did not emit
+the owner's stated edge on span 154 under contract 4, though it did under contract 3, and the rules
+supplied the edge. All three surface on day 13.
+
+### Correction to the sensitivity section
+
+**[CORRECTED 2026-09-24: the rounding sentence in the sensitivity section above counts all 28 runs
+with no refs. It should read: 27 of the 28 runs with no refs differ from their re-score by rounding
+alone, at most 4.61e-05; the 28th, the contract-0 L0 run, differs by 2.2e-02 for the earlier scorer
+change the next bullet names.]**
+
+### Honest scope
+
+- **What was measured:** synthetic seeded template households, seeds 1–10, 14 days. Contract 4 was
+  measured on contract 3's own corpus and gold, and on ORACLE candidates for the control.
+- **What is unchanged:** contract 3's numbers are kept. The closed field and every verdict file are
+  untouched. MS1's verdict is untouched, and its re-verdict is an open question.
+- **Growth is still a MISS**, and it is written as a MISS. The coexisting band is met here for the
+  first time, and it is met on synthetic households only.
+- **Nothing here was measured** on real speech, on household audio, or on the owner's household. MS2b
+  is the first run that will be.
