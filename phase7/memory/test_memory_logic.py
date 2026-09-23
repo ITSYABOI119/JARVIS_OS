@@ -3529,6 +3529,10 @@ _SCHEMA_C3_46 = "93af3702870ea82242a13fe764261d2118c3610f96a72cd0e67ad92ae7a4f4f
 _PROMPT_C2_46 = "31d99140f87105ac8c93acd3d9cc0c2a0c95a6322f50d4026253e81b14550d37"
 _PROMPT_C3_46 = "5c0387e519900f031f614ae4f736c7dd338d1526e8d9b84e42b3246d66076ebf"
 _HH_C3_46 = "de02fd0e0f68d358c62d5c2d68c210f3e58c46db082bd4480bfdfac86b1b51f4"
+# Contract 3's full request body, MEASURED on `git archive ee41e8e` - the tree before contract 4
+# existed - and equal at HEAD. A pin taken from today's code would only freeze whatever is there;
+# this one says contract 3's body is the body the closed MS2a-1 run was measured with (MX2, MX7).
+_BODY_C3_46 = "8a0d2aec6f01b2dfadfca728711004101cbd4e431430dd3d3caec1ebec2d1fb2"
 
 
 def _sha46(s):
@@ -3582,6 +3586,9 @@ _p2_46, _p3_46, _p4_46 = system_prompt(), system_prompt("contract3"), system_pro
 # meaningful under a mutant that folds the instruction back inside STATED.
 _stated46 = _block46(_p4_46, "STATED:", "ENDED:", "OBJECT:")
 _ended46 = _block46(_p4_46, "ENDED:", "OBJECT:")
+# OBJECT is the LAST block of the contract-4 prompt, so it runs to the end of the text. Testing the
+# line against the whole prompt could not see it spliced into the ENDED slot instead (MX1).
+_object46 = _block46(_p4_46, "OBJECT:")
 _pid_in_ended46 = [p for p in PREDICATES if p in _ended46]
 _count_mismatch46 = [p for p in PREDICATES if _p4_46.count(p) != _p3_46.count(p)]
 check("T46b contract 4's ended instruction LEAVES the stated block and becomes its own with a "
@@ -3593,7 +3600,7 @@ check("T46b contract 4's ended instruction LEAVES the stated block and becomes i
       and "ENDED:" in _p4_46 and "stopped" in _ended46
       and "i stopped, i no longer read before bed" in _ended46
       and 'Keep the whole value, including its day or time: "washing on saturday", never "washing".'
-      in _p4_46
+      in _object46
       and not _pid_in_ended46 and not _count_mismatch46
       and _sha46(_p2_46) == _PROMPT_C2_46 and _sha46(_p3_46) == _PROMPT_C3_46,
       str({"pid_in_ended": _pid_in_ended46, "count_mismatch": _count_mismatch46,
@@ -3602,8 +3609,10 @@ check("T46b contract 4's ended instruction LEAVES the stated block and becomes i
 # --- T46c the span message's people header ----------------------------------------------
 _u4_46 = user_prompt("i work as a nurse", 2, 5, {1: "alex", 2: "tess"}, 77, "contract4")
 _u2_46 = user_prompt("i work as a nurse", 2, 5, {1: "alex", 2: "tess"}, 77)
+_u3_46 = user_prompt("i work as a nurse", 2, 5, {1: "alex", 2: "tess"}, 77, "contract3")
 _known4_46 = [x for x in _u4_46.splitlines() if x.startswith("known people")][0]
 _known2_46 = [x for x in _u2_46.splitlines() if x.startswith("known people")][0]
+_known3_46 = [x for x in _u3_46.splitlines() if x.startswith("known people")][0]
 _body2_46 = _jsha46(build_request("i work as a teacher", 1, 4, {1: "sam"}, 0,
                                   candidate_schema(), max_tokens=2048))
 _body3_46 = _jsha46(build_request("i work as a teacher", 1, 4, {1: "sam"}, 0,
@@ -3615,7 +3624,8 @@ _u4msg46 = _body4_46["messages"][1]["content"]
 check("T46c under contract 4 the people header is written in the form the SCORER resolves - the "
       "word cluster dropped from that join alone - while the speaker_cluster line and the span's "
       "carried context are unchanged, and the contract-2 and contract-3 bodies still hash to what "
-      "the closed field measured",
+      "the closed field measured - contract 3's pinned from the tree before contract 4 existed, its "
+      "own people header still carrying the word cluster",
       _known4_46 == "known people: 1 = alex, 2 = tess"
       and _known2_46 == "known people: cluster 1 = alex, cluster 2 = tess"
       and "cluster " not in _known4_46
@@ -3626,10 +3636,9 @@ check("T46c under contract 4 the people header is written in the form the SCORER
       and _body2_46 == _jsha46(build_request("i work as a teacher", 1, 4, {1: "sam"}, 0,
                                              candidate_schema(), max_tokens=2048,
                                              contract="contract2"))
-      and _body3_46 == _jsha46(build_request("i work as a teacher", 1, 4, {1: "sam"}, 0,
-                                             candidate_schema("contract3"), max_tokens=2048,
-                                             contract="contract3")),
-      repr(_known4_46))
+      and _body3_46 == _BODY_C3_46
+      and _known3_46 == "known people: cluster 1 = alex, cluster 2 = tess",
+      repr((_known4_46, _known3_46, _body3_46[:12])))
 
 # --- T46d derive reads cluster N, and only cluster N -------------------------------------
 _span46 = {"sid": 5, "cluster": 2}
@@ -3660,8 +3669,18 @@ check("T46d derive normalises a cluster-N reference on a subject ref and on a re
       and _d46("we")["subject"]["ref"] == "2" and _d46("i")["subject"]["ref"] == "2"
       and _d46("speaker")["subject"]["ref"] == "2"
       and _d46("tess")["subject"]["ref"] == "tess"
-      and _cref46("cluster 2") == "2" and _cref46("cluster two") is None,
-      str([_d46(x)["subject"]["ref"] for x in ("cluster 2", "cluster two", "cluster  2")]))
+      and _cref46("cluster 2") == "2" and _cref46("cluster two") is None
+      # `derive` lower-cases `about` before it calls cluster_ref, so the capitalised subject probes
+      # above cannot see a lost IGNORECASE (MX4); these two can.
+      and _cref46("Cluster 2") == "2"
+      and _d46("speaker", "Cluster 2", pid="person.relation_to", relation_id="spouse",
+               stated=True)["object"] == "2"
+      # a NON-edge object that is exactly the spelling keeps it: only a relation's far end is a
+      # person (MX3)
+      and _d46("speaker", "cluster 2", pid="person.lives_in")["object"] == "cluster 2",
+      str([_d46(x)["subject"]["ref"] for x in ("cluster 2", "cluster two", "cluster  2")]
+          + [_cref46("Cluster 2"),
+             _d46("speaker", "cluster 2", pid="person.lives_in")["object"]]))
 
 # --- T46e a derive change cannot move a recorded number ----------------------------------
 # A run JSON stores candidates that are ALREADY derived, so `score_household` re-reads them as-is.
@@ -3679,10 +3698,24 @@ check("T46d derive normalises a cluster-N reference on a subject ref and on a re
 # The exclusion is SELF-POLICING: exactly one file may be skipped, it must be that file, and the
 # rest of the population must still be compared. A silently widening skip is the failure this
 # guards against.
+#
+# THE POPULATION is every `ms1b_*.json` plus every `ms2a*_*.json` that is an EXTRACTION run - one
+# carrying a `model_key` and at least one household with predictions - so a later extraction run
+# (MS2a-3's `ms2a3_...`) is covered the moment it is written, and a store run or an ORACLE control
+# never is. The predicate applies to the ms2a side only: four ms1b arms extracted nothing and carry
+# empty prediction lists beside a recorded 0.0, and they are still compared.
+def _extracted46(pth):
+    with open(pth, encoding="utf-8") as fh:
+        d = _json.load(fh)
+    return bool(d.get("model_key")) and any(h.get("predictions")
+                                            for h in (d.get("households") or []))
+
+
+_pop46 = (sorted(_RES.glob("ms1b_*.json"))
+          + [p for p in sorted(_RES.glob("ms2a*_*.json")) if _extracted46(p)])
+_popn46 = [p.name for p in _pop46]
 _e46, _skip46, _cmp46 = [], [], 0
-for _p46 in sorted(_RES.glob("ms1b_*.json")) + [_RES / "ms2a_gemma-e4b-q8-q4tpl.json"]:
-    if not _p46.exists():
-        continue
+for _p46 in _pop46:
     with open(_p46, encoding="utf-8") as _fh46:
         _d46j = _json.load(_fh46)
     _hh46 = next((h for h in (_d46j.get("households") or []) if h.get("seed") == 1), None)
@@ -3700,26 +3733,43 @@ for _p46 in sorted(_RES.glob("ms1b_*.json")) + [_RES / "ms2a_gemma-e4b-q8-q4tpl.
     _cmp46 += 1
     if not close_to(_got46, _hh46["f1"], 1e-9):
         _e46.append((_p46.name, _hh46["f1"], _got46))
-check("T46e re-deriving nothing: every committed run that carries a contract label reproduces its "
+check("T46e re-deriving nothing: every committed run that carries a contract label - every ms1b "
+      "arm and every extracted ms2a run - reproduces its "
       "own recorded seed-1 f1 to 1e-9 through today's code - the proof that a derive change cannot "
       "move a number that was already derived when it was written. The unlabelled contract-0 run is "
       "the single exclusion and is named here, because its f1 predates MS1b's scorer change and "
       "would assert something this check is not for",
-      not _e46 and _skip46 == ["ms1b_llama_8b_contract0.json"] and _cmp46 >= 30,
-      str({"mismatches": _e46[:4], "skipped": _skip46, "compared": _cmp46}))
+      not _e46 and _skip46 == ["ms1b_llama_8b_contract0.json"] and _cmp46 >= 30
+      and "ms2a_gemma-e4b-q8-q4tpl.json" in _popn46
+      and not [n for n in _popn46 if n.startswith("ms2a") and "_control_" in n],
+      str({"mismatches": _e46[:4], "skipped": _skip46, "compared": _cmp46,
+           "ms2a": [n for n in _popn46 if n.startswith("ms2a")]}))
 
 # --- T46f the corpus does not move -------------------------------------------------------
 _h4_46 = _corpus.generate_household(1, 14, contract="contract4")
 _h3_46 = _corpus.generate_household(1, 14, contract="contract3")
 _h4_nokey46 = {k: v for k, v in _h4_46.items() if k != "contract"}
 _h3_nokey46 = {k: v for k, v in _h3_46.items() if k != "contract"}
-check("T46f contract 4's corpus IS contract 3's - identical but for the contract key, so a "
+# Section 6 runs seeds 1-10, so the equality is asserted over all ten rather than seed 1 alone (MX8).
+_fdiv46, _fgold46 = [], {"contract3": 0, "contract4": 0}
+for _s46f in range(1, 11):
+    _hh46f = {c: _corpus.generate_household(_s46f, 14, contract=c)
+              for c in ("contract3", "contract4")}
+    if (_jsha46({k: v for k, v in _hh46f["contract4"].items() if k != "contract"})
+            != _jsha46({k: v for k, v in _hh46f["contract3"].items() if k != "contract"})):
+        _fdiv46.append(_s46f)
+    for _c46f in _fgold46:
+        _fgold46[_c46f] += len(_hh46f[_c46f]["candidates"])
+check("T46f contract 4's corpus IS contract 3's - identical but for the contract key at every one "
+      "of seeds 1-10, 410 gold under both, so a "
       "contract-4 F1 compares directly with contract 3's on the same 171 spans and 41 gold",
       _jsha46(_h4_nokey46) == _jsha46(_h3_nokey46)
       and _h4_46["contract"] == "contract4" and _h3_46["contract"] == "contract3"
       and _jsha46(_h3_46) == _HH_C3_46
-      and len(_h4_46["spans"]) == 171 and len(_h4_46["candidates"]) == 41,
-      str((len(_h4_46["spans"]), len(_h4_46["candidates"]), _jsha46(_h4_nokey46)[:12])))
+      and len(_h4_46["spans"]) == 171 and len(_h4_46["candidates"]) == 41
+      and not _fdiv46 and _fgold46 == {"contract3": 410, "contract4": 410},
+      str((len(_h4_46["spans"]), len(_h4_46["candidates"]), _jsha46(_h4_nokey46)[:12],
+           _fdiv46, _fgold46)))
 
 # --- T46g the resolving map -------------------------------------------------------------
 _map46 = _crmap46({1: "alex", 2: "tess"})
@@ -3822,14 +3872,94 @@ with _tempfile.TemporaryDirectory() as _qd46:
          "--results-dir", _qd46],
         capture_output=True, text=True, encoding="utf-8", errors="replace")
     _wrote46 = sorted(_os.listdir(_qd46))
+with _tempfile.TemporaryDirectory() as _vd46:
+    _v46 = _subprocess.run(
+        [sys.executable, _MS1B46, "--verdict", "--build", "b10809", "--contract", "contract4",
+         "--results-dir", _vd46],
+        capture_output=True, text=True, encoding="utf-8", errors="replace")
+    _vwrote46 = sorted(_os.listdir(_vd46))
 check("T46i the CLI accepts contract 4 for a single run and reports contract 3's schema hash under "
       "it, while the closed field's own readings still refuse it - the queue exits 2 and writes "
       "nothing, so a contract-4 number can never enter the field's verdict",
       _dry46.returncode == 0
       and ("schema_sha256: " + _SCHEMA_C3_46) in _dry46.stdout
-      and _q46.returncode == 2 and not _wrote46,
-      str((_dry46.returncode, _q46.returncode, _wrote46,
+      and _q46.returncode == 2 and not _wrote46
+      and _v46.returncode == 2 and not _vwrote46,
+      str((_dry46.returncode, _q46.returncode, _wrote46, _v46.returncode, _vwrote46,
            _dry46.stdout[:80], _q46.stdout[:80])))
+
+# --- T46j the hearsay rule runs under contract 4 --------------------------------------------
+# T44m's exact scenario, under contract 3 AND contract 4: the owner stating a relation about the
+# partner is hearsay, and the design's amendment of 2026-09-23 says contract 4 inherits every
+# contract-3 rule outside the prompt and the derivation. T44m itself is untouched.
+_hs46 = {}
+_saved_ingest46 = store_mod.MemoryStore.ingest
+try:
+    def _ingest_rec46(self, cand):
+        if cand.get("predicate_id") == "person.relation_to":
+            _hs46.setdefault("seen", []).append(cand.get("source_kind"))
+        return _saved_ingest46(self, cand)
+
+    store_mod.MemoryStore.ingest = _ingest_rec46
+    with _tempfile.TemporaryDirectory() as _td46j:
+        _hh46j = _corpus.generate_household(1, 14, contract="contract3")
+        _pred46j = {"predicate_id": "person.relation_to",
+                    "subject": {"kind": "person", "ref": _hh46j["persons"][1]["name"]},
+                    "object": _hh46j["persons"][0]["name"], "object_norm": "spouse",
+                    "relation_id": "spouse", "source_kind": "stated_owner", "speaker_cluster": 1,
+                    "span_ids": [154], "polarity": None, "strength": None, "ended": False,
+                    "about_time": None}
+        for _c46j in ("contract3", "contract4"):
+            _p46j = _os.path.join(_td46j, "run_%s.json" % _c46j)
+            Path(_p46j).write_text(_json.dumps(
+                {"contract": _c46j, "days": 14,
+                 "households": [{"seed": 1, "n_spans": 171, "predictions": [_pred46j]}]}),
+                encoding="utf-8")
+            _hs46["seen"] = []
+            _out46j = _h44.run_household(1, 14, candidates_from=_p46j, contract=_c46j)
+            _hs46[_c46j] = (list(_hs46["seen"]), _out46j.get("hearsay_demoted"))
+finally:
+    store_mod.MemoryStore.ingest = _saved_ingest46
+check("T46j contract 4 runs the contract-3 hearsay rule: on T44m's own scenario the owner stating a "
+      "relation about the partner is ingested inferred with hearsay_demoted 1 under contract 3 AND "
+      "under contract 4 - the rule lives outside the prompt and the derivation, so contract 4 "
+      "inherits it",
+      _hs46.get("contract3", ([], None))[0] == ["inferred"] and _hs46["contract3"][1] == 1
+      and _hs46.get("contract4", ([], None))[0] == ["inferred"] and _hs46["contract4"][1] == 1,
+      str({k: _hs46.get(k) for k in ("contract3", "contract4")}))
+
+# --- T46k the strict digest reading runs under contract 4 ---------------------------------------
+# A contract-4 reference digest that states everything but its seed. Under the legacy rule a missing
+# field reads as the value every pre-MS2a digest was taken at, which is right for contract 2 and
+# wrong for a contract that must be explicit - so contract 4 refuses it exactly as contract 3 does,
+# contract 2 accepts it, and the same digest stating seed 1 is accepted, which is what makes the
+# refusal attributable to the omission.
+_ref46k = {"key": "gemma-e4b-q8-q4tpl", "contract": "contract4", "schema_sha256": _SCHEMA_C3_46,
+           "days": 14, "render_ok": True, "build_info": "b10809-5266f24da"}
+
+
+def _crd46(ref, contract, schema_hash):
+    try:
+        _bench.check_reference_digest(ref, "gemma-e4b-q8-q4tpl", "b10809", contract=contract,
+                                      schema_hash=schema_hash, seed=1, days=14)
+        return "accepted"
+    except _bench.RenderMismatch:
+        return "RenderMismatch"
+
+
+_k46 = {
+    "c4_no_seed": _crd46(_ref46k, "contract4", _SCHEMA_C3_46),
+    "c3_no_seed": _crd46(dict(_ref46k, contract="contract3"), "contract3", _SCHEMA_C3_46),
+    "c2_no_seed": _crd46(dict(_ref46k, contract="contract2", schema_sha256=_SCHEMA_C2_46),
+                         "contract2", _SCHEMA_C2_46),
+    "c4_seed_1": _crd46(dict(_ref46k, seed=1), "contract4", _SCHEMA_C3_46),
+}
+check("T46k contract 4 reads a render reference digest strictly: a contract-4 digest that omits its "
+      "seed is refused exactly as under contract 3, the same omission under contract 2 is read as "
+      "seed 1 by the legacy rule, and the contract-4 digest that states seed 1 is accepted",
+      _k46 == {"c4_no_seed": "RenderMismatch", "c3_no_seed": "RenderMismatch",
+               "c2_no_seed": "accepted", "c4_seed_1": "accepted"},
+      str(_k46))
 
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
 sys.exit(1 if FAILS else 0)

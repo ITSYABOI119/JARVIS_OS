@@ -425,7 +425,9 @@ def run_household(seed, days, predicate_hint=True, embedder=None, drop_stopwords
     `embedder` adds the vector lane. It is applied by `embed_pending` AFTER ingest, never during:
     the write path stays embedding-free so the p99 write band measures the store, not a GPU.
 
-    `contract` selects the corpus and, on the EXTRACTED path only, the contract-3 hearsay rule.
+    `contract` selects the corpus and, on the EXTRACTED path only, the hearsay rule - which runs
+    under contract 3 AND contract 4, because the design's amendment of 2026-09-23 says contract 4
+    changes only the prompt and the derivation and so inherits every other contract-3 rule.
 
     `people_layer` runs MS2a-2's evidence rules over the spine and resolves pronouns in extracted
     candidates. It is a SWITCH rather than a new default so that every store run taken before it -
@@ -521,11 +523,14 @@ def run_household(seed, days, predicate_hint=True, embedder=None, drop_stopwords
                     continue
             # THE HEARSAY CHECK RUNS HERE, when the candidate is first offered, and not inside
             # `extracted_candidates`: a later milestone resolves a pronoun ref to a cluster, and
-            # that resolution has to happen before this decision, not after it. Contract-3
-            # EXTRACTED runs only - the oracle path and every contract-2 store run are untouched,
-            # so every earlier number stays re-runnable.
-            if contract == "contract3" and candidates_from and not _people.stated_allowed(
-                    c, cluster_of_ref):
+            # that resolution has to happen before this decision, not after it. Contract-3 and
+            # contract-4 EXTRACTED runs only - the oracle path and every contract-2 store run are
+            # untouched, so every earlier number stays re-runnable. Contract 4 is here because the
+            # design's amendment of 2026-09-23 says it changes only the prompt and the derivation:
+            # keyed on contract 3 by equality, a contract-4 run would ingest as STATED what contract
+            # 3 demotes, and its bands would move for a harness reason rather than a prompt one.
+            if (contract in ("contract3", "contract4") and candidates_from
+                    and not _people.stated_allowed(c, cluster_of_ref)):
                 c = dict(c)
                 c["source_kind"] = "inferred"
                 c["stated"] = False

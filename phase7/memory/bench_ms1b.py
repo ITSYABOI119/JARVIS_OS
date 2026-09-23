@@ -464,11 +464,13 @@ def check_reference_digest(ref, must, require_build=None, contract=None, schema_
     seed or day count, which changes the prompts themselves.
 
     THE LEGACY RULE, and it is what keeps the committed contract-2 digests valid: under
-    `contract3` a digest MISSING any of the four new fields raises, because a contract-3 comparison
-    must be explicit about all of them; under `contract2` (or when no contract is asked for) a
-    missing field is read as the value every pre-MS2a digest was taken at.
+    `contract3` and `contract4` a digest MISSING any of the four new fields raises, because a
+    contract-3 or contract-4 comparison must be explicit about all of them; under `contract2` (or
+    when no contract is asked for) a missing field is read as the value every pre-MS2a digest was
+    taken at. Contract 4 is strict because the design's amendment of 2026-09-23 says it changes
+    only the prompt and the derivation, and so inherits every other contract-3 rule.
     """
-    strict = contract == "contract3"
+    strict = contract in ("contract3", "contract4")
     for name, want in (("contract", contract), ("schema_sha256", schema_hash),
                        ("seed", seed), ("days", days)):
         if want is None:
@@ -477,8 +479,8 @@ def check_reference_digest(ref, must, require_build=None, contract=None, schema_
         if got is None:
             if strict:
                 raise RenderMismatch(
-                    "the reference digest for %s records no %s - a contract-3 comparison must "
-                    "state it" % (must, name))
+                    "the reference digest for %s records no %s - a %s comparison must "
+                    "state it" % (must, name, contract))
             got = LEGACY_DIGEST[name]
         if got != want:
             raise RenderMismatch("the reference digest for %s records %s %r, not %r"
