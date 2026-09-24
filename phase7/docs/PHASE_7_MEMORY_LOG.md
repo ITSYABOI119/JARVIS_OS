@@ -3208,3 +3208,178 @@ count of `person.relation_to` candidates with a `stated*` `source_kind` over tho
 - **What contract 5 is.** It is contract 4 with two strings changed. It is not a prompt free of the corpus:
   its older examples are still drawn from the scored corpus, and contract 6 holds those out.
 - **Nothing here** was measured on real speech or on the owner's household.
+
+## MS2a-4 — 2026-09-25 — contract 6: every corpus-drawn example held out, and the two premiums
+
+Contract 6 is contract 5 with every remaining example the prompts drew from the scored corpus replaced through
+a six-row table:
+
+| held out | replaced with |
+|---|---|
+| `i work as a nurse` | `i play the cello` |
+| `sam is a teacher` | `wyatt is a locksmith` |
+| `my husband` / `love` | `my fiance` / `sweetheart` |
+| `she picked the kids up` | `he kissed me goodnight` |
+| `a nurse`, `Sydney` | `a beekeeper`, `Wellington` |
+| `we moved to X last week` | `we relocated to X in may` |
+
+It keeps the rule, not the answers. It is the only prompt none of whose worked examples is drawn from the
+scored corpus. Its words shared with the generator's own lists are `{the}`.
+
+### Contract 6 on the chosen arm, beside contracts 3, 4 and 5
+
+`ms2a4_c6_gemma-e4b-q8-q4tpl.json` is the same arm, build and thinking state. Its identity pin equals the
+contract-3 run's (`6a6eba0d…` / `55572b8d…`, `model_sha256_agree` true). The quantities below come from the
+same post-hoc script that reproduced contracts 3 and 4.
+
+| figure | contract 3 | contract 4 | contract 5 | contract 6 |
+|---|---|---|---|---|
+| validity | 1.0000 | 1.0000 | 1.0000 | 1.0000 (1710/1710) |
+| F1 / P / R on 410 gold | 0.8021 / 0.8736 / 0.7415 | 0.8399 / 0.9091 / 0.7805 | 0.8320 / 0.9006 / 0.7732 | **0.8272 / 0.8927 / 0.7707** |
+| matches / predictions | 304 / 348 | 320 / 352 | 317 / 352 | 316 / 354 |
+| stopped family | 4/10 | 10/10 | 10/10 | **9/10** (seed 3 `ended` false) |
+| washing whole | 0/6 | 6/6 | 6/6 | **6/6** |
+| untaught family | 0/10 | 3/10 | 1/10 | 3/10 (seeds 3, 4, 7) |
+| span-154 owner-directed edge | 10/10 | 7/10 | 8/10 | **3/10** |
+| the seven coexisting values found | 0/7 | 7/7 | 7/7 | 7/7 |
+| relation recall / stated / inferred | 0.2364 / 0.8667 / 0.0 | 0.2727 / 0.9667 / 0.0125 | 0.2727 / 1.0 / 0.0 | 0.2636 / 0.9667 / 0.0 |
+| preference polarity agreement | 0.45 | 0.35 | 0.40 | 0.45 |
+| subject refs: digit / `cluster N` / name / else | 104 / 7 / 138 / 99 | 172 / 0 / 76 / 104 | 175 / 0 / 74 / 103 | 175 / 0 / 71 / 108 |
+| finish reasons / finish_length | stop 1710 / 0 | stop 1710 / 0 | stop 1710 / 0 | stop 1710 / 0 |
+| tokens in / out | 1,373,964 / 378,026 | 1,509,054 / 416,329 | 1,512,474 / 415,767 | 1,521,024 / 459,852 |
+
+**The span-154 edge.** `she called me love` is the one scored span whose relation frame, the address term
+`love`, contract 6 held out (it now reads `sweetheart`). Under contract 6 the edge breaks down as:
+
+| seeds | what span 154 carries |
+|---|---|
+| 2, 5, 8 | owner-directed and stated |
+| 3 | owner-directed but `inferred` |
+| 6 | reversed (subject `mia`) |
+| 1, 4, 7, 9, 10 | no relation from that span |
+
+The rules still supply an owner→partner edge in every household, so the relationship band does not move. It
+surfaces later: day mean 11.0, against contract 5's 9.0.
+
+| predicate | gold | match c3 / c4 / c5 / c6 | predictions c3 / c4 / c5 / c6 | F1 c6 |
+|---|---|---|---|---|
+| household.routine | 20 | 14 / 20 / 20 / 20 | 37 / 40 / 39 / 41 | 0.6557 |
+| household.topic | 60 | 60 / 60 / 60 / 60 | 60 / 60 / 60 / 60 | 1.0 |
+| owner.prefers | 60 | 60 / 60 / 60 / 60 | 60 / 60 / 60 / 60 | 1.0 |
+| person.habit | 60 | 57 / 60 / 60 / 59 | 60 / 60 / 63 / 63 | 0.9593 |
+| person.lives_in | 30 | 30 / 30 / 30 / 30 | 33 / 33 / 34 / 35 | 0.9231 |
+| person.name | 20 | 8 / 10 / 7 / 8 | 8 / 10 / 8 / 9 | 0.5517 |
+| person.relation_to | 110 | 26 / 30 / 30 / 29 | 40 / 39 / 38 / 36 | 0.3973 |
+| person.trait | 20 | 20 / 20 / 20 / 20 | 20 / 20 / 20 / 20 | 1.0 |
+| person.works_as | 30 | 29 / 30 / 30 / 30 | 30 / 30 / 30 / 30 | 1.0 |
+
+### The two transfer rules, read against contract 6
+
+- **The ended fix TRANSFERS.** 9 of 10 households against a threshold of 8. In seed 3,
+  `i stopped, i no longer runs at dawn` came back with `ended` false.
+- **The object fix TRANSFERS.** 6 of 6 households against a threshold of 5.
+
+With every corpus-drawn example held out, both fixes still read at or above their thresholds.
+
+### The nine MS2 bands
+
+The ORACLE control under contract 6 equals contract 4's (14 differing leaves) and contract 5's (13), with
+0 moved outside `/contract` and the named timing leaves.
+
+| band | contract 6 | contract 5 | contract 4 | contract 3 |
+|---|---|---|---|---|
+| update_acc ≥ 0.85 | 0.875 MET | 0.9 MET | 0.925 MET | 0.925 MET |
+| coexist_recall ≥ 0.85 | **0.9333 MET** | 1.0 MET | 0.9667 MET | 0.6667 MISSED |
+| transfer_recall5 ≥ 0.60 | 0.9084 MET | 0.9084 MET | 0.9 MET | 0.9167 MET |
+| growth drop ≤ 5 pts | **7.5 MISSED** | 7.5 MISSED | 8.75 MISSED | 6.25 MISSED |
+| relationship surfaced ≥ 8/10 | 10/10 MET | 10/10 MET | 10/10 MET | 10/10 MET |
+| relation_precision_pairs ≥ 0.90 | 1.0 MET | 1.0 MET | 1.0 MET | 1.0 MET |
+| relations_wrong == 0 | 0 MET | 0 MET | 0 MET | 0 MET |
+| audit == 0 | 0 MET | 0 MET | 0 MET | 0 MET |
+| p99 ≤ 50 ms | 0.2132 ms MET | 0.2122 ms MET | 0.2133 ms MET | 0.219 ms MET |
+
+**Eight of nine MET.**
+
+**The fields beside the bands.**
+
+- `hearsay_demoted` is 3, all in seed 6. Two are the `]}` string defect on
+  `my husband casey and i decided`, this time as subject `]} ,` and as far end `]} , `. The third is a
+  reversed self-description on span 154: the owner speaking, with the partner `mia` as the subject.
+- `pending_at_end` 3; `pronouns_resolved` 8; `rank_upgrades` 3.
+- `people_rejects` 0; `edges_reopened` 0.
+- `spouse` surfaced in 0 of 10 households.
+- 10 fine pairs, 10 coarse and 0 wrong, over 20.
+
+**The growth drop MISSES at 7.5,** with contract 5's exact pattern:
+
+- The corpus's own 6.25 comes from seed 3's `kit … work`, seed 8's `lena … work` and three of seed 9's
+  partner questions.
+- On top of that, seed 9's `which city does ava live in` is lost.
+- Each lost question is answered correctly before the filler, and after it the appended `thanks, <partner>`
+  span, or a filler span, outranks the fact.
+- **The cause is the store's ranking under growth, against a span the corpus appends.**
+
+**Coexisting is MET at 0.9333, and both residuals are the extractor's.**
+
+- In seed 3, the stopped span came back with `ended` false.
+- In seed 6, the stopped habit was filed as a `household.routine` with `ended` true, so the `person.habit`
+  row stays current.
+
+**Update is MET at 0.875.** Seeds 3, 4, 6, 7 and 8 miss the partner's city by the `with us` mechanism:
+`she said she is just staying with us for now` is extracted as `person.lives_in` and supersedes the city by
+freshness.
+
+### Contract 4 → 5 → 6
+
+| measure | contract 4 | contract 5 | contract 6 |
+|---|---|---|---|
+| F1 on 410 gold | 0.8399 | 0.8320 | 0.8272 |
+| coexisting recall | 0.9667 | 1.0 | 0.9333 |
+| stopped family | 10/10 | 10/10 | 9/10 |
+| washing whole | 6/6 | 6/6 | 6/6 |
+| untaught family | 3/10 | 1/10 | 3/10 |
+| span-154 owner-directed edge | 7/10 | 8/10 | 3/10 |
+| update_acc | 0.925 MET | 0.9 MET | 0.875 MET |
+| coexist_recall | 0.9667 MET | 1.0 MET | 0.9333 MET |
+| transfer_recall5 | 0.9 MET | 0.9084 MET | 0.9084 MET |
+| growth drop | 8.75 MISSED | 7.5 MISSED | 7.5 MISSED |
+| relationship surfaced | 10/10 MET | 10/10 MET | 10/10 MET |
+| relation_precision_pairs | 1.0 MET | 1.0 MET | 1.0 MET |
+| relations_wrong | 0 MET | 0 MET | 0 MET |
+| audit | 0 MET | 0 MET | 0 MET |
+| p99 | 0.2133 MET | 0.2122 MET | 0.2132 MET |
+| bands met | 8 of 9 | 8 of 9 | 8 of 9 |
+
+### The two premiums
+
+A premium is written with its sign; a negative one reads as the examples having hurt.
+
+| premium | F1 | coexisting | stopped | washing |
+|---|---|---|---|---|
+| **contract 4 over 5** (MS2a-3's two examples) | **+0.0079** (0.839895 − 0.832021) | −0.0333 | 0 | 0 |
+| **contract 5 over 6** (the older examples) | **+0.0048** (0.832021 − 0.827225) | +0.0667 | +1 | 0 |
+
+**Both F1 premiums are inside this project's 0.01 band.** The older examples also carried a relation frame the
+scored corpus uses: span 154's owner-directed edge falls from 8 of 10 to 3 of 10 when `love` is held out.
+
+### The MS1 trigger
+
+The absolute difference between contract 5's F1 and contract 6's is 0.832021 − 0.827225 = **0.0048, under
+0.01 in either direction: NOT FIRED.** No re-examination of the MS1 ranking is scheduled.
+
+As the design says, that is not evidence the ranking is unaffected. This measures one arm, in one run, on
+contract 3's 410 gold rather than the field's 370, and a ranking is a set of differences between arms.
+
+### The current reading
+
+**Contract 6 is now the current reading of the MS2a synthetic bands: 8 of 9 met, the growth drop MISSED at
+7.5.** Contracts 4 and 5 are kept beside it.
+
+### Honest scope
+
+- **One run, one arm.** One greedy run per contract on the chosen arm; the arm's own run-to-run determinism is
+  not re-measured.
+- **Synthetic data.** Seeds 1–10, 14 days, on contract 3's corpus and gold.
+- **Contract 6 is not free of the corpus's words.** It keeps the rule, the pronouns, the function words and
+  the instruction words the corpus also uses.
+- **Nothing here** was measured on real speech or on the owner's household.
