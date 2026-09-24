@@ -2804,3 +2804,224 @@ change the next bullet names.]**
   first time, and it is met on synthetic households only.
 - **Nothing here was measured** on real speech, on household audio, or on the owner's household. MS2b
   is the first run that will be.
+
+## MS2a-3 corrections — 2026-09-24 — test text in the prompt, the headline's attribution, the span-154 regression, and the hearsay label
+
+The design correction is `17598bf`, and the T46f change is `33b70e0`. Every number below was
+re-measured from `git archive` of HEAD, on the CPU only.
+
+### What the verification confirmed
+
+The strategist verified MS2a-3 against `git archive 797f2ea`, not against its report, and its numbers
+reproduce:
+
+- the five commits and their CI;
+- the contract-2/3 invariant;
+- the suite at 326;
+- ten mutants;
+- the extraction re-scored from its stored predictions to the digit, with every per-predicate row;
+- the ORACLE control's 14-leaf diff and all nine bands.
+
+The comparison is controlled on every recorded knob. What follows corrects four things the MS2a-3
+section says that the data does not support. Each is an attribution or a label, never a number.
+
+### 1. Test text in the prompt
+
+Contract 4's two worked examples were taken from the scored corpus.
+
+- **The OBJECT example is itself gold.** `washing on saturday` is a gold value in seeds 2, 4, 6, 7, 8
+  and 9. `household.routine` gains exactly +1 match in each of those six households, and +0 in seeds
+  1, 3, 5 and 10.
+- **The ENDED example is the scored sentence frame.** `i stopped, i no longer read before bed` is the
+  frame the corpus scores. Seed 1's scored span is `i stopped, i no longer reads before bed`, one letter
+  away.
+- **Neither string is in the earlier prompts.** Both appear 0 times in contract 2's and contract 3's
+  system prompts, and once each in contract 4's.
+
+**The coexisting MET and `ended` 10/10 were measured on examples drawn from the scored corpus and do
+not show transfer.** Nothing measured here says whether the fix would carry to utterances it was not
+shown.
+
+**Why nothing caught it.** T46b was the guard written against a prompt nudge. It compares
+per-predicate-id counts only, and it held as written. A value-level overlap is invisible to it, and it
+asserts, correctly, that the `washing on saturday` line is present.
+
+### 2. The headline's attribution
+
+F1 = 2·matches / (predictions + gold), with gold = 410.
+
+| step | matches / predictions | F1 | what it is |
+|---|---|---|---|
+| contract 3, recorded | 304 / 348 | 0.8021 | — |
+| contract 3, `cluster N` resolved | 310 / 348 | 0.8179 | **+0.0158**, the scoring artefact already recorded at `4041767` (the rescore file's own entry, 0.817942) |
+| contract 4, less the six taught `washing on saturday` matches (a counterfactual, with predictions held at 352) | 314 / 352 | 0.8241 | **+0.0062**, the prompt's own untaught share |
+| contract 4 | 320 / 352 | 0.8399 | **+0.0158**, the taught string |
+
+**The third row is a counterfactual.** If the model would not have emitted those six predictions at
+all without the taught string, the row reads 314 / 346 = 0.8307, and the untaught share is +0.0128.
+Neither reading is certain. The uncontested fact carries the point on its own: **6 of the 16 new
+matches are the taught value.**
+
+Matches per predicate, reading contract 3 → contract 3 re-scored → contract 4:
+
+| predicate | contract 3 | contract 3 re-scored | contract 4 |
+|---|---|---|---|
+| `person.relation_to` | 26 | 30 | 30 |
+| `person.works_as` | 29 | 30 | 30 |
+| `person.habit` | 57 | 58 | 60 |
+| `household.routine` | 14 | 14 | 20 |
+| `person.name` | 8 | 8 | 10 |
+
+**The relation gain is entirely the artefact.** `person.relation_to`'s 26 → 30 is the artefact alone:
+contract 3 re-scored already reads 30. The untaught remainder is `person.habit` +2 and `person.name`
++2.
+
+**`cluster N` refs 0 holds by construction.** `derive` normalises the spelling before any prediction is
+stored; only `invalid_raw` keeps raw text. So every run after `ee0387c` reads 0, whatever the model
+wrote, and the header change's effect on the model cannot be observed from a stored run.
+
+**What can be observed is consistent with that change.** The subject refs, split into four buckets
+that partition each run's predictions (contract 3 → contract 4):
+
+| bucket | contract 3 | contract 4 |
+|---|---|---|
+| bare digit | 104 | 172 |
+| literal `cluster N` | 7 | 0 |
+| a household member's name | 138 | 76 |
+| anything else | 99 | 104 |
+| **total** | **348** | **352** |
+
+At most 7 of the bare-digit rise of +68 is `derive` rewriting contract 3's spelling.
+
+### 3. The span-154 regression
+
+**The MS2a-3 section misread one cause as two.** It says seeds 1 and 3 surface their owner→partner
+edge as inferred because their stated edge was demoted, and that seed 7 does so "for a different
+reason".
+
+**The demotion causes none of the three.** A gate-off A/B under contract 4 was run CPU-only, with
+`--embedder none` and `--latency-facts 1000`, and the gate forced open in a scratch driver:
+
+- `relationship_finest` is byte-identical in all ten households, and no MS2 band verdict moves;
+- exactly 8 deterministic leaves differ: `hearsay_demoted` top-level 3 → 0, and in seeds 1, 3 and 6;
+  seed 1's `relations_surfaced` 2 → 3 and `relation_precision` 0.5 → 0.3333; and
+  `aggregate.relation_precision` and `reported.relation_precision` 0.5167 → 0.5;
+- run twice with the gate off, only two `latency.*` leaves differ.
+
+**The one cause is span 154, `she called me love`,** where the owner states a relation to the partner.
+
+| contract | owner-directed owner-stated edge on span 154 | detail |
+|---|---|---|
+| contract 3 | **10 of 10** households | seed 8's was spelled `cluster 1` and was demoted as unresolvable, so **9** were usable |
+| contract 4 | **7 of 10** households | seed 1 comes back reversed (subject `tess`); seeds 3 and 7 carry no edge from that span at all |
+
+**This is a contract-4 relation regression that no band catches,** because the rules supply an edge
+in its place. It is one run per arm, in 3 of 10 households. The requests are greedy
+(`build_request`'s `temperature` 0.0 and `seed` 1, which the bench does not override).
+`ms1b_gemma-e4b-q8_run1.json`, the re-run of the Q8_0 arm, holds a prediction list identical to
+`ms1b_gemma-e4b-q8.json`'s, all 322 predictions. So a single-run difference here is not sampling
+noise.
+
+### 4. The hearsay label
+
+**Seed 1's demotion is not genuine hearsay.**
+
+- **What the candidate says.** The owner, speaking, is the relation's far end, and the partner is its
+  subject. That is a reversed-direction self-description, the same class as seed 3's.
+- **The positive control.** Seed 6 extracted the identical span text the right way round (subject `1`,
+  object `she`) and was allowed. Seed 6's one demotion is span 158, the `]}` row.
+
+**The hearsay arm of the rule has never been tested on this corpus.** Across every committed run that
+carries predictions (45 runs), **0 of the 1,412 stated relation candidates is a claim about two other
+people**, and the corpus cannot produce one, because every household holds exactly two named persons.
+What the rule's demotions actually do is refuse refs it cannot resolve and relations told the wrong
+way round. It demotes 354 of the 1,412:
+
+| why demoted | candidates |
+|---|---|
+| the subject ref does not resolve | 166 |
+| another named person as the subject | 157 |
+| the subject and the far end are the same other person | 31 |
+
+**The amendment of 2026-09-23 made the same error about `ms1b_gemma-e4b.json`.** Of its five
+demotable candidates:
+
+- seeds 3, 5 and 8 name another person as the subject with the speaker as the far end — reversed
+  self-descriptions, not hearsay;
+- seeds 1 and 10 are spelled `cluster 2`.
+
+### Two smaller corrections
+
+- **The coexisting ceiling.** Coexisting read 0.9667, above the pre-registered "about 0.88". Units: 30
+  items (3 per household) of 2 gold values each, so one value is 1/60 and one item is 1/30. The design
+  says only "about 0.88", so this is a reconstruction:
+  - take the design's own counterfactual (i), 0.8333;
+  - add the 7 of 60 coexisting values contract 3 never extracted;
+  - that gives **0.9500**.
+
+  The measured residual is one item of 30: seed 1's stopped span, which arrived with `source_kind`
+  `inferred`. The measured 0.9667 exceeds the reconstruction by 1/60, which the reconstruction does not
+  explain.
+- **The residual's mechanism.** It is R4 at `jarvis_memory/rules.py:57`, not source rank:
+  `honoured = bool(cand.get("ended")) and cand.get("source_kind") in STATED`, with
+  `STATED = ("stated_owner", "stated_other")`. R4 honours `ended` only on a STATED candidate, so an
+  inferred ending closes nothing, whatever the rank of the row it would close.
+
+### The sentences these supersede
+
+The original lines are left exactly as they are. Each sentence is quoted here, reflowed onto one line,
+and is **superseded by the corrections above**:
+
+- *the MS2a-3 hearsay table, seed 1's cell:* "genuine hearsay: the subject is not the speaker, which is
+  T44m's own shape" — superseded by the corrections above (§4: a reversed self-description).
+- "**Seeds 1 and 3 surface their owner→partner edge as `inferred` (0.8111), not stated**, because
+  their stated edge was demoted." — superseded by the corrections above (§3: the demotion causes none
+  of the three).
+- "**Seed 7 does the same for a different reason.**" — superseded by the corrections above (§3: it is
+  the same reason for all three seeds, span 154).
+- "Source rank (owner-stated > other-stated > inferred) does not let an inferred ending close a
+  stated-owner row, so `reads before bed` stays current." — superseded by the corrections above (R4
+  honours `ended` only on a stated candidate).
+
+### The T46f fix
+
+**The defect.** T46f indexed the `contract` key of both households directly. A corpus mutant that
+stops `generate_household` writing that key under contract 4 therefore killed the suite with a
+`KeyError`, naming no failing check and leaving T46g–T46k unevaluated.
+
+**The fix.** The two lookups now use `.get`, and the suite stays at 326 checks. The three rows below
+were measured from byte-copies. M20 is `generate_household`'s key-setting branch reading
+`("contract3",)`:
+
+| run | rc | tracebacks | failing set |
+|---|---|---|---|
+| control, with the change | 0 | 0 | none, 326/326 |
+| M20, with the change | 1 | 0 | `T46f` |
+| M20, without the change | 1 | 1 | none (`KeyError: 'contract'`) |
+
+### The polarity note
+
+The MS2a-3 section's `avoids` in 9 of 10 households against 3 of 10 is a net count. On
+`i have gone off spicy food entirely`, seed 9 improved and seven households regressed (seeds 1–6 and
+8), while seeds 7 and 10 read `avoids` under both contracts. The figure stays REPORTED, with no band.
+
+### The rulings
+
+- **Accepted:**
+  - the `_control_` exclusion in T46e, and T46k's fourth probe;
+  - the "fourth session" heading, and the object-value reading of "never extracted", with all three
+    readings stated.
+- **The `]}` defect is recorded, not guarded.** It is one call in 1,710, it corrupts two fields of one
+  candidate, and it appears in no other committed run of this model. A derive change would move
+  contract 4's recorded numbers.
+- **Seed 3's reversed self-description stays demoted.** It is the class contract 3 f was written for.
+- **The growth band stays MISSED, and its disposition is deferred.**
+  - The ORACLE control's 6.25 is the corpus's own.
+  - The move from 6.25 to 8.75 is one household: seed 9's post-filler reading is 0.5 in both runs.
+  - It is a store-ranking question for a later milestone.
+- **The stale `MS0: …` `scope` string** in the store-run JSONs is a known, pre-existing defect.
+
+### Open
+
+**Only a comparison whose worked examples are absent from the scored corpus can say whether contract
+4's fix transfers. No such comparison exists yet.**
