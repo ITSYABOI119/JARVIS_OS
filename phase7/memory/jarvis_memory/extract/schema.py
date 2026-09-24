@@ -28,7 +28,18 @@ POLARITIES = ("likes", "dislikes", "wants", "avoids")
 # hash is contract 3's hash. That is asserted rather than assumed (T46a), because a contract that
 # silently moved the schema would make its numbers a different measurement from contract 3's - and
 # comparing them directly on the same 410 gold is the whole point of contract 4.
-CONTRACTS = ("contract2", "contract3", "contract4")
+#
+# CONTRACTS 5 AND 6 (MS2a-4, 2026-09-24) are held-out re-measures: contract 5 is contract 4 with
+# MS2a-3's two worked examples replaced by strings absent from the scored corpus, and contract 6 is
+# contract 5 with every remaining corpus-drawn example replaced the same way. Neither moves the schema.
+CONTRACTS = ("contract2", "contract3", "contract4", "contract5", "contract6")
+
+# THE CONTRACT-3 FAMILY: the contracts that use contract 3's corpus, schema and store rules - its
+# appended spans and gold, `maxItems` 4, the hearsay gate and the strict digest reading. Named ONCE,
+# here, because MS2a-3 measured what a literal tuple at each site costs: two sites still keyed on
+# contract 3 by equality after contract 4 was added, and no band could see it. Every family site
+# reads this tuple; a new family member is one edit, and T47d/e/f loop over it.
+C3_FAMILY = ("contract3", "contract4", "contract5", "contract6")
 
 
 def candidate_schema(contract: str = "contract2") -> dict:
@@ -104,8 +115,8 @@ def candidate_schema(contract: str = "contract2") -> dict:
     PERSON = branch(person, {"about": {"type": "string"}}, ["about"])
 
     candidates = {"type": "array", "items": {"oneOf": [EDGE, PREFERENCE, HOUSEHOLD, PERSON]}}
-    # Contract 4 inherits this unchanged: it corrects the PROMPT, never the grammar.
-    if contract in ("contract3", "contract4"):
+    # Contracts 4, 5 and 6 inherit this unchanged: they change the PROMPT, never the grammar.
+    if contract in C3_FAMILY:
         candidates["maxItems"] = 4
 
     return {

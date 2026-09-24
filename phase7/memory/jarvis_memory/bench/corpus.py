@@ -25,6 +25,7 @@ Standard library only.
 """
 import random
 
+from ..extract.schema import C3_FAMILY
 from ..registry import normalise_object
 
 # ---------------------------------------------------------------- vocabularies
@@ -330,7 +331,9 @@ def generate_household(seed: int, days: int = 14, contract: str = "contract2") -
     # prompt and in `derive`, so the spans, the gold, the scored sets and the filler are identical
     # and a contract-4 F1 compares DIRECTLY with contract 3's 0.8021 on the same 410 gold. Only the
     # `contract` key differs, and T46f pins exactly that by hashing a copy with the key removed.
-    if contract in ("contract3", "contract4"):
+    # Contracts 5 and 6 (MS2a-4) are the same corpus again: the whole family is read from C3_FAMILY,
+    # and T47d pins every member against contract 3 at seeds 1-10.
+    if contract in C3_FAMILY:
         for day, cluster, sec, text, pid, subj_ref, obj, src, speaker in (
             (2, 1, 540, f"thanks, {partner_name}", "person.name", "partner",
              partner_name, "stated_owner", 1),
@@ -359,8 +362,8 @@ def generate_household(seed: int, days: int = 14, contract: str = "contract2") -
                  "coexist": coexist, "transfer": transfer,
                  "relations": relations, "growth_filler": filler},
     }
-    # The key is added ONLY under contracts 3 and 4: a contract-2 household must be the same dict it
-    # has always been, with no new key for a reader or a hash to trip over.
-    if contract in ("contract3", "contract4"):
+    # The key is added ONLY under the contract-3 family: a contract-2 household must be the same dict
+    # it has always been, with no new key for a reader or a hash to trip over.
+    if contract in C3_FAMILY:
         out["contract"] = contract
     return out

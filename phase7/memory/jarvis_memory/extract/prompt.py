@@ -17,7 +17,7 @@ Both are module constants plus formatting, so the test can pin them (T35b) witho
 """
 from ..registry import PREDICATES, RELATIONS
 from .derive import SPEAKER
-from .schema import CONTRACTS, POLARITIES
+from .schema import C3_FAMILY, CONTRACTS, POLARITIES
 
 _RULES = """\
 You extract structured candidates from ONE utterance of a household conversation.
@@ -119,6 +119,48 @@ _OBJECT_EXTRA_C4 = ('  Keep the whole value, including its day or time: "washing
                     'never "washing".\n')
 
 
+# CONTRACT 5 (MS2a-4, 2026-09-24): contract 4's two blocks with ONLY their example strings replaced.
+# MS2a-3's verification found both examples were drawn from the scored corpus - `washing on saturday`
+# is itself gold in six households, and the ENDED sentence is the corpus's own frame - so contract 4's
+# gains could not separate a prompt that fixes a behaviour from one that shows the model the scored
+# items. These replacements occur nowhere in the corpus text of seeds 1-20 (T47b): of their words only
+# `the` and `last` do. Contract 4 minus contract 5 is therefore the premium of those two examples.
+_ENDED_BLOCK_C5 = """
+ENDED:
+  ended is true when the utterance says a value STOPPED or no longer holds.
+  "we gave up the allotment last spring" says a value ended: emit the candidate for what stopped,
+  with ended true.
+  A value the speaker still holds is ended false. Getting this wrong is worse than omitting the
+  candidate: a value recorded as current when the speaker said it stopped never closes.
+"""
+_OBJECT_EXTRA_C5 = ('  Keep the whole value, including its day or time: '
+                    '"choir on wednesday evenings", never "choir".\n')
+
+# The contracts whose people header drops the word `cluster` - the form the scorer resolves. Contract 3
+# KEEPS it: its committed run was measured with that header, and T46c pins it.
+NO_CLUSTER_WORD = ("contract4", "contract5", "contract6")
+
+# CONTRACT 6 (MS2a-4, 2026-09-24): contract 5 with every REMAINING corpus-drawn example held out, built
+# from contract 5's text through this ONE static ordered table of (old, new, count). A read-only audit
+# found contract 2's prompt - under which the whole MS1 field ran - already printed three gold values
+# of the corpus, two scored utterances verbatim and two scored relation frames, and contract 3 added
+# the frame of its own update set. What stays is the RULE, not an answer: pronouns, function words,
+# and the instruction words the corpus also uses (STOPPED, no longer, still, `she` as a far end). Each
+# `old` must occur exactly `count` times or `system_prompt` raises - a silent partial replacement
+# would be a different contract measured under this one's name.
+_C6_SUBSTITUTIONS = (
+    ('("i work as a nurse")', '("i play the cello")', 1),
+    ('("sam is a teacher" -> "sam")', '("wyatt is a locksmith" -> "wyatt")', 1),
+    ('calling someone "my husband" or "love" states the relation',
+     'calling someone "my fiance" or "sweetheart" states the relation', 1),
+    ('"she picked the kids up" only suggests one',
+     '"he kissed me goodnight" only suggests one', 1),
+    ('e.g. "a nurse", "Sydney"', 'e.g. "a beekeeper", "Wellington"', 1),
+    ('("we moved to X last week" is the new value X',
+     '("we relocated to X in may" is the new value X', 2),
+)
+
+
 def system_prompt(contract: str = "contract2") -> str:
     """Every predicate, relation and polarity the registry knows, listed once each.
 
@@ -127,7 +169,16 @@ def system_prompt(contract: str = "contract2") -> str:
     """
     if contract not in CONTRACTS:
         raise ValueError("unknown contract %r - known: %s" % (contract, ", ".join(CONTRACTS)))
-    extra = _EXTRA_DESC_C3 if contract in ("contract3", "contract4") else _EXTRA_DESC
+    if contract == "contract6":
+        text = system_prompt("contract5")
+        for old, new, count in _C6_SUBSTITUTIONS:
+            found = text.count(old)
+            if found != count:
+                raise ValueError("contract 6: %r occurs %d time(s) in contract 5's prompt, the table "
+                                 "says %d - refusing a partial substitution" % (old, found, count))
+            text = text.replace(old, new)
+        return text
+    extra = _EXTRA_DESC_C3 if contract in C3_FAMILY else _EXTRA_DESC
     lines = []
     for pid in sorted(PREDICATES):
         p = PREDICATES[pid]
@@ -141,8 +192,10 @@ def system_prompt(contract: str = "contract2") -> str:
         "polarities": ", ".join(POLARITIES),
         "speaker": SPEAKER,
         "ended": (_ENDED_BLOCK_C4 if contract == "contract4"
+                  else _ENDED_BLOCK_C5 if contract == "contract5"
                   else _ENDED_LINE_C3 if contract == "contract3" else ""),
-        "object_extra": _OBJECT_EXTRA_C4 if contract == "contract4" else "",
+        "object_extra": (_OBJECT_EXTRA_C4 if contract == "contract4"
+                         else _OBJECT_EXTRA_C5 if contract == "contract5" else ""),
     }
 
 
@@ -164,7 +217,8 @@ def user_prompt(span_text, speaker_cluster, day, names, span_id, contract="contr
     # counted once as a miss and once as a false positive. Contract 4 drops the word from THIS join
     # only; the `speaker_cluster:` line and the SUBJECT block are untouched, and `derive` normalises
     # the old spelling under every contract so a model that says it anyway is still read correctly.
-    fmt = "%s = %s" if contract == "contract4" else "cluster %s = %s"
+    # Contracts 5 and 6 inherit it (NO_CLUSTER_WORD); contract 3 keeps the word.
+    fmt = "%s = %s" if contract in NO_CLUSTER_WORD else "cluster %s = %s"
     known = ", ".join(fmt % (c, n) for c, n in sorted((names or {}).items()))
     return ("span_id: %s\nday: %s\nspeaker_cluster: %s\nknown people: %s\n\nutterance: %s"
             % (span_id, day, speaker_cluster, known or "(none known)", span_text))

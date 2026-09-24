@@ -28,6 +28,7 @@ from jarvis_memory.extract.derive import (                  # noqa: E402
     cluster_ref as _cluster_ref, cluster_ref_map as _cluster_ref_map, derive,
 )
 from jarvis_memory.registry import EDGE_PREDICATE           # noqa: E402
+from jarvis_memory.extract.schema import C3_FAMILY, CONTRACTS               # noqa: E402
 from jarvis_memory.extract.schema import candidate_schema, schema_sha256   # noqa: E402
 from jarvis_memory.extract import gguf_template as _tpl                    # noqa: E402
 from jarvis_memory.extract.score import score_household, validity          # noqa: E402
@@ -468,9 +469,10 @@ def check_reference_digest(ref, must, require_build=None, contract=None, schema_
     contract-3 or contract-4 comparison must be explicit about all of them; under `contract2` (or
     when no contract is asked for) a missing field is read as the value every pre-MS2a digest was
     taken at. Contract 4 is strict because the design's amendment of 2026-09-23 says it changes
-    only the prompt and the derivation, and so inherits every other contract-3 rule.
+    only the prompt and the derivation, and so inherits every other contract-3 rule; contracts 5
+    and 6 (MS2a-4) inherit it the same way, so the whole family is read from `C3_FAMILY`.
     """
-    strict = contract in ("contract3", "contract4")
+    strict = contract in C3_FAMILY
     for name, want in (("contract", contract), ("schema_sha256", schema_hash),
                        ("seed", seed), ("days", days)):
         if want is None:
@@ -1290,8 +1292,9 @@ def main(argv=None):
     # a render, a smoke or a dry run. The field itself is closed and is never re-scored under
     # contract 3, which is why --queue and --verdict refuse it outright rather than silently
     # producing runs that would not be comparable to the eleven.
-    ap.add_argument("--contract", choices=("contract2", "contract3", "contract4"), default=CONTRACT,
-                    help="contract2 (the closed field, the default) or contract3 (MS2a)")
+    ap.add_argument("--contract", choices=CONTRACTS, default=CONTRACT,
+                    help="contract2 (the closed field, the default) or a contract of the "
+                         "contract-3 family (MS2a: contract3 to contract6)")
     a = ap.parse_args(argv)
 
     if a.contract != CONTRACT and (a.queue or a.verdict):

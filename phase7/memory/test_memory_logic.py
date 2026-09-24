@@ -2692,7 +2692,8 @@ check("T44a the contract-2 schema is byte-identical to the closed field's and co
       # this conjunct is false by design. The ONE authorised edit to an existing check - a
       # structural fact changing because a third contract now exists, never a threshold moved to
       # make something pass. Every other conjunct of T44a is byte-identical.
-      and _CONTRACTS44 == ("contract2", "contract3", "contract4")
+      # MS2a-4 authorised the same edit again: contracts 5 and 6 exist, so the tuple holds FIVE.
+      and _CONTRACTS44 == ("contract2", "contract3", "contract4", "contract5", "contract6")
       and _only3_44 == {"/properties/candidates/maxItems": 4}
       and not [k for k in _f2_44 if k not in _f3_44]
       and not [k for k in _f2_44 if k in _f3_44 and _f2_44[k] != _f3_44[k]]
@@ -3553,13 +3554,13 @@ def _raises46(fn, *a):
 
 # --- T46a the schema does not move -----------------------------------------------------
 check("T46a contract 4 changes NO schema - its object and hash are contract 3's, the closed "
-      "field's contract-2 hash is untouched, CONTRACTS holds the three names in order, and an "
+      "field's contract-2 hash is untouched, CONTRACTS holds the contract names in order, and an "
       "unknown contract still raises",
       _jsha46(candidate_schema("contract4")) == _jsha46(candidate_schema("contract3"))
       and _jsha46(candidate_schema("contract4")) == _SCHEMA_C3_46
       and schema_sha256("contract4") == _SCHEMA_C3_46
       and _jsha46(candidate_schema("contract2")) == _SCHEMA_C2_46
-      and _CONTRACTS44 == ("contract2", "contract3", "contract4")
+      and _CONTRACTS44 == ("contract2", "contract3", "contract4", "contract5", "contract6")
       and _raises46(candidate_schema, "contract9")
       and _raises46(schema_sha256, "contract9"),
       str((schema_sha256("contract4")[:12], _CONTRACTS44)))
@@ -3960,6 +3961,326 @@ check("T46k contract 4 reads a render reference digest strictly: a contract-4 di
       _k46 == {"c4_no_seed": "RenderMismatch", "c3_no_seed": "RenderMismatch",
                "c2_no_seed": "accepted", "c4_seed_1": "accepted"},
       str(_k46))
+
+# ================================================ T47 — MS2a-4, contract 5 and the contract-3 family
+# Contract 5 is contract 4 with MS2a-3's two worked examples held out; contract 6 (T48) holds out every
+# example the prompts drew from the scored corpus. Both use contract 3's corpus, gold, schema, store
+# rules and people header, named once as `C3_FAMILY`. Every argument below goes through `_safe47`: a
+# contract missing from CONTRACTS makes `system_prompt` / `candidate_schema` raise, and at module level
+# that kills the suite with NO failing check named - the `_block46` defect class. Here a raise becomes
+# None, and None FAILS the check that reads it.
+import ast as _ast47  # noqa: E402
+import re as _re47  # noqa: E402
+
+from jarvis_memory.extract import schema as _schema47  # noqa: E402
+
+
+def _safe47(fn, *a, **k):
+    try:
+        return fn(*a, **k)
+    except Exception:  # noqa: BLE001 - any raise must fail the check, never kill the module
+        return None
+
+
+def _words47(text):
+    """The 3+-letter `[a-z]` runs of a lower-cased text: the one word definition T47b, T48b, T48d use."""
+    return set(_re47.findall(r"[a-z]{3,}", (text or "").lower()))
+
+
+def _msg47(body, i):
+    try:
+        return body["messages"][i]["content"]
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+_C3F47 = getattr(_schema47, "C3_FAMILY", None)
+_C3F47_T = tuple(_C3F47) if isinstance(_C3F47, (tuple, list)) else ()
+# THE CORPUS TEXT, one definition: every household of seeds 1-20 under contracts 2 and 3, as JSON.
+_CTEXT47 = "\n".join(_json.dumps(_corpus.generate_household(_s47, 14, _c47), sort_keys=True).lower()
+                     for _c47 in ("contract2", "contract3") for _s47 in range(1, 21))
+_CWORDS47 = _words47(_CTEXT47)
+
+# --- T47a the family -------------------------------------------------------------------------
+_cs5_47 = _safe47(candidate_schema, "contract5")
+check("T47a CONTRACTS holds the five names in order and C3_FAMILY the four that use contract 3's "
+      "corpus, schema and store rules; contract 5's schema object and hash are contract 3's, pinned "
+      "by the literal, and an unknown contract still raises",
+      _CONTRACTS44 == ("contract2", "contract3", "contract4", "contract5", "contract6")
+      and _C3F47 == ("contract3", "contract4", "contract5", "contract6")
+      and _cs5_47 is not None
+      and _jsha46(_cs5_47) == _jsha46(candidate_schema("contract3")) == _SCHEMA_C3_46
+      and _safe47(schema_sha256, "contract5") == _SCHEMA_C3_46
+      and _raises46(candidate_schema, "contract9") and _raises46(schema_sha256, "contract9"),
+      str((_CONTRACTS44, _C3F47, _safe47(schema_sha256, "contract5"))))
+
+# --- T47b contract 5's prompt, and the held-out gate -------------------------------------------
+# THE RETYPE RULE: this expectation carries its OWN literals. Importing the example constants would
+# revert on both sides of the comparison at once, and a reverted example would escape (M21/M22).
+_p3_47 = _safe47(system_prompt, "contract3")
+_p4_47 = _safe47(system_prompt, "contract4")
+_p5_47 = _safe47(system_prompt, "contract5")
+_E4_47 = "i stopped, i no longer read before bed"
+_E5_47 = "we gave up the allotment last spring"
+_O4_47 = '"washing on saturday", never "washing"'
+_O5_47 = '"choir on wednesday evenings", never "choir"'
+_exp5_47 = (_p4_47 or "").replace(_E4_47, _E5_47).replace(_O4_47, _O5_47)
+_pidmis47 = ([p for p in PREDICATES if _p5_47.count(p) != _p3_47.count(p)]
+             if (_p5_47 and _p3_47) else ["<no prompt>"])
+_shE47 = _words47(_E5_47) & _CWORDS47
+_shO47 = _words47("choir on wednesday evenings") & _CWORDS47
+check("T47b contract 5's prompt is contract 4's with exactly the two MS2a-3 examples replaced, each "
+      "example once on its own side, every predicate id counted as in contract 3 - and the held-out "
+      "gate: neither contract-5 example occurs in the corpus text of seeds 1-20, the ENDED example "
+      "sharing only {the, last} with it and the OBJECT example nothing",
+      _p4_47 is not None and _p5_47 is not None
+      and _p5_47 == _exp5_47
+      and _p4_47.count(_E4_47) == 1 and _p4_47.count(_O4_47) == 1
+      and _p5_47.count(_E5_47) == 1 and _p5_47.count(_O5_47) == 1
+      and _E4_47 not in _p5_47 and _O4_47 not in _p5_47
+      and not _pidmis47
+      and _E5_47 not in _CTEXT47 and "choir on wednesday evenings" not in _CTEXT47
+      and _shE47 == {"the", "last"} and _shO47 == set(),
+      str({"pid_mismatch": _pidmis47, "ended_shared": sorted(_shE47), "object_shared": sorted(_shO47),
+           "equal_to_expected": _p5_47 == _exp5_47}))
+
+# --- T47c contract 5's people header ------------------------------------------------------------
+_u5_47 = _safe47(user_prompt, "i work as a nurse", 2, 5, {1: "alex", 2: "tess"}, 77, "contract5")
+_b5_47 = _safe47(build_request, "i work as a nurse", 2, 5, {1: "alex", 2: "tess"}, 77,
+                 _cs5_47 or {}, contract="contract5")
+check("T47c under contract 5 the people header is written in the form the scorer resolves, in "
+      "user_prompt and in the request body build_request sends",
+      "known people: 1 = alex, 2 = tess" in (_u5_47 or "")
+      and "known people: 1 = alex, 2 = tess" in _msg47(_b5_47, 1)
+      and "cluster 1 = alex" not in _msg47(_b5_47, 1),
+      repr((_u5_47 or "")[:90]))
+
+# --- T47d the family's corpus is contract 3's ---------------------------------------------------
+_h3cache47 = {s: _corpus.generate_household(s, 14, contract="contract3") for s in range(1, 11)}
+_d47 = {}
+for _c47 in _C3F47_T:
+    _ok47, _gold47 = True, 0
+    for _s47 in range(1, 11):
+        _h47 = _safe47(_corpus.generate_household, _s47, 14, contract=_c47)
+        if _h47 is None:
+            _ok47 = False
+            continue
+        if (_jsha46({k: v for k, v in _h47.items() if k != "contract"})
+                != _jsha46({k: v for k, v in _h3cache47[_s47].items() if k != "contract"})
+                or _h47.get("contract") != _c47):
+            _ok47 = False
+        _gold47 += len(_h47.get("candidates") or ())
+    _d47[_c47] = (_ok47, _gold47)
+check("T47d every contract of C3_FAMILY uses contract 3's corpus: at each of seeds 1-10 the household "
+      "equals contract 3's but for its own contract key, 410 gold each",
+      "contract5" in _d47 and "contract6" in _d47
+      and all(v == (True, 410) for v in _d47.values()),
+      str(_d47))
+
+# --- T47e the family runs the hearsay rule -------------------------------------------------------
+_e47 = {}
+_saved_ingest47 = store_mod.MemoryStore.ingest
+try:
+    def _ingest_rec47(self, cand):
+        if cand.get("predicate_id") == "person.relation_to":
+            _e47.setdefault("_seen", []).append(cand.get("source_kind"))
+        return _saved_ingest47(self, cand)
+
+    store_mod.MemoryStore.ingest = _ingest_rec47
+    with _tempfile.TemporaryDirectory() as _td47:
+        _hh47e = _corpus.generate_household(1, 14, contract="contract3")
+        _pred47e = {"predicate_id": "person.relation_to",
+                    "subject": {"kind": "person", "ref": _hh47e["persons"][1]["name"]},
+                    "object": _hh47e["persons"][0]["name"], "object_norm": "spouse",
+                    "relation_id": "spouse", "source_kind": "stated_owner", "speaker_cluster": 1,
+                    "span_ids": [154], "polarity": None, "strength": None, "ended": False,
+                    "about_time": None}
+        for _c47 in _C3F47_T:
+            _p47e = _os.path.join(_td47, "run_%s.json" % _c47)
+            Path(_p47e).write_text(_json.dumps(
+                {"contract": _c47, "days": 14,
+                 "households": [{"seed": 1, "n_spans": 171, "predictions": [_pred47e]}]}),
+                encoding="utf-8")
+            _e47["_seen"] = []
+            _o47e = _safe47(_h44.run_household, 1, 14, candidates_from=_p47e, contract=_c47)
+            _e47[_c47] = (list(_e47["_seen"]), (_o47e or {}).get("hearsay_demoted"))
+finally:
+    store_mod.MemoryStore.ingest = _saved_ingest47
+_e47.pop("_seen", None)
+check("T47e every contract of C3_FAMILY runs the hearsay rule: on T44m's scenario the owner stating "
+      "a relation about the partner is ingested inferred with hearsay_demoted 1 under each",
+      "contract5" in _e47 and "contract6" in _e47
+      and all(v == (["inferred"], 1) for v in _e47.values()),
+      str(_e47))
+
+# --- T47f the family reads a render digest strictly ---------------------------------------------
+_f47 = {}
+for _c47 in _C3F47_T:
+    _ref47 = dict(_ref46k, contract=_c47)
+    _f47[_c47] = (_crd46(_ref47, _c47, _SCHEMA_C3_46),
+                  _crd46(dict(_ref47, seed=1), _c47, _SCHEMA_C3_46))
+check("T47f every contract of C3_FAMILY refuses a render reference digest that omits its seed and "
+      "accepts the same digest stating seed 1",
+      "contract5" in _f47 and "contract6" in _f47
+      and all(v == ("RenderMismatch", "accepted") for v in _f47.values()),
+      str(_f47))
+
+# --- T47g the CLI accepts contracts 5 and 6, and the field's readings refuse them ---------------
+# `invalid choice` is checked because argparse ALSO exits 2 on an unknown contract: an exit code of 2
+# alone cannot tell a refusal by the field from a contract the CLI does not know.
+_g47 = {}
+for _c47 in ("contract5", "contract6"):
+    _dry47 = _subprocess.run(
+        [sys.executable, _MS1B46, "--dry-run", "--households", "1", "--contract", _c47],
+        capture_output=True, text=True, encoding="utf-8", errors="replace")
+    with _tempfile.TemporaryDirectory() as _qd47:
+        _q47 = _subprocess.run(
+            [sys.executable, _MS1B46, "--queue", "gemma-e4b", "--contract", _c47,
+             "--results-dir", _qd47],
+            capture_output=True, text=True, encoding="utf-8", errors="replace")
+        _qw47 = sorted(_os.listdir(_qd47))
+    with _tempfile.TemporaryDirectory() as _vd47:
+        _v47 = _subprocess.run(
+            [sys.executable, _MS1B46, "--verdict", "--build", "b10809", "--contract", _c47,
+             "--results-dir", _vd47],
+            capture_output=True, text=True, encoding="utf-8", errors="replace")
+        _vw47 = sorted(_os.listdir(_vd47))
+    _g47[_c47] = {"dry_rc": _dry47.returncode,
+                  "dry_hash": ("schema_sha256: " + _SCHEMA_C3_46) in _dry47.stdout,
+                  "queue_rc": _q47.returncode, "queue_wrote": _qw47,
+                  "queue_invalid": "invalid choice" in _q47.stderr,
+                  "verdict_rc": _v47.returncode, "verdict_wrote": _vw47,
+                  "verdict_invalid": "invalid choice" in _v47.stderr}
+check("T47g the CLI accepts contracts 5 and 6 for a single run and reports contract 3's schema hash "
+      "under each, while the queue and the verdict still refuse both - exit 2, nothing written, and "
+      "no argparse invalid-choice",
+      all(g["dry_rc"] == 0 and g["dry_hash"] and g["queue_rc"] == 2 and not g["queue_wrote"]
+          and not g["queue_invalid"] and g["verdict_rc"] == 2 and not g["verdict_wrote"]
+          and not g["verdict_invalid"] for g in _g47.values())
+      and sorted(_g47) == ["contract5", "contract6"],
+      str(_g47))
+
+# ================================================ T48 — MS2a-4, contract 6
+# --- T48a contract 6's prompt ---------------------------------------------------------------------
+# THE RETYPE RULE again: the substitution table is retyped here, never imported.
+_p6_48 = _safe47(system_prompt, "contract6")
+_TABLE48 = (
+    ('("i work as a nurse")', '("i play the cello")', 1),
+    ('("sam is a teacher" -> "sam")', '("wyatt is a locksmith" -> "wyatt")', 1),
+    ('calling someone "my husband" or "love" states the relation',
+     'calling someone "my fiance" or "sweetheart" states the relation', 1),
+    ('"she picked the kids up" only suggests one', '"he kissed me goodnight" only suggests one', 1),
+    ('e.g. "a nurse", "Sydney"', 'e.g. "a beekeeper", "Wellington"', 1),
+    ('("we moved to X last week" is the new value X', '("we relocated to X in may" is the new value X', 2),
+)
+_exp6_48 = _p5_47 or ""
+_cnt48 = []
+for _o48, _n48, _k48 in _TABLE48:
+    _cnt48.append(_exp6_48.count(_o48) == _k48)
+    _exp6_48 = _exp6_48.replace(_o48, _n48)
+_PIN48 = {"contract2": "31d99140f87105ac8c93acd3d9cc0c2a0c95a6322f50d4026253e81b14550d37",
+          "contract3": "5c0387e519900f031f614ae4f736c7dd338d1526e8d9b84e42b3246d66076ebf",
+          "contract4": "55a00e6572a018a967bdb41e01fc70c433074d4e3ee03ee359b9854291a4fdeb",
+          "contract5": "7175a9a842cc3d26330a9d242c0fd6f89b6c65aa1df7b35a3440dc7ddfd209d5",
+          "contract6": "15413995ed21c89bacd35f88ca8d90d8b98e24b7dd5f27766b33ffa35774cfeb"}
+_prompts48 = {c: _safe47(system_prompt, c) for c in _PIN48}
+_ph48 = {c: (_sha46(p) if p is not None else None) for c, p in _prompts48.items()}
+_cs6_48 = _safe47(candidate_schema, "contract6")
+check("T48a contract 6's prompt is contract 5's with the substitution table applied - each old string "
+      "at its stated count, none left afterwards, every predicate id counted as in contract 3 - and "
+      "the five prompt hashes and contract 6's schema object and hash are pinned",
+      _p5_47 is not None and _p6_48 is not None
+      and all(_cnt48) and _p6_48 == _exp6_48
+      and not [o for o, _, _ in _TABLE48 if o in _p6_48]
+      and not [p for p in PREDICATES if _p6_48.count(p) != (_p3_47 or "").count(p)]
+      and _ph48 == _PIN48
+      and _cs6_48 is not None and _jsha46(_cs6_48) == _SCHEMA_C3_46
+      and _safe47(schema_sha256, "contract6") == _SCHEMA_C3_46,
+      str({"counts": _cnt48, "hashes": {c: (h or "None")[:12] for c, h in _ph48.items()},
+           "schema6": _safe47(schema_sha256, "contract6")}))
+
+# --- T48b the VOCABULARY GATE -----------------------------------------------------------------------
+# The vocabulary is the words of the UPPER-CASE list/tuple constants corpus.py ASSIGNS ITSELF - read
+# from its source, so a name it imports (C3_FAMILY) never enters.
+_src48 = open(_corpus.__file__, encoding="utf-8").read()
+_defined48 = set()
+for _node48 in _ast47.parse(_src48).body:
+    _targets48 = (_node48.targets if isinstance(_node48, _ast47.Assign)
+                  else [_node48.target] if isinstance(_node48, _ast47.AnnAssign) else [])
+    for _t48 in _targets48:
+        if isinstance(_t48, _ast47.Name) and _t48.id.isupper():
+            _defined48.add(_t48.id)
+_consts48 = sorted(n for n in _defined48 if isinstance(getattr(_corpus, n, None), (list, tuple)))
+
+
+def _flat48(v):
+    if isinstance(v, str):
+        yield v
+    elif isinstance(v, (list, tuple, set)):
+        for x in v:
+            yield from _flat48(x)
+
+
+_vocab48 = set()
+for _n48 in _consts48:
+    for _str48 in _flat48(getattr(_corpus, _n48)):
+        _vocab48 |= _words47(_str48)
+_shared48 = {c: (_words47(p) & _vocab48 if p is not None else None) for c, p in _prompts48.items()}
+_FW48 = {"the", "and", "for", "with", "you", "are", "not", "but", "all", "any", "can", "has", "have",
+         "its", "one", "our", "out", "she", "her", "his", "him", "who", "was", "were", "what", "when",
+         "which", "will", "that", "this", "from", "they", "them", "then", "than", "into", "only",
+         "also", "each", "very", "just", "more", "most", "some", "such", "over", "own", "same", "too",
+         "been", "both", "did", "does", "had", "how", "nor", "off", "once", "other", "should",
+         "there", "these", "those", "under", "until", "why", "would", "your"}
+check("T48b the vocabulary gate: of the words the corpus generator's own lists define, contract 6's "
+      "prompt shares only a function word, {the} - a subset of contract 5's and of contract 2's "
+      "function words - over a vocabulary of at least 100 words that does carry the older examples' "
+      "gold words",
+      len(_vocab48) >= 100
+      and set(_consts48) == {"NAMES", "PARTNER_NAMES", "CITIES", "JOBS", "HABITS", "ROUTINES",
+                             "TOPICS", "PREF_TOPICS", "FILLER_NAMES", "FILLER_PLACES",
+                             "FILLER_JOBS"}
+      and _shared48.get("contract5") is not None
+      and {"nurse", "sam", "sydney", "teacher", "work"} <= _shared48["contract5"]
+      and _shared48.get("contract6") == {"the"}
+      and _shared48["contract6"] <= _shared48["contract5"]
+      and _shared48.get("contract2") is not None
+      and _shared48["contract6"] <= (_shared48["contract2"] & _FW48),
+      str({"vocab": len(_vocab48), "constants": _consts48,
+           "shared": {c: (sorted(v) if v is not None else None) for c, v in _shared48.items()}}))
+
+# --- T48c contract 6's header and request body ---------------------------------------------------
+_u6_48 = _safe47(user_prompt, "i work as a nurse", 2, 5, {1: "alex", 2: "tess"}, 77, "contract6")
+_b6_48 = _safe47(build_request, "i work as a nurse", 2, 5, {1: "alex", 2: "tess"}, 77,
+                 _cs6_48 or {}, contract="contract6")
+_u3_48 = _safe47(user_prompt, "i work as a nurse", 2, 5, {1: "alex", 2: "tess"}, 77, "contract3")
+check("T48c under contract 6 user_prompt and the request build_request sends both carry the "
+      "resolvable header and the body's system message is contract 6's prompt, not contract 5's; "
+      "contract 3 keeps the word cluster",
+      "known people: 1 = alex, 2 = tess" in (_u6_48 or "")
+      and "known people: 1 = alex, 2 = tess" in _msg47(_b6_48, 1)
+      and _p6_48 is not None and _msg47(_b6_48, 0) == _p6_48
+      and _msg47(_b6_48, 0) != (_p5_47 or "")
+      and "known people: cluster 1 = alex, cluster 2 = tess" in (_u3_48 or ""),
+      repr(((_u6_48 or "")[:80], _msg47(_b6_48, 1)[:80], (_u3_48 or "")[:80])))
+
+# --- T48d every held-out example is in contract 6 and nowhere in the corpus ----------------------
+_SHEXP48 = {"i play the cello": {"the"}, "wyatt is a locksmith": set(), "my fiance": set(),
+            "sweetheart": set(), "he kissed me goodnight": set(), "a beekeeper": set(),
+            "wellington": set(), "we relocated to x in may": set(),
+            "we gave up the allotment last spring": {"the", "last"},
+            "choir on wednesday evenings": set()}
+_d48 = {s: (s in (_p6_48 or "").lower(), s in _CTEXT47, _words47(s) & _CWORDS47) for s in _SHEXP48}
+check("T48d all ten held-out example strings are in contract 6's prompt and occur nowhere in the "
+      "corpus text of seeds 1-20, sharing only the pinned words with it, over a corpus vocabulary "
+      "that does carry the older examples' words",
+      _p6_48 is not None
+      and all(v[0] and not v[1] for v in _d48.values())
+      and {s: v[2] for s, v in _d48.items()} == _SHEXP48
+      and len(_CWORDS47) >= 300
+      and {"nurse", "sam", "sydney", "teacher", "work", "washing", "saturday"} <= _CWORDS47,
+      str({s: (v[0], v[1], sorted(v[2])) for s, v in _d48.items() if not (v[0] and not v[1])
+           or v[2] != _SHEXP48[s]}))
 
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
 sys.exit(1 if FAILS else 0)

@@ -24,6 +24,7 @@ import time
 
 from .. import people as _people
 from ..confidence import SURFACE_THRESHOLD
+from ..extract.schema import C3_FAMILY
 from ..registry import EDGE_PREDICATE as _EDGE_PREDICATE
 from ..store import MemoryStore
 from . import corpus as _corpus
@@ -426,8 +427,9 @@ def run_household(seed, days, predicate_hint=True, embedder=None, drop_stopwords
     the write path stays embedding-free so the p99 write band measures the store, not a GPU.
 
     `contract` selects the corpus and, on the EXTRACTED path only, the hearsay rule - which runs
-    under contract 3 AND contract 4, because the design's amendment of 2026-09-23 says contract 4
-    changes only the prompt and the derivation and so inherits every other contract-3 rule.
+    under every contract of the contract-3 family (`C3_FAMILY`: contracts 3 to 6), because the
+    design's amendments of 2026-09-23 and 2026-09-24 say contracts 4, 5 and 6 change only the
+    prompt (and contract 4 the derivation) and so inherit every other contract-3 rule.
 
     `people_layer` runs MS2a-2's evidence rules over the spine and resolves pronouns in extracted
     candidates. It is a SWITCH rather than a new default so that every store run taken before it -
@@ -529,7 +531,8 @@ def run_household(seed, days, predicate_hint=True, embedder=None, drop_stopwords
             # design's amendment of 2026-09-23 says it changes only the prompt and the derivation:
             # keyed on contract 3 by equality, a contract-4 run would ingest as STATED what contract
             # 3 demotes, and its bands would move for a harness reason rather than a prompt one.
-            if (contract in ("contract3", "contract4") and candidates_from
+            # MS2a-4: the whole family by name (C3_FAMILY), never a literal tuple.
+            if (contract in C3_FAMILY and candidates_from
                     and not _people.stated_allowed(c, cluster_of_ref)):
                 c = dict(c)
                 c["source_kind"] = "inferred"
