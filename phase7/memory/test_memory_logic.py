@@ -3764,7 +3764,7 @@ check("T46f contract 4's corpus IS contract 3's - identical but for the contract
       "of seeds 1-10, 410 gold under both, so a "
       "contract-4 F1 compares directly with contract 3's on the same 171 spans and 41 gold",
       _jsha46(_h4_nokey46) == _jsha46(_h3_nokey46)
-      and _h4_46["contract"] == "contract4" and _h3_46["contract"] == "contract3"
+      and _h4_46.get("contract") == "contract4" and _h3_46.get("contract") == "contract3"
       and _jsha46(_h3_46) == _HH_C3_46
       and len(_h4_46["spans"]) == 171 and len(_h4_46["candidates"]) == 41
       and not _fdiv46 and _fgold46 == {"contract3": 410, "contract4": 410},
