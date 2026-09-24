@@ -3025,3 +3025,186 @@ The MS2a-3 section's `avoids` in 9 of 10 households against 3 of 10 is a net cou
 
 **Only a comparison whose worked examples are absent from the scored corpus can say whether contract
 4's fix transfers. No such comparison exists yet.**
+
+## MS2a-4 — 2026-09-25 — contract 5: MS2a-3's two worked examples held out
+
+Commits `1eeb801` (the design's pre-registration, committed as-is), `94781e5` (contracts 5 and 6, test-first)
+and this one (contract 5 measured). Contract 6 follows in the next section.
+
+### Why this exists, and the audit's reach
+
+MS2a-3's verification found that contract 4's two worked examples were drawn from the scored corpus. The
+design's paragraph "MS2a-4 pre-registered 2026-09-24" (§4.2) records the follow-up audit: the overlap is not
+contract 4's alone.
+
+- **Contract 2's prompt**, under which the whole MS1 field ran, already prints three gold values of the corpus
+  (`a nurse`, `Sydney`, `a teacher`), two of its scored utterances verbatim (`i work as a nurse`,
+  `she picked the kids up`) and two of its scored relation frames (`my husband`, `love`).
+- **Contract 3** adds the frame of its own update set: `we moved to X last week`.
+
+That establishes reach, not effect. Two nested contracts measure the effect. Each is a copy of the one before
+with example strings changed and nothing else:
+
+- **Contract 5** holds out MS2a-3's two examples.
+- **Contract 6** also holds out every older corpus-drawn example.
+
+T48b's vocabulary gate measures the reach directly. It takes the 3+-letter words of each prompt that also
+appear in the word lists the corpus generator defines itself (11 constants, 135 words):
+
+| contract | prompt words shared with the generator's lists |
+|---|---|
+| 2, 3, 5 | `nurse`, `sam`, `sydney`, `teacher`, `the`, `work` |
+| 4 | those, plus `washing`, `saturday`, `before`, `bed` |
+| **6** | **`the`** |
+
+### Commits 0 and 1
+
+- **`C3_FAMILY`.** `schema.py` names the contract-3 family once, as `C3_FAMILY` (contracts 3 to 6). Every
+  family site now reads it: both corpus branches, the prompt's `_EXTRA_DESC_C3`, the hearsay gate and the
+  strict digest reading. MS2a-3 had measured what a literal tuple at each site costs.
+- **Contract 5's prompt** is contract 4's two blocks with only the example strings changed:
+  `we gave up the allotment last spring` for the ENDED example, and `choir on wednesday evenings`, never
+  `choir`, for the OBJECT example.
+- **Contract 6's prompt** is built from contract 5's through one static table of six (old, new, count) rows.
+  Each old string is asserted at its count, or the call raises.
+- **The people header.** `NO_CLUSTER_WORD` covers contracts 4 to 6. Contract 3 keeps the word `cluster`.
+- **Nothing else moved.** The schema, corpus, people header, store rules and derivation are contract 4's.
+
+| check | result |
+|---|---|
+| prompt sha256, contract 5 | `7175a9a8…`, equal to the pre-registered pin |
+| prompt sha256, contract 6 | `15413995…`, equal to the pre-registered pin |
+| contracts 2, 3 and 4 against `git archive af00509` | byte-identical on 1,563 keys (3 schemas, 3 prompts, 30 households, 1,527 request bodies built through the bench's own helpers) |
+| the suite | 326 → 337 checks (the runner reads 336) |
+| test-first | 13 failures and 0 tracebacks before the code |
+| mutants | all 13 (M21–M33) EXACT against their pre-registered failing sets; M33, the table-count mutant, fails its checks with 0 tracebacks |
+
+### The renders
+
+Both contracts rendered household 1's 171 prompts on `b10809-5266f24da`:
+
+- **Contract 5:** `render_ok`, 171 of 171 identical between `gemma-e4b-v040` and `gemma-e4b-q8-q4tpl`.
+- **Contract 6:** the same.
+- **Against the contract before:** contract 5's prompts are 0 of 171 identical to contract 4's, and contract
+  6's 0 of 171 to contract 5's, as expected when the system prompt changes.
+- **The 17 earlier digests are unchanged.**
+
+### Contract 5 on the chosen arm, beside contracts 3 and 4
+
+`ms2a4_c5_gemma-e4b-q8-q4tpl.json` is the same arm (`gemma-e4b-q8-q4tpl`), build and thinking state as
+before. Its identity pin equals the contract-3 run's (`6a6eba0d…` / `55572b8d…`, `model_sha256_agree` true).
+The post-hoc script reproduced every contract-3 and contract-4 baseline below before the contract-5 value was
+read.
+
+| figure | contract 3 | contract 4 | contract 5 |
+|---|---|---|---|
+| validity | 1.0000 (1710/1710) | 1.0000 (1710/1710) | 1.0000 (1710/1710) |
+| F1 / P / R on 410 gold | 0.8021 / 0.8736 / 0.7415 | 0.8399 / 0.9091 / 0.7805 | **0.8320 / 0.9006 / 0.7732** |
+| matches / predictions | 304 / 348 | 320 / 352 | 317 / 352 |
+| **stopped family** (`ended` true on a prediction citing `i stopped, i no longer …`) | 4/10 | 10/10 | **10/10** |
+| **washing whole** (seeds 2, 4, 6, 7, 8, 9) | 0/6 | 6/6 | **6/6** |
+| untaught family (`i no longer enjoy …`) | 0/10 | 3/10 | 1/10 (seed 5) |
+| span-154 owner-directed edge | 10/10 | 7/10 | 8/10 (seeds 1 and 5 cite the span not at all) |
+| the seven coexisting values contract 3 never extracted, found | 0/7 | 7/7 | 7/7 |
+| relation recall / stated / inferred | 0.2364 / 0.8667 / 0.0 | 0.2727 / 0.9667 / 0.0125 | 0.2727 / **1.0000** / 0.0 |
+| preference polarity agreement | 0.45 | 0.35 | 0.40 |
+| subject refs: digit / `cluster N` / name / else | 104 / 7 / 138 / 99 | 172 / 0 / 76 / 104 | 175 / 0 / 74 / 103 |
+| finish reasons / finish_length | stop 1710 / 0 | stop 1710 / 0 | stop 1710 / 0 |
+| tokens in / out | 1,373,964 / 378,026 | 1,509,054 / 416,329 | 1,512,474 / 415,767 |
+| seconds (the run's own line) | — | 7697.5 | 7604.9 |
+
+| predicate | gold | match c3 / c4 / c5 | predictions c3 / c4 / c5 | F1 c3 / c4 / c5 |
+|---|---|---|---|---|
+| household.routine | 20 | 14 / 20 / 20 | 37 / 40 / 39 | 0.4912 / 0.6667 / 0.6780 |
+| household.topic | 60 | 60 / 60 / 60 | 60 / 60 / 60 | 1.0 / 1.0 / 1.0 |
+| owner.prefers | 60 | 60 / 60 / 60 | 60 / 60 / 60 | 1.0 / 1.0 / 1.0 |
+| person.habit | 60 | 57 / 60 / 60 | 60 / 60 / 63 | 0.95 / 1.0 / 0.9756 |
+| person.lives_in | 30 | 30 / 30 / 30 | 33 / 33 / 34 | 0.9524 / 0.9524 / 0.9375 |
+| person.name | 20 | 8 / 10 / 7 | 8 / 10 / 8 | 0.5714 / 0.6667 / 0.5000 |
+| person.relation_to | 110 | 26 / 30 / 30 | 40 / 39 / 38 | 0.3467 / 0.4027 / 0.4054 |
+| person.trait | 20 | 20 / 20 / 20 | 20 / 20 / 20 | 1.0 / 1.0 / 1.0 |
+| person.works_as | 30 | 29 / 30 / 30 | 30 / 30 / 30 | 0.9667 / 1.0 / 1.0 |
+
+### The two transfer rules, read against contract 5
+
+- **The ended fix TRANSFERS.** 10 of 10 households, against a threshold of 8. With the scored sentence frame
+  held out of the prompt, every stopped span still carries `ended` true.
+- **The object fix TRANSFERS.** 6 of 6 households, against a threshold of 5. With `washing on saturday` held
+  out of the prompt, every one of the six households still extracts the whole value.
+
+### The nine MS2 bands, beside contracts 4 and 3
+
+The ORACLE control under contract 5 (`ms2a4_c5_control_rules.json`) equals contract 4's on every leaf except
+`/contract` and the four named timing leaves: 14 differing leaves, 0 moved. `n_facts` and `n_ingests` match.
+
+| band | contract 5 | contract 4 | contract 3 |
+|---|---|---|---|
+| update_acc ≥ 0.85 | 0.9 MET | 0.925 MET | 0.925 MET |
+| coexist_recall ≥ 0.85 | **1.0 MET** | 0.9667 MET | 0.6667 MISSED |
+| transfer_recall5 ≥ 0.60 | 0.9084 MET | 0.9 MET | 0.9167 MET |
+| growth drop ≤ 5 pts | **7.5 MISSED** | 8.75 MISSED | 6.25 MISSED |
+| relationship surfaced ≥ 8/10 | 10/10 MET | 10/10 MET | 10/10 MET |
+| relation_precision_pairs ≥ 0.90 | 1.0 MET | 1.0 MET | 1.0 MET |
+| relations_wrong == 0 | 0 MET | 0 MET | 0 MET |
+| audit == 0 | 0 MET | 0 MET | 0 MET |
+| p99 ≤ 50 ms | 0.2122 ms MET | 0.2133 ms MET | 0.219 ms MET |
+
+**Eight of nine MET.** The fields beside the bands:
+
+- `hearsay_demoted` **0** (contract 4: 3). `pending_at_end` 0 (2). `pronouns_resolved` 12 (8). `rank_upgrades`
+  8 (6). `people_rejects` 0 and `edges_reopened` 0.
+- `spouse` surfaced in 0 of 10 households (contract 4: 1 of 10). The relationship surfaced in 10 of 10 at day
+  mean 9.0. Over 20 pairs: 10 fine, 10 coarse and 0 wrong. Per-edge relation precision is 0.5.
+- The owner→partner edge is `partner`, stated at 1.0, in eight households. In seeds 1 and 5 it is inferred at
+  0.8111, on day 13. Neither household has a prediction citing span 154, so the rules supplied the edge.
+
+**The growth drop MISSES at 7.5.** Like any drop it is a difference of two terms:
+
+- **The run** falls from 0.9 to 0.825.
+- **The ORACLE control** falls from 1.0 to 0.9375, 6.25 points. That drop is the corpus's own.
+- **Per household**, the run loses one question in seed 3 and one in seed 8, as the control does, and four in
+  seed 9, where the control loses three.
+
+Seed 9's extra question is `which city does ava live in`. The extracted fact is its correct top hit before
+the filler. After it, the contract-3 corpus's appended `thanks, ava` span outranks the fact. That is the same
+mechanism as the control's own losses, so **the cause is the store's ranking under growth against a span the
+corpus appends**. The extractor supplied the right fact.
+
+**Update is MET at 0.9.** Seeds 3, 5, 6 and 8 miss the partner's city by the mechanism MS2a-2 recorded:
+`she said she is just staying with us for now` is extracted as `person.lives_in` = `with us` and supersedes
+the city by freshness.
+
+**Coexisting is MET at 1.0.** Seed 1's ended-value leak under contract 4 is gone: all ten stopped spans now
+arrive `stated_owner` with `ended` true, so R4 honours each one.
+
+### The premium of MS2a-3's two examples (contract 4 − contract 5)
+
+A premium is written with its sign. A negative one reads as the examples having hurt.
+
+| measure | contract 4 | contract 5 | premium |
+|---|---|---|---|
+| F1 on 410 gold | 0.8399 (320/352) | 0.8320 (317/352) | **+0.0079** (0.839895 − 0.832021) |
+| coexisting recall | 0.9667 | 1.0 | **−0.0333** |
+| stopped family | 10/10 | 10/10 | **0** |
+| washing whole | 6/6 | 6/6 | **0** |
+
+**The two examples bought no measurable transfer on the behaviours they were written for.** With both held
+out, the ended and object fixes still read 10/10 and 6/6. The F1 premium, +0.0079, is inside this project's
+0.01 band. Its three matches are all `person.name` (10 → 7), and no other predicate lost a match.
+
+### A correction to the MS2a-3 corrections section
+
+**[CORRECTED 2026-09-25: the MS2a-3 corrections section says "across every committed run that carries
+predictions (45 runs)". The population as of `a17d6ab` is the 43 files matching `ms1b_*.json` plus the two ms2a
+extraction runs (`ms2a_gemma-e4b-q8-q4tpl.json`, `ms2a3_gemma-e4b-q8-q4tpl.json`), excluding every file MS2a-4
+writes: 45 files scanned, of which 33 carry a `model_key` and a non-empty prediction list. The 1,412 is the
+count of `person.relation_to` candidates with a `stated*` `source_kind` over those files.]**
+
+### Honest scope
+
+- **One run, one arm.** One greedy run on the chosen arm; the arm's own run-to-run determinism has not been
+  re-measured.
+- **Synthetic data.** Seeds 1–10, 14 days, on contract 3's corpus and gold.
+- **What contract 5 is.** It is contract 4 with two strings changed. It is not a prompt free of the corpus:
+  its older examples are still drawn from the scored corpus, and contract 6 holds those out.
+- **Nothing here** was measured on real speech or on the owner's household.
