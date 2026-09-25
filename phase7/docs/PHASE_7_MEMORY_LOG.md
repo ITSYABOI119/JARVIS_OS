@@ -3383,3 +3383,158 @@ contract 3's 410 gold rather than the field's 370, and a ranking is a set of dif
 - **Contract 6 is not free of the corpus's words.** It keeps the rule, the pronouns, the function words and
   the instruction words the corpus also uses.
 - **Nothing here** was measured on real speech or on the owner's household.
+
+## MS2a-4 corrections — 2026-09-25 — the leak's share of the contract 5 → 6 premium, the span-154 attribution, and smaller points
+
+Every number below was re-measured from `git archive` of HEAD (`0b3d2c6`), on the CPU only. No result file,
+no code and no test changed.
+
+### What the verification confirmed
+
+The strategist verified MS2a-4 against `git archive 0b3d2c6` with seven independent checks, not against its
+report. It holds:
+
+- the six commits and their CI;
+- contracts 2–4 byte-identical to `af00509`;
+- both extraction runs and all four store runs, re-scored to the digit;
+- both transfer rules: contract 5 at 10/10 and 6/6, contract 6 at 9/10 and 6/6;
+- the ORACLE gates, the nine bands, and the MS1 trigger NOT FIRED;
+- the suite at 337/337.
+
+**The strongest challenge to "the fix transfers" is refuted by a control already in the data.** Contract 3's
+ENDED line,
+`ended is true when the speaker says a value no longer holds ("i stopped", "no longer", "not any more", "used to").`,
+shares 5 words with the five scored `i stopped, i no longer …` spans, `i stopped` itself among them. Contract 5's whole ENDED block shares 4, and its example `we gave up the allotment last spring`
+shares only `the`. Contract 3 scored 4/10 on the stopped family; contract 5 scored 10/10.
+
+Nine things in the record need a qualification. None changes a verdict.
+
+### The sentences these supersede
+
+The original lines are left exactly as they are. Each is quoted here, reflowed onto one line, and is
+**superseded by the corrections below**:
+
+- *The MS2a-3 corrections' `]}` ruling, its last clause:* "and it appears in no other committed run of this
+  model" — superseded by the corrections below (§1: the leak recurs under contract 6, in two calls).
+- *The contract-6 section:* "The older examples also carried a relation frame the scored corpus uses: span
+  154's owner-directed edge falls from 8 of 10 to 3 of 10 when `love` is held out." — superseded by the
+  corrections below (§2: the fall follows contract 6 as a whole, and no single held-out string is isolated).
+- *The contract-6 section's premiums table, its second row:* "contract 5 over 6 (the older examples) —
+  +0.0048 (0.832021 − 0.827225)" — superseded by the corrections below (§1: +0.0048 is at most the older
+  examples' premium, and most of it is the leak).
+
+### 1. The `]}` leak's share of the contract 5 → 6 premium
+
+A scan of every household's predictions for any of `] } { [` in `subject.ref` or `object`:
+
+| run | leaked predictions | calls | where |
+|---|---|---|---|
+| contract 3 | 0 | 0 | — |
+| contract 4 | 1 | 1 | seed 6, span 158: subject `]}my husband casey`, object `]}casey` |
+| contract 5 | 0 | 0 | — |
+| contract 6 | 3 | 2 | seed 6, span 159: subject `]} ,` on one prediction, object `]} , ` on another; seed 2, span 168, `person.name`: subject `},{` |
+
+- **The leak recurred under contract 6, in two calls.** Neither is contract 4's span 158. In seed 6, spans
+  158, 159 and 160 carry the same text, `my husband casey and i decided`, and contract 6 resolved 158 and 160
+  cleanly (subject `2`, object `casey`, `spouse`).
+- **All three leaked predictions are false positives, and each call's gold went unmatched:** seed 6's stated
+  `spouse` edge at span 159, and seed 2's `person.name` `juno` at span 168.
+
+F1 = 2·matches / (predictions + 410):
+
+| reading of contract 6 | matches / predictions | F1 | contract 5's F1 minus it |
+|---|---|---|---|
+| as measured | 316 / 354 | 0.827225 | **+0.0048**, the reported premium |
+| without the three leaked predictions | 316 / 351 | 0.830486 | **+0.0015** |
+| and seed 6's span-159 edge resolved as it did at spans 158 and 160 in the same household, and at span 159 under contract 5 | 317 / 352 | 0.832021 | **0.0000** — contract 5's F1 exactly |
+
+- **`relation_stated_recall`'s 1.0000 → 0.9667 is that one call alone.** Contract 6 matched 29 of the 30
+  stated relation edges, and the one it missed is seed 6's span 159.
+- **So the older examples' measured F1 premium is at most +0.0048, and most of it is the leak.** The MS1
+  trigger is NOT FIRED under every variant: 0.0048, 0.0015 and 0.0000 all sit under 0.01.
+
+### 2. The span-154 attribution
+
+Contract 6 changed six rows at once. Two of them sit on adjacent lines of one block, the prompt's STATED
+block:
+
+- **Row 3 replaced both `my husband` and `love`.** The address-term line now reads
+  `calling someone "my fiance" or "sweetheart" states the relation`.
+- **Row 4 changed the hint exemplar on the next line,** `she picked the kids up` → `he kissed me goodnight`.
+- **At least one loss is a reversed direction.** Seed 6 carries span 154's edge as `stated_owner`, with the
+  partner `mia` as its subject.
+
+**So the fall from 8 of 10 to 3 of 10 follows contract 6 as a whole. Which substitution causes it is NOT
+isolated;** that would need a contract that varies one row alone.
+
+### 3. The transfer margin
+
+Contracts 5 and 6 carry the same ENDED and OBJECT examples, byte for byte. The ENDED block with
+`we gave up the allotment last spring`, and the OBJECT line `"choir on wednesday evenings", never "choir"`,
+each occur once in each prompt. **So the `ended` count's 10/10 → 9/10 is the effect of the six rows contract 6
+changed — a ±1-household sensitivity.** Contract 6's margin over the threshold of 8 is one household.
+
+### 4. Smaller points
+
+**The span-154 rule has two conjuncts.** A `person.relation_to` prediction citing span 154 counts when its
+`source_kind` is `stated_owner` **and** its subject resolves to the owner (`1`, `cluster 1` or the owner's
+name). The MS2a-4 report's deviation 4 named the first alone. Measured both ways:
+
+| rule | contract 3 | contract 4 | contract 5 | contract 6 |
+|---|---|---|---|---|
+| `stated_owner` alone | 10 | 8 | 8 | 4 |
+| `stated_owner` and the subject resolves to the owner | 10 | **7** | 8 | 3 |
+
+The second row reproduces the pre-registered baselines, contract 3's 10 and contract 4's 7. It is the rule
+behind every span-154 figure in both MS2a-4 sections. The rows differ by one reversed edge each: seed 1 under
+contract 4 (subject `tess`) and seed 6 under contract 6 (subject `mia`).
+
+**The growth trace was measured in memory and written nowhere.** The per-question list in both MS2a-4
+sections came from an instrumented run that wrote nothing: the questions lost under growth in seeds 3, 8 and
+9, seed 9's `which city does ava live in` among them. The store-run JSONs carry only per-household aggregates
+(`update_acc`, `growth_update_acc`, `growth_drop_points`) and no per-question list; their one per-question
+list, `transfer_gold_ranks`, belongs to the transfer set. The aggregates corroborate the trace. Each household
+asks eight update questions:
+
+| run | seed 3 | seed 8 | seed 9 | the other seven | growth drop |
+|---|---|---|---|---|---|
+| the ORACLE control (contract 6's; contract 5's equals it) | 1 lost | 1 lost | 3 lost | 0 | 6.25 |
+| contract 5 | 1 lost | 1 lost | 4 lost | 0 | 7.5 |
+| contract 6 | 1 lost | 1 lost | 4 lost | 0 | 7.5 |
+
+**The ORACLE wording.** The contract-5 section says the control "equals contract 4's on every leaf except
+`/contract` and the four named timing leaves: 14 differing leaves". The 14 are `/contract` plus 13 timing
+leaves under four names: `embedder_load_s`, `embed_seconds` in each of the 10 households, and `latency`'s
+`p50_ms` and `p99_ms`. 0 moved.
+
+**Contract 6's missing `seconds` row.** The contract-6 figure table has no `seconds` row. The runs' own
+aggregate `seconds`: contract 4 7697.5, contract 5 7604.9, contract 6 8394.7.
+
+**`spouse` surfacing.** `spouse_surfaced_households` reads 1/10 under contracts 3 and 4, and 0/10 under
+contracts 5 and 6. That is one household, and it is band-neutral: no band reads it.
+
+**The mutant table is venue-dependent.** The contract-5 section records all 13 mutants (M21–M33) EXACT. They
+were measured before either the contract-5 or the contract-6 run was committed. Re-run at HEAD, in an archive
+copy, each restored from a byte-copy:
+
+| mutants | at HEAD |
+|---|---|
+| M21, M22, M24–M27, M29, M30, M32, M33 | EXACT, as recorded |
+| M23, M28, M31 | the recorded set **plus T46e**, 0 tracebacks |
+
+T46e re-scores every committed run that carries a contract label through today's code. At HEAD those runs
+include contract 5's and contract 6's. M23, M28 and M31 each remove contract 5 or contract 6 from
+`C3_FAMILY` or `CONTRACTS`. **That is expected, not a regression.**
+
+### The rulings
+
+- **All six of the MS2a-4 report's deviations are ACCEPTED.** Deviation 4, the span-154 count, is recorded
+  with the second conjunct it left out (§4).
+- **The `]}` defect stays recorded, not guarded, for the closed synthetic contracts.** A guard would move
+  recorded numbers. A validation guard, rejecting a candidate whose subject ref or object carries JSON
+  punctuation, is an **open item for the contract MS2b uses**, decided in MS2b's own pre-registration.
+- **The MS1 trigger's scope is correct as designed.** Contract 4 minus contract 6 is 0.0127
+  (0.839895 − 0.827225), above the band. But contract 4's two examples never appeared in the MS1 field's
+  prompt: both strings occur 0 times in contract 2's system prompt, so they cannot have moved its ranking.
+  The trigger is scoped to contract 5 minus contract 6, the older examples, and that is 0.0048. **This is a
+  clarification, not a trigger.**
