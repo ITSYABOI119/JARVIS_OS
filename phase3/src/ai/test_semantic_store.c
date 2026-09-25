@@ -227,8 +227,118 @@ static void test_upsert(void)
     PASS("T6 upsert (insert-or-raise-support, monotonic, no dups)");
 }
 
-int main(void)
+/* ================================================================
+ * --dump / --parse (Phase 7 MS3a): the region as FILE bytes.
+ *
+ * --dump <path> writes a fixed three-fact fixture, plus one upsert, through the
+ * REAL store and saves all 4097 sectors - the C side of the C -> Python round
+ * trip (phase3/scripts/test_parse_semantic.py).
+ *
+ * --parse <path> loads a region image into the mock disk and reads it back
+ * through the REAL store - the C side of the Python -> C round trip
+ * (phase7/memory/test_projection_roundtrip.py). The FILE is opened read-only and
+ * never written: sem_store_init rewrites the header, but only in the mock disk.
+ * ================================================================ */
+#define REGION_BYTES ((size_t)MOCK_SECTORS * 512)
+
+static void fill_fact(semantic_fact_t *f, uint64_t key, uint16_t type, uint64_t t_ms,
+                      uint16_t support, uint16_t conf, const char *text)
 {
+    memset(f, 0, sizeof(*f));
+    f->key             = key;
+    f->fact_type       = type;
+    f->t_ms            = t_ms;
+    f->support_count   = support;
+    f->confidence_x100 = conf;
+    size_t tl = strlen(text);
+    if (tl > SEM_FACT_TEXT_MAX) tl = SEM_FACT_TEXT_MAX;
+    memcpy(f->text, text, tl);
+    f->text_len = (uint16_t)tl;
+}
+
+static int dump_fixture(const char *path)
+{
+    memset(mock_disk, 0, sizeof(mock_disk));
+    sem_store_t s;
+    if (sem_store_init(&s, mock_read, mock_write, SEM_STORE_BASE_LBA, SEM_STORE_MAX_FACTS) != 0) {
+        fprintf(stderr, "dump: sem_store_init failed\n");
+        return 1;
+    }
+    semantic_fact_t f;
+    fill_fact(&f, 0x1ULL, SEM_FACT_QA, 1000, 3, 100, "fixture fact one");
+    if (sem_store_append(&s, &f) != 0) { fprintf(stderr, "dump: append A failed\n"); return 1; }
+    fill_fact(&f, 0x2ULL, SEM_FACT_QA, 2000, 4, 75, "fixture fact two");
+    if (sem_store_append(&s, &f) != 0) { fprintf(stderr, "dump: append B failed\n"); return 1; }
+    fill_fact(&f, 0xffULL, SEM_FACT_PROFILE, 3000, 1, 81, "fixture profile three");
+    if (sem_store_append(&s, &f) != 0) { fprintf(stderr, "dump: append C failed\n"); return 1; }
+    fill_fact(&f, 0x2ULL, SEM_FACT_QA, 2500, 2, 80, "fixture fact two, updated");
+    int up = sem_store_upsert(&s, &f);
+    if (up != 1) { fprintf(stderr, "dump: upsert returned %d, expected 1\n", up); return 1; }
+
+    FILE *fp = fopen(path, "wb");
+    if (!fp) { fprintf(stderr, "dump: cannot open %s\n", path); return 1; }
+    size_t w = fwrite(mock_disk, 1, REGION_BYTES, fp);
+    int cl = fclose(fp);
+    if (w != REGION_BYTES || cl != 0) {
+        fprintf(stderr, "dump: wrote %zu of %zu bytes\n", w, REGION_BYTES);
+        return 1;
+    }
+    return 0;
+}
+
+static int parse_image(const char *path)
+{
+    FILE *fp = fopen(path, "rb");
+    if (!fp) { fprintf(stderr, "parse: cannot open %s\n", path); return 4; }
+    memset(mock_disk, 0, sizeof(mock_disk));
+    size_t got = fread(mock_disk, 1, REGION_BYTES, fp);
+    int extra = fgetc(fp);   /* a byte past the region means the file is too long */
+    int err = ferror(fp);
+    fclose(fp);
+    if (err) { fprintf(stderr, "parse: read error on %s\n", path); return 4; }
+    if (got != REGION_BYTES || extra != EOF) {
+        printf("size %zu%s, expected %zu\n", got, extra != EOF ? "+" : "", REGION_BYTES);
+        return 2;
+    }
+
+    uint32_t header_total;
+    memcpy(&header_total, mock_disk + 12, sizeof(header_total));   /* total_entries @12 */
+
+    sem_store_t s;
+    if (sem_store_init(&s, mock_read, mock_write, SEM_STORE_BASE_LBA, SEM_STORE_MAX_FACTS) != 0) {
+        fprintf(stderr, "parse: sem_store_init failed\n");
+        return 3;
+    }
+    uint32_t n = sem_store_count(&s);
+    printf("count %u header_total %u boot_id_after %u\n", n, header_total, sem_store_boot_id(&s));
+    for (uint32_t i = 0; i < n; i++) {
+        semantic_fact_t f;
+        if (sem_store_read(&s, i, &f) != 0) {
+            fprintf(stderr, "parse: sem_store_read(%u) failed\n", i);
+            return 4;
+        }
+        /* text is length-carried: print exactly text_len bytes, clamped to the field so a
+         * corrupt length can never read past text[] */
+        int tl = f.text_len > SEM_FACT_TEXT_MAX ? SEM_FACT_TEXT_MAX : (int)f.text_len;
+        printf("%u %u %u %llu %016llx %u %u %u %u %.*s\n", i, f.boot_id, f.seq,
+               (unsigned long long)f.t_ms, (unsigned long long)f.key, (unsigned)f.fact_type,
+               (unsigned)f.support_count, (unsigned)f.confidence_x100, (unsigned)f.text_len,
+               tl, f.text);
+    }
+    return (n == header_total && n > 0) ? 0 : 5;
+}
+
+int main(int argc, char **argv)
+{
+    if (argc == 3 && strcmp(argv[1], "--dump") == 0)
+        return dump_fixture(argv[2]);
+    if (argc == 3 && strcmp(argv[1], "--parse") == 0)
+        return parse_image(argv[2]);
+    if (argc != 1) {
+        fprintf(stderr, "usage: %s [--dump PATH | --parse PATH]\n", argv[0]);
+        return 64;
+    }
+
     printf("=== JARVIS AI-OS: Semantic Fact Store Tests (Phase 5 #4/M0) ===\n\n");
     test_fresh_init();
     test_append_roundtrip();

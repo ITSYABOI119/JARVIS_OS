@@ -1072,6 +1072,12 @@ jobs:
         ASAN_OPTIONS=halt_on_error=1:detect_leaks=0 \
         UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
           /tmp/tsem_san
+        ASAN_OPTIONS=halt_on_error=1:detect_leaks=0 \
+        UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+          /tmp/tsem_san --dump /tmp/jsem_san.bin
+        ASAN_OPTIONS=halt_on_error=1:detect_leaks=0 \
+        UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+          /tmp/tsem_san --parse /tmp/jsem_san.bin
 
     - name: "Phase 5: Semantic distill (C)"
       run: |
@@ -1080,6 +1086,14 @@ jobs:
           phase3/src/ai/episodic_store.c phase3/src/ai/decision_cache.c \
           -o /tmp/tsd
         /tmp/tsd
+
+    - name: "Phase 5: Semantic-store parser round-trip (C -> Python)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
+          phase3/src/ai/test_semantic_store.c phase3/src/ai/semantic_store.c \
+          -o /tmp/tsem_rt
+        /tmp/tsem_rt --dump /tmp/jsem_fixture.bin
+        python3 phase3/scripts/test_parse_semantic.py /tmp/jsem_fixture.bin
 
     - name: "Phase C: C/M2a Embedding vector store (C)"
       run: |

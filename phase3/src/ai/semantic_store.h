@@ -53,9 +53,17 @@ typedef struct __attribute__((packed)) {
 } sem_store_header_t;
 
 _Static_assert(sizeof(sem_store_header_t) <= 512, "semantic header must fit one sector");
+_Static_assert(offsetof(sem_store_header_t, magic) == 0, "header magic @0");
+_Static_assert(offsetof(sem_store_header_t, version) == 4, "header version @4");
+_Static_assert(offsetof(sem_store_header_t, cursor) == 8, "header cursor @8");
+_Static_assert(offsetof(sem_store_header_t, total_entries) == 12, "header total_entries @12");
+_Static_assert(offsetof(sem_store_header_t, boot_id) == 16, "header boot_id @16");
+_Static_assert(offsetof(sem_store_header_t, reserved) == 20, "header reserved @20");
+_Static_assert(offsetof(sem_store_header_t, checksum) == 60, "header checksum @60");
 
 /* Fact types */
 #define SEM_FACT_QA  1   /* a recurring Q&A pattern (the M0 distill's only type) */
+#define SEM_FACT_PROFILE  2   /* a projected household belief, written offline by phase7/memory/jarvis_memory/project.py (Phase 7 MS3) */
 
 /* Semantic fact (exactly 512 bytes = 1 sector), packed. */
 #define SEM_FACT_TEXT_MAX  440
@@ -63,16 +71,26 @@ typedef struct __attribute__((packed)) {
     uint32_t boot_id;            /* stamped at write (0 from the distill) */
     uint32_t seq;                /* stamped at write (== total_entries; kept on upsert) */
     uint64_t t_ms;               /* the chosen (newest) source record's timestamp */
-    uint64_t key;                /* FNV-1a of the subject query — decision-cache parity */
+    uint64_t key;                /* FNV-1a of the subject query — decision-cache parity; PROFILE: FNV-1a of the projection's canonical key string */
     uint16_t fact_type;          /* SEM_FACT_* */
     uint16_t support_count;      /* usable source records seen (monotonic across upserts) */
-    uint16_t confidence_x100;    /* % of usable same-key answers identical to the chosen one */
+    uint16_t confidence_x100;    /* QA: % of usable same-key answers identical to the chosen one; PROFILE: the Main-PC store's confidence x 100 */
     uint16_t text_len;           /* bytes used in text[] */
     char     text[SEM_FACT_TEXT_MAX];  /* the distilled fact text (head-copied, *_len — no NUL required) */
     uint8_t  pad[40];            /* pad to exactly 512 */
 } semantic_fact_t;
 
 _Static_assert(sizeof(semantic_fact_t) == 512, "semantic fact must be exactly one sector");
+_Static_assert(offsetof(semantic_fact_t, boot_id) == 0, "fact boot_id @0");
+_Static_assert(offsetof(semantic_fact_t, seq) == 4, "fact seq @4");
+_Static_assert(offsetof(semantic_fact_t, t_ms) == 8, "fact t_ms @8");
+_Static_assert(offsetof(semantic_fact_t, key) == 16, "fact key @16");
+_Static_assert(offsetof(semantic_fact_t, fact_type) == 24, "fact fact_type @24");
+_Static_assert(offsetof(semantic_fact_t, support_count) == 26, "fact support_count @26");
+_Static_assert(offsetof(semantic_fact_t, confidence_x100) == 28, "fact confidence_x100 @28");
+_Static_assert(offsetof(semantic_fact_t, text_len) == 30, "fact text_len @30");
+_Static_assert(offsetof(semantic_fact_t, text) == 32, "fact text @32");
+_Static_assert(offsetof(semantic_fact_t, pad) == 472, "fact pad @472");
 
 /* Store handle — callbacks, region geometry, cached header. */
 typedef struct {
