@@ -55,6 +55,13 @@ def main(argv=None) -> int:
                    help="the ARM for design rule 3: keep function words in the full-text query "
                         "(the MS0.1 behaviour). The default drops them; this is what the A / "
                         "A-prime comparison measures rule 3 against.")
+    # MS3a: persist each household's store for the offline projection. The files hold the WHOLE
+    # store, the benchmark's growth filler included; `jarvis_memory.project` selects the household
+    # from it. A run without --out-db is unchanged.
+    p.add_argument("--out-db", dest="out_db", default=None, metavar="DIR",
+                   help="write each household's store to DIR/household_seed<seed>.sqlite; the "
+                        "files hold the whole store, including the benchmark's growth filler, "
+                        "and an existing file is refused")
     a = p.parse_args(argv)
 
     seeds = list(range(a.seed, a.seed + a.households))
@@ -67,7 +74,7 @@ def main(argv=None) -> int:
               f"(sentence-transformers {embedder.version})")
     res = harness.run(seeds, a.days, a.latency_facts, a.out, a.predicate_hint, embedder,
                       a.embedder, a.drop_stopwords, a.candidates_from, a.contract,
-                      a.people_layer)
+                      a.people_layer, out_db=a.out_db)
 
     print(f"contract   : {a.contract}  people_layer {'ON' if a.people_layer else 'off'}")
     print(f"households : {len(seeds)}  seeds {seeds[0]}..{seeds[-1]}  days {a.days}  "

@@ -34,9 +34,12 @@ VERSION = 1
 TEXT_MAX = 440
 REGION_BYTES = (MAX_FACTS + 1) * SECTOR    # 2,097,664
 
+FACT_QA = 1                   # SEM_FACT_QA: the box's own distill
+FACT_PROFILE = 2              # SEM_FACT_PROFILE: the Main PC's offline projection (Phase 7 MS3)
+
 REC_FMT = '<IIQQHHHH'         # boot_id, seq, t_ms, key, fact_type, support_count, confidence_x100, text_len
 REC_HDR_SIZE = struct.calcsize(REC_FMT)    # 32 - the text starts here
-FACT_TYPES = {1: 'QA', 2: 'PROFILE'}
+FACT_TYPES = {FACT_QA: 'QA', FACT_PROFILE: 'PROFILE'}
 
 
 def _check_len(buf):

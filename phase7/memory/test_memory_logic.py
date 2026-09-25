@@ -4282,5 +4282,294 @@ check("T48d all ten held-out example strings are in contract 6's prompt and occu
       str({s: (v[0], v[1], sorted(v[2])) for s, v in _d48.items() if not (v[0] and not v[1])
            or v[2] != _SHEXP48[s]}))
 
+# =================================================================================================
+# T49 - MS3a: the JSEM projection (jarvis_memory.project). Standard library only; every store and
+# image is a temporary file. The rules are the design's §9 MS3 pre-registration (2026-09-25); each
+# refusal check asserts the RULE NAMED IN THE MESSAGE, and each refusal fixture is built to trip
+# exactly its own rule (the no-span rule is checked first, so every later fixture carries a span).
+# =================================================================================================
+import calendar as _cal49  # noqa: E402
+import contextlib as _cl49  # noqa: E402
+import importlib.util as _ilu49  # noqa: E402
+import io as _io49  # noqa: E402
+import re as _re49  # noqa: E402
+import struct as _st49  # noqa: E402
+from datetime import datetime as _dt49  # noqa: E402
+
+from jarvis_memory import project as _proj49  # noqa: E402
+from jarvis_memory import __main__ as _cli49  # noqa: E402
+from jarvis_memory.store import MemoryStore as _MS49  # noqa: E402
+
+_REPO49 = Path(__file__).resolve().parents[2]
+_spec49 = _ilu49.spec_from_file_location("parse_semantic_t49", _REPO49 / "phase3" / "scripts" / "parse_semantic.py")
+_ps49 = _ilu49.module_from_spec(_spec49)
+_spec49.loader.exec_module(_ps49)
+
+
+class _Store49:
+    """A small store for one case, written with raw SQL so the case is exact."""
+
+    def __init__(self, path):
+        self.path = str(path)
+        self.st = _MS49(self.path)
+        self.c = self.st.conn
+        self.rec = self.c.execute("insert into recording (sha256, started_at, duration_s, device) "
+                                  "values ('t49', '2026-03-01T00:00:00', 1.0, 't49')").lastrowid
+
+    def person(self, name, clustered=True):
+        pid = self.c.execute("insert into person (kind, display_name, created_at) values "
+                             "('cluster', ?, '2026-03-01T00:00:00')", (name,)).lastrowid
+        if clustered:
+            self.c.execute("insert into cluster (person_id) values (?)", (pid,))
+        return pid
+
+    def span(self, said_at):
+        return self.c.execute("insert into span (recording_id, t_start_s, t_end_s, text, said_at) "
+                              "values (?, 0, 1, 't49', ?)", (self.rec, said_at)).lastrowid
+
+    def _link(self, table, col, row_id, spans):
+        for s in spans:
+            self.c.execute("insert into %s (%s, span_id, role) values (?, ?, 'support')" % (table, col),
+                           (row_id, self.span(s)))
+
+    def fact(self, kind, sid, pid, obj, sk="stated_owner", conf=1.0, spans=("2026-03-01T08:00:00",),
+             norm=None):
+        fid = self.c.execute(
+            "insert into fact (subject_kind, subject_id, predicate_id, object_text, object_norm, "
+            "source_kind, confidence, valid_from, recorded_at) values (?,?,?,?,?,?,?,?,?)",
+            (kind, sid, pid, obj, obj if norm is None else norm, sk, conf, "2026-03-01T08:00:00",
+             "2026-03-01T08:00:00")).lastrowid
+        self._link("fact_span", "fact_id", fid, spans)
+        return fid
+
+    def edge(self, a, b, rel, sk="stated_owner", conf=1.0, spans=("2026-03-01T08:00:00",)):
+        eid = self.c.execute(
+            "insert into edge (from_person, to_person, relation_id, source_kind, confidence, "
+            "valid_from, recorded_at) values (?,?,?,?,?,?,?)",
+            (a, b, rel, sk, conf, "2026-03-01T08:00:00", "2026-03-01T08:00:00")).lastrowid
+        self._link("edge_span", "edge_id", eid, spans)
+        return eid
+
+    def pref(self, person, topic, pol, sk="stated_owner", conf=1.0, spans=("2026-03-01T08:00:00",)):
+        rid = self.c.execute(
+            "insert into preference (person_id, topic_norm, polarity, source_kind, confidence, "
+            "valid_from, recorded_at) values (?,?,?,?,?,?,?)",
+            (person, topic, pol, sk, conf, "2026-03-01T08:00:00", "2026-03-01T08:00:00")).lastrowid
+        self._link("preference_span", "preference_id", rid, spans)
+        return rid
+
+    def done(self):
+        self.c.commit()
+        self.st.close()
+        return self.path
+
+
+def _built49(store):
+    """(image, manifest) or (None, the refusal message)."""
+    try:
+        return _proj49.build(store.done())
+    except _proj49.ProjectionRefused as exc:
+        return None, str(exc)
+
+
+def _rows49(man):
+    return [(r["table"], r["row_id"]) for r in man["records"]] if isinstance(man, dict) else man
+
+
+# --- T49a FNV-1a 64 known answers -------------------------------------------------------------
+_fnv49 = {s: "%016x" % _proj49.fnv1a64(s.encode()) for s in ("", "a", "foobar")}
+check("T49a FNV-1a 64 known answers: empty, a and foobar",
+      _fnv49 == {"": "cbf29ce484222325", "a": "af63dc4c8601ec8c", "foobar": "85944171f73967e8"},
+      str(_fnv49))
+
+# --- T49b the drift gate: the box's header against the writer AND the reader --------------------
+_h49 = (_REPO49 / "phase3" / "src" / "ai" / "semantic_store.h").read_text(encoding="utf-8")
+
+
+def _def49(name):
+    m = _re49.search(r"^#define\s+%s\s+(0x[0-9A-Fa-f]+|\d+)U?L*\b" % name, _h49, _re49.M)
+    return int(m.group(1), 0) if m else None
+
+
+_drift49 = {
+    "SEM_STORE_MAX_FACTS": (_def49("SEM_STORE_MAX_FACTS"), _proj49.MAX_FACTS, _ps49.MAX_FACTS),
+    "SEM_STORE_MAGIC": (_def49("SEM_STORE_MAGIC"), _proj49.MAGIC, _ps49.MAGIC),
+    "SEM_STORE_VERSION": (_def49("SEM_STORE_VERSION"), _proj49.VERSION, _ps49.VERSION),
+    "SEM_FACT_TEXT_MAX": (_def49("SEM_FACT_TEXT_MAX"), _proj49.TEXT_MAX, _ps49.TEXT_MAX),
+    "SEM_FACT_PROFILE": (_def49("SEM_FACT_PROFILE"), _proj49.FACT_PROFILE, _ps49.FACT_PROFILE),
+}
+check("T49b drift gate: semantic_store.h's five constants equal project.py's and "
+      "parse_semantic.py's, and the region is the header plus every slot",
+      all(v[0] is not None and v[0] == v[1] == v[2] for v in _drift49.values())
+      and _proj49.REGION_BYTES == _ps49.REGION_BYTES == (_def49("SEM_STORE_MAX_FACTS") + 1) * 512
+      and _proj49.SURFACE is SURFACE_THRESHOLD,
+      str(_drift49))
+
+with _tempfile.TemporaryDirectory() as _td49:
+    _T49 = Path(_td49)
+
+    # --- T49c the header of a three-row image -----------------------------------------------
+    _s = _Store49(_T49 / "c.sqlite")
+    for _o in ("camping", "cycling", "pottery"):
+        _s.fact("household", None, "household.topic", _o)
+    _img, _man = _built49(_s)
+    _w = _st49.unpack_from("<16I", _img, 0) if _img else ()
+    _x = 0
+    for _v in _w[:15]:
+        _x ^= _v
+    check("T49c the header of a three-row image: magic, version 1, cursor 3, total 3, boot_id 0, "
+          "reserved 0, the XOR checksum; the rest of the header sector and every unused slot zero; "
+          "exactly 2,097,664 bytes; seq 1-3 in slots 0-2",
+          _img is not None and len(_img) == 2097664
+          and _w[:5] == (0x4A53454D, 1, 3, 3, 0) and _w[5:15] == (0,) * 10 and _w[15] == _x
+          and _img[64:512] == bytes(448) and _img[4 * 512:] == bytes(2097664 - 4 * 512)
+          and [_st49.unpack_from("<I", _img, (i + 1) * 512 + 4)[0] for i in range(3)] == [1, 2, 3]
+          and _man["n"] == 3,
+          repr((_w[:5], _man if _img is None else _man["n"])))
+
+    # --- T49d scope -------------------------------------------------------------------------------
+    _s = _Store49(_T49 / "d.sqlite")
+    _a, _b = _s.person("alex"), _s.person("tess")
+    _out = _s.person("stranger", clustered=False)
+    _fa = _s.fact("person", _a, "person.lives_in", "bendigo")
+    _fo = _s.fact("person", _out, "person.lives_in", "perth")
+    _fh = _s.fact("household", None, "household.topic", "camping")
+    _ft = _s.fact("topic", None, "household.topic", "gardening")
+    _ein = _s.edge(_a, _b, "partner")
+    _eout = _s.edge(_a, _out, "friend")
+    _pout = _s.pref(_out, "jazz", "likes")
+    _img, _man = _built49(_s)
+    check("T49d scope: a person no cluster names is excluded (its fact, its preference and an edge "
+          "with one end on it), a household and a topic subject are included",
+          _rows49(_man) == [("fact", _fa), ("fact", _fh), ("fact", _ft), ("edge", _ein)],
+          repr(_rows49(_man)))
+
+    # --- T49e the threshold ------------------------------------------------------------------------
+    _s = _Store49(_T49 / "e.sqlite")
+    _below = _s.fact("household", None, "household.topic", "a", sk="inferred", conf=0.7999)
+    _at = _s.fact("household", None, "household.topic", "b", sk="inferred", conf=0.80)
+    _stl = _s.fact("household", None, "household.topic", "c", sk="stated_other", conf=0.1)
+    _img, _man = _built49(_s)
+    check("T49e the threshold: an inferred row at 0.7999 is excluded, one at 0.80 is included, and "
+          "a stated row is always included (here at 0.1)",
+          _rows49(_man) == [("fact", _at), ("fact", _stl)]
+          and [r["confidence_x100"] for r in _man["records"]] == [80, 10],
+          repr(_rows49(_man)))
+
+    # --- T49f coexisting preferences -----------------------------------------------------------
+    _s = _Store49(_T49 / "f.sqlite")
+    _a = _s.person("alex")
+    _pl = _s.pref(_a, "spicy food", "likes")
+    _pd = _s.pref(_a, "spicy food", "dislikes")
+    _img, _man = _built49(_s)
+    _ks = [r["key_string"] for r in _man["records"]] if _img else []
+    check("T49f two coexisting preferences on one topic, likes and dislikes, get two distinct keys "
+          "and two records",
+          _rows49(_man) == [("preference", _pl), ("preference", _pd)]
+          and _ks == ["prof|pref|%d|spicy food|likes" % _a, "prof|pref|%d|spicy food|dislikes" % _a]
+          and len({r["key"] for r in _man["records"]}) == 2,
+          repr(_rows49(_man)))
+
+    # --- T49g the text --------------------------------------------------------------------------
+    _s = _Store49(_T49 / "g.sqlite")
+    _a = _s.person("alex")
+    _anon = _s.person(None)
+    _f1 = _s.fact("person", _a, "person.works_as", "a plumber", norm="plumber")
+    _f2 = _s.fact("household", None, "household.routine", "bins on tuesday",
+                  spans=("2026-03-01T08:00:00", "2026-03-02T08:00:00"))
+    _f3 = _s.fact("person", _anon, "person.trait", "patient", sk="stated_other")
+    _img, _man = _built49(_s)
+    _tx = [r["text"] for r in _man["records"]] if _img else []
+    check("T49g the text: a one-day row ends ' 1 day)', a two-day row ends ' 2 days)', and an "
+          "unnamed person renders 'person <id>'",
+          _tx == ["alex person works as a plumber (stated_owner, 1 day)",
+                  "household household routine bins on tuesday (stated_owner, 2 days)",
+                  "person %d person trait patient (stated_other, 1 day)" % _anon],
+          repr(_tx))
+
+    # --- T49h t_ms is the NEWEST supporting span's time ----------------------------------------
+    _s = _Store49(_T49 / "h.sqlite")
+    _s.fact("household", None, "household.topic", "astronomy",
+            spans=("2026-03-05T10:00:00", "2026-03-02T09:00:00"))
+    _img, _man = _built49(_s)
+    _want49 = _cal49.timegm(_dt49.fromisoformat("2026-03-05T10:00:00").utctimetuple()) * 1000
+    check("T49h t_ms is the newest supporting span's time on a row with two spans on two days, "
+          "whichever was linked first",
+          _img is not None and _man["records"][0]["t_ms"] == _want49 == 1772704800000
+          and _man["records"][0]["support_count"] == 2,
+          repr(_man if _img is None else _man["records"][0]))
+
+    # --- T49i-m each refusal, each fixture tripping exactly its own rule ----------------------------
+    _s = _Store49(_T49 / "i.sqlite")
+    _s.c.executemany(
+        "insert into fact (subject_kind, subject_id, predicate_id, object_text, object_norm, "
+        "source_kind, confidence, valid_from, recorded_at) values ('household', NULL, "
+        "'household.topic', ?, ?, 'stated_owner', 1.0, '2026-03-01', '2026-03-01')",
+        [("topic %d" % i, "topic %d" % i) for i in range(4097)])
+    _img, _msg = _built49(_s)
+    check("T49i refusal: 4097 selected rows refuse the build before any span is read, naming the "
+          "count rule",
+          _img is None and _msg.startswith(_proj49.RULE_TOO_MANY), repr(_msg)[:160])
+
+    _s = _Store49(_T49 / "j.sqlite")
+    _s.c.execute("insert into fact (subject_kind, subject_id, predicate_id, object_text, object_norm, "
+                 "source_kind, confidence, valid_from, recorded_at) values ('household', NULL, "
+                 "'household.topic', 'camping', 'camping', 'stated_owner', 1.0, '2026-03-01', "
+                 "'2026-03-01')")
+    _img, _msg = _built49(_s)
+    check("T49j refusal: a selected row with no supporting span, naming the no-span rule",
+          _img is None and _msg.startswith(_proj49.RULE_NO_SPAN), repr(_msg)[:160])
+
+    _s = _Store49(_T49 / "k.sqlite")
+    _s.fact("household", None, "household.topic", "café")
+    _img, _msg = _built49(_s)
+    check("T49k refusal: a non-ASCII byte (cafe with an accent), with a support span, naming the "
+          "printable-ASCII rule",
+          _img is None and _msg.startswith(_proj49.RULE_NOT_PRINTABLE), repr(_msg)[:160])
+
+    _s = _Store49(_T49 / "l.sqlite")
+    _long49 = "x" * (441 - len("household household topic  (stated_owner, 1 day)"))
+    _s.fact("household", None, "household.topic", _long49)
+    _img, _msg = _built49(_s)
+    check("T49l refusal: a rendered text of exactly 441 bytes, with a support span, naming the "
+          "length rule",
+          _img is None and _msg.startswith(_proj49.RULE_TOO_LONG) and "is 441 bytes" in _msg,
+          repr(_msg)[:160])
+
+    _s = _Store49(_T49 / "m.sqlite")
+    _s.fact("household", None, "household.topic", "Camping", norm="camping")
+    _s.fact("household", None, "household.topic", "camping", norm="camping")
+    _img, _msg = _built49(_s)
+    check("T49m refusal: two current stated household facts with one predicate and one object_norm, "
+          "each with a support span, naming the duplicate-key rule",
+          _img is None and _msg.startswith(_proj49.RULE_DUPLICATE_KEY), repr(_msg)[:160])
+
+    # --- T49n write_image refuses a path inside the repository -----------------------------------
+    _inside49 = _REPO49 / "phase7" / "t49_must_not_exist.img"
+    try:
+        _proj49.write_image(_inside49, bytes(_proj49.REGION_BYTES))
+        _wr49 = "written"
+    except _proj49.ProjectionRefused as exc:
+        _wr49 = str(exc)
+    check("T49n write_image refuses a path inside the repository, and writes nothing there",
+          _wr49.startswith(_proj49.RULE_INSIDE_REPO) and not _inside49.exists(), _wr49[:160])
+
+    # --- T49o the CLI string CLAUDE.md quotes, and T49p the store is never changed -------------------
+    _s = _Store49(_T49 / "o.sqlite")
+    _s.fact("household", None, "household.topic", "camping")
+    _db49 = _s.done()
+    _before49 = _hashlib.md5(open(_db49, "rb").read()).hexdigest()
+    _out49 = _T49 / "o.img"
+    with _cl49.redirect_stdout(_io49.StringIO()) as _so49:
+        _rc49 = _cli49.main(["--db", _db49, "project", "--out", str(_out49)])
+    check("T49o the CLI: main(['--db', STORE, 'project', '--out', IMG]) returns 0 and writes a "
+          "2,097,664-byte image",
+          _rc49 == 0 and _out49.exists() and _out49.stat().st_size == 2097664
+          and "records     : 1" in _so49.getvalue(),
+          repr((_rc49, _so49.getvalue()[:200])))
+    check("T49p a projection never changes the store: the store file's bytes are identical after a "
+          "build and a CLI run",
+          _hashlib.md5(open(_db49, "rb").read()).hexdigest() == _before49)
+
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
 sys.exit(1 if FAILS else 0)

@@ -5,6 +5,8 @@
     query <text> [--k 5]      the full-text lane plus the ranker, with the spans printed
     purge <cluster_id>        R7: the owner's purge, the only delete in the system
     audit [--limit 20]        the audit trail, newest first, plus the violation walker
+    project --out IMG         the household's current beliefs as a JSEM region image (MS3a), a
+                              file outside the repo; [--manifest JSON] writes what each slot holds
 
 Every command runs against the default store (JARVIS_MEMORY_HOME, else
 %USERPROFILE%\\.jarvis\\memory\\household.sqlite) unless --db names another; ':memory:' works and is
@@ -89,6 +91,32 @@ def cmd_audit(args) -> int:
     return 1 if bad else 0
 
 
+def cmd_project(args) -> int:
+    # The store path is the TOP-LEVEL --db, as for every other verb. This subparser deliberately
+    # declares no --db of its own: argparse copies a subparser's defaults over the parent's, so a
+    # second --db here would silently drop the path given before the verb.
+    from . import project
+    db = args.db or str(default_db())
+    try:
+        data, man = project.build(db)
+        if args.manifest and project._inside_repo(args.manifest):
+            raise project.ProjectionRefused("%s: %s" % (project.RULE_INSIDE_REPO, args.manifest))
+        project.write_image(args.out, data)
+    except project.ProjectionRefused as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 3
+    if args.manifest:
+        with open(args.manifest, "w", encoding="utf-8") as fh:
+            json.dump(man, fh, indent=2)
+            fh.write("\n")
+    print(f"records     : {man['n']}")
+    print(f"md5 image   : {man['md5_image']}")
+    print(f"md5 header  : {man['md5_header']}")
+    print(f"md5 records : {man['md5_records']}")
+    print(f"image       : {args.out}")
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="jarvis_memory", description=__doc__.split("\n")[0])
     p.add_argument("--db", default=None,
@@ -114,6 +142,13 @@ def main(argv=None) -> int:
     q = sub.add_parser("audit")
     q.add_argument("--limit", type=int, default=20)
     q.set_defaults(fn=cmd_audit)
+
+    q = sub.add_parser("project")
+    q.add_argument("--out", required=True, metavar="IMG",
+                   help="the region image to write, 2,097,664 bytes, outside the repository")
+    q.add_argument("--manifest", default=None, metavar="JSON",
+                   help="also write the manifest: each slot's table, row, key and text")
+    q.set_defaults(fn=cmd_project)
 
     args = p.parse_args(argv)
     return args.fn(args)

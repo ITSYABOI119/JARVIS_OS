@@ -1438,6 +1438,13 @@ jobs:
     - name: "Phase 7: memory store logic (Python, stdlib-only)"
       run: python3 phase7/memory/test_memory_logic.py
 
+    - name: "Phase 7: JSEM projection round-trip (Python -> C)"
+      run: |
+        gcc -Wall -Werror -O2 -std=c11 -I phase3/src/ai \
+          phase3/src/ai/test_semantic_store.c phase3/src/ai/semantic_store.c \
+          -o /tmp/tsem_proj
+        python3 phase7/memory/test_projection_roundtrip.py /tmp/tsem_proj
+
     # --assert-bands re-armed at MS0.1: every MS0 band is met with the predicate-aware lane (phase7/docs/PHASE_7_MEMORY_LOG.md).
     - name: "Phase 7: memory store benchmark, MS0 bands (Python, stdlib-only)"
       run: python3 phase7/memory/bench_ms0.py --households 3 --days 14 --seed 1 --latency-facts 20000 --out /tmp/ms0_ci.json --assert-bands

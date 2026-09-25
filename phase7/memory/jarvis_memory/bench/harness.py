@@ -19,6 +19,7 @@ Two mechanics are worth knowing before reading a number out of this file:
 Nothing here is a model. Standard library only.
 """
 import json
+import os
 import statistics
 import time
 
@@ -420,7 +421,8 @@ def _candidate_pronoun(cand, heard_by_day):
 
 
 def run_household(seed, days, predicate_hint=True, embedder=None, drop_stopwords=True,
-                  candidates_from=None, contract="contract2", people_layer=False):
+                  candidates_from=None, contract="contract2", people_layer=False,
+                  db_path=":memory:"):
     """`predicate_hint=False` is the NEGATIVE CONTROL: the MS0 lane, unrestricted.
 
     `embedder` adds the vector lane. It is applied by `embed_pending` AFTER ingest, never during:
@@ -435,10 +437,15 @@ def run_household(seed, days, predicate_hint=True, embedder=None, drop_stopwords
     candidates. It is a SWITCH rather than a new default so that every store run taken before it -
     MS0, MS0.1, MS1a.4, MS1b, MS2a-1 - stays re-runnable byte for byte; the new scoring fields and
     merge by rank are unconditional and were measured to move none of them.
+
+    `db_path` (MS3a) is where the household's store lives. ':memory:' is the default and what every
+    recorded run used; a file path persists the store - growth filler included - for the offline
+    projection (`jarvis_memory.project`). Nothing this function returns depends on where the store
+    lives.
     """
     hint = "auto" if predicate_hint else None
     hh = _corpus.generate_household(seed, days, contract)
-    st = MemoryStore(":memory:", drop_stopwords=drop_stopwords)
+    st = MemoryStore(db_path, drop_stopwords=drop_stopwords)
     clusters = {c: st.add_cluster() for c in hh["clusters"]}
     owner_name = hh["persons"][0]["name"]
     partner_name = hh["persons"][1]["name"]
@@ -743,9 +750,21 @@ def measure_latency(n_facts, n_subjects=2000):
 
 def run(seeds, days, latency_facts, out_path=None, predicate_hint=True, embedder=None,
         embedder_name="none", drop_stopwords=True, candidates_from=None,
-        contract="contract2", people_layer=False) -> dict:
+        contract="contract2", people_layer=False, out_db=None) -> dict:
+    # `out_db` (MS3a) persists each household's store as <out_db>/household_seed<seed>.sqlite. A
+    # store is never opened over an old one - the rules would ingest the corpus a second time on top
+    # of the first - so every path is checked before any household runs. No key is added to the
+    # returned dict or the --out JSON: the store's location is not a result.
+    db_paths = {s: ":memory:" for s in seeds}
+    if out_db:
+        os.makedirs(out_db, exist_ok=True)
+        for s in seeds:
+            db_paths[s] = os.path.join(out_db, "household_seed%d.sqlite" % s)
+            if os.path.exists(db_paths[s]):
+                raise FileExistsError("refusing to open a store over an existing file: %s"
+                                      % db_paths[s])
     households = [run_household(s, days, predicate_hint, embedder, drop_stopwords, candidates_from,
-                                contract, people_layer)
+                                contract, people_layer, db_path=db_paths[s])
                   for s in seeds]
     agg = {}
     for field in ("update_acc", "coexist_recall", "transfer_recall5", "relation_precision",
