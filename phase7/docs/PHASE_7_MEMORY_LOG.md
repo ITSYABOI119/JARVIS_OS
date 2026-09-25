@@ -3538,3 +3538,133 @@ include contract 5's and contract 6's. M23, M28 and M31 each remove contract 5 o
   prompt: both strings occur 0 times in contract 2's system prompt, so they cannot have moved its ranking.
   The trigger is scoped to contract 5 minus contract 6, the older examples, and that is 0.0048. **This is a
   clarification, not a trigger.**
+
+## MS2a-4 corrections, second pass — 2026-09-25 — the leak read in both contracts that carry it, and six points made exact
+
+The strategist verified the MS2a-4 corrections (`589c905`, `8d4013d`, `4bb3dae`) against
+`git archive 4bb3dae`, not against their report. Every figure that section measured reproduces; two counts
+in its prose do not, and §2 corrects them. The 13 mutants reproduce at HEAD, ten EXACT and M23, M28 and
+M31 with T46e added; CI is green on all three commits. Two findings reported beside that section, and six
+points in its record, need this pass. **No verdict moves.**
+
+Every measurement in §1 and §2 below was taken by this pass from `git archive 4bb3dae`, on the CPU only.
+The figures quoted from the record are carried, not re-measured: the `ended` counts 10/10 and 9/10, the
+MS1 trigger's 0.01 band, MS1's 99 % validity band, and commit `589c905`'s subject. Each reading is a
+modified copy of a run's own prediction lists, re-scored through the committed `extract/score.py`; the
+counts agree with 2·matches / (predictions + 410) to ten decimal places. No result file, no code and no
+test changed.
+
+### Superseded by this pass
+
+The original lines are left exactly as they are. Each is quoted here, reflowed onto one line, and is
+**superseded by the corrections below**:
+
+- *The contract-5 section:* "The F1 premium, +0.0079, is inside this project's 0.01 band." — it holds as
+  measured only (§1).
+- *The contract-6 section:* "Both F1 premiums are inside this project's 0.01 band." — it holds as measured
+  only (§1).
+- *The MS2a-4 corrections, §1:* "The MS1 trigger is NOT FIRED under every variant: 0.0048, 0.0015 and 0.0000
+  all sit under 0.01." — three readings of four; the trigger fires under none of the four (this pass's §1).
+- *The MS2a-4 corrections, the rulings:* "Contract 4 minus contract 6 is 0.0127 (0.839895 − 0.827225), above
+  the band." — it holds as measured only (§1).
+- *The MS2a-4 corrections, §3:* "Contracts 5 and 6 carry the same ENDED and OBJECT examples, byte for byte."
+  (§2)
+- *The MS2a-4 corrections, what the verification confirmed:* "with seven independent checks" (§2)
+- *The MS2a-4 corrections, what the verification confirmed:* "shares 5 words with the five scored
+  `i stopped, i no longer …` spans" (§2)
+- *The MS2a-4 corrections, §4:* "T46e re-scores every committed run that carries a contract label through
+  today's code." (§2)
+
+### 1. The leak, read in both contracts that carry it
+
+The MS2a-4 corrections recorded that each of contract 6's two leaked calls lost its gold — seed 6's stated
+`spouse` edge at span 159, and seed 2's `person.name` `juno` at span 168 — and then resolved only the first.
+Contract 4's own leaked call, seed 6's span 158, was scanned and not read. Each reading below adds to the
+one above it:
+
+| reading | contract 4 | contract 5 | contract 6 |
+|---|---|---|---|
+| as measured | 320 / 352 = 0.839895 | 317 / 352 = 0.832021 | 316 / 354 = 0.827225 |
+| every leaked prediction dropped | 320 / 351 = 0.840999 | — | 316 / 351 = 0.830486 |
+| and seed 6's span-159 edge resolved (the MS2a-4 corrections' third row) | — | — | 317 / 352 = 0.832021 |
+| and every other leaked call resolved | 321 / 352 = 0.842520 | — | 318 / 353 = 0.833552 |
+
+- **Each resolution copies a clean prediction for the same household.** Contract 4's span 158 takes
+  contract 4's own span-160 edge, and contract 6's span 159 takes contract 6's own span-158 edge: the three
+  spans carry byte-identical text. Contract 6's span 168 has no clean twin in its own run, so it takes
+  contract 5's `person.name` `juno` for the same span; contract 4 matched that gold too. Each count is the
+  same whichever same-shaped donor is used.
+- **`relation_stated_recall`:** contract 4's 0.9667 is its one leaked call alone, as contract 6's is.
+  Resolved, each reads 30/30.
+
+| premium | as measured | every leaked prediction dropped | and span 159 resolved | every leaked call resolved |
+|---|---|---|---|---|
+| contract 5 − contract 6 (the MS1 trigger: more than 0.01 either way) | +0.0048 | +0.0015 | 0.0000 | −0.0015 |
+| contract 4 − contract 5 (reported, never a trigger) | +0.0079 | +0.0090 | — | **+0.0105** |
+| contract 4 − contract 6 (never pre-registered, never a trigger) | +0.0127 | +0.0105 | — | **+0.0090** |
+
+- **The MS1 trigger fires under no reading.** Its largest magnitude is the as-measured +0.0048.
+- **Contract 4 over contract 5 leaves the band when both are read clean.** That premium is reported, and
+  contract 4's two examples never appeared in the MS1 field's prompt, so no verdict moves. "Inside the band"
+  holds as measured only.
+- **Contract 4 minus contract 6 comes back inside the band when both are read clean.** "Above the band"
+  holds as measured only; the trigger's scope never rested on it.
+- **Read clean, the three contracts order 4 (0.842520), 6 (0.833552), 5 (0.832021).** Contract 5 has no leak,
+  so its reading is its measurement; the readings of contracts 4 and 6 are counterfactuals that award a
+  match the model did not produce. This is one greedy run per contract, on an arm whose own run-to-run
+  determinism is not re-measured: these are readings, not effects.
+
+**Each leaked call resolved on its own**, against its run as measured, with every other leaked prediction
+left in place:
+
+| call | what the leak cost | resolved alone | F1 moves by |
+|---|---|---|---|
+| contract 4, seed 6, span 158 | one match, for one false positive | 321 / 352 = 0.842520 | +0.0026 |
+| contract 6, seed 2, span 168 | one match, for one false positive | 317 / 354 = 0.829843 | +0.0026 |
+| contract 6, seed 6, span 159 | one match, for two false positives | 317 / 353 = 0.830931 | +0.0037 |
+
+- **So the span-159 call alone accounts for +0.0037 of the measured +0.0048 contract 5 → 6 premium**, and
+  contract 6's two leaked calls together for +0.0063, which is why resolving both takes that premium below
+  zero. With the span-159 call alone resolved, contract 5 minus contract 6 reads +0.0011. The MS2a-4
+  corrections' third row reaches contract 5's F1 exactly only because seed 2's leaked prediction is
+  dropped in it as well.
+
+**For MS2b's pre-registration** — facts the guard decision must price, not a ruling:
+
+- **The validity figure moves too.** The four leaked predictions sit in three calls, one under contract 4
+  and two under contract 6, and all four pass the committed `candidate.validate()`. `score.validity` counts
+  a call valid only when every candidate validates, so contracts 3 to 6 each read 1710/1710. A guard in
+  `validate()` rejecting JSON punctuation would fail those three calls, giving contract 4 1709/1710 =
+  0.999415 and contract 6 1708/1710 = 0.998830 — both still above MS1's 99 % validity band, and both
+  recorded numbers that move.
+- **The leak takes other shapes in two other models' committed runs.** `ms1b_lfm25-2.6b.json` carries
+  tool-call text after `}]}` in `object` and `object_norm`, 3 predictions in 3 calls, and
+  `ms1b_nuextract3-think.json` carries `}` and `{"speaker_cluster": 2}` in `subject.ref`, 3 in 3. No
+  committed prediction carries it in `object_norm` alone — `object_norm` is `object` normalised, or on a
+  relation edge the relation id — so a guard reading `subject.ref` and `object` would catch all ten leaked
+  predictions in the committed runs. Which fields the guard reads is still MS2b's to state. For this model
+  only contracts 4 and 6 leak; the MS2a-4 corrections' scope stands.
+
+### 2. Six points made exact
+
+- **The transfer margin's premise.** Contracts 5 and 6 carry the same ENDED block, byte for byte, and the
+  same OBJECT line `"choir on wednesday evenings", never "choir"`. The OBJECT block's other example is
+  row 5 of contract 6's substitution table: `e.g. "a nurse", "Sydney"` became
+  `e.g. "a beekeeper", "Wellington"`. The conclusion stands: the `ended` count's 10/10 → 9/10 moved with the
+  six rows contract 6 changed.
+- **The count of checks.** The list under "with seven independent checks" carries six. The count was the
+  strategist's, carried from its prompt.
+- **The scored stopped spans.** There are ten, one per household, in five distinct texts. The word counts
+  (5, 4 and 1) were taken over the five distinct texts and stand, and so does "`i stopped` itself among
+  them": contract 3's line carries that phrase, and both its words are among the five.
+- **T46e's population.** At `4bb3dae` it is 47 files: every `ms1b_*.json`, 43, plus the 4 `ms2a*` runs
+  that carry a `model_key` and a household with predictions. The `ms2a*` store runs and ORACLE controls fail
+  that predicate. T46e re-scores seed 1 of 38 of the 47: the 5 `ms1b_field_verdict*` files hold no
+  households, the 3 `ms1b_store_on_extracted*` files hold a seed-1 household with no `f1`, and
+  `ms1b_llama_8b_contract0.json` is the check's own named exclusion. The 38 include contract 5's and
+  contract 6's extraction runs, which is why M23, M28 and M31 add T46e.
+- **Two labels in the MS2a-4 corrections' superseded list.** The `]}` ruling's quoted clause is the last
+  clause of its second sentence, not of the ruling. The premiums-table quotation reproduces that row's
+  label and F1 cells, two of its five.
+- **Commit `589c905`'s subject** says "five smaller points"; that section's §4 carries six. The count came
+  from the strategist's prompt, and commit messages are not edited.
