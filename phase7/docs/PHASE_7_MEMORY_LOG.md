@@ -3668,3 +3668,140 @@ left in place:
   label and F1 cells, two of its five.
 - **Commit `589c905`'s subject** says "five smaller points"; that section's §4 carries six. The count came
   from the strategist's prompt, and commit messages are not edited.
+
+## MS3a — 2026-09-26 — the JSEM projection builder, a Python reader for the region, and both round trips
+
+MS3 was split on 2026-09-25 by the operator's decision. **MS3a** is this section: it runs on the Main PC and in
+CI. **MS3b** is the operator's own write to the box, a later prompt. The first write carries the SYNTHETIC
+household, because no real household facts exist yet.
+
+### What landed
+
+| commit | what | CI run |
+|---|---|---|
+| `0242b08` | the design's MS3 pre-registration (§9), committed before any MS3 code, with the reference projector's numbers as reproduction targets | 36147437923, green |
+| `848e8a5` | C1, the box-format side: `SEM_FACT_PROFILE` = 2 and offset asserts in `semantic_store.h`; `--dump` and `--parse` modes in `test_semantic_store.c`; `phase3/scripts/parse_semantic.py`, the fifth raw-LBA reader; a C → Python round trip | 36148916474, green |
+| `a11dfcb` | C2, the projection builder: `jarvis_memory/project.py` and a `project` verb, over a store persisted by `bench_ms0.py --out-db`; T49; a Python → C round trip through the real `semantic_store.c` | 36150294741, green |
+
+### The box's region, and the box
+
+The strategist read the box's `JSEM` region read-only before C0 (`iflag=direct`, 2026-09-25). All 4097 sectors at
+LBA 21,110,000 are zero: md5 `1365c929581e56c8bbc59308feeab8e3`, the md5 of 2,097,664 zero bytes.
+**This milestone did not touch the box.** No `ssh`, no `dd` and no device was used, and every image is a file.
+
+### The bands, as a reproduction of the reference projector
+
+The strategist's throwaway reference projector, built to the pre-registered rules, set the numbers that C0
+recorded. MS3a's own implementation was written from the specification and had to reproduce them. The household
+is bench seed 1, 14 days, contract 6's committed extraction (`ms2a4_c6_gemma-e4b-q8-q4tpl.json`), the people
+layer, and no embedder.
+
+| band (C0) | measured |
+|---|---|
+| 27 records, every key distinct | 27 records, 27 distinct keys |
+| image exactly 2,097,664 bytes, md5 `10e4e0fe6ff9be360b14bb75ce68d039` | 2,097,664 bytes, `10e4e0fe6ff9be360b14bb75ce68d039` |
+| header sector (bytes 0–511) `614e67a66fe3c3ab4b4ad094b73ed893` | `614e67a66fe3c3ab4b4ad094b73ed893` |
+| record area (bytes 512–2,097,663, all 4096 slots) `8a57e095ba1526d36e70b6098a666294` | `8a57e095ba1526d36e70b6098a666294` |
+| the same on a second build | a second `out_db` gives identical bytes |
+| the REAL `semantic_store.c` accepts the header, and every record is field-for-field equal to the manifest | `count 27 header_total 27 boot_id_after 1`; all 27 record lines equal the manifest, with `boot_id` 0 and `seq` = slot + 1; the image file's md5 unchanged by the read |
+| a flipped checksum bit and a wrong version each read 0 | each `count 0`, exit 5 |
+| a C-written fixture reads field-for-field through the new Python reader | 23/23 |
+| `bench_ms0.py --out-db` changes no result of a run that does not pass it | 3 households, before C2 against after it: 388 leaves (the oracle path) and 394 (contract 6's extraction with the people layer), 0 differ |
+
+**All 27 records equal the design's table** on `seq`, key, `support_count`, `confidence_x100`, `t_ms`, the key
+string and the text. `slot` is `seq` − 1 and `fact_type` is 2 on every record. The tables read `fact` twenty
+times, then `edge` twice, then `preference` five times. Two rows are worth naming:
+
+- **Row 21** is the one inferred row: `alex` to `tess`, `partner`, at 0.81 (`confidence_x100` 81), over 6 days.
+  The store's third current edge on the same pair, `spouse` inferred at 0.0, is excluded by the 0.80 rule.
+- **Rows 23 and 27** are the coexisting `likes` / `dislikes` pair on `spicy food`, under two distinct keys.
+
+The store also holds the benchmark's 1,110 growth-filler facts. None is projected, because no cluster names
+their persons.
+
+### Neutrality
+
+`harness.run` for the synthetic household gives the same result with `out_db` as without it:
+**176 leaves, 0 differ**. That is the count the strategist measured for `:memory:` against a file.
+
+### Object identity
+
+`semantic_store.h` gained a `#define` and seventeen offset asserts. It was compiled with `gcc -O2 -std=c11 -c` in
+WSL (gcc 13.3), three times: from `git archive` of the base twice, as the control, and once with the change.
+
+| object | section | bytes compared | control | change |
+|---|---|---|---|---|
+| `semantic_store.o` | `.text` | 1,361 | identical | identical |
+| `semantic_store.o` | `.rodata.cst8` | 8 | identical | identical |
+| `semantic_store.o` | `.data` | 0 (the section is empty) | — | — |
+| `semantic_store.o` | `nm` | 9 symbols | identical | identical |
+| `semantic_distill.o` | `.text` | 980 | identical | identical |
+| `semantic_distill.o` | `.data` | 0 (the section is empty) | — | — |
+| `semantic_distill.o` | `nm` | 3 symbols | identical | identical |
+
+`semantic_distill.o` has no `.rodata` section. The whole-object md5s are identical too.
+
+### The negative controls
+
+On copies of the projected image, through the real `semantic_store.c`:
+
+- **A bit flipped in byte 60** (the checksum) reads `count 0` and exits 5.
+- **Byte 4 set to 2, with the checksum recomputed** so that only the version is wrong, reads `count 0` and exits 5.
+  The Python reader reports that checksum as valid, so the refusal is the version's alone.
+- **A copy one sector short** exits 2 and prints no `count` line.
+
+The reader's own controls are measured on the C-written fixture. A buffer one sector short raises `ValueError`
+naming the wrap-modulus trap. A flipped checksum bit gives `checksum_ok` false and zero records.
+
+### The mutants
+
+Each mutant was applied to a `git archive` copy of `a11dfcb`, never to the worktree, and restored from a
+byte-copy with its md5 checked. The control ran before the first and after the last: 353/353, 15/15 and 23/23,
+each time.
+
+| # | mutant | predicted | measured |
+|---|---|---|---|
+| M34 | the preference key drops its polarity | T49f; the round trip aborts at its build with a duplicate key | T49f; the round trip raised `ProjectionRefused: a key equal to one already built: preference 5, 'prof\|pref\|1\|spicy food'` after RT1 passed, so RT2a–RT6 did not run |
+| M35 | the threshold uses `>` | T49e | T49e |
+| M36 | the scope takes every person | T49d; the round trip's n and md5 | T49d; RT2a (n 1,137), RT2c, RT2d, RT2e, RT3, RT4b (`count 1137`), RT4c and RT4d |
+| M37 | the checksum omits `total_entries` | T49c; the round trip's C parse | T49c; RT4a (exit 5), RT4b (`count 0 header_total 27`), RT4c, RT2c, RT3, RT4d and RT6 |
+| M38 | the suffix always says `days` | T49g; the round trip's md5 | T49g and T49l; RT2c, RT2d, RT3 and RT4d |
+| M39 | `t_ms` from the oldest span | T49h; the round trip's md5 | T49h; RT2c, RT2d, RT3 and RT4d |
+| M40 | `run_household` accepts `db_path` and ignores it | the round trip aborts at its build with `sqlite3.OperationalError`; neutrality passes | RT1 passed; then `sqlite3.OperationalError: unable to open database file`, so RT2a–RT6 did not run |
+| M41 | `iter_records` always uses `slot = i` | `test_parse_semantic.py`'s wrap check | the wrap section's three mapping checks (20/23) |
+| M42 | `--parse` writes the mock disk back | the round trip's image-unchanged check | RT4d |
+
+**Every prediction is met.** Where a mutant failed more checks than predicted, each extra has a measured cause:
+
+- **M36:** taking every person projects the 1,110 growth-filler facts, n becomes 1,137, and every check that reads
+  n, the table or the md5 follows.
+- **M37:** the header changes, so the md5s change. The C store refuses it (`count 0`), and the Python reader,
+  which mirrors the box, returns no records.
+- **M38:** `1 days` is one byte longer, so T49l's fixture renders 442 bytes (`fact 1 is 442 bytes`), not 441.
+- **M36, M38 and M39:** RT3 and RT4d also compare with the pinned md5, and RT2d with the table.
+
+### The suites
+
+| suite | before | after |
+|---|---|---|
+| `test_memory_logic.py` | 337 locally, 336 on the runner | **353** locally (T49a–T49p, 16 checks), **352** on the runner (T22g skips there) |
+| `test_semantic_store.c` (no arguments) | 6 PASS | 6 PASS, also under ASan+UBSan |
+| `test_parse_semantic.py` | — | 23/23, locally and on the runner |
+| `test_projection_roundtrip.py` | — | 15/15, locally and on the runner |
+
+Two CI steps were added: `Phase 5: Semantic-store parser round-trip (C -> Python)` and
+`Phase 7: JSEM projection round-trip (Python -> C)`. `Phase 5: Semantic store (C, ASAN+UBSAN)` now also runs
+`--dump` and `--parse`, sanitised. Measured with a duplicate-key-aware loader, the `test` job goes from 139 named steps to 141.
+
+### Honest scope
+
+- **Synthetic data only.** The owner's store does not exist yet: MS2b has not run, and there is no
+  `household.sqlite`.
+- **Nothing on the box reads `JSEM`.** `JARVIS_SEMANTIC` is 0 in every deployed image. This proves a byte-exact
+  round trip through the box's own store code, and nothing about recall.
+- **Read-only means the store file's bytes.** The projection opens the store read-only, and the `.sqlite` file's
+  bytes are unchanged by a build (T49p). On a WAL-mode store, SQLite still creates its `-shm` and `-wal` companion
+  files beside it.
+- **A purge on the Main PC does not reach the box.** The box has no delete, and an upsert never removes an absent
+  key. A purged belief leaves the box only when the whole region is zeroed and re-projected.
+- **MS3b, the operator's write, is next.**
