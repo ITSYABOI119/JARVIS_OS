@@ -18,6 +18,7 @@ unless --yes is given. Nothing else in the store deletes anything.
 import argparse
 import json
 import sys
+from pathlib import Path
 
 from .paths import default_db
 from .store import MemoryStore
@@ -101,6 +102,10 @@ def cmd_project(args) -> int:
         data, man = project.build(db)
         if args.manifest and project._inside_repo(args.manifest):
             raise project.ProjectionRefused("%s: %s" % (project.RULE_INSIDE_REPO, args.manifest))
+        # The manifest's directory is proven BEFORE the image is written, so a refusal never leaves
+        # an image behind without the manifest that describes it.
+        if args.manifest and not Path(args.manifest).resolve().parent.is_dir():
+            raise project.ProjectionRefused("%s: %s" % (project.RULE_NO_MANIFEST_DIR, args.manifest))
         project.write_image(args.out, data)
     except project.ProjectionRefused as exc:
         print(f"refused: {exc}", file=sys.stderr)

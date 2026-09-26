@@ -58,6 +58,13 @@ RULE_NOT_PRINTABLE = "a byte outside 0x20-0x7E in its key string or its text"
 RULE_TOO_LONG = "a text over 440 bytes"
 RULE_DUPLICATE_KEY = "a key equal to one already built"
 RULE_INSIDE_REPO = "an image path inside the repository"
+# MS3b-1: three more, so that no input escapes as a raw traceback. The two time rules run per row,
+# after the no-span rule and before the printable-ASCII rule; the UNC rule runs before the store is
+# opened; the manifest-directory rule is the CLI's, checked before any image is written.
+RULE_BAD_TIME = "a supporting span whose said_at is not an ISO timestamp"
+RULE_PRE_EPOCH = "a supporting span dated before 1970"
+RULE_UNC_PATH = "a store path on a network share (copy it local first)"
+RULE_NO_MANIFEST_DIR = "a manifest path whose directory does not exist"
 
 _SPAN_LINK = {
     "fact": ("fact_span", "fact_id"),
@@ -162,6 +169,14 @@ def _header(n) -> bytes:
 
 def build(db_path):
     """(image bytes, manifest) for the store at `db_path`, opened read-only."""
+    # A network share is refused BEFORE the path is resolved or opened. On Windows `resolve()` keeps
+    # the authority, so the read-only URI becomes file://server/... and SQLite rejects it ("invalid
+    # uri authority"); on Linux the same backslash string is no share at all, its drive is empty,
+    # and it would resolve under the current directory. The raw-string clause is what refuses it
+    # on both, and the drive clause catches a share spelled any other way on Windows.
+    raw = str(db_path)
+    if raw.startswith("\\\\") or raw.startswith("//") or Path(raw).drive.startswith("\\\\"):
+        raise ProjectionRefused("%s: %s" % (RULE_UNC_PATH, raw))
     conn = _connect_ro(db_path)
     try:
         rows = _select(conn)
@@ -174,7 +189,13 @@ def build(db_path):
                 raise ProjectionRefused("%s: %s %d" % (RULE_NO_SPAN, table, r["id"]))
             support = distinct_days(said)
             newest = max(said)          # the string maximum; parsed once, after
-            t_ms = calendar.timegm(datetime.fromisoformat(newest).utctimetuple()) * 1000
+            try:
+                parsed = datetime.fromisoformat(newest)
+            except (ValueError, TypeError):
+                raise ProjectionRefused("%s: %s %d, %r" % (RULE_BAD_TIME, table, r["id"], newest)) from None
+            t_ms = calendar.timegm(parsed.utctimetuple()) * 1000
+            if t_ms < 0:
+                raise ProjectionRefused("%s: %s %d, %r" % (RULE_PRE_EPOCH, table, r["id"], newest))
             conf_x100 = math.floor(r["confidence"] * 100 + 0.5)
             key_string = _key_string(table, r)
             text = "%s (%s, %s)" % (_body(conn, table, r), r["source_kind"],

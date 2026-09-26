@@ -4571,5 +4571,50 @@ with _tempfile.TemporaryDirectory() as _td49:
           "build and a CLI run",
           _hashlib.md5(open(_db49, "rb").read()).hexdigest() == _before49)
 
+    # --- T49q-t MS3b-1: the inputs that escaped as raw tracebacks now refuse by name -------------
+    def _refusal49(fn):
+        """The refusal message, or 'raised <Type>: <msg>' for anything that is not a refusal."""
+        try:
+            fn()
+            return "no refusal"
+        except _proj49.ProjectionRefused as exc:
+            return str(exc)
+        except Exception as exc:                                   # noqa: BLE001 - recorded
+            return "raised %s: %s" % (type(exc).__name__, exc)
+
+    _s = _Store49(_T49 / "q.sqlite")
+    _s.fact("household", None, "household.topic", "camping", spans=("not-a-date",))
+    _db = _s.done()
+    _msg = _refusal49(lambda: _proj49.build(_db))
+    check("T49q refusal: a supporting span whose said_at is not an ISO timestamp, with a support "
+          "span and ASCII text, naming the bad-time rule",
+          _msg.startswith(_proj49.RULE_BAD_TIME), _msg[:160])
+
+    _s = _Store49(_T49 / "r.sqlite")
+    _s.fact("household", None, "household.topic", "camping", spans=("1969-12-31T23:59:59",))
+    _db = _s.done()
+    _msg = _refusal49(lambda: _proj49.build(_db))
+    check("T49r refusal: a supporting span dated before 1970 (a negative t_ms), naming the "
+          "pre-epoch rule",
+          _msg.startswith(_proj49.RULE_PRE_EPOCH), _msg[:160])
+
+    _unc49 = r"\\server\share\h.sqlite"
+    _msg = _refusal49(lambda: _proj49.build(_unc49))
+    check("T49s refusal: a store path whose string holds two leading backslashes "
+          "(\\\\server\\share\\h.sqlite) is refused by name before it is resolved or opened",
+          _unc49[:2] == "\\\\" and _msg.startswith(_proj49.RULE_UNC_PATH), _msg[:160])
+
+    _s = _Store49(_T49 / "t.sqlite")
+    _s.fact("household", None, "household.topic", "camping")
+    _db = _s.done()
+    _img49t = _T49 / "t.img"
+    with _cl49.redirect_stdout(_io49.StringIO()), _cl49.redirect_stderr(_io49.StringIO()) as _se49:
+        _rc49t = _cli49.main(["--db", _db, "project", "--out", str(_img49t),
+                              "--manifest", str(_T49 / "no_such_dir" / "m.json")])
+    check("T49t the CLI refuses a --manifest whose directory does not exist, exit 3 naming the "
+          "rule, BEFORE any image is written: the image path does not exist afterwards",
+          _rc49t == 3 and _proj49.RULE_NO_MANIFEST_DIR in _se49.getvalue() and not _img49t.exists(),
+          repr((_rc49t, _se49.getvalue()[:160], _img49t.exists())))
+
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
 sys.exit(1 if FAILS else 0)
