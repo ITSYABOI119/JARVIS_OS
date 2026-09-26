@@ -3805,3 +3805,56 @@ Two CI steps were added: `Phase 5: Semantic-store parser round-trip (C -> Python
 - **A purge on the Main PC does not reach the box.** The box has no delete, and an upsert never removes an absent
   key. A purged belief leaves the box only when the whole region is zeroed and re-projected.
 - **MS3b, the operator's write, is next.**
+
+## MS3a corrections — 2026-09-26 — the 27-row table's home, the box paragraph's qualification, and four low findings for MS3b
+
+The strategist verified MS3a against `git archive 67333d0`, not against its report. It holds: the committed
+`project` verb and the strategist's scratch reference projector, each written from the pre-registered
+rules alone and independently of the other, produce the identical 2,097,664-byte image (md5
+`10e4e0fe6ff9be360b14bb75ce68d039`) and
+manifests that agree on all 302 leaves; object identity, neutrality (176 leaves, 0 differing), the unchanged
+`bench_ms0` output without `--out-db`, the CI counts (141 and 148) and all nine mutants reproduced. All seven of
+the report's deviations are accepted, and so is the read-only connect's URI quoting, which is identical on an
+ordinary path.
+
+### Superseded by these corrections
+
+The original lines are left exactly as they are. Each is quoted here, reflowed onto one line, and is
+**superseded by the corrections below**:
+
+- *The MS3a section:* "All 27 records equal the design's table" (§1)
+
+### 1. The 27-row table's home
+
+The design's §9 pre-registers MS3a's bands in aggregate — among them 27 records with every key distinct, the
+image's exact 2,097,664 bytes and the three md5s. It does not carry the 27 rows. They are the MS3a prompt's §4.6
+table, measured on the strategist's reference projector and pinned verbatim in `test_projection_roundtrip.py`'s
+`EXPECTED`, which is their only home in the repository. The records equal that pre-registered table on the seven
+fields it carries. The test's module docstring, its `EXPECTED` comment and its RT2d label all attributed the rows
+to the design, and all three were corrected at `73f8080`, with the 27 rows byte-unchanged and the round trip
+still 15/15.
+
+### 2. The box paragraph's qualification
+
+The MS3a section reports the zero read of the box's region. It is complete with the design's own two
+qualifications. First, a zero read shows what the region holds now, not its history. Second, two
+semantic-store writes are recorded on 2026-07-04, each with `JARVIS_SEMANTIC` transiently 1: goal 4's M1 smoke,
+two 1200-second KVM legs against the test image, and its M2 smoke (`1d539fd`), whose venue no record names. No
+record places a write to the box's region on bare metal.
+
+### 3. Four low findings, for MS3b
+
+None can corrupt an image. A build is all-or-nothing, and the one CLI ordering fault leaves a complete image
+without its manifest. They are recorded because MS3b is where the builder's output meets a real device:
+
+- **Two errors escape the named refusals.** An unparseable `said_at` raises a raw `ValueError` from
+  `datetime.fromisoformat`, and a `said_at` before 1970 makes `t_ms` negative and raises a raw `struct.error`.
+  Both should be `ProjectionRefused` with a named rule.
+- **The CLI's ordering.** `cmd_project` writes the image before it finds out that the `--manifest` directory is
+  missing, so it can leave an image without a manifest. An in-repo manifest path is refused first, correctly.
+- **A UNC store path breaks the read-only connect.** `Path(...).as_posix()` gives `//server/share/...`, and SQLite
+  rejects the resulting `file://server/...` URI with `invalid uri authority`. The store lives under
+  `%USERPROFILE%`, so this does not arise today.
+- **`--parse` exits 5 on a wrapped region.** Its count caps at 4096 while `header_total` keeps climbing, and exit
+  0 requires the two to be equal. That is the pre-registered exit table, not a defect. A post-write validator must
+  still never read exit 5 as corruption once a region has wrapped; MS3b's image is 27 records and does not wrap.
