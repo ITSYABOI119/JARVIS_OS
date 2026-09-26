@@ -3858,3 +3858,189 @@ without its manifest. They are recorded because MS3b is where the builder's outp
 - **`--parse` exits 5 on a wrapped region.** Its count caps at 4096 while `header_total` keeps climbing, and exit
   0 requires the two to be equal. That is the pre-registered exit table, not a defect. A post-write validator must
   still never read exit 5 as corruption once a region has wrapped; MS3b's image is 27 records and does not wrap.
+
+## MS3b-1 — 2026-09-26 — the builder's fixes and the -Project tool, proven without writing the device
+
+MS3b splits in two by the operator's decision. **MS3b-1**, this section, builds the tool and proves every leg it
+can without writing the device. **The operator's run** writes the device, from a runbook the strategist writes
+after this lands. **MS3b-2** records that run. The board's MS3 row flips `DONE` only in MS3b-2's commit.
+
+| commit | what | CI run |
+|---|---|---|
+| `21fbe43` | the design: MS3b refined before any MS3b code (md5 `b48d69609c57b480efa6015abafa4ec8`, the strategist's pinned value) | 36231949845, green |
+| `d3a07c8` | C1, the builder's three fixes | 36232080520, green |
+| `7611d68` | C2, `-Project` and `-ProjectRestore` on `jarvis_admin.ps1`, and their unit test in CI | 36233137859, green |
+
+### 1. The builder's fixes
+
+Three of the four low findings the MS3a corrections recorded are fixed, each a refusal that names its rule:
+
+- **`RULE_BAD_TIME`** and **`RULE_PRE_EPOCH`.** The `t_ms` computation catches `ValueError` and `TypeError`
+  from `datetime.fromisoformat`, and a negative `t_ms` refuses. Both run per row, after the no-span rule and
+  before the printable-ASCII rule.
+- **`RULE_UNC_PATH`.** `build()` refuses before it resolves or opens a path whose raw string starts with two
+  backslashes or two slashes, or whose drive starts with two backslashes. The reason differs by venue, as
+  measured:
+  - **On Windows**, `resolve()` keeps the authority, so the path is never rewritten to a local one. The
+    read-only URI becomes `file://server/...`, and SQLite refuses it with `invalid uri authority`.
+  - **On Linux**, where the suite and CI run, the same string is not a share. Its drive is empty,
+    `resolve()` places it under the current directory, and the open fails with
+    `unable to open database file`. The raw-string clause is what refuses it by name there.
+- **`RULE_NO_MANIFEST_DIR`.** `cmd_project` refuses a `--manifest` whose directory does not exist BEFORE
+  `write_image` runs. After the refusal the image path does not exist.
+
+The fourth finding, `--parse` exiting 5 on a wrapped region, is a limit to respect, not a defect. MS3b's image
+is 27 records and never wraps.
+
+T49q–T49t take the memory suite from **353 to 357 locally, and 356 on the runner** (T22g skips there). The round
+trip stays 15/15, and the image md5 is unchanged.
+
+**The mutants**, each on a `git archive` copy of `d3a07c8`, with the control (357 / 15 / 23) before and after:
+
+| # | mutant | measured |
+|---|---|---|
+| M43 | the `RULE_BAD_TIME` catch removed | T49q, the detail a raw `ValueError: Invalid isoformat string: 'not-a-date'` |
+| M44 | the negative-`t_ms` check removed | T49r, the detail a raw `struct.error: 'Q' format requires 0 <= number <= 18446744073709551615` |
+| M45 | the UNC check removed | T49s, the detail a raw `OperationalError: unable to open database file` (the Linux form) |
+| M46 | the manifest-directory check moved after `write_image` | T49t: the refusal still names the rule, and the image exists afterwards |
+
+Each is exactly its prediction, with 0 tracebacks.
+
+### 2. `-Project` and `-ProjectRestore`
+
+**The modes.** `jarvis_admin.ps1` now has five mutually exclusive modes:
+
+- **`-Project`** runs the design's gates in order.
+  - Gate 1: tools, constants, P1.
+  - Gates 2–4: L1 (the image's size and three md5s equal the manifest's), L1b (the image md5 is the expected
+    image), L2 (the header decodes to JSEM, version 1, the manifest's `n`, `n` mod 4096) and L3
+    (`JARVIS_SEMANTIC` is 0).
+  - Gate 5: the box clone holds the parser.
+  - Gate 6: drop_caches.
+  - Gate 7: the anchors before.
+  - Gate 8: the region equals the expected pre-image.
+  - Gate 9: the pre-image on both hosts.
+  - Gate 10: the image to the box.
+  - Gate 11: the plan, then the typed `PROJECT-WRITE-NOW`.
+  - Gates 12–13: the records, then the header.
+  - Gate 14: drop_caches.
+  - Gates 15–16: the size-checked `iflag=direct` readback and its three md5s.
+  - Gate 17: the anchors after.
+  - Gate 18: `parse_semantic.py`'s count.
+  - Gate 19: cleanup.
+- **`-Project -DryRun`** stops at gate 11. It removes what it staged from both hosts, proves it gone, prints
+  `DRY RUN - nothing was written`, and exits 0 without prompting.
+- **`-ProjectRestore`** writes a retained pre-image back with the same discipline, behind `PROJECT-RESTORE-NOW`.
+
+**The refusals.** `-Yes` is refused with either mode, and `-DryRun` without `-Project` (exit 3).
+
+**The exit codes.** New codes 7 and 90–99 name the gates. 10, 40, 41, 50, 51, 61 and 62 keep their meanings.
+
+**Placement is load-bearing.** Everything after the `-Rekey` header is the re-key procedure, unguarded. Both new
+blocks sit above it, and every terminating path of each ends in `exit`.
+
+**The builders are pure:** no script-scope read, no double quote, `bs=512` on every `dd`, and `set -o pipefail`
+on every md5 pipeline. Every JSEM write goes through `Get-JsemWritePlan`, which calls `Get-CmdImageWrite` twice:
+records first, then header, both `conv=fsync,notrunc`. The layout comes from `Get-JsemLayout`, which derives
+every value through the script's own `Get-HeaderConst`.
+
+**The chooser** forwards its values through the pure `Get-ForwardArgs`, which drops empty values, and it
+transcribes them beside the selection.
+
+**The unit test**, `phasec/scripts/test_jarvis_admin_jsem.ps1`, runs **48/48** under Windows PowerShell 5.1. On
+the CI runner it runs under **pwsh 7.6.6: 48/48**, which is the only proof of its `pwsh` leg. It extracts 15
+functions by AST: the ten builders, `Get-JsemLayout`, `Get-ForwardArgs`, and the three existing helpers they call.
+It asserts:
+
+- the layout (21110000, 4097 sectors = 2,097,664 bytes, tail 21108177, JACT 21120000, the three LE magics);
+- every builder's golden string, and each property named separately;
+- the plan's order at the real base and at base 0;
+- the forwarding and the menu's nine keys;
+- the placement: both blocks end above the `-Rekey` anchor at line 2018 and end in `exit`, and exactly two
+  `Get-CmdImageWrite` calls exist, both inside the plan.
+
+**The mutants**, each on a `git archive` copy of `7611d68`, judged by the unit test under 5.1, with the control
+48/48 before and after:
+
+| # | mutant | measured |
+|---|---|---|
+| M47 | the write uses `bs=4096` | T5 imageWrite golden, T5b (`bs=512`), T6d (the plan verbatim) |
+| M48 | a double quote in `Get-CmdRangeMd5` | T5a (no double quote), T5 rangeMd5 golden |
+| M49 | drop caches by `echo 3 >` | T5k (sysctl, no redirect), T5 dropCaches golden |
+| M50 | the tail computed without the `+ 1` | T4b (21108176) |
+| M51 | `notrunc` removed | T5d, T5f (`notrunc` named), T5 imageWrite golden, T6d |
+| M52 | the `-Project` block's final `exit 0` removed | T8d |
+| M53 | the plan returns the header first | T6b, T6c, T6d, T6e |
+| M54 | `Get-ForwardArgs` keeps an empty value | T7a, T7b |
+| M55 | the `Image` key removed from the menu's map | T7c |
+| M56 | a direct `Get-CmdImageWrite` added to `-Project` | T8e (3 calls, 1 outside the plan) |
+
+Every prediction is met. Each extra check is the golden or verbatim-plan check of the same builder.
+
+**PSScriptAnalyzer 1.24.0** reads 0 errors over all four `phasec/scripts/*.ps1`, locally under 5.1 and on the
+runner. There are 158 warnings in each venue; `jarvis_admin.ps1` went from 35 to 45. The parse gate is clean,
+and the A2 invariant's four greps pass.
+
+### 3. `notrunc`, and what the rehearsal covers
+
+GNU dd truncates a regular-file output unless `conv=notrunc` is given. So a header write at seek 0 into a FILE
+destroys the records written just before it: measured on the box at coreutils 9.4, the file ends 512 bytes long.
+On the device it changes nothing, so one builder serves both the rehearsal and the real write.
+
+**What `-Check` rehearses.** It runs both planned writes into a file on the box, and the file ends
+2,097,664 bytes, byte-identical to its throwaway. That covers:
+
+- the builder's real `conv`;
+- the input `skip`;
+- the count split;
+- the plan's `base + 1`;
+- the records-then-header order.
+
+It does **not** cover the absolute device seeks. The unit test asserts them at the real base, and `-Check` and
+the dry run print them. Only the operator's readback (R2) and anchors (A1) will prove the device ran exactly
+those strings.
+
+### 4. The live evidence — the device read, never written
+
+- **The box clone** was pulled `--ff-only`, from `a8f664e` to `7611d68`.
+  - Before the pull, `merge-base --is-ancestor 848e8a5` exited 128; after it, 0.
+  - `parse_semantic.py` is present and clean.
+- **The image**, built by `bench_ms0.py --out-db` and the `project` verb: 2,097,664 bytes, `n` 27, md5
+  `10e4e0fe6ff9be360b14bb75ce68d039`, header `614e67a66fe3c3ab4b4ad094b73ed893`, records
+  `8a57e095ba1526d36e70b6098a666294`.
+- **`-Check`**, from Windows PowerShell 5.1, exits **0**, and every projection leg passes:
+  - the file rehearsal is identical to its throwaway (md5 `f3317bd85f03b1419636d53371904783`);
+  - the region is reported as `1365c929581e56c8bbc59308feeab8e3`, the expected pre-image;
+  - the anchors read: the episodic header `066d7a49681b65c049c3c8488eb2604d` with magic `4950454a` (JEPI), the
+    episodic tail `682941ce1951db355ee17229efe08413`, and the JACT head `2207fe2105a5891177e2dc982c1a6439` with
+    magic `5443414a` (JACT);
+  - drop_caches works;
+  - the cmp probe names both planted bytes, `101:156:99` and `70001:212:43`;
+  - the box clone holds the parser;
+  - L1, L1b, L2 and L3 pass;
+  - every probe is proven absent;
+  - the plan prints `seek=21110001` for the records, then `seek=21110000` for the header.
+- **`-Project -DryRun`** exits **0**. It ran gates 1–10 on the real box, including a real pre-image
+  (`jsem_pre_20260926T093819Z.bin`, md5 `1365c929...` on both hosts), and printed both writes verbatim:
+  - `sudo -n dd if=$HOME/jsem.img of=/dev/nvme0n1 bs=512 skip=1 seek=21110001 count=4096 conv=fsync,notrunc status=none`
+  - `sudo -n dd if=$HOME/jsem.img of=/dev/nvme0n1 bs=512 skip=0 seek=21110000 count=1 conv=fsync,notrunc status=none`
+
+  It printed no `-Rekey` line and no `B1 PC backup` line. Measured afterwards:
+  - the region reads back in full, 2,097,664 bytes, md5 `1365c929...`;
+  - all five anchor values are unchanged;
+  - no `jsem.img`, `jsem_post.bin` or `jsem_pre_*.bin` remains on the box, and no `jsem_pre_*.bin` in the Main
+    PC's admin directory.
+- **The L1 negative control:** `-Project -DryRun -Image <a path that does not exist>` exits **90** at L1, naming
+  that path, and leaves nothing on the box.
+
+### Honest scope
+
+- **The device has not been written.** Every leg above reads it, or writes a file in the box's home directory
+  and proves that file gone.
+- **The operator's run is next,** from a runbook the strategist writes after this lands. Its done-when is the
+  design's: the header, record area and whole region read back as `614e67a6...`, `8a57e095...` and
+  `10e4e0fe...`; every anchor unchanged; the pre-image retained on both hosts; `parse_semantic.py` reading 27
+  records off the device.
+- **MS3b-2 records that run,** and the board's MS3 row flips `DONE` in that commit.
+- **The data is synthetic.** The owner's store does not exist yet, and nothing on the box reads `JSEM`
+  (`JARVIS_SEMANTIC` is 0).
