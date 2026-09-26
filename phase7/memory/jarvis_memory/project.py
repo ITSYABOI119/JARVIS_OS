@@ -188,6 +188,13 @@ def build(db_path):
             if not said:
                 raise ProjectionRefused("%s: %s %d" % (RULE_NO_SPAN, table, r["id"]))
             support = distinct_days(said)
+            for s in said:              # EVERY supporting span, not only the newest: each is a support day
+                try:
+                    p = datetime.fromisoformat(s)
+                except (ValueError, TypeError):
+                    raise ProjectionRefused("%s: %s %d, %r" % (RULE_BAD_TIME, table, r["id"], s)) from None
+                if calendar.timegm(p.utctimetuple()) < 0:
+                    raise ProjectionRefused("%s: %s %d, %r" % (RULE_PRE_EPOCH, table, r["id"], s))
             newest = max(said)          # the string maximum; parsed once, after
             try:
                 parsed = datetime.fromisoformat(newest)

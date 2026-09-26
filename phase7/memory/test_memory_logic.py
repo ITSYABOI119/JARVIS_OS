@@ -4616,5 +4616,23 @@ with _tempfile.TemporaryDirectory() as _td49:
           _rc49t == 3 and _proj49.RULE_NO_MANIFEST_DIR in _se49.getvalue() and not _img49t.exists(),
           repr((_rc49t, _se49.getvalue()[:160], _img49t.exists())))
 
+    # --- T49u-v MS3b-1 fix: every supporting span is checked, not only the newest ----------------
+    _s = _Store49(_T49 / "u.sqlite")
+    _s.fact("household", None, "household.topic", "camping", spans=("0000-garbage", "2026-03-01T08:00:00"))
+    _db = _s.done()
+    _msg = _refusal49(lambda: _proj49.build(_db))
+    check("T49u refusal: a bad said_at on a span that is NOT the newest (another span sorts above it) "
+          "is refused by the bad-time rule, naming that span",
+          _msg.startswith(_proj49.RULE_BAD_TIME) and "'0000-garbage'" in _msg, _msg[:160])
+
+    _s = _Store49(_T49 / "v.sqlite")
+    _s.fact("household", None, "household.topic", "camping",
+            spans=("1960-01-01T00:00:00", "2026-03-01T08:00:00"))
+    _db = _s.done()
+    _msg = _refusal49(lambda: _proj49.build(_db))
+    check("T49v refusal: a pre-1970 span that is NOT the newest is refused by the pre-epoch rule, "
+          "naming that span",
+          _msg.startswith(_proj49.RULE_PRE_EPOCH) and "'1960-01-01T00:00:00'" in _msg, _msg[:160])
+
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
 sys.exit(1 if FAILS else 0)
