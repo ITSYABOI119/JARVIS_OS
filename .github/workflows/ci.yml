@@ -1987,8 +1987,11 @@ jobs:
     # defect (PowerShell variable names are case-INSENSITIVE, so a local `$lines`
     # silently shadowed the `$Lines` parameter and the -Lines option never worked) --
     # that parses perfectly and is only visible by EXECUTING the script. `-Check` remains
-    # the execution substitute, and the "CI: N/A by design" stance for these scripts is
-    # unchanged: a Windows .ps1 cannot be RUN in this Linux CI.
+    # the execution substitute for the operator scripts themselves, which are still
+    # never run here - they need ssh, a live box and an operator. That is no longer a
+    # claim about .ps1 files in general: the step after this one, "Phase C: jarvis_admin
+    # JSEM builders and layout", runs under pwsh and executes jarvis_admin.ps1's pure
+    # JSEM builders and layout, extracted by AST.
     #
     # NETWORK DEPENDENCY: Install-Module fetches from PSGallery -- this step's one
     # external dependency. The version is pinned so the gate is reproducible; an
@@ -2054,3 +2057,7 @@ jobs:
         foreach ($e in $errors) { Write-Output "::error::$($e.ScriptName):$($e.Line) $($e.RuleName) -- $($e.Message)" }
         if ($errors.Count -gt 0) { exit 1 }
         Write-Output "PowerShell parse-level floor holds (parsed, not executed)"
+
+    - name: "Phase C: jarvis_admin JSEM builders and layout (pwsh, never touches a device)"
+      shell: pwsh
+      run: ./phasec/scripts/test_jarvis_admin_jsem.ps1
