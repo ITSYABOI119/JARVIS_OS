@@ -4044,3 +4044,214 @@ those strings.
 - **MS3b-2 records that run,** and the board's MS3 row flips `DONE` in that commit.
 - **The data is synthetic.** The owner's store does not exist yet, and nothing on the box reads `JSEM`
   (`JARVIS_SEMANTIC` is 0).
+
+## MS3b-1 fixes — 2026-09-26 — the anchors re-read after every post-write gate failure, the staged image re-verified, -Check running every shape but the two device writes, and the failure paths measured on a replica
+
+The strategist verified MS3b-1 (`21fbe43` … `b7a317b`) against `git archive b7a317b` and the live box, not against its
+report: five independent verifiers, and a sixth that replayed the REAL script's write path on a replica disk. The
+successful write path held. What follows is what did not, and the fixes. The device is still unwritten.
+
+| commit | what | CI run |
+|---|---|---|
+| `983fa71` | C1, every supporting span's time checked | 36239906692, green |
+| `74f7589` | C2, the post-write discipline, the staged re-verify, `-Check`'s missing legs, the restore's source checks | 36241480260, green |
+
+### 1. What verification found
+
+- **DW-1, the anchors after the write were read only on the success path.**
+  - The design's §9 paragraph "MS3b refined 2026-09-26" lists the read-back before the three anchors, and the
+    MS3b-1 section above numbers them gates 15–16 and gate 17. Every `Fail` after the first write exited.
+  - So a write that damaged a neighbour failed R2 first, exited 61, and never reported the damage. The 61 message
+    then sent the operator to `-ProjectRestore`, which took its own anchors-before from the damaged disk, printed
+    `A1 every anchor is unchanged` and exited 0.
+  - Measured by the strategist on the replica: a hook that corrupted LBA 21,120,005, inside the JACT head, and changed
+    the staged image gave exit 61 with no anchor read after the write, and the restore then exited 0.
+  - This was a defect in the pre-registered order combined with every post-write `Fail` exiting — the
+    strategist's specification, implemented faithfully — not a coder deviation. The design's rule is unconditional:
+    "Three anchors, each read before the write and required unchanged after it".
+- **What an exit from the write window used to print.** A Ctrl+C, or an ssh that hung, printed nothing at all. An ssh
+  that dropped printed only that gate's own FAIL line, which never said the region might now hold part of the image
+  or gave the restore command.
+- **F1, `-Check` did not run every shape `-Project` uses:** the header and records md5 slices, the parse and the pull
+  back to this PC. Gates 16 and 18 would have run for the first time during the operator's write, and a broken
+  slice would have read as a false `Fail 61`.
+- **DW-2:** the staged image was checked (T2) before a prompt that can wait indefinitely, and written by name after it.
+- **The smaller ones:**
+  - DW-4: a restore with no box copy exited 97 with no remedy, and a restore onto its own content was a silent no-op;
+  - F4: a staged `~/jsem.img` or `~/jsem_post.bin` left by an abort was not listed;
+  - F5: an explicit `-PreImage` leaf reached root commands unvalidated;
+  - F2 / F3: the `-Check` help and the meanings of codes 94 and 5 were stale;
+  - CI-1: the A4 header's "(~2,200 lines)" was stale;
+  - C1-1: the builder's time rules looked only at the NEWEST span, so `('0000-garbage', '2026-03-01T08:00:00')`
+    built with support 2.
+- **The record:** R1, the Operator Admin row counted two CI steps where there are three; R2, the sentence superseded
+  in §6 below; R3, more stale "no ci.yml step" stances than MS3b-1 named (§8).
+
+### 2. C1 — every supporting span's time is checked
+
+`build()` now checks EVERY entry of a row's spans before `newest = max(said)`: an unparseable one refuses with
+`RULE_BAD_TIME`, a pre-1970 one with `RULE_PRE_EPOCH`, each naming the offending span. `t_ms` is unchanged — the
+epoch ms of the string maximum, the pre-registered rule — and the newest-span lines stay after the loop.
+
+- T49u (`('0000-garbage', '2026-03-01T08:00:00')`) refuses with `RULE_BAD_TIME` naming `'0000-garbage'`; T49v
+  (`('1960-01-01T00:00:00', '2026-03-01T08:00:00')`) refuses with `RULE_PRE_EPOCH`; T49q and T49r still pass.
+- The suite goes from 357 to **359 locally and 358 on the runner** (T22g skips there). The round trip stays 15/15.
+- The `project` verb over a fresh bench store still gives `10e4e0fe6ff9be360b14bb75ce68d039`, 27 records.
+
+**M57**, on a `git archive` copy of `983fa71`, the control 359/359 before and after: the per-span loop removed, which
+leaves `project.py` byte-identical to `b7a317b`'s (md5 `2ff72ff6130325a0231ff99aa5ba8597` both). It fails T49u and
+T49v and only them, 357/359, with 0 tracebacks.
+
+### 3. C2 — `jarvis_admin.ps1`
+
+- **The post-write hook.** From the flag set IMMEDIATELY before the first write, every `Fail`
+  first re-reads the three anchors, passing its own code as the read-failure code, then exits:
+  - 62 when an anchor changed (a value or a magic), or when the failure was already the anchor check's own verdict,
+    which is not re-read;
+  - the original code when the re-read could not READ an anchor, printed as
+    `the anchors could not be READ after the write -- the sector is NOT proven changed; the original code stands`;
+  - the original code when the anchors are unchanged, after `A1 every anchor is unchanged`.
+
+  Every exit prints the WRITTEN banner once, with the restore command, and writes one transcript line ending
+  `[anchors after the write: changed | unchanged | unreadable | not re-read (code 62)]`.
+- **On the success path the anchors stay gate 17**, after the readback. The hook is on the failure paths, not a
+  reorder. It makes the design's "required unchanged after it" hold on every failing gate whose anchor read succeeds.
+- **Interruptions.** Each JSEM block wraps its write window in `try` / `catch` / `finally`. A Ctrl+C, a hung ssh that
+  the operator interrupts, or an unhandled PowerShell error prints the restore command, writes
+  `ABORT: interrupted inside the JSEM write window` and exits 8, a new code — and reads no anchor, because the
+  connection may be the thing that failed. A dropped ssh surfaces as a failed gate, so it goes through the hook; with
+  the connection still down its re-read fails and is reported as a read failure with the original code. In both
+  cases the sidecar comparison in `-ProjectRestore` is the next check. The `catch` names an unhandled error and
+  rethrows; a `catch` never sees an `exit`, measured under 5.1.
+- **A0 persisted.** Gate 7 writes the five anchor values to the transcript in one line, and gate 9 writes
+  `<pre-image>.anchors.txt` beside the local pre-image (the five values, the UTC stamp, the pre-image md5).
+  `-ProjectRestore` prints each sidecar value beside its value now, and on any difference WARNS, never fails: after a
+  JARVIS boot a difference is expected.
+- **The staged image re-verified after the typed word** with T2's own command strings (`Fail 41`), and the restore's
+  box copy with its own (`Fail 97`). On a 61 or a 98 the staged source is hashed again, so the diagnostic says
+  whether the source or the device moved.
+- **The restore's source:** its leaf must be `jsem_pre_<yyyyMMddTHHmmssZ>.bin` however it was resolved; a missing or
+  different box copy prints the exact `scp` push, never runs it; a source equal to the region warns and lists every
+  pre-image with its md5.
+- **Staged files are artifacts** from the moment they exist (`~/jsem.img`, `~/jsem_post.bin`,
+  `~/jsem_restore_post.bin`), and leave the list once a cleanup proves them gone.
+- **`-Check`** now also runs both md5 slices of the rehearsal file (against md5s computed on this PC), the pull of that
+  file back to this PC, and the parse (on the verified image as `jsem_probe_img.bin`, requiring the manifest's `n`;
+  with no valid image, on the region's copy as a shape check). Only the two device writes are unexercised.
+- **Help, `.NOTES` and CI:** `.PARAMETER Check` names the legs; code 94 reads "not the expected pre-image, or could
+  not be read" and 5 "a prerequisite is missing, or a -Check / -DryRun shape or its cleanup failed"; a "THE JSEM
+  WRITE WINDOW" paragraph follows "THE ONE WINDOW"; the A4 header lost its line count.
+- **The unit test grows from 48 to 63 checks:** 63/63 under Windows PowerShell 5.1 and 63/63 under pwsh 7.6.6 on the
+  runner (run 36241480260). The new checks: both banner texts; the pre-image-name truth table; the sidecar round trip
+  and its ASCII; and, over the AST, the hook in `Fail`, the flag's single placement after each block's `Read-Host`
+  and before its first write, the re-verify between them, each block's `finally`, and `-Check`'s literal
+  `-Part header` / `-Part records`, parse and pull calls.
+- **PSScriptAnalyzer 1.24.0:** 0 errors over the four scripts, locally under 5.1 and on the runner, and 165 warnings in
+  each (158 before): `jarvis_admin.ps1` 45 → 50, the test 0 → 2. The A2 invariant's four greps pass.
+
+**The mutants**, each on a `git archive` copy of `74f7589`, judged by the unit test under 5.1 with the control 63/63
+before and after, and where named by the replica too:
+
+| # | mutant | unit test | replica |
+|---|---|---|---|
+| M58 | the post-write hook removed from `Fail` | T10a (62/63) | S3: exit **8**, not the predicted 61 — the R2 FAIL line, no anchor re-read, no `ANCHOR CHANGED`; the banner is printed by the block's `finally`, because `Fail 61`'s exit runs it and the banner flag was never set |
+| M59 | the staged re-verify removed from `-Project` | T10c for `-Project` (62/63) | S5: one hook entry, both writes run, exit 0 — the device is written with the staged file as it stood, as predicted |
+| M60 | `-Check`'s slice legs removed | T10f (62/63) | — |
+| M61 | `Test-JsemPreImageName` accepts any `.bin` | T9d (62/63) | — |
+| M62 | the flag set before the `Read-Host` in `-Project` | T10b and T10c for `-Project` (61/63) | — |
+
+### 4. The live evidence — the real box, no device write
+
+Taken after `74f7589` was pushed and green, from an ordinary session: `ssh` and `scp` resolved to the Windows OpenSSH
+client, and no harness variable was set.
+
+- **The box clone** was pulled `--ff-only`, from `7611d68` to `74f7589`, and holds `848e8a5` with a clean
+  `parse_semantic.py`.
+- **`-Check`**, from Windows PowerShell 5.1 with nothing on 8800, exits **0**. Its projection section passes every leg,
+  the new ones included:
+  - both md5 slices of the rehearsal file, header `ce16307a762c86703ba8aef4da5c2108` and records
+    `5a909e11271a09c7623890e075d11672`, equal to the throwaway's, computed on this PC;
+  - `pull shape works: ~/jsem_probe.out pulled to this PC, md5 f3317bd85f03b1419636d53371904783`;
+  - `parse shape works: parse_semantic.py reads 27 records off ~/jsem_probe_img.bin (the verified image)`;
+  - item 1's second info line in the new wording, and item 7's naming the two device writes as the only shapes not
+    exercised;
+  - the region `1365c929581e56c8bbc59308feeab8e3`, the anchors unchanged from MS3b-1's reading, every probe proven
+    absent.
+- **`-Project -DryRun`** exits **0**. It ran gates 1–10 on the real box and printed both writes verbatim.
+  - The transcript gained the A0 line, `exit=recorded`:
+
+    ```
+    A0 episodic header md5=066d7a49681b65c049c3c8488eb2604d; episodic header magic=4950454a; episodic tail md5=682941ce1951db355ee17229efe08413; JACT head md5=2207fe2105a5891177e2dc982c1a6439; JACT head magic=5443414a
+    ```
+  - The sidecar `jsem_pre_20260926T134121Z.bin.anchors.txt` was written at gate 9 and removed with the pre-image.
+  - No `-Rekey` line and no `B1 PC backup` line was printed.
+
+  Measured afterwards, independently:
+  - the region reads back in full, 2,097,664 bytes, md5 `1365c929581e56c8bbc59308feeab8e3`;
+  - all five anchor values are unchanged;
+  - no `jsem*` file is on the box, and no `jsem_pre_*` file or sidecar on this PC.
+
+### 5. The replica — every failure path, on a disk that is not the box
+
+**The harness** (the strategist's, copied into the coder's scratch; never committed):
+- a copy of the script that differs in three lines — one `Read-Host` override inserted at script scope after
+  `$ErrorActionPreference = 'Stop'`, and the two `[Console]::IsInputRedirected` guards replaced by `$false`;
+- fake `ssh` / `scp` that run each command in WSL against a 21,200,000-sector sparse file, rewriting `/dev/nvme0n1` to
+  it, and log every command as the script sent it;
+- `USERPROFILE` sandboxed, so the operator's admin directory and transcript are never touched;
+- a fresh `setup.sh` before each scenario that starts one: seeded `JEPI` / `JACT` magics, random anchors and
+  sentinels, a clone of the repository at `74f7589`, and md5 snapshots of 11,000 sectors below the region and 10,903
+  above it (`lo` / `hi`);
+- every run started as a child `powershell.exe`, with `ssh` and `scp` proven to resolve to the fakes first.
+
+S5 changed the staged image through a counter hook, with no change to the harness.
+
+| # | run | exit | key lines | `verify.sh` | trace |
+|---|---|---|---|---|---|
+| S1 | `-Project`, answered `PROJECT-WRITE-NOW` | **0** | R2 `10e4e0fe…`, `A1 every anchor is unchanged`, `P … 27 records`; the sidecar written beside the local pre-image; no banner | region `10e4e0fe…`; `lo`, `hi` match | 0 hooks; the two writes, `seek=21110001` then `seek=21110000`, both rc 0 |
+| S2 | then `-ProjectRestore`, answered `PROJECT-RESTORE-NOW` | **0** | resolved to S1's pre-image `jsem_pre_20260926T122052Z.bin`; the five sidecar values printed beside now, all `equal`; A1 unchanged | region `1365c929…`; `lo`, `hi` match | 0 hooks; two writes from the pre-image, rc 0 |
+| S8 | IMMEDIATELY after S2, `-ProjectRestore`, answered `no` | **50** | `the region already holds this pre-image … would change nothing`, and the one pre-image listed with its md5; `not confirmed -- NOTHING was written` | region `1365c929…`; `lo`, `hi` match | 0 hooks; 0 device writes |
+| S3 | `-Project`, hook H3 before the records write | **62** | the re-verify passed; the source-changed warning; the R2 FAIL line; `ANCHOR CHANGED: JACT head md5` once; the WRITTEN banner once | region `574d500f…` (the changed staged file); `lo` matches; `hi` differs, by design: H3 wrote LBA 21,120,005 | 1 hook; both writes rc 0 |
+| S4 | `-Project`, `FAKE_FAIL` on the header write | **51** | the HEADER-write FAIL line; `A1 every anchor is unchanged`, printed by the hook; the WRITTEN banner once | region `6b2f90a6…` (records written, header not); `lo`, `hi` match | 0 hooks; records rc 0, header rc 1 injected |
+| S4r | then `-ProjectRestore`, answered `PROJECT-RESTORE-NOW` | **0** | resolved to S4's pre-image `jsem_pre_20260926T122240Z.bin`; sidecar all `equal` | region `1365c929…`; `lo`, `hi` match | two writes rc 0 |
+| S5 | `-Project`, answered, the COUNTER hook H5 | **41** | `the staged image changed after T2: ~/jsem.img is now … md5 '378d6e19…' … -- nothing was written`; no banner | region `1365c929…`; `lo`, `hi` match | **2** hook entries (T2's md5, then the re-verify's); **0** commands containing `of=/dev/nvme0n1` |
+| S6 | `-ProjectRestore`, no box copy (fresh `setup.sh`) | **97** | resolved to S5's pre-image `jsem_pre_20260926T122321Z.bin`; the FAIL line ends `run this yourself, then re-run: cd <admin dir>; scp jsem_pre_20260926T122321Z.bin jarvis:jsem_pre_20260926T122321Z.bin` | region `1365c929…` | 3 ssh commands, 0 writes |
+| S7 | S1 (exit 0), then a random sector written in WSL at LBA 21,108,180, then `-ProjectRestore`, answered | **0** | resolved to that run's pre-image `jsem_pre_20260926T122420Z.bin`; `episodic tail md5  sidecar 1add2693…  now 907af8d6…  DIFFERS`, the other four `equal`; then the fixed-text warning; the restore proceeds, A1 unchanged against its own before | region `1365c929…`; `hi` matches; `lo` differs, by design: it covers the edited sector | two writes rc 0 |
+| S9 | `-Project`, hook H9 (`chmod 000` before the header write), `chmod 600` before `verify.sh` | **51** | the HEADER-write FAIL line; `could not READ the anchor 'episodic header md5' after (exit 1 …)`; `the anchors could not be READ after the write -- … the original code stands`; the WRITTEN banner once; transcript `[anchors after the write: unreadable]` | region `6b2f90a6…`; `lo`, `hi` match | 1 hook; records rc 0, header rc 1 |
+| S10 | S1 (exit 0), then `-ProjectRestore`, answered, hook H10 before its readback | **62** | resolved to that run's pre-image `jsem_pre_20260926T122533Z.bin`; the readback passed; `ANCHOR CHANGED: JACT head md5` once; the RESTORE banner once | region `1365c929…`; `lo` matches; `hi` differs, by design: H10 wrote LBA 21,120,005 | 1 hook; two writes rc 0 |
+
+Every run's device writes were the two plan strings verbatim, and the fake rewrote the device path only when running
+them. The WRITTEN or RESTORE banner printed exactly once in each run that failed inside the write window, and never in
+a run that completed or stopped before its first write.
+
+### 6. The superseded sentence
+
+The MS3b-1 section above says: "Only the operator's readback (R2) and anchors (A1) will prove the device ran exactly
+those strings." That overclaims, and it stands as written. It is superseded by three statements:
+- the readback (R2) proves the region's final bytes equal the image;
+- the anchors (A1) prove that three sampled neighbours did not move;
+- the transcript records the exact command strings that ran.
+
+`-Check`'s item-1 info line printed the same claim; C2 rewords it to match.
+
+### 7. What `-Check` covers now
+
+The MS3b-1 section lists what `-Check` rehearsed. From `74f7589` it also runs both md5 slices, the parse and the pull,
+so the only shapes it does not exercise are the two device writes.
+
+### 8. Stale "no ci.yml step" stances, carried forward
+
+Each is false since A4 (`cfebeef`, 2026-08-03), which parses and lints every `phasec/scripts/*.ps1`, and each is left
+unchanged here:
+- the Control-IN Launcher row in CLAUDE.md, and its record entry in `docs/CLAUDE_RECORD.md`;
+- the Operator Menu row, with its `CI: N/A BY DESIGN`, and its record entry;
+- `phasec/docs/OPERATOR_MENU_DESIGN.md`, in three places (lines 117, 322 and 495);
+- `jarvis_menu.ps1`'s header comment (lines 49–50) and its inline comment at line 398;
+- `start_receiver.ps1`'s header comment (line 32).
+
+### Honest scope
+
+- **The device has not been written.** The replica wrote a sparse file in WSL; the live box was only read.
+- **The operator's run is next**, from the strategist's runbook. MS3b-2 records it, and the board's MS3 row flips
+  `DONE` in that commit.
+- **The data is synthetic,** and nothing on the box reads `JSEM` (`JARVIS_SEMANTIC` is 0).
