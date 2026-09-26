@@ -4,8 +4,10 @@
 The synthetic household (bench seed 1, 14 days, contract 6's committed extraction, the people layer,
 no embedder) is run through the benchmark with its store persisted, projected by
 jarvis_memory.project, and the image read back by the REAL semantic_store.c (test_semantic_store
---parse) and by phase3/scripts/parse_semantic.py. The expected numbers are the design's §9 MS3
-pre-registration: the strategist's reference projector's, which this implementation must reproduce.
+--parse) and by phase3/scripts/parse_semantic.py. The expected aggregate numbers (among them 27
+records, the image's 2,097,664 bytes and the three md5s) are the design's §9 MS3 pre-registration;
+the 27 rows are the MS3a prompt's §4.6 table. Both were measured on the strategist's reference
+projector, and this implementation must reproduce them.
 
 Run from the repo root, in WSL or CI, with the compiled C suite:
 
@@ -32,8 +34,8 @@ MD5_IMAGE = "10e4e0fe6ff9be360b14bb75ce68d039"
 MD5_HEADER = "614e67a66fe3c3ab4b4ad094b73ed893"
 MD5_RECORDS = "8a57e095ba1526d36e70b6098a666294"
 
-# The design's 27 expected records, verbatim: seq, key hex, support_count, confidence_x100, t_ms and
-# the key string, then ' :: ', then the text.
+# The pre-registered 27 records (the MS3a prompt's §4.6 table), verbatim: seq, key hex,
+# support_count, confidence_x100, t_ms and the key string, then ' :: ', then the text.
 EXPECTED = """
  1  175d274c5764de04  1  100  1772352470000  prof|fact|household:|household.topic|cycling  ::  household household topic cycling (stated_owner, 1 day)
  2  ea6554535a418e2c  1  100  1772525275000  prof|fact|household:|household.topic|pottery  ::  household household topic pottery (stated_owner, 1 day)
@@ -150,8 +152,8 @@ def main():
         fields = ("seq", "key", "support_count", "confidence_x100", "t_ms", "key_string", "text")
         bad = [(e["seq"], f, (r.get(f) if r else None), e[f]) for e, r in zip(exp, recs + [None] * 27)
                for f in fields if not r or r.get(f) != e[f]]
-        check("RT2d the 27 records equal the design's table on seq, key, support, confidence, t_ms, "
-              "key string and text", len(exp) == 27 and not bad, repr(bad[:5]))
+        check("RT2d the 27 records equal the pre-registered table on seq, key, support, "
+              "confidence, t_ms, key string and text", len(exp) == 27 and not bad, repr(bad[:5]))
         check("RT2e slot is seq - 1, fact_type is 2 on every record, and the tables read fact x20, "
               "edge x2, preference x5",
               all(r["slot"] == r["seq"] - 1 and r["fact_type"] == 2 for r in recs)
