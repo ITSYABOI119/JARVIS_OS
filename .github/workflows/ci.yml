@@ -1980,7 +1980,7 @@ jobs:
         python3 phase3/scripts/check_claude_record.py --self-test
         python3 phase3/scripts/check_claude_record.py
 
-    # A4 -- a PARSE-LEVEL floor over the operator PowerShell tooling (~2,200 lines).
+    # A4 -- a PARSE-LEVEL floor over the operator PowerShell tooling.
     #
     # THE HONEST CEILING, stated here so this is never mistaken for coverage: this step
     # PARSES and lints. It NEVER RUNS anything. It would NOT have caught the $Lines

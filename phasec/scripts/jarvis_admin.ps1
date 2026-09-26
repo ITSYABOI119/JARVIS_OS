@@ -30,7 +30,8 @@
   invocation, so no arguments prints usage and exits non-zero.
 
     -Check      validate every prerequisite and print what every step WOULD run.
-                Runs no write, no generation, no transfer. Safe at any time.
+                Writes no device and generates no key; its JSEM legs stage probe
+                files in the box's home and remove them. Safe at any time.
     -Rekey      the full procedure, behind a typed confirmation before the write.
     -Rollback   restore both halves from the .BAK pair, then verify.
     -Project    write a JSEM projection image (built beforehand by the memory
@@ -137,7 +138,13 @@
 
 .PARAMETER Check
   Validate everything, print what each step would run, change nothing. Exit 0
-  means a -Rekey could proceed right now.
+  means a -Rekey could proceed right now AND every JSEM projection leg passed.
+  Those legs run every shape -Project and -ProjectRestore use except the two
+  device writes: the two-part write rehearsed into a FILE on the box, the header
+  and records md5 slices of that file, the pull of a file back to this PC, the
+  region and anchor reads, the range-to-file read, drop_caches, cmp, the box
+  clone's parser check, the local gates L1-L3, and parse_semantic.py over the
+  verified image (or, with no valid local image, over a copy of the region).
 .PARAMETER Rekey
   Run the full procedure. Prompts for a typed confirmation before the write.
 .PARAMETER Rollback
@@ -204,9 +211,12 @@
     0  ok
     2  no mode given (usage printed)
     3  more than one mode given, or -Yes / -DryRun used where they are refused
-    4  stdin redirected (see -Check)      5  a prerequisite is missing
+    4  stdin redirected (see -Check)
+    5  a prerequisite is missing, or a -Check / -DryRun shape or its cleanup failed
     6  a header constant could not be derived
     7  the box clone is stale, dirty in the parser, or lacks it
+    8  interrupted inside the JSEM write window (the device may hold part of the
+       image; see THE JSEM WRITE WINDOW below)
    10  P1 box unreachable over ssh       11  P2 box slot invalid
    12  P3 PC key file invalid            13  P4 halves already disagree
    14  P5 a receiver is running
@@ -222,7 +232,8 @@
    80  -Rollback: backups missing or unverifiable
    90  local image or manifest invalid, or not the expected image
    91  local image header invalid        92  JARVIS_SEMANTIC is not 0
-   93  pre-image backup unverified       94  the region is not the expected pre-image
+   93  pre-image backup unverified
+   94  the region is not the expected pre-image, or could not be read
    95  drop_caches failed                96  readback size wrong
    97  restore preconditions             98  restore readback mismatch
    99  parse count != manifest n
@@ -250,6 +261,17 @@
   completed" and before "S2", the box is on the new key and this PC is not.
   -Rollback is the way out, and the scratch directory still holds a copy of the
   live key until it is removed by hand.
+
+  THE JSEM WRITE WINDOW. From the first JSEM write until R2 passes, the region
+  may hold part of the image. Every FAIL in that window BEFORE the anchor check
+  re-reads the three anchors: a changed one exits 62; a failed re-read is
+  reported as a READ failure, keeps the gate's own code, and is never called
+  damage. The anchor check itself (gate 17, and the restore's after-check) exits
+  62 for an anchor that is changed OR unreadable, as the exit-code table says.
+  An interruption exits 8. Every exit from the window prints the restore
+  command -- a Ctrl+C, a dropped or hung ssh and an unhandled PowerShell error
+  included; those exits read no anchor, because the connection may be the thing
+  that failed. The pre-image on both hosts is the way back.
 #>
 [CmdletBinding()]
 param(
@@ -317,14 +339,36 @@ function Warn([string]$Message) { Write-Host ("  warn: {0}" -f $Message) -Foregr
 # would destroy the rollback path).
 $script:artifacts = @()
 $script:keyIsLive = $false      # set true the moment the dd write succeeds
+# The JSEM write window (see .NOTES). Every variable Fail's post-write hook or a
+# JSEM block's finally reads is initialised HERE, at the top: under StrictMode 2.0
+# reading an unset variable throws, which would turn any Fail -- in -Rekey and
+# -Rollback too -- into exit 1.
+$script:jsemWritten = $false        # set true IMMEDIATELY before the first JSEM device write, nowhere else
+$script:jsemInAnchorCheck = $false  # set only by Fail's post-write hook, around its anchor re-read
+$script:jsemBannerShown = $false    # the WRITTEN banner prints once per run
+$script:jsemInnerCode = 0           # the highest code a Fail raised inside the hook's re-read
+$script:jsemBlockDone = $false      # a JSEM block's try reached its end
+$script:jsemA0 = $null              # the anchors before the write
+$script:jsemL = $null               # the layout
+$script:jsemMode = ''               # 'project' or 'restore'
+$script:jsemLocalPre = ''           # the pre-image (or restore source) on this PC
+$script:jsemLeaf = ''               # its leaf, the same name on the box
 function Add-Artifact {
     # -NewKey marks an artifact holding the NEWLY GENERATED key. Whether that key
     # is LIVE depends on whether the write has happened yet, which is why it is
     # resolved at print time rather than at registration.
     # -Region marks a copy of the JSEM region as it was BEFORE a -Project run --
     # the pre-image, which is -ProjectRestore's source and must be kept.
-    param([string]$Path, [string]$What, [switch]$NewKey, [switch]$Region)
-    $script:artifacts += [pscustomobject]@{ Path = $Path; What = $What; NewKey = [bool]$NewKey; Region = [bool]$Region }
+    # -Staged marks a file staged in the box's home (-Name is its leaf there), so
+    # an abort at its own check still names it.
+    param([string]$Path, [string]$What, [switch]$NewKey, [switch]$Region, [switch]$Staged, [string]$Name = '')
+    $script:artifacts += [pscustomobject]@{ Path = $Path; What = $What; NewKey = [bool]$NewKey; Region = [bool]$Region; Staged = [bool]$Staged; Name = $Name }
+}
+
+function Remove-Artifact {
+    # Once a cleanup PROVES a file gone, it is no longer an artifact to name.
+    param([string]$Path)
+    $script:artifacts = @($script:artifacts | Where-Object { $_.Path -ne $Path })
 }
 
 function Show-Artifacts {
@@ -339,6 +383,7 @@ function Show-Artifacts {
     Write-Host '  so an aborted run never destroys its own rollback path):' -ForegroundColor Yellow
     foreach ($a in $script:artifacts) {
         $tag = if ($a.Region) { '   (the region as it was before this run -- your restore path for -ProjectRestore; keep it)' }
+               elseif ($a.Staged) { ('   (staged copy on the box -- remove after inspection: ssh {0} rm -f ~/{1})' -f $BoxHost, $a.Name) }
                elseif ($a.NewKey -and $script:keyIsLive) { '   *** HOLDS THE LIVE KEY -- DELETE IT ***' }
                elseif ($a.NewKey) { '   (new key, NOT yet live on the box)' }
                else { '   (previous key -- your rollback path; keep until you are satisfied)' }
@@ -353,6 +398,50 @@ function Show-Artifacts {
 
 function Fail([int]$Code, [string]$Message) {
     Write-Host ("  FAIL: {0}" -f $Message) -ForegroundColor Red
+    # Inside the post-write hook's own anchor re-read: record the code, never exit.
+    # Only the hook sets this guard.
+    if ($script:jsemInAnchorCheck) {
+        if ($Code -gt $script:jsemInnerCode) { $script:jsemInnerCode = $Code }
+        return
+    }
+    # THE POST-WRITE HOOK. Once the first JSEM write has been sent, a gate that
+    # fails must not exit before the anchors are re-read: the readback runs before
+    # the anchor check (the design's section 9, MS3b refined 2026-09-26), so a write
+    # that damaged a neighbour would otherwise exit on R2 and never report it. The
+    # anchor check's own verdict (62) is not re-read. The locals are set HERE: under
+    # StrictMode an unset one throws, and a caller's own $ok must never leak in.
+    if (-not $Check -and $script:jsemWritten) {
+        $aA = $null
+        $ok = $null
+        $how = 'not re-read (code 62)'
+        if ($Code -ne 62) {
+            $script:jsemInAnchorCheck = $true
+            $script:jsemInnerCode = 0
+            try {
+                Say '  -- the write has started: the three anchors are re-read before this exits --'
+                $aA = Read-JsemAnchors -L $script:jsemL -ReadFailCode $Code -When 'after'
+                if ($null -ne $aA) { $ok = Compare-JsemAnchors -Before $script:jsemA0 -After $aA }
+            } finally {
+                $script:jsemInAnchorCheck = $false
+            }
+        }
+        $final = $Code
+        if ($Code -eq 62) {
+            $final = 62
+        } elseif (($null -ne $ok -and -not $ok) -or $script:jsemInnerCode -eq 62) {
+            $final = 62
+            $how = 'changed'
+        } elseif ($null -eq $aA) {
+            Warn 'the anchors could not be READ after the write -- the sector is NOT proven changed; the original code stands'
+            $how = 'unreadable'
+        } else {
+            $how = 'unchanged'
+        }
+        Show-JsemWrittenBanner
+        Write-Transcript -Command ('ABORT: {0} [anchors after the write: {1}]' -f $Message, $how) -ExitCode $final
+        Show-Artifacts
+        exit $final
+    }
     if (-not $Check) {
         Write-Transcript -Command ('ABORT: {0}' -f $Message) -ExitCode $Code
         Show-Artifacts
@@ -659,6 +748,52 @@ function Get-BytesMd5 {
     $md5 = [System.Security.Cryptography.MD5]::Create()
     try { $h = $md5.ComputeHash($Bytes, $Offset, $Count) } finally { $md5.Dispose() }
     (($h | ForEach-Object { $_.ToString('x2') }) -join '')
+}
+
+function Get-JsemWrittenBanner {
+    # What every exit from the JSEM write window prints: the region may now hold
+    # part of the image, where the way back is, and the exact command to take it.
+    param([string]$Mode, [string]$LocalPre, [string]$BoxHost, [string]$Leaf)
+    switch ($Mode) {
+        'project' { return ('THE JSEM REGION HAS BEEN WRITTEN, possibly only in part. The pre-image is kept at {0} and {1}:~/{2}. Restore it with: jarvis_admin.bat -ProjectRestore -PreImage {0}' -f $LocalPre, $BoxHost, $Leaf) }
+        'restore' { return ('THE RESTORE WRITE HAS STARTED, and the region may hold a mix of old and new bytes. The source is still at {0} and {1}:~/{2}. Re-run: jarvis_admin.bat -ProjectRestore -PreImage {0}' -f $LocalPre, $BoxHost, $Leaf) }
+    }
+    throw ("unknown mode '{0}' (project or restore)" -f $Mode)
+}
+
+function Test-JsemPreImageName {
+    # The leaf is interpolated into root commands on the box, so ONLY the shape
+    # -Project writes is accepted: case-sensitive, ASCII digits, and \z rather than
+    # $ because .NET's $ also matches before a trailing newline.
+    param([string]$Leaf)
+    return ($Leaf -cmatch '^jsem_pre_[0-9]{8}T[0-9]{6}Z\.bin\z')
+}
+
+function ConvertTo-JsemAnchorLines {
+    # The sidecar beside a local pre-image: ASCII name=value lines, in order. A name
+    # holds spaces but never '=', so a reader splits on the FIRST '='.
+    param([System.Collections.IDictionary]$Values)
+    $out = @()
+    foreach ($k in $Values.Keys) {
+        $line = '{0}={1}' -f $k, $Values[$k]
+        if ("$k".Contains('=') -or $line -match '[\r\n]' -or $line -match '[^\x20-\x7E]') {
+            throw ("sidecar entry '{0}' is not a printable-ASCII name without '=' and a one-line value" -f $k)
+        }
+        $out += $line
+    }
+    $out
+}
+
+function ConvertFrom-JsemAnchorLines {
+    param([string[]]$Lines)
+    $vals = [ordered]@{}
+    foreach ($ln in $Lines) {
+        if ($ln -eq '') { continue }
+        $i = $ln.IndexOf('=')
+        if ($i -lt 1) { throw ("sidecar line '{0}' is not name=value" -f $ln) }
+        $vals[$ln.Substring(0, $i)] = $ln.Substring($i + 1)
+    }
+    $vals
 }
 
 # ---------------------------------------------------------------------------
@@ -1221,6 +1356,33 @@ function Receive-FromBox {
     return $rc
 }
 
+function Show-JsemWrittenBanner {
+    # Printed by Fail's post-write hook and by a JSEM block's finally, once a run.
+    $t = Get-JsemWrittenBanner -Mode $script:jsemMode -LocalPre $script:jsemLocalPre -BoxHost $BoxHost -Leaf $script:jsemLeaf
+    Write-Host ''
+    Write-Host ('  ' + ('!' * 78)) -ForegroundColor Red
+    Write-Host ('  {0}' -f $t) -ForegroundColor Red
+    Write-Host ('  ' + ('!' * 78)) -ForegroundColor Red
+    $script:jsemBannerShown = $true
+}
+
+function Test-JsemStaged {
+    # DW-2: a staged source re-checked AFTER the typed word, which can wait for as
+    # long as the operator likes. The commands are the ones the pre-prompt check
+    # ran (-Slice: Get-CmdFileSliceMd5 whole, the restore's; otherwise
+    # Get-CmdBoxFileMd5, T2's), so the bytes written are the bytes verified.
+    param([string]$Name, [uint64]$Bytes, [string]$Md5, [int]$Code, [string]$Label, [string]$After, [switch]$Slice)
+    $sz = Invoke-Box -RemoteCommand (Get-CmdBoxFileSize -Name $Name)
+    $mdCmd = if ($Slice) { Get-CmdFileSliceMd5 -Name $Name -Part 'whole' } else { Get-CmdBoxFileMd5 -Name $Name }
+    $md = Invoke-Box -RemoteCommand $mdCmd
+    if ($sz.Code -ne 0 -or $sz.Out -ne [string]$Bytes -or $md.Code -ne 0 -or $md.Out -ne $Md5) {
+        Fail $Code ("{0} changed after {1}: ~/{2} is now '{3}' bytes, md5 '{4}' (exits {5}, {6}); it was {7} bytes, md5 {8} -- nothing was written" -f $Label, $After, $Name, $sz.Out, $md.Out, $sz.Code, $md.Code, $Bytes, $Md5)
+        return $false
+    }
+    Pass ('~/{0} re-verified after the typed word: {1} B, md5 {2} -- unchanged since {3}' -f $Name, $sz.Out, $md.Out, $After)
+    return $true
+}
+
 # ---------------------------------------------------------------------------
 # -Check's projection section. Gated on its OWN probe, never on the key
 # preflight: Invoke-Preflight returns $null on a key-side failure, and a moved or
@@ -1246,6 +1408,7 @@ function Invoke-CheckProjection {
     $probeOut = 'jsem_probe.out'
     $probeB = 'jsem_probe_b.img'
     $probeRead = 'jsem_probe_read.bin'
+    $probeParse = 'jsem_probe_img.bin'
     $sd = Join-Path $env:TEMP ('jarvis-admin-jsem-{0}' -f (Get-Random))
     New-Item -ItemType Directory -Path $sd -Force | Out-Null
     try {
@@ -1288,10 +1451,30 @@ function Invoke-CheckProjection {
                 } else {
                     Pass ('rehearsal: records then header into a FILE, which ends {0} bytes, md5 {1} -- identical to the throwaway' -f $sz.Out, $m5.Out)
                 }
+                # The two md5 slices -Project's R2 and the restore's readback run,
+                # against md5s computed HERE from the throwaway's own bytes.
+                $sh = Invoke-Box -RemoteCommand (Get-CmdFileSliceMd5 -Name $probeOut -Part 'header')
+                $sr = Invoke-Box -RemoteCommand (Get-CmdFileSliceMd5 -Name $probeOut -Part 'records')
+                $wantH = Get-BytesMd5 -Bytes $buf -Offset 0 -Count 512
+                $wantR = Get-BytesMd5 -Bytes $buf -Offset 512 -Count ($buf.Length - 512)
+                if ($sh.Code -ne 0 -or $sh.Out -ne $wantH -or $sr.Code -ne 0 -or $sr.Out -ne $wantR) {
+                    Fail 5 ("the md5 slice shapes FAILED: header '{0}' (exit {1}), records '{2}' (exit {3}); the throwaway's are {4}, {5}" -f $sh.Out, $sh.Code, $sr.Out, $sr.Code, $wantH, $wantR)
+                } else {
+                    Pass ('md5 slice shapes work: header {0}, records {1} -- equal to the throwaway''s, computed on this PC' -f $sh.Out, $sr.Out)
+                }
+                # The pull of a file back to this PC (gate 9's shape).
+                $rcPull = Receive-FromBox -RemoteName $probeOut -LocalDir $sd
+                $pulled = Join-Path $sd $probeOut
+                $pmd = if (Test-Path -LiteralPath $pulled) { Get-FileMd5 -Path $pulled } else { '' }
+                if ($rcPull -ne 0 -or $pmd -ne $mdA) {
+                    Fail 5 ("the pull shape FAILED (scp exit {0}); the pulled copy's md5 is '{1}', the throwaway's {2}" -f $rcPull, $pmd, $mdA)
+                } else {
+                    Pass ('pull shape works: ~/{0} pulled to this PC, md5 {1} -- identical to the throwaway' -f $probeOut, $pmd)
+                }
             }
         }
         Info 'the rehearsal covers: the builder''s real conv (fsync,notrunc), the input skip, the count split, the plan''s base + 1 arithmetic and the records-then-header order'
-        Info 'it does NOT cover the ABSOLUTE device seeks (a device seek against a file would address 10.8 GB in): the unit test asserts the plan at the real base, item 7 below prints it, and only the operator''s readback (R2) and anchors (A1) prove the device run executed exactly those strings'
+        Info 'it does NOT cover the ABSOLUTE device seeks (a device seek against a file would address 10.8 GB in): the unit test asserts the plan at the real base and item 7 below prints it; on the operator''s run the readback (R2) proves the region''s final bytes, the anchors (A1) prove that three sampled neighbours did not move, and the transcript records the exact command strings that ran'
 
         # -- 2. the read shapes, against the real device --------------------------
         Say ''
@@ -1357,18 +1540,48 @@ function Invoke-CheckProjection {
         # -- 5. the local gates --------------------------------------------------
         Say ''
         Say '  -- 5. the local gates (L1, L1b reported, L2, L3) --'
+        $limg = $null
         if ((Test-Path -LiteralPath $Image) -and (Test-Path -LiteralPath $Manifest)) {
-            [void](Test-JsemLocalImage -L $L -Report)
+            $limg = Test-JsemLocalImage -L $L -Report
         } else {
             Info ("L1/L1b/L2 skipped: no image at '{0}' or no manifest at '{1}' yet" -f $Image, $Manifest)
         }
         [void](Test-JsemSemanticOff)
+
+        # -- 5b. the parse (gate 18's shape) ---------------------------------------
+        Say ''
+        Say '  -- 5b. parse_semantic.py on the box (gate 18) --'
+        if ($null -ne $limg) {
+            $upI = Send-ToBox -LocalPath $Image -RemoteName $probeParse
+            if ($upI -ne 0) {
+                Fail 5 ('the parse probe could not be staged (scp exit {0})' -f $upI)
+            } else {
+                $ps = Invoke-Box -RemoteCommand (Get-CmdParseSemantic -BoxRepo $BoxRepo -Name $probeParse)
+                $pc = -1
+                if ($ps.Code -eq 0) { try { $pc = @(($ps.Out | ConvertFrom-Json).records).Count } catch { $pc = -1 } }
+                if ($ps.Code -ne 0 -or $pc -ne [int]$limg.N) {
+                    Fail 5 ('the parse shape read {0} records (exit {1}) off the verified image; the manifest''s n is {2}' -f $pc, $ps.Code, $limg.N)
+                } else {
+                    Pass ('parse shape works: parse_semantic.py reads {0} records off ~/{1} (the verified image) -- the manifest''s n' -f $pc, $probeParse)
+                }
+            }
+        } else {
+            # No valid local image: a shape check only, over the region's own copy.
+            $ps = Invoke-Box -RemoteCommand (Get-CmdParseSemantic -BoxRepo $BoxRepo -Name $probeRead)
+            $pobj = $null
+            if ($ps.Code -eq 0) { try { $pobj = $ps.Out | ConvertFrom-Json } catch { $pobj = $null } }
+            if ($ps.Code -ne 0 -or $null -eq $pobj -or @($pobj.PSObject.Properties.Name) -notcontains 'records') {
+                Fail 5 ('the parse shape FAILED over ~/{0} (exit {1}, no records array)' -f $probeRead, $ps.Code)
+            } else {
+                Pass ('parse shape works (no valid local image, so over the region''s copy ~/{0}, a shape check only): {1} records' -f $probeRead, @($pobj.records).Count)
+            }
+        }
     } finally {
         # -- 6. cleanup ------------------------------------------------------------
         Say ''
         Say '  -- 6. cleanup: every probe removed and proven absent --'
-        if (Remove-BoxFile -Names @($probeImg, $probeOut, $probeB, $probeRead)) {
-            Pass 'every box probe (jsem_probe.img, jsem_probe.out, jsem_probe_b.img, jsem_probe_read.bin) proven absent'
+        if (Remove-BoxFile -Names @($probeImg, $probeOut, $probeB, $probeRead, $probeParse)) {
+            Pass 'every box probe (jsem_probe.img, jsem_probe.out, jsem_probe_b.img, jsem_probe_read.bin, jsem_probe_img.bin) proven absent'
         } else {
             Fail 5 'a box probe could not be removed (named above)'
         }
@@ -1383,7 +1596,7 @@ function Invoke-CheckProjection {
     $dplan = @(Get-JsemWritePlan -Device $BoxDevice -Name 'jsem.img' -BaseLba $L.BaseLba -MaxFacts $L.MaxFacts)
     Say ('     records: {0}' -f $dplan[0])
     Say ('     header : {0}' -f $dplan[1])
-    Info 'NOT exercised, and cannot be without writing the device: the two device writes themselves'
+    Info 'the ONLY shapes NOT exercised are these two device writes, which cannot be without writing the device; every other command shape -Project and -ProjectRestore send to the box, and the push and the pull, was executed above'
 }
 
 # ---------------------------------------------------------------------------
@@ -1752,6 +1965,11 @@ if ($Project) {
     Say '== gate 7: the anchors BEFORE the write (A0) =='
     Say '  (an anchor already wrong HERE is pre-existing -- this run has not written anything yet)'
     $a0 = Read-JsemAnchors -L $L -ReadFailCode 62 -When 'before'
+    # A0 persisted: the transcript records no screen output, so without this line
+    # it could not show what the anchors read before the write.
+    if ($null -ne $a0) {
+        Write-Transcript -Command ('A0 ' + ((@($a0.Keys) | ForEach-Object { '{0}={1}' -f $_, $a0[$_] }) -join '; ')) -ExitCode 'recorded'
+    }
 
     Say ''
     Say '== gate 8: the region must hold the expected pre-image =='
@@ -1793,11 +2011,31 @@ if ($Project) {
         Fail 93 ('the pre-image on this PC is {0} bytes, md5 {1}; the box copy is {2} bytes, md5 {3}' -f $lsz, $lmd, $bsz.Out, $bmd.Out)
     }
     Pass ('B1 pre-image {0}: {1} B, md5 {2}, identical on the box and on this PC' -f $preName, $lsz, $lmd)
+    # The A0 sidecar, beside the LOCAL pre-image: -ProjectRestore prints it beside
+    # the anchors it reads, so a restore run later can see whether a neighbour moved.
+    $sidePath = $localPre + '.anchors.txt'
+    $sideVals = [ordered]@{}
+    foreach ($k in $a0.Keys) { $sideVals[$k] = $a0[$k] }
+    $sideVals['stamp'] = $stamp
+    $sideVals['region_md5'] = $lmd
+    try {
+        $sideText = (@(ConvertTo-JsemAnchorLines -Values $sideVals) -join "`r`n") + "`r`n"
+        [IO.File]::WriteAllText($sidePath, $sideText, [Text.Encoding]::ASCII)
+        $sideBack = ConvertFrom-JsemAnchorLines -Lines ([IO.File]::ReadAllLines($sidePath))
+    } catch {
+        Fail 93 ("the anchors sidecar '{0}' could not be written: {1} -- nothing was written to the device" -f $sidePath, $_.Exception.Message)
+    }
+    Add-Artifact -Path $sidePath -What 'the anchors before this run (A0) and the pre-image md5, beside the pre-image on this PC' -Region
+    if (@($sideBack.Keys).Count -ne @($sideVals.Keys).Count -or @($sideVals.Keys | Where-Object { $sideBack[$_] -ne $sideVals[$_] }).Count -ne 0) {
+        Fail 93 ("the anchors sidecar '{0}' does not read back as written" -f $sidePath)
+    }
+    Pass ('A0 sidecar {0}: the five anchors, stamp {1}, region md5 {2}' -f (Split-Path -Leaf $sidePath), $stamp, $lmd)
 
     Say ''
     Say '== gate 10: the image to the box (T1/T2) =='
     $rcPush = Send-ToBox -LocalPath $Image -RemoteName 'jsem.img'
     if ($rcPush -ne 0) { Fail 40 ('scp exited {0} -- nothing was written, and the pre-image is retained' -f $rcPush) }
+    Add-Artifact -Path ('{0}:~/jsem.img' -f $BoxHost) -What 'the staged image, on the box' -Staged -Name 'jsem.img'
     $tsz = Invoke-Box -RemoteCommand (Get-CmdBoxFileSize -Name 'jsem.img')
     $tmd = Invoke-Box -RemoteCommand (Get-CmdBoxFileMd5 -Name 'jsem.img')
     if ($tsz.Code -ne 0 -or $tsz.Out -ne [string]$L.RegionBytes -or $tmd.Code -ne 0 -or $tmd.Out -ne $img.Md5Image) {
@@ -1824,15 +2062,15 @@ if ($Project) {
         Say ''
         Say '== DRY RUN: removing what was staged, and proving it gone =='
         $okBox = Remove-BoxFile -Names @('jsem.img', $preName)
-        Remove-Item -LiteralPath $localPre -Force -ErrorAction SilentlyContinue
-        $okPc = -not (Test-Path -LiteralPath $localPre)
+        Remove-Item -LiteralPath $localPre, $sidePath -Force -ErrorAction SilentlyContinue
+        $okPc = -not (Test-Path -LiteralPath $localPre) -and -not (Test-Path -LiteralPath $sidePath)
         if (-not $okBox -or -not $okPc) {
-            Fail 5 ('the dry run could not remove everything it staged -- remove by hand: ~/jsem.img and ~/{0} on the box, {1} here' -f $preName, $localPre)
+            Fail 5 ('the dry run could not remove everything it staged -- remove by hand: ~/jsem.img and ~/{0} on the box, {1} and {2} here' -f $preName, $localPre, $sidePath)
         }
         # A stale pre-image must never become -ProjectRestore's default: the
         # operator's real run makes its own.
         $script:artifacts = @()
-        Pass ('~/jsem.img and ~/{0} are gone from the box (test ! -e), and {1} from this PC' -f $preName, $localPre)
+        Pass ('~/jsem.img and ~/{0} are gone from the box (test ! -e), and {1} and its sidecar from this PC' -f $preName, $localPre)
         Say ''
         Say 'DRY RUN - nothing was written'
         Write-Transcript -Command 'project -DryRun: gates 1-10 passed, plan printed, staged files removed, nothing written' -ExitCode 0
@@ -1849,62 +2087,105 @@ if ($Project) {
     }
 
     Say ''
-    Say '== gates 12-13: the write, records then header =='
-    $w1 = Invoke-Box -RemoteCommand $plan[0]
-    if ($w1.Code -ne 0) { Fail 51 ('the RECORDS write FAILED (exit {0}); the header was not written, so the box still reads the old header. The pre-image is retained: -ProjectRestore puts it back.' -f $w1.Code) }
-    Pass 'records written (conv=fsync,notrunc)'
-    $w2 = Invoke-Box -RemoteCommand $plan[1]
-    if ($w2.Code -ne 0) { Fail 51 ('the HEADER write FAILED (exit {0}) after the records were written. The pre-image is retained: -ProjectRestore puts it back.' -f $w2.Code) }
-    Pass 'header written (conv=fsync,notrunc)'
+    Say '== the staged image, re-verified AFTER the typed word (the prompt can wait indefinitely) =='
+    [void](Test-JsemStaged -Name 'jsem.img' -Bytes $L.RegionBytes -Md5 $img.Md5Image -Code 41 -Label 'the staged image' -After 'T2')
 
-    Say ''
-    Say '== gate 14: sync and drop_caches =='
-    $dc2 = Invoke-Box -RemoteCommand (Get-CmdDropCaches)
-    if ($dc2.Code -ne 0) { Fail 95 ('drop_caches FAILED after the write (exit {0}) -- the readback would not be trustworthy' -f $dc2.Code) }
-    Pass 'caches dropped (the iflag=direct read below carries the guarantee; this is belt-and-braces)'
+    # THE WRITE WINDOW (see .NOTES). From the flag below to the end of gate 18 every
+    # Fail re-reads the anchors and prints the restore command (Fail's post-write
+    # hook), and the finally prints it for anything else that leaves the try -- a
+    # Ctrl+C, a hung ssh, an unhandled error -- and exits 8.
+    $script:jsemA0 = $a0
+    $script:jsemL = $L
+    $script:jsemMode = 'project'
+    $script:jsemLocalPre = $localPre
+    $script:jsemLeaf = $preName
+    $script:jsemBlockDone = $false
+    try {
+        Say ''
+        Say '== gates 12-13: the write, records then header =='
+        $script:jsemWritten = $true
+        $w1 = Invoke-Box -RemoteCommand $plan[0]
+        if ($w1.Code -ne 0) { Fail 51 ('the RECORDS write FAILED (exit {0}); the header was not written, so the box still reads the old header. The pre-image is retained: -ProjectRestore puts it back.' -f $w1.Code) }
+        Pass 'records written (conv=fsync,notrunc)'
+        $w2 = Invoke-Box -RemoteCommand $plan[1]
+        if ($w2.Code -ne 0) { Fail 51 ('the HEADER write FAILED (exit {0}) after the records were written. The pre-image is retained: -ProjectRestore puts it back.' -f $w2.Code) }
+        Pass 'header written (conv=fsync,notrunc)'
 
-    Say ''
-    Say '== gates 15-16: the readback, from the device (R1/R2) =='
-    $r1 = Invoke-Box -RemoteCommand (Get-CmdRangeToFile -Device $BoxDevice -Lba $L.BaseLba -Count $L.RegionCount -Name 'jsem_post.bin')
-    $rsz = Invoke-Box -RemoteCommand (Get-CmdBoxFileSize -Name 'jsem_post.bin')
-    if ($r1.Code -ne 0 -or $rsz.Code -ne 0 -or $rsz.Out -ne [string]$L.RegionBytes) {
-        Fail 96 ("R1 the readback is '{0}' bytes (read exit {1}), expected {2}" -f $rsz.Out, $r1.Code, $L.RegionBytes)
-    }
-    Pass ('R1 readback {0} bytes (iflag=direct)' -f $rsz.Out)
-    $rw = Invoke-Box -RemoteCommand (Get-CmdFileSliceMd5 -Name 'jsem_post.bin' -Part 'whole')
-    $rh = Invoke-Box -RemoteCommand (Get-CmdFileSliceMd5 -Name 'jsem_post.bin' -Part 'header')
-    $rr = Invoke-Box -RemoteCommand (Get-CmdFileSliceMd5 -Name 'jsem_post.bin' -Part 'records')
-    if ($rw.Out -ne $img.Md5Image -or $rh.Out -ne $img.Md5Header -or $rr.Out -ne $img.Md5Records) {
-        $cmp = Invoke-Box -RemoteCommand (Get-CmdCmpHead -A 'jsem.img' -B 'jsem_post.bin')
-        Say '  cmp -l jsem.img jsem_post.bin | head -n 20 (offset, octal image byte, octal device byte):'
-        foreach ($ln in @($cmp.Out -split "`n")) { Say ('    {0}' -f $ln) }
-        Fail 61 ('R2 the readback md5s (whole {0}, header {1}, records {2}) are not the manifest''s ({3}, {4}, {5}). The pre-image is retained: -ProjectRestore puts it back.' -f $rw.Out, $rh.Out, $rr.Out, $img.Md5Image, $img.Md5Header, $img.Md5Records)
-    }
-    Pass ('R2 the device reads back whole {0}, header {1}, records {2} -- the manifest''s' -f $rw.Out, $rh.Out, $rr.Out)
+        Say ''
+        Say '== gate 14: sync and drop_caches =='
+        $dc2 = Invoke-Box -RemoteCommand (Get-CmdDropCaches)
+        if ($dc2.Code -ne 0) { Fail 95 ('drop_caches FAILED after the write (exit {0}) -- the readback would not be trustworthy' -f $dc2.Code) }
+        Pass 'caches dropped (the iflag=direct read below carries the guarantee; this is belt-and-braces)'
 
-    Say ''
-    Say '== gate 17: the anchors AFTER the write (A1) =='
-    $a1 = Read-JsemAnchors -L $L -ReadFailCode 62 -When 'after'
-    [void](Compare-JsemAnchors -Before $a0 -After $a1)
+        Say ''
+        Say '== gates 15-16: the readback, from the device (R1/R2) =='
+        $r1 = Invoke-Box -RemoteCommand (Get-CmdRangeToFile -Device $BoxDevice -Lba $L.BaseLba -Count $L.RegionCount -Name 'jsem_post.bin')
+        Add-Artifact -Path ('{0}:~/jsem_post.bin' -f $BoxHost) -What 'the readback of the region after the write, on the box' -Staged -Name 'jsem_post.bin'
+        $rsz = Invoke-Box -RemoteCommand (Get-CmdBoxFileSize -Name 'jsem_post.bin')
+        if ($r1.Code -ne 0 -or $rsz.Code -ne 0 -or $rsz.Out -ne [string]$L.RegionBytes) {
+            Fail 96 ("R1 the readback is '{0}' bytes (read exit {1}), expected {2}" -f $rsz.Out, $r1.Code, $L.RegionBytes)
+        }
+        Pass ('R1 readback {0} bytes (iflag=direct)' -f $rsz.Out)
+        $rw = Invoke-Box -RemoteCommand (Get-CmdFileSliceMd5 -Name 'jsem_post.bin' -Part 'whole')
+        $rh = Invoke-Box -RemoteCommand (Get-CmdFileSliceMd5 -Name 'jsem_post.bin' -Part 'header')
+        $rr = Invoke-Box -RemoteCommand (Get-CmdFileSliceMd5 -Name 'jsem_post.bin' -Part 'records')
+        if ($rw.Out -ne $img.Md5Image -or $rh.Out -ne $img.Md5Header -or $rr.Out -ne $img.Md5Records) {
+            $cmp = Invoke-Box -RemoteCommand (Get-CmdCmpHead -A 'jsem.img' -B 'jsem_post.bin')
+            Say '  cmp -l jsem.img jsem_post.bin | head -n 20 (offset, octal image byte, octal device byte):'
+            foreach ($ln in @($cmp.Out -split "`n")) { Say ('    {0}' -f $ln) }
+            # Which side moved: the staged source, or the device?
+            $sm = Invoke-Box -RemoteCommand (Get-CmdBoxFileMd5 -Name 'jsem.img')
+            if ($sm.Code -eq 0 -and $sm.Out -eq $img.Md5Image) {
+                Info ('the staged source ~/jsem.img still reads md5 {0}, the image''s: the source did not change, so the DEVICE holds other bytes' -f $sm.Out)
+            } else {
+                Warn ("the staged source ~/jsem.img now reads md5 '{0}' (exit {1}), NOT the image's {2}: the SOURCE changed after its re-verify, and the cmp above compares the device with that changed file" -f $sm.Out, $sm.Code, $img.Md5Image)
+            }
+            Fail 61 ('R2 the readback md5s (whole {0}, header {1}, records {2}) are not the manifest''s ({3}, {4}, {5}). The pre-image is retained: -ProjectRestore puts it back.' -f $rw.Out, $rh.Out, $rr.Out, $img.Md5Image, $img.Md5Header, $img.Md5Records)
+        }
+        Pass ('R2 the device reads back whole {0}, header {1}, records {2} -- the manifest''s' -f $rw.Out, $rh.Out, $rr.Out)
 
-    Say ''
-    Say '== gate 18: parse_semantic.py reads the readback on the box (P) =='
-    $ps = Invoke-Box -RemoteCommand (Get-CmdParseSemantic -BoxRepo $BoxRepo -Name 'jsem_post.bin')
-    $count = -1
-    if ($ps.Code -eq 0) {
-        try { $count = @(($ps.Out | ConvertFrom-Json).records).Count } catch { $count = -1 }
+        Say ''
+        Say '== gate 17: the anchors AFTER the write (A1) =='
+        $a1 = Read-JsemAnchors -L $L -ReadFailCode 62 -When 'after'
+        [void](Compare-JsemAnchors -Before $a0 -After $a1)
+
+        Say ''
+        Say '== gate 18: parse_semantic.py reads the readback on the box (P) =='
+        $ps = Invoke-Box -RemoteCommand (Get-CmdParseSemantic -BoxRepo $BoxRepo -Name 'jsem_post.bin')
+        $count = -1
+        if ($ps.Code -eq 0) {
+            try { $count = @(($ps.Out | ConvertFrom-Json).records).Count } catch { $count = -1 }
+        }
+        if ($ps.Code -ne 0 -or $count -ne [int]$img.N) {
+            Fail 99 ('P parse_semantic.py read {0} records (exit {1}); the manifest''s n is {2}' -f $count, $ps.Code, $img.N)
+        }
+        Pass ('P parse_semantic.py reads {0} records off the device -- the manifest''s n' -f $count)
+        $script:jsemBlockDone = $true
+    } catch {
+        # An unhandled error: named here, because the finally's exit would swallow it.
+        # A Fail's exit never lands here -- a catch does not see an exit.
+        Write-Host ('  FAIL: an unhandled error inside the JSEM write window: {0}' -f $_.Exception.Message) -ForegroundColor Red
+        throw
+    } finally {
+        if ($script:jsemWritten -and -not $script:jsemBlockDone -and -not $script:jsemBannerShown) {
+            Show-JsemWrittenBanner
+            Write-Transcript -Command 'ABORT: interrupted inside the JSEM write window (the device may hold part of the image)' -ExitCode 'interrupted'
+            Show-Artifacts
+            exit 8
+        }
     }
-    if ($ps.Code -ne 0 -or $count -ne [int]$img.N) {
-        Fail 99 ('P parse_semantic.py read {0} records (exit {1}); the manifest''s n is {2}' -f $count, $ps.Code, $img.N)
-    }
-    Pass ('P parse_semantic.py reads {0} records off the device -- the manifest''s n' -f $count)
 
     Say ''
     Say '== gate 19: cleanup (the pre-image stays on BOTH hosts) =='
-    if (Remove-BoxFile -Names @('jsem.img', 'jsem_post.bin')) { Pass '~/jsem.img and ~/jsem_post.bin removed from the box, proven absent' }
+    $gone = $true
+    foreach ($nm in @('jsem.img', 'jsem_post.bin')) {
+        if (Remove-BoxFile -Names @($nm)) { Remove-Artifact -Path ('{0}:~/{1}' -f $BoxHost, $nm) } else { $gone = $false }
+    }
+    if ($gone) { Pass '~/jsem.img and ~/jsem_post.bin removed from the box, proven absent' }
     Say ('  pre-image kept : {0}' -f $localPre)
     Say ('                   {0}:~/{1}' -f $BoxHost, $preName)
     Say ('  its md5        : {0}' -f $lmd)
+    Say ('  A0 sidecar     : {0}' -f $sidePath)
     Say '  -ProjectRestore writes it back; keep it.'
     Write-Transcript -Command ('project complete: image {0}, pre-image {1} md5 {2}' -f $img.Md5Image, $preName, $lmd) -ExitCode 0
     exit 0
@@ -1928,20 +2209,27 @@ if ($ProjectRestore) {
     $src = $PreImage
     if (-not $src) {
         $cands = @(Get-ChildItem -LiteralPath $adminHome -Filter 'jsem_pre_*.bin' -File -ErrorAction SilentlyContinue |
-                   Where-Object { $_.Name -match '^jsem_pre_[0-9]{8}T[0-9]{6}Z\.bin$' } | Sort-Object Name)
+                   Where-Object { Test-JsemPreImageName -Leaf $_.Name } | Sort-Object Name)
         if ($cands.Count -eq 0) { Fail 97 ("no -PreImage given, and no jsem_pre_<UTC stamp>.bin in '{0}'" -f $adminHome) }
         $src = $cands[$cands.Count - 1].FullName
         Info ('-PreImage resolved to the newest by the UTC stamp in its name: {0}' -f $src)
     }
-    if (-not (Test-Path -LiteralPath $src)) { Fail 97 ("the pre-image '{0}' does not exist" -f $src) }
+    # The leaf is interpolated into root commands on the box, so its shape is
+    # checked HOWEVER it was resolved, an explicit -PreImage included.
     $leaf = Split-Path -Leaf $src
+    if (-not (Test-JsemPreImageName -Leaf $leaf)) {
+        Fail 97 ("the pre-image name '{0}' is not jsem_pre_<yyyyMMddTHHmmssZ>.bin -- it is used in commands run as root on the box, so only the name -Project writes is accepted" -f $leaf)
+    }
+    if (-not (Test-Path -LiteralPath $src)) { Fail 97 ("the pre-image '{0}' does not exist" -f $src) }
     $lsz = (Get-Item -LiteralPath $src).Length
     $lmd = Get-FileMd5 -Path $src
     if ([uint64]$lsz -ne $L.RegionBytes) { Fail 97 ("the pre-image '{0}' is {1} bytes, expected {2}" -f $src, $lsz, $L.RegionBytes) }
     $bsz = Invoke-Box -RemoteCommand (Get-CmdBoxFileSize -Name $leaf)
     $bmd = Invoke-Box -RemoteCommand (Get-CmdFileSliceMd5 -Name $leaf -Part 'whole')
     if ($bsz.Code -ne 0 -or $bsz.Out -ne [string]$L.RegionBytes -or $bmd.Code -ne 0 -or $bmd.Out -ne $lmd) {
-        Fail 97 ("the box copy ~/{0} is '{1}' bytes, md5 '{2}'; this PC's is {3} bytes, md5 {4} -- both must exist and agree" -f $leaf, $bsz.Out, $bmd.Out, $lsz, $lmd)
+        # Never pushed by this script: which copy is right is the operator's call.
+        $push = Get-CmdScpTo -BoxHost $BoxHost -Dir (Split-Path -Parent $src) -LocalName $leaf -RemoteName $leaf
+        Fail 97 ("the box copy ~/{0} is '{1}' bytes, md5 '{2}'; this PC's is {3} bytes, md5 {4} -- both must exist and agree. To put this PC's copy on the box, run this yourself, then re-run: {5}" -f $leaf, $bsz.Out, $bmd.Out, $lsz, $lmd, $push)
     }
     $ph = Invoke-Box -RemoteCommand (Get-CmdFileSliceMd5 -Name $leaf -Part 'header')
     $pr = Invoke-Box -RemoteCommand (Get-CmdFileSliceMd5 -Name $leaf -Part 'records')
@@ -1957,8 +2245,40 @@ if ($ProjectRestore) {
     Say ''
     Say '== the anchors BEFORE the write =='
     $a0 = Read-JsemAnchors -L $L -ReadFailCode 62 -When 'before'
+    # The A0 sidecar the -Project run wrote beside this pre-image, if any: its
+    # anchors beside the ones read now. A difference is WARNED, never failed --
+    # whether to restore is the operator's decision.
+    $sidePath = Join-Path (Split-Path -Parent $src) ($leaf + '.anchors.txt')
+    if (Test-Path -LiteralPath $sidePath) {
+        $side = $null
+        try { $side = ConvertFrom-JsemAnchorLines -Lines ([IO.File]::ReadAllLines($sidePath)) }
+        catch { Warn ("the anchors sidecar '{0}' could not be read: {1}" -f $sidePath, $_.Exception.Message) }
+        if ($null -ne $side) {
+            $sStamp = if ($side.Contains('stamp')) { $side['stamp'] } else { '(absent)' }
+            $sMd5 = if ($side.Contains('region_md5')) { $side['region_md5'] } else { '(absent)' }
+            Say ('  the -Project run that made this pre-image recorded (stamp {0}, region md5 {1}):' -f $sStamp, $sMd5)
+            $diff = $false
+            foreach ($k in $a0.Keys) {
+                $sv = if ($side.Contains($k)) { $side[$k] } else { '(absent)' }
+                if ($sv -eq $a0[$k]) { $mark = 'equal' } else { $mark = 'DIFFERS'; $diff = $true }
+                Info ('anchor {0,-22} sidecar {1}  now {2}  {3}' -f $k, $sv, $a0[$k], $mark)
+            }
+            if ($diff) {
+                Warn 'an anchor differs from the -Project run that made this pre-image. If JARVIS has booted since, that is expected: the episodic store and JACT are written at every boot. If it has not, a neighbouring store was damaged -- stop and assess before restoring.'
+            }
+        }
+    } else {
+        Info ('no anchors sidecar beside the pre-image ({0}) -- there is nothing to compare the anchors with' -f $sidePath)
+    }
     $cur = Invoke-Box -RemoteCommand (Get-CmdRangeMd5 -Device $BoxDevice -Lba $L.BaseLba -Count $L.RegionCount)
     Info ('the region md5 now: {0}' -f $cur.Out)
+    if ($cur.Code -eq 0 -and $cur.Out -eq $lmd) {
+        Warn ('the region already holds this pre-image (md5 {0}) -- the restore would change nothing. The pre-images on this PC:' -f $lmd)
+        foreach ($c in @(Get-ChildItem -LiteralPath $adminHome -Filter 'jsem_pre_*.bin' -File -ErrorAction SilentlyContinue |
+                         Where-Object { Test-JsemPreImageName -Leaf $_.Name } | Sort-Object Name)) {
+            Info ('{0}  md5 {1}' -f $c.FullName, (Get-FileMd5 -Path $c.FullName))
+        }
+    }
 
     $plan = @(Get-JsemWritePlan -Device $BoxDevice -Name $leaf -BaseLba $L.BaseLba -MaxFacts $L.MaxFacts)
     Say ''
@@ -1977,37 +2297,75 @@ if ($ProjectRestore) {
         exit 50
     }
 
-    $w1 = Invoke-Box -RemoteCommand $plan[0]
-    if ($w1.Code -ne 0) { Fail 51 ('the RECORDS restore write FAILED (exit {0})' -f $w1.Code) }
-    Pass 'records written (conv=fsync,notrunc)'
-    $w2 = Invoke-Box -RemoteCommand $plan[1]
-    if ($w2.Code -ne 0) { Fail 51 ('the HEADER restore write FAILED (exit {0}) after the records were written' -f $w2.Code) }
-    Pass 'header written (conv=fsync,notrunc)'
+    Say ''
+    Say '== the box copy, re-verified AFTER the typed word (the prompt can wait indefinitely) =='
+    [void](Test-JsemStaged -Name $leaf -Bytes $L.RegionBytes -Md5 $lmd -Code 97 -Label 'the box copy of the pre-image' -After 'its pre-write check' -Slice)
 
-    $dc2 = Invoke-Box -RemoteCommand (Get-CmdDropCaches)
-    if ($dc2.Code -ne 0) { Fail 95 ('drop_caches FAILED after the write (exit {0})' -f $dc2.Code) }
-    Pass 'caches dropped'
+    # THE WRITE WINDOW, as in -Project: from the flag to the after-anchor comparison.
+    $script:jsemA0 = $a0
+    $script:jsemL = $L
+    $script:jsemMode = 'restore'
+    $script:jsemLocalPre = $src
+    $script:jsemLeaf = $leaf
+    $script:jsemBlockDone = $false
+    try {
+        $script:jsemWritten = $true
+        $w1 = Invoke-Box -RemoteCommand $plan[0]
+        if ($w1.Code -ne 0) { Fail 51 ('the RECORDS restore write FAILED (exit {0})' -f $w1.Code) }
+        Pass 'records written (conv=fsync,notrunc)'
+        $w2 = Invoke-Box -RemoteCommand $plan[1]
+        if ($w2.Code -ne 0) { Fail 51 ('the HEADER restore write FAILED (exit {0}) after the records were written' -f $w2.Code) }
+        Pass 'header written (conv=fsync,notrunc)'
 
-    $r1 = Invoke-Box -RemoteCommand (Get-CmdRangeToFile -Device $BoxDevice -Lba $L.BaseLba -Count $L.RegionCount -Name 'jsem_restore_post.bin')
-    $rsz = Invoke-Box -RemoteCommand (Get-CmdBoxFileSize -Name 'jsem_restore_post.bin')
-    if ($r1.Code -ne 0 -or $rsz.Code -ne 0 -or $rsz.Out -ne [string]$L.RegionBytes) {
-        Fail 96 ("the restore readback is '{0}' bytes (read exit {1}), expected {2}" -f $rsz.Out, $r1.Code, $L.RegionBytes)
+        $dc2 = Invoke-Box -RemoteCommand (Get-CmdDropCaches)
+        if ($dc2.Code -ne 0) { Fail 95 ('drop_caches FAILED after the write (exit {0})' -f $dc2.Code) }
+        Pass 'caches dropped'
+
+        $r1 = Invoke-Box -RemoteCommand (Get-CmdRangeToFile -Device $BoxDevice -Lba $L.BaseLba -Count $L.RegionCount -Name 'jsem_restore_post.bin')
+        Add-Artifact -Path ('{0}:~/jsem_restore_post.bin' -f $BoxHost) -What 'the readback of the region after the restore, on the box' -Staged -Name 'jsem_restore_post.bin'
+        $rsz = Invoke-Box -RemoteCommand (Get-CmdBoxFileSize -Name 'jsem_restore_post.bin')
+        if ($r1.Code -ne 0 -or $rsz.Code -ne 0 -or $rsz.Out -ne [string]$L.RegionBytes) {
+            Fail 96 ("the restore readback is '{0}' bytes (read exit {1}), expected {2}" -f $rsz.Out, $r1.Code, $L.RegionBytes)
+        }
+        $rw = Invoke-Box -RemoteCommand (Get-CmdFileSliceMd5 -Name 'jsem_restore_post.bin' -Part 'whole')
+        $rh = Invoke-Box -RemoteCommand (Get-CmdFileSliceMd5 -Name 'jsem_restore_post.bin' -Part 'header')
+        $rr = Invoke-Box -RemoteCommand (Get-CmdFileSliceMd5 -Name 'jsem_restore_post.bin' -Part 'records')
+        if ($rw.Out -ne $lmd -or $rh.Out -ne $ph.Out -or $rr.Out -ne $pr.Out) {
+            $cmp = Invoke-Box -RemoteCommand (Get-CmdCmpHead -A $leaf -B 'jsem_restore_post.bin')
+            Say ('  cmp -l {0} jsem_restore_post.bin | head -n 20:' -f $leaf)
+            foreach ($ln in @($cmp.Out -split "`n")) { Say ('    {0}' -f $ln) }
+            # Which side moved: the box copy of the source, or the device?
+            $sm = Invoke-Box -RemoteCommand (Get-CmdFileSliceMd5 -Name $leaf -Part 'whole')
+            if ($sm.Code -eq 0 -and $sm.Out -eq $lmd) {
+                Info ('the source ~/{0} still reads md5 {1}, this PC''s copy: the source did not change, so the DEVICE holds other bytes' -f $leaf, $sm.Out)
+            } else {
+                Warn ("the source ~/{0} now reads md5 '{1}' (exit {2}), NOT this PC's {3}: the SOURCE changed after its re-verify, and the cmp above compares the device with that changed file" -f $leaf, $sm.Out, $sm.Code, $lmd)
+            }
+            Fail 98 ('the restore readback md5s (whole {0}, header {1}, records {2}) are not the pre-image''s ({3}, {4}, {5})' -f $rw.Out, $rh.Out, $rr.Out, $lmd, $ph.Out, $pr.Out)
+        }
+        Pass ('the device reads back the pre-image: whole {0}, header {1}, records {2}' -f $rw.Out, $rh.Out, $rr.Out)
+
+        $a1 = Read-JsemAnchors -L $L -ReadFailCode 62 -When 'after'
+        [void](Compare-JsemAnchors -Before $a0 -After $a1)
+        $script:jsemBlockDone = $true
+    } catch {
+        # An unhandled error: named here, because the finally's exit would swallow it.
+        # A Fail's exit never lands here -- a catch does not see an exit.
+        Write-Host ('  FAIL: an unhandled error inside the JSEM write window: {0}' -f $_.Exception.Message) -ForegroundColor Red
+        throw
+    } finally {
+        if ($script:jsemWritten -and -not $script:jsemBlockDone -and -not $script:jsemBannerShown) {
+            Show-JsemWrittenBanner
+            Write-Transcript -Command 'ABORT: interrupted inside the JSEM write window (the device may hold part of the image)' -ExitCode 'interrupted'
+            Show-Artifacts
+            exit 8
+        }
     }
-    $rw = Invoke-Box -RemoteCommand (Get-CmdFileSliceMd5 -Name 'jsem_restore_post.bin' -Part 'whole')
-    $rh = Invoke-Box -RemoteCommand (Get-CmdFileSliceMd5 -Name 'jsem_restore_post.bin' -Part 'header')
-    $rr = Invoke-Box -RemoteCommand (Get-CmdFileSliceMd5 -Name 'jsem_restore_post.bin' -Part 'records')
-    if ($rw.Out -ne $lmd -or $rh.Out -ne $ph.Out -or $rr.Out -ne $pr.Out) {
-        $cmp = Invoke-Box -RemoteCommand (Get-CmdCmpHead -A $leaf -B 'jsem_restore_post.bin')
-        Say ('  cmp -l {0} jsem_restore_post.bin | head -n 20:' -f $leaf)
-        foreach ($ln in @($cmp.Out -split "`n")) { Say ('    {0}' -f $ln) }
-        Fail 98 ('the restore readback md5s (whole {0}, header {1}, records {2}) are not the pre-image''s ({3}, {4}, {5})' -f $rw.Out, $rh.Out, $rr.Out, $lmd, $ph.Out, $pr.Out)
+
+    if (Remove-BoxFile -Names @('jsem_restore_post.bin')) {
+        Remove-Artifact -Path ('{0}:~/jsem_restore_post.bin' -f $BoxHost)
+        Pass '~/jsem_restore_post.bin removed, proven absent (the pre-image stays)'
     }
-    Pass ('the device reads back the pre-image: whole {0}, header {1}, records {2}' -f $rw.Out, $rh.Out, $rr.Out)
-
-    $a1 = Read-JsemAnchors -L $L -ReadFailCode 62 -When 'after'
-    [void](Compare-JsemAnchors -Before $a0 -After $a1)
-
-    if (Remove-BoxFile -Names @('jsem_restore_post.bin')) { Pass '~/jsem_restore_post.bin removed, proven absent (the pre-image stays)' }
     Write-Transcript -Command ('project restore complete: region = pre-image {0} md5 {1}' -f $leaf, $lmd) -ExitCode 0
     exit 0
 }

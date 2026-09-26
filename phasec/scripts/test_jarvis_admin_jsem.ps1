@@ -14,7 +14,14 @@
                       Get-CmdCmpHead Get-CmdParseSemantic Get-CmdScpTo
                       Get-CmdScpFrom
     the pure helpers  Get-JsemLayout Get-ForwardArgs
+                      Get-JsemWrittenBanner Test-JsemPreImageName
+                      ConvertTo-JsemAnchorLines ConvertFrom-JsemAnchorLines
     what they call    Get-HeaderConst Get-LeMagicHex Get-CmdBoxFileMd5
+
+  It also asserts, statically over the AST, the JSEM write window (MS3b-1 fix):
+  Fail's post-write hook, the flag's single placement in each JSEM block, the
+  staged re-verify before it, each block's finally, and -Check's slice, parse
+  and pull legs.
 
   They run under Set-StrictMode -Version 2.0, so a builder that read a
   script-scope variable (such as $BoxDevice) would throw here instead of passing.
@@ -71,7 +78,8 @@ foreach ($p in @($adminPath, $selfPath)) {
 # --- 3. define the functions under test from their AST extents -------------------
 $want = @('Get-HeaderConst', 'Get-LeMagicHex', 'Get-CmdBoxFileMd5', 'Get-JsemLayout', 'Get-ForwardArgs',
           'Get-CmdRangeMd5', 'Get-CmdRangeToFile', 'Get-CmdImageWrite', 'Get-JsemWritePlan', 'Get-CmdDropCaches',
-          'Get-CmdFileSliceMd5', 'Get-CmdCmpHead', 'Get-CmdParseSemantic', 'Get-CmdScpTo', 'Get-CmdScpFrom')
+          'Get-CmdFileSliceMd5', 'Get-CmdCmpHead', 'Get-CmdParseSemantic', 'Get-CmdScpTo', 'Get-CmdScpFrom',
+          'Get-JsemWrittenBanner', 'Test-JsemPreImageName', 'ConvertTo-JsemAnchorLines', 'ConvertFrom-JsemAnchorLines')
 $fnAsts = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true))
 $missing = @()
 foreach ($name in $want) {
@@ -209,6 +217,99 @@ $outside = @($writes | Where-Object {
 })
 Test-That ('T8e exactly two Get-CmdImageWrite calls in the script, both inside Get-JsemWritePlan (found {0}, {1} outside)' -f $writes.Count, $outside.Count) `
     ($plans.Count -eq 1 -and $writes.Count -eq 2 -and $outside.Count -eq 0) (($outside | ForEach-Object { 'line {0}' -f $_.Extent.StartLineNumber }) -join ', ')
+
+# --- 9. the MS3b-1 fix's pure helpers -------------------------------------------------
+$bp = Get-JsemWrittenBanner -Mode 'project' -LocalPre 'C:\a\jsem_pre_20260926T093819Z.bin' -BoxHost 'jarvis' -Leaf 'jsem_pre_20260926T093819Z.bin'
+Test-That 'T9a the project banner, golden' ($bp -ceq 'THE JSEM REGION HAS BEEN WRITTEN, possibly only in part. The pre-image is kept at C:\a\jsem_pre_20260926T093819Z.bin and jarvis:~/jsem_pre_20260926T093819Z.bin. Restore it with: jarvis_admin.bat -ProjectRestore -PreImage C:\a\jsem_pre_20260926T093819Z.bin') $bp
+$br = Get-JsemWrittenBanner -Mode 'restore' -LocalPre 'C:\a\jsem_pre_20260926T093819Z.bin' -BoxHost 'jarvis' -Leaf 'jsem_pre_20260926T093819Z.bin'
+Test-That 'T9b the restore banner, golden' ($br -ceq 'THE RESTORE WRITE HAS STARTED, and the region may hold a mix of old and new bytes. The source is still at C:\a\jsem_pre_20260926T093819Z.bin and jarvis:~/jsem_pre_20260926T093819Z.bin. Re-run: jarvis_admin.bat -ProjectRestore -PreImage C:\a\jsem_pre_20260926T093819Z.bin') $br
+Test-That 'T9c Test-JsemPreImageName accepts jsem_pre_20260926T093819Z.bin' (Test-JsemPreImageName -Leaf 'jsem_pre_20260926T093819Z.bin')
+$badNames = @('jsem_pre_x.bin', 'a b.bin', 'jsem_pre_20260926T093819Z.bin;rm', '../jsem_pre_20260926T093819Z.bin')
+$accepted = @($badNames | Where-Object { Test-JsemPreImageName -Leaf $_ })
+Test-That ('T9d Test-JsemPreImageName refuses all {0}: {1}' -f $badNames.Count, ($badNames -join ' | ')) ($accepted.Count -eq 0) ('accepted: ' + ($accepted -join ' | '))
+$sx = [ordered]@{
+    'episodic header md5'   = '066d7a49681b65c049c3c8488eb2604d'
+    'episodic header magic' = '4950454a'
+    'episodic tail md5'     = '682941ce1951db355ee17229efe08413'
+    'JACT head md5'         = '2207fe2105a5891177e2dc982c1a6439'
+    'JACT head magic'       = '5443414a'
+    'stamp'                 = '20260926T093819Z'
+    'region_md5'            = '1365c929581e56c8bbc59308feeab8e3'
+}
+$sLines = @(ConvertTo-JsemAnchorLines $sx)
+$sBack = ConvertFrom-JsemAnchorLines $sLines
+$sSame = ((@($sBack.Keys) -join '|') -ceq (@($sx.Keys) -join '|')) -and (@($sx.Keys | Where-Object { $sBack[$_] -cne $sx[$_] }).Count -eq 0)
+$sText = $sLines -join "`n"
+$sHi = @([Text.Encoding]::UTF8.GetBytes($sText) | Where-Object { $_ -gt 0x7F }).Count
+Test-That ('T9e the sidecar round-trips five anchors, the stamp and the region md5 ({0} lines), and its text is pure ASCII' -f $sLines.Count) ($sLines.Count -eq 7 -and $sSame -and $sHi -eq 0) $sText
+
+# --- 10. the JSEM write window, statically ----------------------------------------------
+function Get-VarRefs {
+    param($Node, [string]$Name)
+    @($Node.FindAll({ param($n) $n -is [System.Management.Automation.Language.VariableExpressionAst] -and $n.VariablePath.UserPath -eq $Name }, $true))
+}
+function Test-IsFlagSet {
+    param($n, [string]$Value)
+    ($n -is [System.Management.Automation.Language.AssignmentStatementAst]) -and $n.Left.Extent.Text -eq '$script:jsemWritten' -and $n.Right.Extent.Text -eq $Value
+}
+$failFn = @($fnAsts | Where-Object { $_.Name -eq 'Fail' })
+$hookOk = ($failFn.Count -eq 1) -and (@(Get-VarRefs $failFn[0] 'script:jsemWritten').Count -ge 1) -and (@(Get-VarRefs $failFn[0] 'script:jsemInAnchorCheck').Count -ge 1)
+Test-That 'T10a Fail''s body references $script:jsemWritten and $script:jsemInAnchorCheck (the post-write hook)' $hookOk ('{0} Fail definition(s)' -f $failFn.Count)
+
+$allFlagTrue = @($ast.FindAll({ param($n) Test-IsFlagSet $n '$true' }, $true))
+$allFlagFalse = @($ast.FindAll({ param($n) Test-IsFlagSet $n '$false' }, $true))
+$blocks = @()
+foreach ($cond in @('$Project', '$ProjectRestore')) {
+    $blk = @($ifs | Where-Object { $_.Clauses[0].Item1.Extent.Text -eq $cond })
+    if ($blk.Count -ne 1) { Test-That ('T10b the {0} block exists exactly once' -f $cond) $false; continue }
+    $b = $blk[0]
+    $blocks += $b
+    $rh = @($b.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Read-Host' }, $true))
+    $fl = @($b.FindAll({ param($n) Test-IsFlagSet $n '$true' }, $true))
+    $w0 = @($b.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Invoke-Box' -and $n.Extent.Text -match '-RemoteCommand\s+\$plan\[0\]' }, $true))
+    $placed = ($rh.Count -eq 1 -and $fl.Count -eq 1 -and $w0.Count -eq 1) -and
+              ($rh[0].Extent.StartOffset -lt $fl[0].Extent.StartOffset) -and ($fl[0].Extent.StartOffset -lt $w0[0].Extent.StartOffset)
+    Test-That ('T10b in the {0} block $script:jsemWritten = $true appears exactly once, after its one Read-Host and before its one Invoke-Box -RemoteCommand $plan[0]' -f $cond) $placed `
+        ('Read-Host x{0}, flag x{1}, plan[0] write x{2}' -f $rh.Count, $fl.Count, $w0.Count)
+    $rv = @($b.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Test-JsemStaged' }, $true))
+    $between = ($rh.Count -eq 1 -and $fl.Count -eq 1) -and @($rv | Where-Object { $_.Extent.StartOffset -gt $rh[0].Extent.StartOffset -and $_.Extent.StartOffset -lt $fl[0].Extent.StartOffset }).Count -ge 1
+    Test-That ('T10c in the {0} block a Test-JsemStaged re-verify lies between the Read-Host and the flag' -f $cond) $between ('Test-JsemStaged x{0}' -f $rv.Count)
+    $fins = @($b.FindAll({ param($n) $n -is [System.Management.Automation.Language.TryStatementAst] -and $null -ne $n.Finally }, $true))
+    $finOk = @($fins | Where-Object { @(Get-VarRefs $_.Finally 'script:jsemWritten').Count -ge 1 -and @(Get-VarRefs $_.Finally 'script:jsemBannerShown').Count -ge 1 }).Count -ge 1
+    Test-That ('T10d the {0} block has a finally that references $script:jsemWritten and $script:jsemBannerShown' -f $cond) $finOk ('{0} try/finally' -f $fins.Count)
+}
+$falseOutside = @($allFlagFalse | Where-Object {
+    $f = $_
+    @($blocks | Where-Object { $f.Extent.StartOffset -ge $_.Extent.StartOffset -and $f.Extent.EndOffset -le $_.Extent.EndOffset }).Count -eq 0
+})
+$falseTop = @($allFlagFalse | Where-Object { $_.Parent -eq $ast.EndBlock })
+Test-That ('T10e $script:jsemWritten = $true is set only in the two JSEM blocks (x{0}), and every = $false (x{1}) lies outside both, at top level' -f $allFlagTrue.Count, $allFlagFalse.Count) `
+    ($allFlagTrue.Count -eq 2 -and $allFlagFalse.Count -ge 1 -and $falseOutside.Count -eq $allFlagFalse.Count -and $falseTop.Count -eq $allFlagFalse.Count)
+
+$icp = @($fnAsts | Where-Object { $_.Name -eq 'Invoke-CheckProjection' })
+function Test-HasLiteralPart {
+    param($Cmd, [string]$Value)
+    $els = @($Cmd.CommandElements)
+    for ($i = 0; $i -lt $els.Count; $i++) {
+        $e = $els[$i]
+        if ($e -is [System.Management.Automation.Language.CommandParameterAst] -and $e.ParameterName -eq 'Part') {
+            if ($null -ne $e.Argument -and $e.Argument -is [System.Management.Automation.Language.StringConstantExpressionAst] -and $e.Argument.Value -ceq $Value) { return $true }
+            if ($i + 1 -lt $els.Count -and $els[$i + 1] -is [System.Management.Automation.Language.StringConstantExpressionAst] -and $els[$i + 1].Value -ceq $Value) { return $true }
+        }
+    }
+    return $false
+}
+if ($icp.Count -eq 1) {
+    $slices = @($icp[0].FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Get-CmdFileSliceMd5' }, $true))
+    $hasH = @($slices | Where-Object { Test-HasLiteralPart $_ 'header' }).Count -ge 1
+    $hasR = @($slices | Where-Object { Test-HasLiteralPart $_ 'records' }).Count -ge 1
+    Test-That 'T10f Invoke-CheckProjection calls Get-CmdFileSliceMd5 with a literal -Part header and a literal -Part records' ($hasH -and $hasR) ('header {0}, records {1}' -f $hasH, $hasR)
+    $cPs = @($icp[0].FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Get-CmdParseSemantic' }, $true)).Count
+    $cRx = @($icp[0].FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Receive-FromBox' }, $true)).Count
+    Test-That 'T10g Invoke-CheckProjection calls Get-CmdParseSemantic and Receive-FromBox' ($cPs -ge 1 -and $cRx -ge 1) ('parse x{0}, pull x{1}' -f $cPs, $cRx)
+} else {
+    Test-That 'T10f Invoke-CheckProjection is defined exactly once' $false ('{0}' -f $icp.Count)
+}
 
 Write-Output ''
 Write-Output ('{0}/{1} checks passed' -f ($script:checks - $script:fails), $script:checks)
