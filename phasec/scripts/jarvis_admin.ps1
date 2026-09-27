@@ -274,11 +274,21 @@
   so a drop at gate 17 exits 62. A parse failure at gate 18 also re-reads and
   prints the banner although R2 has already proven the image; there the restore
   is optional. A Ctrl+C or an unhandled PowerShell error reads no anchor and
-  exits 8 through [Environment]::Exit(8), so these modes must run as their own
-  process (jarvis_admin.bat, the menu, or powershell -File). Via the menu, the
-  menu itself may report 0 after a Ctrl+C; the banner and the run's log are the
-  signal. Every exit from the window prints the restore command, and every
-  -Project and -ProjectRestore run writes its own log to
+  exits 8 through [Environment]::Exit, or with the failing gate's own code if it
+  lands after that gate's post-write hook has decided it; so these modes must
+  run as their own process (jarvis_admin.bat with the mode's flag, the chooser,
+  or powershell -File). The chooser runs each option as a child process on the
+  same console, so the child's lines, its typed-word prompt and its banner are
+  shown, and a terminal option's code is the chooser's exit code; what the
+  chooser itself reports after a Ctrl+C is not measured, so the banner and the
+  run's log are the signal. From jarvis_admin.bat, cmd.exe may also ask
+  Terminate batch job (Y/N)? after a Ctrl+C (inferred, not measured): answering
+  N should let the .bat keep the exit code and pause; answering Y ends the .bat
+  without its pause. The ssh and scp commands this script prints and records
+  omit the -o options of Get-JsemSshOptions. Every ssh command it runs carries
+  them, and so do the JSEM scp copies; the two re-key scp copies (-Check's dry
+  run and -Rekey) carry none. Every exit from the window prints the restore
+  command, and every -Project and -ProjectRestore run writes its own log to
   %USERPROFILE%\.jarvis\admin\ (the script's own lines; ssh's stderr stays on
   the console). The pre-image on both hosts is the way back. Never dot-source
   this script, and never &-call it from an interactive session:
@@ -372,6 +382,9 @@ $script:jsemLogPath = ''            # its path, printed at the start and the end
 $script:jsemDryStaging = $false     # set by -Project -DryRun just before gate 9 stages anything
 $script:jsemDryItems = @()          # what the dry run has staged, appended BEFORE each create
 $script:jsemDryCleaned = $false     # a failed dry run's removal has run (Show-Artifacts' header)
+# MS3b-1 fix 3.
+$script:jsemHookCode = 0            # the code Fail's post-write hook decided; a finally exits with it
+$script:menuRc = 0                  # the chooser's exit code: Invoke-Menu returns no value
 function Add-Artifact {
     # -NewKey marks an artifact holding the NEWLY GENERATED key. Whether that key
     # is LIVE depends on whether the write has happened yet, which is why it is
@@ -464,6 +477,9 @@ function Fail([int]$Code, [string]$Message) {
         } else {
             $how = 'unchanged'
         }
+        # Recorded BEFORE the banner: a Ctrl+C from here on leaves through the
+        # window's finally, which exits with this code rather than 8.
+        $script:jsemHookCode = $final
         Show-JsemWrittenBanner
         Write-Transcript -Command ('ABORT: {0} [anchors after the write: {1}]' -f $Message, $how) -ExitCode $final
         Show-Artifacts
@@ -525,7 +541,7 @@ function Invoke-JsemDryCleanup {
     $left = @()
     foreach ($it in @($script:jsemDryItems)) {
         if ($it.Box) {
-            $gone = Remove-BoxFile -Names @($it.Name)
+            $gone = Remove-BoxFile -Quiet -Names @($it.Name)
         } else {
             Remove-Item -LiteralPath $it.Path -Force -ErrorAction SilentlyContinue
             $gone = -not (Test-Path -LiteralPath $it.Path)
@@ -1442,12 +1458,16 @@ function Test-JsemSemanticOff {
 function Remove-BoxFile {
     # Removes each name from the box's home and PROVES it gone with test ! -e,
     # because rm -f exits 0 for a file that never existed.
-    param([string[]]$Names)
+    # -Quiet: the caller reports each survivor itself (the dry-run cleanup).
+    param([string[]]$Names, [switch]$Quiet)
     $ok = $true
     foreach ($nm in $Names) {
         [void](Invoke-Box -RemoteCommand (Get-CmdBoxRemove -Name $nm))
         $gone = Invoke-Box -RemoteCommand ('test ! -e $HOME/{0}' -f $nm)
-        if ($gone.Code -ne 0) { Warn ('~/{0} is still on the box -- remove it by hand' -f $nm); $ok = $false }
+        if ($gone.Code -ne 0) {
+            if (-not $Quiet) { Warn ('~/{0} is still on the box -- remove it by hand' -f $nm) }
+            $ok = $false
+        }
     }
     return $ok
 }
@@ -1834,12 +1854,12 @@ function Invoke-Menu {
             # IsInputRedirected is FALSE for a console driven to EOF (Ctrl+Z), so
             # the guard at the top does not cover it and this does.
             $empties++
-            if ($empties -ge 3) { Say '  empty input three times running (stdin at EOF?) -- exiting rather than spinning.'; return 0 }
+            if ($empties -ge 3) { Say '  empty input three times running (stdin at EOF?) -- exiting rather than spinning.'; $script:menuRc = 0; return }
             continue
         }
         $empties = 0
 
-        if ($pick -eq 'q' -or $pick -eq 'quit') { Write-Transcript -Command 'menu:q -> quit (nothing was run)' -ExitCode 0; return 0 }
+        if ($pick -eq 'q' -or $pick -eq 'quit') { Write-Transcript -Command 'menu:q -> quit (nothing was run)' -ExitCode 0; $script:menuRc = 0; return }
         if ($pick -eq 'r') { Say ''; Say '  probing the box...'; $st = Get-MenuStatus; continue }
 
         $c = $choices | Where-Object { $_.Key -eq $pick } | Select-Object -First 1
@@ -1871,7 +1891,7 @@ function Invoke-Menu {
             # invites a second run against state that just changed underneath it.
             Say ''
             Say ('  {0} finished with exit code {1}. This menu does not loop after a write.' -f $c.Label, $rc)
-            return $rc
+            $script:menuRc = $rc; return
         }
         Say ''
         Say ('  {0} finished (exit {1}).' -f $c.Label, $rc)
@@ -1879,7 +1899,9 @@ function Invoke-Menu {
     }
 }
 
-if ($MenuMode) { exit (Invoke-Menu) }
+# Invoke-Menu is called as a bare statement: a parenthesised call would give the
+# child a pipe for stdout and swallow every line it prints (fix 3).
+if ($MenuMode) { Invoke-Menu; exit $script:menuRc }
 
 # ===========================================================================
 # -Check
@@ -2189,7 +2211,7 @@ if ($Project) {
     if ($DryRun) {
         Say ''
         Say '== DRY RUN: removing what was staged, and proving it gone =='
-        $okBox = Remove-BoxFile -Names @('jsem.img', $preName)
+        $okBox = Remove-BoxFile -Quiet -Names @('jsem.img', $preName)
         Remove-Item -LiteralPath $localPre, $sidePath -Force -ErrorAction SilentlyContinue
         $okPc = -not (Test-Path -LiteralPath $localPre) -and -not (Test-Path -LiteralPath $sidePath)
         if (-not $okBox -or -not $okPc) {
@@ -2262,18 +2284,25 @@ if ($Project) {
         $rw = Invoke-Box -RemoteCommand (Get-CmdFileSliceMd5 -Name 'jsem_post.bin' -Part 'whole')
         $rh = Invoke-Box -RemoteCommand (Get-CmdFileSliceMd5 -Name 'jsem_post.bin' -Part 'header')
         $rr = Invoke-Box -RemoteCommand (Get-CmdFileSliceMd5 -Name 'jsem_post.bin' -Part 'records')
+        $sliceFail = ($rw.Code -ne 0 -or $rh.Code -ne 0 -or $rr.Code -ne 0)
         if ($rw.Out -ne $img.Md5Image -or $rh.Out -ne $img.Md5Header -or $rr.Out -ne $img.Md5Records) {
+            # An unread slice: the device is unknown, so nothing else is asserted --
+            # no cmp listing and no which-side-moved verdict (fix 3).
+            if ($sliceFail) {
+                Fail 61 ('R2 a readback slice could not be READ (exits: whole {0}, header {1}, records {2}) -- a READ failure, not a proven mismatch. The pre-image is retained: -ProjectRestore puts it back.' -f $rw.Code, $rh.Code, $rr.Code)
+            }
             $cmp = Invoke-Box -RemoteCommand (Get-CmdCmpHead -A 'jsem.img' -B 'jsem_post.bin')
-            Say '  cmp -l jsem.img jsem_post.bin | head -n 20 (offset, octal image byte, octal device byte):'
-            foreach ($ln in @($cmp.Out -split "`n")) { Say ('    {0}' -f $ln) }
+            if ($cmp.Code -eq 0) {
+                Say '  cmp -l jsem.img jsem_post.bin | head -n 20 (offset, octal image byte, octal device byte):'
+                foreach ($ln in @($cmp.Out -split "`n")) { Say ('    {0}' -f $ln) }
+            } else {
+                Warn ('cmp could not be READ (exit {0}) -- no byte comparison is available' -f $cmp.Code)
+            }
             # Which side moved: the staged source, the device, or -- when the re-hash
             # itself failed -- neither is known.
             $sm = Invoke-Box -RemoteCommand (Get-CmdBoxFileMd5 -Name 'jsem.img')
             $vd = Get-JsemMovedVerdict -Mode 'project' -Leaf '' -Code $sm.Code -Md5 $sm.Out -Expected $img.Md5Image
             if ($vd.Level -eq 'info') { Info $vd.Text } else { Warn $vd.Text }
-            if ($rw.Code -ne 0 -or $rh.Code -ne 0 -or $rr.Code -ne 0) {
-                Fail 61 ('R2 a readback slice could not be READ (exits: whole {0}, header {1}, records {2}) -- a READ failure, not a proven mismatch. The pre-image is retained: -ProjectRestore puts it back.' -f $rw.Code, $rh.Code, $rr.Code)
-            }
             Fail 61 ('R2 the readback md5s (whole {0}, header {1}, records {2}) are not the manifest''s ({3}, {4}, {5}). The pre-image is retained: -ProjectRestore puts it back.' -f $rw.Out, $rh.Out, $rr.Out, $img.Md5Image, $img.Md5Header, $img.Md5Records)
         }
         Pass ('R2 the device reads back whole {0}, header {1}, records {2} -- the manifest''s' -f $rw.Out, $rh.Out, $rr.Out)
@@ -2301,14 +2330,19 @@ if ($Project) {
         Write-Host ('  FAIL: an unhandled error inside the JSEM write window: {0}' -f $_.Exception.Message) -ForegroundColor Red
         throw
     } finally {
-        if ($script:jsemWritten -and -not $script:jsemBlockDone -and -not $script:jsemBannerShown) {
-            Show-JsemWrittenBanner
-            Write-Transcript -Command 'ABORT: interrupted inside the JSEM write window (the device may hold part of the image)' -ExitCode 'interrupted'
-            Show-Artifacts
+        # Guarded WITHOUT the banner flag: a Ctrl+C after a post-write hook has shown
+        # the banner still stops the log and exits with that hook's code (fix 3).
+        if ($script:jsemWritten -and -not $script:jsemBlockDone) {
+            if (-not $script:jsemBannerShown) {
+                Show-JsemWrittenBanner
+                $how = if ($script:jsemHookCode -eq 0) { 'interrupted' } else { 'interrupted ({0})' -f $script:jsemHookCode }
+                Write-Transcript -Command 'ABORT: interrupted inside the JSEM write window (the device may hold part of the image)' -ExitCode $how
+                Show-Artifacts
+            }
             Stop-JsemLog
             # Not a plain exit: in a [CmdletBinding()] script, exit 8 in a finally
             # after a Ctrl+C gives the process exit code 0 (measured under 5.1).
-            [Environment]::Exit(8)
+            [Environment]::Exit($(if ($script:jsemHookCode -ne 0) { $script:jsemHookCode } else { 8 }))
         }
     }
 
@@ -2475,17 +2509,23 @@ if ($ProjectRestore) {
         $rw = Invoke-Box -RemoteCommand (Get-CmdFileSliceMd5 -Name 'jsem_restore_post.bin' -Part 'whole')
         $rh = Invoke-Box -RemoteCommand (Get-CmdFileSliceMd5 -Name 'jsem_restore_post.bin' -Part 'header')
         $rr = Invoke-Box -RemoteCommand (Get-CmdFileSliceMd5 -Name 'jsem_restore_post.bin' -Part 'records')
+        $sliceFail = ($rw.Code -ne 0 -or $rh.Code -ne 0 -or $rr.Code -ne 0)
         if ($rw.Out -ne $lmd -or $rh.Out -ne $ph.Out -or $rr.Out -ne $pr.Out) {
+            # An unread slice: the device is unknown, so nothing else is asserted (fix 3).
+            if ($sliceFail) {
+                Fail 98 ('a restore readback slice could not be READ (exits: whole {0}, header {1}, records {2}) -- a READ failure, not a proven mismatch' -f $rw.Code, $rh.Code, $rr.Code)
+            }
             $cmp = Invoke-Box -RemoteCommand (Get-CmdCmpHead -A $leaf -B 'jsem_restore_post.bin')
-            Say ('  cmp -l {0} jsem_restore_post.bin | head -n 20:' -f $leaf)
-            foreach ($ln in @($cmp.Out -split "`n")) { Say ('    {0}' -f $ln) }
+            if ($cmp.Code -eq 0) {
+                Say ('  cmp -l {0} jsem_restore_post.bin | head -n 20:' -f $leaf)
+                foreach ($ln in @($cmp.Out -split "`n")) { Say ('    {0}' -f $ln) }
+            } else {
+                Warn ('cmp could not be READ (exit {0}) -- no byte comparison is available' -f $cmp.Code)
+            }
             # Which side moved: the box copy of the source, the device, or neither known.
             $sm = Invoke-Box -RemoteCommand (Get-CmdFileSliceMd5 -Name $leaf -Part 'whole')
             $vd = Get-JsemMovedVerdict -Mode 'restore' -Leaf $leaf -Code $sm.Code -Md5 $sm.Out -Expected $lmd
             if ($vd.Level -eq 'info') { Info $vd.Text } else { Warn $vd.Text }
-            if ($rw.Code -ne 0 -or $rh.Code -ne 0 -or $rr.Code -ne 0) {
-                Fail 98 ('a restore readback slice could not be READ (exits: whole {0}, header {1}, records {2}) -- a READ failure, not a proven mismatch' -f $rw.Code, $rh.Code, $rr.Code)
-            }
             Fail 98 ('the restore readback md5s (whole {0}, header {1}, records {2}) are not the pre-image''s ({3}, {4}, {5})' -f $rw.Out, $rh.Out, $rr.Out, $lmd, $ph.Out, $pr.Out)
         }
         Pass ('the device reads back the pre-image: whole {0}, header {1}, records {2}' -f $rw.Out, $rh.Out, $rr.Out)
@@ -2499,14 +2539,19 @@ if ($ProjectRestore) {
         Write-Host ('  FAIL: an unhandled error inside the JSEM write window: {0}' -f $_.Exception.Message) -ForegroundColor Red
         throw
     } finally {
-        if ($script:jsemWritten -and -not $script:jsemBlockDone -and -not $script:jsemBannerShown) {
-            Show-JsemWrittenBanner
-            Write-Transcript -Command 'ABORT: interrupted inside the JSEM write window (the device may hold part of the image)' -ExitCode 'interrupted'
-            Show-Artifacts
+        # Guarded WITHOUT the banner flag: a Ctrl+C after a post-write hook has shown
+        # the banner still stops the log and exits with that hook's code (fix 3).
+        if ($script:jsemWritten -and -not $script:jsemBlockDone) {
+            if (-not $script:jsemBannerShown) {
+                Show-JsemWrittenBanner
+                $how = if ($script:jsemHookCode -eq 0) { 'interrupted' } else { 'interrupted ({0})' -f $script:jsemHookCode }
+                Write-Transcript -Command 'ABORT: interrupted inside the JSEM write window (the device may hold part of the image)' -ExitCode $how
+                Show-Artifacts
+            }
             Stop-JsemLog
             # Not a plain exit: in a [CmdletBinding()] script, exit 8 in a finally
             # after a Ctrl+C gives the process exit code 0 (measured under 5.1).
-            [Environment]::Exit(8)
+            [Environment]::Exit($(if ($script:jsemHookCode -ne 0) { $script:jsemHookCode } else { 8 }))
         }
     }
 

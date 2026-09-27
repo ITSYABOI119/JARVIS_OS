@@ -355,33 +355,117 @@ foreach ($fn in @('Send-ToBox', 'Receive-FromBox')) {
     $d = @($fnAsts | Where-Object { $_.Name -eq $fn })
     Test-That ('T11e {0} calls Get-JsemSshOptions (scp gets the keepalive too)' -f $fn) (($d.Count -eq 1) -and (@(Get-CallsIn $d[0] 'Get-JsemSshOptions').Count -ge 1))
 }
-function Test-IsEnvExit8 {
+function Test-IsEnvExit {
     param($n)
-    ($n -is [System.Management.Automation.Language.InvokeMemberExpressionAst]) -and $n.Expression.Extent.Text -eq '[Environment]' -and $n.Member.Extent.Text -eq 'Exit' -and $n.Static -and
-        @($n.Arguments).Count -eq 1 -and $n.Arguments[0].Extent.Text -eq '8'
+    ($n -is [System.Management.Automation.Language.InvokeMemberExpressionAst]) -and $n.Expression.Extent.Text -eq '[Environment]' -and $n.Member.Extent.Text -eq 'Exit' -and $n.Static
 }
 foreach ($b in $blocks) {
     $cond = $b.Clauses[0].Item1.Extent.Text
     $fins = @($b.FindAll({ param($n) $n -is [System.Management.Automation.Language.TryStatementAst] -and $null -ne $n.Finally -and @(Get-VarRefs $n.Finally 'script:jsemWritten').Count -ge 1 }, $true))
-    $envX = @(); $bare8 = @(); $stops = @()
+    $envX = @(); $bareX = @(); $stops = @()
     foreach ($t in $fins) {
-        $envX += @($t.Finally.FindAll({ param($n) Test-IsEnvExit8 $n }, $true))
-        $bare8 += @($t.Finally.FindAll({ param($n) $n -is [System.Management.Automation.Language.ExitStatementAst] -and $null -ne $n.Pipeline -and $n.Pipeline.Extent.Text -eq '8' }, $true))
+        $envX += @($t.Finally.FindAll({ param($n) Test-IsEnvExit $n }, $true))
+        $bareX += @($t.Finally.FindAll({ param($n) $n -is [System.Management.Automation.Language.ExitStatementAst] }, $true))
         $stops += @(Get-CallsIn $t.Finally 'Stop-JsemLog')
     }
-    Test-That ('T11f the {0} block''s window finally calls [Environment]::Exit(8) and holds no bare exit 8' -f $cond) ($fins.Count -eq 1 -and $envX.Count -eq 1 -and $bare8.Count -eq 0) `
-        ('finally x{0}, Environment.Exit(8) x{1}, exit 8 x{2}' -f $fins.Count, $envX.Count, $bare8.Count)
+    $argOk = $false
+    if ($envX.Count -eq 1 -and @($envX[0].Arguments).Count -eq 1) {
+        $a = $envX[0].Arguments[0]
+        $has8 = @($a.FindAll({ param($n) $n -is [System.Management.Automation.Language.ConstantExpressionAst] -and "$($n.Value)" -eq '8' }, $true)).Count -ge 1
+        $argOk = ($a.Extent.Text -match 'jsemHookCode') -and $has8
+    }
+    Test-That ('T11f the {0} block''s window finally holds exactly one [Environment]::Exit, whose argument references jsemHookCode with the literal 8 as its fallback, and no bare exit' -f $cond) `
+        ($fins.Count -eq 1 -and $envX.Count -eq 1 -and $argOk -and $bareX.Count -eq 0) `
+        ('finally x{0}, Environment.Exit x{1}, argument ok {2}, exit x{3}' -f $fins.Count, $envX.Count, $argOk, $bareX.Count)
     $ordered = ($envX.Count -eq 1) -and @($stops | Where-Object { $_.Extent.StartOffset -lt $envX[0].Extent.StartOffset }).Count -ge 1
-    Test-That ('T11g the {0} block''s window finally calls Stop-JsemLog before [Environment]::Exit' -f $cond) $ordered ('Stop-JsemLog x{0}, Exit x{1}' -f $stops.Count, $envX.Count)
+    Test-That ('T11g the {0} block''s window finally calls Stop-JsemLog before its [Environment]::Exit' -f $cond) $ordered ('Stop-JsemLog x{0}, Exit x{1}' -f $stops.Count, $envX.Count)
 }
-$ffOk = ($failFn.Count -eq 1) -and (@(Get-VarRefs $failFn[0] 'script:jsemDryStaging').Count -ge 1) -and (@(Get-CallsIn $failFn[0] 'Stop-JsemLog').Count -ge 2)
-Test-That 'T11h Fail''s body references $script:jsemDryStaging (the failed dry run cleans up) and calls Stop-JsemLog before each of its two exits' $ffOk
+$fOrder = $false
+$fExits = @()
+if ($failFn.Count -eq 1) {
+    $fExits = @($failFn[0].FindAll({ param($n) $n -is [System.Management.Automation.Language.ExitStatementAst] }, $true))
+    $fOrder = $fExits.Count -ge 2
+    foreach ($e in $fExits) {
+        $blk = $e.Parent
+        $before = @($blk.Statements | Where-Object {
+            $_ -is [System.Management.Automation.Language.PipelineAst] -and @($_.PipelineElements).Count -eq 1 -and
+            $_.PipelineElements[0] -is [System.Management.Automation.Language.CommandAst] -and $_.PipelineElements[0].GetCommandName() -eq 'Stop-JsemLog' -and
+            $_.Extent.StartOffset -lt $e.Extent.StartOffset })
+        if ($before.Count -lt 1) { $fOrder = $false }
+    }
+}
+$ffOk = ($failFn.Count -eq 1) -and (@(Get-VarRefs $failFn[0] 'script:jsemDryStaging').Count -ge 1) -and $fOrder
+Test-That 'T11h Fail''s body references $script:jsemDryStaging, and for EACH of its exit statements a Stop-JsemLog call in the same statement block comes first' $ffOk ('exits x{0}, order ok {1}' -f $fExits.Count, $fOrder)
 if ($icp.Count -eq 1) {
     $probeC = @(Get-CallsIn $icp[0] 'Invoke-Box' | Where-Object { $_.Extent.Text -match "-RemoteCommand\s+'true'" })
     $locC = @(Get-CallsIn $icp[0] 'Test-JsemLocalImage') + @(Get-CallsIn $icp[0] 'Test-JsemSemanticOff')
     $lOk = ($probeC.Count -eq 1) -and ($locC.Count -ge 2) -and (@($locC | Where-Object { $_.Extent.StartOffset -gt $probeC[0].Extent.StartOffset }).Count -eq 0)
     Test-That 'T11i Invoke-CheckProjection runs its local gates (Test-JsemLocalImage, Test-JsemSemanticOff) before its P1 probe' $lOk ('probe x{0}, local x{1}' -f $probeC.Count, $locC.Count)
 }
+
+# --- 12. MS3b-1 fix 3: the chooser, the READ-failure order, the Ctrl+C-after-a-hook code, one warn -------
+$menuExits = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.ExitStatementAst] -and $null -ne $n.Pipeline -and $n.Pipeline.Extent.Text -match 'Invoke-Menu' }, $true))
+$menuIf = @($ast.EndBlock.Statements | Where-Object { $_ -is [System.Management.Automation.Language.IfStatementAst] -and $_.Clauses[0].Item1.Extent.Text -eq '$MenuMode' })
+$menuOk = $false
+if ($menuIf.Count -eq 1) {
+    $st = @($menuIf[0].Clauses[0].Item2.Statements)
+    $bare = @($st | Where-Object { $_ -is [System.Management.Automation.Language.PipelineAst] -and @($_.PipelineElements).Count -eq 1 -and
+        $_.PipelineElements[0] -is [System.Management.Automation.Language.CommandAst] -and $_.PipelineElements[0].GetCommandName() -eq 'Invoke-Menu' })
+    $ex = @($st | Where-Object { $_ -is [System.Management.Automation.Language.ExitStatementAst] -and $null -ne $_.Pipeline -and $_.Pipeline.Extent.Text -eq '$script:menuRc' })
+    $menuOk = ($bare.Count -eq 1 -and $ex.Count -eq 1)
+}
+Test-That 'T12a no exit (Invoke-Menu): the menu line calls Invoke-Menu as a bare statement and exits with $script:menuRc' ($menuExits.Count -eq 0 -and $menuOk) ('exit (Invoke-Menu) x{0}, menu line ok {1}' -f $menuExits.Count, $menuOk)
+$im = @($fnAsts | Where-Object { $_.Name -eq 'Invoke-Menu' })
+$valued = @()
+if ($im.Count -eq 1) { $valued = @($im[0].FindAll({ param($n) $n -is [System.Management.Automation.Language.ReturnStatementAst] -and $null -ne $n.Pipeline }, $true)) }
+$rets = if ($im.Count -eq 1) { @($im[0].FindAll({ param($n) $n -is [System.Management.Automation.Language.ReturnStatementAst] }, $true)).Count } else { 0 }
+Test-That 'T12b every return statement inside Invoke-Menu carries no value' ($im.Count -eq 1 -and $rets -ge 1 -and $valued.Count -eq 0) ('returns x{0}, valued x{1}' -f $rets, $valued.Count)
+foreach ($b in $blocks) {
+    $cond = $b.Clauses[0].Item1.Extent.Text
+    $sfIf = @($b.FindAll({ param($n) $n -is [System.Management.Automation.Language.IfStatementAst] -and @(Get-VarRefs $n.Clauses[0].Item1 'sliceFail').Count -ge 1 -and @(Get-CallsIn $n.Clauses[0].Item2 'Fail').Count -ge 1 }, $true))
+    $cmpC = @(Get-CallsIn $b 'Get-CmdCmpHead')
+    $vdC = @(Get-CallsIn $b 'Get-JsemMovedVerdict')
+    $ordOk = ($sfIf.Count -eq 1 -and $cmpC.Count -eq 1 -and $vdC.Count -eq 1) -and
+             ($sfIf[0].Extent.StartOffset -lt $cmpC[0].Extent.StartOffset) -and ($sfIf[0].Extent.StartOffset -lt $vdC[0].Extent.StartOffset)
+    Test-That ('T12c in the {0} block the if on $sliceFail that calls Fail comes before the Get-CmdCmpHead and Get-JsemMovedVerdict calls' -f $cond) $ordOk `
+        ('sliceFail if x{0}, cmp x{1}, verdict x{2}' -f $sfIf.Count, $cmpC.Count, $vdC.Count)
+    $lst = @($b.FindAll({ param($n) $n -is [System.Management.Automation.Language.ForEachStatementAst] -and $n.Condition.Extent.Text -match '\$cmp\.Out' }, $true))
+    $guarded = $lst.Count -ge 1
+    foreach ($l in $lst) {
+        $p = $l.Parent; $under = $false
+        while ($null -ne $p -and $p -ne $b) {
+            if ($p -is [System.Management.Automation.Language.IfStatementAst] -and @($p.Clauses | Where-Object { $_.Item1.Extent.Text -match '\$cmp\.Code' }).Count -ge 1) { $under = $true }
+            $p = $p.Parent
+        }
+        if (-not $under) { $guarded = $false }
+    }
+    Test-That ('T12d in the {0} block the cmp listing is printed only under a $cmp.Code test' -f $cond) $guarded ('listings x{0}' -f $lst.Count)
+    $fins = @($b.FindAll({ param($n) $n -is [System.Management.Automation.Language.TryStatementAst] -and $null -ne $n.Finally -and @(Get-VarRefs $n.Finally 'script:jsemWritten').Count -ge 1 }, $true))
+    $gOk = $false
+    if ($fins.Count -eq 1) {
+        $firstIf = @($fins[0].Finally.Statements | Where-Object { $_ -is [System.Management.Automation.Language.IfStatementAst] }) | Select-Object -First 1
+        $gOk = ($null -ne $firstIf) -and (@(Get-VarRefs $firstIf.Clauses[0].Item1 'script:jsemBannerShown').Count -eq 0) -and (@(Get-VarRefs $firstIf.Clauses[0].Item1 'script:jsemWritten').Count -ge 1)
+    }
+    Test-That ('T12e the {0} block''s window finally guard does not reference jsemBannerShown' -f $cond) $gOk
+}
+$hookOk2 = $false
+if ($failFn.Count -eq 1) {
+    $hc = @($failFn[0].FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$script:jsemHookCode' }, $true))
+    $bn = @(Get-CallsIn $failFn[0] 'Show-JsemWrittenBanner')
+    $hookOk2 = ($hc.Count -eq 1 -and $bn.Count -eq 1 -and $hc[0].Extent.StartOffset -lt $bn[0].Extent.StartOffset)
+}
+Test-That 'T12f Fail''s post-write hook assigns $script:jsemHookCode before it calls Show-JsemWrittenBanner' $hookOk2
+function Test-HasQuiet {
+    param($Cmd)
+    @($Cmd.CommandElements | Where-Object { $_ -is [System.Management.Automation.Language.CommandParameterAst] -and $_.ParameterName -eq 'Quiet' }).Count -ge 1
+}
+$dc = @($fnAsts | Where-Object { $_.Name -eq 'Invoke-JsemDryCleanup' })
+$dcQ = ($dc.Count -eq 1) -and @(Get-CallsIn $dc[0] 'Remove-BoxFile').Count -ge 1 -and @(Get-CallsIn $dc[0] 'Remove-BoxFile' | Where-Object { -not (Test-HasQuiet $_) }).Count -eq 0
+$pb = @($blocks | Where-Object { $_.Clauses[0].Item1.Extent.Text -eq '$Project' })
+$okBox = @()
+if ($pb.Count -eq 1) { $okBox = @($pb[0].FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$okBox' }, $true)) }
+$obQ = ($okBox.Count -eq 1) -and @(Get-CallsIn $okBox[0] 'Remove-BoxFile' | Where-Object { Test-HasQuiet $_ }).Count -eq 1
+Test-That 'T12g Invoke-JsemDryCleanup and the dry run''s own removal call Remove-BoxFile with -Quiet' ($dcQ -and $obQ) ('cleanup {0}, dry run {1}' -f $dcQ, $obQ)
 
 Write-Output ''
 Write-Output ('{0}/{1} checks passed' -f ($script:checks - $script:fails), $script:checks)
