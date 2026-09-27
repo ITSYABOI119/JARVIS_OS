@@ -311,6 +311,78 @@ if ($icp.Count -eq 1) {
     Test-That 'T10f Invoke-CheckProjection is defined exactly once' $false ('{0}' -f $icp.Count)
 }
 
+# --- 11. MS3b-1 fix 2: the ssh keepalive, the moved verdict, Ctrl+C, the log, the dry run, -Check --------
+$want2 = @('Get-JsemSshOptions', 'Get-JsemMovedVerdict')
+$missing2 = @()
+foreach ($name in $want2) {
+    $defs = @($fnAsts | Where-Object { $_.Name -eq $name })
+    if ($defs.Count -ne 1) { $missing2 += ('{0} x{1}' -f $name, $defs.Count); continue }
+    . ([scriptblock]::Create($defs[0].Extent.Text))
+}
+Test-That ('T11a the {0} fix-2 pure functions are defined exactly once, and extracted' -f $want2.Count) ($missing2.Count -eq 0) ($missing2 -join ', ')
+if ($missing2.Count -eq 0) {
+    $so = @(Get-JsemSshOptions)
+    $soWant = @('-o','BatchMode=yes','-o','ConnectTimeout=8','-o','ServerAliveInterval=5','-o','ServerAliveCountMax=6')
+    Test-That 'T11b Get-JsemSshOptions, golden: BatchMode, ConnectTimeout=8, ServerAliveInterval=5, ServerAliveCountMax=6' `
+        (($so -join '|') -ceq ($soWant -join '|')) ($so -join ' ')
+    $lf = 'jsem_pre_20260926T093819Z.bin'
+    $mA = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    $mB = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    $vcases = @(
+        @('project', 255, '', $mA, 'warn', 'the staged source ~/jsem.img could not be READ after the failure (exit 255) -- whether the source or the device moved is UNKNOWN'),
+        @('project', 0, $mB, $mA, 'warn', ("the staged source ~/jsem.img now reads md5 '{0}' (exit 0), NOT the image's {1}: the SOURCE changed after its re-verify, and the cmp above compares the device with that changed file" -f $mB, $mA)),
+        @('project', 0, $mA, $mA, 'info', ('the staged source ~/jsem.img still reads md5 {0}, the image''s: the source did not change, so the DEVICE holds other bytes' -f $mA)),
+        @('restore', 1, '', $mA, 'warn', ('the source ~/{0} could not be READ after the failure (exit 1) -- whether the source or the device moved is UNKNOWN' -f $lf)),
+        @('restore', 0, $mB, $mA, 'warn', ("the source ~/{0} now reads md5 '{1}' (exit 0), NOT this PC's {2}: the SOURCE changed after its re-verify, and the cmp above compares the device with that changed file" -f $lf, $mB, $mA)),
+        @('restore', 0, $mA, $mA, 'info', ('the source ~/{0} still reads md5 {1}, this PC''s copy: the source did not change, so the DEVICE holds other bytes' -f $lf, $mA))
+    )
+    $vi = 0
+    foreach ($c in $vcases) {
+        $vi++
+        $v = Get-JsemMovedVerdict -Mode $c[0] -Leaf $lf -Code $c[1] -Md5 $c[2] -Expected $c[3]
+        Test-That ('T11c.{0} Get-JsemMovedVerdict {1} code {2} {3}: level {4}, exact text' -f $vi, $c[0], $c[1], $(if ($c[2] -eq $c[3]) { 'equal' } else { 'differs' }), $c[4]) `
+            ($v.Level -ceq $c[4] -and $v.Text -ceq $c[5]) ('{0}: {1}' -f $v.Level, $v.Text)
+    }
+}
+function Get-CallsIn {
+    param($Node, [string]$Name)
+    @($Node.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq $Name }, $true))
+}
+$ib = @($fnAsts | Where-Object { $_.Name -eq 'Invoke-Box' })
+$ibOk = ($ib.Count -eq 1) -and (@(Get-CallsIn $ib[0] 'Get-JsemSshOptions').Count -ge 1) -and ($ib[0].Extent.Text -notmatch 'ConnectTimeout=')
+Test-That 'T11d Invoke-Box calls Get-JsemSshOptions and carries no ConnectTimeout= literal of its own' $ibOk
+foreach ($fn in @('Send-ToBox', 'Receive-FromBox')) {
+    $d = @($fnAsts | Where-Object { $_.Name -eq $fn })
+    Test-That ('T11e {0} calls Get-JsemSshOptions (scp gets the keepalive too)' -f $fn) (($d.Count -eq 1) -and (@(Get-CallsIn $d[0] 'Get-JsemSshOptions').Count -ge 1))
+}
+function Test-IsEnvExit8 {
+    param($n)
+    ($n -is [System.Management.Automation.Language.InvokeMemberExpressionAst]) -and $n.Expression.Extent.Text -eq '[Environment]' -and $n.Member.Extent.Text -eq 'Exit' -and $n.Static -and
+        @($n.Arguments).Count -eq 1 -and $n.Arguments[0].Extent.Text -eq '8'
+}
+foreach ($b in $blocks) {
+    $cond = $b.Clauses[0].Item1.Extent.Text
+    $fins = @($b.FindAll({ param($n) $n -is [System.Management.Automation.Language.TryStatementAst] -and $null -ne $n.Finally -and @(Get-VarRefs $n.Finally 'script:jsemWritten').Count -ge 1 }, $true))
+    $envX = @(); $bare8 = @(); $stops = @()
+    foreach ($t in $fins) {
+        $envX += @($t.Finally.FindAll({ param($n) Test-IsEnvExit8 $n }, $true))
+        $bare8 += @($t.Finally.FindAll({ param($n) $n -is [System.Management.Automation.Language.ExitStatementAst] -and $null -ne $n.Pipeline -and $n.Pipeline.Extent.Text -eq '8' }, $true))
+        $stops += @(Get-CallsIn $t.Finally 'Stop-JsemLog')
+    }
+    Test-That ('T11f the {0} block''s window finally calls [Environment]::Exit(8) and holds no bare exit 8' -f $cond) ($fins.Count -eq 1 -and $envX.Count -eq 1 -and $bare8.Count -eq 0) `
+        ('finally x{0}, Environment.Exit(8) x{1}, exit 8 x{2}' -f $fins.Count, $envX.Count, $bare8.Count)
+    $ordered = ($envX.Count -eq 1) -and @($stops | Where-Object { $_.Extent.StartOffset -lt $envX[0].Extent.StartOffset }).Count -ge 1
+    Test-That ('T11g the {0} block''s window finally calls Stop-JsemLog before [Environment]::Exit' -f $cond) $ordered ('Stop-JsemLog x{0}, Exit x{1}' -f $stops.Count, $envX.Count)
+}
+$ffOk = ($failFn.Count -eq 1) -and (@(Get-VarRefs $failFn[0] 'script:jsemDryStaging').Count -ge 1) -and (@(Get-CallsIn $failFn[0] 'Stop-JsemLog').Count -ge 2)
+Test-That 'T11h Fail''s body references $script:jsemDryStaging (the failed dry run cleans up) and calls Stop-JsemLog before each of its two exits' $ffOk
+if ($icp.Count -eq 1) {
+    $probeC = @(Get-CallsIn $icp[0] 'Invoke-Box' | Where-Object { $_.Extent.Text -match "-RemoteCommand\s+'true'" })
+    $locC = @(Get-CallsIn $icp[0] 'Test-JsemLocalImage') + @(Get-CallsIn $icp[0] 'Test-JsemSemanticOff')
+    $lOk = ($probeC.Count -eq 1) -and ($locC.Count -ge 2) -and (@($locC | Where-Object { $_.Extent.StartOffset -gt $probeC[0].Extent.StartOffset }).Count -eq 0)
+    Test-That 'T11i Invoke-CheckProjection runs its local gates (Test-JsemLocalImage, Test-JsemSemanticOff) before its P1 probe' $lOk ('probe x{0}, local x{1}' -f $probeC.Count, $locC.Count)
+}
+
 Write-Output ''
 Write-Output ('{0}/{1} checks passed' -f ($script:checks - $script:fails), $script:checks)
 if ($script:fails -gt 0) { exit 1 }

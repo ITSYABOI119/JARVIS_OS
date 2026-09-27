@@ -262,16 +262,28 @@
   -Rollback is the way out, and the scratch directory still holds a copy of the
   live key until it is removed by hand.
 
-  THE JSEM WRITE WINDOW. From the first JSEM write until R2 passes, the region
-  may hold part of the image. Every FAIL in that window BEFORE the anchor check
-  re-reads the three anchors: a changed one exits 62; a failed re-read is
-  reported as a READ failure, keeps the gate's own code, and is never called
-  damage. The anchor check itself (gate 17, and the restore's after-check) exits
-  62 for an anchor that is changed OR unreadable, as the exit-code table says.
-  An interruption exits 8. Every exit from the window prints the restore
-  command -- a Ctrl+C, a dropped or hung ssh and an unhandled PowerShell error
-  included; those exits read no anchor, because the connection may be the thing
-  that failed. The pre-image on both hosts is the way back.
+  THE JSEM WRITE WINDOW. From the first JSEM write through gate 18 (the restore:
+  through its after-anchor check), the region may hold part of the image. Every
+  FAIL in that window before the anchor check re-reads the three anchors: a
+  changed one exits 62; a failed re-read is reported as a READ failure and keeps
+  the gate's own code. A dropped ssh is such a FAIL: with ServerAliveInterval=5
+  and ServerAliveCountMax=6 it returns 255 within about 30 s, the gate fails,
+  and the re-read is attempted; with the link still down that re-read is
+  reported as a read failure. The anchor check itself (gate 17, and the
+  restore's after-check) exits 62 for an anchor that is changed OR unreadable,
+  so a drop at gate 17 exits 62. A parse failure at gate 18 also re-reads and
+  prints the banner although R2 has already proven the image; there the restore
+  is optional. A Ctrl+C or an unhandled PowerShell error reads no anchor and
+  exits 8 through [Environment]::Exit(8), so these modes must run as their own
+  process (jarvis_admin.bat, the menu, or powershell -File). Via the menu, the
+  menu itself may report 0 after a Ctrl+C; the banner and the run's log are the
+  signal. Every exit from the window prints the restore command, and every
+  -Project and -ProjectRestore run writes its own log to
+  %USERPROFILE%\.jarvis\admin\ (the script's own lines; ssh's stderr stays on
+  the console). The pre-image on both hosts is the way back. Never dot-source
+  this script, and never &-call it from an interactive session:
+  [Environment]::Exit ends the whole PowerShell process, so a Ctrl+C would close
+  that session.
 #>
 [CmdletBinding()]
 param(
@@ -353,6 +365,13 @@ $script:jsemL = $null               # the layout
 $script:jsemMode = ''               # 'project' or 'restore'
 $script:jsemLocalPre = ''           # the pre-image (or restore source) on this PC
 $script:jsemLeaf = ''               # its leaf, the same name on the box
+# MS3b-1 fix 2. The per-run log, and a failed -Project -DryRun's cleanup: Fail reads
+# ONLY these, never gate 9's locals, which may be unset when it runs.
+$script:jsemLogOn = $false          # a Start-Transcript of this run is running
+$script:jsemLogPath = ''            # its path, printed at the start and the end
+$script:jsemDryStaging = $false     # set by -Project -DryRun just before gate 9 stages anything
+$script:jsemDryItems = @()          # what the dry run has staged, appended BEFORE each create
+$script:jsemDryCleaned = $false     # a failed dry run's removal has run (Show-Artifacts' header)
 function Add-Artifact {
     # -NewKey marks an artifact holding the NEWLY GENERATED key. Whether that key
     # is LIVE depends on whether the write has happened yet, which is why it is
@@ -361,8 +380,10 @@ function Add-Artifact {
     # the pre-image, which is -ProjectRestore's source and must be kept.
     # -Staged marks a file staged in the box's home (-Name is its leaf there), so
     # an abort at its own check still names it.
-    param([string]$Path, [string]$What, [switch]$NewKey, [switch]$Region, [switch]$Staged, [string]$Name = '')
-    $script:artifacts += [pscustomobject]@{ Path = $Path; What = $What; NewKey = [bool]$NewKey; Region = [bool]$Region; Staged = [bool]$Staged; Name = $Name }
+    # -Sidecar marks the A0 anchors file beside a pre-image. -DryRun marks what a
+    # failed dry run could not remove: never a restore path, whatever else it is.
+    param([string]$Path, [string]$What, [switch]$NewKey, [switch]$Region, [switch]$Staged, [string]$Name = '', [switch]$Sidecar, [switch]$DryRun)
+    $script:artifacts += [pscustomobject]@{ Path = $Path; What = $What; NewKey = [bool]$NewKey; Region = [bool]$Region; Staged = [bool]$Staged; Name = $Name; Sidecar = [bool]$Sidecar; DryRun = [bool]$DryRun }
 }
 
 function Remove-Artifact {
@@ -379,10 +400,16 @@ function Show-Artifacts {
     # person reading the terminal.
     if (-not $script:artifacts.Count) { return }
     Write-Host ''
-    Write-Host '  ARTIFACTS THIS RUN LEFT BEHIND (nothing was cleaned up -- cleanup runs only after the final gate,' -ForegroundColor Yellow
-    Write-Host '  so an aborted run never destroys its own rollback path):' -ForegroundColor Yellow
+    if ($script:jsemDryCleaned) {
+        Write-Host '  ARTIFACTS THE DRY RUN COULD NOT REMOVE (the rest was removed above):' -ForegroundColor Yellow
+    } else {
+        Write-Host '  ARTIFACTS THIS RUN LEFT BEHIND (nothing was cleaned up -- cleanup runs only after the final gate,' -ForegroundColor Yellow
+        Write-Host '  so an aborted run never destroys its own rollback path):' -ForegroundColor Yellow
+    }
     foreach ($a in $script:artifacts) {
-        $tag = if ($a.Region) { '   (the region as it was before this run -- your restore path for -ProjectRestore; keep it)' }
+        $tag = if ($a.DryRun) { '   (dry run -- NOT a restore path; delete it)' }
+               elseif ($a.Sidecar) { '   (A0 anchors for -ProjectRestore''s comparison; keep it beside the pre-image)' }
+               elseif ($a.Region) { '   (the region as it was before this run -- your restore path for -ProjectRestore; keep it)' }
                elseif ($a.Staged) { ('   (staged copy on the box -- remove after inspection: ssh {0} rm -f ~/{1})' -f $BoxHost, $a.Name) }
                elseif ($a.NewKey -and $script:keyIsLive) { '   *** HOLDS THE LIVE KEY -- DELETE IT ***' }
                elseif ($a.NewKey) { '   (new key, NOT yet live on the box)' }
@@ -440,16 +467,108 @@ function Fail([int]$Code, [string]$Message) {
         Show-JsemWrittenBanner
         Write-Transcript -Command ('ABORT: {0} [anchors after the write: {1}]' -f $Message, $how) -ExitCode $final
         Show-Artifacts
+        Stop-JsemLog
         exit $final
     }
     if (-not $Check) {
         Write-Transcript -Command ('ABORT: {0}' -f $Message) -ExitCode $Code
+        # A failed -Project -DryRun removes what it staged before it exits, so no
+        # dry-run pre-image is left to become -ProjectRestore's newest (LIVE-3).
+        if ($script:jsemDryStaging) { Invoke-JsemDryCleanup }
         Show-Artifacts
+        Stop-JsemLog
         exit $Code
     }
     # -Check accumulates. Keep the WORST (highest) code, not merely the first --
     # otherwise a later, more serious gate is masked by an earlier trivial one.
     if ($Code -gt $script:worstExit) { $script:worstExit = $Code }
+}
+
+function Start-JsemLog {
+    # The per-run log (MS3b-1 fix 2): %USERPROFILE%\.jarvis\admin\<mode>_<UTC>.log.
+    # Start-Transcript records every Write-Host line this script prints; ssh's own
+    # stderr goes straight to the console and is NOT in it, and the ABORT lines
+    # Write-Transcript writes go to transcript.log only.
+    param([string]$Mode)
+    if (-not (Test-Path -LiteralPath $adminHome)) { New-Item -ItemType Directory -Path $adminHome -Force | Out-Null }
+    $script:jsemLogPath = Join-Path $adminHome ('{0}_{1}.log' -f $Mode, [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ'))
+    try {
+        Start-Transcript -LiteralPath $script:jsemLogPath | Out-Null
+        $script:jsemLogOn = $true
+        Info ('this run''s log: {0}' -f $script:jsemLogPath)
+    } catch {
+        Warn ('the per-run log could not be started ({0}) -- transcript.log still records every command' -f $_.Exception.Message)
+    }
+}
+
+function Stop-JsemLog {
+    # Called before EVERY exit of a -Project / -ProjectRestore run. Guarded: with
+    # no transcript running Stop-Transcript throws, which under Stop would turn an
+    # exit into 1.
+    if (-not $script:jsemLogOn) { return }
+    Info ('this run''s log: {0}' -f $script:jsemLogPath)
+    $script:jsemLogOn = $false
+    try { Stop-Transcript | Out-Null } catch { Write-Host ('  warn: the per-run log could not be closed: {0}' -f $_.Exception.Message) }
+}
+
+function Add-JsemDryItem {
+    # Registered BEFORE the command that creates it, so a failed or partial create
+    # is still removed by a failed dry run.
+    param([string]$Name, [string]$Path, [string]$What, [switch]$Box)
+    $script:jsemDryItems += [pscustomobject]@{ Box = [bool]$Box; Name = $Name; Path = $Path; What = $What }
+}
+
+function Invoke-JsemDryCleanup {
+    # Fail's dry-run cleanup. Reads ONLY $script:jsemDryItems: under StrictMode an
+    # unassigned local of gate 9 read here would throw and turn the exit into 1.
+    Say '  -- the dry run failed: removing what it staged, and proving it gone --'
+    $left = @()
+    foreach ($it in @($script:jsemDryItems)) {
+        if ($it.Box) {
+            $gone = Remove-BoxFile -Names @($it.Name)
+        } else {
+            Remove-Item -LiteralPath $it.Path -Force -ErrorAction SilentlyContinue
+            $gone = -not (Test-Path -LiteralPath $it.Path)
+        }
+        if ($gone) {
+            Info ('{0}: gone (proven absent)' -f $it.Path)
+            Remove-Artifact -Path $it.Path
+        } else {
+            Warn ('{0}: STILL PRESENT (or the box did not answer) -- remove it by hand' -f $it.Path)
+            $left += $it
+        }
+    }
+    foreach ($it in $left) {
+        $hit = @($script:artifacts | Where-Object { $_.Path -eq $it.Path })
+        if ($hit.Count -eq 0) { Add-Artifact -Path $it.Path -What $it.What -DryRun }
+        else { foreach ($h in $hit) { $h.DryRun = $true } }
+    }
+    $script:jsemDryCleaned = $true
+}
+
+function Get-JsemSshOptions {
+    # ssh and scp options for every JSEM and -Check box command (MS3b-1 fix 2).
+    # ServerAliveInterval 5 x ServerAliveCountMax 6: a link that dies while a
+    # command runs returns 255 in about 30 s, instead of waiting on the OS's TCP
+    # keepalive (about two hours).
+    @('-o','BatchMode=yes','-o','ConnectTimeout=8','-o','ServerAliveInterval=5','-o','ServerAliveCountMax=6')
+}
+
+function Get-JsemMovedVerdict {
+    # After R2 (61) or a restore readback (98) fails: which side moved. Three-way,
+    # because a re-hash that FAILS (a dropped link) proves nothing about either.
+    # Returns [pscustomobject]@{ Level = 'info' | 'warn'; Text }.
+    param([string]$Mode, [string]$Leaf, [int]$Code, [string]$Md5, [string]$Expected)
+    $src = if ($Mode -eq 'restore') { 'the source ~/{0}' -f $Leaf } else { 'the staged source ~/jsem.img' }
+    if ($Code -ne 0) {
+        return [pscustomobject]@{ Level = 'warn'; Text = ('{0} could not be READ after the failure (exit {1}) -- whether the source or the device moved is UNKNOWN' -f $src, $Code) }
+    }
+    if ($Md5 -cne $Expected) {
+        $whose = if ($Mode -eq 'restore') { 'this PC''s' } else { 'the image''s' }
+        return [pscustomobject]@{ Level = 'warn'; Text = ("{0} now reads md5 '{1}' (exit 0), NOT {2} {3}: the SOURCE changed after its re-verify, and the cmp above compares the device with that changed file" -f $src, $Md5, $whose, $Expected) }
+    }
+    $whose = if ($Mode -eq 'restore') { 'this PC''s copy' } else { 'the image''s' }
+    return [pscustomobject]@{ Level = 'info'; Text = ('{0} still reads md5 {1}, {2}: the source did not change, so the DEVICE holds other bytes' -f $src, $Md5, $whose) }
 }
 
 function Write-Transcript {
@@ -901,7 +1020,7 @@ function Invoke-Box {
     # abort the script mid-procedure. Remote stderr goes straight to the console
     # where the operator can see it; only stdout is parsed.
     param([string]$RemoteCommand)
-    $out = & ssh @('-o','BatchMode=yes','-o','ConnectTimeout=8', $BoxHost, $RemoteCommand)
+    $out = & ssh @(@(Get-JsemSshOptions) + @($BoxHost, $RemoteCommand))
     $code = $LASTEXITCODE
     Write-Transcript -Command ('ssh {0} "{1}"' -f $BoxHost, $RemoteCommand) -ExitCode $code
     [pscustomobject]@{ Out = (@($out) -join "`n").Trim(); Code = $code }
@@ -1340,8 +1459,9 @@ function Send-ToBox {
     $leaf = Split-Path -Leaf $LocalPath
     $shown = Get-CmdScpTo -BoxHost $BoxHost -Dir $dir -LocalName $leaf -RemoteName $RemoteName
     Info $shown
+    $so = @(Get-JsemSshOptions)
     Push-Location $dir
-    try { & scp $leaf ('{0}:{1}' -f $BoxHost, $RemoteName) | Out-Null; $rc = $LASTEXITCODE } finally { Pop-Location }
+    try { & scp @so $leaf ('{0}:{1}' -f $BoxHost, $RemoteName) | Out-Null; $rc = $LASTEXITCODE } finally { Pop-Location }
     Write-Transcript -Command $shown -ExitCode $rc
     return $rc
 }
@@ -1350,8 +1470,9 @@ function Receive-FromBox {
     param([string]$RemoteName, [string]$LocalDir)
     $shown = Get-CmdScpFrom -BoxHost $BoxHost -Dir $LocalDir -RemoteName $RemoteName -LocalName $RemoteName
     Info $shown
+    $so = @(Get-JsemSshOptions)
     Push-Location $LocalDir
-    try { & scp ('{0}:{1}' -f $BoxHost, $RemoteName) $RemoteName | Out-Null; $rc = $LASTEXITCODE } finally { Pop-Location }
+    try { & scp @so ('{0}:{1}' -f $BoxHost, $RemoteName) $RemoteName | Out-Null; $rc = $LASTEXITCODE } finally { Pop-Location }
     Write-Transcript -Command $shown -ExitCode $rc
     return $rc
 }
@@ -1396,9 +1517,20 @@ function Invoke-CheckProjection {
     if (-not (Test-JsemTools)) { Info 'projection section skipped: a required tool is missing'; return }
     $L = Get-JsemLayoutChecked
     if (-not $L) { Info 'projection section skipped: the layout could not be derived'; return }
+    # -- 0. the local gates, BEFORE the probe: they need no box, and an unreachable
+    #       box is exactly when the operator is triaging (MS3b-1 fix 2) --
+    Say ''
+    Say '  -- 0. the local gates (L1, L1b reported, L2, L3) -- no box needed --'
+    $limg = $null
+    if ((Test-Path -LiteralPath $Image) -and (Test-Path -LiteralPath $Manifest)) {
+        $limg = Test-JsemLocalImage -L $L -Report
+    } else {
+        Info ("L1/L1b/L2 skipped: no image at '{0}' or no manifest at '{1}' yet" -f $Image, $Manifest)
+    }
+    [void](Test-JsemSemanticOff)
     $probe = Invoke-Box -RemoteCommand 'true'
     if ($probe.Code -ne 0) {
-        Info 'projection section SKIPPED: its own P1 probe did not reach the box over ssh'
+        Info 'projection section SKIPPED (its box-side legs; the local gates above ran): its own P1 probe did not reach the box over ssh'
         Fail 10 ("ssh to '{0}' failed -- the projection section did not run, so this -Check cannot pass" -f $BoxHost)
         return
     }
@@ -1536,17 +1668,6 @@ function Invoke-CheckProjection {
         Say ''
         Say '  -- 4. the box clone (gate 5) --'
         [void](Test-JsemBoxClone -Code 7)
-
-        # -- 5. the local gates --------------------------------------------------
-        Say ''
-        Say '  -- 5. the local gates (L1, L1b reported, L2, L3) --'
-        $limg = $null
-        if ((Test-Path -LiteralPath $Image) -and (Test-Path -LiteralPath $Manifest)) {
-            $limg = Test-JsemLocalImage -L $L -Report
-        } else {
-            Info ("L1/L1b/L2 skipped: no image at '{0}' or no manifest at '{1}' yet" -f $Image, $Manifest)
-        }
-        [void](Test-JsemSemanticOff)
 
         # -- 5b. the parse (gate 18's shape) ---------------------------------------
         Say ''
@@ -1938,6 +2059,7 @@ if ($Rollback) {
 # ===========================================================================
 if ($Project) {
     $dryTag = if ($DryRun) { ' -DryRun (gates 1-10 for real, then the plan; nothing is written)' } else { '' }
+    Start-JsemLog -Mode $(if ($DryRun) { 'project-dryrun' } else { 'project' })
     Say ('== jarvis_admin.ps1 -Project{0} ==' -f $dryTag)
 
     Say ''
@@ -1989,6 +2111,9 @@ if ($Project) {
     # UtcNow, not Get-Date -Format: that returns LOCAL time under the Z.
     $stamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')
     $preName = 'jsem_pre_{0}.bin' -f $stamp
+    # From here a failed dry run removes what it staged (Fail reads the flag).
+    if ($DryRun) { $script:jsemDryStaging = $true }
+    Add-JsemDryItem -Box -Name $preName -Path ('{0}:~/{1}' -f $BoxHost, $preName) -What 'pre-image of the JSEM region, on the box'
     $b1 = Invoke-Box -RemoteCommand (Get-CmdRangeToFile -Device $BoxDevice -Lba $L.BaseLba -Count $L.RegionCount -Name $preName)
     if ($b1.Code -ne 0) { Fail 93 ('the pre-image read FAILED (exit {0}) -- nothing was written' -f $b1.Code) }
     Add-Artifact -Path ('{0}:~/{1}' -f $BoxHost, $preName) -What 'pre-image of the JSEM region, on the box' -Region
@@ -2002,6 +2127,7 @@ if ($Project) {
     }
     if (-not (Test-Path -LiteralPath $adminHome)) { New-Item -ItemType Directory -Path $adminHome -Force | Out-Null }
     $localPre = Join-Path $adminHome $preName
+    Add-JsemDryItem -Name $preName -Path $localPre -What 'pre-image of the JSEM region, on this PC'
     $rcPull = Receive-FromBox -RemoteName $preName -LocalDir $adminHome
     if ($rcPull -ne 0 -or -not (Test-Path -LiteralPath $localPre)) { Fail 93 ('pulling the pre-image back to this PC FAILED (exit {0})' -f $rcPull) }
     Add-Artifact -Path $localPre -What 'pre-image of the JSEM region, on this PC' -Region
@@ -2018,6 +2144,7 @@ if ($Project) {
     foreach ($k in $a0.Keys) { $sideVals[$k] = $a0[$k] }
     $sideVals['stamp'] = $stamp
     $sideVals['region_md5'] = $lmd
+    Add-JsemDryItem -Name (Split-Path -Leaf $sidePath) -Path $sidePath -What 'the anchors sidecar, on this PC'
     try {
         $sideText = (@(ConvertTo-JsemAnchorLines -Values $sideVals) -join "`r`n") + "`r`n"
         [IO.File]::WriteAllText($sidePath, $sideText, [Text.Encoding]::ASCII)
@@ -2025,7 +2152,7 @@ if ($Project) {
     } catch {
         Fail 93 ("the anchors sidecar '{0}' could not be written: {1} -- nothing was written to the device" -f $sidePath, $_.Exception.Message)
     }
-    Add-Artifact -Path $sidePath -What 'the anchors before this run (A0) and the pre-image md5, beside the pre-image on this PC' -Region
+    Add-Artifact -Path $sidePath -What 'the anchors before this run (A0) and the pre-image md5, beside the pre-image on this PC' -Sidecar
     if (@($sideBack.Keys).Count -ne @($sideVals.Keys).Count -or @($sideVals.Keys | Where-Object { $sideBack[$_] -ne $sideVals[$_] }).Count -ne 0) {
         Fail 93 ("the anchors sidecar '{0}' does not read back as written" -f $sidePath)
     }
@@ -2033,6 +2160,7 @@ if ($Project) {
 
     Say ''
     Say '== gate 10: the image to the box (T1/T2) =='
+    Add-JsemDryItem -Box -Name 'jsem.img' -Path ('{0}:~/jsem.img' -f $BoxHost) -What 'the staged image, on the box'
     $rcPush = Send-ToBox -LocalPath $Image -RemoteName 'jsem.img'
     if ($rcPush -ne 0) { Fail 40 ('scp exited {0} -- nothing was written, and the pre-image is retained' -f $rcPush) }
     Add-Artifact -Path ('{0}:~/jsem.img' -f $BoxHost) -What 'the staged image, on the box' -Staged -Name 'jsem.img'
@@ -2068,12 +2196,16 @@ if ($Project) {
             Fail 5 ('the dry run could not remove everything it staged -- remove by hand: ~/jsem.img and ~/{0} on the box, {1} and {2} here' -f $preName, $localPre, $sidePath)
         }
         # A stale pre-image must never become -ProjectRestore's default: the
-        # operator's real run makes its own.
+        # operator's real run makes its own. The flag stays set until everything
+        # is proven gone, so the Fail 5 above retries the removal.
         $script:artifacts = @()
+        $script:jsemDryStaging = $false
+        $script:jsemDryItems = @()
         Pass ('~/jsem.img and ~/{0} are gone from the box (test ! -e), and {1} and its sidecar from this PC' -f $preName, $localPre)
         Say ''
         Say 'DRY RUN - nothing was written'
         Write-Transcript -Command 'project -DryRun: gates 1-10 passed, plan printed, staged files removed, nothing written' -ExitCode 0
+        Stop-JsemLog
         exit 0
     }
     $answer = Read-Host ('  type {0} to write, anything else to abort' -f $ProjectWord)
@@ -2083,6 +2215,7 @@ if ($Project) {
         Say ('    ssh {0} ''{1}''' -f $BoxHost, (Get-CmdBoxRemove -Name 'jsem.img'))
         Write-Transcript -Command 'project write NOT confirmed' -ExitCode 50
         Show-Artifacts
+        Stop-JsemLog
         exit 50
     }
 
@@ -2133,12 +2266,13 @@ if ($Project) {
             $cmp = Invoke-Box -RemoteCommand (Get-CmdCmpHead -A 'jsem.img' -B 'jsem_post.bin')
             Say '  cmp -l jsem.img jsem_post.bin | head -n 20 (offset, octal image byte, octal device byte):'
             foreach ($ln in @($cmp.Out -split "`n")) { Say ('    {0}' -f $ln) }
-            # Which side moved: the staged source, or the device?
+            # Which side moved: the staged source, the device, or -- when the re-hash
+            # itself failed -- neither is known.
             $sm = Invoke-Box -RemoteCommand (Get-CmdBoxFileMd5 -Name 'jsem.img')
-            if ($sm.Code -eq 0 -and $sm.Out -eq $img.Md5Image) {
-                Info ('the staged source ~/jsem.img still reads md5 {0}, the image''s: the source did not change, so the DEVICE holds other bytes' -f $sm.Out)
-            } else {
-                Warn ("the staged source ~/jsem.img now reads md5 '{0}' (exit {1}), NOT the image's {2}: the SOURCE changed after its re-verify, and the cmp above compares the device with that changed file" -f $sm.Out, $sm.Code, $img.Md5Image)
+            $vd = Get-JsemMovedVerdict -Mode 'project' -Leaf '' -Code $sm.Code -Md5 $sm.Out -Expected $img.Md5Image
+            if ($vd.Level -eq 'info') { Info $vd.Text } else { Warn $vd.Text }
+            if ($rw.Code -ne 0 -or $rh.Code -ne 0 -or $rr.Code -ne 0) {
+                Fail 61 ('R2 a readback slice could not be READ (exits: whole {0}, header {1}, records {2}) -- a READ failure, not a proven mismatch. The pre-image is retained: -ProjectRestore puts it back.' -f $rw.Code, $rh.Code, $rr.Code)
             }
             Fail 61 ('R2 the readback md5s (whole {0}, header {1}, records {2}) are not the manifest''s ({3}, {4}, {5}). The pre-image is retained: -ProjectRestore puts it back.' -f $rw.Out, $rh.Out, $rr.Out, $img.Md5Image, $img.Md5Header, $img.Md5Records)
         }
@@ -2171,7 +2305,10 @@ if ($Project) {
             Show-JsemWrittenBanner
             Write-Transcript -Command 'ABORT: interrupted inside the JSEM write window (the device may hold part of the image)' -ExitCode 'interrupted'
             Show-Artifacts
-            exit 8
+            Stop-JsemLog
+            # Not a plain exit: in a [CmdletBinding()] script, exit 8 in a finally
+            # after a Ctrl+C gives the process exit code 0 (measured under 5.1).
+            [Environment]::Exit(8)
         }
     }
 
@@ -2188,6 +2325,7 @@ if ($Project) {
     Say ('  A0 sidecar     : {0}' -f $sidePath)
     Say '  -ProjectRestore writes it back; keep it.'
     Write-Transcript -Command ('project complete: image {0}, pre-image {1} md5 {2}' -f $img.Md5Image, $preName, $lmd) -ExitCode 0
+    Stop-JsemLog
     exit 0
 }
 
@@ -2196,6 +2334,7 @@ if ($Project) {
 # Above the -Rekey header for the same reason as -Project, and every path exits.
 # ===========================================================================
 if ($ProjectRestore) {
+    Start-JsemLog -Mode 'projectrestore'
     Say '== jarvis_admin.ps1 -ProjectRestore =='
 
     Say ''
@@ -2221,6 +2360,11 @@ if ($ProjectRestore) {
         Fail 97 ("the pre-image name '{0}' is not jsem_pre_<yyyyMMddTHHmmssZ>.bin -- it is used in commands run as root on the box, so only the name -Project writes is accepted" -f $leaf)
     }
     if (-not (Test-Path -LiteralPath $src)) { Fail 97 ("the pre-image '{0}' does not exist" -f $src) }
+    # Resolved, so a bare leaf behaves like a full path: the sidecar and the push
+    # command below take its directory (MS3b-1 fix 2).
+    $src = (Resolve-Path -LiteralPath $src).ProviderPath
+    $leaf = Split-Path -Leaf $src
+    Info ('source: {0}' -f $src)
     $lsz = (Get-Item -LiteralPath $src).Length
     $lmd = Get-FileMd5 -Path $src
     if ([uint64]$lsz -ne $L.RegionBytes) { Fail 97 ("the pre-image '{0}' is {1} bytes, expected {2}" -f $src, $lsz, $L.RegionBytes) }
@@ -2294,6 +2438,7 @@ if ($ProjectRestore) {
     if (-not ("$answer".Trim() -ceq $ProjectRestoreWord)) {
         Say '  not confirmed -- NOTHING was written.'
         Write-Transcript -Command 'project restore NOT confirmed' -ExitCode 50
+        Stop-JsemLog
         exit 50
     }
 
@@ -2334,12 +2479,12 @@ if ($ProjectRestore) {
             $cmp = Invoke-Box -RemoteCommand (Get-CmdCmpHead -A $leaf -B 'jsem_restore_post.bin')
             Say ('  cmp -l {0} jsem_restore_post.bin | head -n 20:' -f $leaf)
             foreach ($ln in @($cmp.Out -split "`n")) { Say ('    {0}' -f $ln) }
-            # Which side moved: the box copy of the source, or the device?
+            # Which side moved: the box copy of the source, the device, or neither known.
             $sm = Invoke-Box -RemoteCommand (Get-CmdFileSliceMd5 -Name $leaf -Part 'whole')
-            if ($sm.Code -eq 0 -and $sm.Out -eq $lmd) {
-                Info ('the source ~/{0} still reads md5 {1}, this PC''s copy: the source did not change, so the DEVICE holds other bytes' -f $leaf, $sm.Out)
-            } else {
-                Warn ("the source ~/{0} now reads md5 '{1}' (exit {2}), NOT this PC's {3}: the SOURCE changed after its re-verify, and the cmp above compares the device with that changed file" -f $leaf, $sm.Out, $sm.Code, $lmd)
+            $vd = Get-JsemMovedVerdict -Mode 'restore' -Leaf $leaf -Code $sm.Code -Md5 $sm.Out -Expected $lmd
+            if ($vd.Level -eq 'info') { Info $vd.Text } else { Warn $vd.Text }
+            if ($rw.Code -ne 0 -or $rh.Code -ne 0 -or $rr.Code -ne 0) {
+                Fail 98 ('a restore readback slice could not be READ (exits: whole {0}, header {1}, records {2}) -- a READ failure, not a proven mismatch' -f $rw.Code, $rh.Code, $rr.Code)
             }
             Fail 98 ('the restore readback md5s (whole {0}, header {1}, records {2}) are not the pre-image''s ({3}, {4}, {5})' -f $rw.Out, $rh.Out, $rr.Out, $lmd, $ph.Out, $pr.Out)
         }
@@ -2358,7 +2503,10 @@ if ($ProjectRestore) {
             Show-JsemWrittenBanner
             Write-Transcript -Command 'ABORT: interrupted inside the JSEM write window (the device may hold part of the image)' -ExitCode 'interrupted'
             Show-Artifacts
-            exit 8
+            Stop-JsemLog
+            # Not a plain exit: in a [CmdletBinding()] script, exit 8 in a finally
+            # after a Ctrl+C gives the process exit code 0 (measured under 5.1).
+            [Environment]::Exit(8)
         }
     }
 
@@ -2367,6 +2515,7 @@ if ($ProjectRestore) {
         Pass '~/jsem_restore_post.bin removed, proven absent (the pre-image stays)'
     }
     Write-Transcript -Command ('project restore complete: region = pre-image {0} md5 {1}' -f $leaf, $lmd) -ExitCode 0
+    Stop-JsemLog
     exit 0
 }
 
