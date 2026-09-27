@@ -4454,3 +4454,187 @@ fake returns 255 at once.
 - **The operator's run is next**, from the strategist's runbook, which repeats `-Check` and `-Project -DryRun` before
   the write. MS3b-2 records it, and the board's MS3 row flips `DONE` in that commit.
 - **The data is synthetic,** and nothing on the box reads `JSEM` (`JARVIS_SEMANTIC` is 0).
+
+## MS3b-1 fix 3 — 2026-09-27 — the chooser shows its child, no device verdict on a READ failure, a Ctrl+C after a hook keeps its code, and the record corrected
+
+The strategist's verifiers re-measured MS3b-1 fix 2 (`3cea23f` … `66ce350`): an independent replica run matched all
+eight rows, a clean dry run, and a HIDDEN Ctrl+C during the header write (the inner script exited 8; the per-run log
+held `TerminatingError`, then the banner, the ARTIFACTS block and the log line). What follows is what they found, each
+measured and confirmed by a second check, the fixes, and five corrections to the record. The device is still
+unwritten.
+
+| commit | what | CI run |
+|---|---|---|
+| `0e056d5` | C1, the extended-date check takes ASCII digits only | 36317950084, green |
+| `8379093` | C2, the chooser, the READ-failure order, the Ctrl+C-after-a-hook code, one warn per survivor, `.NOTES` | 36318297682, green |
+
+### 1. What verification found
+
+- **The chooser hid its child.** A bare `jarvis_admin.bat` opens `Invoke-Menu`, which ran the chosen mode as
+  `& $psExe @argList`, and the script ended with `if ($MenuMode) { exit (Invoke-Menu) }`. The parenthesised call
+  collects the function's output, so PowerShell gave the child a PIPE for stdout: the gates, the plan, the typed-word
+  prompt, the banner and the ARTIFACTS block went into `Invoke-Menu`'s return value and nothing printed them (standard
+  error, ssh's included, still reached the console). `exit` was then handed an array, and the process exited 0.
+  Measured by the verifier at `34877de`: direct `-Project` exit 10 with every line shown; menu option 6, the same
+  child, exit 0 with only the menu's own lines. Both statements date from `ab9b9e8` (2026-07-26).
+- **R2 / 98 gave a device verdict on a READ failure.** The branch was entered when any slice's `Out` differed, a
+  failed read's `''` included; it ran `cmp` and the source re-hash, printed the verdict, and only then tested the slice
+  exit codes. With the header slice failing (255) and the re-hash succeeding it printed
+  `… the source did not change, so the DEVICE holds other bytes` before `… a READ failure, not a proven mismatch`.
+  The restore's 98 branch had the same shape.
+- **A failed `cmp` printed an empty listing,** which reads as "no differences".
+- **A Ctrl+C after a post-write hook had printed its banner** skipped `Stop-JsemLog` and `[Environment]::Exit`: the
+  window's `finally` was guarded by `-not $script:jsemBannerShown` (static).
+- **T11h counted `Stop-JsemLog` calls in `Fail` but never checked their order.**
+- **A surviving dry-run item was warned about twice** (`Remove-BoxFile`'s own warn, then the cleanup's).
+- **The extended-date check used Python's Unicode `\d`:** Arabic-Indic or fullwidth digits passed the regex and were
+  refused only because CPython's C `fromisoformat` rejects them.
+- **`.bat` Ctrl+C (inferred, not measured):** `cmd.exe` may ask `Terminate batch job (Y/N)?`; answering Y skips the
+  `.bat`'s pause and its `exit /b`.
+- **The printed and transcribed `scp` commands omit the four `-o` options** the real `scp` gets, as does the 97 push
+  hint. Record-only.
+- **The record:** five sentences of the fix-2 section, corrected in §7.
+
+### 2. C1 — ASCII digits only
+
+`_EXTENDED_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")`, with one sentence added to its comment. Nothing else in
+`build()` changes.
+
+- **T49z:** the regex does not match the Arabic-Indic `2025-03-01` (`٢٠٢٥-…`) or its fullwidth
+  form, and a span carrying the Arabic-Indic one, not the newest, refuses with `RULE_BAD_TIME` naming it.
+- **RED first, at `66ce350`:** the regex half failed; the build half already refused, through CPython's
+  `fromisoformat` (the refusal message named the span).
+- The suite goes from 362 to **363 locally and 362 on the runner** (T22g). The round trip stays 15/15, the parser
+  round trip 23/23. The `project` verb over a fresh bench store still gives `10e4e0fe6ff9be360b14bb75ce68d039`.
+- `test_memory_logic.py` was already NOT pure ASCII before this change: nine lines (eight comments carrying `—` or
+  `§`, and T49k's `café` input) predate it. The additions are pure ASCII; those lines are unchanged.
+
+### 3. C2 — `jarvis_admin.ps1`
+
+- **The chooser.** `Invoke-Menu` returns no value: `$script:menuRc` (initialised at the top) carries the code, each
+  valued `return` became `$script:menuRc = <value>; return`, and the menu line is
+  `if ($MenuMode) { Invoke-Menu; exit $script:menuRc }`. No statement in `Invoke-Menu` writes to the output stream.
+  The child keeps the console's stdout, so its lines, its typed-word prompt and its banner are shown, and a terminal
+  option's code is the chooser's exit code.
+- **No device verdict on a READ failure.** Right after the three slice reads, `$sliceFail`; the md5-differs `if`
+  stays the entry, and its FIRST statement is `if ($sliceFail)` with the READ-failure `Fail` (61, or 98). Then `cmp`:
+  its header and listing only when `$cmp.Code` is 0, otherwise
+  `warn: cmp could not be READ (exit <code>) -- no byte comparison is available`. Then the re-hash, the verdict and the mismatch `Fail`, as before. No exit code changes.
+  **One wording limit stays:** when `cmp` could not be read and the re-hash reads a CHANGED md5, the verdict's clause
+  `and the cmp above compares the device with that changed file` has no cmp above it.
+- **A Ctrl+C after a hook keeps that gate's code.** `$script:jsemHookCode` (initialised at the top) is set to `$final`
+  in `Fail`'s hook before `Show-JsemWrittenBanner`. Each window `finally` is guarded by
+  `$script:jsemWritten -and -not $script:jsemBlockDone` only; inside, the banner, the transcript line (`interrupted`,
+  or `interrupted (<code>)`) and the ARTIFACTS block print only if the banner has not; then `Stop-JsemLog`, then
+  `[Environment]::Exit` with `$script:jsemHookCode` when it is not 0, else 8. A normal post-write `Fail` still leaves
+  through its own `exit $final`; the `finally` then exits with the same code.
+- **One warn per survivor:** `Remove-BoxFile -Quiet`, passed by `Invoke-JsemDryCleanup` and by the dry run's own
+  removal before its `Fail 5`.
+- **`.NOTES`:** the two sentences from `A Ctrl+C or an unhandled PowerShell error` through
+  `the banner and the run's log are the signal.` replaced by the strategist's text (the gate's own code after a hook, the chooser, the `.bat`'s
+  `Terminate batch job (Y/N)?`, and the omitted `-o` options). Nothing else in `.NOTES` changed.
+
+**The unit test** goes from 80 to **90**, under 5.1 and under pwsh in CI (run 36318297682). T11f and T11g were
+REWRITTEN, keeping their ids, because they found the `finally`'s exit by the argument text `8`.
+**Control: the `66ce350` test, run unchanged against the fix-3 script, reads 76/80, T11f and T11g failing in both.**
+The new
+T11f asks for exactly one `[Environment]::Exit` whose argument references `jsemHookCode` with the literal 8 as its
+fallback, and no bare `exit`; the new T11g for a `Stop-JsemLog` before it. T11h now checks, for EACH exit in `Fail`, a
+`Stop-JsemLog` earlier in the same statement block. New: T12a (no `exit (Invoke-Menu)`, the bare call and
+`exit $script:menuRc`), T12b (no valued `return` in `Invoke-Menu`), T12c (in both readback branches the `$sliceFail`
+`if` precedes the `cmp` and verdict calls), T12d (the listing only under a `$cmp.Code` test), T12e (neither
+`finally` guard references `jsemBannerShown`), T12f (the hook sets `jsemHookCode` before the banner), T12g (`-Quiet`
+at both call sites). PSScriptAnalyzer 0 errors and 0 parse errors on all four `phasec/scripts/*.ps1`; A2 passes;
+both files pure ASCII.
+
+**Mutants**, on a `git archive` copy of `8379093`, the control 90/90 before and after:
+
+| # | mutant | failed (unit, 5.1) |
+|---|---|---|
+| M64 (re-run) | `-Project`'s `finally` back to `exit 8` | T11f and T11g, 88/90 |
+| M68 | the menu line back to `exit (Invoke-Menu)`, with valued returns | T12a and T12b, 88/90 |
+| M69 | the R2 `if ($sliceFail)` moved back after the verdict | T12c (`$Project`), 89/90 |
+| M70 | the `finally` guard regains `-not $script:jsemBannerShown` (both) | T12e in both blocks, 88/90 |
+| M71 | both `Stop-JsemLog` calls in `Fail` moved after their `exit` | T11h only, 89/90 |
+| M72 | `-Quiet` dropped from `Invoke-JsemDryCleanup` | T12g only, 89/90 |
+
+### 4. The live evidence — NOT RUN
+
+`ssh jarvis true` from the Main PC timed out (exit 124 under a 20 s `timeout`) at the start of the session. The cause
+was not measured. The box clone was not pulled, `-Check` and `-Project -DryRun` were not run on the box, and the box
+was not touched. The PC's network settings were not changed. The operator's runbook repeats both before the write.
+
+### 5. The replica
+
+The strategist's harness (`fake.py` `54ae8bfb…`, which now logs every ssh argv, and `drive.ps1` `63df39d7…`, which
+keeps PowerShell's module-analysis cache out of the working directory), copied into the coder's scratch with its own
+WSL base `/home/itsme/ms3b1fix3`, `setup.sh` checking out `8379093`, `drive.ps1`'s `$D` a `git archive` of `8379093`,
+and a second `drive_ctl.ps1` whose `$D` is a `git archive` of `66ce350`, for the controls. Both scripts under test are
+the three-line harness patch (the `Read-Host` override after `$ErrorActionPreference = 'Stop'`, and
+`[Console]::IsInputRedirected` replaced by `$false` in the menu guard and the confirmed-mode guard). Every run was one
+child `powershell.exe` at a time, in the session's own console, from a scratch working directory; no `Microsoft\`
+directory appeared there after any run.
+
+| # | setup | exit | key lines | region; snapshots | trace |
+|---|---|---|---|---|---|
+| R1 | fresh | **0** | `A1 every anchor is unchanged`; no banner | `10e4e0fe…`; lo, hi match | both plan writes; **all 36 ssh and both scp argvs begin with the four `-o` options** |
+| D6 | continues R1 | **98** | `a restore readback slice could not be READ (exits: whole 0, header 255, records 0)`; no `cmp` line, no which-side-moved line; `A1 every anchor is unchanged`; the RESTORE banner once | `1365c929…`; lo, hi match | the header slice injected 255; both restore writes |
+| C1 | fresh | **50** | the child's `== gate 1` line, its `[HARNESS Read-Host]   type PROJECT-WRITE-NOW …` prompt and `not confirmed -- NOTHING was written`, then `Project finished with exit code 50` | unchanged | 20 entries, no write |
+| C1 control (`66ce350`) | fresh | **0** | only the chooser's own lines, ending `Project finished with exit code 50` (the child's code, which the process exit then loses); none of the child's lines | unchanged | 20 entries, no write |
+| D2 | fresh | **61** | `R2 a readback slice could not be READ (exits: whole 255, header 255, records 255)`; no `cmp` line, no verdict; the hook's re-read a READ failure; the WRITTEN banner once | `10e4e0fe…` | drop armed after R1's size check; 4 dropped |
+| D2e | fresh | **61** | the READ-failure line `(exits: whole 0, header 255, records 0)`; no `DEVICE holds other bytes`, no `cmp` line; `A1 every anchor is unchanged`; the WRITTEN banner once | `10e4e0fe…` | the header slice injected 255 |
+| D2e control (`66ce350`) | fresh | **61** | the `cmp` header, then `info: … the source did not change, so the DEVICE holds other bytes`, THEN the READ-failure line | `10e4e0fe…` | the header slice injected 255 |
+| D2b | fresh | **61** | the `cmp` header and one listing line (`2097001   0 132`); `info: the staged source ~/jsem.img still reads md5 10e4e0fe…, the image's: the source did not change, so the DEVICE holds other bytes`; the mismatch `Fail`; `A1 every anchor is unchanged`; the WRITTEN banner once | `10e4e0fe…` (the device holds the image; HB changed the readback file) | 1 hook |
+| D2c | fresh | **61** | `warn: cmp could not be READ (exit 255) -- no byte comparison is available`, no `cmp` header; `… could not be READ after the failure (exit 255) -- whether the source or the device moved is UNKNOWN`; the mismatch `Fail`; the hook's re-read a READ failure; the WRITTEN banner once | `10e4e0fe…` | 1 hook; drop armed after the records slice; 3 dropped |
+| D1 | fresh | **51** | the hook's re-read a READ failure, `the original code stands`; the WRITTEN banner once | `6b2f90a6…` | the records write, then the drop; 2 dropped |
+| R3 | fresh | **62** | the source-changed verdict; `ANCHOR CHANGED` (JACT head) once; the WRITTEN banner once | `574d500f…`; `hi` differs by design | 1 hook |
+| DX | fresh | **41** | `jarvis:~/jsem.img: STILL PRESENT …` warned EXACTLY once; listed under `ARTIFACTS THE DRY RUN COULD NOT REMOVE (the rest was removed above):` with the dry-run tag | `1365c929…` | every command containing `jsem.img` injected |
+| DR | fresh | **0** | `DRY RUN - nothing was written`; the box home holds only `Desktop`; the admin listing gains only the run's `project-dryrun_<stamp>.log` | `1365c929…` | no write |
+
+D1 51, D2 61 and R3 62 are unchanged by the `finally` rewrite. Every `-Project` / `-ProjectRestore` row's per-run
+log holds the script's last printed line; in C1 the last printed line is the chooser's own, which no child log holds.
+
+**Mutants on the replica**, each a harness copy of the mutant run as a variant script:
+- **M68 on C1: exit 0**, and none of the child's lines — the pre-fix behaviour.
+- **M69 on D2e: exit 61, with the `cmp` header and `… so the DEVICE holds other bytes` before the READ-failure line.**
+- **M72 on DX: exit 41, the survivor warned TWICE** (`~/jsem.img is still on the box` and `STILL PRESENT`).
+
+### 6. Ctrl+C, hidden
+
+Run with a copy of the verifier's `cc_launch.ps1`, itself started with `CreateNoWindow` (its console window handle
+logged as 0): the launcher starts `drive.ps1` on its own windowless console with the prehook
+`skip=0 seek=21110000|sleep 30` and raises `GenerateConsoleCtrlEvent(CTRL_C, 0)` on that console 15 s after the
+records write. **The inner script exited 8.** The per-run log ends with
+`TerminatingError(): "The pipeline has been stopped."`, the WRITTEN banner, the ARTIFACTS block and the log line; `transcript.log`'s last line is
+`ABORT: interrupted inside the JSEM write window (the device may hold part of the image) | exit=interrupted`. The
+region then read `6b2f90a6…` (records written, header not). `-ProjectRestore`, answered, resolved to that run's
+pre-image and exited 0, region `1365c929…`, both snapshots matching. The Ctrl+C-after-a-hook case cannot be timed on
+the replica and rests on the static checks.
+
+### 7. Corrections to the MS3b-1 fix 2 section, quoted and superseded (the originals are not edited)
+
+- **The menu.** "`-Project` and `-ProjectRestore` must run as their own process (`jarvis_admin.bat`, the menu or
+  `powershell -File`); `.NOTES` says so, and that via the menu the parent may report 0 after a Ctrl+C, where the
+  banner and the run's log are the signal." At `34877de` the chooser captured every child's standard output (its
+  standard error, ssh's included, still reached the console) and exited 0 whatever the child's code: the banner was
+  never shown there, and only the per-run log and the chooser's own `finished with exit code N` line carried the
+  result. The two statements responsible were unchanged since `ab9b9e8`, so every option ran hidden from 2026-07-26,
+  the JSEM options from `7611d68`. Fixed at `8379093`.
+- **The READ-failure wording.** "A readback slice read with a non-zero code is now worded as a READ failure, not a
+  mismatch" held for the `Fail` line only: at `34877de` the which-side-moved verdict was printed first, and with the
+  re-hash succeeding it said the DEVICE held other bytes. Fixed at `8379093`.
+- **R1's trace.** "ssh argv carries the four keepalive options": the fake logged ssh argv only for a dropped call, so
+  R1's trace held none. The eight dropped ssh argvs of D1 and D2 and every scp argv carried all four; the non-dropped
+  ssh path rested on the static check. From this section the fake logs every ssh argv.
+- **§4's cause.** "the Main PC's LAN link was down and it was on a phone hotspot": only the 124 timeout was measured
+  in that session; the cause was carried over from the fix-1 session.
+- **D3's quoted line.** It reads `-- the dry run failed: removing what it staged, and proving it gone --`.
+
+### Honest scope
+
+- **The device has not been written.** The replica wrote a sparse file in WSL; the live box was not touched.
+- **The Ctrl+C-after-a-hook case of §3 cannot be timed on the replica:** it rests on the static checks (T11f, T11g,
+  T12e, T12f).
+- **The operator's run is next**, from the strategist's runbook, which repeats `-Check` and `-Project -DryRun` before
+  the write. MS3b-2 records it, and the board's MS3 row flips `DONE` in that commit.
+- **The data is synthetic,** and nothing on the box reads `JSEM` (`JARVIS_SEMANTIC` is 0).
