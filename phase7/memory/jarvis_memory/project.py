@@ -27,6 +27,7 @@ import calendar
 import hashlib
 import math
 import os
+import re
 import sqlite3
 import struct
 import urllib.parse
@@ -61,10 +62,13 @@ RULE_INSIDE_REPO = "an image path inside the repository"
 # MS3b-1: three more, so that no input escapes as a raw traceback. The two time rules run per row,
 # after the no-span rule and before the printable-ASCII rule; the UNC rule runs before the store is
 # opened; the manifest-directory rule is the CLI's, checked before any image is written.
-RULE_BAD_TIME = "a supporting span whose said_at is not an ISO timestamp"
+RULE_BAD_TIME = "a supporting span whose said_at is not an extended ISO timestamp in range"
 RULE_PRE_EPOCH = "a supporting span dated before 1970"
 RULE_UNC_PATH = "a store path on a network share (copy it local first)"
 RULE_NO_MANIFEST_DIR = "a manifest path whose directory does not exist"
+# MS3b-1 fix 2: distinct_days counts a day by the first ten characters, so only the extended form
+# YYYY-MM-DD can be counted; a basic-form 20260301 would parse and then count as another day.
+_EXTENDED_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 _SPAN_LINK = {
     "fact": ("fact_span", "fact_id"),
@@ -190,17 +194,19 @@ def build(db_path):
             support = distinct_days(said)
             for s in said:              # EVERY supporting span, not only the newest: each is a support day
                 try:
+                    if not _EXTENDED_DATE.match(s):
+                        raise ValueError("not the extended date form")
                     p = datetime.fromisoformat(s)
-                except (ValueError, TypeError):
+                    epoch_s = calendar.timegm(p.utctimetuple())
+                except (ValueError, TypeError, OverflowError):   # an aware time whose UTC leaves years 1-9999
                     raise ProjectionRefused("%s: %s %d, %r" % (RULE_BAD_TIME, table, r["id"], s)) from None
-                if calendar.timegm(p.utctimetuple()) < 0:
+                if epoch_s < 0:
                     raise ProjectionRefused("%s: %s %d, %r" % (RULE_PRE_EPOCH, table, r["id"], s))
             newest = max(said)          # the string maximum; parsed once, after
-            try:
-                parsed = datetime.fromisoformat(newest)
-            except (ValueError, TypeError):
+            try:                        # defensive: the loop above has already checked this span
+                t_ms = calendar.timegm(datetime.fromisoformat(newest).utctimetuple()) * 1000
+            except (ValueError, TypeError, OverflowError):
                 raise ProjectionRefused("%s: %s %d, %r" % (RULE_BAD_TIME, table, r["id"], newest)) from None
-            t_ms = calendar.timegm(parsed.utctimetuple()) * 1000
             if t_ms < 0:
                 raise ProjectionRefused("%s: %s %d, %r" % (RULE_PRE_EPOCH, table, r["id"], newest))
             conf_x100 = math.floor(r["confidence"] * 100 + 0.5)

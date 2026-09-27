@@ -4634,5 +4634,32 @@ with _tempfile.TemporaryDirectory() as _td49:
           "naming that span",
           _msg.startswith(_proj49.RULE_PRE_EPOCH) and "'1960-01-01T00:00:00'" in _msg, _msg[:160])
 
+    # --- T49w-y MS3b-1 fix 2: a said_at out of datetime range or in ISO basic form ----------------
+    _s = _Store49(_T49 / "w.sqlite")
+    _s.fact("household", None, "household.topic", "camping",
+            spans=("0001-01-01T00:00:00+01:00", "2026-03-01T08:00:00"))
+    _db = _s.done()
+    _msg = _refusal49(lambda: _proj49.build(_db))
+    check("T49w refusal: an aware said_at whose UTC falls before year 1 (0001-01-01T00:00:00+01:00), "
+          "NOT the newest span, is refused by the bad-time rule, naming that span",
+          _msg.startswith(_proj49.RULE_BAD_TIME) and "'0001-01-01T00:00:00+01:00'" in _msg, _msg[:160])
+
+    _s = _Store49(_T49 / "x.sqlite")
+    _s.fact("household", None, "household.topic", "camping",
+            spans=("2026-03-01T08:00:00", "9999-12-31T23:59:59-01:00"))
+    _db = _s.done()
+    _msg = _refusal49(lambda: _proj49.build(_db))
+    check("T49x refusal: an aware said_at whose UTC falls after year 9999 (9999-12-31T23:59:59-01:00), "
+          "the NEWEST span, is refused by the bad-time rule in the per-span loop, naming that span",
+          _msg.startswith(_proj49.RULE_BAD_TIME) and "'9999-12-31T23:59:59-01:00'" in _msg, _msg[:160])
+
+    _s = _Store49(_T49 / "y.sqlite")
+    _s.fact("household", None, "household.topic", "camping", spans=("20250301", "2026-03-01T08:00:00"))
+    _db = _s.done()
+    _msg = _refusal49(lambda: _proj49.build(_db))
+    check("T49y refusal: a said_at in ISO basic form (20250301), NOT the newest span, is refused by the "
+          "bad-time rule, naming that span, so every counted day is an extended date",
+          _msg.startswith(_proj49.RULE_BAD_TIME) and "'20250301'" in _msg, _msg[:160])
+
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
 sys.exit(1 if FAILS else 0)
