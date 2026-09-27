@@ -68,7 +68,9 @@ RULE_UNC_PATH = "a store path on a network share (copy it local first)"
 RULE_NO_MANIFEST_DIR = "a manifest path whose directory does not exist"
 # MS3b-1 fix 2: distinct_days counts a day by the first ten characters, so only the extended form
 # YYYY-MM-DD can be counted; a basic-form 20260301 would parse and then count as another day.
-_EXTENDED_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+# MS3b-1 fix 3: Python's \d matches any Unicode digit, and only ASCII digits are a date
+# distinct_days can count.
+_EXTENDED_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
 _SPAN_LINK = {
     "fact": ("fact_span", "fact_id"),

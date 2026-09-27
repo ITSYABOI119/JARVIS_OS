@@ -4661,5 +4661,19 @@ with _tempfile.TemporaryDirectory() as _td49:
           "bad-time rule, naming that span, so every counted day is an extended date",
           _msg.startswith(_proj49.RULE_BAD_TIME) and "'20250301'" in _msg, _msg[:160])
 
+    # --- T49z MS3b-1 fix 3: the extended-date check takes ASCII digits only ----------------------
+    _ar49 = "\u0662\u0660\u0662\u0665-\u0660\u0663-\u0660\u0661T00:00:00"      # Arabic-Indic 2025-03-01
+    _fw49 = "\uff12\uff10\uff12\uff15-\uff10\uff13-\uff10\uff11T00:00:00"      # fullwidth 2025-03-01
+    _re49z = (_proj49._EXTENDED_DATE.match(_ar49) is None and _proj49._EXTENDED_DATE.match(_fw49) is None)
+    _s = _Store49(_T49 / "z.sqlite")
+    _s.fact("household", None, "household.topic", "camping", spans=(_ar49, "2026-03-01T08:00:00"))
+    _db = _s.done()
+    _msg = _refusal49(lambda: _proj49.build(_db))
+    check("T49z the extended-date check takes ASCII digits only: it does not match the Arabic-Indic or the "
+          "fullwidth 2025-03-01, and a span carrying the Arabic-Indic one, NOT the newest, is refused by the "
+          "bad-time rule naming that span",
+          _re49z and _msg.startswith(_proj49.RULE_BAD_TIME) and repr(_ar49) in _msg,
+          ascii((_re49z, _msg[:160])))
+
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
 sys.exit(1 if FAILS else 0)
