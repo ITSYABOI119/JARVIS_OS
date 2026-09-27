@@ -4255,3 +4255,202 @@ unchanged here:
 - **The operator's run is next**, from the strategist's runbook. MS3b-2 records it, and the board's MS3 row flips
   `DONE` in that commit.
 - **The data is synthetic,** and nothing on the box reads `JSEM` (`JARVIS_SEMANTIC` is 0).
+
+## MS3b-1 fix 2 — 2026-09-27 — an ssh keepalive, Ctrl+C that exits 8, a per-run log, a dry run that cleans up, and the record corrected
+
+The strategist's verifiers re-measured MS3b-1-FIX (`983fa71` … `e75778a`) from `git archive` and on their own replica
+disk. The spec checks, the builder, CI and the local state held. What follows is what did not, the fixes, and four
+corrections to the record. The device is still unwritten.
+
+| commit | what | CI run |
+|---|---|---|
+| `3cea23f` | C1, every said_at in range and in the extended form | 36309223358, green |
+| `34877de` | C2, the keepalive, exit 8, the per-run log, the dry-run cleanup, `-Check`'s local gates, the restore's source path, the three-way verdict | 36309892236, green |
+
+### 1. What verification found
+
+- **LIVE-2, a dropped link mid-write would HANG, not fail.** `Invoke-Box` ran
+  `ssh -o BatchMode=yes -o ConnectTimeout=8` and nothing else, and the effective setting on the Main PC is `serveraliveinterval 0`. A link that
+  drops while an ssh is running leaves the client waiting on the OS's TCP keepalive, about two hours, instead of
+  returning 255. The link to the box dropped twice on the evening of the fix run. The remote `dd` completes on the box
+  whether or not the client survives.
+- **Ctrl+C did not exit 8.** The script declares `[CmdletBinding()]`, and in such a script a plain `exit 8` inside
+  `finally` after a Ctrl+C sets the process exit code to 0. Measured under 5.1 by the verifier: without
+  `[CmdletBinding()]` 8, with it 0; `[Environment]::Exit(8)` gives 8 either way. The banner and the transcript line did
+  print.
+- **R-2, "which side moved" could blame the wrong side.** After R2 (61) or a restore readback failure (98) the
+  diagnostic re-hashes the staged source; when that re-hash itself FAILED, as on a dropped link, it still printed "the
+  SOURCE changed after its re-verify".
+- **LIVE-3, a failed dry run left its pre-image behind.** A `-Project -DryRun` that failed after gate 9 (T1 or T2, 40 /
+  41), or a `Fail 93` inside gate 9 after its box read, left `jsem_pre_<stamp>.bin` on both hosts, its sidecar on this
+  PC and `~/jsem.img` on the box, the first three tagged "your restore path". `-ProjectRestore` would then pick that
+  pre-image as the newest.
+- **LIVE-4, `-Check` skipped its local gates when the box was unreachable.** L1–L3 need no box, yet were skipped with
+  everything else.
+- **C2-A, a bare-leaf `-PreImage` crashed.** `-PreImage jsem_pre_<stamp>.bin` reached
+  `Join-Path (Split-Path -Parent $src) …` with an empty parent and exited 1 before the typed word. Nothing was written.
+- **R-3, the `.NOTES` window paragraph was imprecise:** the window runs through gate 18; a DROPPED ssh fails its gate,
+  so the hook does re-read; a drop AT gate 17 is the anchor check itself and exits 62.
+- **R-7:** the A0 sidecar was listed with the pre-image's "restore path" tag.
+- **The builder, C1-F1 and C1-F2:** an aware `said_at` near year 1 or year 9999 escaped as a raw `OverflowError` from
+  `utctimetuple()`; an ISO BASIC-format `said_at` (`20260301`) passed `fromisoformat` while `distinct_days` counts the
+  first ten characters, so a basic and an extended span on the same date counted as two days. Neither can come from
+  the store's own writer, and the synthetic image is unaffected.
+- **The record:** R-1, R-6, R-5 and the exit-8 claim, corrected in §7.
+
+### 2. C1 — every said_at in range and in the extended form
+
+`build()`'s per-span loop now refuses with `RULE_BAD_TIME`, naming the span, a said_at that does not begin with
+`^\d{4}-\d{2}-\d{2}` (checked before `fromisoformat`), and one whose `calendar.timegm(….utctimetuple())` raises
+`OverflowError`. The newest-span parse carries the same wrap. `t_ms` is unchanged: the epoch ms of the string maximum.
+`RULE_BAD_TIME` now reads "a supporting span whose said_at is not an extended ISO timestamp in range"; every test
+asserts through the constant.
+
+- T49w (`0001-01-01T00:00:00+01:00`, not the newest), T49x (`9999-12-31T23:59:59-01:00`, the newest) and T49y
+  (`20250301`, not the newest) each refuse with `RULE_BAD_TIME` naming that span. Before the fix, T49w and T49x raised
+  `OverflowError: date value out of range` and T49y built. T49y uses 2025, not 2026: a basic-form `2026…` string sorts
+  above every extended `2026-…` string, so it would have been the newest.
+- **The newest-span wrap is defensive and unreachable** once the loop has passed: the loop checks every span, the
+  newest included, before the newest is taken. T49x is caught by the per-span wrap and does NOT cover it.
+- The suite goes from 359 to **362 locally and 361 on the runner** (T22g). The round trip stays 15/15, the parser
+  round trip 23/23.
+- The `project` verb over a fresh bench store still gives `10e4e0fe6ff9be360b14bb75ce68d039`, 27 records.
+
+### 3. C2 — `jarvis_admin.ps1`
+
+- **The keepalive.** A pure `Get-JsemSshOptions` returns exactly
+  `-o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=6`. `Invoke-Box` uses it, and
+  `Send-ToBox` and `Receive-FromBox` pass it to `scp` before the file arguments. With 5 × 6, a dead link returns 255
+  after about 30 s; the gate then fails and the post-write hook runs. The re-key's own `scp` calls are untouched. The
+  fake ssh cannot exercise a real keepalive: it is covered by the golden string, the static check and the option's
+  documented meaning, not by a measured drop. The shown `scp` command lines (`Get-CmdScpTo` / `Get-CmdScpFrom`, golden
+  -tested display text) do not list the options.
+- **Ctrl+C.** Each JSEM block's `finally` ends in `[Environment]::Exit(8)`, not `exit 8`. It ends the whole PowerShell
+  process, so `-Project` and `-ProjectRestore` must run as their own process (`jarvis_admin.bat`, the menu or
+  `powershell -File`); `.NOTES` says so, and that via the menu the parent may report 0 after a Ctrl+C, where the
+  banner and the run's log are the signal.
+- **The per-run log.** `-Project` (dry run included) and `-ProjectRestore` start `Start-Transcript` at the top of their
+  block, to `%USERPROFILE%\.jarvis\admin\<mode>_<UTC yyyyMMddTHHmmssZ>.log` with `<mode>` one of `project`,
+  `project-dryrun`, `projectrestore`, and print its path at the start and the end. `Stop-JsemLog`, guarded by a
+  script-scope flag initialised at the top, runs before every exit: both of `Fail`'s, each `finally`'s, the dry run's,
+  each block's final exit, and both not-confirmed exits (50). The log holds every line the script prints; ssh's own
+  stderr goes straight to the console and is not in it, and the `ABORT` lines go to `transcript.log` only. A
+  `Start-Transcript` failure warns and continues.
+- **A failed dry run cleans up.** Two script-scope variables initialised at the top: `$script:jsemDryStaging`, set just
+  before gate 9's box read in `-DryRun` only, and `$script:jsemDryItems`, appended to immediately BEFORE each create
+  (the box pre-image, the local pre-image, the sidecar, the staged image). `Fail` reads only these two; when the flag is
+  set it removes each item best effort, reports it gone (proven absent) or still present, drops the gone ones from the
+  artifact list, prints the ARTIFACTS block under the header
+  `ARTIFACTS THE DRY RUN COULD NOT REMOVE (the rest was removed above):`, stops the log and exits with its own code.
+  A survivor is tagged `(dry run -- NOT a restore path; delete it)`, which takes precedence over every other tag. The
+  flag stays set through the dry run's own cleanup, so a `Fail 5` retries the removal; it is cleared once everything is proven gone, before `exit 0`.
+- **`-Check`'s local gates** (L1, L1b reported, L2, L3) run before the projection section's P1 probe; an unreachable
+  box skips only the box-side legs, with the existing `Fail 10`.
+- **The restore resolves its source**: `$src = (Resolve-Path -LiteralPath $src).ProviderPath` right after the existence
+  check, and the leaf, the sidecar path and the push command derive from it.
+- **Which side moved is three-way.** A pure `Get-JsemMovedVerdict -Mode -Leaf -Code -Md5 -Expected`: a non-zero code
+  gives `warn` and the text
+  `… could not be READ after the failure (exit <Code>) -- whether the source or the device moved is UNKNOWN`; code 0 and a different md5 the existing source-changed text; code 0 and equal the existing device text,
+  `info`. Used in the R2 branch and the restore's 98 branch. A readback slice read with a non-zero code is now worded
+  as a READ failure, not a mismatch; the exit code is unchanged.
+- **The sidecar's own tag**: `Add-Artifact -Sidecar`, tagged
+  `(A0 anchors for -ProjectRestore's comparison; keep it beside the pre-image)`.
+- **`.NOTES`' window paragraph** is replaced by the strategist's text, with one sentence added: never dot-source the
+  script, never `&`-call it from an interactive session.
+
+**The unit test** goes from 63 to **80**, under Windows PowerShell 5.1 and under pwsh 7 in CI (run 36309892236): the
+golden options (T11b); the verdict's three branches in both modes, exact texts and levels (T11c.1–6); `Invoke-Box`
+calls `Get-JsemSshOptions` with no `ConnectTimeout=` literal of its own (T11d); `Send-ToBox` and `Receive-FromBox` call
+it (T11e); each window `finally` holds `[Environment]::Exit(8)` and no bare `exit 8` (T11f) and calls `Stop-JsemLog`
+before it (T11g); `Fail` references the dry-run flag and calls `Stop-JsemLog` (T11h); `Invoke-CheckProjection` runs its
+local gates before its probe (T11i). PSScriptAnalyzer reads 0 errors and the parse 0 errors over all four
+`phasec/scripts/*.ps1`; the A2 invariant passes; both files are pure ASCII.
+
+**Mutants**, each on a `git archive` copy of `34877de`, the control 80/80 before and after:
+
+| # | mutant | failed (unit, 5.1) |
+|---|---|---|
+| M63 | `ServerAliveInterval=5` removed from `Get-JsemSshOptions` | T11b only, 79/80 |
+| M64 | `-Project`'s `finally` back to `exit 8` | T11f and T11g (it finds no Exit to order against), 78/80 |
+| M65 | `Get-JsemMovedVerdict`'s non-zero branch removed | T11c.1 and T11c.4, 78/80 |
+| M66 | the dry-run cleanup line removed from `Fail` | T11h only, 79/80 |
+| M67 | the local gates moved back after the P1 probe | T11i only, 79/80 |
+
+### 4. The live evidence — NOT RUN
+
+`ssh jarvis true` from the Main PC timed out (exit 124 under a 20 s `timeout`) at the start of the session: the Main
+PC's LAN link was down and it was on a phone hotspot. So `-Check` and `-Project -DryRun` were not run on the box, the
+box clone was not pulled, and the box was not touched. The PC's network settings were not changed. The operator's
+runbook repeats both runs before the write.
+
+### 5. The replica
+
+The strategist's harness, copied into the coder's scratch, with its own WSL base `/home/itsme/ms3b1fix2` in `fake.py`,
+`setup.sh`, `run.sh` and `verify.sh`, `setup.sh` checking out `34877de`, and `drive.ps1`'s `$H` / `$D` set to the copy
+and to a `git archive` of `34877de`. The script under test is `jarvis_admin_harness.ps1`, C2's script differing in
+exactly three lines: the `Read-Host` override inserted at script scope after `$ErrorActionPreference = 'Stop'`, and
+`[Console]::IsInputRedirected` replaced by `$false` in the menu guard and in the confirmed-mode guard. Every run was a
+child `powershell.exe` in the session's own console, never a new window. The sandbox profile was seeded with the
+image `10e4e0fe…` and its manifest.
+
+| # | setup | scenario | exit | key lines | region; snapshots | trace |
+|---|---|---|---|---|---|---|
+| R1 | fresh | `-Project`, answered | **0** | `P parse_semantic.py reads 27 records`; no banner; a sidecar beside the local pre-image | `10e4e0fe…`; `lo`, `hi` match | the two plan writes, rc 0; ssh argv carries the four keepalive options |
+| D1 | fresh | `-Project`, answered, the link dies after the records write | **51** | the HEADER-write FAIL (exit 255); the hook's re-read `could not READ the anchor … the original code stands`; the WRITTEN banner once, with `jarvis_admin.bat -ProjectRestore -PreImage <full path>` | `6b2f90a6…` (records written, header not); `lo`, `hi` match | the records write rc 0, drop armed after it; 2 dropped calls |
+| D1r | none | `-ProjectRestore`, answered | **0** | resolved to D1's pre-image, the newest stamp; sidecar all `equal` | `1365c929…`; `lo`, `hi` match | the two restore writes, rc 0 |
+| D5 | none | `-ProjectRestore` from the admin directory, `-PreImage` the BARE leaf of D1's pre-image, answered `no` | **50** | `source: <the resolved full path>`; `identical on both hosts`; the sidecar comparison, all `equal`; the region-already-holds-this-pre-image warning (expected) | unchanged | no write |
+| D2 | fresh | `-Project`, answered, the link dies after R1's size check | **61** | `the staged source ~/jsem.img could not be READ after the failure (exit 255) -- whether the source or the device moved is UNKNOWN`; `R2 a readback slice could not be READ (exits: whole 255, header 255, records 255) -- a READ failure, not a proven mismatch`; the hook's re-read a READ failure; the WRITTEN banner once | `10e4e0fe…`; `lo`, `hi` match | both writes rc 0; 6 dropped calls |
+| D3 | fresh | `-Project -DryRun`, T2 injected to fail | **41** | `-- the dry run failed: removing what it staged --`; `jarvis:~/jsem_pre_…`, the local pre-image, its sidecar and `jarvis:~/jsem.img` each `gone (proven absent)`; no ARTIFACTS block, nothing tagged "your restore path" | `1365c929…`; `lo`, `hi` match | T2's md5 injected; no device write |
+| D4 | none | `-Check`, every command containing `true` failing 255 | **10** | L1, L2 and L3 PASS before `projection section SKIPPED (its box-side legs; the local gates above ran)` | unchanged | 2 entries, both the probe `true` |
+| R3 | fresh | `-Project`, answered, H3 before the records write | **62** | the verdict's source-changed text (exit 0, md5 `574d500f…`); the R2 FAIL; `ANCHOR CHANGED: JACT head md5` once; the WRITTEN banner once | `574d500f…`; `lo` matches; `hi` differs, by design: H3 wrote LBA 21,120,005 | 1 hook; both writes rc 0 |
+
+D3's listing: the admin directory after it equals the listing before it apart from the new
+`project-dryrun_<stamp>.log` (and the grown `transcript.log`); no file carries D3's pre-image stamp, and the earlier
+rows' pre-images are untouched.
+
+**The per-run logs.** Every `-Project` and `-ProjectRestore` row wrote its own log, and every one holds the script's
+last printed line. ssh's own `Connection timed out` lines reached the console and are not in the logs, as designed.
+`-Check` (D4) writes none.
+
+**Mutants on the replica**, each a harness copy of the mutant, run as a variant script:
+- **M65 on D2: exit 61, and it prints `the staged source ~/jsem.img now reads md5 '' (exit 0), NOT the image's 10e4e0fe…: the SOURCE changed after its re-verify` — the wrong-side text the three-way verdict exists to prevent.**
+- **M66 on D3: exit 41, and the dry run's pre-image and its sidecar remain on this PC, the pre-image tagged "your restore path for -ProjectRestore"**; the listing gains `jsem_pre_20260927T095143Z.bin` and its sidecar.
+- **M67 on D4: exit 10 with no L1, L2 or L3 line** — only `projection section SKIPPED`.
+
+**Ctrl+C was not tested.** A hidden console with a Ctrl+C sent only to it was not built; the exit-8 path rests on the
+static checks T11f / T11g and the verifier's 5.1 measurement in §1.
+
+### 6. What the fake covers
+
+The fake ssh rewrites `/dev/nvme0n1` to the replica file, strips `sudo -n` and turns the cache drop into `true`. So
+sudo and the real cache drop are covered only by the live `-Check` / `-DryRun`, and a real keepalive not at all: the
+fake returns 255 at once.
+
+### 7. Corrections to the MS3b-1-fixes section, quoted and superseded (the originals are not edited)
+
+- **R-1.** That section says: "An ssh that dropped printed only that gate's own FAIL line, which never said the region
+  might now hold part of the image or gave the restore command." What `b7a317b` really printed:
+  - a post-gate-9 `Fail` in `-Project` printed its FAIL line; the HEADER-write line said the records had been written,
+    the RECORDS-write line said the header had not been, and both, like R2's (61), pointed at `-ProjectRestore`;
+  - it also printed the ARTIFACTS block, naming both pre-image copies as the restore path.
+
+  What was genuinely missing: the exact command carrying `-PreImage`, and any partial-write statement on gates 95, 96
+  and 99 and in `-ProjectRestore`. A Ctrl+C or a hung ssh printed nothing: that half stands.
+- **R-6.**
+  - "Every exit prints the WRITTEN banner" should read "the WRITTEN banner (the RESTORE banner in `-ProjectRestore`)".
+  - "the fake rewrote the device path only when running them" understates what the fake does. It also strips
+    `sudo -n` and turns the cache drop into `true`, so sudo and the real cache drop are covered only by the live
+    `-Check` / `-DryRun`.
+- **The exit-8 claim.** The MS3b-1-fixes section and `.NOTES` said an interruption exits 8. As shipped at `74f7589`, a
+  Ctrl+C exited 0 (the `[CmdletBinding()]` behaviour of §1). From `34877de` it exits 8.
+- **The gate-17 edge.** A drop at the anchor check itself exits 62, not "a read failure with the original code".
+- **R-5**, carried to CLAUDE.md: the Operator Admin row's older MS3b-1 bracket says "-Check rehearses every shape
+  without writing the device", which was false for `7611d68`; C4 qualifies it in place.
+
+### Honest scope
+
+- **The device has not been written.** The replica wrote a sparse file in WSL; the live box was not touched.
+- **A real keepalive is not measured**: the fake ssh returns 255 at once. Ctrl+C was not exercised (above).
+- **The operator's run is next**, from the strategist's runbook, which repeats `-Check` and `-Project -DryRun` before
+  the write. MS3b-2 records it, and the board's MS3 row flips `DONE` in that commit.
+- **The data is synthetic,** and nothing on the box reads `JSEM` (`JARVIS_SEMANTIC` is 0).
