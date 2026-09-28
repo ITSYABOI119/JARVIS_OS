@@ -4670,8 +4670,8 @@ with _tempfile.TemporaryDirectory() as _td49:
     _db = _s.done()
     _msg = _refusal49(lambda: _proj49.build(_db))
     check("T49z the extended-date check takes ASCII digits only: it does not match the Arabic-Indic or the "
-          "fullwidth 2025-03-01, and a span carrying the Arabic-Indic one, NOT the newest, is refused by the "
-          "bad-time rule naming that span",
+          "fullwidth 2025-03-01, and a span carrying the Arabic-Indic one (the string maximum: non-ASCII "
+          "digits sort above ASCII) is refused by the bad-time rule naming that span",
           _re49z and _msg.startswith(_proj49.RULE_BAD_TIME) and repr(_ar49) in _msg,
           ascii((_re49z, _msg[:160])))
 
