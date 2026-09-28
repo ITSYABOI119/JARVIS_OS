@@ -4638,3 +4638,101 @@ the replica and rests on the static checks.
 - **The operator's run is next**, from the strategist's runbook, which repeats `-Check` and `-Project -DryRun` before
   the write. MS3b-2 records it, and the board's MS3 row flips `DONE` in that commit.
 - **The data is synthetic,** and nothing on the box reads `JSEM` (`JARVIS_SEMANTIC` is 0).
+
+## MS3b-2 — 2026-09-28 — the operator's write: the synthetic household in the box's JSEM region, read back byte-equal, the neighbours unchanged
+
+The operator wrote the projection to the box on 2026-09-28 with `jarvis_admin.ps1` at `8379093`. This section records
+it from the run logs, `transcript.log`, the pre-image's sidecar and the strategist's independent read-back. The coder
+ran no JSEM mode and wrote nothing to the box. The region holds a SYNTHETIC household (the generated `alex` and
+`tess`, bench seed 1), not anyone's real data.
+
+| commit | what | CI run |
+|---|---|---|
+| `d624a94` | T49z's label corrected (§5) | 36400084971, green |
+
+### 1. The conditions
+
+- 2026-09-28, local time AEST (UTC+10). The Main PC's wired port and the box were on the wired LAN with no router on
+  the wire that day. The PC's port was given its usual address by hand with no gateway, and the box still held its
+  lease.
+- The box ran Ubuntu. Its clone was at `74f7589`; the tool's gate 5 checks only that it holds `848e8a5` and a clean
+  `parse_semantic.py`.
+- The tool was `jarvis_admin.ps1` at `8379093`, launched as `.\jarvis_admin.bat` with explicit flags. `-Check` was not
+  run live before the write; the live dry run was.
+- These were the tool's first live runs since fix 1's, at `74f7589` on 2026-09-26 (`-Check` and `-Project -DryRun`,
+  both exit 0, the device read and never written). Fix 2's and fix 3's live legs were each NOT RUN, because
+  `ssh jarvis true` timed out.
+
+### 2. The dry run and the write
+
+**`-Project -DryRun`**, 04:34:58Z, log `project-dryrun_20260928T043458Z.log` (88 lines):
+- gates 1–10 PASS: L1 the image 2,097,664 B, md5 whole `10e4e0fe6ff9be360b14bb75ce68d039`, header
+  `614e67a66fe3c3ab4b4ad094b73ed893`, records `8a57e095ba1526d36e70b6098a666294`, equal to the manifest; L1b the
+  expected image; L2 JSEM, version 1, total 27, cursor 27; L3 `JARVIS_SEMANTIC` 0; gate 5 the clone holds `848e8a5`;
+  gate 6 the cache drop ran; A0 as below; gate 8 the region `1365c929581e56c8bbc59308feeab8e3`; B1 its pre-image
+  `jsem_pre_20260928T043501Z.bin`, identical on both hosts; T2 `~/jsem.img` identical to the local image;
+- the plan printed; `~/jsem.img` and the dry run's pre-image proven gone from the box, and its pre-image and sidecar
+  from the PC; `DRY RUN - nothing was written`; exit 0 (`transcript.log`, 14:35:04 local).
+
+**`-Project`**, 04:36:38Z to 04:36:56Z (18 s), log `project_20260928T043638Z.log` (117 lines, with the transcript's
+end marker). Every gate PASS:
+- gates 1–6 as in the dry run;
+- **A0**, the anchors before: episodic header md5 `066d7a49681b65c049c3c8488eb2604d`, magic `4950454a`; episodic tail
+  md5 `682941ce1951db355ee17229efe08413`; JACT head md5 `2207fe2105a5891177e2dc982c1a6439`, magic `5443414a`;
+- **gate 8:** the region `1365c929581e56c8bbc59308feeab8e3` (all zero), as expected;
+- **B1:** the pre-image `jsem_pre_20260928T043641Z.bin`, 2,097,664 B, md5 `1365c929…`, identical on both hosts, and
+  its A0 sidecar (the five A0 values, stamp `20260928T043641Z`, `region_md5=1365c929…`);
+- **T2, and the re-verify after the typed word** (14:36:52 local): `~/jsem.img` 2,097,664 B, md5 `10e4e0fe…`;
+- **gates 12–13:** the records, then the header, each `conv=fsync,notrunc`, exit 0 (14:36:52 local);
+- **gate 14:** the caches dropped;
+- **R1** 2,097,664 bytes (`iflag=direct`); **R2** whole `10e4e0fe…`, header `614e67a6…`, records `8a57e095…`, the
+  manifest's;
+- **A1:** every anchor unchanged, each value equal to A0;
+- **P:** `parse_semantic.py` reads 27 records off the device;
+- **gate 19:** `~/jsem.img` and `~/jsem_post.bin` removed and proven absent; the pre-image kept on both hosts.
+
+`transcript.log`'s last line:
+`project complete: image 10e4e0fe6ff9be360b14bb75ce68d039, pre-image jsem_pre_20260928T043641Z.bin md5 1365c929581e56c8bbc59308feeab8e3 | exit=0`.
+Its entries from 14:34:58 to the end are the dry run's 24 and the write's 40, every one `exit=0` or a recorded value.
+
+### 3. The independent read-back
+
+**The strategist's, just after the run.** `sync; sudo -n sysctl -q vm.drop_caches=3`, then `sudo -n dd … iflag=direct`
+straight off `/dev/nvme0n1`:
+- the region (LBA 21,110,000 for 4,097 sectors) `10e4e0fe…`, its header sector `614e67a6…`, its records `8a57e095…`,
+  and the header's first four bytes `4d45534a` (`JSEM`, little-endian);
+- the anchors `066d7a49…` / `682941ce…` / `2207fe21…`, unchanged;
+- the unowned gaps either side, LBA 21,108,193–21,109,999 (1,807 sectors) and 21,114,097–21,119,999 (5,903
+  sectors), 0 non-zero bytes each;
+- the box's home held no `jsem*` file but the pre-image `jsem_pre_20260928T043641Z.bin`, md5 `1365c929…`. The PC's
+  `%USERPROFILE%\.jarvis\admin\` held that pre-image (same md5), its sidecar, the two run logs and `transcript.log`.
+
+**The coder's, on 2026-09-28:** not run. `ssh jarvis true` timed out (exit 124 under a 20 s `timeout`), so the
+strategist's read-back stands. The coder confirmed every value above that the PC holds, read-only: the two logs,
+`transcript.log`, the sidecar, and the local pre-image's md5 `1365c929…` at 2,097,664 B.
+
+### 4. MS3's done-when, met
+
+- **Current beliefs into the box's JSEM store, offline:** the synthetic household's 27 records, md5 `10e4e0fe…`,
+  written by the operator through `jarvis_admin.ps1 -Project`.
+- **Read back byte-equal:** R2 in the run, and again in the strategist's read-back off the device.
+- **Neighbours md5-identical:** A1 equal to A0 for all three anchors, and the unowned gaps either side still all zero.
+- **Rollback retained:** the pre-image `jsem_pre_20260928T043641Z.bin` (md5 `1365c929…`) on the box and on the PC, and
+  its A0 sidecar beside the PC copy. `jarvis_admin.bat -ProjectRestore -PreImage <that path>` writes it back.
+
+**What it proves:** the delivery path works end to end on the real device: build, gate, write, read back, verify,
+keep a way back. **What it does not prove:** anything about recall. Nothing on the box reads the region
+(`JARVIS_SEMANTIC` is 0), so this changes nothing the box does. The region holds a SYNTHETIC household, and the
+box-side reader is its own gated slice.
+
+### 5. Corrections, quoted and superseded (the originals are not edited)
+
+- **T49z.** The fix-3 section's T49z bullet says, in its clause, "and a span carrying the Arabic-Indic one, not the
+  newest, refuses with `RULE_BAD_TIME` naming it" (the regex half of that bullet stands). The Arabic-Indic span is the
+  string maximum: non-ASCII digits sort above ASCII, so it is `max(said)`, the span the newest check reads. T49z's
+  build half is therefore also caught by a newest-only check (a mutant checking only the newest span read 359/363
+  with T49z passing); T49u/v/w/y cover the every-span loop. The label is corrected at `d624a94`.
+- **The board's controls.** The MS3 evidence cell's "replica C1, D2e and D6 measured with controls": C1 and D2e ran
+  with controls at `66ce350`; D6 ran without one.
+- **DX's trace.** The fix-3 section's DX cell "every command containing `jsem.img` injected": `-FailOn` injects ssh
+  commands only. The four ssh commands (T2's two, the rm and the test) were injected; the scp push ran with rc 0.
