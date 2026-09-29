@@ -344,7 +344,8 @@ class MemoryStore:
         return cand.get("object_norm")
 
     def current(self, table, **slot) -> list:
-        where = " and ".join(f"{k}=?" for k in slot)
+        # `is ?`: a household fact's subject_id is NULL, and NULL = NULL is never true (MS4a).
+        where = " and ".join(f"{k} is ?" for k in slot)
         sql = f"select * from {table} where valid_to is null"
         if where:
             sql += f" and {where}"

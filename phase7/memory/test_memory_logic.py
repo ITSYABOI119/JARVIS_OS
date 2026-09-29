@@ -4675,5 +4675,135 @@ with _tempfile.TemporaryDirectory() as _td49:
           _re49z and _msg.startswith(_proj49.RULE_BAD_TIME) and repr(_ar49) in _msg,
           ascii((_re49z, _msg[:160])))
 
+# ------------------------------------------------------------------- T50 MS4a
+# The null-safe slot: a household fact accrues evidence across days.
+import tempfile as _tf50
+import os as _os50
+from jarvis_memory import project as _proj50
+
+_D50 = ("2026-03-01", "2026-03-02", "2026-03-03", "2026-03-04")
+
+
+def _st50(path=":memory:"):
+    st = MemoryStore(path)
+    c = st.add_cluster()
+    p = st.bind_owner(c, "Owner")
+    recs = {d: st.add_recording("h" * 60 + d[-2:], d + "T09:00:00", 60.0, "bench") for d in _D50}
+    return st, c, p, recs
+
+
+def _c50(pred, subject, obj, spans, cl, **over):
+    c = {"predicate_id": pred, "subject": subject, "object": obj, "object_norm": obj,
+         "source_kind": "stated_owner", "speaker_cluster": cl, "span_ids": list(spans),
+         "about_time": None, "relation_id": None, "polarity": None, "strength": None,
+         "ended": False}
+    c.update(over)
+    return c
+
+
+def _sup50(st, rid):
+    return st.conn.execute(
+        "select s.said_at from fact_span l join span s on s.id=l.span_id "
+        "where l.fact_id=? and l.role='support'", (rid,)).fetchall()
+
+
+# T50a -- a household routine stated on three days is ONE row with three support days
+_s50a, _c50a, _p50a, _r50a = _st50()
+for _d in _D50[:3]:
+    _sid = _s50a.add_span(_r50a[_d], 10.0, 14.0, _c50a,
+                          "remember the pasta night on tuesdays", 0.95)
+    _s50a.ingest(_c50(
+        "household.routine", {"kind": "household", "id": None},
+        "pasta night on tuesdays", [_sid], _c50a))
+_live50a = [dict(r) for r in _s50a.conn.execute(
+    "select * from fact where predicate_id='household.routine' and valid_to is null").fetchall()]
+_sp50a = _sup50(_s50a, _live50a[0]["id"]) if len(_live50a) == 1 else []
+check("T50a a household.routine stated on 3 distinct days is ONE current row carrying 3 support "
+      "spans on 3 distinct days (R4 evidence accrual on the NULL slot)",
+      len(_live50a) == 1 and len(_sp50a) == 3
+      and len({r[0][:10] for r in _sp50a}) == 3,
+      "rows %d spans %d" % (len(_live50a), len(_sp50a)))
+
+# T50b -- the control: the same shape on a PERSON subject, whose slot is never NULL
+_s50b, _c50b, _p50b, _r50b = _st50()
+for _d in _D50[:3]:
+    _sid = _s50b.add_span(_r50b[_d], 10.0, 14.0, _c50b, "i still cycle to work", 0.95)
+    _s50b.ingest(_c50("person.habit", {"kind": "person", "id": _p50b},
+                      "cycles to work", [_sid], _c50b))
+_live50b = [dict(r) for r in _s50b.conn.execute(
+    "select * from fact where predicate_id='person.habit' and valid_to is null").fetchall()]
+check("T50b the control: a person.habit stated on 3 days is 1 row with 3 support spans - the "
+      "fixture merges wherever the slot is not NULL",
+      len(_live50b) == 1 and len(_sup50(_s50b, _live50b[0]["id"])) == 3,
+      "rows %d" % len(_live50b))
+
+# T50c -- R4 `ended` closes a household routine
+_s50c, _c50c, _p50c, _r50c = _st50()
+_sid = _s50c.add_span(_r50c[_D50[0]], 10.0, 14.0, _c50c,
+                      "remember the pasta night on tuesdays", 0.95)
+_s50c.ingest(_c50("household.routine", {"kind": "household", "id": None},
+                  "pasta night on tuesdays", [_sid], _c50c))
+_sid2 = _s50c.add_span(_r50c[_D50[2]], 20.0, 24.0, _c50c, "the pasta night has stopped", 0.95)
+_s50c.ingest(_c50("household.routine", {"kind": "household", "id": None},
+                  "pasta night on tuesdays", [_sid2], _c50c, ended=True))
+_open50c = _s50c.conn.execute(
+    "select count(*) from fact where predicate_id='household.routine' "
+    "and object_norm='pasta night on tuesdays' and valid_to is null").fetchone()[0]
+_vt50c = _s50c.conn.execute(
+    "select valid_to from fact where predicate_id='household.routine' order by id").fetchone()[0]
+_cl50c = _s50c.conn.execute(
+    "select count(*) from audit where op='close' and rule='R4' and target_table='fact' "
+    "and loser_id=1").fetchone()[0]
+check("T50c an R4 ended on a household routine CLOSES its row: 0 current rows for that object, "
+      "valid_to set, exactly one close/R4 audit row naming it",
+      _open50c == 0 and _vt50c is not None and _cl50c == 1,
+      "open %d valid_to %r closes %d" % (_open50c, _vt50c, _cl50c))
+
+# T50d -- the second predicate on the NULL slot
+_s50d, _c50d, _p50d, _r50d = _st50()
+for _d in _D50[:2]:
+    _sid = _s50d.add_span(_r50d[_d], 10.0, 14.0, _c50d, "we were talking about the bins again",
+                          0.95)
+    _s50d.ingest(_c50("household.topic", {"kind": "household", "id": None}, "bins", [_sid], _c50d))
+_live50d = [dict(r) for r in _s50d.conn.execute(
+    "select * from fact where predicate_id='household.topic' and valid_to is null").fetchall()]
+check("T50d household.topic, the second predicate on the NULL slot: stated on 2 distinct days it "
+      "is 1 current row with 2 support spans",
+      len(_live50d) == 1 and len(_sup50(_s50d, _live50d[0]["id"])) == 2,
+      "rows %d" % len(_live50d))
+
+# T50e -- the API itself
+_api50 = _s50a.current("fact", subject_kind="household", subject_id=None,
+                       predicate_id="household.routine")
+check("T50e current() with subject_id=None returns the household routine row (length 1), so a NULL "
+      "slot is queryable through the public API",
+      len(_api50) == 1 and _api50[0]["object_norm"] == "pasta night on tuesdays",
+      "len %d" % len(_api50))
+
+# T50f -- the projection builds a restated household
+_dir50 = _tf50.mkdtemp()
+_db50 = _os50.path.join(_dir50, "h50.sqlite")
+_s50f, _c50f, _p50f, _r50f = _st50(_db50)
+for _d in _D50[:3]:
+    _sid = _s50f.add_span(_r50f[_d], 10.0, 14.0, _c50f,
+                          "remember the pasta night on tuesdays", 0.95)
+    _s50f.ingest(_c50("household.routine", {"kind": "household", "id": None},
+                      "pasta night on tuesdays", [_sid], _c50f))
+_s50f.conn.commit()
+_s50f.close()
+try:
+    _d50, _m50 = _proj50.build(_db50)
+    _rr50 = [r for r in _m50["records"] if "household.routine" in r["key_string"]]
+    _ok50 = (len(_rr50) == 1 and _rr50[0]["support_count"] == 3
+             and _rr50[0]["text"].endswith("(stated_owner, 3 days)"))
+    _why50 = str(_rr50)[:160]
+except Exception as _e50:                                        # noqa: BLE001
+    _ok50, _why50 = False, "%s: %s" % (type(_e50).__name__, _e50)
+import shutil as _sh50
+_sh50.rmtree(_dir50, ignore_errors=True)
+check("T50f the projection builds a restated household: one household.routine record, "
+      "support_count 3, text ending (stated_owner, 3 days) - before the fix it refused with a "
+      "duplicate key", _ok50, _why50)
+
 print(f"\n{CHECKS - FAILS}/{CHECKS} checks passed")
 sys.exit(1 if FAILS else 0)
