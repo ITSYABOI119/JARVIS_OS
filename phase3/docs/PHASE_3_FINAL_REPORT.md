@@ -50,7 +50,7 @@ Phase 3 delivers a **standalone, bare-metal seL4 x86-64 system with process-isol
 
 ### Model bench-off & security
 - Bench-off: 11 models across speed (llama-bench), perplexity (WikiText-2), and quality (10 prompts, blind 7-judge consensus) → **Gemma 4 E2B winner, 8.40/10**; Llama 3.1 8B disqualified (training-data contamination).
-- Security: March 2026 adversarial audit (26 findings, all resolved) + April 2026 Phase 3c audit (25 findings: all 5 HIGH + 5 MEDIUM fixed, 7 LOW/INFO accepted). Fuzz harness: 300K iterations, ASAN-clean (found + fixed a div-by-zero in `shmem_ipc.c`).
+- Security: March 2026 adversarial audit (26 findings, all resolved) + April 2026 Phase 3c audit (25 findings: all 5 HIGH + 5 MEDIUM fixed, 7 LOW/INFO accepted). **[CORRECTED 2026-09-28: the audit's findings table gives 10 LOW/INFO accepted-or-deferred (4 of 9 LOW, 6 of 6 INFO) and 15 fixed; the 7 came from the audit doc's inconsistent summary block.]** Fuzz harness: 300K iterations, ASAN-clean (found + fixed a div-by-zero in `shmem_ipc.c`).
 
 ---
 
@@ -107,7 +107,7 @@ Against the Phase 3 success criteria (`phase3/docs/PHASE_3_IMPLEMENTATION_PLAN.m
 - **KV compression (TurboQuant/RotorQuant) deferred to Phase 4** (ADR 2026-06-15).
 - **F32 legacy inference path is Llama-only** — do not reuse for Gemma/Qwen (the production path is the quantized `qmodel`).
 - **Gemma 4 KV cache ~57% over-allocated** (shared-KV layers still allocate full slots; correctness-first, optimization deferred).
-- **Accepted LOW/INFO security findings** remain per the April 2026 audit (7 accepted; 0 HIGH/MED open).
+- **Accepted LOW/INFO security findings** remain per the April 2026 audit (7 accepted; 0 HIGH/MED open). **[CORRECTED 2026-09-28: 10 accepted-or-deferred per the audit's findings table; 0 HIGH/MED open stands.]**
 
 ---
 

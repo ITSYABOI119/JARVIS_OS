@@ -25,7 +25,7 @@ and query routing — under sustained supervised use.
 
 ## 2. System under test (all default-ON, deployed)
 
-The deployed image — `ba94eb04…` at boot 55 (2026-09-03), or a fresh committed-source rebuild if the pending `3f676a2` -Wall cleanup is deployed first (the operator's call; `a865b830` was the 6-6 flip image of boot 38, superseded five deploys ago): the memory stack (episodic +
+The deployed image — `ba94eb04…` at boot 55 (2026-09-03), or a fresh committed-source rebuild if the pending `3f676a2` -Wall cleanup is deployed first [the pending set is five image-compiled commits as of 2026-09-28: `3f676a2`, `43c60d1`, `a8f664e`, `02490ad`, `848e8a5`] (the operator's call; `a865b830` was the 6-6 flip image of boot 38, superseded five deploys ago): the memory stack (episodic +
 shared context + retrieval + cache growth) · the K self-heal action gate · always-on monitors (v8) ·
 event-driven wake (v9) · the ≥5 proactive INFORM behaviors (v10) · control-IN two-way + cross-session
 recall · query routing (v12), semantic recall (v13), the routing veto (v14). Nothing new is
@@ -124,7 +124,7 @@ deployed for the soak.
       which restarts the clock anyway — a non-blocking caveat, NOT a gate. Downgraded from the drafting
       pass's "hard start blocker".)
 - [ ] Rollbacks retained (the current image `ba94eb04…` (boot 55) with `2c061aec…` retained as
-      `.bak-pre-provenance` in BOTH locations; whether the pending -Wall commit `3f676a2` is
+      `.bak-pre-provenance` in BOTH locations; whether the pending -Wall commit `3f676a2` [and, as of 2026-09-28, `43c60d1`, `a8f664e`, `02490ad`, `848e8a5`] is
       deployed first is the operator's call); Ubuntu `BootOrder[0]`;
       the owner's presence model agreed (available for stability watch + real control-IN + FP judging —
       NOT 24/7, and nothing to approve).

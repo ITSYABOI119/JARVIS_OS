@@ -4736,3 +4736,28 @@ box-side reader is its own gated slice.
   with controls at `66ce350`; D6 ran without one.
 - **DX's trace.** The fix-3 section's DX cell "every command containing `jsem.img` injected": `-FailOn` injects ssh
   commands only. The four ssh commands (T2's two, the rm and the test) were injected; the scp push ran with rc 0.
+
+## MS3b-2 verified — 2026-09-28
+
+The strategist verified MS3b-2 (`d624a94`, `b0b515e`, `96c9648`, `897df01`) from `git archive 897df01` against the
+run logs, `transcript.log`, the sidecar and the exported image. Every md5, size, count and duration the MS3b-2 section states reproduces.
+Four of its statements are imprecise; none moves a value or the verdict. Each is quoted and superseded here; the
+section itself is not edited.
+
+- **T2's time.** "**T2, and the re-verify after the typed word** (14:36:52 local)": T2 ran at 14:36:43 local (the
+  scp push, then T2's `stat` and `md5sum`, in `transcript.log`); the re-verify after the typed word ran at 14:36:52,
+  just before the two writes. Both read `~/jsem.img` at 2,097,664 B, md5 `10e4e0fe…`.
+- **Where R2 and P were measured.** "**R1** 2,097,664 bytes (`iflag=direct`); **R2** whole `10e4e0fe…`" and "**P:**
+  `parse_semantic.py` reads 27 records off the device": the run read the region off the device with `iflag=direct`
+  into `~/jsem_post.bin` (R1), then computed R2's three md5s and ran `parse_semantic.py` on that file. The bytes are
+  the device's; the strategist's read-back (§3 of the MS3b-2 section) is the one that piped `dd` straight into
+  `md5sum`.
+- **The anchor magics.** A0 and A1 list five anchor values as one set. The three md5s were `iflag=direct` reads; the
+  two magic reads (`od -An -tx1 -N4`) went through the page cache after the cache drop, each inside a sector whose
+  md5 was read directly.
+- **The gaps' single source.** "the unowned gaps either side, LBA 21,108,193–21,109,999 (1,807 sectors) and
+  21,114,097–21,119,999 (5,903 sectors), 0 non-zero bytes each": neither run log reads the gaps; the result rests on
+  the strategist's read-back alone. Its command and output are kept outside the repository at
+  `%USERPROFILE%\.jarvis\strategist\2026-09-28\ms3b2\strategist_readback_20260928T043734Z.txt` (md5
+  `16737fc47f81006db99e293adee7b5e8`). The board's evidence cell and CLAUDE.md's JSEM projection row state the same
+  result; this is its source.

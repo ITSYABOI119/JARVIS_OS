@@ -58,7 +58,7 @@ This document provides a detailed week-by-week implementation plan for Phase 3. 
 | Task | Date | Notes |
 |------|------|-------|
 | Fuzz testing harness | Apr 6 | 300K iterations, ASAN, 3 targets, found div-by-zero |
-| Security audit (25 findings, 18 fixed) | Apr 6 | Two rounds: initial + gap fill (pci, ahci, uart, posix) |
+| Security audit (25 findings, 18 fixed **[15 fixed per the findings table — corrected 2026-09-28]**) | Apr 6 | Two rounds: initial + gap fill (pci, ahci, uart, posix) |
 | Model bench-off (11 models, 3 benches) | Apr 9 | Speed + perplexity + quality. 7 independent blind judges. |
 | **Gemma 4 E2B confirmed #1 (8.40/10, 7 judges, StdDev 0.27)** | Apr 9 | 56% better than best Llama. 19.7 tok/s. |
 | Mistral 7B Q8_0 confirmed CRITICAL pick (7.50/10) | Apr 9 | Drop-in, #2 ranked, 5.5 tok/s |
@@ -644,7 +644,7 @@ While waiting for the JARVIS Project PC, the majority of Phase 3b implementation
 | 3b I211 NIC + IPC fixes | **DONE** | Apr 5-6, 2026 |
 | 3b continuous workload | **DONE** | Apr 6, 2026 (QEMU verified, err=0) |
 | 3c fuzz testing | **DONE** | Apr 6, 2026 (300K iterations, ASAN, 0 crashes) |
-| 3c security audit | **DONE** | Apr 6, 2026 (25 findings, 18 fixed) |
+| 3c security audit | **DONE** | Apr 6, 2026 (25 findings, 18 fixed **[15 fixed / 10 accepted-or-deferred per the findings table — corrected 2026-09-28]**) |
 | 3c model bench-off | **DONE** | Apr 9, 2026 (11 models, speed+PPL+quality) |
 | 3c Gemma 4 engine work | **DONE** | Apr 11, 17 fixes, 4/4 queries on seL4 QEMU |
 | 3c architecture expansion (6 families) | **DONE** | Apr 12, fused QKV + DeltaNet SSM + partial RoPE |

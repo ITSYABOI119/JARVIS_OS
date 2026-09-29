@@ -138,7 +138,7 @@ Tests run as a flat compile-and-run suite in CI (GitHub Actions, "JARVIS AI-OS T
 
 From `phase4/docs/ROADMAP.md` — sequential, each with explicit "done when" criteria:
 
-- **Phase 4 — Production (`v1.0.0`):** CPU inference performance ✅ (Gemma 4 E2B 5.46 tok/s @ NUM_NODES=6, M0–M4), a **1024×768** GOP framebuffer HUD ✅ + a read-only browser **Remote Telemetry Console** ✅, a one-script installer ✅ (USB / on-SSD dual-boot / full-disk), and the **MIT open-source release** (in progress). GPU inference and a local USB keyboard were **deferred/cut** (no usable GPU; the appliance is observed remotely); the **90-day** soak is owner-scheduled.
+- **Phase 4 — Production (`v1.0.0`):** CPU inference performance ✅ (Gemma 4 E2B 5.46 tok/s @ NUM_NODES=6, M0–M4), a **1024×768** GOP framebuffer HUD ✅ + a read-only browser **Remote Telemetry Console** ✅, a one-script installer ✅ (USB / on-SSD dual-boot / full-disk), and the **MIT open-source release** (shipped 2026-06-26, tag `v1.0.0` → `bdf0951`). GPU inference and a local USB keyboard were **deferred/cut** (no usable GPU; the appliance is observed remotely); the **90-day** soak is owner-scheduled.
 - **Phase 5 — Memory:** episodic store on NVMe, shared context pool in C, retrieval-before-inference, persisted SHIELD learning, cache that grows from use.
 - **Phase 6 — Butler:** always-on monitors, event-driven proactive actions, a structured user model, conversation as the primary interface, multi-agent routing >95%.
 - **Phase 7 — Autonomy (`v2.0.0`):** associative ("Instinct") memory, 30-day unsupervised operation, staged self-modification with rollback (immutable core), larger GPU models for hard tasks, external security audit.

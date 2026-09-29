@@ -55,7 +55,7 @@ f. The GATE is OUR data, not MTEB (narrow/technical domain). Prove-it-or-don't, 
   model choice stands. What does NOT hold is citing "clean separation" as an operational guarantee:
   cosine-topk needs a MEASURED floor, and with one (128 dims, mean-projected, floor 0.55) the
   measured outcome is 19 useful / 0 false recalls on 36 queries — **no failures observed, which is
-  not a zero rate** (95% upper bound on 0/36 is ~8%). Enlarged the recall set to 36 distinct pairs (tighter error bars), scored the
+  not a zero rate** (95% upper bound on 0/36 is ~8%) [CORRECTED 2026-09-28: 19 useful of the 36 distinct pairs stands, but false recall was scored on 56 queries (42 positives incl. 6 adversarial + 14 negatives), so it is 0 false of 56 and the 95% upper bound is about 5% (3/56 = 5.4%)]. Enlarged the recall set to 36 distinct pairs (tighter error bars), scored the
   fine-tune-BASE candidates (Qwen3-Embedding-0.6B decoder / gte-large / mxbai encoders / re-eval'd
   EmbeddingGemma) + a mean-projection ablation, kept bge as reference. Golden vectors SAVED for the
   winner (`golden_vectors.npz` + `golden_meta.json`, sym:none + frozen mean-projection). See the C/M0.5

@@ -5,7 +5,7 @@
 **Scope:** Phase 3 x86 code added since March 22, 2026 audit (~5700 LOC, 17 file pairs)
 **Previous Audit:** SEC-001 through SEC-026 (March 22, 2026) — all fixed
 
-**Status:** 18/25 findings resolved. 7 INFO/accepted findings documented.
+**Status:** 18/25 findings resolved. 7 INFO/accepted findings documented. **[CORRECTED 2026-09-28: the findings table below and the three fix commits (`13fc749` 8 + `8370245` 3 + `9efe7c9` 4) give 15/25 fixed and 10 accepted-or-deferred: HIGH 5 of 5 fixed, MEDIUM 5 of 5, LOW 5 of 9, INFO 0 of 6. The 18/7 split, and the LOW 8 / INFO 7 rows in both summary tables, never matched the findings table; the table wins. No finding was reopened. Recounted from this file's own findings table at `209b654`.]**
 
 | Severity | Total | Fixed | Accepted |
 |----------|-------|-------|----------|
@@ -14,6 +14,8 @@
 | LOW      | 8     | 6     | 2        |
 | INFO     | 7     | 2     | 5        |
 | **Total** | **25** | **18** | **7**  |
+
+**[CORRECTED 2026-09-28, recounted from the findings table: HIGH 5 / 5 fixed / 0 accepted; MEDIUM 5 / 5 / 0; LOW 9 / 5 / 4; INFO 6 / 0 / 6; Total 25 / 15 / 10. The table above is kept as written.]**
 
 **Fix commits:**
 - `13fc749` — SEC-027 through SEC-033, SEC-036 (8 fixes: fat32, nvme, nic_i211, vga, tokenizer)
@@ -352,6 +354,8 @@ All 26 findings from the March 22, 2026 audit were verified to remain fixed:
 | INFO | 7 | 2 | 5 |
 | **Total** | **25** | **18** | **7** |
 
+**[CORRECTED 2026-09-28: the findings table gives HIGH 5 / 5 / 0, MEDIUM 5 / 5 / 0, LOW 9 / 5 / 4, INFO 6 / 0 / 6, Total 25 / 15 / 10 — see the correction under the Status line. "All HIGH and MEDIUM findings have been fixed" stands.]**
+
 All HIGH and MEDIUM findings have been fixed. The accepted findings are either benign (integer wraps within operational bounds), by-design (CRC-32 is integrity not auth), documented future work (SHIELD stub, SMP), reliability constraints (UART blocking spin, AHCI iteration-based timeout), or test-only stubs that should never be linked into production builds (ggml_backend_stubs).
 
 ---
@@ -362,7 +366,7 @@ All HIGH and MEDIUM findings have been fixed. The accepted findings are either b
 
 **Reading method:** Each file read in full (no grep-only review). Untrusted input traced from PCI config space, MMIO BARs, ATA IDENTIFY data, and POSIX stub call sites to their consumers.
 
-**Summary:** 11 new findings added (1 HIGH, 2 MEDIUM, 4 LOW, 4 INFO). 4 fixed in this commit (SEC-041, SEC-043, SEC-047, SEC-049), 7 documented as accepted/constraint/by-design.
+**Summary:** 11 new findings added (1 HIGH, 2 MEDIUM, 4 LOW, 4 INFO). 4 fixed in this commit (SEC-041, SEC-043, SEC-047, SEC-049), 7 documented as accepted/constraint/by-design. **[CORRECTED 2026-09-28: the gap fill's own findings rows give 1 HIGH (SEC-041), 2 MEDIUM (SEC-043/049), 5 LOW (SEC-042/044/047/048/050) and 3 INFO (SEC-045/046/051); the 4-fixed / 7-documented split stands.]**
 
 ### SEC-041: pci_get_bar_address silent truncation when bar_index=5 has 64-bit type
 **Severity:** HIGH

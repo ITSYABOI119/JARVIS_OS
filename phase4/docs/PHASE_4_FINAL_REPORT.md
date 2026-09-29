@@ -13,7 +13,7 @@
 
 ## 1. Executive Summary
 
-Phase 4 turns the proven bare-metal beta into a **single-model, autonomous, remotely-observed v1.0 appliance**. On the same Ryzen 7 2700X, JARVIS now runs **Gemma 4 E2B at 5.46 tok/s** in the seL4 build (AVX2 + a 6-core seL4-native threadpool), renders a live **1024×768 GOP framebuffer HUD**, emits **~1 Hz CRC'd UDP telemetry** (~2 Hz at deployed rates since — see the 2026-08 soak report) to a **read-only browser console**, ships a **one-script installer**, and **dual-boots from the internal NVMe alongside Ubuntu** — all verified on real hardware. The MIT open-source release is in progress.
+Phase 4 turns the proven bare-metal beta into a **single-model, autonomous, remotely-observed v1.0 appliance**. On the same Ryzen 7 2700X, JARVIS now runs **Gemma 4 E2B at 5.46 tok/s** in the seL4 build (AVX2 + a 6-core seL4-native threadpool), renders a live **1024×768 GOP framebuffer HUD**, emits **~1 Hz CRC'd UDP telemetry** (~2 Hz at deployed rates since — see the 2026-08 soak report) to a **read-only browser console**, ships a **one-script installer**, and **dual-boots from the internal NVMe alongside Ubuntu** — all verified on real hardware. The MIT open-source release is in progress. **[SHIPPED 2026-06-26 — `v1.0.0` annotated tag `c8cc5e2` → commit `bdf0951`, MIT, public, GitHub Release live; see the goal table, row 7. Noted 2026-09-28.]**
 
 What is **deferred or cut** is stated plainly: GPU inference is deferred (no usable GPU), the system is CPU-only and single-model, the display is 1024×768 (firmware declined 1080p), the console is telemetry-out only (no control-in), the box is autonomous with no interactive input (USB keyboard cut), the `--target disk` installer is code + dry-run-only, and the **90-day stability soak has not been run** (owner-scheduled).
 
@@ -107,7 +107,7 @@ Against the Phase 4 goals (`phase4/docs/ROADMAP.md` §Phase 4 / "Done when"):
 
 ## 7. Phase 5 Handoff
 
-The remaining Phase 4 step is the **`v1.0.0` tag + public MIT repo** (release step #7; the owner names and cuts the tag). After that, **Phase 5 — Memory** (`phase4/docs/ROADMAP.md`): an episodic interaction store on NVMe that survives reboot, the shared context pool ported to bare-metal C, retrieval-before-inference (inject relevant memory into Process B's context before generation), distilled semantic memory, **persisted SHIELD failure-learning** on bare metal (the natural place to make the passive SHIELD a real learner), automatic cache growth from the episodic log, and a low-priority consolidation job.
+**[DONE 2026-06-26 — `v1.0.0` tagged at `bdf0951`, MIT, public; Phase 5 then closed with `v1.1.0-memory` → `feeafd1` (2026-07-04). Noted 2026-09-28.]** The remaining Phase 4 step is the **`v1.0.0` tag + public MIT repo** (release step #7; the owner names and cuts the tag). After that, **Phase 5 — Memory** (`phase4/docs/ROADMAP.md`): an episodic interaction store on NVMe that survives reboot, the shared context pool ported to bare-metal C, retrieval-before-inference (inject relevant memory into Process B's context before generation), distilled semantic memory, **persisted SHIELD failure-learning** on bare metal (the natural place to make the passive SHIELD a real learner), automatic cache growth from the episodic log, and a low-priority consolidation job.
 
 Carry-forward: the deferred 30-day x86 soak and the Phase 4 90-day soak are best run once daily-use volume accumulates; the residual CPU↔native perf gap is a memory-subsystem / GPU question, not more cores.
 

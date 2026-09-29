@@ -67,6 +67,8 @@ cache_growth_count=9  retrieval_hits=16  episodic_count=8192  crc_ok=True
 
 ## 6. Proposed tag (NOT created — the user names/creates all tags)
 
+**[OUTCOME 2026-07-04: the user cut it as `v1.1.0-memory` — annotated tag `205df61` → commit `feeafd1`. Noted 2026-09-28; the proposal below is kept as written.]**
+
 `git tag -l` at proposal time: latest release tags are `v0.2.1-beta` and `v1.0.0` (monotonic ceiling: v1.0.0). The `memory` milestone tag was always scoped as a **milestone marker, not a release**. Proposal:
 
 - **Name:** `memory` (as canonized in `PHASE_5_GOAL6_CACHE_GROWTH.md` / ROADMAP — "the early `memory` milestone tag"); alternative if a versioned form is preferred: `v1.1.0-memory`.
