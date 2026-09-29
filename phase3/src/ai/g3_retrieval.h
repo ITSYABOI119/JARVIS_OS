@@ -160,10 +160,12 @@ static inline int g3_candidate_usable(uint16_t action, uint8_t outcome, uint16_t
  * makes a safe floor exist at all — and it has the WORSE margin while having the BETTER behaviour,
  * because it compresses every cosine (min true-pair 0.4981 -> 0.2117) while reordering correctly.
  *
- * *** THE CAVEAT THAT TRAVELS WITH THE NUMBER. "0 false out of 36" is NO FAILURES OBSERVED, NOT a
- * zero rate. The 95% upper bound on 0/36 is roughly 8%. The honest claim is "no false recalls
- * observed on a 36-query hand-authored set with an adversarial tail". Do NOT write, here or
- * anywhere, that false recall is zero, prevented, or eliminated. ***
+ * *** THE CAVEAT THAT TRAVELS WITH THE NUMBER. "0 false out of 56" is NO FAILURES OBSERVED, NOT a
+ * zero rate. The 95% upper bound on 0/56 is about 5% (3/56 = 5.4% by the rule of three). The
+ * honest claim is "no false recalls observed on a 56-query hand-authored set: 42 paraphrase
+ * positives (36 distinct + a 6-query adversarial tail) and 14 unrelated negatives". (Corrected
+ * 2026-09-28: this comment previously said 0/36 and ~8%, a denominator no measurement used.)
+ * Do NOT write, here or anywhere, that false recall is zero, prevented, or eliminated. ***
  *
  * THE FLOOR IS A KNOB. RAISE it to buy safety at the cost of recall (0.55 -> 0.60 took useful from
  * 19 to 11 with false still 0); LOWER it to buy recall at the cost of safety (0.50 admitted 3 false

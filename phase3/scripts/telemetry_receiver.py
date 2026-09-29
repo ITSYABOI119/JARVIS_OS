@@ -101,8 +101,8 @@ MAGIC = 0x4A54454C            # "JTEL" (LE on the wire: 4C 45 54 4A)
 # control_in_answered/blocked/dropped, v12 further appends route_sysfacts/decline/infer/inited/pad,
 # v13 further appends sem_recall_hits/tried/floor/sem_inited/sem_pad, and v14 further appends
 # route_veto_checked/route_vetoed/veto_inited/veto_pad — each before crc32.
-# THIS TOLERANCE IS LOAD-BEARING, NOT HYPOTHETICAL: the deployed box emits v13 today and will keep
-# doing so until the next deploy, so a live box is a v13 box while this code speaks v14. An
+# THIS TOLERANCE WAS LOAD-BEARING WHEN WRITTEN: the deployed box then emitted v13 [2026-09-28: it has
+# emitted v14 since the C/M4 deploy, boot 49, 2026-08-02; v13 and older are now replayed captures]. An
 # older packet must decode cleanly with its newer fields -> None, NEVER a fabricated 0 (a 0 would
 # read as "the veto is live and checked nothing", which is a different and false claim).
 FMT_COMMON = '<IBBHIIIBBH6QBBBBHHIIHH56s40s6IHHHHIHHHBBHBBHHBB'   # through beh_pad, NO crc
@@ -259,8 +259,8 @@ def decode_packet(data: bytes) -> dict:
     """
     # Version-tolerant by LENGTH (the append-only wire): v14 has control_in + route_* + sem_* +
     # veto_*; v13 lacks veto_*; v12 lacks sem_*; v11 has only control_in; v10 has none of them.
-    # The DEPLOYED box emits v13 and will until the next deploy, so v13 is a LIVE shape here, not
-    # legacy; v12/v11/v10 are retained for captured/replayed older pcaps. An older packet decodes
+    # The DEPLOYED box emitted v13 until the C/M4 deploy [2026-09-28: v14 since boot 49, 2026-08-02], so v13, like
+    # v12/v11/v10, is now retained for captured/replayed older pcaps. An older packet decodes
     # cleanly with its newer fields == None — never a fabricated 0, because for veto_inited (and
     # sem_inited before it) a 0 means "the box reports the mechanism and it is gated off" while
     # None means "this box does not report it at all".

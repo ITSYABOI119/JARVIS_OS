@@ -12,7 +12,9 @@
  * two-way conversation channel is live whenever JARVIS runs), and JARVIS_CONTROL_IN_RECALL
  * (6-5/M5-recall FLIP, 2026-07-22 — cross-session exact-repeat recall), and JARVIS_ROUTING
  * (6-6 B FLIP, 2026-07-23 — the control-IN query router: SYSTEM-FACTS answered from PA state /
- * DECLINE canned / INFER to the model). All other diagnostic/feature flags are 0, and every
+ * DECLINE canned / INFER to the model), JARVIS_EMBED (C/M3b FLIP, 2026-08-01 — semantic recall) and
+ * JARVIS_ROUTE_VETO (C/M4 FLIP, 2026-08-02 — the embedder may reroute a SYSFACTS capture to the
+ * model). All other diagnostic/feature flags are 0, and every
  * *_PROBE stays OFF in deploy (the box never induces synthetic events), as do JARVIS_G3_AB and
  * JARVIS_DBG_BOOT_LOG. Enable diagnostics as needed.
  */
@@ -322,7 +324,8 @@
 /* 6-5/M3-2a: control-IN routing (pa_ctrl_gate) uses the K action spine — pa_fault_check for the
  * mid-route self-heal funnel + the JACT store (g_action_audit) for the audit record — so a
  * CONTROL_IN=1 build now REQUIRES JARVIS_ACTIONS=1 (default-ON since K/M4; the OFF/deploy build is
- * CONTROL_IN=0, unaffected). */
+ * CONTROL_IN=0, unaffected [2026-09-28: true when written; since the 6-5 flip 2026-07-21 the DEPLOY
+ * build is CONTROL_IN=1, and CONTROL_IN=0 is the OFF/rollback build only]). */
 #if JARVIS_CONTROL_IN && !JARVIS_ACTIONS
 #error "JARVIS_CONTROL_IN (>= M3-2a) routes via the K action spine (pa_fault_check + JACT) -> requires JARVIS_ACTIONS"
 #endif
@@ -489,7 +492,8 @@
 #error "JARVIS_ROUTING_PROBE must not co-run with the other *_PROBE flags (replay-floor resets / synthetic-anomaly / respawn / terminal g_pb_dead collisions)"
 #endif
 
-/* ── Phase C (semantic embedding) / C/M1a: the Qwen3-Embedding-0.6B host path (default: 0) ──────
+/* ── Phase C (semantic embedding) / C/M1a: the Qwen3-Embedding-0.6B host path (default: 0 at C/M1a;
+ *    [2026-09-28: DEFAULT 1 since the C/M3b flip 2026-08-01, boot_id=48 — semantic recall is DEPLOYED]) ──
  * When 1, the engine gains the qwen/embed tokenization + (Stage 2) embed-mode forward for the
  * co-resident Qwen3-Embedding-0.6B model used by the semantic-recall lane (Phase C). STAGE 1
  * (this milestone) is TOKENIZATION ONLY: the qwen GPT-2/qwen2 pre-split + the add_eos append, on
@@ -497,7 +501,8 @@
  * at EMBED=0. The parity GATE (host, model-gated, NOT CI) is the 15-probe token-id match vs
  * `phase3/scripts/embed/golden_meta.json`. Stage 2 (RoPE-NEOX + the gated embed-forward + vector
  * parity) is a separate milestone gated on Stage 1 GREEN. Default 0 -> the whole qwen/embed path
- * compiles out; the deployed engine is unaffected. (Box wiring — a co-resident 2nd GGUF, MSG_EMBED
+ * compiles out; the deployed engine is unaffected. [2026-09-28: C/M1a-era text; the default is 1
+ * since C/M3b, and 0 now means the OFF build, not the deployed one.] (Box wiring — a co-resident 2nd GGUF, MSG_EMBED
  * IPC, OFF object-identity — is C/M1b, and adds the ACTIONS/CONTROL_IN deps + #error guards then.) */
 #ifndef JARVIS_EMBED
 #define JARVIS_EMBED 1
@@ -592,7 +597,8 @@
 #define EMBED_PROBE_RESPAWN_YIELDS 200
 #endif
 
-/* ---- Phase C / C/M4: the hybrid ROUTING VETO (default 0) ------------------------------
+/* ---- Phase C / C/M4: the hybrid ROUTING VETO (default 0 when built; [2026-09-28: DEFAULT 1 since
+ *      the C/M4 flip 2026-08-02, boot_id=49 — see "DEPLOYED default-ON" below]) ----------------
  *
  * WHAT IT IS. The keyword router still decides; the embedder may only REROUTE a SYSFACTS
  * capture to INFER, never the reverse. It cannot create a capture, widen the allowlist,
@@ -880,7 +886,8 @@
  * preserved) → Resume → drain-then-poll the ready ACK → one inference → measure the 3
  * zero-RESOURCE axes (PB musl-heap pointers flat + PA cslot-delta==0 + coherent gen).
  * Independent of JARVIS_ACTIONS (which stays 0 — the deploy image is action-inert and this
- * flag is OFF in it). THROWAWAY: reset after the measurement locks Strategy A. Default 0 ->
+ * flag is OFF in it) [2026-09-28: K/M2a-era text; ACTIONS is default-ON since K/M4 2026-07-08 —
+ * only "this flag is OFF in the deploy image" still holds]. THROWAWAY: reset after the measurement locks Strategy A. Default 0 ->
  * pb_restart_entry + the spike driver + the restart stack compile out (deploy byte-identical;
  * pb_serve_loop is extracted unconditionally but is a behavior-neutral refactor). */
 #define JARVIS_KM2A_SPIKE 0

@@ -151,9 +151,10 @@
  * ================== HONEST CEILING (carried from C/M2) ==================
  *
  * The floor these vectors are compared at (0.55) was measured with ZERO false
- * recalls observed on a 36-query hand-authored set with an adversarial tail. That
- * is NO FAILURES OBSERVED, NOT A ZERO RATE — the 95% upper bound on 0/36 is about
- * 8%. Nothing here prevents, eliminates, or zeroes false recall. See
+ * recalls observed on a 56-query hand-authored set (42 paraphrase positives incl. a
+ * 6-query adversarial tail, and 14 unrelated negatives). That is NO FAILURES
+ * OBSERVED, NOT A ZERO RATE — the 95% upper bound on 0/56 is about 5% (corrected
+ * 2026-09-28 from 0/36 and 8%, a denominator no measurement used). Nothing here prevents, eliminates, or zeroes false recall. See
  * g3_retrieval.h, which carries the same caveat next to the floor itself.
  */
 

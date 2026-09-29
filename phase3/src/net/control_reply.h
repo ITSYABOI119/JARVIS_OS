@@ -88,7 +88,8 @@
 #define CTRL_REPLY_TEXT_MAX  1426u
 #endif
 
-/* worst case = 10 (hdr) + 512 (text) + 4 (crc) + 32 (tag) = 558 */
+/* worst case = 10 (hdr) + 1426 (text) + 4 (crc) + 32 (tag) = 1472 == UDP_MAX_PAYLOAD
+ * (was 10 + 512 + 4 + 32 = 558 before M2 raised CTRL_REPLY_TEXT_MAX 512 -> 1426) */
 #define CTRL_REPLY_MAX_LEN (CTRL_REPLY_HDR_LEN + CTRL_REPLY_TEXT_MAX + \
                             CTRL_REPLY_CRC_LEN + CTRL_REPLY_TAG_LEN)
 

@@ -532,8 +532,8 @@ def main():
     check(dvt['route_veto_checked'] != dvt['route_vetoed'],
           "checked != vetoed on the golden pair — neither may be derived from the other")
 
-    # VERSION-TOLERANCE for the VETO-flip deferral, and this one is LIVE not hypothetical: the
-    # deployed box emits v13 (the C/M3b EMBED-flip image) and will until the next deploy, so a
+    # VERSION-TOLERANCE for the VETO-flip deferral, which was LIVE when written: the
+    # deployed box emitted v13 (the C/M3b EMBED-flip image) until the C/M4 deploy (v14 since boot 49), so a
     # v13 packet must decode CLEANLY with the 3 veto fields ABSENT (None). A fabricated 0 would
     # be worse here than anywhere else — veto_inited==0 means "the box reports the veto and it
     # is gated off" while None means "this box does not report the veto at all", and rendering

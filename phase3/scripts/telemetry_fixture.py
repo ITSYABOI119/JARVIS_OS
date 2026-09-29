@@ -57,7 +57,7 @@ def build_packet(finalize=True, wire_version=14, **overrides):
     """Pack a telemetry packet; when finalize, stamp a valid zlib CRC over [:size-4].
 
     wire_version=14 (default) -> the current wire (+ route_veto_checked/route_vetoed/inited/pad);
-    wire_version=13 -> the shape the LIVE DEPLOYED BOX still emits until the next deploy
+    wire_version=13 -> the shape the deployed box emitted until the C/M4 deploy (v14 since boot 49, 2026-08-02)
     (+ sem_*), which is why v13 must keep decoding cleanly; wire_version=12 -> the pre-semantic
     shape; wire_version=11 -> the pre-routing shape; wire_version=10 -> the pre-control-IN shape.
     Sizes come from the receiver's PKT_SIZE_V* constants, never a literal here. The version BYTE

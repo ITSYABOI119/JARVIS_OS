@@ -7,6 +7,7 @@ UNPUNCTUATED eval strings:
   * "about half of paraphrases recall — 19 of 36 at the 0.55 floor"  (a DOCUMENTATION claim,
     and one the console shows a human)
   * "0 false recalls observed on 36"                                  (a SAFETY claim — false
+    [2026-09-28: the claim as then written; the measured denominator is 56 — 42 positives + 14 negatives]
     recall is the risk cosine-topk introduced that exact-key structurally could not have)
 
 Real traffic is not clean: measured on the box's own control-IN store, 24.5% of distinct

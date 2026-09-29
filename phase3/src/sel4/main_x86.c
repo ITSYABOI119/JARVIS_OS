@@ -4816,8 +4816,9 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
      * Distinct from semantic_fact_count (v6), which is the Phase-5 #4 DISTILL store: a different
      * mechanism with a different ceiling. Never merged or cross-labelled.
      *
-     * Gated, so the EMBED=0 deploy — which is what ships today — emits v13 with all three 0 and
-     * sem_inited 0, the honest "semantic recall gated off" shape (the v5..v12 pattern). */
+     * Gated, so an EMBED=0 build emits v13-or-later with all three 0 and sem_inited 0, the honest
+     * "semantic recall gated off" shape (the v5..v12 pattern). [2026-09-28: 'the EMBED=0 deploy —
+     * which is what ships today' was true until the C/M3b flip 2026-08-01; the deploy is EMBED=1.] */
     pkt.sem_recall_hits  = g_embed_sem_hits       > 0xFFFFu ? 0xFFFFu : (uint16_t)g_embed_sem_hits;
     pkt.sem_recall_tried = g_embed_sem_tried      > 0xFFFFu ? 0xFFFFu : (uint16_t)g_embed_sem_tried;
     pkt.sem_recall_floor = g_embed_sem_below_floor > 0xFFFFu ? 0xFFFFu : (uint16_t)g_embed_sem_below_floor;
@@ -4843,8 +4844,9 @@ static void jarvis_telemetry_emit(uint8_t kind, uint64_t q_total, uint64_t q_hit
      * compiled in: an armed-but-embedless boot can never run a comparison, and reporting it
      * "live" would advertise a mechanism that cannot fire.
      *
-     * Gated, so the VETO=0 deploy — which is what ships today — emits v14 with both counts 0
-     * and veto_inited 0, the honest "veto gated off" shape (the v5..v13 pattern). */
+     * Gated, so a VETO=0 build emits v14 with both counts 0 and veto_inited 0, the honest
+     * "veto gated off" shape (the v5..v13 pattern). [2026-09-28: 'the VETO=0 deploy — which is
+     * what ships today' was true until the C/M4 flip 2026-08-02; the deploy is VETO=1.] */
     pkt.route_veto_checked = g_route_veto_checked > 0xFFFFu ? 0xFFFFu : (uint16_t)g_route_veto_checked;
     pkt.route_vetoed       = g_route_vetoed       > 0xFFFFu ? 0xFFFFu : (uint16_t)g_route_vetoed;
     pkt.veto_inited        = (g_route_veto_armed && g_embed_ready && !g_embed_bad) ? 1u : 0u;

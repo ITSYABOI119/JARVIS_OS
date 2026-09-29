@@ -720,8 +720,8 @@ static void test_local_not_a_memory(void)
  * mean-projected, floor 0.55 -> 19 useful / 16 missed / 0 false on the 36-distinct +
  * 6-adversarial + 14-negative recall set.
  *
- * "0 false out of 36" is NO FAILURES OBSERVED, not a zero rate -- the 95% upper bound on 0/36
- * is roughly 8%. These tests pin the MECHANISM, never that rate. */
+ * "0 false out of 56" is NO FAILURES OBSERVED, not a zero rate -- the 95% upper bound on 0/56
+ * is about 5% (was 0/36, ~8%; corrected 2026-09-28). These tests pin the MECHANISM, never that rate. */
 
 #define SEMDIM 4   /* a tiny dim keeps the fixtures readable; the real one is a PARAMETER */
 

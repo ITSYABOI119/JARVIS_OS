@@ -135,8 +135,10 @@
  * sentence to quote). Rendering the residual as zero, or floor as "tried-hits",
  * would attribute embed/backfill states to a similarity decision. A miss is NOT
  * an error — it degrades to EXACTLY the no-preamble path the box takes today.
- * The fill is gated JARVIS_EMBED so the EMBED=0 deploy emits v13 with all three
- * counts 0 and sem_inited 0 — honest "semantic recall gated off".
+ * The fill is gated JARVIS_EMBED so an EMBED=0 build emits v13-or-later (v14 since
+ * C/M4: only the fill is gated, never the version) with all three counts 0 and
+ * sem_inited 0 — honest "semantic recall gated off". [2026-09-28: the deploy is
+ * EMBED=1 since the C/M3b flip 2026-08-01.]
  *
  * v14 (Phase C / C/M4) appends route_veto_checked/route_vetoed/veto_inited/
  * veto_pad -> 276 B, CRC@272, again with NO NEW FLAG BIT (the u16 flags word
@@ -159,9 +161,9 @@
  * increment sites sit downstream of the veto, nothing moved). The honest
  * claim is "an 81% measured cut in ONE defect class" (32->6 FP at 1 FN on the
  * measured corpus), NEVER "routing is fixed" — the 6 surviving FPs and the
- * 1 FN are the ceiling. The fill is gated JARVIS_ROUTE_VETO so the VETO=0
- * deploy — which is what ships today — emits v14 with both counts 0 and
- * veto_inited 0, honest "veto gated off". */
+ * 1 FN are the ceiling. The fill is gated JARVIS_ROUTE_VETO so a VETO=0
+ * build emits v14 with both counts 0 and veto_inited 0, honest "veto gated
+ * off". [2026-09-28: the deploy is VETO=1 since the C/M4 flip 2026-08-02.] */
 typedef struct __attribute__((packed)) {
     uint32_t magic; uint8_t version; uint8_t kind; uint16_t flags; uint32_t boot_id; uint32_t seq;  /* 16 */
     uint32_t uptime_ms;                                                                              /*  4 */

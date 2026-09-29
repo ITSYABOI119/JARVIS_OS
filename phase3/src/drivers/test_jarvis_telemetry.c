@@ -295,7 +295,7 @@ static void test_finalize_roundtrip(void)
           "honest-0: ROUTING=0 emits zero routing decisions");
     CHECK(z.route_inited == 0u, "honest-0: route_inited 0 == 'routing gated off' (no flag bit exists)");    CHECK((z.flags & TLM_F_CONTROL_IN) == 0, "honest-0: TLM_F_CONTROL_IN clear (channel gated off)");
 
-    /* The EMBED=0 deploy — which is what ships today — emits v13 with the three semantic counts 0
+    /* An EMBED=0 build (the deploy until the C/M3b flip 2026-08-01) emits v13-or-later with the three semantic counts 0
      * AND sem_inited 0. sem_inited==0 is what stops the console rendering a live-looking zero: a
      * gated-off lane and a live lane that has recalled nothing are otherwise indistinguishable on
      * the wire, and only one of them is honest to render as "0 recalls". */
@@ -303,7 +303,7 @@ static void test_finalize_roundtrip(void)
           "honest-0: EMBED=0 emits zero semantic-recall counts");
     CHECK(z.sem_inited == 0u, "honest-0: sem_inited 0 == 'semantic recall gated off' (no flag bit exists)");
 
-    /* The VETO=0 deploy — which is what ships today — emits v14 with both veto counts 0 AND
+    /* A VETO=0 build (the deploy until the C/M4 flip 2026-08-02) emits v14 with both veto counts 0 AND
      * veto_inited 0. veto_inited==0 is what stops the console rendering a live-looking zero:
      * a gated-off veto and an armed veto that has checked nothing are otherwise
      * indistinguishable on the wire, and only one is honest to render as "0 checked". */
