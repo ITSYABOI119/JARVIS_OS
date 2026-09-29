@@ -4761,3 +4761,90 @@ section itself is not edited.
   `%USERPROFILE%\.jarvis\strategist\2026-09-28\ms3b2\strategist_readback_20260928T043734Z.txt` (md5
   `16737fc47f81006db99e293adee7b5e8`). The board's evidence cell and CLAUDE.md's JSEM projection row state the same
   result; this is its source.
+
+## MS4a — 2026-09-29 — household facts accrue evidence: the null-safe slot
+
+The operator chose MS4, a routine-questions band. Mapping it found a store defect that had to be fixed first. MS4
+was pre-registered in the design before any MS4 code (§8's routine set and the §11 MS4 row, `ea33f13`); this section
+is MS4a, the fix. Every household here is synthetic, and the embedder was off in every run.
+
+| commit | what | CI run |
+|---|---|---|
+| `ea33f13` | C0, MS4 pre-registered in the design (§8, §11) | 36550066644, green |
+| `8940d18` | C1, the null-safe slot, and T50a–T50f | 36550839100, green |
+
+### 1. The defect
+
+`store.current()` built its filter as `" and ".join(f"{k}=?" for k in slot)`. A household subject (both `household.*`
+predicates; none takes a `topic` subject) passes `subject_id=None`, and in SQL `subject_id = NULL` is never true, so
+`current()` returned `[]` for every household slot. Three consequences:
+- a household fact restated on another day inserted a SECOND current row instead of joining the first as evidence
+  (R4, design §4.3): one routine stated on 3 distinct days gave 3 rows of 1 span each, while a person-subject control
+  (`person.habit`) merged into 1 row of 3 spans;
+- an R4 `ended` on a household routine could not close it: the ending was appended as another live row, no `close`
+  audit row was written, and `audit_violations()`, which walks closed rows, saw nothing;
+- a restated household store could not be projected: the MS3 builder refused it with a duplicate key.
+
+Its pre-registration, before any MS4 code, is the design's §8 routine set (`ea33f13`): the defect, the set, the band
+and its controls, including the salience miss expected in advance.
+
+### 2. The fix and its tests
+
+`8940d18` replaces that one line with `" and ".join(f"{k} is ?" for k in slot)`, with a comment. `fact.subject_id`
+is the only slot column that can be NULL; every other slot column is `NOT NULL` in the schema, and in SQLite `IS`
+equals `=` for non-NULL operands. Nothing else in `store.py` changed.
+
+T50a–T50f, the strategist's reference tests, appended verbatim to `test_memory_logic.py`:
+- **T50a:** a `household.routine` stated on 3 distinct days is ONE current row carrying 3 support spans on 3 days;
+- **T50b:** the control, a `person.habit` of the same shape, is 1 row with 3 spans (it passes with or without the fix);
+- **T50c:** an R4 `ended` closes a household routine: 0 current rows for that object, `valid_to` set, exactly one
+  `close`/R4 audit row;
+- **T50d:** `household.topic` on 2 days is 1 row with 2 spans;
+- **T50e:** the public `current()` with `subject_id=None` returns the row;
+- **T50f:** the projection builds a restated household: one `household.routine` record, `support_count` 3, text
+  ending `(stated_owner, 3 days)`.
+
+The suite: 363 → **369/369 locally** (Windows and WSL), **368/368 on the CI runner** (T22g skips). Written first and
+run before the fix: T50a, T50c, T50d, T50e and T50f failed and T50b passed, 364/369. T50f's failure named
+`ProjectionRefused`, the duplicate key. The round trip stays 15/15 and the parser round trip 23/23.
+
+### 3. The mutant
+
+On a `git archive` copy with the fix reverted and the new tests kept:
+**T50a, T50c, T50d, T50e and T50f FAIL; T50b PASSES; nothing outside T50 fails, 364/369.**
+That is exactly the prediction.
+
+### 4. The blast radius: none
+
+BASE is `git archive ea33f13`; FIXED is BASE plus the one-line fix. Every run was CPU only, the embedder off, and
+every leaf of each pair of result JSONs was compared, excluding only the `env` block and the latency block's `_ms`
+timing values:
+
+| configuration | leaves compared | moved |
+|---|---|---|
+| 1. the MS0 CI line (`--households 3 --days 14 --seed 1 --latency-facts 20000 --assert-bands`), rc 0 both | 387 (2 `_ms` values skipped) | 0 |
+| 2. 10 households, contract 2, oracle | 1,135 | 0 |
+| 3. 10 households, contract 6, the people layer, stores persisted | 1,135 | 0 |
+| 4. 1 household, contract 6, the people layer, the committed extraction `ms2a4_c6_gemma-e4b-q8-q4tpl.json` | 176 | 0 |
+
+- **The store dumps** of configuration 3: every table of every persisted store (300 tables across the 10 households,
+  90,800 rows), base against fixed, row for row, excluding only the four wall-clock columns `created_at`,
+  `recorded_at`, `transcribed_at` and `ts`: **0 tables differ**. The control, a SECOND base run into a fresh
+  directory compared with the first the same way, also reads 0 tables differing, so those four are the only
+  exclusions needed.
+- **The projections:** configuration 3's seed-1 store (the ORACLE path, not the store MS3a recorded) projects to
+  `ece508d62813dae9ffef0c817cd453cb` over 24 records in both trees. Configuration 4's seed-1 store, the recorded MS3a
+  extraction, projects to `10e4e0fe6ff9be360b14bb75ce68d039` over 27 records in both, the MS3a image.
+- The round trip, run as ci.yml runs it (WSL), reads 15/15.
+
+### 5. Honest scope
+
+- **The recorded runs are unaffected because every household fact in the synthetic corpus is stated once.**
+- REPORTED from the strategist's pre-measure, not re-run here: of the 35 committed extraction-arm files, 9 contain
+  household facts the fix would merge, phi3-mini's the most, and no recorded store run scored any of them.
+- The recorded runs that used the qwen embedder were not re-run. They are unaffected only because their stores are
+  identical by configuration 3's dump (wall-clock columns aside), and a retrieval over an identical store is
+  identical.
+- Real speech, which restates household facts constantly, is where the defect would have bitten; it would also have
+  stopped the MS3 builder with a duplicate key.
+- MS4b — contract 7's routine set, `support_days` on query results and the day-count band — is next.
